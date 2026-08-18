@@ -231,6 +231,17 @@ const BR_P_WORD_ID: usize = 1 + 40960 + 2 + 256 + 1;
 const BR_P_BYTE_ID: usize = 1 + 40960 + 2 + 256 + 2;
 
 const BR_P_BOOL_ID: usize = 1 + 40960 + 2 + 256 + 3;
+/// The absolute token index that `packed[0]` holds. Zero means the whole stream
+/// is seeded, which is what the ordinary driver does.
+///
+/// The `+ 6` steps over `bool_id` and the two eager-operator ids `and_id` and
+/// `or_id`, which have no constant here because nothing on this side reads them.
+/// Named rather than left as arithmetic because the block is addressed BY SLOT
+/// and a miscount shifts every field after it.
+const BR_P_BASE: usize = 1 + 40960 + 2 + 256 + 6;
+/// The cursor, written back by the stage on every token read, so a host feeding a
+/// window knows where to slide it without the stage needing a protocol to ask.
+const BR_P_AT: usize = 1 + 40960 + 2 + 256 + 7;
 
 fn br_shared_word(vm: &Vm<'_, '_>, buf: &[u8], slot: usize) -> i64 {
     match vm.get_shared(buf, slot).expect("get_shared") {
@@ -595,6 +606,98 @@ fn chunk_table_from_tokens(tokens: &[(i64, i64)], names: &[String]) -> Vec<i64> 
     ids
 }
 
+/// The token cursor after each resume of `parse.kel`, for measuring how far the
+/// parser actually reaches into its input.
+///
+/// # Why this exists
+///
+/// `toks.packed` is 40,960 words and the driver seeds the whole token stream into
+/// it. That residency is the LAST one in the pipeline, and it is the driver's
+/// rather than the parser's: every one of `parse.kel`'s cursor moves is plus or
+/// minus one, so it is a one-token lookahead scanner with single-token pushback.
+///
+/// Reading the cursor back is what turns that from a claim about the source into
+/// a measurement. A host feeding a sliding window needs to know the parser cannot
+/// jump; this returns the evidence rather than the assurance.
+///
+/// The stage writes `toks.at` on every token read, and a step consumes at most one
+/// token, so consecutive entries differ by at most one in either direction.
+#[must_use]
+pub fn parse_cursor_trace(src: &str) -> Vec<i64> {
+    let (tokens, names) = br_lex(src);
+    let id_of = |s: &str| {
+        names
+            .iter()
+            .position(|n| n == s)
+            .map(|i| i as i64)
+            .unwrap_or(-1)
+    };
+    let chunks: Vec<i64> = chunk_table_from_tokens(&tokens, &names);
+    let module = std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(|| compile_src(&read_stage("kel/parse.kel")))
+        .expect("spawn")
+        .join()
+        .expect("join");
+    let need = required_persistent_capacity_for(&module);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(module, &arena).expect("verify parse.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    vm.set_shared(&mut shared, BR_P_LEN, Value::Int(tokens.len() as i64))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_LIMIT_ID, Value::Int(id_of("limit")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_REQUIRE_ID, Value::Int(id_of("require")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_WORD_ID, Value::Int(id_of("Word")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_BYTE_ID, Value::Int(id_of("Byte")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_BOOL_ID, Value::Int(id_of("Bool")))
+        .unwrap();
+    vm.set_shared(
+        &mut shared,
+        BR_P_CHUNK_COUNT,
+        Value::Int(chunks.len() as i64),
+    )
+    .unwrap();
+    for (i, &c) in chunks.iter().enumerate() {
+        vm.set_shared(&mut shared, BR_P_CHUNKS + i, Value::Int(c))
+            .unwrap();
+    }
+    // THE WINDOW BASE, SET EXPLICITLY RATHER THAN LEFT TO ZERO-INITIALISATION.
+    // The whole stream is seeded here, so `packed[0]` really is token zero; but
+    // this file's own rule is that an emitter relying on its buffer starting
+    // zeroed breaks the day it writes into a reused one, and a driver relying on
+    // the same is no different. Stating it also makes the contract visible to a
+    // later windowed driver, which sets a base that is not zero.
+    vm.set_shared(&mut shared, BR_P_BASE, Value::Int(0))
+        .unwrap();
+    for (i, &(k, v)) in tokens.iter().enumerate() {
+        vm.set_shared(&mut shared, BR_P_PACKED + i, Value::Int(k + v * 256))
+            .unwrap();
+    }
+
+    let mut trace = Vec::new();
+    let mut state = vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call");
+    for _ in 0..(tokens.len() * 16 + 256) {
+        trace.push(br_shared_word(&vm, &shared, BR_P_AT));
+        match state {
+            VmState::Finished(_) => break,
+            _ => {
+                state = match vm.resume_with_shared(&mut shared, Value::Int(0)) {
+                    Ok(st) => st,
+                    Err(_) => break,
+                }
+            }
+        }
+    }
+    trace
+}
+
 /// Drive lexer.kel then parse.kel over `src` and return every function it yields, each
 /// with its guard and body records, plus the interned-name table. Multiheaded functions
 /// appear as several same-named entries in declaration order.
@@ -654,6 +757,14 @@ pub fn parse_functions(
         vm.set_shared(&mut shared, BR_P_CHUNKS + i, Value::Int(c))
             .unwrap();
     }
+    // THE WINDOW BASE, SET EXPLICITLY RATHER THAN LEFT TO ZERO-INITIALISATION.
+    // The whole stream is seeded here, so `packed[0]` really is token zero; but
+    // this file's own rule is that an emitter relying on its buffer starting
+    // zeroed breaks the day it writes into a reused one, and a driver relying on
+    // the same is no different. Stating it also makes the contract visible to a
+    // later windowed driver, which sets a base that is not zero.
+    vm.set_shared(&mut shared, BR_P_BASE, Value::Int(0))
+        .unwrap();
     for (i, &(k, v)) in tokens.iter().enumerate() {
         vm.set_shared(&mut shared, BR_P_PACKED + i, Value::Int(k + v * 256))
             .unwrap();
