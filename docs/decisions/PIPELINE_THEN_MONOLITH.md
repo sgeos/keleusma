@@ -126,16 +126,30 @@ to prove.
 ### THE ENUMERATION, AS FAR AS IT HAS BEEN MEASURED
 
 Taken by reading what the DRIVER extracts from each stage, since every non-stream output shows up as
-something read back after the stage is driven. Partial: `codegen`'s output shape has not been examined
-closely.
+something read back after the stage is driven. **Complete for the five shapes below.**
 
 | stage | outputs |
 |---|---|
 | `lexer` | a token stream, **plus an intern table** read back by index (`ICOUNT`, `ISTART + id`, `ILEN + id`) |
 | `parse` | **one tagged record stream.** The driver demultiplexes by code into function, data and enum records |
 | `reconstruct` | a node count, **plus an AST written into shared memory** and read by slot (`RC_AST_ROOT`, `RC_AST_KINDS + i`, `RC_AST_ARGS + i`) |
+| `codegen` | **one stream in three sections, entirely in band.** Ops until a terminator, then a pool count with that many values and that many tags, then the local-frame size. Nothing is read back by slot |
 | `analyze`, `verify_*` | a single verdict word each |
-| `codegen` | reads back through the same slot-indexed pattern; NOT examined closely |
+
+**`codegen` is the purest stream in the pipeline** and fits the one-unit-with-metadata model best of
+all five: three sections, one channel, strictly in order, no side output.
+
+**But its section boundary is CATEGORY-DEPENDENT, so the stream is not self-describing.** Phase one
+ends at `Return` for an `fn`, `Reset` for a `loop`, and `Trap(1)` for a multiheaded dispatch -- and a
+multihead's per-head `Return`s are interior ops, so a reader that stops at the first `Return` truncates
+it. **A consumer that does not already know the function's category cannot find the boundary.** Under
+fusion the driver knows it; across a serialised boundary it would not, so the format needs either an
+explicit section terminator or the category carried in band. This is a concrete instance of the
+framing requirement recorded above, found by enumeration rather than by design review.
+
+**A latent capability worth not losing**: the pool carries per-constant TAGS (0 Int, 1 StaticStr) that
+the driver currently reads and discards, because every stage source is all-Int. The tagged protocol
+already exists for the string case that the streaming constant-node path refuses today.
 
 **The working assumption was that an output unit with attached metadata is just one stream. That holds
 for `parse` and it does not hold at the lexer.** The intern table is a separate structure, complete
@@ -214,9 +228,8 @@ that produced this document when they pull in different directions.
   function, and "the shape suggests" was wrong four times in the session that produced this document.
   The measurement is the one already used for the parser: instrument the executed reach rather than
   read the source.
-- **`codegen`'s output shape**, the one stage the enumeration above did not examine.
 - **Whether `reconstruct`'s AST becomes a node stream or stays addressed.** It is a random-access
-  structure today.
+  structure today, and it is the only stage output that is not a stream at all.
 
 ## The first increment, which needs no shell and no format
 
