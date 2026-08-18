@@ -2251,3 +2251,138 @@ fn the_parser_never_jumps_more_than_one_token() {
     }
     assert_eq!(checked, CASES.len(), "not every case was measured");
 }
+
+/// **THE FUSED PARSE AGREES WITH THE COLLECTING ONE**, which is the only thing
+/// that makes the fusion safe to prefer.
+///
+/// `parse_functions` collects every token into a `Vec` and seeds all of them into
+/// a 40,960-word shared array. `parse_functions_fused` drives `lexer.kel` INTO
+/// `parse.kel`, holding eight tokens and sliding.
+///
+/// Fusion changes WHEN a token is produced, not what it is, so the two must return
+/// the same functions, the same name table, and the same data and enum record
+/// streams. Anything else is a defect in the window arithmetic — the pushback
+/// landing outside the window, or a slide taken after the parser had already read.
+///
+/// # Why real stages rather than snippets
+///
+/// A snippet parses inside one window and would pass for a feed that never slid at
+/// all. These sources are thousands of tokens, so the window turns over hundreds
+/// of times, and the sizes are asserted so a corpus shrinking back under the
+/// window is reported rather than silently making the test vacuous.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_fused_parse_agrees_with_the_collecting_one() {
+    const STAGES: &[&str] = &["verify_datalayout", "verify_yield", "analyze", "lexer"];
+    const WINDOW: usize = 8;
+
+    let mut checked = 0;
+    for stage in STAGES {
+        let path = format!("src/selfhost/kel/{stage}.kel");
+        let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+
+        let (want_fns, want_names, want_data, want_enums) =
+            keleusma::selfhost::parse_functions(&src);
+        let (got_fns, got_names, got_data, got_enums) =
+            keleusma::selfhost::parse_functions_fused(&src);
+
+        // The premise: the window really does turn over. A source that fits in
+        // eight tokens would satisfy every assertion below without sliding once.
+        let trace = keleusma::selfhost::parse_cursor_trace(&src);
+        let reach = trace.iter().copied().max().unwrap_or(0);
+        assert!(
+            reach as usize > WINDOW * 20,
+            "{stage}: the parser reached token {reach}, barely past the {WINDOW}-token \
+             window, so the sliding this test exists to check is hardly exercised"
+        );
+
+        assert_eq!(
+            got_names, want_names,
+            "{stage}: the intern tables differ, so the two lexer runs disagree"
+        );
+        assert_eq!(
+            got_fns.len(),
+            want_fns.len(),
+            "{stage}: {} functions fused against {} collected",
+            got_fns.len(),
+            want_fns.len()
+        );
+        for (i, (g, w)) in got_fns.iter().zip(want_fns.iter()).enumerate() {
+            assert_eq!(
+                g.body_records(),
+                w.body_records(),
+                "{stage}: function {i} body records differ"
+            );
+            assert_eq!(
+                g.guard_records(),
+                w.guard_records(),
+                "{stage}: function {i} guard records differ"
+            );
+            assert_eq!(
+                (g.category(), g.param_count()),
+                (w.category(), w.param_count()),
+                "{stage}: function {i} header differs"
+            );
+        }
+        assert_eq!(got_data, want_data, "{stage}: data records differ");
+        assert_eq!(got_enums, want_enums, "{stage}: enum records differ");
+        checked += 1;
+    }
+    assert_eq!(checked, STAGES.len(), "not every stage was compared");
+}
+
+/// **THE PUSHBACK DEPTH, DERIVED FROM THE CURSOR TRACE**, because the fused feed's
+/// lookbehind rests on it.
+///
+/// `parse_functions_fused` keeps ONE token behind the cursor. That is not a
+/// choice, it is the bound: `toks.at` is written before the cursor advances, so it
+/// names the index just read. After a read at `C` the cursor is `C+1`; with `k`
+/// pushbacks the next read is at `C+1-k`, so a trace step of `1-k` reports `k`
+/// directly.
+///
+/// `the_parser_never_jumps_more_than_one_token` already bounds every step to plus
+/// or minus one, which bounds `k` at two and puts the lowest read at `at - 1`.
+/// This states the consequence explicitly so a later reader does not have to
+/// re-derive it, and so a parser that started pushing back further fails HERE,
+/// naming the cause, rather than in the fused driver as an out-of-bounds index.
+///
+/// A wider lookbehind was used at first, justified by a claim that the cursor
+/// could sit "several tokens" behind `at`. It cannot. That was a misdiagnosis of a
+/// fault whose real cause was an unprimed window, and the widening did not fix it.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_parser_pushes_back_at_most_two_tokens() {
+    const SOURCES: &[(&str, &str)] = &[
+        ("lexer-stage", include_str!("../src/selfhost/kel/lexer.kel")),
+        (
+            "analyze-stage",
+            include_str!("../src/selfhost/kel/analyze.kel"),
+        ),
+    ];
+
+    let mut deepest_seen = 0i64;
+    for (label, src) in SOURCES {
+        let trace = keleusma::selfhost::parse_cursor_trace(src);
+        assert!(trace.len() > 100, "{label}: trace too short to measure");
+        for w in trace.windows(2) {
+            // step == 1 - k, so k == 1 - step.
+            let k = 1 - (w[1] - w[0]);
+            assert!(
+                k <= 2,
+                "{label}: {k} consecutive pushbacks. The fused feed keeps one token \
+                 behind the cursor, which covers k <= 2; at {k} it would read below its \
+                 window base."
+            );
+            deepest_seen = deepest_seen.max(k);
+        }
+    }
+
+    // MUST-NOT-FIRE. A trace that only ever advanced would satisfy the bound for a
+    // reason that has nothing to do with pushback, and the lookbehind would be
+    // untested rather than proven.
+    assert!(
+        deepest_seen >= 1,
+        "no pushback occurred in any source, so the bound above is vacuous and the \
+         fused feed's lookbehind rests on nothing"
+    );
+}

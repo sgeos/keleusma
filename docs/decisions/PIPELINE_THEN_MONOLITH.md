@@ -126,27 +126,45 @@ to prove.
 ### THE ENUMERATION, AS FAR AS IT HAS BEEN MEASURED
 
 Taken by reading what the DRIVER extracts from each stage, since every non-stream output shows up as
-something read back after the stage is driven. Partial: `codegen`'s output shape has not been examined
-closely.
+something read back after the stage is driven. **Complete for the five shapes below.**
 
 | stage | outputs |
 |---|---|
 | `lexer` | a token stream, **plus an intern table** read back by index (`ICOUNT`, `ISTART + id`, `ILEN + id`) |
 | `parse` | **one tagged record stream.** The driver demultiplexes by code into function, data and enum records |
 | `reconstruct` | a node count, **plus an AST written into shared memory** and read by slot (`RC_AST_ROOT`, `RC_AST_KINDS + i`, `RC_AST_ARGS + i`) |
+| `codegen` | **one stream in three sections, entirely in band.** Ops until a terminator, then a pool count with that many values and that many tags, then the local-frame size. Nothing is read back by slot |
 | `analyze`, `verify_*` | a single verdict word each |
-| `codegen` | reads back through the same slot-indexed pattern; NOT examined closely |
+
+**`codegen` is the purest stream in the pipeline** and fits the one-unit-with-metadata model best of
+all five: three sections, one channel, strictly in order, no side output.
+
+**But its section boundary is CATEGORY-DEPENDENT, so the stream is not self-describing.** Phase one
+ends at `Return` for an `fn`, `Reset` for a `loop`, and `Trap(1)` for a multiheaded dispatch -- and a
+multihead's per-head `Return`s are interior ops, so a reader that stops at the first `Return` truncates
+it. **A consumer that does not already know the function's category cannot find the boundary.** Under
+fusion the driver knows it; across a serialised boundary it would not, so the format needs either an
+explicit section terminator or the category carried in band. This is a concrete instance of the
+framing requirement recorded above, found by enumeration rather than by design review.
+
+**A latent capability worth not losing**: the pool carries per-constant TAGS (0 Int, 1 StaticStr) that
+the driver currently reads and discards, because every stage source is all-Int. The tagged protocol
+already exists for the string case that the streaming constant-node path refuses today.
 
 **The working assumption was that an output unit with attached metadata is just one stream. That holds
 for `parse` and it does not hold at the lexer.** The intern table is a separate structure, complete
 only at end of input and addressed by identifier index: a token carries an ID, and the spelling lives
 in the table.
 
-**Both known whole-input facts come from the lexer**, and that is not a coincidence. Interning is
+**All THREE known whole-input facts come from the lexer**, and that is not a coincidence. Interning is
 inherently a whole-input operation -- an id's spelling table cannot be known complete until the input
-ends -- and the chunk table is derived from the tokens and those names. **This strengthens the single
-sidecar with sections**: both facts come from the same phase, so one pre-pass can emit both, and there
-is one fingerprint and one correspondence rather than two.
+ends -- the chunk table is derived from the tokens and those names, and the token count is not known
+until the stream ends. **This strengthens the single sidecar with sections**: one pre-pass emits all
+three, with one fingerprint and one correspondence rather than three.
+
+**The third was found by BUILDING the fusion, not by inspecting the stages.** `toks.len` is invisible
+as a dependency until a windowed feed has to supply it. Treat the enumeration as incomplete until each
+boundary has actually been cut.
 
 **`reconstruct` produces a random-access structure rather than a stream.** Nothing forbids
 serialising the AST as a node stream, but today it is addressed and not consumed in order, so calling
@@ -214,20 +232,46 @@ that produced this document when they pull in different directions.
   function, and "the shape suggests" was wrong four times in the session that produced this document.
   The measurement is the one already used for the parser: instrument the executed reach rather than
   read the source.
-- **`codegen`'s output shape**, the one stage the enumeration above did not examine.
 - **Whether `reconstruct`'s AST becomes a node stream or stays addressed.** It is a random-access
-  structure today.
+  structure today, and it is the only stage output that is not a stream at all.
 
-## The first increment, which needs no shell and no format
+## THE FIRST INCREMENT IS DONE, and building it found a fact the enumeration had missed
 
-**Fuse `lexer` into `parse` so the parser pulls a token on demand**, in-process, with no intermediate
-collection. Both stages are measured, the parser is known to need only a one-token window, and success
-removes the largest remaining residency.
+`parse_functions_fused` drives `lexer.kel` INTO `parse.kel` with no token stream materialised. The
+collecting path seeds all tokens into a 40,960-word array; this holds a small window and slides, and
+produces byte-identical output on four real stages -- same functions, same guard and body records,
+same data and enum streams, same intern table.
 
-**The chunk-table pre-pass is the obstacle and its answer is the classical one**: two passes. Pass one
-streams the lexer and collects only function names -- bounded, a name table and nothing else. Pass two
-streams the lexer again, fused into the parser, materialising no token stream. Running the lexer twice
-is how a single-pass compiler has always handled a forward reference it cannot settle on first sight.
+**Two passes, because one cannot work.** Pass one streams the lexer holding only bounded facts; pass
+two streams it again, fused. Running the lexer twice is how a single-pass compiler has always handled
+a forward reference it cannot settle on first sight, and it is exactly what a pipeline cut at this
+boundary would materialise as a sidecar.
+
+**The lookbehind is ONE token and it is derived rather than chosen.** `toks.at` is written before the
+cursor advances, so it names the index just read; with `k` pushbacks the next read is at `C+1-k`,
+making a trace step of `1-k` a direct report of `k`. Steps are bounded to plus or minus one, so `k` is
+at most two and the lowest read is `at - 1`. Pinned by
+`the_parser_pushes_back_at_most_two_tokens`, with a must-not-fire check that pushback actually occurs.
+
+### A THIRD WHOLE-INPUT FACT, found by building rather than by reasoning
+
+The enumeration listed two: the intern table and the chunk table. **There is a third, and nothing
+would have surfaced it except attempting the fusion.**
+
+`parse.kel` finds end of input by comparing its cursor against `toks.len` -- **the token COUNT**. A
+collecting driver supplies it for free, because it has the whole stream before it starts. A windowed
+feed cannot leave it as "however many arrive", so the count must come from the pre-pass.
+
+That is the argument for enumerating by BUILDING rather than by inspection, and it is a warning about
+the sidecar format: a fact can be invisible in the source and obvious the moment a boundary is cut.
+**All three come from the lexer**, which continues to point at one sidecar with sections rather than a
+flag each.
+
+### What the fusion establishes about the architecture
+
+The demand-driven composition works in-process, with no shell, no serialisation and no format. Two
+coroutines, one pulling from the other. That is the first evidence the architecture rests on something
+real rather than on the stages merely having a compatible shape.
 
 ## Sequencing, stated because agreement on the architecture is not agreement on the priority
 

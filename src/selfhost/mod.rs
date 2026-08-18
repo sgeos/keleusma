@@ -606,6 +606,189 @@ fn chunk_table_from_tokens(tokens: &[(i64, i64)], names: &[String]) -> Vec<i64> 
     ids
 }
 
+/// Pull the next token from a live `lexer.kel`, or `None` at end of input.
+///
+/// The lexer's protocol: 63 is PENDING (a step that consumed a byte without
+/// completing a token), 62 is end of input, anything else is a token packed as
+/// `kind + payload * 256`.
+fn lex_next(vm: &mut Vm<'_, '_>, shared: &mut [u8]) -> Option<i64> {
+    // Bounded rather than `loop`: a lexer that only ever reported PENDING would
+    // otherwise hang the driver, and a total language should not need a host that
+    // can. Four bytes of pending per token is far past any real run.
+    for _ in 0..(4 * 393_216) {
+        // A coroutine must be RESUMED, not re-called -- but the FIRST entry has to
+        // be a call, and the machine exposes no predicate for which it wants.
+        // `NotSuspended` is that predicate, and taking it here keeps the caller
+        // from having to track whether it has started the lexer yet.
+        let st = match vm.resume_with_shared(shared, Value::Int(0)) {
+            Err(crate::vm::VmError::NotSuspended) => vm
+                .call_with_shared(shared, &[Value::Int(0)])
+                .expect("start lexer.kel"),
+            other => other.expect("resume lexer.kel"),
+        };
+        match st {
+            VmState::Yielded(Value::Int(62)) => return None,
+            VmState::Yielded(Value::Int(63)) | VmState::Reset => {}
+            VmState::Yielded(Value::Int(t)) => return Some(t),
+            other => panic!("lexer.kel yielded {other:?}"),
+        }
+    }
+    panic!("lexer.kel reported PENDING without end of input")
+}
+
+/// Build a live `lexer.kel` over `src`, returning the machine and its shared buffer.
+///
+/// Separated from driving so the same construction serves the collecting pass and
+/// the fused one, and so a caller can hold TWO stages live at once.
+/// The compiled lexer, so a caller can size its arena before opening one.
+///
+/// Split out because the persistent region must be resized to the MODULE's
+/// requirement before `Vm::new`, and the requirement is not known until the module
+/// exists. A version of `lex_open` that both compiled and opened could not do that
+/// without guessing a capacity.
+fn lex_module() -> Module {
+    compile_src(&read_stage("kel/lexer.kel"))
+}
+
+fn lex_open<'a>(arena: &'a Arena, m: Module, src: &str) -> (Vm<'a, 'a>, Vec<u8>) {
+    let vm = Vm::new(m, arena).expect("verify lexer.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    let bytes = src.as_bytes();
+    vm.set_shared(&mut shared, 0, Value::Int(bytes.len() as i64))
+        .unwrap();
+    for (i, &b) in bytes.iter().enumerate() {
+        vm.set_shared(&mut shared, 1 + i, Value::Byte(b)).unwrap();
+    }
+    (vm, shared)
+}
+
+/// The intern table, read out of a lexer that has reached end of input.
+fn lex_names(vm: &Vm<'_, '_>, shared: &[u8], src: &str) -> Vec<String> {
+    let bytes = src.as_bytes();
+    let icount = br_shared_word(vm, shared, BR_LEX_ICOUNT) as usize;
+    (0..icount)
+        .map(|id| {
+            let start = br_shared_word(vm, shared, BR_LEX_ISTART + id) as usize;
+            let len = br_shared_word(vm, shared, BR_LEX_ILEN + id) as usize;
+            String::from_utf8(bytes[start..start + len].to_vec()).unwrap()
+        })
+        .collect()
+}
+
+/// What the first pass over the source establishes, all of it bounded.
+struct FirstPass {
+    /// The intern table. Complete only at end of input, which is why it is a
+    /// whole-input fact rather than something a token can carry.
+    names: Vec<String>,
+    /// The call-resolution chunk table, in the module's chunk order.
+    chunks: Vec<i64>,
+    /// How many tokens the source lexes to. `parse.kel` compares its cursor
+    /// against this to find end of input, so a windowed feed must know it up
+    /// front -- which is the one thing a single forward pass cannot supply.
+    token_count: usize,
+}
+
+/// Stream the lexer once, keeping only what the second pass needs.
+///
+/// **This is the pre-pass, and it is bounded.** It holds an intern table, a list
+/// of function-name ids, one previous token and a depth counter -- not the token
+/// stream. `chunk_table_from_tokens` walks `windows(2)`, so the same scan runs
+/// incrementally with a single token of lookbehind.
+///
+/// Running the lexer twice is how a single-pass compiler has always handled a
+/// forward reference it cannot settle on first sight, and it is cheap: the lexer
+/// is the fastest stage and the source is the smallest representation in the
+/// pipeline.
+fn first_pass(src: &str) -> FirstPass {
+    let m = lex_module();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let (mut vm, mut shared) = lex_open(&arena, m, src);
+    let mut ids: Vec<i64> = Vec::new();
+    let mut depth: i64 = 0;
+    let mut prev: Option<(i64, i64)> = None;
+    let mut token_count = 0usize;
+    while let Some(w) = lex_next(&mut vm, &mut shared) {
+        let cur = (w.rem_euclid(256), w.div_euclid(256));
+        token_count += 1;
+        if let Some((kw, _)) = prev {
+            if depth == 0 && (kw == 0 || kw == 5 || kw == 6) && cur.0 == 1 {
+                ids.push(cur.1);
+            }
+            match kw {
+                2 => depth += 1,
+                3 => depth -= 1,
+                _ => {}
+            }
+        }
+        prev = Some(cur);
+    }
+    let names = lex_names(&vm, &shared, src);
+    // Ordering needs the names, which exist only now. A multiheaded function is
+    // one chunk, and the reference keys its chunk map by name, so the table is the
+    // deduplicated lexicographically sorted set.
+    ids.sort_by(|&a, &b| names[a as usize].cmp(&names[b as usize]));
+    ids.dedup_by(|&mut a, &mut b| names[a as usize] == names[b as usize]);
+    FirstPass {
+        names,
+        chunks: ids,
+        token_count,
+    }
+}
+
+/// Drive lexer.kel then parse.kel over `src`, collecting the token stream first.
+///
+/// The original path: every token materialised into a `Vec` and seeded into a
+/// 40,960-word shared array. Kept because it is the reference the fused path is
+/// checked against.
+// The 4-tuple carries the parsed functions, name table, and the raw data and enum
+// record streams; factoring each into a `type` alias would only scatter it.
+#[allow(clippy::type_complexity)]
+pub fn parse_functions(
+    src: &str,
+) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>) {
+    parse_functions_impl(src, false)
+}
+
+/// The same, with `lexer.kel` driven INTO `parse.kel` and no token stream
+/// materialised.
+///
+/// # The two passes, and why there are two
+///
+/// `parse.kel` needs the chunk table before its first token, because a resolved
+/// call index must match the module's chunk order -- and that table is a property
+/// of the WHOLE token stream. No single forward pass supplies it, so the lexer
+/// runs twice: `first_pass` establishes the bounded facts, then the second run
+/// is fused into the parser. That is the classical answer to a forward reference,
+/// and it is what a pipeline cut at this boundary would do with a sidecar file.
+///
+/// The token COUNT comes from the first pass for the same reason: `parse.kel`
+/// finds end of input by comparing its cursor against `toks.len`, which a windowed
+/// feed cannot leave as "however many arrive".
+///
+/// # What it does not change
+///
+/// The output is what [`parse_functions`] returns, and
+/// `the_fused_parse_agrees_with_the_collecting_one` asserts they are equal on real
+/// sources. Fusion changes WHEN a token is produced, not what it is.
+#[allow(clippy::type_complexity)]
+pub fn parse_functions_fused(
+    src: &str,
+) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>) {
+    parse_functions_impl(src, true)
+}
+
+/// How many tokens the fused feed keeps resident.
+///
+/// Three would suffice: the parser reads at its cursor and pushes back by at most
+/// one, so `[cursor - 1, cursor + 1]` covers every access, measured by
+/// `the_parser_never_jumps_more_than_one_token`. Eight is used for margin, and the
+/// margin is the point -- a window sized exactly to the measured bound would turn
+/// any future widening of the parser's reach into a silently wrong parse rather
+/// than an obvious one.
+const FUSED_WINDOW: usize = 8;
+
 /// The token cursor after each resume of `parse.kel`, for measuring how far the
 /// parser actually reaches into its input.
 ///
@@ -705,10 +888,19 @@ pub fn parse_cursor_trace(src: &str) -> Vec<i64> {
 // enum record streams; factoring each into a `type` alias would only scatter it, so
 // allow the complexity lint here as the root test file does file-wide.
 #[allow(clippy::type_complexity)]
-pub fn parse_functions(
+fn parse_functions_impl(
     src: &str,
+    fused: bool,
 ) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>) {
-    let (tokens, names) = br_lex(src);
+    // ONE IMPLEMENTATION, TWO FEEDS. The record handling below is long and
+    // stateful, and a second copy of it in a fused driver is precisely the drift
+    // `selfhost_host` already records paying for once. Only the token FEED
+    // differs: collected and seeded whole, or windowed and slid.
+    let first = first_pass(src);
+    let names = first.names.clone();
+    let token_count = first.token_count;
+    // The collecting feed still needs the tokens themselves.
+    let tokens: Vec<(i64, i64)> = if fused { Vec::new() } else { br_lex(src).0 };
     let id_of = |s: &str| {
         names
             .iter()
@@ -723,7 +915,7 @@ pub fn parse_functions(
     // program's function names, which is derived from the token stream itself (each
     // `fn`/`yield`/`loop` keyword is immediately followed by the name identifier), so the
     // resolution table needs no reference borrow of the user program.
-    let chunks: Vec<i64> = chunk_table_from_tokens(&tokens, &names);
+    let chunks: Vec<i64> = first.chunks.clone();
     let module = std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
         .spawn(|| compile_src(&read_stage("kel/parse.kel")))
@@ -735,7 +927,7 @@ pub fn parse_functions(
     arena.resize_persistent(need).expect("resize");
     let mut vm = Vm::new(module, &arena).expect("verify parse.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
-    vm.set_shared(&mut shared, BR_P_LEN, Value::Int(tokens.len() as i64))
+    vm.set_shared(&mut shared, BR_P_LEN, Value::Int(token_count as i64))
         .unwrap();
     vm.set_shared(&mut shared, BR_P_LIMIT_ID, Value::Int(id_of("limit")))
         .unwrap();
@@ -769,6 +961,21 @@ pub fn parse_functions(
         vm.set_shared(&mut shared, BR_P_PACKED + i, Value::Int(k + v * 256))
             .unwrap();
     }
+    // THE FUSED FEED. A live lexer and a window of `FUSED_WINDOW` tokens, instead
+    // of the whole stream seeded above. Built here rather than in a separate
+    // driver so the record handling below has exactly one implementation.
+    let lex_m = lex_module();
+    let lex_need = required_persistent_capacity_for(&lex_m);
+    let mut lex_arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + lex_need);
+    lex_arena.resize_persistent(lex_need).expect("resize");
+    let mut lex: Option<(Vm<'_, '_>, Vec<u8>)> = if fused {
+        Some(lex_open(&lex_arena, lex_m, src))
+    } else {
+        None
+    };
+    let mut win: alloc::collections::VecDeque<i64> = alloc::collections::VecDeque::new();
+    let mut base: i64 = 0;
+    let mut eof = false;
 
     let mut fns: Vec<ParsedFn> = Vec::new();
     let mut cur: Option<ParsedFn> = None;
@@ -780,73 +987,155 @@ pub fn parse_functions(
     let mut enum_records: Vec<(i64, i64)> = Vec::new();
     let (mut in_body, mut in_guard, mut in_data, mut in_enum, mut in_use) =
         (false, false, false, false, false);
+    // PRIME THE WINDOW BEFORE THE INITIAL CALL, not just before resumes.
+    //
+    // `drive_parse_records_with` runs the hook before every RESUME, but the first
+    // step of the parser happens inside this CALL. Left unprimed, that read lands
+    // on a zeroed `packed` and the parser is fed token zero -- which surfaces far
+    // downstream as `IndexOutOfBounds(-1, 64)` on the OPERATOR STACK, not on the
+    // token array, because the wrong token drives the shunting yard into draining
+    // an empty stack. The index that faults names neither the array at fault nor
+    // the cause.
+    if fused {
+        if let Some((lex_vm, lex_shared)) = lex.as_mut() {
+            while !eof && (win.len() as i64) < FUSED_WINDOW as i64 {
+                match lex_next(lex_vm, lex_shared) {
+                    Some(w) => win.push_back(w),
+                    None => eof = true,
+                }
+            }
+        }
+        vm.set_shared(&mut shared, BR_P_BASE, Value::Int(base))
+            .unwrap();
+        for (i, &w) in win.iter().enumerate() {
+            vm.set_shared(&mut shared, BR_P_PACKED + i, Value::Int(w))
+                .unwrap();
+        }
+    }
+
     let state = vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call");
-    let budget = tokens.len() * 16 + 256;
-    crate::selfhost_host::drive_parse_records(&mut vm, &mut shared, state, budget, |code, val| {
-        if in_body {
-            match code {
-                0 => {}
-                15 => in_body = false,
-                _ => cur.as_mut().unwrap().body.push((code, val)),
-            }
-        } else if in_guard {
-            match code {
-                0 => {}
-                15 => in_guard = false,
-                _ => cur.as_mut().unwrap().guard.push((code, val)),
-            }
-        } else if in_data {
-            if code == 5 {
-                data_records.push((5, 0));
-                in_data = false;
-            } else if code != 0 {
-                data_records.push((code, val));
-            }
-        } else if in_enum {
-            if code == 5 {
-                enum_records.push((5, 0));
-                in_enum = false;
-            } else if code != 0 {
-                enum_records.push((code, val));
-            }
-        } else if in_use {
-            in_use = code != 5;
-        } else {
-            match code {
-                1..=3 => {
-                    cur = Some(ParsedFn {
-                        cat: code,
-                        name: val,
-                        params: 0,
-                        param_types: Vec::new(),
-                        return_type: 0,
-                        guard: Vec::new(),
-                        body: Vec::new(),
-                    })
-                }
-                4 => cur.as_mut().unwrap().params += 1,
-                6 => cur.as_mut().unwrap().param_types.push(val),
-                7 => cur.as_mut().unwrap().return_type = val,
-                9 => {
-                    in_data = true;
-                    data_records.push((9, val));
-                }
-                10 => in_use = true,
-                12 => {
-                    in_enum = true;
-                    enum_records.push((12, val));
-                }
-                16 => in_body = true,
-                17 => in_guard = true,
-                5 => fns.push(cur.take().unwrap()),
-                15 => return ControlFlow::Break(()),
-                _ => {}
+    let budget = token_count * 16 + 256;
+    // SLIDE BEFORE THE RESUME, NEVER AFTER. The parser reads at its cursor the
+    // moment it runs, so a window corrected afterwards is corrected too late.
+    // One token behind the cursor is kept resident, because the parser pushes back
+    // by one and that read must still land inside the window.
+    let before_resume = |vm: &mut Vm<'_, '_>, shared: &mut [u8]| {
+        let Some((lex_vm, lex_shared)) = lex.as_mut() else {
+            return;
+        };
+        let at = match vm.get_shared(shared, BR_P_AT).expect("at") {
+            Value::Int(n) => n,
+            other => panic!("expected Int at BR_P_AT, got {other:?}"),
+        };
+        while !eof && (base + win.len() as i64) < at + FUSED_WINDOW as i64 {
+            match lex_next(lex_vm, lex_shared) {
+                Some(w) => win.push_back(w),
+                None => eof = true,
             }
         }
-        ControlFlow::Continue(())
-    });
+        // ONE TOKEN OF LOOKBEHIND, AND IT IS PROVEN RATHER THAN CHOSEN.
+        //
+        // `toks.at` is written BEFORE the cursor advances, so it names the index
+        // just read: after a read at C the cursor is C+1. With k pushbacks the
+        // next read is at C+1-k, so the trace step is 1-k. Every step is within
+        // plus or minus one, asserted over five sources including a whole real
+        // stage by `the_parser_never_jumps_more_than_one_token`, so k is at most
+        // two and the lowest index ever read is `at - 1`.
+        //
+        // AN EARLIER REVISION USED HALF THE WINDOW AND JUSTIFIED IT WITH A CLAIM
+        // THAT IS FALSE -- that the cursor could sit "several tokens" behind `at`.
+        // It cannot. That widening was a misdiagnosis of `IndexOutOfBounds(-1, 64)`,
+        // whose real cause was an unprimed window at the initial call; the
+        // widening did not fix it and was kept anyway.
+        //
+        // The tight bound is also the more diagnostic one. `base` is a true
+        // absolute index, so a read below it lands negative and faults LOUDLY --
+        // slack would only delay the report of an assumption breaking, never
+        // prevent a wrong parse.
+        let lookbehind = 1i64;
+        while base < at - lookbehind && win.len() > 1 {
+            win.pop_front();
+            base += 1;
+        }
+        vm.set_shared(shared, BR_P_BASE, Value::Int(base)).unwrap();
+        for (i, &w) in win.iter().enumerate() {
+            vm.set_shared(shared, BR_P_PACKED + i, Value::Int(w))
+                .unwrap();
+        }
+    };
+
+    crate::selfhost_host::drive_parse_records_with(
+        &mut vm,
+        &mut shared,
+        state,
+        budget,
+        |code, val| {
+            if in_body {
+                match code {
+                    0 => {}
+                    15 => in_body = false,
+                    _ => cur.as_mut().unwrap().body.push((code, val)),
+                }
+            } else if in_guard {
+                match code {
+                    0 => {}
+                    15 => in_guard = false,
+                    _ => cur.as_mut().unwrap().guard.push((code, val)),
+                }
+            } else if in_data {
+                if code == 5 {
+                    data_records.push((5, 0));
+                    in_data = false;
+                } else if code != 0 {
+                    data_records.push((code, val));
+                }
+            } else if in_enum {
+                if code == 5 {
+                    enum_records.push((5, 0));
+                    in_enum = false;
+                } else if code != 0 {
+                    enum_records.push((code, val));
+                }
+            } else if in_use {
+                in_use = code != 5;
+            } else {
+                match code {
+                    1..=3 => {
+                        cur = Some(ParsedFn {
+                            cat: code,
+                            name: val,
+                            params: 0,
+                            param_types: Vec::new(),
+                            return_type: 0,
+                            guard: Vec::new(),
+                            body: Vec::new(),
+                        })
+                    }
+                    4 => cur.as_mut().unwrap().params += 1,
+                    6 => cur.as_mut().unwrap().param_types.push(val),
+                    7 => cur.as_mut().unwrap().return_type = val,
+                    9 => {
+                        in_data = true;
+                        data_records.push((9, val));
+                    }
+                    10 => in_use = true,
+                    12 => {
+                        in_enum = true;
+                        enum_records.push((12, val));
+                    }
+                    16 => in_body = true,
+                    17 => in_guard = true,
+                    5 => fns.push(cur.take().unwrap()),
+                    15 => return ControlFlow::Break(()),
+                    _ => {}
+                }
+            }
+            ControlFlow::Continue(())
+        },
+        before_resume,
+    );
     (fns, names, data_records, enum_records)
 }
 

@@ -31,9 +31,35 @@ pub fn drive_parse_records<F>(
     shared: &mut [u8],
     state: VmState,
     budget: usize,
-    mut on_record: F,
+    on_record: F,
 ) where
     F: FnMut(i64, i64) -> ControlFlow<()>,
+{
+    drive_parse_records_with(vm, shared, state, budget, on_record, |_, _| {});
+}
+
+/// [`drive_parse_records`] with a hook run before every resume.
+///
+/// **ONE LOOP, NOT TWO.** A fused driver feeding tokens through a sliding window
+/// must correct the window BEFORE the parser is resumed, because the parser reads
+/// at its cursor the moment it runs -- a window fixed afterwards is fixed too
+/// late. That needs a hook inside this loop, and the alternative was a second copy
+/// of the Option E transport in the caller.
+///
+/// This file already records what a second copy costs: the class table duplicated
+/// into a test had drifted, keeping a catch-all after this one became exhaustive,
+/// so the differential that was supposed to be the oracle ran against the
+/// unrepaired table. The transport here is subtler than that table.
+pub fn drive_parse_records_with<F, B>(
+    vm: &mut Vm<'_, '_>,
+    shared: &mut [u8],
+    state: VmState,
+    budget: usize,
+    mut on_record: F,
+    mut before_resume: B,
+) where
+    F: FnMut(i64, i64) -> ControlFlow<()>,
+    B: FnMut(&mut Vm<'_, '_>, &mut [u8]),
 {
     let mut state = state;
     for _ in 0..budget {
@@ -41,6 +67,7 @@ pub fn drive_parse_records<F>(
             // Option E two-word transport: the tag word `t` is followed by its payload word on
             // the next yield. Read it now.
             let arg = loop {
+                before_resume(vm, shared);
                 state = vm
                     .resume_with_shared(shared, Value::Int(0))
                     .expect("resume parse.kel");
@@ -64,6 +91,7 @@ pub fn drive_parse_records<F>(
                 return;
             }
         }
+        before_resume(vm, shared);
         state = vm
             .resume_with_shared(shared, Value::Int(0))
             .expect("resume parse.kel");
