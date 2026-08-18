@@ -3644,10 +3644,6 @@ fn window_emit(
     arena.resize_persistent(need).expect("resize");
     let mut vm = Vm::new(m, &arena).expect("verify wire.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
-    const WARG_SLOT: usize = 1 + 65536 + 1 + 1024 * 4;
-    const FIN_SLOT: usize = WARG_SLOT + 5;
-    const BIN_SLOT: usize = FIN_SLOT + 1024;
-    const HEADER_FIELD_BASE: usize = 990;
     vm.set_shared(&mut shared, WARG_SLOT, Value::Int(chunk_count as i64))
         .expect("warg");
     for (i, &v) in header.iter().enumerate() {
@@ -3697,6 +3693,139 @@ fn window_emit(
     Ok(out)
 }
 
+// `wire.kel`'s shared-block slot map, shared by every windowed emitter here.
+//
+// Hoisted out of `window_emit`, where they were function-local, when a second
+// emitter needed them. Two copies of a slot map is the drift this file's history
+// already records once: the shared block is addressed BY SLOT, so a constant that
+// disagrees with its twin shifts every field after it and the artifact is wrong
+// rather than refused.
+const WARG_SLOT: usize = 1 + 65536 + 1 + 1024 * 4;
+const FIN_SLOT: usize = WARG_SLOT + 5;
+const BIN_SLOT: usize = FIN_SLOT + 1024;
+/// Where the eleven header scalars ride in `fin`, above the chunk-field area.
+const HEADER_FIELD_BASE: usize = 990;
+
+/// Emit the whole `CHUNKS` region by STREAMING, one record per call.
+///
+/// `window_emit` seeds a batch into `fin` and takes one region back, which is why
+/// it inherits the batch's 90-record cap: `fin` is 1,024 words at eleven fields a
+/// chunk. This drives commands 174 and 175 instead — begin once, then one record
+/// per call — so the host holds the artifact and the stage holds one record.
+///
+/// **The three running range cursors are NOT relayed here, and that is the
+/// point.** The batch path takes `first`, `c0`, `t0` and `p0` because a function
+/// entered fresh cannot remember; the stage is a coroutine and carries them in a
+/// private block across the loop's RESET. A host that recomputed them would be
+/// asserting an answer it has no way to check.
+///
+/// The virtual machine is built ONCE and resumed, never re-called. Calling a
+/// suspended coroutine stacks another activation instead of replacing it, and a
+/// module with several hundred chunks exhausts the arena that way — the failure
+/// arrives as an operand-stack error naming neither the call pattern nor the
+/// chunk count.
+fn window_emit_chunks(
+    blob: &[u8],
+    header: &[i64; 11],
+    chunk_fields: &[i64],
+    want: usize,
+) -> Result<Vec<u8>, SelfHostError> {
+    const CMD_BEGIN: i64 = 174;
+    const CMD_STEP: i64 = 175;
+    const FIELDS: usize = 11;
+
+    let m = compile_src(&read_stage("kel/wire.kel"));
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify wire.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+
+    let records = chunk_fields.len() / FIELDS;
+    vm.set_shared(&mut shared, WARG_SLOT, Value::Int(records as i64))
+        .expect("chunk count");
+    for (i, &v) in header.iter().enumerate() {
+        vm.set_shared(&mut shared, FIN_SLOT + HEADER_FIELD_BASE + i, Value::Int(v))
+            .expect("header field");
+    }
+    for (i, &b) in blob.iter().enumerate() {
+        vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(b))
+            .expect("blob");
+    }
+
+    let enter = |vm: &mut Vm<'_, '_>, shared: &mut [u8], cmd: i64| -> Result<i64, SelfHostError> {
+        // The loop block reports its RESET between iterations; skip it, bounded,
+        // so a stage that only ever reset cannot hang the driver.
+        let mut st = match vm.resume_with_shared(shared, Value::Int(cmd)) {
+            Err(crate::vm::VmError::NotSuspended) => vm
+                .call_with_shared(shared, &[Value::Int(cmd)])
+                .map_err(|e| SelfHostError::Unsupported {
+                    detail: alloc::format!("wire.kel faulted on command {cmd}: {e:?}"),
+                })?,
+            other => other.map_err(|e| SelfHostError::Unsupported {
+                detail: alloc::format!("wire.kel faulted on command {cmd}: {e:?}"),
+            })?,
+        };
+        for _ in 0..4 {
+            match st {
+                crate::vm::VmState::Yielded(Value::Int(v)) => return Ok(v),
+                crate::vm::VmState::Reset => {}
+                other => {
+                    return Err(SelfHostError::Unsupported {
+                        detail: alloc::format!("wire.kel returned {other:?} for command {cmd}"),
+                    });
+                }
+            }
+            st = vm
+                .resume_with_shared(shared, Value::Int(cmd))
+                .map_err(|e| SelfHostError::Unsupported {
+                    detail: alloc::format!("wire.kel faulted resuming command {cmd}: {e:?}"),
+                })?;
+        }
+        Err(SelfHostError::Unsupported {
+            detail: alloc::format!("wire.kel reset repeatedly without yielding for {cmd}"),
+        })
+    };
+
+    let began = enter(&mut vm, &mut shared, CMD_BEGIN)?;
+    if began < 0 {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!("wire.kel refused the chunk stream with {began}"),
+        });
+    }
+
+    let mut out = vec![0u8; want];
+    for (j, row) in chunk_fields.chunks_exact(FIELDS).enumerate() {
+        for (f, &v) in row.iter().enumerate() {
+            vm.set_shared(&mut shared, FIN_SLOT + f, Value::Int(v))
+                .expect("chunk field");
+        }
+        let wrote = enter(&mut vm, &mut shared, CMD_STEP)?;
+        if wrote <= 0 {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!("wire.kel refused chunk record {j} with {wrote}"),
+            });
+        }
+        let stride = wrote as usize;
+        let at = j * stride;
+        if at + stride > want {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!(
+                    "chunk record {j} would end at {} in a {want}-byte region",
+                    at + stride
+                ),
+            });
+        }
+        for k in 0..stride {
+            out[at + k] = match vm.get_shared(&shared, 1 + k).expect("read") {
+                Value::Byte(b) => b,
+                other => panic!("shared byte slot held {other:?}"),
+            };
+        }
+    }
+    Ok(out)
+}
+
 /// See [`WindowedArtifact`]. `regions` gives each region's `(kind, base, len)` in
 /// the artifact the caller is assembling.
 pub fn wire_windowed_via_kel(
@@ -3708,20 +3837,20 @@ pub fn wire_windowed_via_kel(
     let (blob, names) = module_input(module);
     let header = header_fields_of(module);
     let fields = chunk_fields_of(module);
-    let chunks_fit = module.chunks.len() <= CHUNK_BATCH_CAP;
-
     let mut out = vec![0u8; artifact_len];
     for &(kind, base, len) in regions {
+        // CHUNKS TAKES THE STREAMING PATH, so the 90-record batch no longer
+        // decides whether a stage is reachable. `parse` (94) and `wire` (475)
+        // were the two it excluded and both emit now.
+        if kind == crate::wire_schema::kind::CHUNKS {
+            let win = window_emit_chunks(&blob, &header, &fields, len)?;
+            out[base..base + len].copy_from_slice(&win[..len]);
+            continue;
+        }
         let cmd = match kind {
             k if k == crate::wire_schema::kind::NAMES => 170,
             k if k == crate::wire_schema::kind::STRING_POOL => 171,
             k if k == crate::wire_schema::kind::HEADER => 172,
-            k if k == crate::wire_schema::kind::CHUNKS => {
-                if !chunks_fit {
-                    continue;
-                }
-                173
-            }
             _ => continue,
         };
         if len > WINDOW {
@@ -3744,7 +3873,10 @@ pub fn wire_windowed_via_kel(
     }
     Ok(WindowedArtifact {
         bytes: out,
-        chunks_emitted: chunks_fit,
+        // Always, now. The field is kept rather than removed because callers read
+        // it, and because a flag that is permanently true is a smaller lie than a
+        // silently deleted one; a future limit would set it false again.
+        chunks_emitted: true,
     })
 }
 
