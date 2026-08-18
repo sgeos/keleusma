@@ -2386,3 +2386,74 @@ fn the_parser_pushes_back_at_most_two_tokens() {
          fused feed's lookbehind rests on nothing"
     );
 }
+
+/// **THE CHUNK-TABLE CAP, AND THE DIAGNOSTIC IT USED TO GIVE.**
+///
+/// `toks.chunks` in `parse.kel` is `[Word; 256]`, and eight load-bearing fields sit
+/// immediately after it in the same shared block: `require_id`, `word_id`,
+/// `byte_id`, `bool_id`, `and_id`, `or_id`, and the token window's `base` and `at`.
+///
+/// # What was measured, because the failure was not what it looked like
+///
+/// I predicted a silent corruption window — a 257th entry landing on `require_id`
+/// with no error. **That prediction was wrong.** Overflowing by one panics
+/// immediately. But it panics with `LoopLimitExceeded` from inside `parse.kel`,
+/// naming neither this table nor its cap, so a caller would look at loop bounds
+/// rather than at the 257th function in their program.
+///
+/// The driver now refuses with both numbers. This test pins the boundary from both
+/// sides, because a guard that fired one entry early would be just as wrong and no
+/// existing test would notice.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_chunk_table_cap_is_refused_by_the_driver_and_not_by_the_stage() {
+    fn src_with(n: usize) -> String {
+        let mut s = String::new();
+        for i in 0..n {
+            s.push_str(&format!("fn f{i:04}(a: Word) -> Word {{ a + {i} }}\n"));
+        }
+        s.push_str("fn main() -> Word { f0000(1) }\n");
+        s
+    }
+
+    // The cap read out of the stage, so the two cannot drift.
+    const STAGE: &str = include_str!("../src/selfhost/kel/parse.kel");
+    let declared: usize = STAGE
+        .lines()
+        .find(|l| l.trim_start().starts_with("chunks: [Word;"))
+        .and_then(|l| l.split(';').nth(1))
+        .and_then(|t| t.split(']').next())
+        .and_then(|n| n.trim().parse().ok())
+        .expect("parse.kel declares chunks: [Word; N]");
+    assert_eq!(
+        declared, 256,
+        "the stage's chunk array is {declared}; the driver's cap must be updated with it"
+    );
+
+    // AT the cap: accepted. `n` functions plus `main` is `n + 1` chunks.
+    let at_cap = src_with(declared - 1);
+    let (fns, ..) = keleusma::selfhost::parse_functions(&at_cap);
+    assert_eq!(
+        fns.len(),
+        declared,
+        "a program with exactly {declared} chunks must parse; the guard fires too early"
+    );
+
+    // ONE PAST the cap: refused by the DRIVER, naming the table, not
+    // `LoopLimitExceeded` from inside the stage.
+    let past = src_with(declared);
+    let err = std::panic::catch_unwind(|| keleusma::selfhost::parse_functions(&past))
+        .err()
+        .expect("a program past the cap must be refused");
+    let msg = err
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| err.downcast_ref::<&str>().map(|s| (*s).to_string()))
+        .unwrap_or_default();
+    assert!(
+        msg.contains("toks.chunks") && msg.contains("functions"),
+        "the refusal was {msg:?}, which does not name the chunk table. A diagnostic that \
+         does not name the cause sends a reader to the wrong place, which is the whole \
+         defect this guard replaces."
+    );
+}

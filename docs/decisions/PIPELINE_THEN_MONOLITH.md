@@ -226,6 +226,45 @@ that produced this document when they pull in different directions.
   reopening. Its trailing-directory alternative was implemented and works, and stays available as a
   last resort.
 
+## A FIFTH CAP, ON THE PARSER RATHER THAN THE EMITTER
+
+`toks.chunks` in `parse.kel` is `[Word; 256]`, so **`wire.kel` cannot be PARSED** at 475 functions --
+not emitted, parsed. Eight load-bearing fields sit immediately after the array in the same shared
+block: the keyword and type ids, the eager-operator ids, and the token window's own `base` and `at`.
+
+**Found by accident while measuring residency, which is worth noting on its own**: four of the five
+caps this line has found were discovered by something other than looking for them.
+
+**A prediction of mine failed here and the correction matters.** I expected a silent corruption
+window -- a 257th entry landing on `require_id` with no error. It panics instead, from the first
+overflow. But it panics with `LoopLimitExceeded` from inside `parse.kel`, naming neither the table nor
+its cap, so a reader investigates loop bounds rather than the 257th function in their program. Loud
+and misdirecting rather than silent and wrong.
+
+The driver now refuses with both numbers, pinned from both sides so a guard firing one entry early is
+caught too. **Raising the array is the real fix and is a separate increment**: `base` and `at` were
+appended after it, so widening `chunks` shifts them, and a mid-block insertion silently shifting every
+later field has already broken four tests once.
+
+## `parse` INTO `reconstruct`: what the next pair actually needs
+
+Two of the three questions are answered by measurement.
+
+- **`reconstruct` is bounded PER FUNCTION**, not per program. The driver calls it with one function's
+  records. That closes one of the unverified items below.
+- **Its record access is strictly sequential**, `io.rec_kind[start + i]` ascending with no pushback --
+  the easiest streaming shape there is.
+- **But its `main` performs the ENTIRE reconstruction in one resume.** It is a coroutine by form, not
+  by granularity. Fusing at record level needs `reconstruct.kel` restructured into a stepped state
+  machine, which is a substantially larger change than the lexer fusion, which needed no stage change
+  at all.
+
+**The residency at stake is 3x to 13x**, measured: `parse` holds 12,048 records across all functions
+where its largest single function needs 931. A fusion at FUNCTION granularity would capture most of
+that without restructuring the stage, since a unit may be a function rather than a record -- but it
+needs the chunk metadata, which is assembled from all parsed functions and is therefore a fourth
+whole-input fact.
+
 ## Unverified, and to be measured before building on
 
 - **Whether `reconstruct` and `codegen` buffer per FUNCTION or per PROGRAM.** Their shape suggests per
@@ -234,6 +273,9 @@ that produced this document when they pull in different directions.
   read the source.
 - **Whether `reconstruct`'s AST becomes a node stream or stays addressed.** It is a random-access
   structure today, and it is the only stage output that is not a stream at all.
+- **Whether the chunk metadata is genuinely a fourth whole-input fact.** It is assembled from all
+  parsed functions and consumed per chunk, which is the shape of one, but nothing has yet tried to
+  supply it incrementally.
 
 ## THE FIRST INCREMENT IS DONE, and building it found a fact the enumeration had missed
 

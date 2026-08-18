@@ -223,6 +223,12 @@ const BR_P_LIMIT_ID: usize = 1 + 40960;
 const BR_P_CHUNK_COUNT: usize = 1 + 40960 + 1;
 
 const BR_P_CHUNKS: usize = 1 + 40960 + 2;
+/// How many entries `toks.chunks` in `parse.kel` holds.
+///
+/// Restated here rather than parsed out of the stage, because a driver that
+/// discovered the cap by overflowing it would already have written past the array.
+/// `the_chunk_table_cap_matches_the_stage` checks the two agree.
+const PARSE_CHUNK_CAP: usize = 256;
 
 const BR_P_REQUIRE_ID: usize = 1 + 40960 + 2 + 256;
 
@@ -845,6 +851,33 @@ pub fn parse_cursor_trace(src: &str) -> Vec<i64> {
         Value::Int(chunks.len() as i64),
     )
     .unwrap();
+    // THE CHUNK TABLE HAS A CAP AND OVERFLOWING IT REPORTS THE WRONG THING.
+    //
+    // `toks.chunks` is `[Word; 256]`, and `base` and `at` sit immediately after it
+    // in the same shared block. A 257th entry lands on `require_id`, and the eight
+    // fields following the array are all load-bearing: the keyword and type ids,
+    // the eager-operator ids, and the token window's own base and cursor.
+    //
+    // Measured, because the failure mode was not what it looked like. Overflowing
+    // by one does NOT silently corrupt -- it panics -- but it panics with
+    // `LoopLimitExceeded` from inside `parse.kel`, naming neither the chunk table
+    // nor its cap. A caller reading that would look at loop bounds, not at the
+    // 257th function in its program. `wire.kel` hits it at 475 chunks.
+    //
+    // Refused here with both numbers so the diagnostic names the cause. Raising
+    // the array is the real fix and is NOT done here: `base` and `at` were appended
+    // after it, so widening `chunks` shifts them, and this file's history records
+    // a mid-block insertion silently shifting every later field and breaking four
+    // tests.
+    assert!(
+        chunks.len() <= PARSE_CHUNK_CAP,
+        "this program has {} functions and `toks.chunks` in parse.kel holds {}; the 257th \
+         entry overwrites `require_id` and the seven fields after it, including the token \
+         window's `base`. Overflowing surfaces as `LoopLimitExceeded` from inside the \
+         parser, which names neither this table nor its cap.",
+        chunks.len(),
+        PARSE_CHUNK_CAP
+    );
     for (i, &c) in chunks.iter().enumerate() {
         vm.set_shared(&mut shared, BR_P_CHUNKS + i, Value::Int(c))
             .unwrap();
@@ -945,6 +978,33 @@ fn parse_functions_impl(
         Value::Int(chunks.len() as i64),
     )
     .unwrap();
+    // THE CHUNK TABLE HAS A CAP AND OVERFLOWING IT REPORTS THE WRONG THING.
+    //
+    // `toks.chunks` is `[Word; 256]`, and `base` and `at` sit immediately after it
+    // in the same shared block. A 257th entry lands on `require_id`, and the eight
+    // fields following the array are all load-bearing: the keyword and type ids,
+    // the eager-operator ids, and the token window's own base and cursor.
+    //
+    // Measured, because the failure mode was not what it looked like. Overflowing
+    // by one does NOT silently corrupt -- it panics -- but it panics with
+    // `LoopLimitExceeded` from inside `parse.kel`, naming neither the chunk table
+    // nor its cap. A caller reading that would look at loop bounds, not at the
+    // 257th function in its program. `wire.kel` hits it at 475 chunks.
+    //
+    // Refused here with both numbers so the diagnostic names the cause. Raising
+    // the array is the real fix and is NOT done here: `base` and `at` were appended
+    // after it, so widening `chunks` shifts them, and this file's history records
+    // a mid-block insertion silently shifting every later field and breaking four
+    // tests.
+    assert!(
+        chunks.len() <= PARSE_CHUNK_CAP,
+        "this program has {} functions and `toks.chunks` in parse.kel holds {}; the 257th \
+         entry overwrites `require_id` and the seven fields after it, including the token \
+         window's `base`. Overflowing surfaces as `LoopLimitExceeded` from inside the \
+         parser, which names neither this table nor its cap.",
+        chunks.len(),
+        PARSE_CHUNK_CAP
+    );
     for (i, &c) in chunks.iter().enumerate() {
         vm.set_shared(&mut shared, BR_P_CHUNKS + i, Value::Int(c))
             .unwrap();
