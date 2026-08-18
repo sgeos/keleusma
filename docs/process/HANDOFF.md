@@ -204,18 +204,30 @@ than only at it.
 it, so widening shifts them, and a mid-block insertion silently shifting every later field has already
 broken four tests once.
 
-## DIAGNOSTICS IN `parse.kel` POINT AWAY FROM THEIR CAUSES
+## DIAGNOSTICS IN `parse.kel`: FOUR CAUSES NAMED, ABOUT A HUNDRED AND THIRTY ARRAYS NOT
 
-Twice in one session, in one file, each costing real time:
+**Done for the four that were MEASURED**, each pinned from both sides. Too many local bindings,
+expression nesting too deep, too many statements in one body, and an unmatched closing bracket now
+report through a negative record tag the driver renders; an unterminated block gets a driver-side
+message naming its likely cause.
 
-- **`LoopLimitExceeded`** for a full chunk table. A reader investigates loop bounds, not the 257th
-  function in their program.
-- **`IndexOutOfBounds(-1, 64)`** for an unprimed token window. `packed` is 40,960 words; **64 is
-  `opstack`**. The wrong token drove the shunting yard into draining an empty operator stack thousands
-  of steps later, so the index named neither the array at fault nor the cause.
+**THE HEADLINE, AND IT IS ENCODED AS A TEST.** `ops.opstack` and `stmt.let_names` are both 64
+entries, so 65 locals and 65 nested parentheses both reported `IndexOutOfBounds(64, 64)` —
+byte-identical, for two unrelated limits.
 
-**Treat this as its own increment rather than adding a guard each time you trip over one.** Both were
-diagnosed wrongly on the first attempt because the message was taken at face value.
+**The guard is on the POINTER and each guarded array carries ONE SPARE SLOT.** The write precedes
+the increment, so a guard on the increment fires one write too late, and clamping at the last usable
+slot would REFUSE the exactly-full program that parses today. Do not "simplify" that away.
+
+**WHAT IS NOT COVERED, and the count is the point.** Roughly a hundred and thirty fixed arrays remain
+— 47 of 8 entries, 22 of 32, 4 of 64, 19 of 256, 17 of 512 — none probed. The same probe found
+several malformed inputs SILENTLY ACCEPTED (a stray `)`, an unclosed `(`, a missing right operand,
+`a[]`), which is acceptance laxity rather than a diagnostic defect.
+
+**WIDENING AN ARRAY FAMILY: READ THE SET OUT OF THE STAGE.** Widening `let_names` and `scope_slot`
+left the trap exactly where it was, because SIX more arrays are written at the same counter.
+`the_parse_guard_caps_match_their_arrays` derives the set rather than listing it, and is verified by
+mutation.
 
 ## THE META-DEFECT THIS LINE KEEPS FINDING
 

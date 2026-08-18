@@ -10,97 +10,82 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-18 (session 47, continued)
+**Date**: 2026-08-18 (session 48)
 
 ## Where things stand
 
 | | |
 |---|---|
 | all twelve stages | `loop main(...)` coroutines |
-| emit path | **11 of 11 stages**; every emit-side cap removed |
-| `wire.kel` | seven streaming commands; the rest answer in one yield |
-| `lexer` into `parse` | **FUSED**, one-token window, byte-identical on four stages |
+| emit path | 11 of 11 stages; every emit-side cap removed |
+| `lexer` into `parse` | FUSED, one-token window, byte-identical on four stages |
 | architecture | one binary, selectable phases — documented, unbuilt |
-| open PRs | none. Tree clean at `3f3735d2` |
+| **`parse.kel` capacity diagnostics** | **four causes now NAMED; the rest still trap raw** |
+| branch | `feat/parse-diagnostics`, cut from `v0.2.3` |
 
-## THE ARCHITECTURE IS DECIDED AND ONE FORK IS YOURS
+## WHAT THIS INCREMENT DID
 
-[`../decisions/PIPELINE_THEN_MONOLITH.md`](../decisions/PIPELINE_THEN_MONOLITH.md) — the filename's
-"then" is superseded and the note at its top says so.
+`parse.kel` reported its capacity limits as raw virtual-machine traps. Measured by feeding the
+stage malformed and oversized sources, not by reading it:
 
-**One binary with `--start` and `--end`.** The monolith is `--start=first --end=last`; the shell
-pipeline is N invocations with `start == end`. Same program, so nothing built now is discarded later.
+| input | reported | now |
+|---|---|---|
+| 65 local bindings | `IndexOutOfBounds(64, 64)` | names locals, the count, and the cap |
+| 65 nested parentheses | `IndexOutOfBounds(64, 64)` | names expression nesting |
+| 257 statements in a body | `IndexOutOfBounds(256, 256)` | names the statement table |
+| an unmatched `]` | `IndexOutOfBounds(-1, 64)` | names the bracket and its token |
+| an unterminated block | "did not reach DONE within its iteration budget" | names the likely cause |
 
-**The open fork**: both the pre-pass and the main pipeline read the SOURCE, so a fused run from a pipe
-cannot re-read it. Buffer the source, accept a file operand with standard input as the default, or
-always split. I lean to the file operand and said why. `--chunk` can only be optional under the first
-two.
+**The first two are the finding.** `opstack` and `let_names` are both 64 entries, so two unrelated
+limits produced a BYTE-IDENTICAL message. `the_two_sixty_four_caps_no_longer_give_the_same_message`
+encodes that defect so it cannot return.
 
-**Required whichever way that goes**: fingerprint the sidecar against its input. A stale table
-produces a byte-plausible wrong artifact, which is worse than a crash.
-
-## FOUR WHOLE-INPUT FACTS, THREE FOUND ONLY BY CUTTING A BOUNDARY
-
-The intern table, the chunk table, the token count, and — probably — the chunk metadata.
-
-**The token count is the instructive one.** `parse.kel` finds end of input by comparing its cursor
-against `toks.len`. Free for a collecting driver, impossible for a windowed feed to leave unspecified.
-Nothing in the source marks it as a dependency; it reads as an ordinary field.
-
-**So: enumerate by BUILDING, not by inspecting.** The enumeration was called complete twice before it
-was. Treat it as incomplete until each boundary has actually been cut.
-
-All four come from the lexer or from parse's whole output, which points at one sidecar with sections
-rather than a flag each.
-
-## THE ONE CAP LEFT, AND IT IS ON THE PARSER
-
-`toks.chunks` is `[Word; 256]`, so **`wire.kel` cannot be PARSED** at 475 functions. Four of the five
-caps this line has found were discovered by something other than looking for them; this one surfaced
-while measuring residency for a different increment.
-
-The driver now refuses with both numbers. **Raising the array is a separate increment**: `base` and
-`at` were appended after it, so widening shifts them.
+**The guard is on the pointer and each guarded array carries one spare slot.** The write precedes
+the increment, so a guard on the increment alone fires one write too late; clamping at the last
+usable slot would have REFUSED the exactly-full program that parses today, which is a unilateral
+narrowing. Every boundary is pinned from both sides — 64 parses, 65 does not.
 
 ## WHAT I GOT WRONG, RECORDED AS CORRECTIONS
 
-- **A four-token lookbehind justified by a false claim.** I wrote that the cursor could sit "several
-  tokens" behind `at`. It cannot, and the existing measurement already disproved it. The bound is one
-  and it is derived. The widening was a misdiagnosis that did not fix the fault and was kept anyway.
-- **A predicted silent-corruption window that panics instead.** Overflowing the chunk table by one
-  does not corrupt silently. Smaller defect than I claimed; the real one is the misdirecting message.
-- **A private intra-doc link** that only the gate's doc build catches, after correcting that same
-  class earlier and then treating a prose edit as not needing the check. **Rustdoc reads comments, so
-  a comment edit is a gated edit.**
+- **I widened two arrays of eight and the trap did not move.** Six more are written at the same
+  local-binding counter. The test now DERIVES the array set by reading the stage, and is verified by
+  mutation: reverting `let_enum` to 64 fails it by name. A hand-written list would have encoded the
+  mistake I had just made.
+- **A sixth constructed status, and it nearly landed.** The full suite reported `exited with code 0`
+  with forty green lines. That was `grep`'s exit; `cargo test` had aborted at a failing binary and
+  eighteen never ran. **The tell was the SHAPE, not the code** — `selfhost_parse` takes ninety-eight
+  seconds and nothing in the list took that long. Now run with `--no-fail-fast` and the exit code
+  captured outside the pipe.
 
-## Held for the operator, with rulings
+## What this green suite does NOT establish
+
+**Roughly a hundred and thirty fixed arrays remain in `parse.kel` and four causes are named.** The
+rest still trap raw: 47 arrays of 8 entries (nesting stacks), 22 of 32, 4 of 64 (struct-definition
+tables), 19 of 256, 17 of 512. **None has been probed**, so none is known reachable or unreachable.
+
+**Separately, the probe found malformed inputs SILENTLY ACCEPTED**: a stray `)`, an unclosed `(`, a
+binary operator with no right operand, and an empty index `a[]`. That is acceptance laxity rather
+than a diagnostic defect, mitigated but not closed by the cross-check against the reference compiler.
+
+**A question for you rather than a decision I took**: these refusals PANIC, matching the existing
+failure mode of `parse_functions` and of the chunk-table guard. Turning them into a `Result` is
+defensible and changes a signature many tests and both compile paths depend on. I did not widen the
+scope to do it.
+
+## Held for you, with rulings
 
 - **`Op::cost()`**: 50 of 66 opcodes unmeasured. *Ruled: after Order 1.*
-- **Derived operands in type rejection**: extraction still host-side. *Ruled: before publishing V0.3.0.*
+- **Derived operands in type rejection**: *Ruled: before publishing V0.3.0.*
 - **Publication**: *held.*
 - **The Japanese FAQ entry** renders as English. *Ruled: correct eventually.*
-- **The input-re-readability fork** above: open.
-
-## What these green suites do NOT establish
-
-The composite constant case does not stream in this shape at all — a composite's record carries a
-range into children numbered after every node at its depth, so the walk needs a queue and **the queue
-IS the residency**. Scalars have no children, which is the only reason `CONSTS` streams.
-
-Nothing here has been run as an actual pipeline. The fusion is in-process, and the phase-selection
-architecture is documented and unbuilt.
+- **The input-re-readability fork** in `../decisions/PIPELINE_THEN_MONOLITH.md`: still open. It
+  decides whether the monolith is one command or two.
 
 ## Next intended increment
 
-**`parse` into `reconstruct`**, and the measurements say what it costs. `reconstruct` is bounded per
-FUNCTION and reads strictly sequentially — both good, both measured. But its `main` performs the whole
-reconstruction in one resume, so it is a coroutine by form rather than by granularity, and fusing at
-record level means restructuring the stage.
+**Raising `toks.chunks` above 256**, the one cap still standing, which excludes `wire.kel` from
+being PARSED at 475 functions. Deliberately separate work: `base` and `at` were appended after that
+array, so widening it shifts them, and a mid-block insertion has silently broken four tests once.
 
-Residency at stake: **3x to 13x**. `parse` holds 12,048 records across all functions where its largest
-single function needs 931. A fusion at FUNCTION granularity captures most of that without
-restructuring, at the cost of a probable fourth sidecar fact.
-
-**Before that, consider the diagnostics increment.** `parse.kel` reported `LoopLimitExceeded` for a
-full chunk table and `IndexOutOfBounds(-1, 64)` for an unprimed window — both today, both pointing
-away from the cause, both diagnosed wrongly on the first attempt.
+**Then `parse` into `reconstruct`**, worth 3x to 13x residency, needing `reconstruct.kel`
+restructured or fused at function granularity with a probable fourth sidecar fact.

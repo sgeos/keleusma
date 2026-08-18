@@ -12585,17 +12585,21 @@ fn every_stage_fits_the_driver_caps_with_margin() {
         worst_blob = worst_blob.max(blob.len());
     }
     // Pinned so a change in the worst case is visible rather than absorbed, and it
-    // has now earned that twice. `semi_terminates_nothing` for the empty statement
-    // moved it from 627 names and 33,395 bytes to 628 and 33,480; the `toks.base`
-    // and `toks.at` window fields moved it again to 630 and 33,500 — two data-block
-    // field names and their blob records. Neither change was about names, and
-    // neither author would have thought to check.
-    // The margins are 61% and 68% of the caps, so the increment was admissible;
-    // the point of the pin is that a stage growing toward either bound is
-    // reported here with the number rather than surfacing later as an
-    // `Unsupported` at some call site.
-    assert_eq!(worst_names, 630, "the worst-case name count moved");
-    assert_eq!(worst_blob, 33500, "the worst-case blob size moved");
+    // has now earned that THREE TIMES. `semi_terminates_nothing` for the empty
+    // statement moved it from 627 names and 33,395 bytes to 628 and 33,480; the
+    // `toks.base` and `toks.at` window fields moved it again to 630 and 33,500 —
+    // two data-block field names and their blob records. The capacity diagnostics
+    // moved it to 645 and 34,118: thirteen guard functions and the two `ps.perr_*`
+    // fields, which is the count exactly. **None of the three changes was about
+    // names, and no author would have thought to check.** That is the entire
+    // argument for the pin.
+    //
+    // The margins are 63% and 69% of the caps, so the increment is admissible; the
+    // point of the pin is that a stage growing toward either bound is reported here
+    // with the number rather than surfacing later as an `Unsupported` at some call
+    // site.
+    assert_eq!(worst_names, 645, "the worst-case name count moved");
+    assert_eq!(worst_blob, 34118, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**
