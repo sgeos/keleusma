@@ -64,19 +64,74 @@ the whole pipeline.
 **No runtime cost when fused.** `--start=first --end=last` serialises nothing internally. The cost is
 design cost, paid once.
 
-## THE QUESTION THAT MUST BE ANSWERED BEFORE THE FORMAT IS DESIGNED
+## BOUNDARY FACTS: A STREAM IS NOT ALL A PHASE NEEDS
 
-**A boundary carries more than a unit stream, and the full list of extras is not yet known.**
+**A phase may depend on a whole-input property of an earlier phase's output**, which is not something a
+stream can carry without destroying the stream.
 
 The case in hand: `parse` needs the lexicographically sorted set of function names, because a resolved
-call index must match the module's chunk order. That is a whole-input property of the LEXER's output.
-A reader starting at `--start=parse` must get it from somewhere -- carried in the lexer's intermediate
-alongside the token stream, re-derived, or supplied separately.
+call index must match the module's chunk order. That is a property of the LEXER's ENTIRE output.
 
-So an intermediate is **a stream plus whatever whole-input facts later phases depend on**. That is
-what an object file is, and it is fine. But **enumerate those facts before fixing the format**:
-discovering the third one afterwards is how formats become bad. The known one is the chunk table; the
-others are unknown because nothing has yet asked the question of each phase.
+### Why it cannot go in-band, which is the argument FOR a side channel
+
+Carrying it as a header section of the lexer's output stream would force the lexer to see every token
+before emitting its first one. **That destroys the streaming property of the very phase being
+streamed.** A trailing section does not help either: the consumer needs the table BEFORE the tokens it
+annotates.
+
+So a side channel is not a convenience. It is what lets both phases stream, and that is a better
+justification than the (real) precedent of `-fprofile-use`, dependency files, linker scripts and
+`--sysroot`.
+
+### The chosen shape: a pre-pass PHASE plus a file option
+
+The pre-pass is an ordinary phase, so it needs no special case in the `--start`/`--end` model. Phase
+zero produces the table; the rest consume it.
+
+```sh
+cat input.kel | kelc --start=lexchunk --end=lexchunk > chunk.ir
+cat input.kel | kelc --start=lex --end=bytecode --chunk=chunk.ir > output.bin
+```
+
+### THE OPEN FORK: both phases read the SOURCE, so the input must be re-readable
+
+Phase zero consumes the source to build the table; phase one needs the source again from the
+beginning. The two-invocation form above works because the shell reopens the file each time. **A
+single fused `--start=lexchunk --end=bytecode` reading from a PIPE cannot do that** -- once standard
+input is drained it is gone.
+
+Three ways out, and the choice decides whether the monolith is one command or necessarily two:
+
+| option | consequence |
+|---|---|
+| **Buffer the source** | Fusion works from a pipe. Costs O(input) memory -- the smallest representation in the pipeline, but not O(1), in a design whose selling point is a bounded footprint |
+| **Accept a file operand**, keeping standard input as the default | Fusion works by reopening; standard input remains for cut pipelines. Matches every compiler driver, so it surprises nobody |
+| **Always split** at the pre-pass | No re-read and no buffering. The monolith is two commands |
+
+**Unresolved.** The middle option looks best and costs least, but it is the operator's call. Note that
+`--chunk` can only be OPTIONAL -- supplied if present, derived if absent -- under the first two: with
+pure standard input there is nothing to derive it from a second time.
+
+### REQUIRED WHICHEVER WAY THAT GOES: fingerprint the sidecar
+
+`--chunk=` naming a table built from a DIFFERENT input produces a byte-plausible wrong artifact. Under
+the always-split form the two invocations are always separate, so this is not an edge case -- it is
+the ordinary way to hold the tool wrong.
+
+**Stamp the sidecar with a fingerprint of the input it was derived from and verify it on load.** A
+hash of the source or of the token stream. Cheap, and it converts a silent wrong artifact into a
+refusal naming both files. Without it the option is pointed at exactly the property the project exists
+to prove.
+
+### One decision to take once rather than N times
+
+**Enumerate the whole-input facts before fixing the sidecar's format.** The chunk table is the only one
+known, and only because something asked for it; nothing has yet put the question to each phase.
+
+If the enumeration turns up more, one sidecar with SECTIONS beats `--chunk= --syms= --enums=`: one
+file, one fingerprint, one correspondence to check, and the pre-pass runs once regardless of how many
+facts it yields. That is what an object file's symbol table is. Genuinely a judgement call, and it
+depends on an enumeration nobody has done.
 
 ## Two properties to build in from the start
 
@@ -128,7 +183,8 @@ that produced this document when they pull in different directions.
   function, and "the shape suggests" was wrong four times in the session that produced this document.
   The measurement is the one already used for the parser: instrument the executed reach rather than
   read the source.
-- **Which phases have whole-input dependencies**, per the format question above.
+- **Which phases have whole-input dependencies.** The chunk table is the only one known. Until each
+  phase is asked, the sidecar's format cannot be fixed without risking a fourth fact arriving late.
 
 ## The first increment, which needs no shell and no format
 
