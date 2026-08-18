@@ -44,6 +44,29 @@ shared data toks {
     // position -- the `limit`/`require`/`word`/`byte`/`bool` pattern.
     and_id: Word,
     or_id: Word,
+    // --- THE TOKEN WINDOW ------------------------------------------------------
+    //
+    // `packed` is 40,960 words, and holding the whole token stream there is the
+    // last residency in the pipeline. It is not something the PARSER needs: every
+    // one of its cursor moves is plus or minus one, so it is a one-token
+    // lookahead scanner with single-token pushback and it touches a bounded
+    // neighbourhood of the cursor and nothing else.
+    //
+    // `base` is the absolute token index that `packed[0]` holds, so a read is
+    // `packed[cursor - base]`. At zero, with the whole stream seeded, this is
+    // exactly what it was.
+    //
+    // `at` is the cursor written back on every read, so the host can slide the
+    // window without the stage needing a protocol to ask. A step consumes at most
+    // one token, so the cursor advances by at most one per resume and a host
+    // watching `at` can never be surprised by a jump.
+    //
+    // APPENDED LAST, like `and_id` and `or_id` before them. The block is addressed
+    // by SLOT: inserting in the middle silently shifts every field after the
+    // insertion point, which this file's history already records breaking four
+    // tests.
+    base: Word,
+    at: Word,
 }
 
 // The unified token vocabulary (body.kel's `enum Tok` extended with the header keywords).
@@ -4993,8 +5016,9 @@ fn body_step() -> Word {
             ops.draining = 1;
             0
         } else {
-            let k = toks.packed[ps.cursor] % 256;
-            let v = toks.packed[ps.cursor] / 256;
+            let k = toks.packed[ps.cursor - toks.base] % 256;
+            let v = toks.packed[ps.cursor - toks.base] / 256;
+            toks.at = ps.cursor;
             ps.cursor = ps.cursor + 1;
             // A pending struct-field-access postfix intercepts the next token here, before the
             // normal dispatch, so the deep `step_dispatch_normal` chain is not deepened.
@@ -6021,8 +6045,9 @@ fn step_body() -> Word {
                 15
             }
         } else {
-            let k = toks.packed[ps.cursor] % 256;
-            let v = toks.packed[ps.cursor] / 256;
+            let k = toks.packed[ps.cursor - toks.base] % 256;
+            let v = toks.packed[ps.cursor - toks.base] / 256;
+            toks.at = ps.cursor;
             ps.cursor = ps.cursor + 1;
             header_step(k, v)
         }

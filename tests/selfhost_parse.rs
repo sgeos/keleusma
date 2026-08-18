@@ -2166,3 +2166,88 @@ fn an_impl_block_captures_its_method_names() {
     assert_eq!(got.traits.len(), 1, "the trait captured too");
     assert_eq!(got.funcs[0].3, vec![(1, 5)]); // top: Literal 5
 }
+
+/// **THE PARSER NEEDS A WINDOW, NOT THE STREAM**, and this measures it rather
+/// than asserting it.
+///
+/// `toks.packed` is 40,960 words and the driver seeds the whole token stream into
+/// it. That is the last residency in the pipeline, and it belongs to the DRIVER:
+/// every one of `parse.kel`'s cursor assignments is plus or minus one, so it is a
+/// one-token lookahead scanner with single-token pushback — the shape a Turbo
+/// Pascal front end has.
+///
+/// Counting `ps.cursor = ` in the source would establish that syntactically and
+/// prove nothing about execution: a cursor set by some other route, or a read at
+/// an index the cursor does not hold, would both pass. The stage now writes its
+/// cursor back on every token read, so this reads the EXECUTED sequence.
+///
+/// # What a passing run licenses
+///
+/// If consecutive cursors differ by at most one, a host can feed a window of two
+/// tokens and slide it, because it can never be surprised by a jump. That is what
+/// makes the 40,960-word array removable rather than merely large.
+///
+/// **It does not mean the driver does that yet.** It still seeds the whole
+/// stream; this is the property the change would rest on, measured in advance
+/// rather than discovered afterwards.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_parser_never_jumps_more_than_one_token() {
+    // Sources with the constructs most likely to seek: nested calls, an operator
+    // chain the shunting yard drains, a match, and a `for` with a limit.
+    const CASES: &[(&str, &str)] = &[
+        ("scalar", "fn main() -> Word { 42 }"),
+        (
+            "operators",
+            "fn f(a: Word, b: Word) -> Word { a + b * a - b + a * b }\nfn main() -> Word { f(1, 2) }",
+        ),
+        (
+            "nested-calls",
+            "fn g(x: Word) -> Word { x + 1 }\n\
+             fn f(a: Word) -> Word { g(g(g(a))) }\n\
+             fn main() -> Word { f(1) }",
+        ),
+        (
+            "match-and-for",
+            "private data d { s: Word }\n\
+             fn f(n: Word) -> Word { for i in 0..n limit 8 { d.s = d.s + i; } d.s }\n\
+             fn main() -> Word { match f(3) { _ => 1, } }",
+        ),
+        // The largest real stage, so the case is a program rather than a snippet.
+        ("lexer-stage", include_str!("../src/selfhost/kel/lexer.kel")),
+    ];
+
+    let mut checked = 0;
+    for (label, src) in CASES {
+        let trace = keleusma::selfhost::parse_cursor_trace(src);
+        assert!(
+            trace.len() > 4,
+            "{label}: the trace is {} entries, too short to measure motion",
+            trace.len()
+        );
+
+        let mut worst = 0i64;
+        for w in trace.windows(2) {
+            let step = w[1] - w[0];
+            if step.abs() > worst.abs() {
+                worst = step;
+            }
+        }
+        assert!(
+            worst.abs() <= 1,
+            "{label}: the cursor moved by {worst} in one step. A host feeding a sliding \
+             window would have been surprised by that jump, and the two-token window this \
+             measurement licenses would have read the wrong token."
+        );
+
+        // MUST-NOT-FIRE. A trace that never moved would satisfy the bound above
+        // for a reason that has nothing to do with the parser being well behaved.
+        let advanced = trace.last().copied().unwrap_or(0);
+        assert!(
+            advanced > 0,
+            "{label}: the cursor never advanced, so the bound above is vacuous"
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, CASES.len(), "not every case was measured");
+}
