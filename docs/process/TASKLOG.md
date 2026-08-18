@@ -10,6 +10,25 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-18, later).** **`parse.kel`'s capacity limits now name themselves.** Four
+> causes that arrived as raw virtual-machine traps are reported by the stage through a negative
+> record tag and rendered by the driver: too many local bindings, expression nesting too deep, too
+> many statements in one body, and an unmatched closing bracket. A fifth, an unterminated block, is
+> a driver-side budget message that now names its likely cause.
+>
+> **THE HEADLINE: two unrelated 64-entry limits gave a BYTE-IDENTICAL message.** `ops.opstack` and
+> `stmt.let_names` are both 64, so "too many locals" and "expression nested too deep" both read
+> `IndexOutOfBounds(64, 64)`. That defect is now encoded as a test.
+>
+> The guard is on the pointer and each guarded array carries one spare slot, because the write
+> precedes the increment and clamping at the last usable slot would REFUSE the exactly-full program
+> that parses today. Every boundary is pinned from both sides.
+>
+> **NOT COVERED, and the count is the point**: roughly a hundred and thirty fixed arrays remain in
+> `parse.kel` and four are named. 47 of 8 entries, 22 of 32, 4 of 64, 19 of 256, 17 of 512, none
+> probed. The probe also found several malformed inputs SILENTLY ACCEPTED, which is acceptance
+> laxity rather than a diagnostic defect.
+
 > **Currency note (2026-08-18).** The streaming programme reached its design boundary and the
 > architecture is recorded.
 >

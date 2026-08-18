@@ -13,6 +13,75 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**FOUR DIAGNOSTICS THAT POINTED AWAY FROM THEIR CAUSES, AND TWO OF THEM WERE THE SAME MESSAGE
+(2026-08-18).**
+
+`parse.kel` reported its capacity limits as raw virtual-machine traps. Measured by feeding malformed
+and oversized sources to the stage and recording what came back, rather than by reading the code:
+
+| input | what it reported |
+|---|---|
+| 65 local bindings in one function | `IndexOutOfBounds(64, 64)` |
+| 65 nested parentheses | `IndexOutOfBounds(64, 64)` |
+| 257 statements in one body | `IndexOutOfBounds(256, 256)` |
+| an unmatched `]` | `IndexOutOfBounds(-1, 64)` |
+| an unterminated block | `parse.kel did not reach DONE within its iteration budget` |
+
+**THE FIRST TWO ARE THE FINDING.** `ops.opstack` and `stmt.let_names` are both 64 entries, so two
+entirely unrelated limits produced a BYTE-IDENTICAL diagnostic. A reader could not tell "too many
+locals" from "expression nested too deep", and neither message named a cap they controlled or a
+construct they could split. The boundaries were pinned from both sides by measurement first: 64
+bindings parse and 65 do not; 64 nested parentheses parse and 65 do not; 256 statements parse and
+257 do not.
+
+**THE GUARD IS ON THE POINTER AND EACH GUARDED ARRAY CARRIES ONE SPARE SLOT.** The write happens
+before the increment (`a[sp] = v; sp = sp + 1`), so a guard on the increment alone fires one write
+too late. Clamping the pointer at the last USABLE slot would have been worse than useless: it would
+REFUSE the exactly-full program that parses today, which is a unilateral narrowing of the admitted
+language. The spare slot gives the overflowing write somewhere legal to land, the pointer guard
+records the cause, and the parse limps to its next record boundary where `step` reports it. The
+clamped parse is garbage and is never used, because the host stops at the diagnostic record.
+
+The stage reports through a negative record tag (`0 - 900 - code`) on the existing Option E two-word
+transport, so the payload is a full word carrying the count that was reached. Record tags are
+non-negative, so no legitimate record can collide.
+
+**I WIDENED TWO ARRAYS OF EIGHT AND THE TRAP DID NOT MOVE.** `let_names` and `scope_slot` are the two
+that a grep for the counter's write sites surfaces. Six more — `let_tuple`, `let_struct`,
+`let_array`, `let_array_struct`, `let_array_size` and `let_enum` — are written at the same counter,
+and the 65th binding reaches one of those first. The measurement said so immediately: the guard was
+in place, the message was still `IndexOutOfBounds(64, 64)`.
+
+**The test therefore DERIVES the array set from the stage instead of listing it.**
+`the_parse_guard_caps_match_their_arrays` reads every array `parse.kel` indexes with a guarded
+counter and requires each to be declared one longer than its cap. Verified by mutation: reverting
+`let_enum` to 64 fails it by name. A hand-written list would have encoded exactly the mistake I had
+just made — the sixth instance of this line's recurring meta-defect, a suite whose coverage is a
+property of its case list.
+
+**A SIXTH CONSTRUCTED STATUS, AND IT NEARLY LANDED.** The full-feature suite reported `[exited with
+code 0]` and forty green result lines. That exit code was `grep`'s, not `cargo`'s: `cargo test`
+aborts at the first failing binary, `selfhost_wire` had failed, and eighteen binaries never ran. The
+tell was not the exit code but the SHAPE of the output — `selfhost_parse` takes ninety-eight seconds
+and nothing in the list took that long. Re-run with `--no-fail-fast` and the exit code captured
+separately from the pipe. **Same defect the handoff already records twice, in a third disguise.**
+
+The failure it hid was a pin doing its job: `every_stage_fits_the_driver_caps_with_margin` moved from
+630 names to 645 and from 33,500 blob bytes to 34,118. Fifteen names is thirteen guard functions plus
+two `ps.perr_*` fields, which is the count exactly. **That pin has now earned itself three times, and
+not one of the three changes was about names.**
+
+**WHAT THIS DOES NOT COVER, stated because a green suite here is easy to over-read.** `parse.kel`
+declares roughly a hundred and thirty fixed arrays. Four causes are named; the rest still trap raw —
+47 arrays of 8 entries (the nesting stacks), 22 of 32, 4 of 64 (the struct-definition tables), 19 of
+256 and 17 of 512. None has been probed, so none is known to be reachable or unreachable. Separately,
+the probe found several malformed inputs SILENTLY ACCEPTED by the stage: a stray `)`, an unclosed
+`(`, a binary operator with no right operand, and an empty index `a[]`. That is acceptance laxity
+rather than a diagnostic defect, and it is mitigated but not closed by the self-hosted compiler
+cross-checking every output against the reference.
+
+---
+
 **THE PIPELINE IS THE PERMANENT STRUCTURE, AND FOUR CAPS FELL BECAUSE THEY WERE MEASURING THE WRONG
 THING (2026-08-18).**
 

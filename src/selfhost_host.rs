@@ -13,6 +13,8 @@
 
 use crate::bytecode::Value;
 use crate::vm::{Vm, VmState};
+use alloc::format;
+use alloc::string::String;
 use core::ops::ControlFlow;
 
 /// Drive a running `parse.kel` coroutine, invoking `on_record(code, val)` for each record it
@@ -87,6 +89,19 @@ pub fn drive_parse_records_with<F, B>(
             } else {
                 (t, arg)
             };
+            // A DIAGNOSTIC RECORD FROM THE STAGE, not a parse record. `parse.kel` reports
+            // its own capacity limits here rather than letting them surface as raw virtual
+            // machine traps: four separate causes used to arrive as `IndexOutOfBounds`
+            // naming an array's size, and two unrelated limits (locals and operator nesting,
+            // both 64) produced the byte-identical message `IndexOutOfBounds(64, 64)`.
+            //
+            // Panics rather than returning an error, matching the existing failure mode of
+            // this driver and of `parse_functions`. Whether these should become a `Result`
+            // is a real question and a separate one; it changes a signature that many tests
+            // and both compile paths depend on.
+            if code <= PARSE_DIAG_TAG_BASE {
+                panic!("{}", describe_parse_diagnostic(code, val));
+            }
             if on_record(code, val).is_break() {
                 return;
             }
@@ -96,8 +111,71 @@ pub fn drive_parse_records_with<F, B>(
             .resume_with_shared(shared, Value::Int(0))
             .expect("resume parse.kel");
     }
-    panic!("parse.kel did not reach DONE within its iteration budget");
+    // Measured cause: an unterminated block. `fn f() -> Word { let x = 1; x` (no closing
+    // brace) exhausts the budget rather than reporting anything, because the stage is still
+    // waiting for the token that closes the body. The budget itself is almost never the
+    // real fault, so it is named last rather than first.
+    panic!(
+        "parse.kel ran {budget} steps without reaching DONE. The usual cause is an \
+         unterminated block, string, or bracket in the input: the parser is still waiting \
+         for the token that closes it and never reaches the end of the declaration."
+    );
 }
+
+/// The tag at or below which a record from `parse.kel` is a diagnostic rather than a parse
+/// record. Record tags are non-negative, so no legitimate record can collide.
+///
+/// Restated here from `pe_tag_base()` in the stage; `the_parse_diagnostic_tag_base_matches`
+/// checks the two agree, because a driver that learned the base by observing one would only
+/// learn it from a program that had already failed.
+pub const PARSE_DIAG_TAG_BASE: i64 = -900;
+
+/// Render a diagnostic record from `parse.kel` as a message that names the cap, the count
+/// that exceeded it, and the construct at fault.
+///
+/// The codes are `pe_opstack`/`pe_bracket`/`pe_locals`/`pe_stmts` in the stage. An unknown
+/// code is reported as unknown rather than guessed at: a stage that grew a fifth cause and
+/// a driver that silently mapped it onto a fourth would be the misdirecting-diagnostic
+/// defect this whole path exists to remove.
+pub fn describe_parse_diagnostic(code: i64, detail: i64) -> String {
+    match PARSE_DIAG_TAG_BASE - code {
+        1 => format!(
+            "expression nesting is too deep for parse.kel: it reached {detail} pending \
+             operators and `ops.opstack` holds {}. Nesting counts parentheses, calls, \
+             struct and array literals, and pending binary operators. Split the expression.",
+            PARSE_OPSTACK_CAP
+        ),
+        2 => format!(
+            "unmatched closing bracket at token {detail}: parse.kel reached a `]` or a `)` \
+             with no matching opening bracket pending."
+        ),
+        3 => format!(
+            "too many local bindings in one function for parse.kel: it reached {detail} and \
+             `stmt.let_names` holds {}. Every `let`, every `for` loop variable, and every \
+             pattern binding takes a slot. Split the function.",
+            PARSE_LOCALS_CAP
+        ),
+        4 => format!(
+            "too many statements in one body for parse.kel: it reached {detail} and \
+             `stmt.stmt_kind` holds {}. Split the body.",
+            PARSE_STMTS_CAP
+        ),
+        other => format!(
+            "parse.kel reported diagnostic code {other} (detail {detail}), which this driver \
+             does not know. The stage has grown a cause that `describe_parse_diagnostic` was \
+             not taught."
+        ),
+    }
+}
+
+/// The usable capacities behind the three counted limits, restated from `pe_cap_op`,
+/// `pe_cap_let` and `pe_cap_stmt` in the stage. `the_parse_guard_caps_match_their_arrays`
+/// checks all three against the array declarations they guard.
+pub const PARSE_OPSTACK_CAP: usize = 64;
+/// See [`PARSE_OPSTACK_CAP`].
+pub const PARSE_LOCALS_CAP: usize = 64;
+/// See [`PARSE_OPSTACK_CAP`].
+pub const PARSE_STMTS_CAP: usize = 256;
 
 /// Control-flow class and target for one opcode, as `analyze.kel` consumes them.
 ///

@@ -2457,3 +2457,316 @@ fn the_chunk_table_cap_is_refused_by_the_driver_and_not_by_the_stage() {
          defect this guard replaces."
     );
 }
+
+// ---------------------------------------------------------------------------------------
+// THE CAPACITY DIAGNOSTICS. Four causes that used to arrive as raw virtual-machine traps.
+// ---------------------------------------------------------------------------------------
+
+#[cfg(feature = "self-host")]
+const PARSE_STAGE: &str = include_str!("../src/selfhost/kel/parse.kel");
+
+/// The declared length of `parse.kel`'s array `name`, or `None` if it declares no such array.
+#[cfg(feature = "self-host")]
+fn declared_len(name: &str) -> Option<usize> {
+    PARSE_STAGE
+        .lines()
+        .map(str::trim)
+        .find(|l| l.starts_with(&format!("{name}: [Word;")))
+        .and_then(|l| l.split(';').nth(1))
+        .and_then(|t| t.split(']').next())
+        .and_then(|n| n.trim().parse().ok())
+}
+
+/// Every array `parse.kel` indexes with `expr`, found by reading the stage rather than by
+/// listing them here.
+///
+/// **This function exists because listing them by hand is what failed.** Widening
+/// `let_names` and `scope_slot` left the 65-binding trap exactly where it was, because six
+/// further arrays — `let_tuple`, `let_struct`, `let_array`, `let_array_struct`,
+/// `let_array_size` and `let_enum` — are written at the same counter, and the 65th binding
+/// reaches one of those first. Eight arrays, of which I had found two by inspection.
+#[cfg(feature = "self-host")]
+fn arrays_indexed_by(expr: &str) -> Vec<String> {
+    let needle = format!("[{expr}]");
+    let mut out = Vec::new();
+    for (i, _) in PARSE_STAGE.match_indices(&needle) {
+        let head = &PARSE_STAGE[..i];
+        let name: String = head
+            .chars()
+            .rev()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        // Field accesses read `block.field[...]`; the array is the field.
+        if !name.is_empty() && !out.contains(&name) {
+            out.push(name);
+        }
+    }
+    out.sort();
+    out
+}
+
+/// A `Word` constant returned by a nullary function in `parse.kel`, e.g. `pe_cap_op`.
+#[cfg(feature = "self-host")]
+fn stage_const(name: &str) -> Option<i64> {
+    PARSE_STAGE
+        .lines()
+        .map(str::trim)
+        .find(|l| l.starts_with(&format!("fn {name}() -> Word {{")))
+        .and_then(|l| l.split('{').nth(1))
+        .and_then(|t| t.split('}').next())
+        .and_then(|n| {
+            let n = n.trim();
+            // The tag base is written `0 - 900`, since the subset has no negative literal.
+            if let Some(rest) = n.strip_prefix("0 - ") {
+                rest.trim().parse::<i64>().ok().map(|v| -v)
+            } else {
+                n.parse().ok()
+            }
+        })
+}
+
+/// Runs `parse_functions` and returns the refusal message, or `None` if it was accepted.
+#[cfg(feature = "self-host")]
+fn refusal(src: &str) -> Option<String> {
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        keleusma::selfhost::parse_functions(src);
+    }));
+    r.err().map(|e| {
+        e.downcast_ref::<String>()
+            .cloned()
+            .or_else(|| e.downcast_ref::<&str>().map(|s| (*s).to_string()))
+            .unwrap_or_else(|| "<non-string panic>".to_string())
+    })
+}
+
+#[cfg(feature = "self-host")]
+fn src_lets(n: usize) -> String {
+    let mut s = String::from("fn f() -> Word {\n");
+    for i in 0..n {
+        s.push_str(&format!("    let v{i} = {i};\n"));
+    }
+    s.push_str("    v0\n}\n");
+    s
+}
+
+#[cfg(feature = "self-host")]
+fn src_parens(n: usize) -> String {
+    let mut s = String::from("fn f() -> Word { let x = ");
+    for _ in 0..n {
+        s.push('(');
+    }
+    s.push('1');
+    for _ in 0..n {
+        s.push(')');
+    }
+    s.push_str("; x }");
+    s
+}
+
+#[cfg(feature = "self-host")]
+fn src_stmts(n: usize) -> String {
+    let mut s = String::from("data d { a: Word = 0 }\nfn f() -> Word {\n");
+    for i in 0..n {
+        s.push_str(&format!("    d.a = {i};\n"));
+    }
+    s.push_str("    d.a\n}\n");
+    s
+}
+
+/// **EVERY ARRAY BEHIND A GUARDED COUNTER MUST CARRY THE SPARE SLOT, and the set is read
+/// out of the stage rather than listed here.**
+///
+/// The guard is on the pointer and the write happens before the increment, so each guarded
+/// array is declared one longer than its usable capacity. An array that is written at a
+/// guarded counter but was never widened still traps at the old index, and the guard above
+/// it never fires — which is exactly what happened to six of the eight local-binding
+/// arrays, and no test would have caught it, because the two I had widened were the two I
+/// had looked at.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_parse_guard_caps_match_their_arrays() {
+    let cases: &[(&str, &str, usize)] = &[
+        (
+            "ops.opsp",
+            "pe_cap_op",
+            keleusma::selfhost_host::PARSE_OPSTACK_CAP,
+        ),
+        (
+            "stmt.let_count",
+            "pe_cap_let",
+            keleusma::selfhost_host::PARSE_LOCALS_CAP,
+        ),
+        (
+            "stmt.stmt_count",
+            "pe_cap_stmt",
+            keleusma::selfhost_host::PARSE_STMTS_CAP,
+        ),
+    ];
+
+    for &(counter, cap_fn, driver_cap) in cases {
+        let cap = stage_const(cap_fn)
+            .unwrap_or_else(|| panic!("parse.kel declares no `fn {cap_fn}() -> Word`"));
+        assert_eq!(
+            cap as usize, driver_cap,
+            "the stage's {cap_fn} is {cap} and the driver restates it as {driver_cap}. A \
+             driver whose cap has drifted from the stage's prints a number the reader \
+             cannot act on."
+        );
+
+        let arrays = arrays_indexed_by(counter);
+        assert!(
+            !arrays.is_empty(),
+            "no array is indexed by `{counter}`, so this case reads nothing and the guard \
+             on it is unverified"
+        );
+        for a in &arrays {
+            let Some(len) = declared_len(a) else { continue };
+            assert_eq!(
+                len,
+                cap as usize + 1,
+                "`{a}` is indexed by `{counter}`, whose guard holds the pointer at {cap}, \
+                 but `{a}` is declared [Word; {len}]. It must be {} — the usable capacity \
+                 plus the spare slot the overflowing write lands in. Widening the counter's \
+                 other arrays and not this one leaves the original trap in place.",
+                cap + 1
+            );
+        }
+    }
+}
+
+/// The driver's diagnostic tag base is the stage's, checked rather than assumed.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_parse_diagnostic_tag_base_matches() {
+    let base = stage_const("pe_tag_base").expect("parse.kel declares `fn pe_tag_base()`");
+    assert_eq!(
+        base,
+        keleusma::selfhost_host::PARSE_DIAG_TAG_BASE,
+        "the stage emits diagnostics at or below {base} and the driver recognises them at \
+         or below {}. A mismatch either swallows a diagnostic as a parse record or treats a \
+         parse record as a diagnostic.",
+        keleusma::selfhost_host::PARSE_DIAG_TAG_BASE
+    );
+}
+
+/// **THE HEADLINE DEFECT, ENCODED: two unrelated 64-entry limits gave the SAME message.**
+///
+/// `ops.opstack` and `stmt.let_names` are both 64 entries, so 65 local bindings and 65
+/// nested parentheses both produced `IndexOutOfBounds(64, 64)` — byte-identical, naming an
+/// array size and neither the construct at fault nor a cap the reader controls. This test
+/// fails if they ever converge again.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_two_sixty_four_caps_no_longer_give_the_same_message() {
+    let locals = refusal(&src_lets(65)).expect("65 local bindings must be refused");
+    let nesting = refusal(&src_parens(65)).expect("65 nested parentheses must be refused");
+    assert_ne!(
+        locals, nesting,
+        "the two 64-entry caps report identically again, which is the defect this path \
+         exists to remove"
+    );
+    assert!(
+        locals.contains("local bindings") && !locals.contains("nesting"),
+        "the local-binding refusal was {locals:?}"
+    );
+    assert!(
+        nesting.contains("nesting") && !nesting.contains("local bindings"),
+        "the nesting refusal was {nesting:?}"
+    );
+}
+
+/// Local bindings: at the cap accepted, one past refused, and the refusal names the cap.
+///
+/// Pinned from BOTH sides. A guard firing one binding early would refuse a program that
+/// works today, and the accepting half is the only thing that would catch it.
+#[cfg(feature = "self-host")]
+#[test]
+fn too_many_local_bindings_is_named_and_the_boundary_holds() {
+    let cap = keleusma::selfhost_host::PARSE_LOCALS_CAP;
+    assert!(
+        refusal(&src_lets(cap)).is_none(),
+        "a function with exactly {cap} local bindings must parse; the guard fires too early"
+    );
+    let msg = refusal(&src_lets(cap + 1)).expect("one binding past the cap must be refused");
+    assert!(
+        msg.contains("local bindings")
+            && msg.contains(&(cap + 1).to_string())
+            && msg.contains(&cap.to_string()),
+        "the refusal was {msg:?}, which does not name both the count reached and the cap. \
+         It used to be `IndexOutOfBounds(64, 64)`."
+    );
+}
+
+/// Expression nesting: at the cap accepted, one past refused, and the refusal says so.
+#[cfg(feature = "self-host")]
+#[test]
+fn expression_nesting_is_named_and_the_boundary_holds() {
+    let cap = keleusma::selfhost_host::PARSE_OPSTACK_CAP;
+    assert!(
+        refusal(&src_parens(cap)).is_none(),
+        "an expression with exactly {cap} nested parentheses must parse; the guard fires \
+         too early. This half is load-bearing: holding the pointer at the last USABLE slot \
+         instead of at a spare one would refuse this program, which parses today."
+    );
+    let msg = refusal(&src_parens(cap + 1)).expect("one level past the cap must be refused");
+    assert!(
+        msg.contains("nesting") && msg.contains(&(cap + 1).to_string()),
+        "the refusal was {msg:?}, which does not name expression nesting"
+    );
+}
+
+/// Statements in one body: at the cap accepted, one past refused, named.
+#[cfg(feature = "self-host")]
+#[test]
+fn too_many_statements_is_named_and_the_boundary_holds() {
+    let cap = keleusma::selfhost_host::PARSE_STMTS_CAP;
+    assert!(
+        refusal(&src_stmts(cap)).is_none(),
+        "a body with exactly {cap} statements must parse; the guard fires too early"
+    );
+    let msg = refusal(&src_stmts(cap + 1)).expect("one statement past the cap must be refused");
+    assert!(
+        msg.contains("statements") && msg.contains(&(cap + 1).to_string()),
+        "the refusal was {msg:?}, which does not name the statement table. It used to be \
+         `IndexOutOfBounds(256, 256)`."
+    );
+}
+
+/// **An unmatched `]` used to index -1 into a 64-entry array.**
+///
+/// `IndexOutOfBounds(-1, 64)` named `opstack`'s size, and the reader's actual fault was a
+/// bracket several tokens earlier. Measured on two inputs, because the second reaches the
+/// same site through a different path.
+#[cfg(feature = "self-host")]
+#[test]
+fn an_unmatched_bracket_is_named_rather_than_indexing_minus_one() {
+    for src in [
+        "fn f() -> Word { let x = 1]; x }",
+        "fn f() -> Word { ] ) } { [ ( }",
+    ] {
+        let msg = refusal(src).unwrap_or_else(|| panic!("{src:?} must be refused"));
+        assert!(
+            msg.contains("unmatched closing bracket"),
+            "the refusal for {src:?} was {msg:?}, which does not name the bracket"
+        );
+        assert!(
+            !msg.contains("IndexOutOfBounds"),
+            "the refusal for {src:?} is still a raw index trap: {msg:?}"
+        );
+    }
+}
+
+/// An unterminated block exhausts the driver's step budget, and the message now names that
+/// as the likely cause rather than reporting a budget the reader did not set.
+#[cfg(feature = "self-host")]
+#[test]
+fn budget_exhaustion_names_the_likely_cause() {
+    let msg = refusal("fn f() -> Word { let x = 1; x ").expect("an unclosed body must be refused");
+    assert!(
+        msg.contains("unterminated"),
+        "the refusal was {msg:?}, which names only the budget"
+    );
+}
