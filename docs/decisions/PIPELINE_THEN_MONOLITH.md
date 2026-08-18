@@ -156,11 +156,15 @@ for `parse` and it does not hold at the lexer.** The intern table is a separate 
 only at end of input and addressed by identifier index: a token carries an ID, and the spelling lives
 in the table.
 
-**Both known whole-input facts come from the lexer**, and that is not a coincidence. Interning is
+**All THREE known whole-input facts come from the lexer**, and that is not a coincidence. Interning is
 inherently a whole-input operation -- an id's spelling table cannot be known complete until the input
-ends -- and the chunk table is derived from the tokens and those names. **This strengthens the single
-sidecar with sections**: both facts come from the same phase, so one pre-pass can emit both, and there
-is one fingerprint and one correspondence rather than two.
+ends -- the chunk table is derived from the tokens and those names, and the token count is not known
+until the stream ends. **This strengthens the single sidecar with sections**: one pre-pass emits all
+three, with one fingerprint and one correspondence rather than three.
+
+**The third was found by BUILDING the fusion, not by inspecting the stages.** `toks.len` is invisible
+as a dependency until a windowed feed has to supply it. Treat the enumeration as incomplete until each
+boundary has actually been cut.
 
 **`reconstruct` produces a random-access structure rather than a stream.** Nothing forbids
 serialising the AST as a node stream, but today it is addressed and not consumed in order, so calling
@@ -231,16 +235,43 @@ that produced this document when they pull in different directions.
 - **Whether `reconstruct`'s AST becomes a node stream or stays addressed.** It is a random-access
   structure today, and it is the only stage output that is not a stream at all.
 
-## The first increment, which needs no shell and no format
+## THE FIRST INCREMENT IS DONE, and building it found a fact the enumeration had missed
 
-**Fuse `lexer` into `parse` so the parser pulls a token on demand**, in-process, with no intermediate
-collection. Both stages are measured, the parser is known to need only a one-token window, and success
-removes the largest remaining residency.
+`parse_functions_fused` drives `lexer.kel` INTO `parse.kel` with no token stream materialised. The
+collecting path seeds all tokens into a 40,960-word array; this holds a small window and slides, and
+produces byte-identical output on four real stages -- same functions, same guard and body records,
+same data and enum streams, same intern table.
 
-**The chunk-table pre-pass is the obstacle and its answer is the classical one**: two passes. Pass one
-streams the lexer and collects only function names -- bounded, a name table and nothing else. Pass two
-streams the lexer again, fused into the parser, materialising no token stream. Running the lexer twice
-is how a single-pass compiler has always handled a forward reference it cannot settle on first sight.
+**Two passes, because one cannot work.** Pass one streams the lexer holding only bounded facts; pass
+two streams it again, fused. Running the lexer twice is how a single-pass compiler has always handled
+a forward reference it cannot settle on first sight, and it is exactly what a pipeline cut at this
+boundary would materialise as a sidecar.
+
+**The lookbehind is ONE token and it is derived rather than chosen.** `toks.at` is written before the
+cursor advances, so it names the index just read; with `k` pushbacks the next read is at `C+1-k`,
+making a trace step of `1-k` a direct report of `k`. Steps are bounded to plus or minus one, so `k` is
+at most two and the lowest read is `at - 1`. Pinned by
+`the_parser_pushes_back_at_most_two_tokens`, with a must-not-fire check that pushback actually occurs.
+
+### A THIRD WHOLE-INPUT FACT, found by building rather than by reasoning
+
+The enumeration listed two: the intern table and the chunk table. **There is a third, and nothing
+would have surfaced it except attempting the fusion.**
+
+`parse.kel` finds end of input by comparing its cursor against `toks.len` -- **the token COUNT**. A
+collecting driver supplies it for free, because it has the whole stream before it starts. A windowed
+feed cannot leave it as "however many arrive", so the count must come from the pre-pass.
+
+That is the argument for enumerating by BUILDING rather than by inspection, and it is a warning about
+the sidecar format: a fact can be invisible in the source and obvious the moment a boundary is cut.
+**All three come from the lexer**, which continues to point at one sidecar with sections rather than a
+flag each.
+
+### What the fusion establishes about the architecture
+
+The demand-driven composition works in-process, with no shell, no serialisation and no format. Two
+coroutines, one pulling from the other. That is the first evidence the architecture rests on something
+real rather than on the stages merely having a compatible shape.
 
 ## Sequencing, stated because agreement on the architecture is not agreement on the priority
 
