@@ -5,7 +5,13 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **Refreshed 2026-08-17** against the merge at `81ddd260`, with every pinned count re-measured
+> **Refreshed 2026-08-18** against the merge at `3f3735d2`, with every pinned count re-measured. The
+> session that produced it converted the last two stages to coroutines, removed every emit-side cap,
+> fused the lexer into the parser, and recorded the selectable-phase architecture. **Read
+> `../decisions/PIPELINE_THEN_MONOLITH.md` before touching the pipeline**; it holds one open fork for
+> the operator and the enumeration of whole-input facts that any boundary format depends on.
+>
+> **Previously refreshed 2026-08-17** against the merge at `81ddd260`, with every pinned count re-measured
 > rather than carried forward. The state, macro position, correctness items and operator-held list
 > changed; the workflow, method rules and hard-won facts below did not and were left alone. Four
 > operator decisions are now RULED ON and two are DONE — read that section before asking anything.
@@ -26,15 +32,21 @@ always-current, so it must be able to report itself stale rather than mislead a 
 recorded parent is a claim that nothing else ever lands, and it has failed twice.
 
 ```sh
-git merge-base --is-ancestor eec49eae HEAD    # must succeed
+git merge-base --is-ancestor 3f3735d2 HEAD    # must succeed
 
 # Content. If ANY of these differ, say so rather than acting on the state below.
 grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 12
-grep -c '^\s*#\[test\]' tests/selfhost_wire.rs              # 169
+grep -c '^\s*#\[test\]' tests/selfhost_wire.rs              # 172
+grep -c '^\s*#\[test\]' tests/selfhost_parse.rs             # 69
 grep -c '^\s*#\[test\]' tests/block_form_statements.rs      # 11
 grep -c '^\s*#\[test\]' tests/consts_region_composition.rs  # 7
 grep -c '^\s*#\[test\]' tests/operand_stack_model.rs        # 6
-grep -oE 'fn highest_command\(\) -> Word \{ [0-9]+ \}' src/selfhost/kel/wire.kel   # 173
+grep -oE 'fn highest_command\(\) -> Word \{ [0-9]+ \}' src/selfhost/kel/wire.kel   # 181
+
+# THE FIVE CAPS. Four are gone; the numbers that remain are LIVE BOUNDS.
+grep -oE 'fn (nm_max_names|mi_max_nodes|fl_max_nodes|ck_max)\(\) -> Word \{ [0-9]+ \}' \
+    src/selfhost/kel/wire.kel        # 1024 names, 1365 nodes, 170 flattener, 90 chunk batch
+grep -n 'chunks: \[Word;' src/selfhost/kel/parse.kel   # [Word; 256] -- excludes `wire` at 475
 
 awk '/let cases: &\[\(&str, Support, &str\)\] = &\[/{f=1;next} f&&/^    \];/{f=0} f' \
     tests/selfhost_codegen.rs \
@@ -98,9 +110,12 @@ push cancelled run `31932202253` and `31932359730` replaced it.
 
 | | |
 |---|---|
-| ALL TWELVE STAGES | **`loop main(...)` coroutines**; the last two converted |
+| ALL TWELVE STAGES | **`loop main(...)` coroutines** |
+| emit path | **11 of 11 stages**; every emit-side cap removed |
 | `verify_types.kel` | **streams**, one row per resume, asserted by resume COUNT |
-| `wire.kel` | coroutine ENTRY only; its commands still answer in one yield |
+| `wire.kel` | SEVEN streaming commands; the rest answer in one yield |
+| `lexer` into `parse` | **FUSED**, one-token window, byte-identical on four stages |
+| architecture | one binary, selectable phases -- see `../decisions/PIPELINE_THEN_MONOLITH.md` |
 | construct-support boundary | **79 Ok / 4 Gap / 1 RefRejects**, 84 cases |
 | auxiliary body | **103,544 bytes** across eleven stages, down from 712,936 |
 | stages fitting one 65,536-byte window | **11 of 11**, where three did not |
@@ -170,6 +185,37 @@ sometime after Order 1.**
 **4. Derived operands in type rejection.** A field read, an index or an arithmetic result is still
 UNKNOWN and therefore accepted. Pinned by `the_rules_still_do_not_reach_a_derived_operand`.
 Reaching them is a fixpoint, not a lookup.
+
+## FIVE CAPS, FOUR REMOVED, AND HOW THEY WERE FOUND
+
+| bound | status |
+|---|---|
+| artifact size against the 65,536 window | **gone** -- the all-default elision, 6.9x smaller body |
+| chunk batch, 90 records | **gone** -- streaming; the carries existed because a function cannot remember |
+| constant flattener, 170 nodes | **gone for a scalar forest** -- a composite needs the queue, and the queue IS the residency |
+| module-input node walk, 1,024 | **gone** -- the guard was measuring the NAME arrays; the node table holds 1,365 |
+| `toks.chunks`, 256 entries | **STANDS.** `wire.kel` cannot be PARSED at 475 functions |
+
+**FOUR OF THE FIVE WERE FOUND BY SOMETHING OTHER THAN LOOKING FOR THEM.** The last surfaced while
+measuring residency for an unrelated increment. That is an argument for measuring AROUND work rather
+than only at it.
+
+**Raising `toks.chunks` is a real fix and a separate increment**: `base` and `at` were appended after
+it, so widening shifts them, and a mid-block insertion silently shifting every later field has already
+broken four tests once.
+
+## DIAGNOSTICS IN `parse.kel` POINT AWAY FROM THEIR CAUSES
+
+Twice in one session, in one file, each costing real time:
+
+- **`LoopLimitExceeded`** for a full chunk table. A reader investigates loop bounds, not the 257th
+  function in their program.
+- **`IndexOutOfBounds(-1, 64)`** for an unprimed token window. `packed` is 40,960 words; **64 is
+  `opstack`**. The wrong token drove the shunting yard into draining an empty operator stack thousands
+  of steps later, so the index named neither the array at fault nor the cause.
+
+**Treat this as its own increment rather than adding a guard each time you trip over one.** Both were
+diagnosed wrongly on the first attempt because the message was taken at face value.
 
 ## THE META-DEFECT THIS LINE KEEPS FINDING
 

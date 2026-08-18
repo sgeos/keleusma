@@ -10,6 +10,35 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-18).** The streaming programme reached its design boundary and the
+> architecture is recorded.
+>
+> **EVERY EMIT-SIDE CAP IS GONE and all eleven stages emit.** Four bounds removed, and each was a limit
+> on the WRONG QUANTITY: the artifact ceiling was an offset; the 90-record chunk batch existed because
+> a plain function cannot remember its range cursors; the 170-node flattener held a whole forest only a
+> COMPOSITE needs; and the module-input walk refused past 1,024 NODES using the cap that sizes the NAME
+> arrays. **A fifth stands, on the PARSER**: `toks.chunks` is `[Word; 256]`, so `wire.kel` cannot be
+> PARSED at 475 functions. Raising it is a separate increment, since `base` and `at` were appended
+> after it.
+>
+> **ALL TWELVE STAGES ARE COROUTINES** and `wire.kel` has seven streaming commands. **The lexer is
+> FUSED into the parser** with a one-token window that is DERIVED rather than chosen, byte-identical on
+> four real stages. Two passes, because the chunk table is a whole-stream property.
+>
+> **THE ARCHITECTURE IS DECIDED AND DOCUMENTED**, in
+> [`../decisions/PIPELINE_THEN_MONOLITH.md`](../decisions/PIPELINE_THEN_MONOLITH.md): one binary with
+> `--start`/`--end`, the monolith being `--start=first --end=last` and the shell pipeline N invocations
+> with `start == end`. **One fork is open for the operator**: whether the input is re-readable, which
+> decides whether the monolith is one command or two. The largest benefit is not the memory bound but
+> that phase cuts make a byte-identity divergence BISECTABLE.
+>
+> **FOUR WHOLE-INPUT FACTS, THREE FOUND ONLY BY CUTTING A BOUNDARY.** Enumerate by BUILDING, not by
+> inspecting; the enumeration was called complete twice before it was.
+>
+> **A finding worth its own increment**: diagnostics in `parse.kel` point away from their causes.
+> `LoopLimitExceeded` for a full chunk table, `IndexOutOfBounds(-1, 64)` for an unprimed window where
+> 64 is `opstack` and not the token array. Both today, both misdiagnosed on the first attempt.
+
 > **Currency note (2026-08-17).** Option A landed: the **wholly-default private-slot initialiser pool
 > is elided**, authorised by the operator with no `BYTECODE_VERSION` change since no version-2
 > artifact has ever been published.

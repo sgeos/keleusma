@@ -10,112 +10,97 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-17 (session 47)
+**Date**: 2026-08-18 (session 47, continued)
 
 ## Where things stand
 
 | | |
 |---|---|
-| Auxiliary body | **712,936 → 103,544 bytes**, a factor of 6.9 |
-| Stages fitting one window | **11 of 11**, where three did not |
-| Chunk region emitted | **9 of 11 stages**, up from 7 |
-| Remaining emit limit | the 90-record chunk batch cap only |
-| Operand-stack models | agree on every one of the 66 opcodes |
-| Empty statement | landed; both parsers agree byte-identically |
+| all twelve stages | `loop main(...)` coroutines |
+| emit path | **11 of 11 stages**; every emit-side cap removed |
+| `wire.kel` | seven streaming commands; the rest answer in one yield |
+| `lexer` into `parse` | **FUSED**, one-token window, byte-identical on four stages |
+| architecture | one binary, selectable phases — documented, unbuilt |
+| open PRs | none. Tree clean at `3f3735d2` |
 
-## THE ALL-DEFAULT INITIALISER POOL IS ELIDED
+## THE ARCHITECTURE IS DECIDED AND ONE FORK IS YOURS
 
-Authorised as Option A, with no `BYTECODE_VERSION` change: no version-2 artifact has ever been
-published, so refining the format costs nothing.
+[`../decisions/PIPELINE_THEN_MONOLITH.md`](../decisions/PIPELINE_THEN_MONOLITH.md) — the filename's
+"then" is superseded and the note at its top says so.
 
-A private slot with no explicit initialiser is zero, materialised as one `ConstValue::Int(0)` per
-slot **word** at a sixteen-byte record each. **38,087 of the corpus's 40,332 constants were exactly
-that**, roughly 85% of the whole auxiliary body encoding a value the decoder can supply for nothing.
+**One binary with `--start` and `--end`.** The monolith is `--start=first --end=last`; the shell
+pipeline is N invocations with `start == end`. Same program, so nothing built now is discarded later.
 
-`DataInitRecord.first` now carries `ABSENT` for a wholly-default pool and stores no records. A pool
-with any non-default value is stored in full — a trailing-run scheme would elide nothing for a value
-written last. The sentinel is explicit and `decode_constant_pools` **rejects** it, so a reader that
-has not handled the elision fails on the range rather than returning whatever `u32::MAX` addresses.
+**The open fork**: both the pre-pass and the main pipeline read the SOURCE, so a fused run from a pipe
+cannot re-read it. Buffer the source, accept a file operand with standard input as the default, or
+always split. I lean to the file operand and said why. `--chunk` can only be optional under the first
+two.
 
-Measured at the artifact rather than the encoder, because an encoder that computed the elision and
-stored the records anyway would pass a test of intent.
+**Required whichever way that goes**: fingerprint the sidecar against its input. A stale table
+produces a byte-plausible wrong artifact, which is worse than a crash.
 
-## REMOVING THE WASTE BROKE FIVE VACUITY CONTROLS, AND THAT IS THE FINDING
+## FOUR WHOLE-INPUT FACTS, THREE FOUND ONLY BY CUTTING A BOUNDARY
 
-Seven byte-identity tests failed and **none was a defect**. Five were controls of the form *"this
-input must exceed the buffer, or the mechanism under test is untested"*, and the elision removed
-every oversize real input. **Without those controls the windowing and batching machinery would have
-stopped being exercised while the whole suite stayed green.**
+The intern table, the chunk table, the token count, and — probably — the chunk metadata.
 
-Two of them carried comments recording they had already been re-aimed **twice** for the same reason,
-and a previous increment had built `synthetic_source_over` to end the cycle — sized against the
-encoder's own output, so a win grows the input rather than disqualifying it. This was the third
-round, there is no larger real stage left, and the generator is now the input.
+**The token count is the instructive one.** `parse.kel` finds end of input by comparing its cursor
+against `toks.len`. Free for a collecting driver, impossible for a windowed feed to leave unspecified.
+Nothing in the source marks it as a dependency; it reads as an ordinary field.
 
-Preconditions were **relocated, not weakened**. A real stage still proves region coverage and byte
-identity; the synthetic case carries the oversize and batching guarantees. Two assertions came out of
-the shared `assemble_whole_artifact` helper for the same reason.
+**So: enumerate by BUILDING, not by inspecting.** The enumeration was called complete twice before it
+was. Treat it as incomplete until each boundary has actually been cut.
 
-## Where `CONSTS` emission now stands
+All four come from the lexer or from parse's whole output, which points at one sidecar with sections
+rather than a flag each.
 
-The artifact-size ceiling is gone. What remains:
+## THE ONE CAP LEFT, AND IT IS ON THE PARSER
 
-| bound | value | who it excludes |
-|---|---|---|
-| chunk batch | 90 records | `parse` (94), `wire` (475) |
-| module-input node walk | 1,024 nodes | `wire` (1,148 chunk constants) |
-| flattener out of `wire.fin` | 170 nodes | every stage, for the full region |
+`toks.chunks` is `[Word; 256]`, so **`wire.kel` cannot be PARSED** at 475 functions. Four of the five
+caps this line has found were discovered by something other than looking for them; this one surfaced
+while measuring residency for a different increment.
 
-`parse` now has 817 chunk constants, under the 1,024-node walk cap, so `CONSTS` emission needs about
-five flattener batches rather than a hundred and three. **The two 1,024-figures are different caps**
-and I conflated them once, retracted in `50d949ab`.
+The driver now refuses with both numbers. **Raising the array is a separate increment**: `base` and
+`at` were appended after it, so widening shifts them.
 
-## Held for the operator, with their rulings
+## WHAT I GOT WRONG, RECORDED AS CORRECTIONS
 
-- **`Op::cost()`**: 50 of 66 opcodes unmeasured. *Ruled: close sometime after Order 1.*
-- **Derived operands in type rejection**: extraction still host-side, reaching them is a fixpoint.
-  *Ruled: before publishing V0.3.0.*
+- **A four-token lookbehind justified by a false claim.** I wrote that the cursor could sit "several
+  tokens" behind `at`. It cannot, and the existing measurement already disproved it. The bound is one
+  and it is derived. The widening was a misdiagnosis that did not fix the fault and was kept anyway.
+- **A predicted silent-corruption window that panics instead.** Overflowing the chunk table by one
+  does not corrupt silently. Smaller defect than I claimed; the real one is the misdirecting message.
+- **A private intra-doc link** that only the gate's doc build catches, after correcting that same
+  class earlier and then treating a prose edit as not needing the check. **Rustdoc reads comments, so
+  a comment edit is a gated edit.**
+
+## Held for the operator, with rulings
+
+- **`Op::cost()`**: 50 of 66 opcodes unmeasured. *Ruled: after Order 1.*
+- **Derived operands in type rejection**: extraction still host-side. *Ruled: before publishing V0.3.0.*
 - **Publication**: *held.*
-- **The Japanese FAQ entry** is stale and renders as English. *Ruled: correct eventually.*
+- **The Japanese FAQ entry** renders as English. *Ruled: correct eventually.*
+- **The input-re-readability fork** above: open.
 
 ## What these green suites do NOT establish
 
-Nothing here emits a single `CONSTS` byte for a stage module. The byte identity covers synthetic
-sources under the 170-node flattener cap. The elision figures are properties of **this corpus**: a
-stage gaining a non-default initialiser would store its pool in full, which
-`a_pool_with_any_non_default_value_is_stored_in_full` pins because the corpus cannot supply it.
+The composite constant case does not stream in this shape at all — a composite's record carries a
+range into children numbered after every node at its depth, so the walk needs a queue and **the queue
+IS the residency**. Scalars have no children, which is the only reason `CONSTS` streams.
 
-## ALL TWELVE STAGES ARE COROUTINES NOW
-
-`verify_types.kel` and `wire.kel` were the last two entered as `fn main(cmd)`. Merged at `eec49eae`.
-
-**`verify_types` genuinely streams** — one row per resume, cursors in a private block so they survive
-the loop's `RESET`. **The eleven verdict tests could not establish that**: a stage folding everything
-in its first step and yielding the answer immediately satisfies all of them while streaming nothing.
-`the_fold_advances_one_row_per_resume` measures the resume count instead, and it failed first at two
-yields per row — my counter was counting the loop's `RESET` as a step. The stage was right and the
-instrument was wrong.
-
-**`wire.kel` has a coroutine ENTRY, not streaming commands.** Each still answers in one yield. That is
-a shell that would pass all 169 tests while streaming nothing, and the file says so.
-
-### A COROUTINE MUST BE RESUMED, NOT RE-CALLED
-
-Three parity tests failed with `OutOfArena` at 67,424 bytes while 166 passed. The three were the only
-ones issuing hundreds of commands against ONE machine: each `call` on a suspended coroutine stacks
-another activation instead of replacing it. Resuming reclaims the iteration's arena, so a thousand
-commands cost what one costs — **which is the bounded-memory property the windowed goal is about**.
-It surfaced as an arena error naming the operand stack, not the call pattern.
+Nothing here has been run as an actual pipeline. The fusion is in-process, and the phase-selection
+architecture is documented and unbuilt.
 
 ## Next intended increment
 
-**Convert `wire.kel`'s emit commands to yield per record.** The entry is done and could not have been
-done second. The concrete prize is the LAST remaining emit exclusion: the 90-record chunk batch cap
-that keeps `parse` (94 chunks) and `wire` (475) from emitting their chunk regions. A per-record yield
-removes the cap rather than routing around it, which is the difference between the windowed
-architecture and a workaround — and it subsumes the batched-`CONSTS` increment that was planned
-before the goal was stated.
+**`parse` into `reconstruct`**, and the measurements say what it costs. `reconstruct` is bounded per
+FUNCTION and reads strictly sequentially — both good, both measured. But its `main` performs the whole
+reconstruction in one resume, so it is a coroutine by form rather than by granularity, and fusing at
+record level means restructuring the stage.
 
-Whatever is built, a refusal for any constant forest containing a composite or a name-bearing node
-stays load-bearing: without it the path would silently emit a wrong region for the general case it
-cannot handle.
+Residency at stake: **3x to 13x**. `parse` holds 12,048 records across all functions where its largest
+single function needs 931. A fusion at FUNCTION granularity captures most of that without
+restructuring, at the cost of a probable fourth sidecar fact.
+
+**Before that, consider the diagnostics increment.** `parse.kel` reported `LoopLimitExceeded` for a
+full chunk table and `IndexOutOfBounds(-1, 64)` for an unprimed window — both today, both pointing
+away from the cause, both diagnosed wrongly on the first attempt.

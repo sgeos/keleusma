@@ -13,6 +13,66 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE PIPELINE IS THE PERMANENT STRUCTURE, AND FOUR CAPS FELL BECAUSE THEY WERE MEASURING THE WRONG
+THING (2026-08-18).**
+
+**Every emit-side cap is gone and all eleven stages emit.** Four bounds removed, and the pattern
+across them is the finding rather than the count: **each was a limit on the wrong quantity.** The
+artifact ceiling was an OFFSET, not a size. The chunk batch existed because a plain function cannot
+remember, so the host relayed three range cursors -- a coroutine carries them itself. The flattener's
+170 was the whole forest resident, which only a COMPOSITE needs, because a composite's record carries
+a range into children numbered after every node at its depth and **that queue IS the residency**. And
+the module-input walk refused past 1,024 NODES using the cap that sizes the NAME arrays.
+
+**A fifth cap stands, on the PARSER, and `wire.kel` cannot be parsed at 475 functions.** Found while
+measuring residency for a different increment. **Four of the five were found by something other than
+looking for them**, which is an argument for measuring around work rather than only at it.
+
+**THE ARCHITECTURE CHANGED SHAPE UNDER CHALLENGE, TWICE, AND I WAS WRONG BOTH TIMES.** I argued a
+pipeline meant building serialisation surface to be deleted later; the operator's framing is that the
+pipeline is the permanent LOGICAL structure and only the transport is interim. Then I claimed a
+windowed verifier was blocked because a bound needs a whole chunk's control-flow graph; challenged, it
+is a fold over a well-nested structure with a stack the depth of the nesting, and the whole-chunk
+requirement is how the walk is WRITTEN -- jump targets, a backward scan for a bound constant, a
+forward peek at a loop's tail, each with a bounded-state streaming equivalent. Both corrections are in
+the tree rather than absorbed.
+
+The settled design is one binary with `--start`/`--end`: the monolith is `--start=first --end=last`,
+the shell pipeline is N invocations with `start == end`, same program. **The largest benefit is not
+the memory bound that motivated it** -- byte identity currently says an artifact differs, not where,
+and phase cuts bracket a divergence to a phase.
+
+**FOUR WHOLE-INPUT FACTS, THREE FOUND ONLY BY CUTTING A BOUNDARY.** The token count is the instructive
+one: `parse.kel` compares its cursor against `toks.len`, free for a collecting driver and impossible
+for a windowed feed to leave unspecified. Nothing marks it as a dependency; it reads as an ordinary
+field. **Enumerate by BUILDING, not by inspecting** -- the enumeration was called complete twice
+before it was.
+
+**THE LEXER IS FUSED INTO THE PARSER**, one-token window, byte-identical on four real stages. Two
+passes, because the chunk table is a whole-stream property and no forward pass supplies it. The
+lookbehind is DERIVED: `toks.at` is written before the cursor advances, so a trace step of `1-k`
+reports `k` pushbacks directly, and steps bounded to plus or minus one put the lowest read at `at - 1`.
+
+**AND I HAD WRITTEN A FALSE JUSTIFICATION INTO THE CODE.** An earlier revision used four tokens,
+claiming the cursor could sit "several tokens" behind `at`. It cannot; the existing measurement
+already disproved it. That widening was a misdiagnosis of `IndexOutOfBounds(-1, 64)`, it did not fix
+the fault, and it was kept anyway. The real cause: the hook runs before every RESUME but the parser's
+first step happens inside the initial CALL, so an unprimed window fed it token zero.
+
+**DIAGNOSTICS IN `parse.kel` POINT AWAY FROM THEIR CAUSES, TWICE IN ONE DAY.** `LoopLimitExceeded` for
+a full chunk table; `IndexOutOfBounds(-1, 64)` where `packed` is 40,960 words and **64 is `opstack`**.
+Both were diagnosed wrongly on the first attempt because the message was taken at face value. That
+deserves its own increment rather than a guard bolted on each time.
+
+**FIVE CONSTRUCTED STATUSES, none caught by reading the code.** A gate reported green that never ran
+(`timeout` does not exist on macOS). An unconditional `echo "CLIPPY OK"`. `| tail -1; echo $?`
+reporting the PIPE's exit. And a CI filter classifying failure by EXCLUSION, so every pending job read
+as failed -- **written, fixed, written up, then reproduced verbatim an hour later** in the shell
+version of the same wait. Fixing the instance is not fixing the habit. The rule that works is narrow:
+never classify a state as failure by exclusion.
+
+---
+
 **85% OF THE AUXILIARY BODY WAS ZEROS, AND REMOVING THEM BROKE FIVE VACUITY CONTROLS (2026-08-17).**
 
 **The operator authorised Option A and ruled out a version bump**: no version-2 artifact has ever
