@@ -123,10 +123,41 @@ hash of the source or of the token stream. Cheap, and it converts a silent wrong
 refusal naming both files. Without it the option is pointed at exactly the property the project exists
 to prove.
 
+### THE ENUMERATION, AS FAR AS IT HAS BEEN MEASURED
+
+Taken by reading what the DRIVER extracts from each stage, since every non-stream output shows up as
+something read back after the stage is driven. Partial: `codegen`'s output shape has not been examined
+closely.
+
+| stage | outputs |
+|---|---|
+| `lexer` | a token stream, **plus an intern table** read back by index (`ICOUNT`, `ISTART + id`, `ILEN + id`) |
+| `parse` | **one tagged record stream.** The driver demultiplexes by code into function, data and enum records |
+| `reconstruct` | a node count, **plus an AST written into shared memory** and read by slot (`RC_AST_ROOT`, `RC_AST_KINDS + i`, `RC_AST_ARGS + i`) |
+| `analyze`, `verify_*` | a single verdict word each |
+| `codegen` | reads back through the same slot-indexed pattern; NOT examined closely |
+
+**The working assumption was that an output unit with attached metadata is just one stream. That holds
+for `parse` and it does not hold at the lexer.** The intern table is a separate structure, complete
+only at end of input and addressed by identifier index: a token carries an ID, and the spelling lives
+in the table.
+
+**Both known whole-input facts come from the lexer**, and that is not a coincidence. Interning is
+inherently a whole-input operation -- an id's spelling table cannot be known complete until the input
+ends -- and the chunk table is derived from the tokens and those names. **This strengthens the single
+sidecar with sections**: both facts come from the same phase, so one pre-pass can emit both, and there
+is one fingerprint and one correspondence rather than two.
+
+**`reconstruct` produces a random-access structure rather than a stream.** Nothing forbids
+serialising the AST as a node stream, but today it is addressed and not consumed in order, so calling
+it "a stream with metadata" would describe an intention rather than the code. Whether it becomes a
+stream is a decision the format design has to take rather than inherit.
+
 ### One decision to take once rather than N times
 
-**Enumerate the whole-input facts before fixing the sidecar's format.** The chunk table is the only one
-known, and only because something asked for it; nothing has yet put the question to each phase.
+**Finish the enumeration before fixing the sidecar's format.** Two facts are known and both come from
+the lexer; `codegen` is unexamined and `reconstruct`'s AST needs a shape decision. Discovering a third
+fact after the format is fixed is how formats become bad.
 
 If the enumeration turns up more, one sidecar with SECTIONS beats `--chunk= --syms= --enums=`: one
 file, one fingerprint, one correspondence to check, and the pre-pass runs once regardless of how many
@@ -183,8 +214,9 @@ that produced this document when they pull in different directions.
   function, and "the shape suggests" was wrong four times in the session that produced this document.
   The measurement is the one already used for the parser: instrument the executed reach rather than
   read the source.
-- **Which phases have whole-input dependencies.** The chunk table is the only one known. Until each
-  phase is asked, the sidecar's format cannot be fixed without risking a fourth fact arriving late.
+- **`codegen`'s output shape**, the one stage the enumeration above did not examine.
+- **Whether `reconstruct`'s AST becomes a node stream or stays addressed.** It is a random-access
+  structure today.
 
 ## The first increment, which needs no shell and no format
 
