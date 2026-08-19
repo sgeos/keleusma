@@ -214,7 +214,7 @@ const CATEGORY: usize = 1 + 1024 * 4 + 256 * 5 + 1;
 use crate::selfhost_host::{
     BR_LEX_ICOUNT, BR_LEX_ILEN, BR_LEX_ISTART, BR_P_AT, BR_P_BASE, BR_P_BOOL_ID, BR_P_BYTE_ID,
     BR_P_CHUNK_COUNT, BR_P_CHUNKS, BR_P_LEN, BR_P_LIMIT_ID, BR_P_PACKED, BR_P_REQUIRE_ID,
-    BR_P_WORD_ID, PARSE_CHUNK_CAP,
+    BR_P_WORD_ID, PARSE_CHUNK_CAP, PARSE_TOKEN_CAP,
 };
 
 fn br_shared_word(vm: &Vm<'_, '_>, buf: &[u8], slot: usize) -> i64 {
@@ -759,6 +759,42 @@ pub fn parse_functions_fused(
     (fns, names, data_records, enum_records)
 }
 
+/// How many tokens `lexer.kel` produces for `src` — **the count `PARSE_TOKEN_CAP` is
+/// measured against**.
+///
+/// Public because it is NOT the reference tokenizer's count and the difference matters. The
+/// two disagree by one on every source measured, the reference emitting a terminator the
+/// stage's stream does not carry. A caller sizing an input against the cap with
+/// `keleusma::lexer::tokenize(...).len()` is measuring the wrong quantity — the same class
+/// of error as sizing a guard against the wrong array.
+pub fn lex_token_count(src: &str) -> usize {
+    first_pass(src).token_count
+}
+
+/// The declaration a record belongs to, or a diagnostic naming what arrived instead.
+///
+/// **SIX BARE `unwrap()`s USED TO SIT HERE, AND THEY ALL FIRE FOR ONE REASON**: a record
+/// arrived while no declaration was open. Measured cause: a top-level `struct` declaration.
+/// `parse.kel` has no struct handling at all — its declaration record codes are 1..3
+/// (`fn`/`yield`/`loop`), 9 (`data`), 10 (`use`) and 12 (`enum`), with no struct code — so
+/// its tokens are parsed as something else and the records land here with nothing open.
+///
+/// The old failure was `called Option::unwrap() on a None value`, which names neither the
+/// record nor the declaration form that produced it. **A user writing an ordinary
+/// declaration got a Rust panic with no indication the form was unsupported.**
+///
+/// This does not decide whether the form should be supported; it reports what happened.
+fn open_decl(cur: &mut Option<ParsedFn>, code: i64, val: i64) -> &mut ParsedFn {
+    cur.as_mut().unwrap_or_else(|| {
+        panic!(
+            "parse.kel emitted record ({code}, {val}) with no declaration open. The usual \
+             cause is a top-level declaration form the stage does not recognise: it handles \
+             `fn`, `yield`, `loop`, `data`, `use` and `enum`, and a `struct` declaration is \
+             NOT among them."
+        )
+    })
+}
+
 /// How many tokens the fused feed keeps resident.
 ///
 /// Three would suffice: the parser reads at its cursor and pushes back by at most
@@ -935,6 +971,23 @@ fn parse_functions_impl(
     arena.resize_persistent(need).expect("resize");
     let mut vm = Vm::new(module, &arena).expect("verify parse.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
+    // THE TOKEN ARRAY HAS A CAP AND OVERFLOWING IT REPORTS ONE OF TWO WRONG THINGS.
+    //
+    // `toks.packed` holds `PARSE_TOKEN_CAP` tokens. Measured on a program that is one long
+    // left-associative sum, so nothing else binds first:
+    //
+    //   41,015 tokens -> `IndexOutOfBounds(40960, 40960)` from inside the stage
+    //   42,015 tokens -> a shared-slot range error from the seeding loop BELOW, which walks
+    //                    off the end of the whole block
+    //
+    // Which one a caller sees depends on how far over they are, and neither names the token
+    // array or a limit the caller controls. Refused here, before any seeding, with both
+    // numbers. `parse.kel` itself is 32,907 tokens, 80% of this.
+    assert!(
+        token_count <= PARSE_TOKEN_CAP,
+        "this program lexes to {token_count} tokens and `toks.packed` in parse.kel holds \
+         {PARSE_TOKEN_CAP}. Split the source."
+    );
     vm.set_shared(&mut shared, BR_P_LEN, Value::Int(token_count as i64))
         .unwrap();
     vm.set_shared(&mut shared, BR_P_LIMIT_ID, Value::Int(id_of("limit")))
@@ -1112,13 +1165,13 @@ fn parse_functions_impl(
                 match code {
                     0 => {}
                     15 => in_body = false,
-                    _ => cur.as_mut().unwrap().body.push((code, val)),
+                    _ => open_decl(&mut cur, code, val).body.push((code, val)),
                 }
             } else if in_guard {
                 match code {
                     0 => {}
                     15 => in_guard = false,
-                    _ => cur.as_mut().unwrap().guard.push((code, val)),
+                    _ => open_decl(&mut cur, code, val).guard.push((code, val)),
                 }
             } else if in_data {
                 if code == 5 {
@@ -1149,9 +1202,9 @@ fn parse_functions_impl(
                             body: Vec::new(),
                         })
                     }
-                    4 => cur.as_mut().unwrap().params += 1,
-                    6 => cur.as_mut().unwrap().param_types.push(val),
-                    7 => cur.as_mut().unwrap().return_type = val,
+                    4 => open_decl(&mut cur, code, val).params += 1,
+                    6 => open_decl(&mut cur, code, val).param_types.push(val),
+                    7 => open_decl(&mut cur, code, val).return_type = val,
                     9 => {
                         in_data = true;
                         data_records.push((9, val));
@@ -1163,7 +1216,10 @@ fn parse_functions_impl(
                     }
                     16 => in_body = true,
                     17 => in_guard = true,
-                    5 => on_function(&names, cur.take().unwrap()),
+                    5 => {
+                        open_decl(&mut cur, code, val);
+                        on_function(&names, cur.take().unwrap())
+                    }
                     15 => return ControlFlow::Break(()),
                     _ => {}
                 }

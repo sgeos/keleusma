@@ -24,8 +24,8 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 | **the last cap** | **GONE. `wire.kel` PARSES, 486 functions** |
 | **`parse` into `reconstruct`** | **FUSED at function granularity, 3.4x to 41.1x** |
 | shared-slot layouts | **nine copies collapsed to two definitions** |
-| `parse.kel` caps named | **NINE**, up from four; two more same-size pairs split |
-| branch | `feat/more-parse-diagnostics`; #164-#167 merged, at `c6cca448` |
+| `parse.kel` caps named | **TEN**, plus the unrecognised-declaration panic |
+| branch | `feat/driver-diagnostics`; #164-#168 merged, at `ed3d8081` |
 
 ## WHAT THIS INCREMENT DID
 
@@ -161,12 +161,28 @@ callee's arity, so the parameter cap fires first. A probe that varies two quanti
 diagnostics programme has spent 33 of the 1,024-name budget across two increments, leaving 64%
 margin.
 
+## THE LAST TWO UNNAMED FAILURE MODES ARE NAMED
+
+**The token array had TWO failures**, and which one a caller got depended on how far over they were:
+`IndexOutOfBounds(40960, 40960)` from the stage, or a shared-slot range error from the driver's own
+seeding loop. One refusal now fires before any seeding. **This is the bound the corpus is closest
+to** -- `parse.kel` is 32,907 tokens, 80% of it.
+
+**Six bare `unwrap()`s became one diagnostic.** A top-level `struct` declaration was the measured
+cause; `parse.kel` has no struct handling at all. **It does not decide whether `struct` should be
+supported** -- that is yours, and the test says so.
+
+**Both of my own mistakes here were the session's recurring one.** My test generated against the
+REFERENCE tokenizer while the cap governs the STAGE's lexer -- measuring the wrong quantity, so
+`lex_token_count` is now public and documented as the count the cap uses. And an insertion detached
+`#[allow(clippy::type_complexity)]` from its function, because I anchored on the signature rather
+than the item. I restored from `HEAD` and reapplied rather than stack a third correction.
+
 ## Next intended increment
 
-**A top-level `struct` declaration panics the DRIVER** with a bare `Option::unwrap()` on `None`.
-`parse.kel` has no struct-declaration handling at all -- its record vocabulary covers
-`fn`/`yield`/`loop`, `data`, `use` and `enum`, with no struct code. A driver gap with no diagnostic,
-evidenced and unfixed.
+**Nothing is queued that does not need a decision from you.** The three open items below are all
+yours. Absent direction I would keep sweeping `parse.kel`'s remaining arrays for reachable caps,
+which is the same work as the last two increments and needs no ruling.
 
 
 
