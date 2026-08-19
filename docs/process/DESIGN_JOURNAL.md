@@ -13,6 +13,52 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**DERIVED OPERANDS IN TYPE REJECTION, AND THE CAP I ALMOST DOCUMENTED WAS NOT THE BOUND
+(2026-08-19).**
+
+The gap was pinned by `the_rules_still_do_not_reach_a_derived_operand`: `let a = 1 + 2` left `a`
+UNKNOWN, so `a + b` with `b: Bool` was accepted where the reference rejects. The operator's ruling
+was "before publishing V0.3.0", so it needed no new decision.
+
+**It needed a FIXPOINT, not a lookup, exactly as recorded.** `verify_types.kel` gains a bounded
+solver: a binding may now take form 2, meaning "this binding takes whatever expression node N
+yields". The stage proves a node's tag only for an OPERATOR node whose two operands resolve to the
+same type; every other kind yields unknown, which accepts. Rounds are capped and named, because a
+total language cannot host an unbounded fixpoint.
+
+**THE DIVISION OF LABOUR IS PRESERVED AND CHECKED.** The host says only WHICH NODE the initialiser
+is -- as syntactic as a literal tag or an alias name. Verified by mutation: making `tyb_node_tag`
+return unknown fails the test. Without that control the host could have been supplying the answer
+and the test would look identical, which is the objection this file already records against inferred
+tags.
+
+**THE MEASUREMENT THAT CORRECTED ME, AND IT WAS ONE SENTENCE FROM BEING WRITTEN DOWN.** I was about
+to document "reaches a chain of four", reasoning from `tyb_rounds() = 4`. Setting the cap to **1**
+rejects every depth through six just the same. **Scoping forces `let` bindings into dependency
+order** -- `let v3 = v2 + 1` cannot precede `v2` -- so one pass in walk order proves the whole chain.
+The cap is insurance for a channel that supplies rows OUT of order, not the bound on this construct.
+The control is encoded with its reasoning.
+
+**A SECOND INDEX TRAP AVOIDED BY LOOKING**: each function's node walk numbers from zero, so a derived
+index is function-local and must be offset by everything already accumulated. Missing that offset
+would point every derived binding after the first function at a node that EXISTS -- resolving to a
+plausible wrong tag rather than failing.
+
+**ONE WALK, NOT TWO.** The node table and the derived-binding indices come from the same traversal,
+because this file already warns that two walks over one tree are how an index and the thing it
+indexes come to disagree.
+
+**THE NEW EDGE IS PINNED**: a `let` bound to a FIELD READ or an INDEX is still unknown and therefore
+accepted, those being other node kinds. `a_derived_operand_from_a_field_read_is_still_unreached` is a
+measurement rather than an aspiration, and tells the next author to record what they reach.
+
+**One structural cost, stated rather than glossed**: the solver reads the whole binding and expression
+tables, so it is the one part of this stage that is not row-at-a-time. That is inherent -- a derived
+binding can depend on operands bound later -- and it is bounded by the round cap over at most 128
+bindings.
+
+---
+
 **THE SWEEP RETURNS NOTHING NEW, AND CATCHES A STALE DIAGNOSTIC I HAD CREATED TWO INCREMENTS EARLIER
 (2026-08-19).**
 
