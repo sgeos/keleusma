@@ -13,6 +13,55 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**IDENTITY NOW TRAVELS WITH THE STRUCTURE, AND I ASSERTED THE BLAST RADIUS BEFORE MEASURING IT
+(2026-08-19).**
+
+Order 1 records that the type checker's input should come from `parse.kel` plus `reconstruct.kel`
+because "structure is available" there. **Measured, that was only half true.** A `Local` record
+carries a SLOT -- `codegen.kel` lowers it straight to `GetLocal(slot)` -- and no body record
+mentioned a name at all. The type channel is keyed by interned NAME ids, so a forest of slots could
+not be joined to a binding table of names. **Structure was available; identity was not.**
+
+The operator ruled on the fork: a `let` record carries its name id, rather than keying the type
+channel by slot for locals and by name for everything else. `parse.kel` already held the name at the
+emitting site and the Option E transport had a full word free.
+
+**THE STATEMENT TABLE EMITS IN THE PACKED FORM** (`kind + arg * 64`), which caps kinds at 63, so the
+name record goes out on the MIGRATED path with tag 90 -- a full word, no packing against the slot,
+no radix for a reader to get wrong. The driver pairs it with the following `LetIn` and diverts it, so
+the node stream is unchanged.
+
+**THE PAIRING IS POSITIONAL, WHICH IS NORMALLY A SMELL.** It is sound because one fold step emits
+exactly the pair with nothing interleaved, and `every_let_binding_carries_its_slot_and_name` is what
+keeps that true: it checks slot AND name, so a reordering shows up as a wrong slot rather than as
+silence. Mutation-verified.
+
+**I CLAIMED THE BLAST RADIUS BEFORE MEASURING IT, AND WAS WRONG.** I wrote that the node stream was
+"byte-for-byte unchanged" and that neither `reconstruct.kel` nor `codegen.kel` was touched, having
+run `selfhost_parse` and generalised. Eight tests then failed: a THIRD record decoder, the Rust
+reconstruction that checks `reconstruct.kel`, panicked on `unsupported node kind 90`. The suite that
+disproved the claim was still running when I made it.
+
+**THREE DECODERS NOW CONSUME THE PARSE RECORD STREAM** -- the driver, the parse harness, and the
+codegen harness -- and each must know this record is not a node. **Only the TAG is shared, and that
+is correct rather than lazy**: the skip sets legitimately differ, because the codegen walker CONSUMES
+kind 35 where the parse harness skips it. Recorded with the count rather than implied to be clean.
+
+**TWO MISTAKES CAUGHT BY MACHINERY RATHER THAN ATTENTION.** A brace splice landed in the wrong
+function; I restored `parse.kel` from `HEAD` and redid all three edits against exact anchors rather
+than stacking a repair -- the second time today that call was right. And I published the tag from
+`crate::selfhost`, gated on `self-host`, while its readers are gated on `compile + verify`: the
+identical mistake as earlier today, except **the feature-matrix check I encoded after the first one
+caught it locally instead of CI**.
+
+**THE MARGIN PIN MOVED A SEVENTH TIME, AND THIS IS THE FIRST MOVE PREDICTED IN ADVANCE.** 666 -> 669
+names and 35,045 -> 35,154 blob bytes; three names is `stmt_name`, `name_pending` and `tag_let_name`
+exactly. Six of the seven moves were changes whose author was thinking about something else -- which
+is why a pin that has to teach you what it measures, six times, does something a computed value
+could not.
+
+---
+
 **DERIVED OPERANDS IN TYPE REJECTION, AND THE CAP I ALMOST DOCUMENTED WAS NOT THE BOUND
 (2026-08-19).**
 

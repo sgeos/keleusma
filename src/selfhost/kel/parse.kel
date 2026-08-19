@@ -994,6 +994,20 @@ private data stmt {
     // statements, so 64 is too small; 256 covers the stage files with headroom. These
     // are private (persistent-arena) slots, not part of the 64KB shared segment.
     stmt_kind: [Word; 257],
+    // The BINDING NAME of a `let` statement, parallel to `stmt_kind`/`stmt_arg`.
+    //
+    // `stmt_arg` carries the frame SLOT, which is what `codegen.kel` lowers to
+    // `SetLocal`. The slot is enough to RUN the program and not enough to TYPE it:
+    // the type channel is keyed by interned NAME ids, so a forest of slots cannot
+    // be joined to a binding table of names. This array closes that gap.
+    //
+    // Sized with its family, so `the_parse_guard_caps_match_their_arrays` fails by
+    // name if it is ever left narrow.
+    stmt_name: [Word; 257],
+    // Set while a `let` fold owes its NAME record, so the next step emits the
+    // binding without advancing the cursor twice. The same two-phase shape `step`
+    // already uses for the Option E payload word.
+    name_pending: Word,
     stmt_arg: [Word; 257],
     stmt_count: Word,
     // The pending-statement and block-base stacks, sized 32 (was 16). The current stage
@@ -4946,6 +4960,10 @@ fn step_draining() -> Word {
                     stmt.slot_count = stmt.slot_count + 1;
                     stmt.stmt_kind[stmt.stmt_count] = Node::LetIn() as Word;
                     stmt.stmt_arg[stmt.stmt_count] = slot;
+                    // The name travels with the statement, from the site that already
+                    // knows it. Recovering it later from the slot is impossible: slots
+                    // are reused across scopes and names are not.
+                    stmt.stmt_name[stmt.stmt_count] = stmt.pstmt_name[stmt.pstmt_sp];
                     stmt.let_names[stmt.let_count] = stmt.pstmt_name[stmt.pstmt_sp];
                     stmt.scope_slot[stmt.let_count] = slot;
                     // Record the binding's composite type from its value's root construction, so a
@@ -5129,10 +5147,34 @@ fn step_draining() -> Word {
 
 // Wrap the block's tail in each statement node, last to first, then do the fold
 // continuation: the body's Done, a then branch's phase advance, or an else branch's If.
+// THE BINDING-NAME RECORD'S TAG.
+//
+// Well above the `Node` codes, which reach 64, and emitted through the MIGRATED
+// path: `ps.emit_arg` carries a full word, so the name needs no packing against
+// the slot and no radix for a reader to get wrong.
+//
+// **It is not a node.** `reconstruct.kel` never sees one, because the driver
+// diverts it before the record stream is handed on. That is what keeps this change
+// off the reconstruct and codegen paths, and why the body-record sequences the
+// parse tests pin are unchanged.
+fn tag_let_name() -> Word { 90 }
+
 fn step_folding() -> Word {
+    if stmt.name_pending == 1 {
+        // The name went out last step; emit the binding it belongs to now, without
+        // advancing the cursor a second time.
+        stmt.name_pending = 0;
+        stmt.stmt_kind[stmt.fold_i] + stmt.stmt_arg[stmt.fold_i] * 64
+    } else {
     if stmt.fold_i > stmt.fold_start {
         stmt.fold_i = stmt.fold_i - 1;
-        stmt.stmt_kind[stmt.fold_i] + stmt.stmt_arg[stmt.fold_i] * 64
+        if stmt.stmt_kind[stmt.fold_i] == Node::LetIn() as Word {
+            stmt.name_pending = 1;
+            ps.emit_arg = stmt.stmt_name[stmt.fold_i];
+            tag_let_name()
+        } else {
+            stmt.stmt_kind[stmt.fold_i] + stmt.stmt_arg[stmt.fold_i] * 64
+        }
     } else {
         stmt.stmt_count = stmt.fold_start;
         stmt.folding = 0;
@@ -5161,7 +5203,7 @@ fn step_folding() -> Word {
             forst.for_emit_i = 0;
             0
         } } }
-    }
+    } }
 }
 
 // One step of the body walk: the active sub-state, or the next body token.
