@@ -3142,3 +3142,104 @@ fn the_enum_variant_bound_counts_the_whole_program() {
          wrong thing"
     );
 }
+
+/// A source that lexes to exactly `want` tokens.
+///
+/// Built from a long left-associative sum, which costs two tokens per term and drains the
+/// operator stack after each one, so nothing but the token array binds. Parity is corrected
+/// with empty statements — one token each, and admitted only because the trailing-semicolon
+/// work made the empty statement legal in both parsers.
+///
+/// Counted with [`keleusma::selfhost::lex_token_count`], the stage's own lexer, because that
+/// is what the cap governs. The reference tokenizer reports one more.
+#[cfg(feature = "self-host")]
+fn src_of_token_count(want: usize) -> String {
+    let build = |terms: usize, semis: usize| {
+        let mut s = String::from("fn f() -> Word { let x = 1");
+        for _ in 0..terms {
+            s.push_str(" + 1");
+        }
+        s.push(';');
+        for _ in 0..semis {
+            s.push(';');
+        }
+        s.push_str(" x }");
+        s
+    };
+    // MEASURED WITH THE STAGE'S OWN LEXER, NOT THE REFERENCE ONE. The cap governs
+    // `lexer.kel`'s output, and the two counts disagree by one on every source measured.
+    // Targeting the reference count made this test's `cap + 1` case land on `cap`, so the
+    // guard did not fire and the test failed for the right reason.
+    let base = keleusma::selfhost::lex_token_count(&build(0, 0));
+    assert!(
+        want >= base,
+        "cannot build a source shorter than {base} tokens"
+    );
+    let terms = (want - base) / 2;
+    let semis = (want - base) % 2;
+    let src = build(terms, semis);
+    let got = keleusma::selfhost::lex_token_count(&src);
+    assert_eq!(got, want, "the generator missed its target token count");
+    src
+}
+
+/// **THE TOKEN ARRAY, WHOSE OVERFLOW REPORTED ONE OF TWO WRONG THINGS.**
+///
+/// `toks.packed` holds `PARSE_TOKEN_CAP` tokens, and which failure a caller saw depended on
+/// how far over they were. Measured:
+///
+/// | tokens | reported |
+/// |---|---|
+/// | 41,015 | `IndexOutOfBounds(40960, 40960)` from inside the stage |
+/// | 42,015 | `NativeError("shared slot index 41995 out of range")` from the driver's seeding loop |
+///
+/// Neither names the token array. **This is the bound the corpus is closest to**:
+/// `parse.kel` is 32,907 tokens, 80% of it.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_token_cap_is_named_and_its_boundary_holds() {
+    let cap = keleusma::selfhost_host::PARSE_TOKEN_CAP;
+    assert!(
+        refusal(&src_of_token_count(cap)).is_none(),
+        "a source of exactly {cap} tokens must parse; the guard fires too early"
+    );
+    let msg = refusal(&src_of_token_count(cap + 1)).expect("one token past the cap must refuse");
+    assert!(
+        msg.contains("toks.packed") && msg.contains(&(cap + 1).to_string()),
+        "the refusal was {msg:?}, which does not name the token array and the count reached"
+    );
+    // Checked by the raw forms' SIGNATURES rather than by their text. The message
+    // deliberately quotes both failures it replaces, so an assertion looking for
+    // "IndexOutOfBounds" matches the explanation as readily as the fault -- the same
+    // self-matching mistake the no-copies guard made against its own needle.
+    assert!(
+        !msg.starts_with("resume parse.kel") && !msg.contains("NativeError"),
+        "the refusal is still one of the two raw failures: {msg:?}"
+    );
+}
+
+/// **A `struct` DECLARATION PANICKED THE DRIVER WITH A BARE `unwrap()`.**
+///
+/// `parse.kel` has no struct handling at all: its declaration record codes are 1..3
+/// (`fn`/`yield`/`loop`), 9 (`data`), 10 (`use`) and 12 (`enum`), with no struct code. Its
+/// tokens are parsed as something else and the records arrive with no declaration open,
+/// where six bare `unwrap()`s used to sit.
+///
+/// The old failure was `called Option::unwrap() on a None value` — a Rust panic naming
+/// neither the record nor the form. **This test does not assert that `struct` should be
+/// rejected**, only that the failure says what happened; whether the form is supported is a
+/// language decision and not this test's business.
+#[cfg(feature = "self-host")]
+#[test]
+fn an_unrecognised_declaration_is_named_rather_than_unwrapped() {
+    let msg = refusal("struct S { a: Word }\nfn f() -> Word { 1 }\n")
+        .expect("a struct declaration must be refused rather than accepted silently");
+    assert!(
+        msg.contains("no declaration open") && msg.contains("struct"),
+        "the refusal was {msg:?}, which does not name what arrived or the likely cause"
+    );
+    assert!(
+        !msg.contains("Option::unwrap"),
+        "the refusal is still a bare unwrap panic: {msg:?}"
+    );
+}

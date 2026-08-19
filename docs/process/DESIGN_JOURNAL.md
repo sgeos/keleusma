@@ -13,6 +13,44 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE LAST TWO UNNAMED FAILURE MODES, AND BOTH OF MY OWN MISTAKES THIS INCREMENT WERE THE SESSION'S
+RECURRING ONE (2026-08-19).**
+
+**The token array had TWO failures and which one you got depended on how far over you were.** At
+41,015 tokens the stage reports `IndexOutOfBounds(40960, 40960)`; at 42,015 the DRIVER's own seeding
+loop walks off the end of the whole shared block and reports a slot-range error. Neither names the
+token array. One refusal now fires before any seeding, naming the count and the array. **This is the
+bound the corpus is closest to**: `parse.kel` is 32,907 tokens, 80% of it.
+
+**Six bare `unwrap()`s collapse into one diagnostic.** They all fire for one reason -- a record
+arriving with no declaration open -- and the measured cause is a top-level `struct` declaration.
+`parse.kel` has no struct handling at all: its declaration record codes are 1..3, 9, 10 and 12, with
+no struct code. The old failure was `called Option::unwrap() on a None value`, naming neither the
+record nor the form. **It deliberately does not decide whether `struct` should be supported**; that
+is a language question and the test says so.
+
+**MISTAKE ONE: MY TEST MEASURED THE WRONG QUANTITY.** The generator targeted
+`keleusma::lexer::tokenize`, the REFERENCE tokenizer, while the cap governs `lexer.kel`'s output. The
+two disagree by one on every source measured, so the `cap + 1` case landed on `cap` and the guard
+correctly did not fire. **I did not paper over it with "the difference is one"** -- that assumption
+breaks silently. `lex_token_count` is now public and documented as the count the cap is measured
+against. Same class as every other defect this session: measuring the wrong quantity.
+
+**MISTAKE TWO: AN EDIT DETACHED AN ATTRIBUTE FROM ITS FUNCTION.** Inserting a helper before
+`fn parse_functions_impl(` put it between `#[allow(clippy::type_complexity)]` and the function that
+attribute applies to. Clippy caught it. **An item is its attributes and doc block, not just its `fn`
+line**, and my anchor was the signature. Two further splices trying to repair it made it worse, so I
+restored the file from `HEAD` and reapplied both edits against verified anchors, inserting before a
+DOC BLOCK rather than before a signature. **Stopping and restoring beat a third correction stacked on
+two bad ones.**
+
+**And one self-inflicted assertion.** The refusal message deliberately quotes both raw failures it
+replaces, so my `!msg.contains("IndexOutOfBounds")` check matched the explanation as readily as the
+fault. Now checked by the raw forms' SIGNATURES instead -- the same self-matching mistake the
+no-copies guard made against its own needle, in a different disguise.
+
+---
+
 **FIVE MORE CAPS, FOUND BY SWEEPING RATHER THAN BY TRIPPING OVER THEM, AND TWO MORE PAIRS SHARED A
 MESSAGE (2026-08-19).**
 

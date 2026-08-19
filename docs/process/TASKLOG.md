@@ -10,6 +10,17 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-19, later).** **THE LAST TWO UNNAMED FAILURE MODES ARE NAMED.** The token
+> array had TWO failures depending how far over the input was -- `IndexOutOfBounds(40960, 40960)`
+> from the stage, or a shared-slot range error from the driver's seeding loop -- and both are now one
+> refusal fired before any seeding. Six bare `unwrap()`s became one diagnostic naming an unrecognised
+> declaration; a top-level `struct` was the measured cause, and `parse.kel` has no struct handling at
+> all. **Whether `struct` should be supported is not decided here.**
+>
+> Both of my own mistakes were the session's recurring one: a test generated against the REFERENCE
+> tokenizer while the cap governs the STAGE's lexer, and an insertion that detached an `#[allow]`
+> from its function because the anchor was the signature rather than the item.
+
 > **Currency note (2026-08-19).** **NINE `parse.kel` CAPS NOW NAME THEMSELVES**, up from four.
 > Sweeping the stage's arrays with generated programs found five more reachable caps -- parameters
 > (32), `if` nesting (32), `for` nesting (8), array-literal nesting (8), enum variants (256, a
