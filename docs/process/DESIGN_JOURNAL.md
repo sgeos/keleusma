@@ -13,6 +13,63 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**FIVE MORE CAPS, FOUND BY SWEEPING RATHER THAN BY TRIPPING OVER THEM, AND TWO MORE PAIRS SHARED A
+MESSAGE (2026-08-19).**
+
+The morning's increment named the four causes it had tripped over and left roughly a hundred and
+thirty arrays unprobed. Sweeping them with generated programs found five more reachable caps, every
+one reporting a raw index trap:
+
+| construct | admits | reported |
+|---|---|---|
+| parameters on one function | 32 | `IndexOutOfBounds(32, 32)` |
+| `if` nesting | 32 | `IndexOutOfBounds(32, 32)` |
+| `for` nesting | 8 | `IndexOutOfBounds(8, 8)` |
+| array-literal nesting | 8 | `IndexOutOfBounds(8, 8)` |
+| enum variants, whole program | 256 | `IndexOutOfBounds(256, 256)` |
+
+**TWO MORE PAIRS SHARED A MESSAGE, one array-size down from the pair fixed that morning.** Fixing the
+instances I had measured left the class; sweeping is what found the rest. Both pairs are now kept
+distinct by an encoded test, on the same terms as the 64-entry pair.
+
+**THE ENUM BOUND IS A WHOLE-PROGRAM TOTAL AND ITS SIZE DOES NOT SAY SO.** 128 enums of two variants
+refuse at exactly the same point as one enum of 257. A reader given "256" would split the wrong
+thing. No message naming an array size can convey that, which is the sharpest argument yet for the
+stage naming its own causes.
+
+**THE FAMILY LESSON, APPLIED RATHER THAN RELEARNED.** `ps.pcount` alone indexes TWELVE arrays. I did
+not list them: the widening derived each family from its counter by reading the stage, thirty-one
+arrays across five counters. The guard test now covers NINE counters and is mutation-verified on a
+member of a new family. **Fourth consecutive increment where a hand-written list would have been
+wrong, and the first where I did not find that out by failing.**
+
+**A CONFOUNDED PROBE, CORRECTED BY MEASUREMENT.** I reported call arguments as a third construct
+sharing `IndexOutOfBounds(32, 32)`. It is not a separate cap: passing 33 arguments needs a
+33-parameter function, so the PARAMETER cap fires first, and a call cannot exceed its callee's arity.
+Verified by measuring 33 parameters with no call at all. **A probe that varies two quantities at once
+measures neither.**
+
+**NAMING A CAUSE HAS A MEASURED PRICE.** The margin pin moved for the fifth time: 645 to 660 names
+(fifteen guard, cap and code functions) and 34,148 to 34,785 blob bytes (thirty-one spare slots).
+**The diagnostics programme has spent 33 of the 1,024-name budget across two increments, leaving 64%
+margin.** Recorded in the test where the next author meets it, because "add a named refusal" now has
+a unit cost rather than an assumed-free one.
+
+**That pin has now earned itself five times and has NEVER ONCE moved for a reason its author was
+thinking about** -- an empty-statement fix, two token-window fields, a chunk array, and guard
+functions. None was about names or blob size.
+
+**Also swept and found NOT reachable**, recorded so the next sweep does not repeat it: pending
+statements (32 entries) survive past 40, and data-block fields, array-literal elements, and `if`
+nesting beyond 32 have no wall in the ranges probed.
+
+**STILL UNNAMED AND NOW EVIDENCED**: a single top-level `struct` declaration panics the DRIVER with a
+bare `Option::unwrap()` on `None`. `parse.kel` has no struct-declaration handling at all -- its record
+vocabulary covers `fn`/`yield`/`loop`, `data`, `use` and `enum`, and there is no struct code. That is
+a driver gap with no diagnostic, not a cap, and it is the next thing of this kind worth fixing.
+
+---
+
 **I SHIPPED A DEFECT MY OWN GUARD WAS WRITTEN TO CATCH, BECAUSE I GAVE THE GUARD A SCOPE NARROWER
 THAN THE CLASS (2026-08-18).**
 

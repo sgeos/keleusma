@@ -10,6 +10,19 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-19).** **NINE `parse.kel` CAPS NOW NAME THEMSELVES**, up from four.
+> Sweeping the stage's arrays with generated programs found five more reachable caps -- parameters
+> (32), `if` nesting (32), `for` nesting (8), array-literal nesting (8), enum variants (256, a
+> WHOLE-PROGRAM total) -- and **two more pairs shared a message**, one array-size down from the pair
+> fixed the day before.
+>
+> The family widening derived thirty-one arrays across five counters from the stage; `ps.pcount`
+> alone indexes twelve. **Corrected from my own probe**: call arguments are not a separate cap, since
+> a call cannot exceed its callee's arity.
+>
+> **Naming a cause costs names**: 645 to 660, and 34,148 to 34,785 blob bytes. 33 of the 1,024-name
+> budget spent across two increments, 64% margin left.
+
 > **Currency note (2026-08-18, latest+2).** **NINE COPIES OF TWO SHARED-SLOT LAYOUTS COLLAPSED TO
 > TWO DEFINITIONS.** Raising the chunk table left a FIFTH copy in `compiler/src/main.rs` seeding the
 > parser with offsets wrong by 768 slots; nothing caught it, because `run_parse_pipeline` is reachable

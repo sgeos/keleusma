@@ -2616,6 +2616,31 @@ fn the_parse_guard_caps_match_their_arrays() {
             "pe_cap_stmt",
             keleusma::selfhost_host::PARSE_STMTS_CAP,
         ),
+        (
+            "ps.pcount",
+            "pe_cap_param",
+            keleusma::selfhost_host::PARSE_PARAMS_CAP,
+        ),
+        (
+            "branch.if_sp",
+            "pe_cap_if",
+            keleusma::selfhost_host::PARSE_IF_DEPTH_CAP,
+        ),
+        (
+            "forst.for_sp",
+            "pe_cap_for",
+            keleusma::selfhost_host::PARSE_FOR_DEPTH_CAP,
+        ),
+        (
+            "call.al_sp",
+            "pe_cap_anest",
+            keleusma::selfhost_host::PARSE_ARRAY_NEST_CAP,
+        ),
+        (
+            "enums.enum_count",
+            "pe_cap_variant",
+            keleusma::selfhost_host::PARSE_VARIANTS_CAP,
+        ),
     ];
 
     for &(counter, cap_fn, driver_cap) in cases {
@@ -2930,5 +2955,190 @@ fn wire_kel_parses_now_that_the_chunk_table_admits_it() {
     assert!(
         fns.len() <= keleusma::selfhost_host::PARSE_CHUNK_CAP,
         "the corpus worst case has reached the cap it is sized against"
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// FIVE MORE CAPS, FOUND BY SWEEPING RATHER THAN BY TRIPPING OVER THEM.
+// ---------------------------------------------------------------------------------------
+
+#[cfg(feature = "self-host")]
+fn src_params(n: usize) -> String {
+    let ps: Vec<String> = (0..n).map(|i| format!("p{i}: Word")).collect();
+    format!("fn f({}) -> Word {{ p0 }}\n", ps.join(", "))
+}
+
+#[cfg(feature = "self-host")]
+fn src_ifs(n: usize) -> String {
+    let mut s = String::from("fn f(a: Word) -> Word {\n");
+    for _ in 0..n {
+        s.push_str("if a > 0 {\n");
+    }
+    s.push_str("a\n");
+    for _ in 0..n {
+        s.push_str("} else { 0 }\n");
+    }
+    s.push_str("}\n");
+    s
+}
+
+#[cfg(feature = "self-host")]
+fn src_fors(n: usize) -> String {
+    let mut s = String::from("private data d { a: Word = 0 }\nfn f() -> Word {\n");
+    for i in 0..n {
+        s.push_str(&format!("for i{i} in 0..2 limit 4 {{\n"));
+    }
+    s.push_str("d.a = d.a + 1;\n");
+    for _ in 0..n {
+        s.push_str("}\n");
+    }
+    s.push_str("d.a\n}\n");
+    s
+}
+
+#[cfg(feature = "self-host")]
+fn src_array_nest(n: usize) -> String {
+    let mut s = String::from("fn f() -> Word { let xs = ");
+    for _ in 0..n {
+        s.push('[');
+    }
+    s.push('1');
+    for _ in 0..n {
+        s.push(']');
+    }
+    s.push_str("; 0 }");
+    s
+}
+
+#[cfg(feature = "self-host")]
+fn src_variants(n: usize) -> String {
+    let vs: Vec<String> = (0..n).map(|i| format!("V{i}")).collect();
+    format!("enum E {{ {} }}\nfn f() -> Word {{ 1 }}\n", vs.join(", "))
+}
+
+/// **FIVE MORE CAPS, EACH PINNED FROM BOTH SIDES AND EACH NAMING ITS OWN CAUSE.**
+///
+/// Found by sweeping the stage's fixed arrays with generated programs rather than by
+/// tripping over them, which is how the first four were found. All five reported raw
+/// index traps before this:
+///
+/// | construct | admits | refused with |
+/// |---|---|---|
+/// | parameters on one function | 32 | `IndexOutOfBounds(32, 32)` |
+/// | `if` nesting | 32 | `IndexOutOfBounds(32, 32)` |
+/// | `for` nesting | 8 | `IndexOutOfBounds(8, 8)` |
+/// | array-literal nesting | 8 | `IndexOutOfBounds(8, 8)` |
+/// | enum variants, whole program | 256 | `IndexOutOfBounds(256, 256)` |
+///
+/// **TWO MORE PAIRS SHARED A MESSAGE.** Parameters and `if` nesting were byte-identical,
+/// as were `for` nesting and array-literal nesting. The morning's increment fixed one such
+/// pair and called it the headline; sweeping found two more one array-size down.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_remaining_caps_are_named_and_their_boundaries_hold() {
+    use keleusma::selfhost_host as h;
+    let cases: &[(&str, usize, &dyn Fn(usize) -> String, &str)] = &[
+        ("parameters", h::PARSE_PARAMS_CAP, &src_params, "parameters"),
+        (
+            "if nesting",
+            h::PARSE_IF_DEPTH_CAP,
+            &src_ifs,
+            "`if` nesting",
+        ),
+        (
+            "for nesting",
+            h::PARSE_FOR_DEPTH_CAP,
+            &src_fors,
+            "`for` nesting",
+        ),
+        (
+            "array nesting",
+            h::PARSE_ARRAY_NEST_CAP,
+            &src_array_nest,
+            "array-literal nesting",
+        ),
+        (
+            "variants",
+            h::PARSE_VARIANTS_CAP,
+            &src_variants,
+            "enum variants",
+        ),
+    ];
+    for &(label, cap, make, phrase) in cases {
+        assert!(
+            refusal(&make(cap)).is_none(),
+            "{label}: exactly {cap} must be admitted; the guard fires too early and would \
+             refuse a program that parses today"
+        );
+        let msg = refusal(&make(cap + 1))
+            .unwrap_or_else(|| panic!("{label}: one past {cap} must be refused"));
+        assert!(
+            msg.contains(phrase) && msg.contains(&(cap + 1).to_string()),
+            "{label}: the refusal was {msg:?}, which does not name the construct and the \
+             count it reached"
+        );
+        assert!(
+            !msg.contains("IndexOutOfBounds"),
+            "{label}: still a raw index trap: {msg:?}"
+        );
+    }
+}
+
+/// **THE TWO PAIRS THAT SHARED A MESSAGE MUST STAY DISTINCT.**
+///
+/// `ps.pnames` and `branch.if_seq` are both 32; `forst.for_seq` and `call.al_count` are
+/// both 8. Four unrelated limits, two messages, before this. Encoded so they cannot
+/// converge again — the same check the 64-entry pair already carries.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_same_sized_caps_do_not_share_a_message() {
+    use keleusma::selfhost_host as h;
+    let thirty_twos = [
+        refusal(&src_params(h::PARSE_PARAMS_CAP + 1)).expect("params must refuse"),
+        refusal(&src_ifs(h::PARSE_IF_DEPTH_CAP + 1)).expect("if depth must refuse"),
+    ];
+    assert_ne!(
+        thirty_twos[0], thirty_twos[1],
+        "parameters and `if` nesting report identically again; both arrays are 32 entries \
+         and that is the only thing they have in common"
+    );
+    let eights = [
+        refusal(&src_fors(h::PARSE_FOR_DEPTH_CAP + 1)).expect("for depth must refuse"),
+        refusal(&src_array_nest(h::PARSE_ARRAY_NEST_CAP + 1)).expect("array nest must refuse"),
+    ];
+    assert_ne!(
+        eights[0], eights[1],
+        "`for` nesting and array-literal nesting report identically again; both arrays are \
+         8 entries and that is the only thing they have in common"
+    );
+}
+
+/// **THE ENUM BOUND IS A WHOLE-PROGRAM TOTAL, NOT A PER-ENUM ONE.**
+///
+/// 128 enums of two variants refuse at exactly the same point as one enum of 257. No
+/// message naming an array size could convey that, which is the argument for the stage
+/// naming the cause itself. Measured, because "256 variants" reads as per-declaration.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_enum_variant_bound_counts_the_whole_program() {
+    let cap = keleusma::selfhost_host::PARSE_VARIANTS_CAP;
+    let many_enums = |n: usize| {
+        let mut s = String::new();
+        for i in 0..n {
+            s.push_str(&format!("enum E{i} {{ A, B }}\n"));
+        }
+        s.push_str("fn f() -> Word { 1 }\n");
+        s
+    };
+    assert!(
+        refusal(&many_enums(cap / 2)).is_none(),
+        "{} enums of two variants is exactly the cap and must be admitted",
+        cap / 2
+    );
+    let msg = refusal(&many_enums(cap / 2 + 1)).expect("one enum past the total must refuse");
+    assert!(
+        msg.contains("TOTAL ACROSS THE WHOLE PROGRAM"),
+        "the refusal was {msg:?}; a reader who sees only a per-enum count will split the \
+         wrong thing"
     );
 }

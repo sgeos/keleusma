@@ -393,12 +393,12 @@ private data ps {
     started: Word,
     pend_end: Word,
     pcount: Word,
-    pnames: [Word; 32],
+    pnames: [Word; 33],
     // Per value-parameter: 1 if the parameter's type is `Byte`, else 0, so a bitwise op on two Byte
     // operands lowers promote-operate-truncate. `last_byte` tracks whether the most recently emitted
     // operand VALUE is Byte-typed (set for a Byte parameter Local, cleared otherwise); the stages
     // carry no Byte value, so this is always 0 there and the Byte lowering never fires for them.
-    pbyte: [Word; 32],
+    pbyte: [Word; 33],
     last_byte: Word,
     // Operand-type tracking for `struct == struct` equality (a field-wise comparison loop): the
     // struct declaration index (plus one) of the most recently emitted operand VALUE if it is a
@@ -447,48 +447,48 @@ private data ps {
     // Per value-parameter struct binding: 0 if not a struct type, else the struct's
     // declaration index plus one; and the field-access postfix sub-state after a struct-typed
     // parameter Local was emitted (1 awaits an optional `.`, 2 reads the field name).
-    pstruct: [Word; 32],
+    pstruct: [Word; 33],
     // Per value-parameter enum binding: 0 if not an enum type, else the enum's name intern id plus
     // one. When a `match`'s scrutinee is such a parameter, the match lowers to the IsEnum virtual
     // loop (an enum-value match) rather than an integer disc compare.
-    penum: [Word; 32],
+    penum: [Word; 33],
     // Per value-parameter tuple binding: 0 if not a tuple type, else the tuple layout index (in
     // `tupledefs`) plus one, so a body `t.N` access resolves the element offset/kind. `ta_phase`
     // is the tuple-access postfix sub-state (1 awaits an optional `.`, 2 reads the element index);
     // `ta_tuple` the layout index of the tuple under access. `tts`/`tts_off` scan a tuple TYPE
     // annotation `(T, T, ...)` in the signature: `tts` active, `tts_off` the running byte offset.
-    ptuple: [Word; 32],
+    ptuple: [Word; 33],
     ta_phase: Word,
     ta_tuple: Word,
     // Per value-parameter array-of-scalar binding: 0 if not an array type, else the element
     // ScalarKind plus one, so a body `xs[i]` access arms the array-index postfix and emits
     // GetIndex(Flat{kind}). Mirrors a let-bound array (`stmt.let_array`) for a parameter.
-    parray: [Word; 32],
+    parray: [Word; 33],
     // Per value-parameter scalar-array binding: the declared array length N (element count), captured
     // at the `; N` size close. Needed by `array == array` equality to bound the per-element loop.
-    parray_len: [Word; 32],
+    parray_len: [Word; 33],
     // Per value-parameter array-of-STRUCT binding: 0 if the element is not a declared struct, else
     // the struct's declaration index plus one; `parray_size` the struct's flat byte size. A body
     // `ps[i]` extracts element i as a nested struct (GetIndex(FlatNested{size, Struct})) and a
     // following `.field` reads into it. `sa_phase`/`sa_struct`/`sa_size` are the postfix sub-state
     // after such a parameter Local was emitted (1 awaits an optional `[`).
-    parray_struct: [Word; 32],
-    parray_size: [Word; 32],
+    parray_struct: [Word; 33],
+    parray_size: [Word; 33],
     // Per value-parameter array-of-ENUM binding: 0 if the array element type is not a declared enum,
     // else the element enum's name token + 1 (the flat byte size rides `parray_size`). Drives the
     // whole-value array-of-enum equality (`[E; N] == [E; N]`); mutually exclusive with the other
     // `parray_*` element kinds.
-    parray_enum: [Word; 32],
+    parray_enum: [Word; 33],
     // Per value-parameter array-of-TUPLE binding: 0 if the element is not a tuple, else the tuple
     // layout index (in `tupledefs`) plus one; the element byte size rides `parray_size`. A body
     // `ts[i].N` extracts element i as a nested tuple (GetIndex(FlatNested{size, Tuple})) and reads
     // element N. Mutually exclusive with `parray_struct` and `parray` (tuple vs struct vs scalar).
-    parray_tuple: [Word; 32],
+    parray_tuple: [Word; 33],
     // Per value-parameter array-of-ARRAY binding: 0 if the element is not an array, else the INNER
     // element ScalarKind plus one; the inner array byte size rides `parray_size`. A body `m[i][j]`
     // extracts inner array i as a nested array (GetIndex(FlatNested{size, Array})) then scalar-indexes
     // element j (GetIndex(Flat{kind})). Mutually exclusive with `parray_struct`/`parray_tuple`/`parray`.
-    parray_arr: [Word; 32],
+    parray_arr: [Word; 33],
     sa_phase: Word,
     sa_struct: Word,
     sa_size: Word,
@@ -614,10 +614,26 @@ fn pe_opstack() -> Word { 1 }
 fn pe_bracket() -> Word { 2 }
 fn pe_locals() -> Word { 3 }
 fn pe_stmts() -> Word { 4 }
+// Measured the same way as the first four, on the boundary from both sides. TWO MORE PAIRS
+// SHARED A MESSAGE: parameters and `if` nesting both reported `IndexOutOfBounds(32, 32)`,
+// and `for` nesting and array-literal nesting both reported `IndexOutOfBounds(8, 8)`.
+fn pe_params() -> Word { 5 }
+fn pe_ifdepth() -> Word { 6 }
+fn pe_fordepth() -> Word { 7 }
+fn pe_arraynest() -> Word { 8 }
+fn pe_variants() -> Word { 9 }
 
 fn pe_cap_op() -> Word { 64 }
 fn pe_cap_let() -> Word { 64 }
 fn pe_cap_stmt() -> Word { 256 }
+fn pe_cap_param() -> Word { 32 }
+fn pe_cap_if() -> Word { 32 }
+fn pe_cap_for() -> Word { 8 }
+fn pe_cap_anest() -> Word { 8 }
+// The enum bound is a TOTAL ACROSS THE PROGRAM, not a per-enum one: 128 enums of two
+// variants reach it at exactly the same point as one enum of 257 variants. No message
+// naming an array size could convey that, which is the argument for naming it here.
+fn pe_cap_variant() -> Word { 256 }
 
 // Record the FIRST cause and its count. A clamped pointer provokes cascades, and the first
 // cause is the one that names the real limit. Returns zero; callers use it for effect.
@@ -658,6 +674,51 @@ fn let_push(n: Word) -> Word {
     if n + 1 > pe_cap_let() {
         perr(pe_locals(), n + 1);
         pe_cap_let()
+    } else {
+        n + 1
+    }
+}
+
+fn param_push(n: Word) -> Word {
+    if n + 1 > pe_cap_param() {
+        perr(pe_params(), n + 1);
+        pe_cap_param()
+    } else {
+        n + 1
+    }
+}
+
+fn if_push(n: Word) -> Word {
+    if n + 1 > pe_cap_if() {
+        perr(pe_ifdepth(), n + 1);
+        pe_cap_if()
+    } else {
+        n + 1
+    }
+}
+
+fn for_push(n: Word) -> Word {
+    if n + 1 > pe_cap_for() {
+        perr(pe_fordepth(), n + 1);
+        pe_cap_for()
+    } else {
+        n + 1
+    }
+}
+
+fn anest_push(n: Word) -> Word {
+    if n + 1 > pe_cap_anest() {
+        perr(pe_arraynest(), n + 1);
+        pe_cap_anest()
+    } else {
+        n + 1
+    }
+}
+
+fn variant_push(n: Word) -> Word {
+    if n + 1 > pe_cap_variant() {
+        perr(pe_variants(), n + 1);
+        pe_cap_variant()
     } else {
         n + 1
     }
@@ -942,10 +1003,10 @@ private data stmt {
 // wrapping the whole conditional (`yield if c { a }`, whose YieldMark was pushed
 // before the branch opened and must keep spanning the built If).
 private data branch {
-    if_phase: [Word; 32],
-    if_stmt_start: [Word; 32],
-    if_opbase: [Word; 32],
-    if_seq: [Word; 32],
+    if_phase: [Word; 33],
+    if_stmt_start: [Word; 33],
+    if_opbase: [Word; 33],
+    if_seq: [Word; 33],
     if_sp: Word,
 }
 
@@ -962,16 +1023,16 @@ private data branch {
 // (`for_emit`/`for_emit_i`) is single because a nested loop emits its parts fully before
 // the enclosing loop's body closes, so the two emissions never overlap.
 private data forst {
-    for_phase: [Word; 8],
+    for_phase: [Word; 9],
     for_var: [Word; 8],
-    for_vslot: [Word; 8],
-    for_end_slot: [Word; 8],
-    for_ctr: [Word; 8],
-    for_cap_slot: [Word; 8],
-    for_oc: [Word; 8],
+    for_vslot: [Word; 9],
+    for_end_slot: [Word; 9],
+    for_ctr: [Word; 9],
+    for_cap_slot: [Word; 9],
+    for_oc: [Word; 9],
     for_cap: [Word; 8],
-    for_stmt_start: [Word; 8],
-    for_seq: [Word; 8],
+    for_stmt_start: [Word; 9],
+    for_seq: [Word; 9],
     for_sp: Word,
     forlimit_count: Word,
     for_emit: Word,
@@ -1102,7 +1163,7 @@ private data call {
     // The array-literal context stack, parallel to the call stack: `al_count` the running
     // element count per open `[...]` literal, `al_sp` the nesting depth. Its `,` drains through
     // the same `step_cdraining` (generalised to the ArrayMark), its `]` emits the ArrayLit.
-    al_count: [Word; 8],
+    al_count: [Word; 9],
     al_sp: Word,
     // The enum-construction context stack, parallel to the call stack: `en_count` the running
     // child count per open `E::V(...)` construction (seeded at one for the discriminant, then
@@ -1135,19 +1196,19 @@ private data call {
 // previous plus one otherwise) unless an explicit `= N` overrides it and reseeds the
 // running `next_disc`. `cur_enum` is the enum under construction.
 private data enums {
-    edata: [Word; 256],
-    evar: [Word; 256],
-    edisc: [Word; 256],
+    edata: [Word; 257],
+    evar: [Word; 257],
+    edisc: [Word; 257],
     // Per variant row, the sum of that variant's payload field byte sizes (zero for a unit
     // variant). A construction reads the enum's flat body size as eight (the discriminant) plus
     // the largest `epayload` across the enum's variants; see `enum_bytesize`.
-    epayload: [Word; 256],
+    epayload: [Word; 257],
     // Per variant row, the flat per-payload-field layout for a payload match `E::V(x, y)`:
     // `evfstart`/`evfcount` bound the variant's field run in `evfoff`/`evfkind` (per-field flat
     // byte offset -- eight for the discriminant plus preceding field sizes -- and ScalarKind).
     // `evfcursor` is the running append cursor.
-    evfstart: [Word; 256],
-    evfcount: [Word; 256],
+    evfstart: [Word; 257],
+    evfcount: [Word; 257],
     evfoff: [Word; 512],
     evfkind: [Word; 512],
     // Per payload field, the struct declaration index (plus one) when the field is a struct, else 0,
@@ -3978,7 +4039,7 @@ fn step_op(k: Word) -> Word {
     if k == Tok::For() as Word {
         // Push a fresh loop context; a nested loop stacks above the enclosing one.
         forst.for_phase[forst.for_sp] = 1;
-        forst.for_sp = forst.for_sp + 1;
+        forst.for_sp = for_push(forst.for_sp);
         0
     } else {
     if k == Tok::Let() as Word {
@@ -4070,7 +4131,7 @@ fn step_op(k: Word) -> Word {
 fn step_if(k: Word) -> Word {
     if k == Tok::If() as Word {
         branch.if_phase[branch.if_sp] = 1;
-        branch.if_sp = branch.if_sp + 1;
+        branch.if_sp = if_push(branch.if_sp);
         ops.expect_operand = 1;
         0
     } else {
@@ -4410,7 +4471,7 @@ fn step_normal(k: Word, v: Word) -> Word {
         // A `[` in operand position opens an array literal (a `[` after an operand is an index,
         // intercepted earlier). Push an ArrayMark that blocks precedence across the elements.
         call.al_count[call.al_sp] = 0;
-        call.al_sp = call.al_sp + 1;
+        call.al_sp = anest_push(call.al_sp);
         ops.opstack[ops.opsp] = OpCode::ArrayMark() as Word;
         ops.opsp = op_push(ops.opsp);
         ops.expect_operand = 1;
@@ -5428,7 +5489,7 @@ fn header_enum(k: Word, v: Word) -> Word {
             enums.epayload[enums.enum_count] = 0;
             enums.evfstart[enums.enum_count] = enums.evfcursor;
             enums.evfcount[enums.enum_count] = 0;
-            enums.enum_count = enums.enum_count + 1;
+            enums.enum_count = variant_push(enums.enum_count);
             enums.next_disc = enums.next_disc + 1;
             ps.mode = 12;
             13 + v * 64
@@ -5968,7 +6029,7 @@ fn header_sig(k: Word, v: Word) -> Word {
                 ps.parray_arr[ps.pcount] = 0;
                 ps.parray_enum[ps.pcount] = 0;
                 ps.pbyte[ps.pcount] = 0;
-                ps.pcount = ps.pcount + 1;
+                ps.pcount = param_push(ps.pcount);
                 4 + v * 64
             } else {
             if ps.ptype == 1 {
