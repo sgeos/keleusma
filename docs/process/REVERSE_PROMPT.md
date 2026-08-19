@@ -25,7 +25,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 | **`parse` into `reconstruct`** | **FUSED at function granularity, 3.4x to 41.1x** |
 | shared-slot layouts | **nine copies collapsed to two definitions** |
 | `parse.kel` failure modes named | **THIRTEEN**; eleven counters guarded |
-| branch | `docs/refresh-handoff`; #164-#170 merged, at `3ffd5a4c` |
+| branch | `feat/derived-operand-types`; #164-#171 merged, at `0ce53287` |
 
 ## WHAT THIS INCREMENT DID
 
@@ -209,6 +209,22 @@ about the stage. It caught three of the five.
 
 **`HANDOFF.md` is rewritten** against `3ffd5a4c` with every value re-measured, and its own check block
 was run as a resuming session would.
+
+## DERIVED OPERANDS IN TYPE REJECTION ARE CLOSED
+
+Your ruling was "before publishing V0.3.0", so this needed no new decision. `let a = 1 + 2` left `a`
+UNKNOWN and `a + b` was accepted; the stage now proves `a` from its operands and rejects.
+
+**It needed a fixpoint, as recorded.** A binding may take form 2 -- "takes whatever node N yields" --
+and the stage proves a tag only for an operator node whose operands agree. **The host supplies only
+WHICH NODE**, which is verified by mutation: neutering the stage's join fails the test.
+
+**The cap I almost documented was not the bound.** I nearly wrote "reaches a chain of four" from
+`tyb_rounds() = 4`. Setting it to 1 rejects every depth through six: scoping forces `let` bindings
+into dependency order, so one pass proves the chain. The cap is insurance for out-of-order rows.
+
+**The new edge is pinned**: a `let` bound to a FIELD READ or an INDEX is still unreached, and the
+test says so as a measurement rather than an aspiration.
 
 ## Next intended increment
 

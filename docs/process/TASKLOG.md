@@ -10,6 +10,16 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-19, final+1).** **DERIVED OPERANDS IN TYPE REJECTION ARE CLOSED**, an
+> item the operator had already ruled on ("before publishing V0.3.0"). `verify_types.kel` gains a
+> BOUNDED FIXPOINT: a binding may take form 2, "takes whatever expression node N yields", and the
+> stage proves a tag only for an operator node whose operands agree. **The host supplies only which
+> node**, verified by mutation.
+>
+> **The round cap is not the bound.** Setting it to 1 rejects every chain depth through six, because
+> scoping forces `let` bindings into dependency order. The new edge -- a `let` bound to a field read
+> or an index -- is pinned as a measurement.
+
 > **Currency note (2026-08-19, final).** **THE SWEEP IS EXHAUSTED** -- a final round found no new
 > reachable caps. It did catch a stale diagnostic of mine: the chunk-table guard told a caller with
 > 1,025 functions about a *257th* entry and cited a 256-entry array that is now 1,024. Both copies

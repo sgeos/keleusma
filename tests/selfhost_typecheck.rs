@@ -653,6 +653,7 @@ fn binding_rows(ast: &keleusma::ast::Program) -> BindingRows {
     struct Lets {
         found: Vec<(String, i64)>,
         aliases: Vec<(String, String)>,
+        derived: Vec<String>,
     }
     impl Visitor for Lets {
         fn visit_stmt(&mut self, stmt: &Stmt) {
@@ -672,6 +673,13 @@ fn binding_rows(ast: &keleusma::ast::Program) -> BindingRows {
                     Expr::Call { name, .. } => {
                         self.aliases.push((n.clone(), name.clone()));
                     }
+                    // `let a = 1 + 2` says `a` takes whatever that OPERATOR
+                    // EXPRESSION yields. Syntactic, like the two above; the join
+                    // -- resolving both operands and requiring them to agree --
+                    // is the stage's bounded fixpoint, not this function's.
+                    Expr::BinOp { .. } => {
+                        self.derived.push(n.clone());
+                    }
                     _ => {}
                 }
             }
@@ -681,6 +689,7 @@ fn binding_rows(ast: &keleusma::ast::Program) -> BindingRows {
     let mut lets = Lets {
         found: Vec::new(),
         aliases: Vec::new(),
+        derived: Vec::new(),
     };
     for f in &ast.functions {
         lets.visit_block(&f.body);
@@ -693,6 +702,13 @@ fn binding_rows(ast: &keleusma::ast::Program) -> BindingRows {
         let id = id_of(&mut names, &n);
         let tid = id_of(&mut names, &target);
         rows.push((id, tid, 1));
+    }
+    // A `let` whose initialiser is an OPERATOR EXPRESSION gets a name id here but
+    // NO ROW: the row needs the initialiser's index in the expression table, which
+    // only the node walk knows. Registering the name is what lets a later operand
+    // spelling it take form 1 instead of collapsing to an untyped 0.
+    for n in lets.derived {
+        id_of(&mut names, &n);
     }
 
     (names, rows)
@@ -720,10 +736,10 @@ fn expression_nodes(ast: &keleusma::ast::Program) -> Vec<(i64, i64, i64)> {
 /// operand IS a literal of kind `t`, or that it IS the name `n`. Which type `n`
 /// then has, and whether that disagrees with the other operand, is the stage's
 /// join. That line is the point of the whole slice.
-fn expression_nodes_resolvable(
+fn expression_nodes_and_derived(
     ast: &keleusma::ast::Program,
     names: &std::collections::BTreeMap<String, i64>,
-) -> Vec<ResolvableNode> {
+) -> (Vec<ResolvableNode>, Vec<(String, i64)>) {
     use keleusma::ast::{Expr, Pattern, Stmt, TypeDef, TypeExpr};
     use keleusma::visitor::Visitor;
     use std::collections::{BTreeMap, BTreeSet};
@@ -749,6 +765,11 @@ fn expression_nodes_resolvable(
         names: &'a BTreeMap<String, i64>,
         scalars: BTreeSet<String>,
         out: Vec<ResolvableNode>,
+        // Each `let` whose initialiser is an operator expression, with the index
+        // that expression takes in `out`. Collected HERE rather than by a second
+        // walk, because two walks over the same tree are exactly how an index and
+        // the thing it indexes come to disagree.
+        derived: Vec<(String, i64)>,
     }
     impl Visitor for Nodes<'_> {
         fn visit_stmt(&mut self, stmt: &Stmt) {
@@ -757,6 +778,16 @@ fn expression_nodes_resolvable(
                 && let Some(TypeExpr::Prim(_, _)) = &l.type_expr
             {
                 self.scalars.insert(n.clone());
+            }
+            // The index the initialiser's own node WILL take. Read before
+            // `walk_stmt` descends, and correct because `visit_expr` pushes an
+            // operator node BEFORE walking its operands, so the outermost one
+            // lands at exactly this position.
+            if let Stmt::Let(l) = stmt
+                && let Pattern::Variable(n, _) = &l.pattern
+                && matches!(&l.value, Expr::BinOp { .. })
+            {
+                self.derived.push((n.clone(), self.out.len() as i64));
             }
             self.walk_stmt(stmt);
         }
@@ -822,21 +853,41 @@ fn expression_nodes_resolvable(
     }
 
     let mut out = Vec::new();
+    let mut derived: Vec<(String, i64)> = Vec::new();
     for f in &ast.functions {
         let mut n = Nodes {
             structs: &struct_fields,
             names,
             scalars: BTreeSet::new(),
             out: Vec::new(),
+            derived: Vec::new(),
         };
         n.visit_block(&f.body);
+        // EACH FUNCTION'S WALK NUMBERS FROM ZERO, so a derived index is
+        // function-local and must be offset by everything already accumulated.
+        // Missing this offset would point every derived binding after the first
+        // function at the wrong node -- and at a node that exists, so it would
+        // resolve to a plausible wrong tag rather than fail.
+        let base = out.len() as i64;
+        derived.extend(n.derived.into_iter().map(|(name, i)| (name, base + i)));
         out.extend(n.out);
         if let Some(tail) = f.body.tail_expr.as_ref() {
             let (t, tf) = operand_form(tail, names);
             out.push((TAIL_VS_RETURN, t, tf, type_tag(&f.return_type), 0));
         }
     }
-    out
+    (out, derived)
+}
+
+/// The expression table alone, for callers with no derived bindings to place.
+///
+/// A thin wrapper so there is ONE walk: the pair-returning form is the only one
+/// that traverses the tree, and this drops the half its callers do not use.
+fn expression_nodes_resolvable(
+    ast: &keleusma::ast::Program,
+    names: &std::collections::BTreeMap<String, i64>,
+) -> Vec<ResolvableNode> {
+    expression_nodes_and_derived(ast, names).0
 }
 
 /// Struct field sets and field accesses, kept SEPARATE so the stage searches.
@@ -2127,8 +2178,17 @@ fn prim_tag(p: &keleusma::ast::PrimType) -> i64 {
 /// Drive the stage with the binding table and resolvable operands.
 fn stage_verdict_resolving(src: &str) -> bool {
     let ast = parse(&tokenize(src).expect("lex")).expect("parse");
-    let (names, bindings) = binding_rows(&ast);
-    let nodes = expression_nodes_resolvable(&ast, &names);
+    let (names, mut bindings) = binding_rows(&ast);
+    let (nodes, derived) = expression_nodes_and_derived(&ast, &names);
+    // FORM 2: the binding takes whatever expression node `idx` yields. The host
+    // says only WHICH node the initialiser is -- a syntactic fact, like a literal
+    // tag or an alias name. Resolving that node's operands and requiring them to
+    // agree is the stage's bounded fixpoint.
+    for (n, idx) in derived {
+        if let Some(&id) = names.get(&n) {
+            bindings.push((id, idx, 2));
+        }
+    }
     let (dparams, sites, arg_pairs) = decl_call_rows(&ast);
     stage_verdict(&StageInput {
         pairs: &arg_pairs,
@@ -2263,7 +2323,10 @@ fn the_stage_and_not_the_host_resolves_an_operand() {
 /// rule that propagates through operators, which is a fixpoint rather than a
 /// lookup and is deliberately out of this slice.
 #[test]
-fn the_rules_still_do_not_reach_a_derived_operand() {
+fn a_derived_operand_is_now_reached_and_the_chain_has_no_depth_limit() {
+    // `a` is bound to an OPERATOR EXPRESSION, so before this it was UNKNOWN and
+    // `a + b` was accepted. The stage now proves `a` is Word from its operands and
+    // rejects the mixed addition.
     let src = "fn main() -> Word { let a = 1 + 2; let b = true; a + b }";
     let mut for_ref = parse(&tokenize(src).expect("lex")).expect("parse");
     assert!(
@@ -2271,9 +2334,59 @@ fn the_rules_still_do_not_reach_a_derived_operand() {
         "the reference ACCEPTS this, so it measures nothing"
     );
     assert!(
+        !stage_verdict_resolving(src),
+        "the stage must reject a derived operand it can prove"
+    );
+
+    // A CHAIN OF ANY DEPTH, AND THE ROUND CAP IS NOT WHAT ALLOWS IT.
+    //
+    // Measured, because the obvious reading is wrong: `tyb_rounds()` is 4, so the
+    // natural claim is "chains up to four". Setting it to 1 rejects every depth
+    // below just the same. **Scoping forces `let` bindings into dependency order**
+    // -- `let v3 = v2 + 1` cannot precede `v2` -- so one pass over the table in
+    // walk order proves the whole chain. The cap is insurance for a future channel
+    // that supplies rows out of order, not the bound on this construct.
+    for depth in 1..=6usize {
+        let mut s = String::from("fn main() -> Word { let v0 = 1 + 2;");
+        for i in 1..depth {
+            s.push_str(&format!(" let v{i} = v{} + 1;", i - 1));
+        }
+        s.push_str(&format!(" let b = true; v{} + b }}", depth - 1));
+        let mut r = parse(&tokenize(&s).expect("lex")).expect("parse");
+        assert!(
+            keleusma::typecheck::check(&mut r).is_err(),
+            "depth {depth}: the reference accepts it, so the case measures nothing"
+        );
+        assert!(
+            !stage_verdict_resolving(&s),
+            "depth {depth}: the stage accepted a chain it should have proved"
+        );
+    }
+}
+
+/// **WHAT A DERIVED OPERAND STILL DOES NOT REACH**, so the next increment knows
+/// where the edge is.
+///
+/// `tyb_node_tag` proves a tag only for an operator node whose two operands agree.
+/// A field read and an index are other node kinds, so a `let` bound to one is
+/// still UNKNOWN and therefore ACCEPTED -- the safe direction, and the same one
+/// the single alias hop takes.
+///
+/// This is a PIN, not an aspiration: if a later increment reaches these, it fails
+/// here and the author records what it now reaches.
+#[test]
+fn a_derived_operand_from_a_field_read_is_still_unreached() {
+    let src = "struct P { x: Word }\n\
+               fn main(p: P) -> Word { let a = p.x; let b = true; a + b }";
+    let mut for_ref = parse(&tokenize(src).expect("lex")).expect("parse");
+    assert!(
+        keleusma::typecheck::check(&mut for_ref).is_err(),
+        "the reference ACCEPTS this, so it measures nothing"
+    );
+    assert!(
         stage_verdict_resolving(src),
-        "the stage now REJECTS a derived operand. If propagation through operators \
-         landed, move this case into the slice above and record what it now reaches."
+        "the stage now reaches a field-read initialiser. Record what it reaches and \
+         move this case into the positive test above."
     );
 }
 
