@@ -22,7 +22,8 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 | architecture | one binary, selectable phases — documented, unbuilt |
 | **`parse.kel` capacity diagnostics** | **four causes now NAMED; the rest still trap raw** |
 | **the last cap** | **GONE. `wire.kel` PARSES, 486 functions** |
-| branch | `feat/chunk-table-cap`; `feat/parse-diagnostics` merged at `09784042` |
+| **`parse` into `reconstruct`** | **FUSED at function granularity, 3.4x to 41.1x** |
+| branch | `feat/fuse-reconstruct`; #164 and #165 merged, at `1c5a1fc2` |
 
 ## WHAT THIS INCREMENT DID
 
@@ -102,10 +103,27 @@ chained constants, harnesses aliased, and a guard that WALKS the tree rather tha
 **Two vacuity guards fired in one run** — the family test found zero arrays (a bug in my own walk),
 and the no-copies guard flagged itself. Both now verified by mutation.
 
+## `parse` INTO `reconstruct` IS FUSED, AND THE PREDICTED COST DID NOT EXIST
+
+Cut at FUNCTION granularity. `self_host_compile_fused` holds one GROUP -- consecutive same-named
+heads, which are one chunk -- where `self_host_compile` holds every function's records for the whole
+program. Byte-identical modules, mutation-verified: flushing per function instead of per group fails
+the equivalence test by naming the multihead chunk.
+
+**Measured 3.4x to 41.1x**, against a recorded estimate of 3x to 13x. `wire` is the 41x case, so the
+largest stage benefits most.
+
+**THE FOURTH SIDECAR FACT DID NOT MATERIALISE.** A group ends when the next function's NAME differs,
+so a completed function waits for the following HEADER -- a bounded one-function lookahead, not a
+whole-input dependency. The name table is available before the drive. That predicted cost was the
+reason this increment ranked below the diagnostics work; it was not real.
+
 ## Next intended increment
 
-**`parse` into `reconstruct`**, worth 3x to 13x residency, needing `reconstruct.kel` restructured or
-fused at function granularity with a probable fourth sidecar fact.
+**`parse.kel` is 32,907 tokens against its own 40,960-token array, at 80%** -- newly measured,
+unowned, and nothing reports it when it binds. I would NOT widen it unilaterally: raising a capacity
+widens what is admitted, and the chunk-table raise was widened only because you had named it. A
+NAMED REFUSAL costs nothing and widens nothing, which is what I would do absent direction.
 
-**Also newly measured and unowned: `parse.kel` is 32,907 tokens against its own 40,960-token array,
-at 80%.** That is the next array likely to bind, and nothing reports it when it does.
+Beyond that, the remaining structural work is the phase-selection architecture, which is blocked on
+the input-re-readability fork below.

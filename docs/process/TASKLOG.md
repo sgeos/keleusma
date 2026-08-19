@@ -10,6 +10,15 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-18, latest+1).** **`parse` INTO `reconstruct` IS FUSED** at function
+> granularity, holding one group of same-named heads instead of every function's records.
+> Byte-identical modules, mutation-verified. **Measured 3.4x to 41.1x**, against a recorded estimate
+> of 3x to 13x; `wire` is the 41x case.
+>
+> **The predicted fourth sidecar fact does not exist.** A group ends when the next function's NAME
+> differs, so it is a bounded one-function lookahead rather than a whole-input dependency. That
+> predicted cost was why the increment ranked below the diagnostics work.
+
 > **Currency note (2026-08-18, latest).** **THE LAST CAP IS GONE: `wire.kel` PARSES at 486
 > functions.** `toks.chunks` went from 256 to 1024, sized from the measured corpus (`wire` 486,
 > `parse` 108 up from 94 in the previous increment) rather than from the stage that needed it.
