@@ -24,7 +24,8 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 | **the last cap** | **GONE. `wire.kel` PARSES, 486 functions** |
 | **`parse` into `reconstruct`** | **FUSED at function granularity, 3.4x to 41.1x** |
 | shared-slot layouts | **nine copies collapsed to two definitions** |
-| branch | `fix/compiler-layout-copy`; #164/#165/#166 merged, at `233e9c83` |
+| `parse.kel` caps named | **NINE**, up from four; two more same-size pairs split |
+| branch | `feat/more-parse-diagnostics`; #164-#167 merged, at `c6cca448` |
 
 ## WHAT THIS INCREMENT DID
 
@@ -138,7 +139,36 @@ published and chained, all nine copies alias them, and both derivation tests are
 was scoped to `compiler/src/`. And root `cargo fmt --all` does not reach `compiler/`, which declares
 its own workspace -- a local gate touching it needs a `cd compiler` pass.
 
+## FIVE MORE CAPS, FOUND BY SWEEPING RATHER THAN BY TRIPPING OVER THEM
+
+Parameters (32), `if` nesting (32), `for` nesting (8), array-literal nesting (8), and enum variants
+(256, a WHOLE-PROGRAM total). **Two more pairs shared a message**, one array-size down from the pair
+fixed the morning before -- fixing the instances I had measured left the class, and sweeping found
+the rest.
+
+**The enum bound's size does not say what it counts**: 128 enums of two variants refuse at the same
+point as one enum of 257. No message naming an array size could convey that.
+
+**The family lesson was applied rather than relearned.** `ps.pcount` alone indexes twelve arrays;
+the widening derived thirty-one arrays across five counters from the stage. Fourth consecutive
+increment where a hand-written list would have been wrong, and the first where I did not find out by
+failing.
+
+**Corrected from my own probe**: call arguments are NOT a separate cap. A call cannot exceed its
+callee's arity, so the parameter cap fires first. A probe that varies two quantities measures neither.
+
+**Naming a cause has a measured price**: 645 to 660 names, 34,148 to 34,785 blob bytes. The
+diagnostics programme has spent 33 of the 1,024-name budget across two increments, leaving 64%
+margin.
+
 ## Next intended increment
+
+**A top-level `struct` declaration panics the DRIVER** with a bare `Option::unwrap()` on `None`.
+`parse.kel` has no struct-declaration handling at all -- its record vocabulary covers
+`fn`/`yield`/`loop`, `data`, `use` and `enum`, with no struct code. A driver gap with no diagnostic,
+evidenced and unfixed.
+
+
 
 **`parse.kel` is 32,907 tokens against its own 40,960-token array, at 80%** -- newly measured,
 unowned, and nothing reports it when it binds. I would NOT widen it unilaterally: raising a capacity

@@ -160,6 +160,27 @@ pub fn describe_parse_diagnostic(code: i64, detail: i64) -> String {
              `stmt.stmt_kind` holds {}. Split the body.",
             PARSE_STMTS_CAP
         ),
+        5 => format!(
+            "too many parameters on one function for parse.kel: it reached {detail} and \
+             `ps.pnames` holds {PARSE_PARAMS_CAP}. Pass a data block or a composite instead."
+        ),
+        6 => format!(
+            "`if` nesting is too deep for parse.kel: it reached {detail} and `branch.if_seq` \
+             holds {PARSE_IF_DEPTH_CAP}. Flatten the branches or split the function."
+        ),
+        7 => format!(
+            "`for` nesting is too deep for parse.kel: it reached {detail} and `forst.for_seq` \
+             holds {PARSE_FOR_DEPTH_CAP}. Move an inner loop into its own function."
+        ),
+        8 => format!(
+            "array-literal nesting is too deep for parse.kel: it reached {detail} and \
+             `call.al_count` holds {PARSE_ARRAY_NEST_CAP}. Bind an inner array with `let` first."
+        ),
+        9 => format!(
+            "too many enum variants for parse.kel: it reached {detail} and `enums.evar` holds \
+             {PARSE_VARIANTS_CAP}. This is a TOTAL ACROSS THE WHOLE PROGRAM, not one enum: 128 \
+             enums of two variants reach it at the same point as one enum of 257."
+        ),
         other => format!(
             "parse.kel reported diagnostic code {other} (detail {detail}), which this driver \
              does not know. The stage has grown a cause that `describe_parse_diagnostic` was \
@@ -176,6 +197,16 @@ pub const PARSE_OPSTACK_CAP: usize = 64;
 pub const PARSE_LOCALS_CAP: usize = 64;
 /// See [`PARSE_OPSTACK_CAP`].
 pub const PARSE_STMTS_CAP: usize = 256;
+/// Parameters on one function. See [`PARSE_OPSTACK_CAP`].
+pub const PARSE_PARAMS_CAP: usize = 32;
+/// Nesting depth of `if`. See [`PARSE_OPSTACK_CAP`].
+pub const PARSE_IF_DEPTH_CAP: usize = 32;
+/// Nesting depth of `for`. See [`PARSE_OPSTACK_CAP`].
+pub const PARSE_FOR_DEPTH_CAP: usize = 8;
+/// Nesting depth of array literals. See [`PARSE_OPSTACK_CAP`].
+pub const PARSE_ARRAY_NEST_CAP: usize = 8;
+/// Enum variants **across the whole program**, not per enum. See [`PARSE_OPSTACK_CAP`].
+pub const PARSE_VARIANTS_CAP: usize = 256;
 
 /// Control-flow class and target for one opcode, as `analyze.kel` consumes them.
 ///
