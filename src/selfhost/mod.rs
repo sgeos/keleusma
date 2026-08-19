@@ -863,27 +863,29 @@ pub fn parse_cursor_trace(src: &str) -> Vec<i64> {
     .unwrap();
     // THE CHUNK TABLE HAS A CAP AND OVERFLOWING IT REPORTS THE WRONG THING.
     //
-    // `toks.chunks` is `[Word; 256]`, and `base` and `at` sit immediately after it
-    // in the same shared block. A 257th entry lands on `require_id`, and the eight
-    // fields following the array are all load-bearing: the keyword and type ids,
-    // the eager-operator ids, and the token window's own base and cursor.
+    // `toks.chunks` holds `PARSE_CHUNK_CAP` entries, and eight load-bearing fields sit
+    // immediately after it in the same shared block: the keyword and type ids, the
+    // eager-operator ids, and the token window's own `base` and `at`. One entry past
+    // the end lands on `require_id`.
     //
-    // Measured, because the failure mode was not what it looked like. Overflowing
-    // by one does NOT silently corrupt -- it panics -- but it panics with
-    // `LoopLimitExceeded` from inside `parse.kel`, naming neither the chunk table
-    // nor its cap. A caller reading that would look at loop bounds, not at the
-    // 257th function in its program. `wire.kel` hits it at 475 chunks.
+    // Measured, because the failure mode was not what it looked like. Overflowing by
+    // one does NOT silently corrupt -- it panics -- but it panics with
+    // `LoopLimitExceeded` from inside `parse.kel`, naming neither the chunk table nor
+    // its cap. A caller reading that would look at loop bounds, not at the function
+    // count of their program.
     //
-    // Refused here with both numbers so the diagnostic names the cause. Raising
-    // the array is the real fix and is NOT done here: `base` and `at` were appended
-    // after it, so widening `chunks` shifts them, and this file's history records
-    // a mid-block insertion silently shifting every later field and breaking four
-    // tests.
+    // THIS COMMENT WAS STALE IN FOUR WAYS AND THE DIAGNOSTIC WITH IT. It said the array
+    // was 256, that a 257th entry overflowed, that `wire.kel` hit the cap at 475 chunks,
+    // and that raising the array was "the real fix and NOT done here" -- after the array
+    // had been raised to 1,024, `wire.kel` measured at 486 chunks, and the raise had in
+    // fact been done. **Every number was left behind by the change that moved it**, and
+    // the message told a caller with 1,025 functions about a 257th entry. The counts now
+    // come from `PARSE_CHUNK_CAP` so they cannot drift again.
     assert!(
         chunks.len() <= PARSE_CHUNK_CAP,
-        "this program has {} functions and `toks.chunks` in parse.kel holds {}; the 257th \
-         entry overwrites `require_id` and the seven fields after it, including the token \
-         window's `base`. Overflowing surfaces as `LoopLimitExceeded` from inside the \
+        "this program has {} functions and `toks.chunks` in parse.kel holds {}; one entry \
+         past the end overwrites `require_id` and the seven fields after it, including the \
+         token window's `base`. Overflowing surfaces as `LoopLimitExceeded` from inside the \
          parser, which names neither this table nor its cap.",
         chunks.len(),
         PARSE_CHUNK_CAP
@@ -1008,27 +1010,29 @@ fn parse_functions_impl(
     .unwrap();
     // THE CHUNK TABLE HAS A CAP AND OVERFLOWING IT REPORTS THE WRONG THING.
     //
-    // `toks.chunks` is `[Word; 256]`, and `base` and `at` sit immediately after it
-    // in the same shared block. A 257th entry lands on `require_id`, and the eight
-    // fields following the array are all load-bearing: the keyword and type ids,
-    // the eager-operator ids, and the token window's own base and cursor.
+    // `toks.chunks` holds `PARSE_CHUNK_CAP` entries, and eight load-bearing fields sit
+    // immediately after it in the same shared block: the keyword and type ids, the
+    // eager-operator ids, and the token window's own `base` and `at`. One entry past
+    // the end lands on `require_id`.
     //
-    // Measured, because the failure mode was not what it looked like. Overflowing
-    // by one does NOT silently corrupt -- it panics -- but it panics with
-    // `LoopLimitExceeded` from inside `parse.kel`, naming neither the chunk table
-    // nor its cap. A caller reading that would look at loop bounds, not at the
-    // 257th function in its program. `wire.kel` hits it at 475 chunks.
+    // Measured, because the failure mode was not what it looked like. Overflowing by
+    // one does NOT silently corrupt -- it panics -- but it panics with
+    // `LoopLimitExceeded` from inside `parse.kel`, naming neither the chunk table nor
+    // its cap. A caller reading that would look at loop bounds, not at the function
+    // count of their program.
     //
-    // Refused here with both numbers so the diagnostic names the cause. Raising
-    // the array is the real fix and is NOT done here: `base` and `at` were appended
-    // after it, so widening `chunks` shifts them, and this file's history records
-    // a mid-block insertion silently shifting every later field and breaking four
-    // tests.
+    // THIS COMMENT WAS STALE IN FOUR WAYS AND THE DIAGNOSTIC WITH IT. It said the array
+    // was 256, that a 257th entry overflowed, that `wire.kel` hit the cap at 475 chunks,
+    // and that raising the array was "the real fix and NOT done here" -- after the array
+    // had been raised to 1,024, `wire.kel` measured at 486 chunks, and the raise had in
+    // fact been done. **Every number was left behind by the change that moved it**, and
+    // the message told a caller with 1,025 functions about a 257th entry. The counts now
+    // come from `PARSE_CHUNK_CAP` so they cannot drift again.
     assert!(
         chunks.len() <= PARSE_CHUNK_CAP,
-        "this program has {} functions and `toks.chunks` in parse.kel holds {}; the 257th \
-         entry overwrites `require_id` and the seven fields after it, including the token \
-         window's `base`. Overflowing surfaces as `LoopLimitExceeded` from inside the \
+        "this program has {} functions and `toks.chunks` in parse.kel holds {}; one entry \
+         past the end overwrites `require_id` and the seven fields after it, including the \
+         token window's `base`. Overflowing surfaces as `LoopLimitExceeded` from inside the \
          parser, which names neither this table nor its cap.",
         chunks.len(),
         PARSE_CHUNK_CAP
