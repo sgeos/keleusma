@@ -122,6 +122,20 @@ pub fn drive_parse_records_with<F, B>(
     );
 }
 
+/// The tag `parse.kel` emits a BINDING-NAME record under, restated from
+/// `tag_let_name()` in the stage.
+///
+/// Well above the `Node` codes, which reach 64. Lives HERE rather than in
+/// `crate::selfhost`, which is gated on the `self-host` feature: the harnesses that
+/// must skip this record are gated on `compile + verify` only, and publishing it
+/// from the narrower module broke two feature sets. That is the same correction this
+/// crate already made for the shared-slot layout.
+///
+/// `the_let_name_tag_matches_the_stage` checks the stage and this agree, because a
+/// driver that learned the tag by observing one would only learn it from a stream it
+/// had already mis-read.
+pub const PARSE_LET_NAME_TAG: i64 = 90;
+
 /// The tag at or below which a record from `parse.kel` is a diagnostic rather than a parse
 /// record. Record tags are non-negative, so no legitimate record can collide.
 ///

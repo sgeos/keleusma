@@ -356,6 +356,13 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                     15 => in_body = false, // the body's Done ends body mode
                     35 => {}               // FieldPos: a construction reorder marker, consumed by
                     // reconstruct; not part of the parse-level node stream.
+                    // The binding-name record, skipped for the same reason: it carries
+                    // IDENTITY for the type channel and is not a node. The driver
+                    // diverts it into `ParsedFn::let_names`; this decoder has no use
+                    // for it and must not let it into a sequence pinned against the
+                    // reference. The tag comes from the driver so there is one source
+                    // of truth for the number.
+                    c if c == keleusma::selfhost_host::PARSE_LET_NAME_TAG => {}
                     _ => cur
                         .as_mut()
                         .expect("body node before START")
@@ -367,6 +374,7 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                     0 => {}                 // PENDING
                     15 => in_guard = false, // the guard's Done ends guard mode
                     35 => {}                // FieldPos: reorder marker, skipped (see above)
+                    c if c == keleusma::selfhost_host::PARSE_LET_NAME_TAG => {}
                     _ => cur
                         .as_mut()
                         .expect("guard node before START")

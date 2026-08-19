@@ -10,6 +10,17 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-19, final+2).** **IDENTITY NOW TRAVELS WITH THE STRUCTURE.** Order 1's
+> claim that the type checker's input is available from `parse.kel` plus `reconstruct.kel` was half
+> true: a `Local` record carries a SLOT and no body record mentioned a NAME, while the type channel
+> is keyed by interned names. **The operator ruled** that a `let` record should carry its name id;
+> it now does, on the migrated full-word path with tag 90, and the driver diverts it so the node
+> stream is unchanged.
+>
+> **I claimed the blast radius before measuring it and was wrong** -- a third record decoder failed
+> eight tests. Three decoders now consume the stream and only the TAG is shared, which is correct
+> since their skip sets legitimately differ.
+
 > **Currency note (2026-08-19, final+1).** **DERIVED OPERANDS IN TYPE REJECTION ARE CLOSED**, an
 > item the operator had already ruled on ("before publishing V0.3.0"). `verify_types.kel` gains a
 > BOUNDED FIXPOINT: a binding may take form 2, "takes whatever expression node N yields", and the

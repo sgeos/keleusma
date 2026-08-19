@@ -119,6 +119,13 @@ pub struct ParsedFn {
     return_type: i64,
     guard: Vec<(i64, i64)>,
     body: Vec<(i64, i64)>,
+    /// Each `let` binding's `(frame slot, interned name id)`, in fold order.
+    ///
+    /// **Kept OUT of `body`.** The record stream `body` holds is what
+    /// `reconstruct.kel` consumes and what the parse tests pin against the
+    /// reference, so a new record kind inside it would change both. Diverting the
+    /// binding-name record here leaves the node stream byte-for-byte as it was.
+    let_names: Vec<(i64, i64)>,
 }
 
 impl ParsedFn {
@@ -214,7 +221,7 @@ const CATEGORY: usize = 1 + 1024 * 4 + 256 * 5 + 1;
 use crate::selfhost_host::{
     BR_LEX_ICOUNT, BR_LEX_ILEN, BR_LEX_ISTART, BR_P_AT, BR_P_BASE, BR_P_BOOL_ID, BR_P_BYTE_ID,
     BR_P_CHUNK_COUNT, BR_P_CHUNKS, BR_P_LEN, BR_P_LIMIT_ID, BR_P_PACKED, BR_P_REQUIRE_ID,
-    BR_P_WORD_ID, PARSE_CHUNK_CAP, PARSE_TOKEN_CAP,
+    BR_P_WORD_ID, PARSE_CHUNK_CAP, PARSE_LET_NAME_TAG, PARSE_TOKEN_CAP,
 };
 
 fn br_shared_word(vm: &Vm<'_, '_>, buf: &[u8], slot: usize) -> i64 {
@@ -771,6 +778,9 @@ pub fn lex_token_count(src: &str) -> usize {
     first_pass(src).token_count
 }
 
+/// `Node::LetIn`, the record whose payload carries the frame slot.
+const NODE_LET_IN: i64 = 5;
+
 /// The declaration a record belongs to, or a diagnostic naming what arrived instead.
 ///
 /// **SIX BARE `unwrap()`s USED TO SIT HERE, AND THEY ALL FIRE FOR ONE REASON**: a record
@@ -1169,7 +1179,28 @@ fn parse_functions_impl(
                 match code {
                     0 => {}
                     15 => in_body = false,
-                    _ => open_decl(&mut cur, code, val).body.push((code, val)),
+                    // THE BINDING-NAME RECORD IS DIVERTED, NOT APPENDED.
+                    //
+                    // `parse.kel` emits it immediately before the `LetIn` it belongs
+                    // to, so the slot is the next record's payload. Pairing them here
+                    // is what lets a type-check extraction join a forest of SLOTS to a
+                    // binding table of NAMES, which nothing in the stream could do
+                    // before: slots are reused across scopes and names are not.
+                    c if c == PARSE_LET_NAME_TAG => {
+                        let f = open_decl(&mut cur, code, val);
+                        f.let_names.push((-1, val));
+                    }
+                    _ => {
+                        let f = open_decl(&mut cur, code, val);
+                        // The slot arrives with the `LetIn` that follows the name.
+                        if code == NODE_LET_IN
+                            && let Some(last) = f.let_names.last_mut()
+                            && last.0 == -1
+                        {
+                            last.0 = val;
+                        }
+                        f.body.push((code, val));
+                    }
                 }
             } else if in_guard {
                 match code {
@@ -1204,6 +1235,7 @@ fn parse_functions_impl(
                             return_type: 0,
                             guard: Vec::new(),
                             body: Vec::new(),
+                            let_names: Vec::new(),
                         })
                     }
                     4 => open_decl(&mut cur, code, val).params += 1,
@@ -4798,5 +4830,97 @@ mod classification_tables {
         assert_eq!(analyze_opk(&Op::GetLocal(3), &chunk).1, 3);
         assert_eq!(analyze_opk(&Op::SetLocal(4), &chunk).1, 4);
         assert_eq!(analyze_opk(&Op::PopN(2), &chunk).2, 2);
+    }
+}
+
+#[cfg(test)]
+mod typecheck_input_feasibility {
+    use super::*;
+
+    /// **IDENTITY NOW TRAVELS WITH THE STRUCTURE.**
+    ///
+    /// Order 1 records that the type checker's input should come from `parse.kel`
+    /// plus `reconstruct.kel` because "structure is available" there. Measured, that
+    /// was only half true: a `Local` record carries a **slot**, `codegen.kel` lowers
+    /// it straight to `GetLocal(slot)`, and no body record mentioned a name at all.
+    /// The type channel is keyed by interned NAME ids, so a forest of slots could
+    /// not be joined to a binding table of names.
+    ///
+    /// The operator ruled on the fork: a `let` record carries its name id, rather
+    /// than the type channel being keyed by slot for locals and by name for
+    /// everything else. `parse.kel` already held the name at the emitting site and
+    /// the Option E transport had a full word free.
+    ///
+    /// # Why the pairing is positional, and why that is safe here
+    ///
+    /// The name record is emitted immediately before the `LetIn` it belongs to, by
+    /// the same fold step, so the slot is the very next record's payload. That is a
+    /// positional coupling and normally a smell — it is sound here because one fold
+    /// step emits exactly the pair and nothing can be interleaved between them.
+    /// **This test is what keeps that true**: it checks the slot and name of every
+    /// binding, so a reordering that broke the pairing would show up as a wrong
+    /// slot rather than as silence.
+    #[test]
+    fn every_let_binding_carries_its_slot_and_name() {
+        // Padded so a name id cannot coincide with a slot or a literal, which would
+        // let a wrong pairing pass by arithmetic accident.
+        let mut src = String::new();
+        for i in 0..12 {
+            src.push_str(&alloc::format!("fn pad{i}() -> Word {{ 0 }}\n"));
+        }
+        src.push_str("fn main() -> Word { let aardvark = 1; let barnacle = 2; aardvark }");
+        let (fns, names, ..) = parse_functions(&src);
+
+        let id = |want: &str| {
+            names
+                .iter()
+                .position(|n| n == want)
+                .unwrap_or_else(|| panic!("`{want}` is not interned")) as i64
+        };
+        let main = fns.last().expect("a function");
+        let mut got: Vec<(i64, i64)> = main.let_names.clone();
+        got.sort();
+
+        // Two bindings, distinct slots, and the NAMES the source spelled. The fold
+        // emits statements last to first, so the pairs are sorted rather than
+        // compared in source order.
+        assert_eq!(got.len(), 2, "expected two bindings, got {got:?}");
+        let mut want = alloc::vec![(got[0].0, id("aardvark")), (got[1].0, id("barnacle"))];
+        want.sort();
+        assert_eq!(
+            got,
+            want,
+            "the binding names did not arrive with their slots. Slots {:?}, names \
+             aardvark={} barnacle={}",
+            got.iter().map(|(s, _)| *s).collect::<alloc::vec::Vec<_>>(),
+            id("aardvark"),
+            id("barnacle")
+        );
+        assert_ne!(got[0].0, got[1].0, "two bindings share a frame slot");
+        assert!(
+            got.iter().all(|(s, _)| *s >= 0),
+            "a binding was never paired with its `LetIn`, so its slot is still the \
+             unpaired sentinel: {got:?}"
+        );
+    }
+
+    /// The driver's tag is the stage's, checked rather than assumed.
+    #[test]
+    fn the_let_name_tag_matches_the_stage() {
+        const STAGE: &str = include_str!("kel/parse.kel");
+        let declared: i64 = STAGE
+            .lines()
+            .map(str::trim)
+            .find(|l| l.starts_with("fn tag_let_name() -> Word {"))
+            .and_then(|l| l.split('{').nth(1))
+            .and_then(|t| t.split('}').next())
+            .and_then(|n| n.trim().parse().ok())
+            .expect("parse.kel declares `fn tag_let_name()`");
+        assert_eq!(
+            declared, PARSE_LET_NAME_TAG,
+            "the stage emits binding names under {declared} and the driver diverts \
+             {PARSE_LET_NAME_TAG}. A mismatch puts the record into the node stream, \
+             where `reconstruct.kel` would meet a tag it has no arm for."
+        );
     }
 }

@@ -25,7 +25,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 | **`parse` into `reconstruct`** | **FUSED at function granularity, 3.4x to 41.1x** |
 | shared-slot layouts | **nine copies collapsed to two definitions** |
 | `parse.kel` failure modes named | **THIRTEEN**; eleven counters guarded |
-| branch | `feat/derived-operand-types`; #164-#171 merged, at `0ce53287` |
+| branch | `feat/typecheck-input-from-pipeline`; #164-#172 merged, at `52cbb6c4` |
 
 ## WHAT THIS INCREMENT DID
 
@@ -225,6 +225,25 @@ into dependency order, so one pass proves the chain. The cap is insurance for ou
 
 **The new edge is pinned**: a `let` bound to a FIELD READ or an INDEX is still unreached, and the
 test says so as a measurement rather than an aspiration.
+
+## IDENTITY NOW TRAVELS WITH THE STRUCTURE (your fork, option 1)
+
+Order 1 said the type checker's input should come from `parse.kel` plus `reconstruct.kel` because
+"structure is available". **Measured, that was half true**: a `Local` record carries a SLOT and no
+body record mentioned a name, while the type channel is keyed by interned NAMES. You ruled that a
+`let` record should carry its name id.
+
+Built. The statement table emits in the PACKED form (kinds capped at 63), so the name goes out on the
+migrated path with tag 90 -- a full word, no packing, no radix. The driver pairs it with the
+following `LetIn` and diverts it, leaving the node stream unchanged.
+
+**I claimed the blast radius before measuring it and was wrong.** I said nothing else was touched,
+having run one suite; eight tests then failed because a THIRD decoder -- the Rust reconstruction that
+checks `reconstruct.kel` -- panicked on kind 90. Three decoders now consume the record stream, and
+only the TAG is shared, which is correct: their skip sets legitimately differ.
+
+**The margin pin moved a seventh time, and this is the first move predicted in advance**: 669 names,
+35,154 blob bytes.
 
 ## Next intended increment
 

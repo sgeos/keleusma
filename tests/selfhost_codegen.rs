@@ -2293,6 +2293,22 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
 /// yield kinds; a record of any other kind is rejected until a later increment adds
 /// it (the multiheaded dispatch and its head_parts remain).
 fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
+    // THE BINDING-NAME RECORD IS NOT A NODE, and this walker is the third consumer
+    // of the record stream that has to know it.
+    //
+    // `parse.kel` emits it before each `LetIn` so a type-check extraction can join a
+    // forest of SLOTS to a binding table of NAMES. The main driver diverts it into
+    // `ParsedFn::let_names`; the parse harness skips it; and this one, which
+    // reconstructs bodies in Rust to check `reconstruct.kel` against, must drop it
+    // before the walk. **Three decoders now share the protocol and only the tag
+    // itself is shared** -- the skip sets legitimately differ, since this walker
+    // CONSUMES kind 35 where the parse harness skips it.
+    let records: Vec<(i64, i64)> = records
+        .iter()
+        .copied()
+        .filter(|(k, _)| *k != keleusma::selfhost_host::PARSE_LET_NAME_TAG)
+        .collect();
+    let records: &[(i64, i64)] = &records;
     let mut nodes: Vec<Node> = Vec::new();
     let mut call_args: Vec<i64> = Vec::new();
     let mut limit_parts: Vec<i64> = Vec::new();
