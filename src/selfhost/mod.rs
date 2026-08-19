@@ -214,40 +214,13 @@ const BR_LEX_ILEN: usize = 1 + 393216 + 1280;
 
 const BR_LEX_ICOUNT: usize = 1 + 393216 + 1280 + 1280;
 
-const BR_P_LEN: usize = 0;
-
-const BR_P_PACKED: usize = 1;
-
-const BR_P_LIMIT_ID: usize = 1 + 40960;
-
-const BR_P_CHUNK_COUNT: usize = 1 + 40960 + 1;
-
-const BR_P_CHUNKS: usize = 1 + 40960 + 2;
-/// How many entries `toks.chunks` in `parse.kel` holds.
-///
-/// Restated here rather than parsed out of the stage, because a driver that
-/// discovered the cap by overflowing it would already have written past the array.
-/// `the_chunk_table_cap_matches_the_stage` checks the two agree.
-const PARSE_CHUNK_CAP: usize = 256;
-
-const BR_P_REQUIRE_ID: usize = 1 + 40960 + 2 + 256;
-
-const BR_P_WORD_ID: usize = 1 + 40960 + 2 + 256 + 1;
-
-const BR_P_BYTE_ID: usize = 1 + 40960 + 2 + 256 + 2;
-
-const BR_P_BOOL_ID: usize = 1 + 40960 + 2 + 256 + 3;
-/// The absolute token index that `packed[0]` holds. Zero means the whole stream
-/// is seeded, which is what the ordinary driver does.
-///
-/// The `+ 6` steps over `bool_id` and the two eager-operator ids `and_id` and
-/// `or_id`, which have no constant here because nothing on this side reads them.
-/// Named rather than left as arithmetic because the block is addressed BY SLOT
-/// and a miscount shifts every field after it.
-const BR_P_BASE: usize = 1 + 40960 + 2 + 256 + 6;
-/// The cursor, written back by the stage on every token read, so a host feeding a
-/// window knows where to slide it without the stage needing a protocol to ask.
-const BR_P_AT: usize = 1 + 40960 + 2 + 256 + 7;
+// The shared-slot layout for `parse.kel` lives in `crate::selfhost_host`, which is
+// gated on `compile + verify` like the harnesses that need it, rather than on the
+// narrower `self-host` feature this module carries.
+use crate::selfhost_host::{
+    BR_P_AT, BR_P_BASE, BR_P_BOOL_ID, BR_P_BYTE_ID, BR_P_CHUNK_COUNT, BR_P_CHUNKS, BR_P_LEN,
+    BR_P_LIMIT_ID, BR_P_PACKED, BR_P_REQUIRE_ID, BR_P_WORD_ID, PARSE_CHUNK_CAP,
+};
 
 fn br_shared_word(vm: &Vm<'_, '_>, buf: &[u8], slot: usize) -> i64 {
     match vm.get_shared(buf, slot).expect("get_shared") {

@@ -51,13 +51,21 @@ use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, required_persistent_capacity_for}
 // is one packed `tok+payload*64` word per token (not two `kinds`/`vals` arrays).
 const LEN: usize = 0;
 const PACKED: usize = 1;
-const LIMIT_ID: usize = 1 + 40960;
-const CHUNK_COUNT: usize = 1 + 40960 + 1;
-const CHUNKS: usize = 1 + 40960 + 2;
-const REQUIRE_ID: usize = 1 + 40960 + 2 + 256;
-const WORD_ID: usize = 1 + 40960 + 2 + 256 + 1;
-const BYTE_ID: usize = 1 + 40960 + 2 + 256 + 2;
-const BOOL_ID: usize = 1 + 40960 + 2 + 256 + 3;
+// THE SHARED-SLOT LAYOUT LIVES IN ONE PLACE AND THIS IS NOT IT.
+//
+// These were independent copies of the same arithmetic (`1 + 40960 + 2 + 256 + 3`).
+// Widening `toks.chunks` moved the stage's fields and left every copy seeding the
+// keyword and type ids at the old slots, which failed sixty-eight tests with struct
+// byte sizes of 1 instead of 8 and a scalar kind of `Unit` instead of `Int` -- not
+// one of them naming a slot. Aliased to the driver's constants so the next widening
+// moves them.
+const LIMIT_ID: usize = keleusma::selfhost_host::BR_P_LIMIT_ID;
+const CHUNK_COUNT: usize = keleusma::selfhost_host::BR_P_CHUNK_COUNT;
+const CHUNKS: usize = keleusma::selfhost_host::BR_P_CHUNKS;
+const REQUIRE_ID: usize = keleusma::selfhost_host::BR_P_REQUIRE_ID;
+const WORD_ID: usize = keleusma::selfhost_host::BR_P_WORD_ID;
+const BYTE_ID: usize = keleusma::selfhost_host::BR_P_BYTE_ID;
+const BOOL_ID: usize = keleusma::selfhost_host::BR_P_BOOL_ID;
 
 /// Map the reference token stream into the stage's unified `(kind, value)` pairs. The
 /// operator codes follow the retired body.kel scheme (`Plus` 21 upward); the header
@@ -2416,7 +2424,10 @@ fn the_chunk_table_cap_is_refused_by_the_driver_and_not_by_the_stage() {
         s
     }
 
-    // The cap read out of the stage, so the two cannot drift.
+    // The cap read out of the stage, so the two cannot drift. Compared against the
+    // driver's published constant rather than a literal: this assertion used to spell
+    // 256 and would have had to be edited by hand on every widening, which is the same
+    // restatement habit that failed sixty-eight tests when the block moved.
     const STAGE: &str = include_str!("../src/selfhost/kel/parse.kel");
     let declared: usize = STAGE
         .lines()
@@ -2426,7 +2437,8 @@ fn the_chunk_table_cap_is_refused_by_the_driver_and_not_by_the_stage() {
         .and_then(|n| n.trim().parse().ok())
         .expect("parse.kel declares chunks: [Word; N]");
     assert_eq!(
-        declared, 256,
+        declared,
+        keleusma::selfhost_host::PARSE_CHUNK_CAP,
         "the stage's chunk array is {declared}; the driver's cap must be updated with it"
     );
 
@@ -2768,5 +2780,113 @@ fn budget_exhaustion_names_the_likely_cause() {
     assert!(
         msg.contains("unterminated"),
         "the refusal was {msg:?}, which names only the budget"
+    );
+}
+
+/// **THE LAYOUT COPIES MUST NOT COME BACK, and this walks the tree rather than a list.**
+///
+/// The shared block is addressed by slot. Three harnesses each carried their own copy of
+/// the arithmetic (`1 + 40960 + 2 + 256 + 3`); widening `toks.chunks` moved the stage's
+/// fields and left all three seeding the keyword and type ids at the old slots. Sixty-eight
+/// tests failed reporting struct byte sizes of 1 instead of 8 and a scalar kind of `Unit`
+/// instead of `Int`, and **not one of them named a slot**.
+///
+/// A list of known offenders would not have caught the fourth copy, so this reads the
+/// directory. `src/selfhost/mod.rs` is the definition site and is the only file allowed to
+/// spell the layout out.
+/// The offending pattern, assembled at runtime so the file that looks for it does not
+/// match itself. Its first run flagged exactly one file: this one.
+#[cfg(feature = "self-host")]
+fn alloc_needle() -> String {
+    format!("usize = 1 + {}", keleusma::selfhost_host::PARSE_TOKEN_CAP)
+}
+
+#[cfg(feature = "self-host")]
+#[test]
+fn no_other_file_restates_the_shared_layout() {
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                out.push(p);
+            }
+        }
+    }
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    walk(&root.join("src"), &mut files);
+    walk(&root.join("tests"), &mut files);
+    assert!(
+        files.len() > 20,
+        "only {} source files were found, so this check is reading the wrong tree and \
+         would pass vacuously",
+        files.len()
+    );
+
+    let allowed = root.join("src").join("selfhost").join("mod.rs");
+    let mut offenders = Vec::new();
+    for f in &files {
+        if *f == allowed {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(f) else {
+            continue;
+        };
+        for (i, line) in text.lines().enumerate() {
+            // A slot constant computed from the token-array size, rather than taken from
+            // `keleusma::selfhost`. Comments are left alone; they mislead but do not break.
+            // Built from parts so this file does not contain its own needle. The first
+            // run of this check flagged exactly one offender: itself.
+            let needle = alloc_needle();
+            if line.contains(&needle) {
+                offenders.push(format!("{}:{}", f.display(), i + 1));
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "these files restate the shared-slot layout instead of using the constants in \
+         `keleusma::selfhost_host`: {offenders:?}. A copy is correct until the block moves, and \
+         then it is silently wrong -- the failure names a struct size, never a slot."
+    );
+}
+
+/// **THE PAYOFF: `wire.kel` PARSES.**
+///
+/// `wire.kel` is the largest stage in the corpus at 486 chunks, and the 256-entry chunk
+/// table excluded it from the parser entirely. It was the last cap keeping a real stage
+/// out, and it stood while four emit-side caps fell around it.
+///
+/// # Raising it was three edits, and the first two did not work
+///
+/// The chunk index is not one array's index. Widening `toks.chunks` alone left the wall in
+/// place and moved the symptom: first to `LoopLimitExceeded`, from two
+/// `for i in 0..toks.chunk_count limit 256` loops, and then to `IndexOutOfBounds(388, 256)`,
+/// from the six `chunkret.ret_*` arrays, which are addressed by a chunk number too. **A cap
+/// is a family**, and `every_chunk_indexed_array_admits_the_chunk_cap` derives that family
+/// from the stage so the next widening cannot repeat this.
+#[cfg(feature = "self-host")]
+#[test]
+fn wire_kel_parses_now_that_the_chunk_table_admits_it() {
+    const WIRE: &str = include_str!("../src/selfhost/kel/wire.kel");
+    let (fns, ..) = keleusma::selfhost::parse_functions(WIRE);
+    assert_eq!(
+        fns.len(),
+        486,
+        "`wire.kel` parsed to {} chunks. The count is pinned because it is the corpus worst \
+         case and the thing the chunk cap is sized against: PARSE_CHUNK_CAP is {}, so a \
+         stage growing toward it is visible here rather than at the wall.",
+        fns.len(),
+        keleusma::selfhost_host::PARSE_CHUNK_CAP
+    );
+    assert!(
+        fns.len() <= keleusma::selfhost_host::PARSE_CHUNK_CAP,
+        "the corpus worst case has reached the cap it is sized against"
     );
 }

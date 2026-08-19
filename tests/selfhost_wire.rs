@@ -12585,7 +12585,7 @@ fn every_stage_fits_the_driver_caps_with_margin() {
         worst_blob = worst_blob.max(blob.len());
     }
     // Pinned so a change in the worst case is visible rather than absorbed, and it
-    // has now earned that THREE TIMES. `semi_terminates_nothing` for the empty
+    // has now earned that FOUR TIMES. `semi_terminates_nothing` for the empty
     // statement moved it from 627 names and 33,395 bytes to 628 and 33,480; the
     // `toks.base` and `toks.at` window fields moved it again to 630 and 33,500 —
     // two data-block field names and their blob records. The capacity diagnostics
@@ -12594,12 +12594,17 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // names, and no author would have thought to check.** That is the entire
     // argument for the pin.
     //
+    // The fourth was raising the chunk table from 256 to 1024: the NAME count did not
+    // move at all, because widening an array adds no name, but the blob grew 30 bytes
+    // in data-layout records. A change that moves one of these two and not the other is
+    // the normal case, not a surprise.
+    //
     // The margins are 63% and 69% of the caps, so the increment is admissible; the
     // point of the pin is that a stage growing toward either bound is reported here
     // with the number rather than surfacing later as an `Unsupported` at some call
     // site.
     assert_eq!(worst_names, 645, "the worst-case name count moved");
-    assert_eq!(worst_blob, 34118, "the worst-case blob size moved");
+    assert_eq!(worst_blob, 34148, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**

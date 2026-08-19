@@ -21,7 +21,8 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 | `lexer` into `parse` | FUSED, one-token window, byte-identical on four stages |
 | architecture | one binary, selectable phases — documented, unbuilt |
 | **`parse.kel` capacity diagnostics** | **four causes now NAMED; the rest still trap raw** |
-| branch | `feat/parse-diagnostics`, cut from `v0.2.3` |
+| **the last cap** | **GONE. `wire.kel` PARSES, 486 functions** |
+| branch | `feat/chunk-table-cap`; `feat/parse-diagnostics` merged at `09784042` |
 
 ## WHAT THIS INCREMENT DID
 
@@ -60,8 +61,10 @@ narrowing. Every boundary is pinned from both sides — 64 parses, 65 does not.
 ## What this green suite does NOT establish
 
 **Roughly a hundred and thirty fixed arrays remain in `parse.kel` and four causes are named.** The
-rest still trap raw: 47 arrays of 8 entries (nesting stacks), 22 of 32, 4 of 64 (struct-definition
-tables), 19 of 256, 17 of 512. **None has been probed**, so none is known reachable or unreachable.
+rest still trap raw: the nesting stacks at 8 entries, the 32s, the struct-definition tables at 64,
+and the remaining 256s and 512s. **None has been probed**, so none is known reachable or
+unreachable. The chunk-table work is direct evidence that this matters: three of its walls were
+unprobed arrays, and each reported a size rather than a cause.
 
 **Separately, the probe found malformed inputs SILENTLY ACCEPTED**: a stray `)`, an unclosed `(`, a
 binary operator with no right operand, and an empty index `a[]`. That is acceptance laxity rather
@@ -81,11 +84,28 @@ scope to do it.
 - **The input-re-readability fork** in `../decisions/PIPELINE_THEN_MONOLITH.md`: still open. It
   decides whether the monolith is one command or two.
 
+## THE LAST CAP IS GONE, AND IT WAS NEVER ONE NUMBER
+
+`wire.kel` parses at 486 functions. Raising `toks.chunks` from 256 to 1024 was three edits and the
+first two did not work: the wall moved to `LoopLimitExceeded` (two `limit 256` loops over the chunk
+count) and then to `IndexOutOfBounds(388, 256)` (the six chunk-indexed `chunkret.ret_*` arrays).
+
+**A cap is a FAMILY, and that is the second family in two increments.** The eight local-binding
+arrays were the first. Both times I widened what I could find by name and the trap did not move.
+
+**THEN SIXTY-EIGHT TESTS FAILED AND NOT ONE NAMED A SLOT.** The shared layout was restated in FOUR
+places — the driver and three harnesses — so moving the block left them seeding the type ids at the
+old slots, and `parse.kel` sized every field as one byte. **My derivation test proved the DRIVER
+agreed with the stage and said nothing about harnesses that never consult the driver.** Now: public
+chained constants, harnesses aliased, and a guard that WALKS the tree rather than checking a list.
+
+**Two vacuity guards fired in one run** — the family test found zero arrays (a bug in my own walk),
+and the no-copies guard flagged itself. Both now verified by mutation.
+
 ## Next intended increment
 
-**Raising `toks.chunks` above 256**, the one cap still standing, which excludes `wire.kel` from
-being PARSED at 475 functions. Deliberately separate work: `base` and `at` were appended after that
-array, so widening it shifts them, and a mid-block insertion has silently broken four tests once.
+**`parse` into `reconstruct`**, worth 3x to 13x residency, needing `reconstruct.kel` restructured or
+fused at function granularity with a probable fourth sidecar fact.
 
-**Then `parse` into `reconstruct`**, worth 3x to 13x residency, needing `reconstruct.kel`
-restructured or fused at function granularity with a probable fourth sidecar fact.
+**Also newly measured and unowned: `parse.kel` is 32,907 tokens against its own 40,960-token array,
+at 80%.** That is the next array likely to bind, and nothing reports it when it does.

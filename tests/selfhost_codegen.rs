@@ -2046,16 +2046,24 @@ const BR_LEX_ICOUNT: usize = 1 + 393216 + 1280 + 1280;
 // word per token), then the scalar and chunk-table inputs.
 const BR_P_LEN: usize = 0;
 const BR_P_PACKED: usize = 1;
-const BR_P_LIMIT_ID: usize = 1 + 40960;
-const BR_P_CHUNK_COUNT: usize = 1 + 40960 + 1;
-const BR_P_CHUNKS: usize = 1 + 40960 + 2;
-const BR_P_REQUIRE_ID: usize = 1 + 40960 + 2 + 256;
-const BR_P_WORD_ID: usize = 1 + 40960 + 2 + 256 + 1;
-const BR_P_BYTE_ID: usize = 1 + 40960 + 2 + 256 + 2;
-const BR_P_BOOL_ID: usize = 1 + 40960 + 2 + 256 + 3;
+// THE SHARED-SLOT LAYOUT LIVES IN ONE PLACE AND THIS IS NOT IT.
+//
+// These were independent copies of the same arithmetic (`1 + 40960 + 2 + 256 + 3`).
+// Widening `toks.chunks` moved the stage's fields and left every copy seeding the
+// keyword and type ids at the old slots, which failed sixty-eight tests with struct
+// byte sizes of 1 instead of 8 and a scalar kind of `Unit` instead of `Int` -- not
+// one of them naming a slot. Aliased to the driver's constants so the next widening
+// moves them.
+const BR_P_LIMIT_ID: usize = keleusma::selfhost_host::BR_P_LIMIT_ID;
+const BR_P_CHUNK_COUNT: usize = keleusma::selfhost_host::BR_P_CHUNK_COUNT;
+const BR_P_CHUNKS: usize = keleusma::selfhost_host::BR_P_CHUNKS;
+const BR_P_REQUIRE_ID: usize = keleusma::selfhost_host::BR_P_REQUIRE_ID;
+const BR_P_WORD_ID: usize = keleusma::selfhost_host::BR_P_WORD_ID;
+const BR_P_BYTE_ID: usize = keleusma::selfhost_host::BR_P_BYTE_ID;
+const BR_P_BOOL_ID: usize = keleusma::selfhost_host::BR_P_BOOL_ID;
 // The eager `and`/`or` ids, appended after `bool_id` (see the `toks` block in parse.kel).
-const BR_P_AND_ID: usize = 1 + 40960 + 2 + 256 + 4;
-const BR_P_OR_ID: usize = 1 + 40960 + 2 + 256 + 5;
+const BR_P_AND_ID: usize = keleusma::selfhost_host::BR_P_AND_ID;
+const BR_P_OR_ID: usize = keleusma::selfhost_host::BR_P_OR_ID;
 
 fn br_shared_word(vm: &Vm<'_, '_>, buf: &[u8], slot: usize) -> i64 {
     match vm.get_shared(buf, slot).expect("get_shared") {

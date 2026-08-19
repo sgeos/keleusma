@@ -32,7 +32,18 @@ shared data toks {
     packed: [Word; 40960],
     limit_id: Word,
     chunk_count: Word,
-    chunks: [Word; 256],
+    // THE LAST CAP THAT EXCLUDED A REAL STAGE FROM BEING PARSED.
+    //
+    // At 256 this table refused `wire.kel`, which is 486 chunks. Sized from the corpus
+    // rather than from the stage that needed it: the next largest is `parse.kel` at 108,
+    // which grew from 94 in a single increment, so 512 would have left `wire` twenty-six
+    // chunks of margin and one increment can consume that.
+    //
+    // Eight load-bearing fields follow this array in the same shared block, and widening
+    // it shifts every one of them. The driver's slot constants are chained rather than
+    // restated so they move together, and `the_driver_shared_slots_match_the_stage` checks
+    // the whole chain against this declaration order.
+    chunks: [Word; 1024],
     require_id: Word,
     word_id: Word,
     byte_id: Word,
@@ -1164,20 +1175,20 @@ private data enums {
 // all-Word tuple return (>= 2, else 0), so a let-bound tuple call arms `x.N` access (all-Word
 // only, matching tuple construction).
 private data chunkret {
-    ret_struct: [Word; 256],
-    ret_tuple: [Word; 256],
+    ret_struct: [Word; 1024],
+    ret_tuple: [Word; 1024],
     // Per chunk, the enum name id (plus one) it returns, else 0, so a `let e = f(); match e` over
     // an enum-returning call lowers to the IsEnum virtual loop.
-    ret_enum: [Word; 256],
+    ret_enum: [Word; 1024],
     // Per chunk, the element ScalarKind (plus one) of a scalar array return `-> [T; N]`, else 0, so
     // a `let a = f(); a[i]` bound to the call arms `a[i]` access (scalar elements only, matching the
     // scalar array-parameter and let-bound-array cases).
-    ret_array: [Word; 256],
+    ret_array: [Word; 1024],
     // Per chunk, for a STRUCT-element array return `-> [P; N]`, the element struct's declaration
     // index (plus one) and byte size, else 0, so a `let a = f(); a[i].field` bound to the call arms
     // the struct-array postfix. Mutually exclusive with `ret_array` (scalar vs struct element).
-    ret_array_struct: [Word; 256],
-    ret_array_size: [Word; 256],
+    ret_array_struct: [Word; 1024],
+    ret_array_size: [Word; 1024],
 }
 
 // The tuple-parameter-type layout table, accumulated as each `(T, T, ...)` parameter type
@@ -1469,7 +1480,7 @@ fn resolve_plain_ident(v: Word) -> Word {
 // parameter).
 fn step_ident(v: Word) -> Word {
     ps.found_flag = 0;
-    for i in 0..toks.chunk_count limit 256 {
+    for i in 0..toks.chunk_count limit 1024 {
         if toks.chunks[i] == v {
             call.call_pending = i;
             ps.found_flag = 1;
@@ -5292,7 +5303,7 @@ fn header_step(k: Word, v: Word) -> Word {
             // Capture this function's chunk index (its name's position in `toks.chunks`) so its
             // return type is recorded against it.
             ps.cur_chunk = 0;
-            for i in 0..toks.chunk_count limit 256 {
+            for i in 0..toks.chunk_count limit 1024 {
                 if toks.chunks[i] == v {
                     ps.cur_chunk = i;
                 }

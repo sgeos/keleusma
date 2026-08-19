@@ -344,13 +344,21 @@ fn host_recovers_parser_metadata_from_lexer_output() {
 // chunk_count, chunks[256], require_id, in declaration order.
 const P_LEN: usize = 0;
 const P_PACKED: usize = 1;
-const P_LIMIT_ID: usize = 1 + 40960;
-const P_CHUNK_COUNT: usize = 1 + 40960 + 1;
-const P_CHUNKS: usize = 1 + 40960 + 2;
-const P_REQUIRE_ID: usize = 1 + 40960 + 2 + 256;
-const P_WORD_ID: usize = 1 + 40960 + 2 + 256 + 1;
-const P_BYTE_ID: usize = 1 + 40960 + 2 + 256 + 2;
-const P_BOOL_ID: usize = 1 + 40960 + 2 + 256 + 3;
+// THE SHARED-SLOT LAYOUT LIVES IN ONE PLACE AND THIS IS NOT IT.
+//
+// These were independent copies of the same arithmetic (`1 + 40960 + 2 + 256 + 3`).
+// Widening `toks.chunks` moved the stage's fields and left every copy seeding the
+// keyword and type ids at the old slots, which failed sixty-eight tests with struct
+// byte sizes of 1 instead of 8 and a scalar kind of `Unit` instead of `Int` -- not
+// one of them naming a slot. Aliased to the driver's constants so the next widening
+// moves them.
+const P_LIMIT_ID: usize = keleusma::selfhost_host::BR_P_LIMIT_ID;
+const P_CHUNK_COUNT: usize = keleusma::selfhost_host::BR_P_CHUNK_COUNT;
+const P_CHUNKS: usize = keleusma::selfhost_host::BR_P_CHUNKS;
+const P_REQUIRE_ID: usize = keleusma::selfhost_host::BR_P_REQUIRE_ID;
+const P_WORD_ID: usize = keleusma::selfhost_host::BR_P_WORD_ID;
+const P_BYTE_ID: usize = keleusma::selfhost_host::BR_P_BYTE_ID;
+const P_BOOL_ID: usize = keleusma::selfhost_host::BR_P_BOOL_ID;
 
 /// Compile parse.kel on a 64MB thread; its deeply nested source overflows the
 /// default 2MB test-thread stack in the host compiler's recursive-descent parse.
