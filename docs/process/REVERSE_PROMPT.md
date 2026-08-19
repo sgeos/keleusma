@@ -25,7 +25,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 | **`parse` into `reconstruct`** | **FUSED at function granularity, 3.4x to 41.1x** |
 | shared-slot layouts | **nine copies collapsed to two definitions** |
 | `parse.kel` failure modes named | **THIRTEEN**; eleven counters guarded |
-| branch | `feat/sweep-remaining-caps`; #164-#169 merged, at `ec927f48` |
+| branch | `docs/refresh-handoff`; #164-#170 merged, at `3ffd5a4c` |
 
 ## WHAT THIS INCREMENT DID
 
@@ -195,10 +195,25 @@ clear (data blocks and `use` through 64, tuple elements through 32, array-litera
 an error code, a capacity, a guard. 39 of the 1,024-name budget spent, 65% margin left. It has not
 once moved for a reason its author was thinking about, which is why it is pinned rather than computed.
 
+## THE SWEEP IS DONE, AND IT CAUGHT A STALE DIAGNOSTIC OF MINE
+
+A final round found **no new reachable caps**. It found something better: the chunk-table guard's
+message and comment were **stale in four ways and I made them so** when I raised the cap -- it told a
+caller with 1,025 functions about a *257th* entry, cited a 256-entry array that is now 1,024, and said
+raising the array "is NOT done here" after it had been done. Both copies now derive from
+`PARSE_CHUNK_CAP`.
+
+**Five of my probes this session measured something other than what I intended.** The rule that came
+out of it: when a generated program fails, confirm the REFERENCE accepts it before concluding anything
+about the stage. It caught three of the five.
+
+**`HANDOFF.md` is rewritten** against `3ffd5a4c` with every value re-measured, and its own check block
+was run as a resuming session would.
+
 ## Next intended increment
 
-**Nothing is queued that does not need a decision from you.** Absent direction I would keep sweeping
-`parse.kel`'s remaining arrays, which needs no ruling but is yielding less each round.
+**Nothing is queued that does not need a decision from you**, and the sweep that needed no ruling is
+now exhausted. The three live decisions are in the handoff's operator-held list and repeated below.
 
 
 

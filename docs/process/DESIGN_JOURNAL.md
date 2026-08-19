@@ -13,6 +13,47 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE SWEEP RETURNS NOTHING NEW, AND CATCHES A STALE DIAGNOSTIC I HAD CREATED TWO INCREMENTS EARLIER
+(2026-08-19).**
+
+A final sweep found **no new reachable caps**. What it found instead was better: the chunk-table
+guard's comment and message were **stale in four ways, and I made them so when I raised the cap.**
+
+They said the array was `[Word; 256]`, that a *257th* entry overflowed, that `wire.kel` hit the cap at
+475 chunks, and that raising the array was "the real fix and NOT done here" -- after the array had
+become 1,024, `wire.kel` measured at 486, and the raise had in fact been done. **A caller with 1,025
+functions was told about a 257th entry.**
+
+That is precisely the failure this handoff has warned about for seven instances -- a comment that
+governs a decision while citing numbers an order of magnitude wrong -- and I produced a fresh one two
+increments after reading the warning. Both copies now derive their counts from `PARSE_CHUNK_CAP`.
+
+**FIVE OF MY PROBES THIS SESSION MEASURED SOMETHING OTHER THAN WHAT I INTENDED**, and the last two
+came from this sweep:
+
+| probe | what it actually measured |
+|---|---|
+| token cap | the REFERENCE tokenizer, not the stage's lexer |
+| call arguments | the PARAMETER cap -- a call cannot exceed its callee's arity |
+| nested `match` | a source the reference rejects at depth 1 |
+| else-if chain | a source the reference rejects at length 2 |
+| enum-pattern `match` | a form the corpus never uses; it matches integer literals |
+
+**The rule that earned a name**: when a generated program fails, confirm the reference accepts it
+before concluding anything about the stage. It caught three of these five.
+
+**The supported `match` form takes 128 arms without a wall**, so match arms are not a reachable cap.
+The stage also requires a wildcard arm where the reference does not -- a subset restriction, recorded
+rather than treated as a defect.
+
+**THE HANDOFF IS REWRITTEN against `3ffd5a4c`** with every value re-measured, and **its own check block
+was run as a resuming session would run it**. Its centrepiece is a section that did not exist this
+morning: the one defect this session kept finding, tabulated as six instances of a single mistake with
+the fix stated once, plus the four message-collision groups, the whole-program bounds whose array
+sizes mislead, and the swept-and-clear list.
+
+---
+
 **THE SWEEP CONVERGES, `IndexOutOfBounds(8, 8)` HAD A THIRD SHARER, AND THE DIAGNOSTICS PROGRAMME
 NOW HAS A UNIT PRICE (2026-08-19).**
 

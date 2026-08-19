@@ -5,22 +5,15 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **Refreshed 2026-08-18** against the merge at `3f3735d2`, with every pinned count re-measured. The
-> session that produced it converted the last two stages to coroutines, removed every emit-side cap,
-> fused the lexer into the parser, and recorded the selectable-phase architecture. **Read
-> `../decisions/PIPELINE_THEN_MONOLITH.md` before touching the pipeline**; it holds one open fork for
-> the operator and the enumeration of whole-input facts that any boundary format depends on.
+> **Refreshed 2026-08-19** against the merge at `3ffd5a4c`, with every pinned value re-measured.
+> **SEVEN increments landed since the previous refresh** and it had gone stale in nearly every
+> number. The session's whole subject was diagnostics: `parse.kel` named NONE of its failure modes
+> at the start and names THIRTEEN now, across ELEVEN guarded counters. The last cap that excluded a
+> real stage is gone -- **`wire.kel` parses at 486 functions** -- and `parse` is fused into
+> `reconstruct` at function granularity.
 >
-> **Previously refreshed 2026-08-17** against the merge at `81ddd260`, with every pinned count re-measured
-> rather than carried forward. The state, macro position, correctness items and operator-held list
-> changed; the workflow, method rules and hard-won facts below did not and were left alone. Four
-> operator decisions are now RULED ON and two are DONE — read that section before asking anything.
->
-> **Rewritten whole, 2026-08-16 (second rewrite that day).** The previous one was stamped six merges
-> back and **passed all of its own validity checks while being wrong about every open item** — it
-> named a repaired bound as the top concern and said the emit path covered two region kinds when it
-> covered four. A document that certifies its own currency and is wrong is the worst case this file
-> exists to avoid. Overwrite; do not append.
+> **Read "THE ONE DEFECT THIS SESSION KEPT FINDING" below before touching anything.** It is one
+> mistake made six times, it was always mine rather than the code's, and the fix is mechanical.
 
 ## Validity
 
@@ -32,21 +25,27 @@ always-current, so it must be able to report itself stale rather than mislead a 
 recorded parent is a claim that nothing else ever lands, and it has failed twice.
 
 ```sh
-git merge-base --is-ancestor 3f3735d2 HEAD    # must succeed
+git merge-base --is-ancestor 3ffd5a4c HEAD    # must succeed
 
 # Content. If ANY of these differ, say so rather than acting on the state below.
 grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 12
 grep -c '^\s*#\[test\]' tests/selfhost_wire.rs              # 172
-grep -c '^\s*#\[test\]' tests/selfhost_parse.rs             # 69
+grep -c '^\s*#\[test\]' tests/selfhost_parse.rs             # 87
+grep -c '^\s*#\[test\]' tests/selfhost_codegen.rs           # 135
 grep -c '^\s*#\[test\]' tests/block_form_statements.rs      # 11
 grep -c '^\s*#\[test\]' tests/consts_region_composition.rs  # 7
 grep -c '^\s*#\[test\]' tests/operand_stack_model.rs        # 6
 grep -oE 'fn highest_command\(\) -> Word \{ [0-9]+ \}' src/selfhost/kel/wire.kel   # 181
 
-# THE FIVE CAPS. Four are gone; the numbers that remain are LIVE BOUNDS.
+# THE `wire.kel` BOUNDS. Unchanged this session; the PARSER's caps are what moved.
 grep -oE 'fn (nm_max_names|mi_max_nodes|fl_max_nodes|ck_max)\(\) -> Word \{ [0-9]+ \}' \
     src/selfhost/kel/wire.kel        # 1024 names, 1365 nodes, 170 flattener, 90 chunk batch
-grep -n 'chunks: \[Word;' src/selfhost/kel/parse.kel   # [Word; 256] -- excludes `wire` at 475
+
+# THE PARSER'S CAPS, ALL NAMED AND ALL GUARDED. One source of truth, in the driver.
+grep -oE 'pub const PARSE_[A-Z_]+: usize = [0-9]+;' src/selfhost_host.rs
+#   OPSTACK 64, LOCALS 64, STMTS 256, PARAMS 32, IF_DEPTH 32, FOR_DEPTH 8,
+#   ARRAY_NEST 8, VARIANTS 256, CALL_DEPTH 8, FIELDS 512, TOKEN 40960, CHUNK 1024
+grep -n 'chunks: \[Word;' src/selfhost/kel/parse.kel   # [Word; 1024] -- `wire` is 486 and PARSES
 
 awk '/let cases: &\[\(&str, Support, &str\)\] = &\[/{f=1;next} f&&/^    \];/{f=0} f' \
     tests/selfhost_codegen.rs \
@@ -54,7 +53,7 @@ awk '/let cases: &\[\(&str, Support, &str\)\] = &\[/{f=1;next} f&&/^    \];/{f=0
 # expect: 4 Gap, 1 RefRejects, 79 SOk
 ```
 
-**A CHECK THAT PASSES IS NOT A CURRENT DOCUMENT.** The last one passed every check six merges after
+**A CHECK THAT PASSES IS NOT A CURRENT DOCUMENT.** IS NOT A CURRENT DOCUMENT.** The last one passed every check six merges after
 it was written. If the counts hold but the dates below are old, read the three channels first and
 trust them over this file.
 
@@ -112,19 +111,14 @@ push cancelled run `31932202253` and `31932359730` replaced it.
 |---|---|
 | ALL TWELVE STAGES | **`loop main(...)` coroutines** |
 | emit path | **11 of 11 stages**; every emit-side cap removed |
-| `verify_types.kel` | **streams**, one row per resume, asserted by resume COUNT |
-| `wire.kel` | SEVEN streaming commands; the rest answer in one yield |
-| `lexer` into `parse` | **FUSED**, one-token window, byte-identical on four stages |
+| `lexer` into `parse` | **FUSED**, one-token window, byte-identical |
+| `parse` into `reconstruct` | **FUSED at function granularity, 3.4x to 41.1x residency** |
+| **`wire.kel`** | **PARSES, 486 functions.** The last excluding cap is gone |
+| **`parse.kel` failure modes named** | **THIRTEEN**, across **ELEVEN** guarded counters |
+| shared-slot layouts | **nine copies collapsed to two definitions**, in `selfhost_host` |
 | architecture | one binary, selectable phases -- see `../decisions/PIPELINE_THEN_MONOLITH.md` |
-| construct-support boundary | **79 Ok / 4 Gap / 1 RefRejects**, 84 cases |
-| auxiliary body | **103,544 bytes** across eleven stages, down from 712,936 |
-| stages fitting one 65,536-byte window | **11 of 11**, where three did not |
-| chunk region emitted by the driver | **9 of 11 stages**, up from 7 |
-| module-driven emit path | **four region kinds** of twenty, and they differ in strength |
+| construct-support boundary | **79 SOk / 4 Gap / 1 RefRejects**, 84 cases |
 | operand-stack models | **agree on every one of the 66 opcodes**; the known list is EMPTY |
-| type rejection | **rules COMPLETE**; the stage RESOLVES names, not just compares tags |
-| ill-typed corpus | **20** cases, 7 well-typed controls, both guards raised |
-| `analyze_class` / `analyze_opk` | exhaustive over `Op`, and in `selfhost_host` so there is ONE copy |
 
 **WHAT EACH EMITTED REGION OWES TO WHOM, because the distinction is the coverage claim.**
 `NAMES` and `STRING_POOL` are **computed** — the stage walks the module blob and derives every byte.
@@ -186,48 +180,63 @@ sometime after Order 1.**
 UNKNOWN and therefore accepted. Pinned by `the_rules_still_do_not_reach_a_derived_operand`.
 Reaching them is a fixpoint, not a lookup.
 
-## FIVE CAPS, FOUR REMOVED, AND HOW THEY WERE FOUND
+## THE ONE DEFECT THIS SESSION KEPT FINDING
 
-| bound | status |
+**I derived a set from the part of the system I was thinking about, rather than from the system.**
+Six times, and it was always mine rather than the code's:
+
+| what I derived | what it actually was |
 |---|---|
-| artifact size against the 65,536 window | **gone** -- the all-default elision, 6.9x smaller body |
-| chunk batch, 90 records | **gone** -- streaming; the carries existed because a function cannot remember |
-| constant flattener, 170 nodes | **gone for a scalar forest** -- a composite needs the queue, and the queue IS the residency |
-| module-input node walk, 1,024 | **gone** -- the guard was measuring the NAME arrays; the node table holds 1,365 |
-| `toks.chunks`, 256 entries | **STANDS.** `wire.kel` cannot be PARSED at 475 functions |
+| 2 local-binding arrays | **8** -- the trap did not move |
+| the one array the chunk cap is named after | a family of **6**, plus **2** loop limits |
+| one copy of the shared layout | **five**, and my test checked only the driver's |
+| a guard walking `src/` and `tests/` | the class spans the repo; a LIVE copy in `compiler/` |
+| `grep '#[test]' compiler/src/` -> "zero tests" | **86**, in `compiler/tests/` |
+| a probe against the REFERENCE tokenizer | the cap governs the STAGE's lexer |
 
-**FOUR OF THE FIVE WERE FOUND BY SOMETHING OTHER THAN LOOKING FOR THEM.** The last surfaced while
-measuring residency for an unrelated increment. That is an argument for measuring AROUND work rather
-than only at it.
+**THE FIX IS ALWAYS THE SAME: derive the set from the source, and assert the derivation is
+non-vacuous.** Two of those assertions fired on their first run -- the family test found ZERO arrays
+because the walk hit a `[` first, and the no-copies guard flagged itself -- so without them both
+guards would have passed while checking nothing.
 
-**Raising `toks.chunks` is a real fix and a separate increment**: `base` and `at` were appended after
-it, so widening shifts them, and a mid-block insertion silently shifting every later field has already
-broken four tests once.
+**Live examples to copy rather than reinvent**: `the_parse_guard_caps_match_their_arrays` (eleven
+counters, families derived), `every_chunk_indexed_array_admits_the_chunk_cap`,
+`no_other_file_restates_the_shared_layout` (walks the tree, asserts `compiler/` was reached).
 
-## DIAGNOSTICS IN `parse.kel`: FOUR CAUSES NAMED, ABOUT A HUNDRED AND THIRTY ARRAYS NOT
+## THE PARSER'S CAPS, ALL NAMED
 
-**Done for the four that were MEASURED**, each pinned from both sides. Too many local bindings,
-expression nesting too deep, too many statements in one body, and an unmatched closing bracket now
-report through a negative record tag the driver renders; an unterminated block gets a driver-side
-message naming its likely cause.
+Thirteen failure modes report their own cause. **Four groups shared a message before this**, which is
+the defect the whole programme exists to remove:
 
-**THE HEADLINE, AND IT IS ENCODED AS A TEST.** `ops.opstack` and `stmt.let_names` are both 64
-entries, so 65 locals and 65 nested parentheses both reported `IndexOutOfBounds(64, 64)` —
-byte-identical, for two unrelated limits.
+| shared message | constructs that gave it |
+|---|---|
+| `IndexOutOfBounds(64, 64)` | local bindings, operator nesting |
+| `IndexOutOfBounds(32, 32)` | parameters, `if` nesting |
+| `IndexOutOfBounds(8, 8)` | `for` nesting, array-literal nesting, **call nesting** |
+| `IndexOutOfBounds(256, 256)` | statements, enum variants |
 
-**The guard is on the POINTER and each guarded array carries ONE SPARE SLOT.** The write precedes
-the increment, so a guard on the increment fires one write too late, and clamping at the last usable
-slot would REFUSE the exactly-full program that parses today. Do not "simplify" that away.
+Each group is held distinct by an encoded test. **Two bounds are WHOLE-PROGRAM totals whose array
+size misleads**: enum variants (256) and data-block fields (512). 128 enums of two variants refuse
+exactly where one enum of 257 does.
 
-**WHAT IS NOT COVERED, and the count is the point.** Roughly a hundred and thirty fixed arrays remain
-— 47 of 8 entries, 22 of 32, 4 of 64, 19 of 256, 17 of 512 — none probed. The same probe found
-several malformed inputs SILENTLY ACCEPTED (a stray `)`, an unclosed `(`, a missing right operand,
-`a[]`), which is acceptance laxity rather than a diagnostic defect.
+**THE GUARD IS ON THE POINTER AND EACH GUARDED ARRAY CARRIES ONE SPARE SLOT.** The write precedes the
+increment, so a guard on the increment fires one write too late, and clamping at the last usable slot
+would REFUSE the exactly-full program that parses today. **Do not "simplify" that away.**
 
-**WIDENING AN ARRAY FAMILY: READ THE SET OUT OF THE STAGE.** Widening `let_names` and `scope_slot`
-left the trap exactly where it was, because SIX more arrays are written at the same counter.
-`the_parse_guard_caps_match_their_arrays` derives the set rather than listing it, and is verified by
-mutation.
+**NAMING A CAUSE COSTS ABOUT THREE NAMES** -- an error code, a capacity, a guard. The programme has
+spent 39 of the 1,024-name budget, leaving 65% margin at 666. The margin pin has moved SIX times and
+**not once for a reason its author was thinking about**.
+
+**SWEPT AND FOUND CLEAR**, so the next sweep skips them: data blocks and `use` declarations through
+64, tuple elements through 32, array-literal ELEMENTS through 1,025 (a different quantity from
+array-literal NESTING, capped at 8), integer-literal match arms through 128, pending statements past
+40.
+
+**WHEN A GENERATED PROGRAM FAILS, CONFIRM THE REFERENCE ACCEPTS IT** before concluding anything about
+the stage. Five of my probes measured something other than what I intended: a token-count mismatch, a
+call-argument confound (a call cannot exceed its callee's arity, so the parameter cap fires first), a
+malformed nested `match`, a malformed else-if chain, and an enum-pattern `match` where the corpus only
+ever matches integer literals.
 
 ## THE META-DEFECT THIS LINE KEEPS FINDING
 
@@ -304,6 +313,20 @@ looked complete. **In every case the code was reachable and the evidence was not
 - **Say what a green suite does NOT establish**, in the source, where a reader will meet it.
 - **Instrument rather than grep** when asking whether anything ever does X.
 - **PIN rather than repair when the change is a judgment call**, and say so.
+- **AN ITEM IS ITS ATTRIBUTES AND DOC BLOCK, NOT ITS `fn` LINE.** Inserting a helper before
+  `fn parse_functions_impl(` put it between `#[allow(clippy::type_complexity)]` and the function that
+  attribute applies to. Clippy caught it; two further splices trying to repair it made it worse.
+  **Restoring from `HEAD` and reapplying beat a third correction stacked on two bad ones.**
+- **ROOT `cargo fmt --all` DOES NOT REACH `compiler/`**, which declares its own `[workspace]`. A gate
+  covering four feature sets still could not see the file just edited. Anything touching `compiler/`
+  needs a `cd compiler` pass, and CI runs `fmt --check`, `clippy --all-targets -D warnings`, `test`
+  there.
+- **READ THE FEATURE MATRIX OUT OF `ci.yml`, NOT FROM MEMORY.** Publishing a constant from a module
+  gated on `self-host` broke three CI jobs while every local check passed, because every local check
+  had that feature enabled. Four `cargo check --tests` runs, about a minute:
+  `--no-default-features`, `--features signatures`, `--features self-host`, `--features signatures,shell`.
+- **A GUARD WITH A SCOPE NARROWER THAN ITS CLASS IS THE DEFECT IT PREVENTS.** The no-copies guard
+  walked `src/` and `tests/` and missed a live fifth copy in `compiler/src/main.rs`.
 - **A mechanical transform applied by pattern needs the compiler to confirm it** — a regex rebinding
   `&vm` missed every multi-line form; clippy found six.
 
@@ -343,6 +366,18 @@ looked complete. **In every case the code was reachable and the evidence was not
     its own `If`/`EndIf` handling and reported 365 of 386 loops disagreeing. `EndIf` RESTORES the
     depth saved at its `If` rather than restoring and then applying its own effect. **Do not compete
     with a validated walker.**
+- **THREE DECISIONS ARE LIVE AND UNANSWERED**, and nothing else is blocked on the operator:
+  * **The input-re-readability fork** in `../decisions/PIPELINE_THEN_MONOLITH.md`. Both the pre-pass
+    and the main pipeline read the SOURCE, so a fused run from a pipe cannot re-read it. Buffer,
+    accept a file operand with standard input as the default, or always split. The V0.2.x line leans
+    to the file operand and said why. It decides whether the monolith is one command or two.
+  * **Whether to raise `parse.kel`'s token array.** It is at 80% -- the stage is 32,907 tokens
+    against 40,960 -- and is the bound the corpus is closest to. It was NAMED rather than widened,
+    because raising a capacity widens what the language admits and that is the operator's call.
+  * **Whether a top-level `struct` declaration should be SUPPORTED or explicitly REFUSED.**
+    `parse.kel` has no struct handling at all: its declaration record codes are 1..3, 9, 10 and 12,
+    with no struct code. The driver now names the situation instead of panicking on a bare
+    `unwrap()`, and deliberately does not decide it.
 - **`MAX_PARSE_DEPTH` does not do its stated job on a small stack.**
 - **`CHANGELOG.md:340`** states the checked-arithmetic push order wrongly in published text.
 - **`-255` is live and has no negative test.**
