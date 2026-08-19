@@ -10,6 +10,14 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-19, latest).** **THIRTEEN `parse.kel` FAILURE MODES NAMED**, eleven
+> counters guarded. Two more caps swept out: call nesting (8) and data-block fields (512, a
+> WHOLE-PROGRAM total like the enum bound). **`IndexOutOfBounds(8, 8)` had THREE sharers**, not two.
+>
+> **The sweep is converging**: two caps this round against five last, and four constructs came back
+> clear. **The margin pin has moved six times and now yields a rate** -- roughly three names per
+> cause named, 39 of 1,024 spent, 65% margin.
+
 > **Currency note (2026-08-19, later).** **THE LAST TWO UNNAMED FAILURE MODES ARE NAMED.** The token
 > array had TWO failures depending how far over the input was -- `IndexOutOfBounds(40960, 40960)`
 > from the stage, or a shared-slot range error from the driver's seeding loop -- and both are now one

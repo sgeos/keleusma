@@ -24,8 +24,8 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 | **the last cap** | **GONE. `wire.kel` PARSES, 486 functions** |
 | **`parse` into `reconstruct`** | **FUSED at function granularity, 3.4x to 41.1x** |
 | shared-slot layouts | **nine copies collapsed to two definitions** |
-| `parse.kel` caps named | **TEN**, plus the unrecognised-declaration panic |
-| branch | `feat/driver-diagnostics`; #164-#168 merged, at `ed3d8081` |
+| `parse.kel` failure modes named | **THIRTEEN**; eleven counters guarded |
+| branch | `feat/sweep-remaining-caps`; #164-#169 merged, at `ec927f48` |
 
 ## WHAT THIS INCREMENT DID
 
@@ -178,11 +178,27 @@ REFERENCE tokenizer while the cap governs the STAGE's lexer -- measuring the wro
 `#[allow(clippy::type_complexity)]` from its function, because I anchored on the signature rather
 than the item. I restored from `HEAD` and reapplied rather than stack a third correction.
 
+## THE SWEEP CONVERGES, AND THE PROGRAMME NOW HAS A UNIT PRICE
+
+Two more caps: call nesting (8) and data-block fields (512, a WHOLE-PROGRAM total like the enum
+bound). **`IndexOutOfBounds(8, 8)` had THREE sharers**, not two -- call nesting sat behind a construct
+I had not generated. All three are now held distinct by test.
+
+**A distinction that is this session's trap in miniature**: array-literal ELEMENTS have no wall
+through 1,025; array-literal NESTING caps at 8.
+
+**The sweep is converging**: two caps this round against five last, and four constructs came back
+clear (data blocks and `use` through 64, tuple elements through 32, array-literal elements through
+1,025).
+
+**The margin pin has moved SIX times and now yields a rate**: roughly three names per cause named --
+an error code, a capacity, a guard. 39 of the 1,024-name budget spent, 65% margin left. It has not
+once moved for a reason its author was thinking about, which is why it is pinned rather than computed.
+
 ## Next intended increment
 
-**Nothing is queued that does not need a decision from you.** The three open items below are all
-yours. Absent direction I would keep sweeping `parse.kel`'s remaining arrays for reachable caps,
-which is the same work as the last two increments and needs no ruling.
+**Nothing is queued that does not need a decision from you.** Absent direction I would keep sweeping
+`parse.kel`'s remaining arrays, which needs no ruling but is yielding less each round.
 
 
 

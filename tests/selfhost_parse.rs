@@ -2641,6 +2641,16 @@ fn the_parse_guard_caps_match_their_arrays() {
             "pe_cap_variant",
             keleusma::selfhost_host::PARSE_VARIANTS_CAP,
         ),
+        (
+            "call.call_sp",
+            "pe_cap_calldepth",
+            keleusma::selfhost_host::PARSE_CALL_DEPTH_CAP,
+        ),
+        (
+            "fields.field_count",
+            "pe_cap_field",
+            keleusma::selfhost_host::PARSE_FIELDS_CAP,
+        ),
     ];
 
     for &(counter, cap_fn, driver_cap) in cases {
@@ -3241,5 +3251,133 @@ fn an_unrecognised_declaration_is_named_rather_than_unwrapped() {
     assert!(
         !msg.contains("Option::unwrap"),
         "the refusal is still a bare unwrap panic: {msg:?}"
+    );
+}
+
+#[cfg(feature = "self-host")]
+fn src_calls(n: usize) -> String {
+    let mut s = String::from("fn g(a: Word) -> Word { a }\nfn f() -> Word { ");
+    for _ in 0..n {
+        s.push_str("g(");
+    }
+    s.push('1');
+    for _ in 0..n {
+        s.push(')');
+    }
+    s.push_str(" }\n");
+    s
+}
+
+#[cfg(feature = "self-host")]
+fn src_fields(n: usize) -> String {
+    let fs: Vec<String> = (0..n).map(|i| format!("f{i}: Word = 0")).collect();
+    format!(
+        "private data d {{ {} }}\nfn g() -> Word {{ d.f0 }}\n",
+        fs.join(", ")
+    )
+}
+
+/// **TWO MORE CAPS, AND `IndexOutOfBounds(8, 8)` HAD A THIRD SHARER.**
+///
+/// Found by continuing the sweep rather than by tripping over them:
+///
+/// | construct | admits | reported |
+/// |---|---|---|
+/// | call nesting `g(g(g(…)))` | 8 | `IndexOutOfBounds(8, 8)` |
+/// | data-block fields, whole program | 512 | `IndexOutOfBounds(512, 512)` |
+///
+/// `for` nesting and array-literal nesting already shared `(8, 8)`; call nesting made three.
+///
+/// # Swept and found clear, so the next sweep can skip them
+///
+/// Data blocks and `use` declarations show no wall through 64; tuple elements none through
+/// 32; array-literal **elements** none through 1,025 — which is a different quantity from
+/// array-literal **nesting**, capped at 8.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_swept_caps_are_named_and_their_boundaries_hold() {
+    use keleusma::selfhost_host as h;
+    let cases: &[(&str, usize, &dyn Fn(usize) -> String, &str)] = &[
+        (
+            "call nesting",
+            h::PARSE_CALL_DEPTH_CAP,
+            &src_calls,
+            "call nesting",
+        ),
+        (
+            "data fields",
+            h::PARSE_FIELDS_CAP,
+            &src_fields,
+            "data-block fields",
+        ),
+    ];
+    for &(label, cap, make, phrase) in cases {
+        assert!(
+            refusal(&make(cap)).is_none(),
+            "{label}: exactly {cap} must be admitted; the guard fires too early"
+        );
+        let msg = refusal(&make(cap + 1))
+            .unwrap_or_else(|| panic!("{label}: one past {cap} must be refused"));
+        assert!(
+            msg.contains(phrase) && msg.contains(&(cap + 1).to_string()),
+            "{label}: the refusal was {msg:?}"
+        );
+        assert!(
+            !msg.starts_with("resume parse.kel"),
+            "{label}: still a raw trap: {msg:?}"
+        );
+    }
+}
+
+/// **THREE CONSTRUCTS SHARED `IndexOutOfBounds(8, 8)` AND MUST STAY DISTINCT.**
+///
+/// `forst.for_seq`, `call.al_count` and `call.call_chunk` are all 8 entries, which is the
+/// only thing they have in common. Encoded so they cannot converge again.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_three_eight_entry_caps_do_not_share_a_message() {
+    use keleusma::selfhost_host as h;
+    let msgs = [
+        refusal(&src_fors(h::PARSE_FOR_DEPTH_CAP + 1)).expect("for depth must refuse"),
+        refusal(&src_array_nest(h::PARSE_ARRAY_NEST_CAP + 1)).expect("array nest must refuse"),
+        refusal(&src_calls(h::PARSE_CALL_DEPTH_CAP + 1)).expect("call depth must refuse"),
+    ];
+    for i in 0..msgs.len() {
+        for j in (i + 1)..msgs.len() {
+            assert_ne!(
+                msgs[i], msgs[j],
+                "two of the three 8-entry caps report identically again"
+            );
+        }
+    }
+}
+
+/// **THE DATA-FIELD BOUND IS A WHOLE-PROGRAM TOTAL, like the enum one.**
+///
+/// Two blocks of 256 fields refuse at the same point as one block of 513. Measured, because
+/// "512 fields" reads as per-declaration and a reader would split the wrong thing.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_data_field_bound_counts_the_whole_program() {
+    let cap = keleusma::selfhost_host::PARSE_FIELDS_CAP;
+    let split = |blocks: usize, per: usize| {
+        let mut s = String::new();
+        for b in 0..blocks {
+            let fs: Vec<String> = (0..per).map(|i| format!("f{i}: Word = 0")).collect();
+            s.push_str(&format!("private data d{b} {{ {} }}\n", fs.join(", ")));
+        }
+        s.push_str("fn g() -> Word { d0.f0 }\n");
+        s
+    };
+    assert!(
+        refusal(&split(2, cap / 2)).is_none(),
+        "two blocks of {} fields is exactly the total and must be admitted",
+        cap / 2
+    );
+    let msg = refusal(&split(2, cap / 2 + 1)).expect("one field past the total must refuse");
+    assert!(
+        msg.contains("TOTAL ACROSS THE WHOLE PROGRAM"),
+        "the refusal was {msg:?}; a reader who sees only a per-block count will split the \
+         wrong thing"
     );
 }

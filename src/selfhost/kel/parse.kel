@@ -622,6 +622,10 @@ fn pe_ifdepth() -> Word { 6 }
 fn pe_fordepth() -> Word { 7 }
 fn pe_arraynest() -> Word { 8 }
 fn pe_variants() -> Word { 9 }
+// Swept, not tripped over. Nested calls are the THIRD construct to report
+// `IndexOutOfBounds(8, 8)`, after `for` nesting and array-literal nesting.
+fn pe_calldepth() -> Word { 10 }
+fn pe_fields() -> Word { 11 }
 
 fn pe_cap_op() -> Word { 64 }
 fn pe_cap_let() -> Word { 64 }
@@ -634,6 +638,8 @@ fn pe_cap_anest() -> Word { 8 }
 // variants reach it at exactly the same point as one enum of 257 variants. No message
 // naming an array size could convey that, which is the argument for naming it here.
 fn pe_cap_variant() -> Word { 256 }
+fn pe_cap_calldepth() -> Word { 8 }
+fn pe_cap_field() -> Word { 512 }
 
 // Record the FIRST cause and its count. A clamped pointer provokes cascades, and the first
 // cause is the one that names the real limit. Returns zero; callers use it for effect.
@@ -710,6 +716,24 @@ fn anest_push(n: Word) -> Word {
     if n + 1 > pe_cap_anest() {
         perr(pe_arraynest(), n + 1);
         pe_cap_anest()
+    } else {
+        n + 1
+    }
+}
+
+fn call_push(n: Word) -> Word {
+    if n + 1 > pe_cap_calldepth() {
+        perr(pe_calldepth(), n + 1);
+        pe_cap_calldepth()
+    } else {
+        n + 1
+    }
+}
+
+fn field_push(n: Word) -> Word {
+    if n + 1 > pe_cap_field() {
+        perr(pe_fields(), n + 1);
+        pe_cap_field()
     } else {
         n + 1
     }
@@ -1084,10 +1108,10 @@ private data fields {
     // The accumulated data-field layout table across ALL data blocks (one entry per field), used
     // to resolve a body `block.field` to its slot. Sized 512 (was 256): parse.kel itself now
     // declares 259 data-block fields, past the old 256, so parse.kel parsing parse.kel overflowed.
-    fdata: [Word; 512],
-    ffield: [Word; 512],
-    fbase: [Word; 512],
-    flen: [Word; 512],
+    fdata: [Word; 513],
+    ffield: [Word; 513],
+    fbase: [Word; 513],
+    flen: [Word; 513],
     field_count: Word,
     base_ctr: Word,
     cur_block: Word,
@@ -1154,8 +1178,8 @@ private data da {
 // the just-read callee name awaiting its `(`, `call_phase` that await, `cdraining` the
 // per-argument operator drain at each `,`.
 private data call {
-    call_chunk: [Word; 8],
-    call_count: [Word; 8],
+    call_chunk: [Word; 9],
+    call_count: [Word; 9],
     call_sp: Word,
     call_pending: Word,
     call_phase: Word,
@@ -4790,7 +4814,7 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
         if k == Tok::LParen() as Word {
             call.call_chunk[call.call_sp] = call.call_pending;
             call.call_count[call.call_sp] = 0;
-            call.call_sp = call.call_sp + 1;
+            call.call_sp = call_push(call.call_sp);
             ops.opstack[ops.opsp] = OpCode::CallMark() as Word;
             ops.opsp = op_push(ops.opsp);
             call.call_phase = 0;
@@ -5656,7 +5680,7 @@ fn commit_field() -> Word {
             fields.ffield[fields.field_count] = fields.cur_field;
             fields.fbase[fields.field_count] = fields.base_ctr;
             fields.flen[fields.field_count] = fields.cur_len;
-            fields.field_count = fields.field_count + 1;
+            fields.field_count = field_push(fields.field_count);
             fields.base_ctr = fields.base_ctr + fields.cur_len;
         }
     }

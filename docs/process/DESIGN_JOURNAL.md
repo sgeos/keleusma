@@ -13,6 +13,43 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE SWEEP CONVERGES, `IndexOutOfBounds(8, 8)` HAD A THIRD SHARER, AND THE DIAGNOSTICS PROGRAMME
+NOW HAS A UNIT PRICE (2026-08-19).**
+
+Continuing the sweep found two more reachable caps, both reporting raw index traps:
+
+| construct | admits | reported |
+|---|---|---|
+| call nesting `g(g(g(...)))` | 8 | `IndexOutOfBounds(8, 8)` |
+| data-block fields, whole program | 512 | `IndexOutOfBounds(512, 512)` |
+
+**`IndexOutOfBounds(8, 8)` HAD THREE SHARERS, NOT TWO.** `for` nesting and array-literal nesting were
+named an increment earlier; call nesting sat behind a construct I had not generated. An encoded test
+now requires all three to stay distinct, and the guard test covers ELEVEN counters.
+
+**THE DATA-FIELD BOUND IS A WHOLE-PROGRAM TOTAL, the second such today.** Two blocks of 256 fields
+refuse at exactly the same point as one block of 513. Like the enum bound, its array size actively
+misleads about what it counts, so it says so explicitly and carries its own test.
+
+**A DISTINCTION THAT IS THE SESSION'S TRAP IN MINIATURE**: array-literal ELEMENTS have no wall through
+1,025, while array-literal NESTING caps at 8. Two similar names, two different quantities.
+
+**THE SWEEP IS CONVERGING.** This round found two caps where the previous found five, and four
+constructs came back clear: data blocks and `use` declarations through 64, tuple elements through 32,
+array-literal elements through 1,025. Recorded so the next sweep skips them.
+
+**THE PIN HAS MOVED SIX TIMES AND NOW YIELDS A RATE RATHER THAN A SERIES OF BUMPS.** 630 -> 645 ->
+645 -> 660 -> 666 names; 33,500 -> 34,118 -> 34,148 -> 34,785 -> 35,045 blob bytes. **Roughly three
+names per cause named** -- an error code, a capacity, and a guard. The programme has spent 39 of the
+1,024-name budget, leaving 65% margin. Written into the test comment rather than absorbed into a
+constant, because "just add a named refusal" has read as free all session and it is not.
+
+**And the pin has NOT ONCE moved for a reason its author was thinking about** across those six: an
+empty-statement fix, two window fields, a chunk array, and twice for guard functions. That is the
+whole argument for pinning it rather than computing it.
+
+---
+
 **THE LAST TWO UNNAMED FAILURE MODES, AND BOTH OF MY OWN MISTAKES THIS INCREMENT WERE THE SESSION'S
 RECURRING ONE (2026-08-19).**
 
