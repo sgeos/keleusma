@@ -12585,7 +12585,7 @@ fn every_stage_fits_the_driver_caps_with_margin() {
         worst_blob = worst_blob.max(blob.len());
     }
     // Pinned so a change in the worst case is visible rather than absorbed, and it
-    // has now earned that FIVE TIMES. `semi_terminates_nothing` for the empty
+    // has now earned that SIX TIMES. `semi_terminates_nothing` for the empty
     // statement moved it from 627 names and 33,395 bytes to 628 and 33,480; the
     // `toks.base` and `toks.at` window fields moved it again to 630 and 33,500 —
     // two data-block field names and their blob records. The capacity diagnostics
@@ -12601,17 +12601,21 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     //
     // The fifth was naming five more capacity diagnostics: 645 -> 660 names (fifteen
     // guard, cap and code functions) and 34,148 -> 34,785 blob bytes (thirty-one arrays
-    // gaining a spare slot across five families). **The margin against the 1,024-name cap
-    // is now 64%, and the diagnostics programme has spent 33 names of it across two
-    // increments.** That is the cost of naming a cause rather than trapping on it, and it
-    // is worth stating because the next increment of this kind pays it again.
+    // gaining a spare slot across five families). The sixth named two more, swept rather
+    // than tripped over: 660 -> 666 names and 34,785 -> 35,045 blob bytes.
+    //
+    // **THE RUNNING COST OF THE DIAGNOSTICS PROGRAMME IS NOW 39 NAMES**, against a
+    // 1,024-name cap, leaving 65% margin at 666. Roughly three names per cause named --
+    // an error code, a capacity, and a guard. That is the unit price of naming a cause
+    // rather than trapping on it, and stating it here is what keeps "just add a named
+    // refusal" from reading as free.
     //
     // The margins are 63% and 69% of the caps, so the increment is admissible; the
     // point of the pin is that a stage growing toward either bound is reported here
     // with the number rather than surfacing later as an `Unsupported` at some call
     // site.
-    assert_eq!(worst_names, 660, "the worst-case name count moved");
-    assert_eq!(worst_blob, 34785, "the worst-case blob size moved");
+    assert_eq!(worst_names, 666, "the worst-case name count moved");
+    assert_eq!(worst_blob, 35045, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**

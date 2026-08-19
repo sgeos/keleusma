@@ -176,6 +176,15 @@ pub fn describe_parse_diagnostic(code: i64, detail: i64) -> String {
             "array-literal nesting is too deep for parse.kel: it reached {detail} and \
              `call.al_count` holds {PARSE_ARRAY_NEST_CAP}. Bind an inner array with `let` first."
         ),
+        10 => format!(
+            "call nesting is too deep for parse.kel: it reached {detail} and `call.call_chunk` \
+             holds {PARSE_CALL_DEPTH_CAP}. Bind an inner call with `let` first."
+        ),
+        11 => format!(
+            "too many data-block fields in one program for parse.kel: it reached {detail} and \
+             `fields.ffield` holds {PARSE_FIELDS_CAP}. Like the enum bound this is a TOTAL \
+             ACROSS THE WHOLE PROGRAM, not one block."
+        ),
         9 => format!(
             "too many enum variants for parse.kel: it reached {detail} and `enums.evar` holds \
              {PARSE_VARIANTS_CAP}. This is a TOTAL ACROSS THE WHOLE PROGRAM, not one enum: 128 \
@@ -207,6 +216,10 @@ pub const PARSE_FOR_DEPTH_CAP: usize = 8;
 pub const PARSE_ARRAY_NEST_CAP: usize = 8;
 /// Enum variants **across the whole program**, not per enum. See [`PARSE_OPSTACK_CAP`].
 pub const PARSE_VARIANTS_CAP: usize = 256;
+/// Nesting depth of calls. See [`PARSE_OPSTACK_CAP`].
+pub const PARSE_CALL_DEPTH_CAP: usize = 8;
+/// Data-block fields **across the whole program**, not per block. See [`PARSE_OPSTACK_CAP`].
+pub const PARSE_FIELDS_CAP: usize = 512;
 
 /// Control-flow class and target for one opcode, as `analyze.kel` consumes them.
 ///
