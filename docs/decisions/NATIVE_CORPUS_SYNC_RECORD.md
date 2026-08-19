@@ -108,8 +108,109 @@ absorption, and it is the one a careless reading gets backwards.
 
 ## Measured outcomes
 
-*Pending. This section is filled from runs on the merged tree, and every prediction
-above gets a row whether it held or not.*
+Every run below is on the merged tree. Each was captured whole and its process exit
+status read outside any pipe, because this line has five recorded instances of a
+constructed status and four of them came from a pipe.
+
+### All seven predictions HELD
+
+| | outcome | evidence |
+|---|---|---|
+| P1 | **held** | merge exited 0 with no conflict; `git grep` for merge markers exits 1 over 0 files |
+| P2 | **held** | `native_codegen` builds unchanged; `git diff origin/v0.3.0 HEAD -- native_codegen/` is 0 files |
+| P3 | **held** | 216 passed, 0 failed, 39 test binaries, process exit 0, 0 compiler diagnostics |
+| P4 | **held** | 44 / 1 / 19, and the exempt membership is identical entry for entry |
+| P5 | **held** | `wire.kel` exempt with the byte-identical reason `IndexOutOfBounds(1570808, 65536)` |
+| P6 | **held** | 0 chunks reach negative operand depth, now over 1027 chunks where it was 971 |
+| P7 | **held in both halves** | see below |
+
+**Four independent signals were required to agree before P3 was called held**, rather
+than one summary line. The process exit status, the summed `test result` totals, the
+count of `FAILED` result lines, and the number of test binaries actually run. The
+other line was nearly fooled by a green-looking summary while eighteen binaries never
+executed, and the tell was the shape of the run rather than any status it printed.
+
+### P7, the anti-prediction, in detail
+
+**Unchanged in count. Changed in message only. NOT closed.**
+
+The survey reports `parse_functions PANICKED on: 02_struct_field.kel,
+08_method_dispatch.kel, 09_big_numbers.kel, 10_multbyte.kel` — four sources, and the
+same four this line reported.
+
+Both halves are measured rather than inferred:
+
+- **Still an abort.** One `cur.as_mut()` site remains in the driver and it is
+  `unwrap_or_else(|| panic!(...))`. The six bare `unwrap()` calls are gone; the
+  process still dies.
+- **The message genuinely changed.** The other line's own test
+  `an_unrecognised_declaration_is_named_rather_than_unwrapped` requires the refusal to
+  name both the missing declaration and `struct`, and to *not* contain
+  `Option::unwrap`. It passes on this merged tree, run directly.
+
+**This line's hypothesis is now confirmed by their measurement.** The reported cause
+was offered here as an unconfirmed guess that the four sources declare a composite
+before any function; a top-level `struct` is the measured cause and `parse.kel` has no
+struct handling at all.
+
+**The tempting summary is that the other line fixed this, and it is wrong.** Whether a
+top-level `struct` should be supported or explicitly refused is an open question the
+other line records as undecided, and a public API under `self-host` still aborts the
+process on ordinary shipped source. **The report stands.**
+
+### A new interaction this merge created, not predicted because it was not foreseen
+
+The other line's guard `no_other_file_restates_the_shared_layout` walks the whole
+repository from the crate manifest directory, skipping only `target` and
+dot-directories. **After this merge it reaches `native_codegen/` for the first time**,
+43 source files that were never in the tree it walks before.
+
+It passes. **A pass here would look identical if the walk did not reach this package
+at all**, so the pass was made a real result by planting a slot-layout copy in
+`native_codegen/tests/probe_unsupported.rs` and re-running. The guard failed and named
+that file and line. The plant was then removed and the tree verified clean.
+
+**Nothing under `native_codegen/` restates a shared-slot layout today**, and that is
+now a measured fact rather than a structural argument. A future harness here that
+copies one would break the other line's test rather than this line's.
+
+### Claims re-established over the grown corpus
+
+| | before | after |
+|---|---|---|
+| modules compiled | 64 | **64** |
+| chunks walked, nesting instrument | 985 | **1032** |
+| chunks walked, peak-model instrument | 971 | **1027** |
+| deepest nesting observed | 19, `parse.kel::body_step` | **19, `parse.kel::body_step`** |
+| loops carrying a break | 386 | **390** |
+| loops whose breaks disagree | 0 | **0** |
+| chunks reaching negative depth | 0 | **0** |
+
+**`parse.kel` grew by 477 lines and the deepest nesting did not move.** It is still 19
+and still in `body_step`. The warning that accompanied that figure is unchanged and is
+repeated here because it is the load-bearing part: **19 is what the corpus contains,
+not a bound on what the language admits**, and it must never be offered as one.
+
+The break-depth zero is guarded by a must-fire control, which fired in this run,
+reporting one disagreeing synthetic loop with depths 1 and 3.
+
+## Examined and left UNRESOLVED
+
+- **The two instruments disagree on how many chunks the corpus has.** The nesting walk
+  reports 1032 and the peak-model walk 1027. **This is pre-existing**, not introduced
+  here — the same pair read 985 and 971 before the merge. **What is unknown is which
+  chunks each population includes and why the gap narrowed from 14 to 5.** Neither
+  figure is corrected in favour of the other, because nothing measured here says which
+  is right. This line already has a recorded instance of a second walker inventing its
+  own handling and reporting a confidently wrong number, so the resolution is to read
+  both walkers rather than to write a third.
+- **`wire.kel` remains exempt.** Nothing in this absorption touched the per-module
+  resume convention whose absence causes it, and that trade is still deliberately
+  unmade.
+- **The mutation census PART C denominators still cite the 54-module corpus.** This
+  absorption did not change the module count, which stays 64, so their staleness is
+  neither worsened nor repaired here.
+- **`verify_datalayout.kel` is still the one vacuous module**, blocked by design.
 
 ---
 
