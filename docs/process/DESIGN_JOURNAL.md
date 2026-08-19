@@ -13,6 +13,49 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**I SHIPPED A DEFECT MY OWN GUARD WAS WRITTEN TO CATCH, BECAUSE I GAVE THE GUARD A SCOPE NARROWER
+THAN THE CLASS (2026-08-18).**
+
+Raising the chunk table moved the parser's shared block. A FIFTH copy of the layout lives in
+`compiler/src/main.rs` and actively seeds the parser, so that binary was reading the keyword and type
+ids from inside the chunk array -- the same fault that failed sixty-eight tests in the runtime.
+
+**Nothing caught it.** `run_parse_pipeline` is reachable only from `main`, so its constants are
+compiled by continuous integration and never executed, and arithmetic compiles clean whatever it
+says. Its own doc comment claimed "correctness is guarded by `tests/selfhost_pipeline.rs`" -- a test
+that exercises an equivalent composition built from its OWN copy of the driver code, and therefore
+passes whatever that binary does. **A false coverage claim is worse than none**, because it stops the
+next reader from looking.
+
+**MY GUARD MISSED IT BECAUSE IT WALKED `src/` AND `tests/`.** I wrote
+`no_other_file_restates_the_shared_layout` in the previous increment specifically to prevent this
+class, and then scoped its search to the part of the tree I was thinking about. **A guard with a
+scope narrower than the class it guards is the same defect it was written to prevent.** It now walks
+the repository minus build output, asserts a file-count floor, and asserts that `compiler/` was
+actually reached -- the directory whose omission is the whole lesson.
+
+**AND THE PARSER'S LAYOUT WAS NOT THE ONLY ONE.** The lexer's `src` block was restated in FOUR places:
+the driver, two harnesses, and `compiler/src/main.rs`. Its block has not moved, so none of its copies
+had failed anything -- which is exactly the state the parser's five copies were in the day before the
+chunk table was widened. **Fixing the instance leaves the class.** Both layouts are now published and
+chained in `selfhost_host`, all nine copies alias them, the guard looks for both needles, and
+`the_lexer_shared_slots_match_the_stage` derives the lexer block from `lexer.kel` the way the
+parser's test does. Both mutation-verified.
+
+**TWO CORRECTIONS I OWE ON MY OWN REPORTING.**
+
+- **I said `compiler/` has zero tests. It has 86**, in `compiler/tests/`. My check was
+  `grep -rn '#[test]' compiler/src/`. That is the FOURTH scope-too-narrow derivation of the day, and
+  it happened inside the increment whose subject is that error, in the sentence explaining it. The
+  substantive finding survives with a narrower reason: the package is tested, but no test reaches
+  `run_parse_pipeline`.
+- **Root `cargo fmt --all` does not reach `compiler/`.** It declares its own `[workspace]`. My gate
+  looked complete, covered four feature sets, and could not see the file I had just edited; the
+  subproject's format check failed. **A local gate for anything touching `compiler/` needs a
+  `cd compiler` pass**, which is now how it is run.
+
+---
+
 **`parse` INTO `reconstruct`, AND THE PREDICTED FOURTH SIDECAR FACT DID NOT EXIST (2026-08-18).**
 
 The boundary is cut at FUNCTION granularity. `self_host_compile` calls `parse_functions` first, so

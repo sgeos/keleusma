@@ -2039,9 +2039,9 @@ fn self_compile_codegen_atomic_functions() {
 // ---------------------------------------------------------------------------
 
 // Lexer `src` block slots: len(1) + bytes(393216) then the intern table.
-const BR_LEX_ISTART: usize = 1 + 393216;
-const BR_LEX_ILEN: usize = 1 + 393216 + 1280;
-const BR_LEX_ICOUNT: usize = 1 + 393216 + 1280 + 1280;
+const BR_LEX_ISTART: usize = keleusma::selfhost_host::BR_LEX_ISTART;
+const BR_LEX_ILEN: usize = keleusma::selfhost_host::BR_LEX_ILEN;
+const BR_LEX_ICOUNT: usize = keleusma::selfhost_host::BR_LEX_ICOUNT;
 // Parser `toks` block slots: len(1), then the packed token array (one `tok+payload*64`
 // word per token), then the scalar and chunk-table inputs.
 const BR_P_LEN: usize = 0;

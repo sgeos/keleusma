@@ -208,18 +208,13 @@ const PARAM_COUNT: usize = 1 + 1024 * 4 + 256 * 5;
 
 const CATEGORY: usize = 1 + 1024 * 4 + 256 * 5 + 1;
 
-const BR_LEX_ISTART: usize = 1 + 393216;
-
-const BR_LEX_ILEN: usize = 1 + 393216 + 1280;
-
-const BR_LEX_ICOUNT: usize = 1 + 393216 + 1280 + 1280;
-
 // The shared-slot layout for `parse.kel` lives in `crate::selfhost_host`, which is
 // gated on `compile + verify` like the harnesses that need it, rather than on the
 // narrower `self-host` feature this module carries.
 use crate::selfhost_host::{
-    BR_P_AT, BR_P_BASE, BR_P_BOOL_ID, BR_P_BYTE_ID, BR_P_CHUNK_COUNT, BR_P_CHUNKS, BR_P_LEN,
-    BR_P_LIMIT_ID, BR_P_PACKED, BR_P_REQUIRE_ID, BR_P_WORD_ID, PARSE_CHUNK_CAP,
+    BR_LEX_ICOUNT, BR_LEX_ILEN, BR_LEX_ISTART, BR_P_AT, BR_P_BASE, BR_P_BOOL_ID, BR_P_BYTE_ID,
+    BR_P_CHUNK_COUNT, BR_P_CHUNKS, BR_P_LEN, BR_P_LIMIT_ID, BR_P_PACKED, BR_P_REQUIRE_ID,
+    BR_P_WORD_ID, PARSE_CHUNK_CAP,
 };
 
 fn br_shared_word(vm: &Vm<'_, '_>, buf: &[u8], slot: usize) -> i64 {

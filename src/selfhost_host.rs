@@ -416,6 +416,42 @@ pub const PARSE_TOKEN_CAP: usize = 40960;
 /// of margin, which one increment can consume.
 pub const PARSE_CHUNK_CAP: usize = 1024;
 
+// THE LEXER'S SHARED BLOCK, ON THE SAME TERMS AS THE PARSER'S.
+//
+// `lexer.kel`'s `src` block was restated in FOUR places -- this driver, two test
+// harnesses, and `compiler/src/main.rs` -- exactly as the parser's was in five. The
+// parser's copies were found only because widening an array moved the block and
+// sixty-eight tests failed; the lexer's block has not moved, so its copies had failed
+// nothing and would have behaved identically the day it did.
+//
+// Fixing the instance leaves the class. Both layouts are published and chained here,
+// and `no_other_file_restates_the_shared_layout` looks for restatements of either.
+
+/// How many source bytes `src.bytes` in `lexer.kel` holds.
+///
+/// Sized to hold the largest stage source. `parse.kel` is the largest at roughly
+/// 100 KB; the wire-format v2 twenty-four-bit data operands raised the shared-segment
+/// ceiling from 64 KB to 16 MB, so this may exceed 64 KB.
+pub const LEX_SOURCE_CAP: usize = 393216;
+
+/// How many distinct identifiers `src.istart`/`src.ilen` in `lexer.kel` hold.
+pub const LEX_INTERN_CAP: usize = 1280;
+
+/// Slot of `src.len`, the source byte count.
+pub const BR_LEX_LEN: usize = 0;
+
+/// Slot of `src.bytes[0]`, the source bytes the host places for the lexer to scan.
+pub const BR_LEX_BYTES: usize = BR_LEX_LEN + 1;
+
+/// Slot of `src.istart[0]`, each interned identifier's byte offset into the source.
+pub const BR_LEX_ISTART: usize = BR_LEX_BYTES + LEX_SOURCE_CAP;
+
+/// Slot of `src.ilen[0]`, each interned identifier's byte length.
+pub const BR_LEX_ILEN: usize = BR_LEX_ISTART + LEX_INTERN_CAP;
+
+/// Slot of `src.icount`, how many identifiers the lexer interned.
+pub const BR_LEX_ICOUNT: usize = BR_LEX_ILEN + LEX_INTERN_CAP;
+
 /// Slot of `toks.len`, the token count `parse.kel` compares its cursor against to
 /// find end of input.
 pub const BR_P_LEN: usize = 0;
@@ -664,6 +700,77 @@ mod shared_layout_tests {
             .and_then(|l| l.split(';').nth(1))
             .and_then(|t| t.split(']').next())
             .and_then(|n| n.trim().parse().ok())
+    }
+
+    /// **THE LEXER'S BLOCK ON THE SAME TERMS**, because the parser's copies were found
+    /// only by a change that moved the block, and the lexer's block has not moved yet.
+    ///
+    /// Four files restated it: this driver, two harnesses, and `compiler/src/main.rs`.
+    /// None had failed anything, which is exactly the state the parser's five copies were
+    /// in the day before the chunk table was widened.
+    #[test]
+    fn the_lexer_shared_slots_match_the_stage() {
+        const STAGE: &str = include_str!("selfhost/kel/lexer.kel");
+        let body = STAGE
+            .split_once("shared data src {")
+            .expect("lexer.kel declares `shared data src`")
+            .1
+            .split_once("\n}")
+            .expect("the block is closed")
+            .0;
+        let mut off = 0usize;
+        let mut at: alloc::vec::Vec<(alloc::string::String, usize, usize)> = Vec::new();
+        for line in body.lines() {
+            let t = line.trim();
+            if t.is_empty() || t.starts_with("//") {
+                continue;
+            }
+            let (name, rest) = t
+                .split_once(':')
+                .unwrap_or_else(|| panic!("unparsed: {t:?}"));
+            let rest = rest.trim().trim_end_matches(',').trim();
+            // `bytes` is `[Byte; N]`; every other field is `Word`-shaped. Both occupy one
+            // slot per element in the shared segment.
+            let len = if let Some(i) = rest.strip_prefix("[Byte;").or(rest.strip_prefix("[Word;")) {
+                i.trim_end_matches(']').trim().parse().expect("length")
+            } else {
+                1
+            };
+            at.push((alloc::string::String::from(name.trim()), off, len));
+            off += len;
+        }
+        let slot = |n: &str| at.iter().find(|(x, _, _)| x == n).expect("field").1;
+        let len = |n: &str| at.iter().find(|(x, _, _)| x == n).expect("field").2;
+
+        assert_eq!(
+            len("bytes"),
+            LEX_SOURCE_CAP,
+            "`src.bytes` and LEX_SOURCE_CAP differ"
+        );
+        assert_eq!(
+            len("istart"),
+            LEX_INTERN_CAP,
+            "`src.istart` and LEX_INTERN_CAP differ"
+        );
+        assert_eq!(
+            len("ilen"),
+            LEX_INTERN_CAP,
+            "`src.ilen` and LEX_INTERN_CAP differ"
+        );
+        for (field, konst, value) in [
+            ("len", "BR_LEX_LEN", BR_LEX_LEN),
+            ("bytes", "BR_LEX_BYTES", BR_LEX_BYTES),
+            ("istart", "BR_LEX_ISTART", BR_LEX_ISTART),
+            ("ilen", "BR_LEX_ILEN", BR_LEX_ILEN),
+            ("icount", "BR_LEX_ICOUNT", BR_LEX_ICOUNT),
+        ] {
+            assert_eq!(
+                slot(field),
+                value,
+                "`{konst}` is {value} but the stage puts `src.{field}` at slot {}",
+                slot(field)
+            );
+        }
     }
 
     /// The two capacities the driver restates are the stage's own array lengths.

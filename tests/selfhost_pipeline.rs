@@ -118,9 +118,9 @@ fn reference_stream_and_names(src: &str) -> (Vec<(i64, i64)>, Vec<String>) {
 
 // Flat shared-data slot indices of the lexer's intern table, in the `src` block's
 // declaration order: len (1 slot) then bytes (393216) precede it.
-const LEX_ISTART: usize = 1 + 393216;
-const LEX_ILEN: usize = 1 + 393216 + 1280;
-const LEX_ICOUNT: usize = 1 + 393216 + 1280 + 1280;
+const LEX_ISTART: usize = keleusma::selfhost_host::BR_LEX_ISTART;
+const LEX_ILEN: usize = keleusma::selfhost_host::BR_LEX_ILEN;
+const LEX_ICOUNT: usize = keleusma::selfhost_host::BR_LEX_ICOUNT;
 
 fn shared_word(vm: &Vm, buf: &[u8], slot: usize) -> i64 {
     match vm.get_shared(buf, slot).expect("get_shared") {
