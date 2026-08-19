@@ -10,6 +10,23 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-18, latest).** **THE LAST CAP IS GONE: `wire.kel` PARSES at 486
+> functions.** `toks.chunks` went from 256 to 1024, sized from the measured corpus (`wire` 486,
+> `parse` 108 up from 94 in the previous increment) rather than from the stage that needed it.
+>
+> **A CAP IS A FAMILY.** Widening the array named after the cap did not work: two
+> `for i in 0..toks.chunk_count limit 256` loops turned it into `LoopLimitExceeded`, and the six
+> chunk-indexed `chunkret.ret_*` arrays turned it into `IndexOutOfBounds(388, 256)`. That is the
+> second family in two increments; the eight local-binding arrays were the first.
+>
+> **THEN SIXTY-EIGHT TESTS FAILED AND NOT ONE NAMED A SLOT.** The shared-slot layout was restated in
+> FOUR places, so moving the block left three harnesses seeding the type ids at the old slots and
+> `parse.kel` sized every field as one byte. The constants are now public and chained in one place,
+> and `no_other_file_restates_the_shared_layout` walks the tree rather than checking a list.
+>
+> **Newly measured and unowned**: `parse.kel` is 32,907 tokens against its own 40,960-token array, at
+> 80%. That is the next array likely to bind.
+
 > **Currency note (2026-08-18, later).** **`parse.kel`'s capacity limits now name themselves.** Four
 > causes that arrived as raw virtual-machine traps are reported by the stage through a negative
 > record tag and rendered by the driver: too many local bindings, expression nesting too deep, too

@@ -13,6 +13,69 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE LAST CAP FELL AND IT WAS NEVER ONE NUMBER: A FAMILY OF ARRAYS, A PAIR OF LOOP LIMITS, AND FOUR
+COPIES OF A LAYOUT (2026-08-18).**
+
+**`wire.kel` parses — 486 functions.** It was the last cap keeping a real stage out of the parser,
+and it stood while four emit-side caps fell around it.
+
+**RAISING IT WAS THREE EDITS AND THE FIRST TWO DID NOT WORK.** The wall moved rather than fell:
+
+| after | reported | actual cause |
+|---|---|---|
+| widening `toks.chunks` 256 -> 1024 | `LoopLimitExceeded` | two `for i in 0..toks.chunk_count limit 256` loops |
+| raising those limits | `IndexOutOfBounds(388, 256)` | the six `chunkret.ret_*` arrays, also chunk-indexed |
+| widening those | **`wire.kel` parses** | — |
+
+**A CAP IS A FAMILY, AND THIS IS THE SECOND FAMILY IN TWO INCREMENTS.** The eight local-binding
+arrays were the first, yesterday. In both cases I widened the arrays I could find by name and the
+trap did not move. `every_chunk_indexed_array_admits_the_chunk_cap` derives the family from the stage
+— every array addressed by a chunk number, every loop bounded by the chunk count — rather than
+listing it.
+
+**AND THEN SIXTY-EIGHT TESTS FAILED, NOT ONE OF THEM NAMING A SLOT.** They reported struct byte sizes
+of 1 instead of 8 and a scalar kind of `Unit` instead of `Int`. Bisected across the three edits
+rather than reasoned about: the cause was the SHARED block moving. **The shared-slot layout was
+restated in FOUR places** — the driver plus `selfhost_codegen.rs`, `selfhost_parse.rs` and
+`selfhost_pipeline.rs`, each with its own copy of `1 + 40960 + 2 + 256 + 3`. Widening the array left
+all three seeding the keyword and type ids at the old slots, so `parse.kel` read zero for `word_id`
+and sized every field as one byte.
+
+**MY OWN DERIVATION TEST DID NOT CATCH IT, AND THE REASON IS THE POINT.** It proved the DRIVER agrees
+with the stage. It said nothing about three harnesses that never consult the driver. I wrote a test
+against the copy I knew about — the identical shape to widening two arrays of eight the day before.
+The constants are now public and chained in one place, the harnesses alias them, and
+`no_other_file_restates_the_shared_layout` WALKS `src/` and `tests/` rather than checking a list,
+because a list would not have found the fourth copy either.
+
+**TWO VACUITY GUARDS EARNED THEIR KEEP IN ONE RUN.**
+
+- The family test asserts it found at least six arrays and two loops. It found **zero**, because the
+  identifier walk read backwards from the index expression and hit the `[` first. Without that
+  assertion it would have passed while checking nothing — a green test proving the exact property it
+  was written to disprove.
+- The no-copies guard's first run flagged exactly one offender: **itself**, matching its own needle
+  literal. The needle is now assembled at runtime.
+
+Both are now verified by mutation: narrowing `ret_enum` fails the first by name, reintroducing a copy
+fails the second.
+
+**A pin moved for the FOURTH time**, and this time asymmetrically: the worst-case NAME count did not
+move at all, because widening an array adds no name, while the blob grew 30 bytes in data-layout
+records. A change moving one and not the other is the normal case.
+
+**MEASURED AROUND THE WORK, per this line's habit.** The corpus chunk counts are `wire` 486, `parse`
+108 (up from 94 in the previous increment), `codegen` 76, everything else under 25. That is what
+sized the new cap at 1024 rather than 512, which would have left `wire` twenty-six chunks of margin.
+**A separate finding fell out: `parse.kel` is 32,907 tokens against its own 40,960-token array, at
+80%.** That is the next of the stage's arrays likely to bind, and nothing currently reports it.
+
+**A COST WORTH NAMING.** `selfhost_parse` went from 98 to 268 seconds, because the chunk-cap boundary
+test now builds 1,024- and 1,025-function programs. The boundary is still pinned from both sides;
+the price of pinning it went up fourfold.
+
+---
+
 **FOUR DIAGNOSTICS THAT POINTED AWAY FROM THEIR CAUSES, AND TWO OF THEM WERE THE SAME MESSAGE
 (2026-08-18).**
 
