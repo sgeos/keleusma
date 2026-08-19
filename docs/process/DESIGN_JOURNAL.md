@@ -13,6 +13,59 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**`parse` INTO `reconstruct`, AND THE PREDICTED FOURTH SIDECAR FACT DID NOT EXIST (2026-08-18).**
+
+The boundary is cut at FUNCTION granularity. `self_host_compile` calls `parse_functions` first, so
+every function's postorder records for the whole program are live before the first one is
+reconstructed. `self_host_compile_fused` holds one GROUP -- consecutive same-named heads, which are
+one chunk -- and drops it as soon as that group is compiled.
+
+**THE RESIDENCY, MEASURED RATHER THAN CARRIED FORWARD.** The recorded estimate was 3x to 13x. The
+measured range over seven stages is **3.4x to 41.1x**:
+
+| stage | all records | largest group | ratio |
+|---|---|---|---|
+| `wire` | 8,785 | 214 | **41.1x** |
+| `parse` | 12,111 | 931 | 13.0x |
+| `codegen` | 7,359 | 762 | 9.7x |
+| `lexer` | 1,415 | 276 | 5.1x |
+| `analyze` | 1,538 | 324 | 4.7x |
+| `reconstruct` | 3,222 | 885 | 3.6x |
+| `verify_typed` | 1,313 | 382 | 3.4x |
+
+**The largest stage benefits most**, which is the direction that matters: `wire` is 486 chunks of
+small functions, so its whole-program record set is large and its largest single one is not.
+
+**THE FOURTH SIDECAR FACT DID NOT MATERIALISE.** The prediction was that fusing at function
+granularity would need one. It does not. A group ends when the next function's NAME differs, so a
+completed function waits for the following HEADER -- a bounded one-function lookahead, not a
+dependency on the whole stream. The name table is already available before the drive, because
+`first_pass` computes it. **A predicted cost that measurement removes is worth recording as loudly
+as one it confirms**, because the prediction was the reason this increment was ranked below the
+diagnostics work.
+
+**ONE IMPLEMENTATION, NOT TWO.** `parse_functions_impl` now streams completed functions to a sink and
+the collecting entry points pass a sink that pushes into a `Vec`. That follows the rule already
+written into that function for the lexer fusion: a second copy of the record handling in a fusing
+driver is exactly the drift this codebase has already paid for once.
+
+**THE EQUIVALENCE TEST IS MUTATION-VERIFIED.** Making the fused path flush per function instead of
+per group fails it, naming the multihead chunk. Without that check a fusion that quietly produced a
+different module would have passed, and a residency change that also changes the output is not a
+fusion but a second compiler.
+
+**WHAT THE GREEN DOES NOT ESTABLISH.** `max group == max single function` in every stage, so grouping
+costs no residency at all here. **That is what the corpus contains, not a bound on what the language
+admits.** A program whose multiheaded group far exceeds any single head would raise the peak and
+nothing rejects one. Stated in the test, where a reader meets it.
+
+**A test source of mine was wrong in a way worth noting**: bare `data` is SHARED and rejects `=
+literal` initializers, because shared data is host-initialised. `private data` is the one that takes
+them. The earlier probes never noticed because `parse_functions` does not run the reference compiler
+over data initialisers; `self_host_compile` does.
+
+---
+
 **AND THEN CI FAILED THREE JOBS BECAUSE EVERY LOCAL CHECK CARRIED THE FEATURE THAT HID THE BUG
 (2026-08-18).**
 

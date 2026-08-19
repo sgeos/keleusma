@@ -727,7 +727,10 @@ fn first_pass(src: &str) -> FirstPass {
 pub fn parse_functions(
     src: &str,
 ) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>) {
-    parse_functions_impl(src, false)
+    let mut fns = Vec::new();
+    let (names, data_records, enum_records) =
+        parse_functions_impl(src, false, &mut |_, f| fns.push(f));
+    (fns, names, data_records, enum_records)
 }
 
 /// The same, with `lexer.kel` driven INTO `parse.kel` and no token stream
@@ -755,7 +758,10 @@ pub fn parse_functions(
 pub fn parse_functions_fused(
     src: &str,
 ) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>) {
-    parse_functions_impl(src, true)
+    let mut fns = Vec::new();
+    let (names, data_records, enum_records) =
+        parse_functions_impl(src, true, &mut |_, f| fns.push(f));
+    (fns, names, data_records, enum_records)
 }
 
 /// How many tokens the fused feed keeps resident.
@@ -897,7 +903,8 @@ pub fn parse_cursor_trace(src: &str) -> Vec<i64> {
 fn parse_functions_impl(
     src: &str,
     fused: bool,
-) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>) {
+    on_function: &mut dyn FnMut(&[String], ParsedFn),
+) -> (Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>) {
     // ONE IMPLEMENTATION, TWO FEEDS. The record handling below is long and
     // stateful, and a second copy of it in a fused driver is precisely the drift
     // `selfhost_host` already records paying for once. Only the token FEED
@@ -1010,7 +1017,8 @@ fn parse_functions_impl(
     let mut base: i64 = 0;
     let mut eof = false;
 
-    let mut fns: Vec<ParsedFn> = Vec::new();
+    // NO VECTOR OF FUNCTIONS HERE. A completed function goes straight to the sink, so
+    // the collecting API owns the accumulation and a fusing caller does not have to.
     let mut cur: Option<ParsedFn> = None;
     // Every data block's header records (DSTART, then PARAM/PTYPE/ASIZE per field, then
     // END), concatenated in declaration order, for the driver's own data-layout assembly.
@@ -1160,7 +1168,7 @@ fn parse_functions_impl(
                     }
                     16 => in_body = true,
                     17 => in_guard = true,
-                    5 => fns.push(cur.take().unwrap()),
+                    5 => on_function(&names, cur.take().unwrap()),
                     15 => return ControlFlow::Break(()),
                     _ => {}
                 }
@@ -1169,7 +1177,7 @@ fn parse_functions_impl(
         },
         before_resume,
     );
-    (fns, names, data_records, enum_records)
+    (names, data_records, enum_records)
 }
 
 /// Self-host-compile a whole program: drive the pipeline over every function, reconstruct
@@ -1215,6 +1223,111 @@ pub fn self_host_compile(src: &str) -> Module {
         module.chunks[idx].local_count = lc as u16;
     }
     module
+}
+
+/// Self-host-compile a whole program **without ever holding every function's records**.
+///
+/// Identical output to [`self_host_compile`], which is the point: the boundary between
+/// `parse` and `reconstruct` is cut at FUNCTION granularity, and
+/// `the_fused_compile_agrees_with_the_collecting_one` checks the two modules chunk for
+/// chunk. Only the residency differs.
+///
+/// # What is resident, and what it is worth
+///
+/// [`self_host_compile`] calls [`parse_functions`] first, so every function's postorder
+/// records for the whole program are live before the first one is reconstructed. This
+/// holds one GROUP -- consecutive same-named heads, which are one chunk -- and drops it
+/// as soon as the group is compiled. Measured over the corpus:
+///
+/// | stage | all records | largest group | ratio |
+/// |---|---|---|---|
+/// | `wire` | 8,785 | 214 | 41.1x |
+/// | `parse` | 12,111 | 931 | 13.0x |
+/// | `codegen` | 7,359 | 762 | 9.7x |
+/// | `lexer` | 1,415 | 276 | 5.1x |
+/// | `analyze` | 1,538 | 324 | 4.7x |
+/// | `reconstruct` | 3,222 | 885 | 3.6x |
+/// | `verify_typed` | 1,313 | 382 | 3.4x |
+///
+/// The largest stage benefits most, which is the direction that matters.
+///
+/// # The group is a one-function lookahead, not a whole-input fact
+///
+/// A group ends when the next function's name differs, so a completed function cannot be
+/// compiled until the following header arrives. That is a bounded lookahead of one
+/// function, not a dependency on the whole stream. **In this corpus the largest group is
+/// exactly the largest single function in every stage**, so grouping costs no residency
+/// at all here -- but that is what the corpus contains, not a bound on what the language
+/// admits, and it must not be offered as one.
+pub fn self_host_compile_fused(src: &str) -> Module {
+    let mut module = compile_src(src);
+    // The pending group: consecutive heads sharing a name. Flushed when the name changes
+    // and again at end of input, which is the only place the last group can be closed.
+    let mut group: Vec<ParsedFn> = Vec::new();
+    let mut group_name = String::new();
+
+    let flush = |group: &mut Vec<ParsedFn>, name: &str, module: &mut Module| {
+        if group.is_empty() {
+            return;
+        }
+        let pc = group[0].params;
+        let refs: Vec<&ParsedFn> = group.iter().collect();
+        let body = if is_multihead_group(&refs) {
+            reconstruct_via_kel_multihead(&refs, pc)
+        } else {
+            let category = if group[0].cat == 3 { 2 } else { 0 };
+            reconstruct_via_kel(&group[0].body, category, pc)
+        };
+        let (ops, pool, lc) = run_codegen(&body, pc);
+        let idx = module
+            .chunks
+            .iter()
+            .position(|c| c.name == name)
+            .unwrap_or_else(|| panic!("no chunk named `{name}`"));
+        module.chunks[idx].ops = ops;
+        module.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        module.chunks[idx].local_count = lc as u16;
+        group.clear();
+    };
+
+    parse_functions_impl(src, false, &mut |names, f| {
+        let name = names[f.name as usize].clone();
+        if !group.is_empty() && name != group_name {
+            flush(&mut group, &group_name, &mut module);
+        }
+        group_name = name;
+        group.push(f);
+    });
+    flush(&mut group, &group_name, &mut module);
+    module
+}
+
+/// The peak record residency of a fused compile, for the residency assertions.
+///
+/// Returns `(peak_group_records, total_records)`. Separated from
+/// [`self_host_compile_fused`] so the compile path carries no measurement apparatus, and
+/// so a test asserting the ratio reads the same numbers the compile would hold.
+pub fn fused_compile_residency(src: &str) -> (usize, usize) {
+    let mut group: Vec<ParsedFn> = Vec::new();
+    let mut group_name = String::new();
+    let (mut peak, mut total) = (0usize, 0usize);
+    parse_functions_impl(src, false, &mut |names, f| {
+        let name = names[f.name as usize].clone();
+        if !group.is_empty() && name != group_name {
+            group.clear();
+        }
+        group_name = name;
+        let n = f.body.len() + f.guard.len();
+        total += n;
+        group.push(f);
+        peak = peak.max(
+            group
+                .iter()
+                .map(|g| g.body.len() + g.guard.len())
+                .sum::<usize>(),
+        );
+    });
+    (peak, total)
 }
 
 // -- reconstruct.kel drivers (ported from tests/selfhost_codegen.rs) --------

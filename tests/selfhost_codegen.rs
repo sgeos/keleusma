@@ -8376,3 +8376,113 @@ fn self_hosted_construct_support_boundary() {
         "classifier degenerate (gap={n_gap}, rej={n_rej})"
     );
 }
+
+/// **THE `parse` -> `reconstruct` BOUNDARY, CUT AT FUNCTION GRANULARITY.**
+///
+/// `self_host_compile` calls `parse_functions` first, so every function's postorder
+/// records for the whole program are live before the first one is reconstructed.
+/// `self_host_compile_fused` holds one GROUP -- consecutive same-named heads, which are
+/// one chunk -- and drops it as soon as that group is compiled.
+///
+/// This checks the two produce the SAME MODULE, chunk for chunk, on real stage sources.
+/// A residency change that also changed the output would not be a fusion, it would be a
+/// second compiler.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_fused_compile_agrees_with_the_collecting_one() {
+    // Sources chosen for shape rather than size: a multiheaded group, a data block, an
+    // enum, and a `for` loop all cross the boundary differently.
+    const SOURCES: &[(&str, &str)] = &[
+        (
+            "multihead",
+            "fn f(a: Word) -> Word when a > 0 { a }\nfn f(a: Word) -> Word { 0 - a }\n\
+             fn g() -> Word { f(3) + f(0 - 3) }\n",
+        ),
+        (
+            "data and loop",
+            "private data d { a: Word = 0, b: Word = 1 }\n\
+             fn g() -> Word { for i in 0..4 limit 8 { d.a = d.a + i; } d.a + d.b }\n",
+        ),
+        (
+            "several chunks",
+            "fn a(x: Word) -> Word { x + 1 }\nfn b(x: Word) -> Word { a(x) * 2 }\n\
+             fn c(x: Word) -> Word { b(x) - a(x) }\nfn main() -> Word { c(5) }\n",
+        ),
+        (
+            "a real stage",
+            include_str!("../src/selfhost/kel/verify_datalayout.kel"),
+        ),
+    ];
+
+    for (label, src) in SOURCES {
+        let collected = keleusma::selfhost::self_host_compile(src);
+        let fused = keleusma::selfhost::self_host_compile_fused(src);
+        assert_eq!(
+            collected.chunks.len(),
+            fused.chunks.len(),
+            "{label}: chunk counts differ"
+        );
+        for (c, f) in collected.chunks.iter().zip(fused.chunks.iter()) {
+            assert_eq!(c.name, f.name, "{label}: chunk order differs");
+            assert_eq!(c.ops, f.ops, "{label}: ops differ for chunk `{}`", c.name);
+            assert_eq!(
+                c.constants, f.constants,
+                "{label}: constant pool differs for chunk `{}`",
+                c.name
+            );
+            assert_eq!(
+                c.local_count, f.local_count,
+                "{label}: local_count differs for chunk `{}`",
+                c.name
+            );
+        }
+    }
+}
+
+/// **THE RESIDENCY THE FUSION BUYS, MEASURED RATHER THAN CLAIMED.**
+///
+/// Pinned per stage so a change is visible. The ratio is total records over the largest
+/// group, and the largest stage benefits most, which is the direction that matters.
+///
+/// # What this does NOT establish
+///
+/// `max group == max single function` in every one of these stages, so grouping costs no
+/// residency here at all. **That is what the corpus contains, not a bound on what the
+/// language admits.** A program whose multiheaded group is far larger than any single
+/// head would raise the peak, and nothing rejects one.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_fused_compile_holds_one_group_not_the_program() {
+    // (stage, total records, largest group). Pinned; a stage that grows moves these.
+    const EXPECT: &[(&str, &str, usize, usize)] = &[
+        (
+            "lexer",
+            include_str!("../src/selfhost/kel/lexer.kel"),
+            1415,
+            276,
+        ),
+        (
+            "analyze",
+            include_str!("../src/selfhost/kel/analyze.kel"),
+            1538,
+            324,
+        ),
+        (
+            "verify_typed",
+            include_str!("../src/selfhost/kel/verify_typed.kel"),
+            1313,
+            382,
+        ),
+    ];
+    for &(name, src, total, peak) in EXPECT {
+        let (got_peak, got_total) = keleusma::selfhost::fused_compile_residency(src);
+        assert_eq!(got_total, total, "{name}: total record count moved");
+        assert_eq!(got_peak, peak, "{name}: peak group residency moved");
+        assert!(
+            got_total >= got_peak * 3,
+            "{name}: the fusion saves only {:.1}x, so the boundary is no longer worth \
+             cutting here and this test should say so rather than pass quietly",
+            got_total as f64 / got_peak as f64
+        );
+    }
+}
