@@ -162,6 +162,44 @@ The guarantee Keleusma currently provides is narrower than noninterference. The 
 
 Information-flow control should not be conflated with two adjacent disciplines. Object-capability security, realized in the language E, constrains which code holds the authority to invoke an operation [IF11]. Reference capabilities, realized in Pony, constrain aliasing and mutability to guarantee data-race freedom [IF12]. Both concern who may act on a value. Information-flow labels concern where a value may travel regardless of who holds a reference to it. The disciplines compose, but none subsumes another.
 
+## 11. Compilers as Multi-Process Pipelines
+
+The architecture of separate compiler phases communicating as operating-system processes, rather than
+as function calls within one program.
+
+**`gcc -pipe`** is the most literal instance available today. Without the flag, the driver passes data
+between the preprocessor, the compiler proper and the assembler through temporary files; with it,
+those phases are connected by actual pipes. The phases are separate executables reading standard input
+and writing standard output.
+
+**The classic Unix C compiler** was structured this way by design rather than as an option: a driver
+invoking a preprocessor, the compiler passes, an assembler and a linker as distinct programs. Early
+versions split the compiler proper into more than one pass, each its own executable. *(The `-pipe`
+behaviour is stated with confidence; the precise early pass structure should be checked against a
+primary source before being relied upon.)*
+
+**Multi-pass mainframe compilers** streamed over tape or disk for the motivation this project shares:
+the machine could not hold the program. Those passes were separate programs communicating through
+sequential files, which is a pipeline with the pipe spelled differently.
+
+**Turbo Pascal is NOT an instance of this pattern, and it is cited in this project for a different
+reason entirely** -- as the strongest prior art that self-hosting under a hard memory bound is
+POSSIBLE AT ALL. A complete self-hosted Pascal compiler in tens of kilobytes is an existence proof,
+and that is the question which gates the rest. Its architecture is a separate matter, and the
+distinction is load bearing. It bounded memory by being
+the opposite: one program, single pass, straight to memory, with no intermediate materialised at all.
+Its speed came from not crossing process boundaries. A pipeline and a single-pass monolith both bound
+memory, by opposite means, and they disagree about whether an intermediate representation should be
+cheap to write or cheap to hold. See
+[`../decisions/PIPELINE_THEN_MONOLITH.md`](../decisions/PIPELINE_THEN_MONOLITH.md).
+
+**What appears to be without precedent** is neither the pipeline nor the streaming: it is that each
+stage would be written in the language being compiled, running on its own virtual machine, and would
+carry a PROVEN worst-case memory bound. The phases of `gcc` stream, but nothing certifies their
+footprint. Here the bound is forced by the language, so a filter stage arrives with a number rather
+than a hope — which is also what makes the serialisation cost of a pipeline buy something concrete
+that it does not buy for `gcc`.
+
 ## Cross-References
 
 - [LANGUAGE_DESIGN.md](../architecture/LANGUAGE_DESIGN.md) describes the design goals and five guarantees.

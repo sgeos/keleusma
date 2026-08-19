@@ -10,6 +10,145 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-19, final+1).** **DERIVED OPERANDS IN TYPE REJECTION ARE CLOSED**, an
+> item the operator had already ruled on ("before publishing V0.3.0"). `verify_types.kel` gains a
+> BOUNDED FIXPOINT: a binding may take form 2, "takes whatever expression node N yields", and the
+> stage proves a tag only for an operator node whose operands agree. **The host supplies only which
+> node**, verified by mutation.
+>
+> **The round cap is not the bound.** Setting it to 1 rejects every chain depth through six, because
+> scoping forces `let` bindings into dependency order. The new edge -- a `let` bound to a field read
+> or an index -- is pinned as a measurement.
+
+> **Currency note (2026-08-19, final).** **THE SWEEP IS EXHAUSTED** -- a final round found no new
+> reachable caps. It did catch a stale diagnostic of mine: the chunk-table guard told a caller with
+> 1,025 functions about a *257th* entry and cited a 256-entry array that is now 1,024. Both copies
+> now derive from `PARSE_CHUNK_CAP`.
+>
+> **`HANDOFF.md` is rewritten** against `3ffd5a4c` with every value re-measured and its own check
+> block executed. **Three decisions are live and everything else is unblocked**: the
+> input-re-readability fork, whether to raise the token array (80% full, named not widened), and
+> whether a top-level `struct` should be supported or refused.
+
+> **Currency note (2026-08-19, latest).** **THIRTEEN `parse.kel` FAILURE MODES NAMED**, eleven
+> counters guarded. Two more caps swept out: call nesting (8) and data-block fields (512, a
+> WHOLE-PROGRAM total like the enum bound). **`IndexOutOfBounds(8, 8)` had THREE sharers**, not two.
+>
+> **The sweep is converging**: two caps this round against five last, and four constructs came back
+> clear. **The margin pin has moved six times and now yields a rate** -- roughly three names per
+> cause named, 39 of 1,024 spent, 65% margin.
+
+> **Currency note (2026-08-19, later).** **THE LAST TWO UNNAMED FAILURE MODES ARE NAMED.** The token
+> array had TWO failures depending how far over the input was -- `IndexOutOfBounds(40960, 40960)`
+> from the stage, or a shared-slot range error from the driver's seeding loop -- and both are now one
+> refusal fired before any seeding. Six bare `unwrap()`s became one diagnostic naming an unrecognised
+> declaration; a top-level `struct` was the measured cause, and `parse.kel` has no struct handling at
+> all. **Whether `struct` should be supported is not decided here.**
+>
+> Both of my own mistakes were the session's recurring one: a test generated against the REFERENCE
+> tokenizer while the cap governs the STAGE's lexer, and an insertion that detached an `#[allow]`
+> from its function because the anchor was the signature rather than the item.
+
+> **Currency note (2026-08-19).** **NINE `parse.kel` CAPS NOW NAME THEMSELVES**, up from four.
+> Sweeping the stage's arrays with generated programs found five more reachable caps -- parameters
+> (32), `if` nesting (32), `for` nesting (8), array-literal nesting (8), enum variants (256, a
+> WHOLE-PROGRAM total) -- and **two more pairs shared a message**, one array-size down from the pair
+> fixed the day before.
+>
+> The family widening derived thirty-one arrays across five counters from the stage; `ps.pcount`
+> alone indexes twelve. **Corrected from my own probe**: call arguments are not a separate cap, since
+> a call cannot exceed its callee's arity.
+>
+> **Naming a cause costs names**: 645 to 660, and 34,148 to 34,785 blob bytes. 33 of the 1,024-name
+> budget spent across two increments, 64% margin left.
+
+> **Currency note (2026-08-18, latest+2).** **NINE COPIES OF TWO SHARED-SLOT LAYOUTS COLLAPSED TO
+> TWO DEFINITIONS.** Raising the chunk table left a FIFTH copy in `compiler/src/main.rs` seeding the
+> parser with offsets wrong by 768 slots; nothing caught it, because `run_parse_pipeline` is reachable
+> only from `main` and its constants are compiled but never executed.
+>
+> **The guard written to prevent this walked `src/` and `tests/` only.** A guard with a scope narrower
+> than its class is the same defect it prevents. It now walks the repository and asserts `compiler/`
+> was reached. The LEXER's block was restated four times as well and had failed nothing only because
+> it has not moved.
+>
+> Corrections: `compiler/` has 86 tests, not zero (my check was scoped to `compiler/src/`), and root
+> `cargo fmt --all` does not reach `compiler/`.
+
+> **Currency note (2026-08-18, latest+1).** **`parse` INTO `reconstruct` IS FUSED** at function
+> granularity, holding one group of same-named heads instead of every function's records.
+> Byte-identical modules, mutation-verified. **Measured 3.4x to 41.1x**, against a recorded estimate
+> of 3x to 13x; `wire` is the 41x case.
+>
+> **The predicted fourth sidecar fact does not exist.** A group ends when the next function's NAME
+> differs, so it is a bounded one-function lookahead rather than a whole-input dependency. That
+> predicted cost was why the increment ranked below the diagnostics work.
+
+> **Currency note (2026-08-18, latest).** **THE LAST CAP IS GONE: `wire.kel` PARSES at 486
+> functions.** `toks.chunks` went from 256 to 1024, sized from the measured corpus (`wire` 486,
+> `parse` 108 up from 94 in the previous increment) rather than from the stage that needed it.
+>
+> **A CAP IS A FAMILY.** Widening the array named after the cap did not work: two
+> `for i in 0..toks.chunk_count limit 256` loops turned it into `LoopLimitExceeded`, and the six
+> chunk-indexed `chunkret.ret_*` arrays turned it into `IndexOutOfBounds(388, 256)`. That is the
+> second family in two increments; the eight local-binding arrays were the first.
+>
+> **THEN SIXTY-EIGHT TESTS FAILED AND NOT ONE NAMED A SLOT.** The shared-slot layout was restated in
+> FOUR places, so moving the block left three harnesses seeding the type ids at the old slots and
+> `parse.kel` sized every field as one byte. The constants are now public and chained in one place,
+> and `no_other_file_restates_the_shared_layout` walks the tree rather than checking a list.
+>
+> **Newly measured and unowned**: `parse.kel` is 32,907 tokens against its own 40,960-token array, at
+> 80%. That is the next array likely to bind.
+
+> **Currency note (2026-08-18, later).** **`parse.kel`'s capacity limits now name themselves.** Four
+> causes that arrived as raw virtual-machine traps are reported by the stage through a negative
+> record tag and rendered by the driver: too many local bindings, expression nesting too deep, too
+> many statements in one body, and an unmatched closing bracket. A fifth, an unterminated block, is
+> a driver-side budget message that now names its likely cause.
+>
+> **THE HEADLINE: two unrelated 64-entry limits gave a BYTE-IDENTICAL message.** `ops.opstack` and
+> `stmt.let_names` are both 64, so "too many locals" and "expression nested too deep" both read
+> `IndexOutOfBounds(64, 64)`. That defect is now encoded as a test.
+>
+> The guard is on the pointer and each guarded array carries one spare slot, because the write
+> precedes the increment and clamping at the last usable slot would REFUSE the exactly-full program
+> that parses today. Every boundary is pinned from both sides.
+>
+> **NOT COVERED, and the count is the point**: roughly a hundred and thirty fixed arrays remain in
+> `parse.kel` and four are named. 47 of 8 entries, 22 of 32, 4 of 64, 19 of 256, 17 of 512, none
+> probed. The probe also found several malformed inputs SILENTLY ACCEPTED, which is acceptance
+> laxity rather than a diagnostic defect.
+
+> **Currency note (2026-08-18).** The streaming programme reached its design boundary and the
+> architecture is recorded.
+>
+> **EVERY EMIT-SIDE CAP IS GONE and all eleven stages emit.** Four bounds removed, and each was a limit
+> on the WRONG QUANTITY: the artifact ceiling was an offset; the 90-record chunk batch existed because
+> a plain function cannot remember its range cursors; the 170-node flattener held a whole forest only a
+> COMPOSITE needs; and the module-input walk refused past 1,024 NODES using the cap that sizes the NAME
+> arrays. **A fifth stands, on the PARSER**: `toks.chunks` is `[Word; 256]`, so `wire.kel` cannot be
+> PARSED at 475 functions. Raising it is a separate increment, since `base` and `at` were appended
+> after it.
+>
+> **ALL TWELVE STAGES ARE COROUTINES** and `wire.kel` has seven streaming commands. **The lexer is
+> FUSED into the parser** with a one-token window that is DERIVED rather than chosen, byte-identical on
+> four real stages. Two passes, because the chunk table is a whole-stream property.
+>
+> **THE ARCHITECTURE IS DECIDED AND DOCUMENTED**, in
+> [`../decisions/PIPELINE_THEN_MONOLITH.md`](../decisions/PIPELINE_THEN_MONOLITH.md): one binary with
+> `--start`/`--end`, the monolith being `--start=first --end=last` and the shell pipeline N invocations
+> with `start == end`. **One fork is open for the operator**: whether the input is re-readable, which
+> decides whether the monolith is one command or two. The largest benefit is not the memory bound but
+> that phase cuts make a byte-identity divergence BISECTABLE.
+>
+> **FOUR WHOLE-INPUT FACTS, THREE FOUND ONLY BY CUTTING A BOUNDARY.** Enumerate by BUILDING, not by
+> inspecting; the enumeration was called complete twice before it was.
+>
+> **A finding worth its own increment**: diagnostics in `parse.kel` point away from their causes.
+> `LoopLimitExceeded` for a full chunk table, `IndexOutOfBounds(-1, 64)` for an unprimed window where
+> 64 is `opstack` and not the token array. Both today, both misdiagnosed on the first attempt.
+
 > **Currency note (2026-08-17).** Option A landed: the **wholly-default private-slot initialiser pool
 > is elided**, authorised by the operator with no `BYTECODE_VERSION` change since no version-2
 > artifact has ever been published.

@@ -304,28 +304,51 @@ fn tok_name(tok: i64) -> &'static str {
 /// a brace-depth scan of the token stream), drive the self-hosted parser, and print
 /// the declarations it yields. This is the first actual composition of two
 /// self-hosted stages in the driver; the host only orchestrates the yield/resume
-/// loops, with no runtime-tokenizer adapter in the path. Correctness is guarded by
-/// `tests/selfhost_pipeline.rs`, which checks this composition against the reference.
+/// loops, with no runtime-tokenizer adapter in the path.
+///
+/// **THIS FUNCTION IS NOT COVERED BY A TEST, AND IT USED TO CLAIM IT WAS.** The claim
+/// named `tests/selfhost_pipeline.rs`, which checks an equivalent composition built from
+/// its OWN copy of the driver code in the runtime's test tree. That test passes whatever
+/// this file does.
+///
+/// The package IS tested -- `compiler/tests/` holds 86 tests across the verify stages,
+/// the scaffold, the validator, and the fixed point -- but none of them reaches this
+/// function, which `main` alone calls. That is how a stale shared-slot layout here
+/// survived the change that moved it: compiled by the continuous-integration job, never
+/// run by it.
 fn run_parse_pipeline(path: &str) {
     use keleusma::Arena;
     use keleusma::bytecode::Value;
     use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
 
     // Lexer `src` block slot layout: len(1) + bytes(65536) then the intern table.
-    const LEX_ISTART: usize = 1 + 393216;
-    const LEX_ILEN: usize = 1 + 393216 + 1280;
-    const LEX_ICOUNT: usize = 1 + 393216 + 1280 + 1280;
-    // Parser `toks` block slot layout: the token stream is one packed `tok+payload*64`
-    // word per token (not two `kinds`/`vals` arrays), which halves its byte cost.
-    const P_LEN: usize = 0;
-    const P_PACKED: usize = 1;
-    const P_LIMIT_ID: usize = 1 + 40960;
-    const P_CHUNK_COUNT: usize = 1 + 40960 + 1;
-    const P_CHUNKS: usize = 1 + 40960 + 2;
-    const P_REQUIRE_ID: usize = 1 + 40960 + 2 + 256;
-    const P_WORD_ID: usize = 1 + 40960 + 2 + 256 + 1;
-    const P_BYTE_ID: usize = 1 + 40960 + 2 + 256 + 2;
-    const P_BOOL_ID: usize = 1 + 40960 + 2 + 256 + 3;
+    const LEX_ISTART: usize = keleusma::selfhost_host::BR_LEX_ISTART;
+    const LEX_ILEN: usize = keleusma::selfhost_host::BR_LEX_ILEN;
+    const LEX_ICOUNT: usize = keleusma::selfhost_host::BR_LEX_ICOUNT;
+    // THE PARSER'S SHARED-SLOT LAYOUT COMES FROM THE RUNTIME, NOT FROM HERE.
+    //
+    // This was a copy of the arithmetic (`1 + 40960 + 2 + 256 + 3`), and it was the
+    // FIFTH such copy. Raising `toks.chunks` from 256 to 1024 moved every field after
+    // the chunk table by 768 slots and left this file seeding the keyword and type ids
+    // inside the chunk array. The three copies in the runtime's own tests failed
+    // sixty-eight tests when that happened. **This one failed nothing**, and not
+    // because the package is untested -- `compiler/tests/` holds 86 tests. None reaches
+    // `run_parse_pipeline`, which `main` alone calls, so its constants are compiled but
+    // never executed by the continuous-integration job. Arithmetic compiles clean
+    // whatever it says.
+    //
+    // A guard that walks the tree for restatements now covers this directory too. Its
+    // first version walked only the runtime's `src/` and `tests/`, which is how a live
+    // instance survived a check written specifically to prevent it.
+    const P_LEN: usize = keleusma::selfhost_host::BR_P_LEN;
+    const P_PACKED: usize = keleusma::selfhost_host::BR_P_PACKED;
+    const P_LIMIT_ID: usize = keleusma::selfhost_host::BR_P_LIMIT_ID;
+    const P_CHUNK_COUNT: usize = keleusma::selfhost_host::BR_P_CHUNK_COUNT;
+    const P_CHUNKS: usize = keleusma::selfhost_host::BR_P_CHUNKS;
+    const P_REQUIRE_ID: usize = keleusma::selfhost_host::BR_P_REQUIRE_ID;
+    const P_WORD_ID: usize = keleusma::selfhost_host::BR_P_WORD_ID;
+    const P_BYTE_ID: usize = keleusma::selfhost_host::BR_P_BYTE_ID;
+    const P_BOOL_ID: usize = keleusma::selfhost_host::BR_P_BOOL_ID;
 
     let input = std::fs::read(path).unwrap_or_else(|e| {
         eprintln!("cannot read {path}: {e}");
@@ -384,10 +407,11 @@ fn run_parse_pipeline(path: &str) {
         let len = read_word(&lvm, &lshared, LEX_ILEN + id) as usize;
         names.push(String::from_utf8_lossy(&input[start..start + len]).into_owned());
     }
-    if tokens.len() > 40960 {
+    if tokens.len() > keleusma::selfhost_host::PARSE_TOKEN_CAP {
         eprintln!(
-            "{} tokens; the parser stage caps input at 40960",
-            tokens.len()
+            "{} tokens; the parser stage caps input at {}",
+            tokens.len(),
+            keleusma::selfhost_host::PARSE_TOKEN_CAP
         );
         std::process::exit(1);
     }

@@ -367,7 +367,12 @@ fn ty_direct(v: Word) -> Word {
     ty.hit = ty_unknown();
     for b in 0..ty.bn limit 128 {
         ty.hit = if ty.bname[b] == v {
-            if ty.bform[b] == 0 { ty.btag[b] } else { ty.hit }
+            // Form 0 states a tag outright. Form 2 is a DERIVED initialiser whose
+            // tag the solver proved before the fold began; both are direct as far
+            // as a lookup is concerned, and keeping them in one arm is what stops
+            // a rule from reaching one and missing the other.
+            if ty.bform[b] == 0 { ty.btag[b] } else {
+            if ty.bform[b] == 2 { tyb.bres[b] } else { ty.hit } }
         } else { ty.hit };
     }
     ty.hit
@@ -381,6 +386,100 @@ fn ty_alias_of(v: Word) -> Word {
         } else { ty.alias };
     }
     ty.alias
+}
+
+// THE DERIVED-OPERAND SOLVER'S SCRATCH.
+//
+// `bres[b]` is the tag the solver has proved for binding `b`, or 0 for "not
+// proved". PRIVATE, for the same reason the cursors below are: the host supplies
+// SYNTAX, and a conclusion it could write here is exactly the join this stage
+// exists to perform.
+private data tyb {
+    bres: [Word; 128],
+    // Set when a round proved something it had not proved before, so the loop can
+    // stop early on a fixpoint instead of always running its full cap.
+    moved: Word,
+    // Scratch for one node's two operand tags while a round resolves them.
+    la: Word,
+    lb: Word,
+}
+
+// HOW MANY ROUNDS THE DERIVED-OPERAND SOLVER RUNS.
+//
+// A DECLARED CAP, NOT A DISCOVERED ONE. Each round can prove a binding whose
+// operands were proved in the round before, so `k` rounds reach a chain of `k`
+// derived bindings: `let a = 1 + 2; let b = a + 1; let c = b + 1` needs three.
+// Four is what the corpus needs plus margin; a program with a longer chain
+// resolves to UNKNOWN and is therefore ACCEPTED, which is the safe direction and
+// the same one `ty_resolve`'s single alias hop already takes.
+//
+// **This must never become "as many rounds as it takes".** The language is total
+// and every loop needs a static bound; a fixpoint that runs until nothing moves
+// still needs a cap, and naming it here is what keeps the bound visible.
+fn tyb_rounds() -> Word { 4 }
+
+// The tag of binding `b` as the solver has proved it, or 0.
+fn tyb_of(v: Word) -> Word {
+    ty.hit = ty_unknown();
+    for b in 0..ty.bn limit 128 {
+        ty.hit = if ty.bname[b] == v {
+            if tyb.bres[b] != 0 { tyb.bres[b] } else { ty.hit }
+        } else { ty.hit };
+    }
+    ty.hit
+}
+
+// One operand of an expression row, resolved to a tag.
+//
+// Form 0 is already a tag. Form 1 is a NAME, which resolves first against the
+// solver's proved bindings and then against the declared rows, so a derived
+// binding and a declared one are reached by the same call.
+fn tyb_operand(v: Word, f: Word) -> Word {
+    if f == 0 { v } else {
+        ty.hit = tyb_of(v);
+        if ty.hit != 0 { ty.hit } else { ty_resolve(1, v) }
+    }
+}
+
+// The tag expression node `e` yields, or 0 when the stage cannot prove one.
+//
+// ONLY A BINOP, AND ONLY WHEN BOTH OPERANDS AGREE. A binop over two operands of
+// the same type yields that type; over disagreeing operands it yields nothing,
+// because the disagreement is itself the rejection and inventing a result would
+// hide it. Every other node kind yields 0, which accepts.
+fn tyb_node_tag(e: Word) -> Word {
+    if ty.ekind[e] == 1 {
+        tyb.la = tyb_operand(ty.ea[e], ty.eaf[e]);
+        tyb.lb = tyb_operand(ty.eb[e], ty.ebf[e]);
+        if tyb.la != 0 andalso tyb.la == tyb.lb { tyb.la } else { ty_unknown() }
+    } else {
+        ty_unknown()
+    }
+}
+
+// Prove what can be proved, in at most `tyb_rounds()` passes.
+//
+// A BOUNDED FIXPOINT RATHER THAN A LOOKUP, which is what the derived-operand gap
+// always needed: `let a = 1 + 2` is knowable only after both its operands are,
+// and `let b = a + 1` only after `a`. Each round walks every binding once; a
+// round that proves nothing new stops the loop.
+fn tyb_solve() -> Word {
+    for b in 0..ty.bn limit 128 {
+        tyb.bres[b] = 0;
+    }
+    tyb.moved = 1;
+    for r in 0..tyb_rounds() limit 8 {
+        if tyb.moved == 1 {
+            tyb.moved = 0;
+            for b in 0..ty.bn limit 128 {
+                if ty.bform[b] == 2 andalso tyb.bres[b] == 0 {
+                    tyb.bres[b] = tyb_node_tag(ty.btag[b]);
+                    tyb.moved = if tyb.bres[b] != 0 { 1 } else { tyb.moved };
+                }
+            }
+        }
+    }
+    0
 }
 
 fn ty_resolve(f: Word, v: Word) -> Word {
@@ -515,6 +614,20 @@ fn tyc_row_rejects(p: Word, i: Word) -> Word {
 // empty, and a host counting resumes against a bound should not have to model
 // that.
 fn ty_step() -> Word {
+    // THE SOLVER RUNS ONCE, BEFORE THE FIRST ROW OF THE FIRST TABLE.
+    //
+    // It reads the whole binding table and the whole expression table, so it is
+    // the one part of this stage that is not row-at-a-time. That is inherent
+    // rather than incidental: a derived binding's tag depends on operands that
+    // may be bound later in the table, so no forward pass over rows can prove it.
+    // The cost is bounded by `tyb_rounds()` passes over at most 128 bindings.
+    //
+    // Guarded on `phase == 0 andalso i == 0` rather than on a "did I run" flag,
+    // because the host may refill the tables and restart the fold, and a flag
+    // would leave the second run using the first run's conclusions.
+    if tyc.phase == 0 andalso tyc.i == 0 {
+        tyb_solve();
+    }
     if tyc.phase >= tyc_phases() {
         tyc.verdict
     } else {

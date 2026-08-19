@@ -1531,6 +1531,63 @@ fn emit_data_slot_records(at: Word, n: Word) -> Word {
     }
 }
 
+// --- ONE RECORD PER CALL, AT WINDOW OFFSET ZERO -----------------------------
+//
+// Each `emit_*_records` above refuses past `fin_capacity()` divided by its field
+// count -- 256 records for a four-field table. These hold ONE record, so the
+// bound is gone: the host seeds the fields and places the bytes.
+//
+// **NONE OF THEM TOUCHES A DATA BLOCK, and that is why they can live here.** A
+// first attempt assigned each `put_*` result to `ck.sink` and had to be moved
+// beside the other stream commands, because the parser is single pass and `ck` is
+// declared far below. Dropping the assignments removes both the relocation and
+// the cross-block coupling: a bare call is a statement, the puts are performed
+// for effect, and the stride is the value. The relocation was a heavier fix than
+// the constraint required.
+//
+// **COVERAGE IS WHAT THESE ARE, WHICH IS FORMATTING.** They lay out records the
+// host hands them. `DATA_SLOTS`'s run-length grouping, a signature's parameter
+// range, a shape's size -- all are decided outside. That makes these regions
+// encoded but not derived, the standing the `HEADER` record has, and counting
+// them beside `NAMES`, which the stage computes from the module blob, would
+// overstate what is self-hosted.
+//
+// **THERE IS NO `*_stream_begin` FOR ANY OF THEM.** The chunk and constant
+// streams need one because they carry state between records. These records depend
+// on nothing outside themselves, so a begin would exist only to look symmetric
+// with its neighbours, and a reader would have to open its body to learn it reset
+// nothing.
+fn ds_stream_step() -> Word {
+    put_u32(dslot_off_name(), wire.fin[0]);
+    put_u8(dslot_off_visibility(), wire.fin[1]);
+    put_u8(dslot_off_reserved(), wire.fin[2]);
+    put_u16(dslot_off_run(), wire.fin[3]);
+    dslot_stride()
+}
+
+fn sh_stream_step() -> Word {
+    put_u16(shape_off_tag(), wire.fin[0]);
+    put_u8(shape_off_kind(), wire.fin[1]);
+    put_u8(shape_off_reserved(), wire.fin[2]);
+    put_u32(shape_off_size(), wire.fin[3]);
+    shape_stride()
+}
+
+fn sg_stream_step() -> Word {
+    put_u32(sig_off_params_first(), wire.fin[0]);
+    put_u32(sig_off_params_count(), wire.fin[1]);
+    put_u32(sig_off_ret(), wire.fin[2]);
+    put_u32(sig_off_resume(), wire.fin[3]);
+    sig_stride()
+}
+
+fn ev_stream_step() -> Word {
+    put_u32(evar_off_name(), wire.fin[0]);
+    put_u32(evar_off_reserved(), wire.fin[1]);
+    put_u32(evar_off_disc(), wire.fin[2]);
+    evar_stride()
+}
+
 // Seven inputs per record, not four: the run-length form carries `first_slot`,
 // `run` and `stride` alongside the original four fields. The host supplies all
 // seven; grouping slots into runs is the CALLER's job, exactly as it is for
@@ -2850,6 +2907,24 @@ fn mi_offset(k: Word, at: Word) -> Word {
 // Six words per node: tag, payload, child count, names_first, flags, disc.
 // Mirrors the reference preorder exactly; the widths are the reference's, not
 // a fresh choice.
+// The NODE table's own capacity, which is what `wire.bytes` holds in node mode:
+// 65,536 bytes at six words a node.
+//
+// **THIS WAS `nm_max_names()`, AND THAT IS A BOUND ON A DIFFERENT QUANTITY.** The
+// walk refused a forest of more than 1,024 NODES using the cap that sizes the
+// NAME arrays -- `nin` is 2,048 words at two per name, `nmap` is 1,024 entries.
+// The two happen to be comparable numbers and are otherwise unrelated, so the
+// guard read as though it were checking capacity while checking someone else's.
+//
+// It excluded `wire.kel` from its own emit path at 1,148 constant nodes. Every
+// one of them is `Int`: the walk interns NOTHING for it, so the name arrays it
+// was being measured against were never touched. The node table it actually
+// writes into holds 1,365.
+//
+// The name bound is now enforced where names are interned, which is the only
+// place it means anything.
+fn mi_max_nodes() -> Word { 1365 }
+
 fn mi_node_words() -> Word { 6 }
 
 fn mi_put_node_full(
@@ -3063,7 +3138,7 @@ fn mi_tag_struct() -> Word { 10 }
 fn mi_const_names() -> Word {
     nm.ccnt = mi_u16(nm.icur);
     nm.icur = nm.icur + 2;
-    nm.err = if nm.ccnt > nm_max_names() { 0 - 240 } else { nm.err };
+    nm.err = if nm.ccnt > mi_max_nodes() { 0 - 240 } else { nm.err };
     for c in 0..mi_bounded(nm.ccnt) limit 1024 {
         nm.sink = if nm.err < 0 { 0 } else {
             // ONE LINEAR SCAN, NOT A STACK WALK (slice 14e). The blob carries
@@ -3090,6 +3165,13 @@ fn mi_const_names() -> Word {
             // records zero, matching the reference.
             nm.cfirst = if nm.cnames == 0 { 0 } else { nm.cnt };
             for q in 0..mi_bounded(nm.cnames) limit 1024 {
+                // THE NAME BOUND, HERE, WHERE A NAME IS ACTUALLY INTERNED.
+                // `mi_pair` writes `wire.nin[k * 2]`, so an unguarded `nm.cnt`
+                // past the array faults on the bounds check rather than
+                // refusing. Checked before the write rather than after, because
+                // a refusal that arrives once the damage is done is a crash
+                // report, not a guard.
+                nm.err = if nm.cnt >= nm_max_names() { 0 - 236 } else { nm.err };
                 nm.sink = if nm.err < 0 { 0 } else {
                     nm.sink = mi_offset(nm.cnt, nm.icur + 2);
                     nm.cnt = mi_pair(nm.cnt, mi_u16(nm.icur), mi_name_mode(nm.ctag, q));
@@ -3529,6 +3611,12 @@ private data fl {
     // struct pair, and separate from it because the two tables are independent.
     eaux: Word,
     eauxat: Word,
+    // The STREAMING emit's record cursor. A field of its own rather than a reuse
+    // of `qn`: that one is the breadth-first queue length, and the streaming path
+    // has no queue at all. Sharing them would be correct only for as long as the
+    // two paths never ran against the same block, which is not a property anyone
+    // can check by reading one function.
+    scur: Word,
 }
 
 // `wire.fin` holds six words per node, so 1024 words is 170 nodes. A STATED cap:
@@ -3785,6 +3873,62 @@ fn fl_put_record(at: Word, head: Word) -> Word {
             fl_payload_of(wire.fq[head])
         },
     )
+}
+
+// Whether a tag makes the walk intern a name.
+//
+// `STATIC_STR`, `STRUCT` and `ENUM` each put a name index in the record's `aux`,
+// so emitting one without running the interner writes a plausible-looking wrong
+// answer rather than failing. The streaming path refuses them on this predicate.
+fn fl_tag_interns(t: Word) -> Word {
+    if t == tag_static_str() { 1 } else {
+    if t == tag_struct() { 1 } else {
+    if t == tag_enum() { 1 } else { 0 } } }
+}
+
+// --- CONSTANT NODES, ONE RECORD PER CALL ------------------------------------
+//
+// `flatten_emit_consts` refuses past `fl_max_nodes()` -- 170 -- because the whole
+// forest must sit in `wire.fin`, which is 1,024 words at six words a node. That
+// is the bound keeping `CONSTS` out of the emit path: `parse` carries 817 chunk
+// constants.
+//
+// **WHY THIS PATH CAN STREAM AND THE BREADTH-FIRST WALK CANNOT.** `fl_walk` needs
+// a QUEUE, because a composite's record carries `(first, count)` into children
+// numbered after every node at its own depth -- so it cannot write a record until
+// it knows how many nodes precede its children. A forest of SCALARS has no
+// children, the queue never grows past the roots, and the walk degenerates to a
+// linear scan. Then one node in, one record out, and no state but the cursor.
+//
+// **THE REFUSAL IS LOAD-BEARING AND IS THE POINT OF THE SLICE.** Every constant
+// across the eleven stages is `Int`, pinned by
+// `tests/consts_region_composition.rs`, so this path covers the corpus entirely.
+// It covers the general case NOT AT ALL, and a composite reaching it would be
+// emitted with a zero range and a zero `aux` -- structurally valid, silently
+// wrong, and indistinguishable from a correct record downstream. Refusing is what
+// keeps the gap visible instead of encoding it in the bytes.
+fn fl_stream_begin() -> Word {
+    fl.scur = 0;
+    fl.err = 0;
+    0
+}
+
+// Emit the record for the node seeded at `wire.fin[0..6]`, at WINDOW OFFSET ZERO.
+//
+// The host places the sixteen bytes. `aux` is written as zero rather than left
+// alone, because the window is reused between calls and a stale index from an
+// earlier record is exactly the kind of wrong answer that looks right.
+fn fl_stream_step() -> Word {
+    if fl_children_of(0) > 0 { 0 - 264 } else {
+    if fl_tag_interns(fl_tag_of(0)) == 1 { 0 - 265 } else {
+    if fl_tag_has_range(fl_tag_of(0)) == 1 { 0 - 266 } else {
+        fl.sink = put_u16(const_off_tag(), fl_tag_of(0));
+        fl.sink = put_u16(const_off_flags(), fl_flags_of(0));
+        fl.sink = put_u32(const_off_aux(), 0);
+        fl.sink = put_u64(const_off_payload(), fl_payload_of(0));
+        fl.scur = fl.scur + 1;
+        const_stride()
+    } } }
 }
 
 // The breadth-first walk. `fl.qn` is both the queue length and the next index
@@ -4463,7 +4607,13 @@ fn dispatch_window(cmd: Word) -> Word {
     if cmd == 173 { mi_window_chunks() } else {
     if cmd == 174 { ck_stream_begin() } else {
     if cmd == 175 { ck_stream_step() } else {
-    0 - 97 }}}}}}
+    if cmd == 176 { fl_stream_begin() } else {
+    if cmd == 177 { fl_stream_step() } else {
+    if cmd == 178 { ds_stream_step() } else {
+    if cmd == 179 { sh_stream_step() } else {
+    if cmd == 180 { sg_stream_step() } else {
+    if cmd == 181 { ev_stream_step() } else {
+    0 - 97 }}}}}}}}}}}}
 }
 
 fn dispatch_driver2(cmd: Word) -> Word {
@@ -4520,7 +4670,7 @@ fn dispatch_driver(cmd: Word) -> Word {
 // did for four consecutive slices — and got wrong once.
 // RAISED FROM 167 for `mi_join_header`. This is a REAL GUARD: a new command
 // returns `0 - 99` until the ceiling moves, so the two must change together.
-fn highest_command() -> Word { 175 }
+fn highest_command() -> Word { 181 }
 
 // --- THE ENTRY, AS A COROUTINE ----------------------------------------------
 //

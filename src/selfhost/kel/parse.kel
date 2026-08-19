@@ -32,7 +32,18 @@ shared data toks {
     packed: [Word; 40960],
     limit_id: Word,
     chunk_count: Word,
-    chunks: [Word; 256],
+    // THE LAST CAP THAT EXCLUDED A REAL STAGE FROM BEING PARSED.
+    //
+    // At 256 this table refused `wire.kel`, which is 486 chunks. Sized from the corpus
+    // rather than from the stage that needed it: the next largest is `parse.kel` at 108,
+    // which grew from 94 in a single increment, so 512 would have left `wire` twenty-six
+    // chunks of margin and one increment can consume that.
+    //
+    // Eight load-bearing fields follow this array in the same shared block, and widening
+    // it shifts every one of them. The driver's slot constants are chained rather than
+    // restated so they move together, and `the_driver_shared_slots_match_the_stage` checks
+    // the whole chain against this declaration order.
+    chunks: [Word; 1024],
     require_id: Word,
     word_id: Word,
     byte_id: Word,
@@ -44,6 +55,29 @@ shared data toks {
     // position -- the `limit`/`require`/`word`/`byte`/`bool` pattern.
     and_id: Word,
     or_id: Word,
+    // --- THE TOKEN WINDOW ------------------------------------------------------
+    //
+    // `packed` is 40,960 words, and holding the whole token stream there is the
+    // last residency in the pipeline. It is not something the PARSER needs: every
+    // one of its cursor moves is plus or minus one, so it is a one-token
+    // lookahead scanner with single-token pushback and it touches a bounded
+    // neighbourhood of the cursor and nothing else.
+    //
+    // `base` is the absolute token index that `packed[0]` holds, so a read is
+    // `packed[cursor - base]`. At zero, with the whole stream seeded, this is
+    // exactly what it was.
+    //
+    // `at` is the cursor written back on every read, so the host can slide the
+    // window without the stage needing a protocol to ask. A step consumes at most
+    // one token, so the cursor advances by at most one per resume and a host
+    // watching `at` can never be surprised by a jump.
+    //
+    // APPENDED LAST, like `and_id` and `or_id` before them. The block is addressed
+    // by SLOT: inserting in the middle silently shifts every field after the
+    // insertion point, which this file's history already records breaking four
+    // tests.
+    base: Word,
+    at: Word,
 }
 
 // The unified token vocabulary (body.kel's `enum Tok` extended with the header keywords).
@@ -359,12 +393,12 @@ private data ps {
     started: Word,
     pend_end: Word,
     pcount: Word,
-    pnames: [Word; 32],
+    pnames: [Word; 33],
     // Per value-parameter: 1 if the parameter's type is `Byte`, else 0, so a bitwise op on two Byte
     // operands lowers promote-operate-truncate. `last_byte` tracks whether the most recently emitted
     // operand VALUE is Byte-typed (set for a Byte parameter Local, cleared otherwise); the stages
     // carry no Byte value, so this is always 0 there and the Byte lowering never fires for them.
-    pbyte: [Word; 32],
+    pbyte: [Word; 33],
     last_byte: Word,
     // Operand-type tracking for `struct == struct` equality (a field-wise comparison loop): the
     // struct declaration index (plus one) of the most recently emitted operand VALUE if it is a
@@ -413,48 +447,48 @@ private data ps {
     // Per value-parameter struct binding: 0 if not a struct type, else the struct's
     // declaration index plus one; and the field-access postfix sub-state after a struct-typed
     // parameter Local was emitted (1 awaits an optional `.`, 2 reads the field name).
-    pstruct: [Word; 32],
+    pstruct: [Word; 33],
     // Per value-parameter enum binding: 0 if not an enum type, else the enum's name intern id plus
     // one. When a `match`'s scrutinee is such a parameter, the match lowers to the IsEnum virtual
     // loop (an enum-value match) rather than an integer disc compare.
-    penum: [Word; 32],
+    penum: [Word; 33],
     // Per value-parameter tuple binding: 0 if not a tuple type, else the tuple layout index (in
     // `tupledefs`) plus one, so a body `t.N` access resolves the element offset/kind. `ta_phase`
     // is the tuple-access postfix sub-state (1 awaits an optional `.`, 2 reads the element index);
     // `ta_tuple` the layout index of the tuple under access. `tts`/`tts_off` scan a tuple TYPE
     // annotation `(T, T, ...)` in the signature: `tts` active, `tts_off` the running byte offset.
-    ptuple: [Word; 32],
+    ptuple: [Word; 33],
     ta_phase: Word,
     ta_tuple: Word,
     // Per value-parameter array-of-scalar binding: 0 if not an array type, else the element
     // ScalarKind plus one, so a body `xs[i]` access arms the array-index postfix and emits
     // GetIndex(Flat{kind}). Mirrors a let-bound array (`stmt.let_array`) for a parameter.
-    parray: [Word; 32],
+    parray: [Word; 33],
     // Per value-parameter scalar-array binding: the declared array length N (element count), captured
     // at the `; N` size close. Needed by `array == array` equality to bound the per-element loop.
-    parray_len: [Word; 32],
+    parray_len: [Word; 33],
     // Per value-parameter array-of-STRUCT binding: 0 if the element is not a declared struct, else
     // the struct's declaration index plus one; `parray_size` the struct's flat byte size. A body
     // `ps[i]` extracts element i as a nested struct (GetIndex(FlatNested{size, Struct})) and a
     // following `.field` reads into it. `sa_phase`/`sa_struct`/`sa_size` are the postfix sub-state
     // after such a parameter Local was emitted (1 awaits an optional `[`).
-    parray_struct: [Word; 32],
-    parray_size: [Word; 32],
+    parray_struct: [Word; 33],
+    parray_size: [Word; 33],
     // Per value-parameter array-of-ENUM binding: 0 if the array element type is not a declared enum,
     // else the element enum's name token + 1 (the flat byte size rides `parray_size`). Drives the
     // whole-value array-of-enum equality (`[E; N] == [E; N]`); mutually exclusive with the other
     // `parray_*` element kinds.
-    parray_enum: [Word; 32],
+    parray_enum: [Word; 33],
     // Per value-parameter array-of-TUPLE binding: 0 if the element is not a tuple, else the tuple
     // layout index (in `tupledefs`) plus one; the element byte size rides `parray_size`. A body
     // `ts[i].N` extracts element i as a nested tuple (GetIndex(FlatNested{size, Tuple})) and reads
     // element N. Mutually exclusive with `parray_struct` and `parray` (tuple vs struct vs scalar).
-    parray_tuple: [Word; 32],
+    parray_tuple: [Word; 33],
     // Per value-parameter array-of-ARRAY binding: 0 if the element is not an array, else the INNER
     // element ScalarKind plus one; the inner array byte size rides `parray_size`. A body `m[i][j]`
     // extracts inner array i as a nested array (GetIndex(FlatNested{size, Array})) then scalar-indexes
     // element j (GetIndex(Flat{kind})). Mutually exclusive with `parray_struct`/`parray_tuple`/`parray`.
-    parray_arr: [Word; 32],
+    parray_arr: [Word; 33],
     sa_phase: Word,
     sa_struct: Word,
     sa_size: Word,
@@ -498,39 +532,46 @@ private data ps {
     found_flag: Word,
     in_guard: Word,
     arm_pending: Word,
+    // The diagnostic channel. `perr_code` is zero while the parse is healthy and otherwise
+    // holds the FIRST cause recorded (later ones are ignored, because a clamped counter
+    // provokes cascades and the first is the one that names the real limit); `perr_detail`
+    // carries the count that exceeded the cap, which is what a caller needs in order to know
+    // how far over it is. APPENDED, per this file's rule about slot-addressed blocks.
+    perr_code: Word,
+    perr_detail: Word,
 }
 
 // The shunting-yard operator stack. `drain_reason` selects the empty-stack drain: 0 commit
 // a statement at its `;`, 1 fold the block at its `}`, 2 the drained `if` condition, 3 a
 // then branch's tail, 4 an else branch's tail.
 private data ops {
-    opstack: [Word; 64],
+    opstack: [Word; 65],
     // Parallel to `opstack`: the Byte-ness of each pending operator's LEFT operand, captured when
     // the operator is pushed. `emit_op` reads it (at the popped slot) to detect a Byte-operand
     // bitwise op. A marker slot's entry is unused (markers are never Byte bitwise ops).
-    op_lbyte: [Word; 64],
+    op_lbyte: [Word; 65],
     // Parallel to `opstack`: the LEFT operand's struct type (plus one) of each pending operator, so
     // `emit_op(Eq)` can detect a `struct == struct` comparison (both operands whole structs).
-    op_lstruct: [Word; 64],
+    op_lstruct: [Word; 65],
     // Parallel to `opstack`: the LEFT operand's enum name id (plus one) of each pending operator, so
     // `emit_op(Eq)` can detect an `enum == enum` comparison (both operands whole enum values).
-    op_lenum: [Word; 64],
+    op_lenum: [Word; 65],
     // Parallel to `opstack`: the LEFT operand's tuple layout index (plus one) of each pending
     // operator, so `emit_op(Eq)` can detect a `tuple == tuple` comparison.
-    op_ltuple: [Word; 64],
+    op_ltuple: [Word; 65],
     // Parallel to `opstack`: the LEFT operand's packed array (length, element kind) of each pending
     // operator, so `emit_op(Eq)` can detect an `array == array` comparison.
-    op_larray: [Word; 64],
+    op_larray: [Word; 65],
     // Parallel to `op_larray`: the LEFT operand's array-of-struct element struct index + 1 (0 if the
     // left operand is not an array-of-struct), so `emit_op(Eq)` can select the struct-element loop.
-    op_larray_struct: [Word; 64],
+    op_larray_struct: [Word; 65],
     // Parallel to `op_larray`: the LEFT operand's array-of-enum element enum name + 1 (0 otherwise),
     // so `emit_op(Eq)` can select the enum-element loop.
-    op_larray_enum: [Word; 64],
+    op_larray_enum: [Word; 65],
     // Parallel to `op_larray`: the LEFT operand's packed array-of-tuple marker (0 otherwise).
-    op_larray_tuple: [Word; 64],
+    op_larray_tuple: [Word; 65],
     // Parallel to `op_larray`: the LEFT operand's packed array-of-array marker (0 otherwise).
-    op_larray_arr: [Word; 64],
+    op_larray_arr: [Word; 65],
     opsp: Word,
     pending_op: Word,
     pending_prec: Word,
@@ -539,6 +580,181 @@ private data ops {
     draining: Word,
     drain_reason: Word,
     expect_operand: Word,
+}
+
+// THE DIAGNOSTIC CHANNEL, AND WHY EACH GUARDED ARRAY CARRIES ONE SPARE SLOT.
+//
+// Every bound below is reached by a program a caller could plausibly write, and each one
+// used to surface as a raw virtual-machine trap naming an array's size and nothing else.
+// Measured, on the boundary from both sides:
+//
+//   65 local bindings in one function  ->  IndexOutOfBounds(64, 64)
+//   65 nested parentheses              ->  IndexOutOfBounds(64, 64)   <- the SAME message
+//   257 statements in one body         ->  IndexOutOfBounds(256, 256)
+//   an unmatched `]`                   ->  IndexOutOfBounds(-1, 64)
+//
+// The first two are why this exists. `let_names` and `opstack` are both 64 entries, so two
+// unrelated limits produced a byte-identical diagnostic and a reader could not tell "too
+// many locals" from "expression nested too deep". None of the four named a cap the reader
+// controls, and none named the construct at fault.
+//
+// THE GUARD IS ON THE POINTER AND THE ARRAY CARRIES ONE SPARE SLOT, because the write
+// happens BEFORE the increment (`a[sp] = v; sp = sp + 1`). A guard on the increment alone
+// fires one write too late, and clamping the pointer at the last usable slot would REFUSE
+// the exactly-full program that works today -- 64 nested parentheses parse, measured. The
+// spare slot gives the overflowing write somewhere legal to land; the pointer guard then
+// records the cause and holds the pointer at the spare, so every later index stays in range
+// and the parse reaches its next record boundary. The clamped parse is garbage and is never
+// used: the host stops at the diagnostic record.
+//
+// The capacities below are the USABLE counts, one less than the declared array sizes.
+// `the_parse_guard_caps_match_their_arrays` checks the two agree, so widening an array
+// without widening its cap cannot pass unnoticed.
+fn pe_opstack() -> Word { 1 }
+fn pe_bracket() -> Word { 2 }
+fn pe_locals() -> Word { 3 }
+fn pe_stmts() -> Word { 4 }
+// Measured the same way as the first four, on the boundary from both sides. TWO MORE PAIRS
+// SHARED A MESSAGE: parameters and `if` nesting both reported `IndexOutOfBounds(32, 32)`,
+// and `for` nesting and array-literal nesting both reported `IndexOutOfBounds(8, 8)`.
+fn pe_params() -> Word { 5 }
+fn pe_ifdepth() -> Word { 6 }
+fn pe_fordepth() -> Word { 7 }
+fn pe_arraynest() -> Word { 8 }
+fn pe_variants() -> Word { 9 }
+// Swept, not tripped over. Nested calls are the THIRD construct to report
+// `IndexOutOfBounds(8, 8)`, after `for` nesting and array-literal nesting.
+fn pe_calldepth() -> Word { 10 }
+fn pe_fields() -> Word { 11 }
+
+fn pe_cap_op() -> Word { 64 }
+fn pe_cap_let() -> Word { 64 }
+fn pe_cap_stmt() -> Word { 256 }
+fn pe_cap_param() -> Word { 32 }
+fn pe_cap_if() -> Word { 32 }
+fn pe_cap_for() -> Word { 8 }
+fn pe_cap_anest() -> Word { 8 }
+// The enum bound is a TOTAL ACROSS THE PROGRAM, not a per-enum one: 128 enums of two
+// variants reach it at exactly the same point as one enum of 257 variants. No message
+// naming an array size could convey that, which is the argument for naming it here.
+fn pe_cap_variant() -> Word { 256 }
+fn pe_cap_calldepth() -> Word { 8 }
+fn pe_cap_field() -> Word { 512 }
+
+// Record the FIRST cause and its count. A clamped pointer provokes cascades, and the first
+// cause is the one that names the real limit. Returns zero; callers use it for effect.
+fn perr(code: Word, detail: Word) -> Word {
+    if ps.perr_code == 0 {
+        ps.perr_code = code;
+        ps.perr_detail = detail;
+    }
+    0
+}
+
+// The pointer guards. Each takes the CURRENT value and returns the next one, held at the
+// spare slot once the usable capacity is spent. `detail` is the count that was attempted,
+// which is what tells a caller how far over the limit the program is.
+fn op_push(sp: Word) -> Word {
+    if sp + 1 > pe_cap_op() {
+        perr(pe_opstack(), sp + 1);
+        pe_cap_op()
+    } else {
+        sp + 1
+    }
+}
+
+// The operator stack does not pop below zero on a well-formed input. It is guarded anyway,
+// because an unmatched closing bracket reaches a pop with nothing pending, and a negative
+// stack pointer surfaces later as an index of -1 at a site with nothing to do with the
+// bracket. Every corpus stage parses without this firing, which is the control.
+fn op_pop(sp: Word) -> Word {
+    if sp <= 0 {
+        perr(pe_bracket(), 0);
+        0
+    } else {
+        sp - 1
+    }
+}
+
+fn let_push(n: Word) -> Word {
+    if n + 1 > pe_cap_let() {
+        perr(pe_locals(), n + 1);
+        pe_cap_let()
+    } else {
+        n + 1
+    }
+}
+
+fn param_push(n: Word) -> Word {
+    if n + 1 > pe_cap_param() {
+        perr(pe_params(), n + 1);
+        pe_cap_param()
+    } else {
+        n + 1
+    }
+}
+
+fn if_push(n: Word) -> Word {
+    if n + 1 > pe_cap_if() {
+        perr(pe_ifdepth(), n + 1);
+        pe_cap_if()
+    } else {
+        n + 1
+    }
+}
+
+fn for_push(n: Word) -> Word {
+    if n + 1 > pe_cap_for() {
+        perr(pe_fordepth(), n + 1);
+        pe_cap_for()
+    } else {
+        n + 1
+    }
+}
+
+fn anest_push(n: Word) -> Word {
+    if n + 1 > pe_cap_anest() {
+        perr(pe_arraynest(), n + 1);
+        pe_cap_anest()
+    } else {
+        n + 1
+    }
+}
+
+fn call_push(n: Word) -> Word {
+    if n + 1 > pe_cap_calldepth() {
+        perr(pe_calldepth(), n + 1);
+        pe_cap_calldepth()
+    } else {
+        n + 1
+    }
+}
+
+fn field_push(n: Word) -> Word {
+    if n + 1 > pe_cap_field() {
+        perr(pe_fields(), n + 1);
+        pe_cap_field()
+    } else {
+        n + 1
+    }
+}
+
+fn variant_push(n: Word) -> Word {
+    if n + 1 > pe_cap_variant() {
+        perr(pe_variants(), n + 1);
+        pe_cap_variant()
+    } else {
+        n + 1
+    }
+}
+
+fn stmt_push(n: Word) -> Word {
+    if n + 1 > pe_cap_stmt() {
+        perr(pe_stmts(), n + 1);
+        pe_cap_stmt()
+    } else {
+        n + 1
+    }
 }
 
 // The statement, binding, and block-fold machinery. `pbase`/`pbase_sp`/`stmt_base` are the
@@ -551,8 +767,8 @@ private data stmt {
     // without draining a (non-existent) statement value.
     break_pending: Word,
     pending_let_name: Word,
-    let_names: [Word; 64],
-    scope_slot: [Word; 64],
+    let_names: [Word; 65],
+    scope_slot: [Word; 65],
     let_count: Word,
     slot_count: Word,
     // Per `let` binding, the composite type inferred from a DIRECT composite construction on its
@@ -563,20 +779,20 @@ private data stmt {
     // operator (`emit_op`) or a call clears both, so only a bare construction root survives to the
     // `let` commit. The construction node emits last (postorder root), so the surviving value is
     // the root's type.
-    let_tuple: [Word; 64],
-    let_struct: [Word; 64],
+    let_tuple: [Word; 65],
+    let_struct: [Word; 65],
     // Per `let` binding, 0 or the element ScalarKind plus one when the binding's value root was an
     // array literal, so a later `a[i]` access emits GetIndex(Flat{kind}).
-    let_array: [Word; 64],
+    let_array: [Word; 65],
     // Per `let` binding, 0 or the element struct's declaration index plus one when the binding's
     // value root was an array-of-struct literal; `let_array_size` the element struct's byte size, so
     // a later `a[i].field` access emits GetIndex(FlatNested{size, Struct}) + a field read (the
     // let-binding analogue of an array-of-struct parameter).
-    let_array_struct: [Word; 64],
-    let_array_size: [Word; 64],
+    let_array_struct: [Word; 65],
+    let_array_size: [Word; 65],
     // Per `let` binding, 0 or the enum's name id plus one when the binding's value root returned an
     // enum (a call of an enum-returning function), so a `match` over the binding lowers to IsEnum.
-    let_enum: [Word; 64],
+    let_enum: [Word; 65],
     // A `struct == struct` fold arms this drain: it emits one StructEqField record per field (from
     // the struct's declaration layout) then a StructEqBuild, over successive body-step calls (the
     // operator fold itself returns only the first record). `sq_struct` the struct index, `sq_field`
@@ -777,8 +993,8 @@ private data stmt {
     // codegen.kel emitter such as `push_forlimit` is a single flat block of about 78
     // statements, so 64 is too small; 256 covers the stage files with headroom. These
     // are private (persistent-arena) slots, not part of the 64KB shared segment.
-    stmt_kind: [Word; 256],
-    stmt_arg: [Word; 256],
+    stmt_kind: [Word; 257],
+    stmt_arg: [Word; 257],
     stmt_count: Word,
     // The pending-statement and block-base stacks, sized 32 (was 16). The current stage
     // functions fit within 16, but the stage's own deepest dispatch function
@@ -811,10 +1027,10 @@ private data stmt {
 // wrapping the whole conditional (`yield if c { a }`, whose YieldMark was pushed
 // before the branch opened and must keep spanning the built If).
 private data branch {
-    if_phase: [Word; 32],
-    if_stmt_start: [Word; 32],
-    if_opbase: [Word; 32],
-    if_seq: [Word; 32],
+    if_phase: [Word; 33],
+    if_stmt_start: [Word; 33],
+    if_opbase: [Word; 33],
+    if_seq: [Word; 33],
     if_sp: Word,
 }
 
@@ -831,16 +1047,16 @@ private data branch {
 // (`for_emit`/`for_emit_i`) is single because a nested loop emits its parts fully before
 // the enclosing loop's body closes, so the two emissions never overlap.
 private data forst {
-    for_phase: [Word; 8],
+    for_phase: [Word; 9],
     for_var: [Word; 8],
-    for_vslot: [Word; 8],
-    for_end_slot: [Word; 8],
-    for_ctr: [Word; 8],
-    for_cap_slot: [Word; 8],
-    for_oc: [Word; 8],
+    for_vslot: [Word; 9],
+    for_end_slot: [Word; 9],
+    for_ctr: [Word; 9],
+    for_cap_slot: [Word; 9],
+    for_oc: [Word; 9],
     for_cap: [Word; 8],
-    for_stmt_start: [Word; 8],
-    for_seq: [Word; 8],
+    for_stmt_start: [Word; 9],
+    for_seq: [Word; 9],
     for_sp: Word,
     forlimit_count: Word,
     for_emit: Word,
@@ -892,10 +1108,10 @@ private data fields {
     // The accumulated data-field layout table across ALL data blocks (one entry per field), used
     // to resolve a body `block.field` to its slot. Sized 512 (was 256): parse.kel itself now
     // declares 259 data-block fields, past the old 256, so parse.kel parsing parse.kel overflowed.
-    fdata: [Word; 512],
-    ffield: [Word; 512],
-    fbase: [Word; 512],
-    flen: [Word; 512],
+    fdata: [Word; 513],
+    ffield: [Word; 513],
+    fbase: [Word; 513],
+    flen: [Word; 513],
     field_count: Word,
     base_ctr: Word,
     cur_block: Word,
@@ -962,8 +1178,8 @@ private data da {
 // the just-read callee name awaiting its `(`, `call_phase` that await, `cdraining` the
 // per-argument operator drain at each `,`.
 private data call {
-    call_chunk: [Word; 8],
-    call_count: [Word; 8],
+    call_chunk: [Word; 9],
+    call_count: [Word; 9],
     call_sp: Word,
     call_pending: Word,
     call_phase: Word,
@@ -971,7 +1187,7 @@ private data call {
     // The array-literal context stack, parallel to the call stack: `al_count` the running
     // element count per open `[...]` literal, `al_sp` the nesting depth. Its `,` drains through
     // the same `step_cdraining` (generalised to the ArrayMark), its `]` emits the ArrayLit.
-    al_count: [Word; 8],
+    al_count: [Word; 9],
     al_sp: Word,
     // The enum-construction context stack, parallel to the call stack: `en_count` the running
     // child count per open `E::V(...)` construction (seeded at one for the discriminant, then
@@ -1004,19 +1220,19 @@ private data call {
 // previous plus one otherwise) unless an explicit `= N` overrides it and reseeds the
 // running `next_disc`. `cur_enum` is the enum under construction.
 private data enums {
-    edata: [Word; 256],
-    evar: [Word; 256],
-    edisc: [Word; 256],
+    edata: [Word; 257],
+    evar: [Word; 257],
+    edisc: [Word; 257],
     // Per variant row, the sum of that variant's payload field byte sizes (zero for a unit
     // variant). A construction reads the enum's flat body size as eight (the discriminant) plus
     // the largest `epayload` across the enum's variants; see `enum_bytesize`.
-    epayload: [Word; 256],
+    epayload: [Word; 257],
     // Per variant row, the flat per-payload-field layout for a payload match `E::V(x, y)`:
     // `evfstart`/`evfcount` bound the variant's field run in `evfoff`/`evfkind` (per-field flat
     // byte offset -- eight for the discriminant plus preceding field sizes -- and ScalarKind).
     // `evfcursor` is the running append cursor.
-    evfstart: [Word; 256],
-    evfcount: [Word; 256],
+    evfstart: [Word; 257],
+    evfcount: [Word; 257],
     evfoff: [Word; 512],
     evfkind: [Word; 512],
     // Per payload field, the struct declaration index (plus one) when the field is a struct, else 0,
@@ -1044,20 +1260,20 @@ private data enums {
 // all-Word tuple return (>= 2, else 0), so a let-bound tuple call arms `x.N` access (all-Word
 // only, matching tuple construction).
 private data chunkret {
-    ret_struct: [Word; 256],
-    ret_tuple: [Word; 256],
+    ret_struct: [Word; 1024],
+    ret_tuple: [Word; 1024],
     // Per chunk, the enum name id (plus one) it returns, else 0, so a `let e = f(); match e` over
     // an enum-returning call lowers to the IsEnum virtual loop.
-    ret_enum: [Word; 256],
+    ret_enum: [Word; 1024],
     // Per chunk, the element ScalarKind (plus one) of a scalar array return `-> [T; N]`, else 0, so
     // a `let a = f(); a[i]` bound to the call arms `a[i]` access (scalar elements only, matching the
     // scalar array-parameter and let-bound-array cases).
-    ret_array: [Word; 256],
+    ret_array: [Word; 1024],
     // Per chunk, for a STRUCT-element array return `-> [P; N]`, the element struct's declaration
     // index (plus one) and byte size, else 0, so a `let a = f(); a[i].field` bound to the call arms
     // the struct-array postfix. Mutually exclusive with `ret_array` (scalar vs struct element).
-    ret_array_struct: [Word; 256],
-    ret_array_size: [Word; 256],
+    ret_array_struct: [Word; 1024],
+    ret_array_size: [Word; 1024],
 }
 
 // The tuple-parameter-type layout table, accumulated as each `(T, T, ...)` parameter type
@@ -1349,7 +1565,7 @@ fn resolve_plain_ident(v: Word) -> Word {
 // parameter).
 fn step_ident(v: Word) -> Word {
     ps.found_flag = 0;
-    for i in 0..toks.chunk_count limit 256 {
+    for i in 0..toks.chunk_count limit 1024 {
         if toks.chunks[i] == v {
             call.call_pending = i;
             ps.found_flag = 1;
@@ -1697,7 +1913,7 @@ fn step_enum(k: Word, v: Word) -> Word {
             call.en_ename[call.en_sp] = mat.enum_name;
             call.en_sp = call.en_sp + 1;
             ops.opstack[ops.opsp] = OpCode::EnumMark() as Word;
-            ops.opsp = ops.opsp + 1;
+            ops.opsp = op_push(ops.opsp);
             ops.expect_operand = 1;
             ps.cursor = ps.cursor - 1;
             Node::Literal() as Word + mat.enum_disc * 64
@@ -1801,7 +2017,7 @@ fn step_mpat(k: Word, v: Word) -> Word {
             stmt.let_array[stmt.let_count] = enums.evfarrkind[fi];
             stmt.let_array_struct[stmt.let_count] = 0;
             stmt.let_enum[stmt.let_count] = 0;
-            stmt.let_count = stmt.let_count + 1;
+            stmt.let_count = let_push(stmt.let_count);
             mat.mpat_pcount = mat.mpat_pcount + 1;
             Node::EnumBind() as Word + (enums.evfoff[fi] + enums.evfkind[fi] * 65536 + slot * 4294967296) * 64
         } else {
@@ -1851,7 +2067,7 @@ fn step_daindex(k: Word) -> Word {
         da.idx_len[da.idx_sp] = da.da_len;
         da.idx_sp = da.idx_sp + 1;
         ops.opstack[ops.opsp] = OpCode::IndexMark() as Word;
-        ops.opsp = ops.opsp + 1;
+        ops.opsp = op_push(ops.opsp);
         da.da_phase = 0;
         ops.expect_operand = 1;
         0
@@ -1876,18 +2092,26 @@ fn step_daindex(k: Word) -> Word {
 // after the `]` decides between a read and an indexed assignment.
 fn step_iclosing() -> Word {
     if ops.opsp > 0 andalso ops.opstack[ops.opsp - 1] != OpCode::IndexMark() as Word andalso ops.opstack[ops.opsp - 1] != OpCode::ArrayMark() as Word {
-        ops.opsp = ops.opsp - 1;
+        ops.opsp = op_pop(ops.opsp);
         let op = ops.opstack[ops.opsp];
         emit_op(op)
     } else {
         da.iclosing = 0;
+        // THE UNMATCHED `]` ARRIVES HERE WITH AN EMPTY OPERATOR STACK. The guard above
+        // fails for two unrelated reasons -- nothing is pending, or the top is a mark --
+        // and only the second may read the top. Reading it at an empty stack indexes -1
+        // and reported `IndexOutOfBounds(-1, 64)`, which named `opstack`'s size and neither
+        // the bracket nor the position. Measured on `fn f() -> Word { let x = 1]; x }`.
+        if ops.opsp <= 0 {
+            perr(pe_bracket(), toks.at)
+        } else {
         if ops.opstack[ops.opsp - 1] == OpCode::ArrayMark() as Word {
             // An array literal `[...]` close: pop the ArrayMark, count the last element (unless
             // the array is empty, when no value was parsed), pop the array context, and emit an
             // ArrayLit packing the flat byte size (count * word_bytes, eight per Word element)
             // and the count as byte_size * 1024 + count -- the reconstruct/StructInit shape --
             // which codegen lowers to NewComposite(Flat{Array, count, byte_size}).
-            ops.opsp = ops.opsp - 1;
+            ops.opsp = op_pop(ops.opsp);
             if ops.expect_operand == 0 {
                 call.al_count[call.al_sp - 1] = call.al_count[call.al_sp - 1] + 1;
             }
@@ -1917,7 +2141,7 @@ fn step_iclosing() -> Word {
                 Node::ArrayLit() as Word + (count * 8 * 1024 + count) * 64
             }
         } else {
-            ops.opsp = ops.opsp - 1;
+            ops.opsp = op_pop(ops.opsp);
             if da.fa_index == 1 {
                 // An array-element access. A struct-element array (`ps[i]`, `fa_index_nested`)
                 // emits an ArrIndexNested (GetIndex(FlatNested{size, Struct}), variant Struct = 2)
@@ -1963,7 +2187,7 @@ fn step_iclosing() -> Word {
                 0
             }
         }
-    }
+    } }
 }
 
 // The token after a closing `]`. A `=` makes the just-indexed `d.f[i]` an assignment
@@ -1995,7 +2219,7 @@ fn step_store_finalize() -> Word {
     da.store_emit = 0;
     stmt.stmt_kind[stmt.stmt_count] = Node::IndexAssignIn() as Word;
     stmt.stmt_arg[stmt.stmt_count] = da.store_arg;
-    stmt.stmt_count = stmt.stmt_count + 1;
+    stmt.stmt_count = stmt_push(stmt.stmt_count);
     ops.expect_operand = 1;
     0
 }
@@ -3620,7 +3844,7 @@ fn opcode_of(k: Word) -> Word {
 
 fn step_resolving() -> Word {
     if ops.opsp > 0 andalso prec_of(ops.opstack[ops.opsp - 1]) >= ops.pending_prec {
-        ops.opsp = ops.opsp - 1;
+        ops.opsp = op_pop(ops.opsp);
         let op = ops.opstack[ops.opsp];
         emit_op(op)
     } else {
@@ -3637,7 +3861,7 @@ fn step_resolving() -> Word {
         ops.op_larray_enum[ops.opsp] = ps.last_array_enum;
         ops.op_larray_tuple[ops.opsp] = ps.last_array_tuple;
         ops.op_larray_arr[ops.opsp] = ps.last_array_arr;
-        ops.opsp = ops.opsp + 1;
+        ops.opsp = op_push(ops.opsp);
         ops.resolving = 0;
         0
     }
@@ -3649,13 +3873,13 @@ fn step_closing() -> Word {
     if ops.opsp > 0 {
         let top = ops.opstack[ops.opsp - 1];
         if top == OpCode::Paren() as Word {
-            ops.opsp = ops.opsp - 1;
+            ops.opsp = op_pop(ops.opsp);
             ops.closing = 0;
             ops.expect_operand = 0;
             0
         } else {
         if top == OpCode::CallMark() as Word {
-            ops.opsp = ops.opsp - 1;
+            ops.opsp = op_pop(ops.opsp);
             ops.closing = 0;
             if ops.expect_operand == 0 {
                 call.call_count[call.call_sp - 1] = call.call_count[call.call_sp - 1] + 1;
@@ -3678,7 +3902,7 @@ fn step_closing() -> Word {
             // element (when a value was parsed), and emit the EnumInit packing the enum's flat
             // byte size and the child count as `byte_size * 1024 + count` -- the StructInit/
             // ArrayLit shape reconstruct consumes.
-            ops.opsp = ops.opsp - 1;
+            ops.opsp = op_pop(ops.opsp);
             ops.closing = 0;
             if ops.expect_operand == 0 {
                 call.en_count[call.en_sp - 1] = call.en_count[call.en_sp - 1] + 1;
@@ -3703,7 +3927,7 @@ fn step_closing() -> Word {
             // value was parsed), and emit the TupleInit packing `byte_size * 1024 + count` with
             // byte_size = count * 8 (Word-sized elements) -- the ArrayLit shape reconstruct
             // consumes.
-            ops.opsp = ops.opsp - 1;
+            ops.opsp = op_pop(ops.opsp);
             ops.closing = 0;
             if ops.expect_operand == 0 {
                 call.tp_count[call.tp_sp - 1] = call.tp_count[call.tp_sp - 1] + 1;
@@ -3719,7 +3943,7 @@ fn step_closing() -> Word {
             stmt.pending_cenum = 0;
             Node::TupleInit() as Word + (call.tp_count[call.tp_sp] * 8 * 1024 + call.tp_count[call.tp_sp]) * 64
         } else {
-            ops.opsp = ops.opsp - 1;
+            ops.opsp = op_pop(ops.opsp);
             emit_op(top)
         } } } }
     } else {
@@ -3732,7 +3956,7 @@ fn step_closing() -> Word {
 // the argument.
 fn step_cdraining() -> Word {
     if ops.opsp > 0 andalso ops.opstack[ops.opsp - 1] != OpCode::CallMark() as Word andalso ops.opstack[ops.opsp - 1] != OpCode::StructMark() as Word andalso ops.opstack[ops.opsp - 1] != OpCode::ArrayMark() as Word andalso ops.opstack[ops.opsp - 1] != OpCode::EnumMark() as Word andalso ops.opstack[ops.opsp - 1] != OpCode::Paren() as Word andalso ops.opstack[ops.opsp - 1] != OpCode::TupleMark() as Word {
-        ops.opsp = ops.opsp - 1;
+        ops.opsp = op_pop(ops.opsp);
         let op = ops.opstack[ops.opsp];
         emit_op(op)
     } else {
@@ -3788,11 +4012,11 @@ fn step_cdraining() -> Word {
 // directly, so a mixed-scalar struct (a `Byte` beside a `Word`) is sized correctly.
 fn step_sc_closing() -> Word {
     if ops.opsp > 0 andalso ops.opstack[ops.opsp - 1] != OpCode::StructMark() as Word {
-        ops.opsp = ops.opsp - 1;
+        ops.opsp = op_pop(ops.opsp);
         let op = ops.opstack[ops.opsp];
         emit_op(op)
     } else {
-        ops.opsp = ops.opsp - 1;
+        ops.opsp = op_pop(ops.opsp);
         structdefs.sc_closing = 0;
         if ops.expect_operand == 0 {
             structdefs.sc_count[structdefs.sc_sp - 1] = structdefs.sc_count[structdefs.sc_sp - 1] + 1;
@@ -3839,7 +4063,7 @@ fn step_op(k: Word) -> Word {
     if k == Tok::For() as Word {
         // Push a fresh loop context; a nested loop stacks above the enclosing one.
         forst.for_phase[forst.for_sp] = 1;
-        forst.for_sp = forst.for_sp + 1;
+        forst.for_sp = for_push(forst.for_sp);
         0
     } else {
     if k == Tok::Let() as Word {
@@ -3852,7 +4076,7 @@ fn step_op(k: Word) -> Word {
         // outcome code before the Break op. The terminating `;` is consumed as a no-op.
         stmt.stmt_kind[stmt.stmt_count] = Node::Break() as Word;
         stmt.stmt_arg[stmt.stmt_count] = forst.for_oc[forst.for_sp - 1];
-        stmt.stmt_count = stmt.stmt_count + 1;
+        stmt.stmt_count = stmt_push(stmt.stmt_count);
         stmt.break_pending = 1;
         ops.expect_operand = 1;
         0
@@ -3877,7 +4101,7 @@ fn step_op(k: Word) -> Word {
         // `yield` is a loosest-binding prefix: push its marker (precedence 0) so no
         // operator pops across it and the whole following expression becomes its operand.
         ops.opstack[ops.opsp] = OpCode::YieldMark() as Word;
-        ops.opsp = ops.opsp + 1;
+        ops.opsp = op_push(ops.opsp);
         ops.expect_operand = 1;
         0
     } else {
@@ -3893,20 +4117,20 @@ fn step_op(k: Word) -> Word {
     } else {
     if k == Tok::Not() as Word {
         ops.opstack[ops.opsp] = OpCode::Not() as Word;
-        ops.opsp = ops.opsp + 1;
+        ops.opsp = op_push(ops.opsp);
         ops.expect_operand = 1;
         0
     } else {
     if k == Tok::Bnot() as Word {
         // `bnot` is a unary prefix operator like `not`: push its OpCode and await the operand.
         ops.opstack[ops.opsp] = OpCode::Bnot() as Word;
-        ops.opsp = ops.opsp + 1;
+        ops.opsp = op_push(ops.opsp);
         ops.expect_operand = 1;
         0
     } else {
     if k == Tok::Minus() as Word andalso ops.expect_operand == 1 {
         ops.opstack[ops.opsp] = OpCode::Neg() as Word;
-        ops.opsp = ops.opsp + 1;
+        ops.opsp = op_push(ops.opsp);
         ops.expect_operand = 1;
         0
     } else {
@@ -3931,7 +4155,7 @@ fn step_op(k: Word) -> Word {
 fn step_if(k: Word) -> Word {
     if k == Tok::If() as Word {
         branch.if_phase[branch.if_sp] = 1;
-        branch.if_sp = branch.if_sp + 1;
+        branch.if_sp = if_push(branch.if_sp);
         ops.expect_operand = 1;
         0
     } else {
@@ -4152,7 +4376,7 @@ fn step_forheader(k: Word, v: Word) -> Word {
         if k == Tok::LBrace() as Word {
             stmt.let_names[stmt.let_count] = forst.for_var[fp];
             stmt.scope_slot[stmt.let_count] = forst.for_vslot[fp];
-            stmt.let_count = stmt.let_count + 1;
+            stmt.let_count = let_push(stmt.let_count);
             forst.for_phase[fp] = 7;
             forst.for_stmt_start[fp] = stmt.stmt_count;
             forst.for_seq[fp] = stmt.open_seq;
@@ -4216,7 +4440,7 @@ fn step_for_emit() -> Word {
         // context, and let the enclosing block fold it in.
         stmt.stmt_kind[stmt.stmt_count] = Node::ForLimit() as Word;
         stmt.stmt_arg[stmt.stmt_count] = 12 * forst.forlimit_count;
-        stmt.stmt_count = stmt.stmt_count + 1;
+        stmt.stmt_count = stmt_push(stmt.stmt_count);
         forst.forlimit_count = forst.forlimit_count + 1;
         forst.for_emit = 0;
         forst.for_sp = forst.for_sp - 1;
@@ -4263,7 +4487,7 @@ fn step_normal(k: Word, v: Word) -> Word {
     } else {
     if k == Tok::LParen() as Word {
         ops.opstack[ops.opsp] = OpCode::Paren() as Word;
-        ops.opsp = ops.opsp + 1;
+        ops.opsp = op_push(ops.opsp);
         ops.expect_operand = 1;
         0
     } else {
@@ -4271,9 +4495,9 @@ fn step_normal(k: Word, v: Word) -> Word {
         // A `[` in operand position opens an array literal (a `[` after an operand is an index,
         // intercepted earlier). Push an ArrayMark that blocks precedence across the elements.
         call.al_count[call.al_sp] = 0;
-        call.al_sp = call.al_sp + 1;
+        call.al_sp = anest_push(call.al_sp);
         ops.opstack[ops.opsp] = OpCode::ArrayMark() as Word;
-        ops.opsp = ops.opsp + 1;
+        ops.opsp = op_push(ops.opsp);
         ops.expect_operand = 1;
         0
     } else {
@@ -4356,7 +4580,7 @@ fn step_fieldaccess(k: Word, v: Word) -> Word {
                 da.fa_index_kind = ps.fa_kind;
             }
             ops.opstack[ops.opsp] = OpCode::IndexMark() as Word;
-            ops.opsp = ops.opsp + 1;
+            ops.opsp = op_push(ops.opsp);
             ops.expect_operand = 1;
             Node::FieldAccessNested() as Word + (ps.fa_off + ps.fa_size * 65536 + 4294967296) * 64
         } else {
@@ -4432,7 +4656,7 @@ fn step_arrayaccess(k: Word, v: Word) -> Word {
         da.fa_index = 1;
         da.fa_index_kind = ps.aa_kind;
         ops.opstack[ops.opsp] = OpCode::IndexMark() as Word;
-        ops.opsp = ops.opsp + 1;
+        ops.opsp = op_push(ops.opsp);
         ops.expect_operand = 1;
         v * 0
     } else {
@@ -4463,7 +4687,7 @@ fn step_structarrayaccess(k: Word, v: Word) -> Word {
         da.fa_index_tuple = ps.sa_tuple;
         da.fa_index_arrkind = ps.sa_arrkind;
         ops.opstack[ops.opsp] = OpCode::IndexMark() as Word;
-        ops.opsp = ops.opsp + 1;
+        ops.opsp = op_push(ops.opsp);
         ops.expect_operand = 1;
         v * 0
     } else {
@@ -4503,7 +4727,7 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
             structdefs.sc_count[structdefs.sc_sp] = 0;
             structdefs.sc_sp = structdefs.sc_sp + 1;
             ops.opstack[ops.opsp] = OpCode::StructMark() as Word;
-            ops.opsp = ops.opsp + 1;
+            ops.opsp = op_push(ops.opsp);
             structdefs.sc_phase = 2;
             ops.expect_operand = 0;
         }
@@ -4590,9 +4814,9 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
         if k == Tok::LParen() as Word {
             call.call_chunk[call.call_sp] = call.call_pending;
             call.call_count[call.call_sp] = 0;
-            call.call_sp = call.call_sp + 1;
+            call.call_sp = call_push(call.call_sp);
             ops.opstack[ops.opsp] = OpCode::CallMark() as Word;
-            ops.opsp = ops.opsp + 1;
+            ops.opsp = op_push(ops.opsp);
             call.call_phase = 0;
             ops.expect_operand = 1;
         }
@@ -4645,7 +4869,7 @@ fn step_body_dispatch(k: Word, v: Word) -> Word {
             if is_stmt_start(k) == 1 {
                 stmt.stmt_kind[stmt.stmt_count] = Node::ExprStmt() as Word;
                 stmt.stmt_arg[stmt.stmt_count] = 0;
-                stmt.stmt_count = stmt.stmt_count + 1;
+                stmt.stmt_count = stmt_push(stmt.stmt_count);
                 ops.expect_operand = 1;
             }
         }
@@ -4709,7 +4933,7 @@ fn step_draining() -> Word {
         orelse branch_tail;
     let yield_blocks = top == OpCode::YieldMark() as Word andalso not yield_completes;
     if has_op andalso not marker andalso not yield_blocks {
-        ops.opsp = ops.opsp - 1;
+        ops.opsp = op_pop(ops.opsp);
         let op = ops.opstack[ops.opsp];
         emit_op(op)
     } else {
@@ -4770,8 +4994,8 @@ fn step_draining() -> Word {
                     stmt.pending_carray_struct = 0;
                     stmt.pending_carray_size = 0;
                     stmt.pending_cenum = 0;
-                    stmt.let_count = stmt.let_count + 1;
-                    stmt.stmt_count = stmt.stmt_count + 1;
+                    stmt.let_count = let_push(stmt.let_count);
+                    stmt.stmt_count = stmt_push(stmt.stmt_count);
                     ops.draining = 0;
                     ops.expect_operand = 1;
                     0
@@ -4780,7 +5004,7 @@ fn step_draining() -> Word {
                     // A scalar data assignment: write the target field's slot.
                     stmt.stmt_kind[stmt.stmt_count] = Node::DataAssignIn() as Word;
                     stmt.stmt_arg[stmt.stmt_count] = stmt.pstmt_arg[stmt.pstmt_sp];
-                    stmt.stmt_count = stmt.stmt_count + 1;
+                    stmt.stmt_count = stmt_push(stmt.stmt_count);
                     ops.draining = 0;
                     ops.expect_operand = 1;
                     0
@@ -4797,7 +5021,7 @@ fn step_draining() -> Word {
             } else {
                 stmt.stmt_kind[stmt.stmt_count] = Node::ExprStmt() as Word;
                 stmt.stmt_arg[stmt.stmt_count] = 0;
-                stmt.stmt_count = stmt.stmt_count + 1;
+                stmt.stmt_count = stmt_push(stmt.stmt_count);
                 ops.draining = 0;
                 ops.expect_operand = 1;
                 0
@@ -4993,8 +5217,9 @@ fn body_step() -> Word {
             ops.draining = 1;
             0
         } else {
-            let k = toks.packed[ps.cursor] % 256;
-            let v = toks.packed[ps.cursor] / 256;
+            let k = toks.packed[ps.cursor - toks.base] % 256;
+            let v = toks.packed[ps.cursor - toks.base] / 256;
+            toks.at = ps.cursor;
             ps.cursor = ps.cursor + 1;
             // A pending struct-field-access postfix intercepts the next token here, before the
             // normal dispatch, so the deep `step_dispatch_normal` chain is not deepened.
@@ -5163,7 +5388,7 @@ fn header_step(k: Word, v: Word) -> Word {
             // Capture this function's chunk index (its name's position in `toks.chunks`) so its
             // return type is recorded against it.
             ps.cur_chunk = 0;
-            for i in 0..toks.chunk_count limit 256 {
+            for i in 0..toks.chunk_count limit 1024 {
                 if toks.chunks[i] == v {
                     ps.cur_chunk = i;
                 }
@@ -5288,7 +5513,7 @@ fn header_enum(k: Word, v: Word) -> Word {
             enums.epayload[enums.enum_count] = 0;
             enums.evfstart[enums.enum_count] = enums.evfcursor;
             enums.evfcount[enums.enum_count] = 0;
-            enums.enum_count = enums.enum_count + 1;
+            enums.enum_count = variant_push(enums.enum_count);
             enums.next_disc = enums.next_disc + 1;
             ps.mode = 12;
             13 + v * 64
@@ -5455,7 +5680,7 @@ fn commit_field() -> Word {
             fields.ffield[fields.field_count] = fields.cur_field;
             fields.fbase[fields.field_count] = fields.base_ctr;
             fields.flen[fields.field_count] = fields.cur_len;
-            fields.field_count = fields.field_count + 1;
+            fields.field_count = field_push(fields.field_count);
             fields.base_ctr = fields.base_ctr + fields.cur_len;
         }
     }
@@ -5828,7 +6053,7 @@ fn header_sig(k: Word, v: Word) -> Word {
                 ps.parray_arr[ps.pcount] = 0;
                 ps.parray_enum[ps.pcount] = 0;
                 ps.pbyte[ps.pcount] = 0;
-                ps.pcount = ps.pcount + 1;
+                ps.pcount = param_push(ps.pcount);
                 4 + v * 64
             } else {
             if ps.ptype == 1 {
@@ -6021,8 +6246,9 @@ fn step_body() -> Word {
                 15
             }
         } else {
-            let k = toks.packed[ps.cursor] % 256;
-            let v = toks.packed[ps.cursor] / 256;
+            let k = toks.packed[ps.cursor - toks.base] % 256;
+            let v = toks.packed[ps.cursor - toks.base] / 256;
+            toks.at = ps.cursor;
             ps.cursor = ps.cursor + 1;
             header_step(k, v)
         }
@@ -6034,6 +6260,12 @@ fn step_body() -> Word {
 // word. `step_body` leaves `emit_arg` at the -1 sentinel for an un-migrated (still packed)
 // record, so the host recovers the old (tag, payload) split; a migrated emit site instead
 // sets `emit_arg` to a full-word payload and returns a raw (possibly >= 64) tag.
+// The diagnostic record's tag base. Record tags are non-negative, so a negative tag cannot
+// collide with one, and each cause gets its own tag `0 - 900 - code`. The payload rides the
+// Option E second word, so it is a FULL word rather than a packed field: it carries the
+// count that exceeded the cap, or the token position of an unmatched bracket.
+fn pe_tag_base() -> Word { 0 - 900 }
+
 fn step() -> Word {
     if ps.emit_phase == 1 {
         ps.emit_phase = 0;
@@ -6041,9 +6273,18 @@ fn step() -> Word {
     } else {
         ps.emit_arg = 0 - 1;
         let w = step_body();
-        ps.pending_arg = ps.emit_arg;
-        ps.emit_phase = 1;
-        w
+        // A guard fired somewhere below. Report it INSTEAD of the record just computed:
+        // that record was produced from clamped state and is meaningless, and the host
+        // stops here rather than consuming a garbage stream to its end.
+        if ps.perr_code != 0 {
+            ps.pending_arg = ps.perr_detail;
+            ps.emit_phase = 1;
+            pe_tag_base() - ps.perr_code
+        } else {
+            ps.pending_arg = ps.emit_arg;
+            ps.emit_phase = 1;
+            w
+        }
     }
 }
 

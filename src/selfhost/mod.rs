@@ -208,29 +208,14 @@ const PARAM_COUNT: usize = 1 + 1024 * 4 + 256 * 5;
 
 const CATEGORY: usize = 1 + 1024 * 4 + 256 * 5 + 1;
 
-const BR_LEX_ISTART: usize = 1 + 393216;
-
-const BR_LEX_ILEN: usize = 1 + 393216 + 1280;
-
-const BR_LEX_ICOUNT: usize = 1 + 393216 + 1280 + 1280;
-
-const BR_P_LEN: usize = 0;
-
-const BR_P_PACKED: usize = 1;
-
-const BR_P_LIMIT_ID: usize = 1 + 40960;
-
-const BR_P_CHUNK_COUNT: usize = 1 + 40960 + 1;
-
-const BR_P_CHUNKS: usize = 1 + 40960 + 2;
-
-const BR_P_REQUIRE_ID: usize = 1 + 40960 + 2 + 256;
-
-const BR_P_WORD_ID: usize = 1 + 40960 + 2 + 256 + 1;
-
-const BR_P_BYTE_ID: usize = 1 + 40960 + 2 + 256 + 2;
-
-const BR_P_BOOL_ID: usize = 1 + 40960 + 2 + 256 + 3;
+// The shared-slot layout for `parse.kel` lives in `crate::selfhost_host`, which is
+// gated on `compile + verify` like the harnesses that need it, rather than on the
+// narrower `self-host` feature this module carries.
+use crate::selfhost_host::{
+    BR_LEX_ICOUNT, BR_LEX_ILEN, BR_LEX_ISTART, BR_P_AT, BR_P_BASE, BR_P_BOOL_ID, BR_P_BYTE_ID,
+    BR_P_CHUNK_COUNT, BR_P_CHUNKS, BR_P_LEN, BR_P_LIMIT_ID, BR_P_PACKED, BR_P_REQUIRE_ID,
+    BR_P_WORD_ID, PARSE_CHUNK_CAP, PARSE_TOKEN_CAP,
+};
 
 fn br_shared_word(vm: &Vm<'_, '_>, buf: &[u8], slot: usize) -> i64 {
     match vm.get_shared(buf, slot).expect("get_shared") {
@@ -595,16 +580,249 @@ fn chunk_table_from_tokens(tokens: &[(i64, i64)], names: &[String]) -> Vec<i64> 
     ids
 }
 
-/// Drive lexer.kel then parse.kel over `src` and return every function it yields, each
-/// with its guard and body records, plus the interned-name table. Multiheaded functions
-/// appear as several same-named entries in declaration order.
-// The 4-tuple return carries the parsed functions, name table, and the raw data and
-// enum record streams; factoring each into a `type` alias would only scatter it, so
-// allow the complexity lint here as the root test file does file-wide.
+/// Pull the next token from a live `lexer.kel`, or `None` at end of input.
+///
+/// The lexer's protocol: 63 is PENDING (a step that consumed a byte without
+/// completing a token), 62 is end of input, anything else is a token packed as
+/// `kind + payload * 256`.
+fn lex_next(vm: &mut Vm<'_, '_>, shared: &mut [u8]) -> Option<i64> {
+    // Bounded rather than `loop`: a lexer that only ever reported PENDING would
+    // otherwise hang the driver, and a total language should not need a host that
+    // can. Four bytes of pending per token is far past any real run.
+    for _ in 0..(4 * 393_216) {
+        // A coroutine must be RESUMED, not re-called -- but the FIRST entry has to
+        // be a call, and the machine exposes no predicate for which it wants.
+        // `NotSuspended` is that predicate, and taking it here keeps the caller
+        // from having to track whether it has started the lexer yet.
+        let st = match vm.resume_with_shared(shared, Value::Int(0)) {
+            Err(crate::vm::VmError::NotSuspended) => vm
+                .call_with_shared(shared, &[Value::Int(0)])
+                .expect("start lexer.kel"),
+            other => other.expect("resume lexer.kel"),
+        };
+        match st {
+            VmState::Yielded(Value::Int(62)) => return None,
+            VmState::Yielded(Value::Int(63)) | VmState::Reset => {}
+            VmState::Yielded(Value::Int(t)) => return Some(t),
+            other => panic!("lexer.kel yielded {other:?}"),
+        }
+    }
+    panic!("lexer.kel reported PENDING without end of input")
+}
+
+/// Build a live `lexer.kel` over `src`, returning the machine and its shared buffer.
+///
+/// Separated from driving so the same construction serves the collecting pass and
+/// the fused one, and so a caller can hold TWO stages live at once.
+/// The compiled lexer, so a caller can size its arena before opening one.
+///
+/// Split out because the persistent region must be resized to the MODULE's
+/// requirement before `Vm::new`, and the requirement is not known until the module
+/// exists. A version of `lex_open` that both compiled and opened could not do that
+/// without guessing a capacity.
+fn lex_module() -> Module {
+    compile_src(&read_stage("kel/lexer.kel"))
+}
+
+fn lex_open<'a>(arena: &'a Arena, m: Module, src: &str) -> (Vm<'a, 'a>, Vec<u8>) {
+    let vm = Vm::new(m, arena).expect("verify lexer.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    let bytes = src.as_bytes();
+    vm.set_shared(&mut shared, 0, Value::Int(bytes.len() as i64))
+        .unwrap();
+    for (i, &b) in bytes.iter().enumerate() {
+        vm.set_shared(&mut shared, 1 + i, Value::Byte(b)).unwrap();
+    }
+    (vm, shared)
+}
+
+/// The intern table, read out of a lexer that has reached end of input.
+fn lex_names(vm: &Vm<'_, '_>, shared: &[u8], src: &str) -> Vec<String> {
+    let bytes = src.as_bytes();
+    let icount = br_shared_word(vm, shared, BR_LEX_ICOUNT) as usize;
+    (0..icount)
+        .map(|id| {
+            let start = br_shared_word(vm, shared, BR_LEX_ISTART + id) as usize;
+            let len = br_shared_word(vm, shared, BR_LEX_ILEN + id) as usize;
+            String::from_utf8(bytes[start..start + len].to_vec()).unwrap()
+        })
+        .collect()
+}
+
+/// What the first pass over the source establishes, all of it bounded.
+struct FirstPass {
+    /// The intern table. Complete only at end of input, which is why it is a
+    /// whole-input fact rather than something a token can carry.
+    names: Vec<String>,
+    /// The call-resolution chunk table, in the module's chunk order.
+    chunks: Vec<i64>,
+    /// How many tokens the source lexes to. `parse.kel` compares its cursor
+    /// against this to find end of input, so a windowed feed must know it up
+    /// front -- which is the one thing a single forward pass cannot supply.
+    token_count: usize,
+}
+
+/// Stream the lexer once, keeping only what the second pass needs.
+///
+/// **This is the pre-pass, and it is bounded.** It holds an intern table, a list
+/// of function-name ids, one previous token and a depth counter -- not the token
+/// stream. `chunk_table_from_tokens` walks `windows(2)`, so the same scan runs
+/// incrementally with a single token of lookbehind.
+///
+/// Running the lexer twice is how a single-pass compiler has always handled a
+/// forward reference it cannot settle on first sight, and it is cheap: the lexer
+/// is the fastest stage and the source is the smallest representation in the
+/// pipeline.
+fn first_pass(src: &str) -> FirstPass {
+    let m = lex_module();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let (mut vm, mut shared) = lex_open(&arena, m, src);
+    let mut ids: Vec<i64> = Vec::new();
+    let mut depth: i64 = 0;
+    let mut prev: Option<(i64, i64)> = None;
+    let mut token_count = 0usize;
+    while let Some(w) = lex_next(&mut vm, &mut shared) {
+        let cur = (w.rem_euclid(256), w.div_euclid(256));
+        token_count += 1;
+        if let Some((kw, _)) = prev {
+            if depth == 0 && (kw == 0 || kw == 5 || kw == 6) && cur.0 == 1 {
+                ids.push(cur.1);
+            }
+            match kw {
+                2 => depth += 1,
+                3 => depth -= 1,
+                _ => {}
+            }
+        }
+        prev = Some(cur);
+    }
+    let names = lex_names(&vm, &shared, src);
+    // Ordering needs the names, which exist only now. A multiheaded function is
+    // one chunk, and the reference keys its chunk map by name, so the table is the
+    // deduplicated lexicographically sorted set.
+    ids.sort_by(|&a, &b| names[a as usize].cmp(&names[b as usize]));
+    ids.dedup_by(|&mut a, &mut b| names[a as usize] == names[b as usize]);
+    FirstPass {
+        names,
+        chunks: ids,
+        token_count,
+    }
+}
+
+/// Drive lexer.kel then parse.kel over `src`, collecting the token stream first.
+///
+/// The original path: every token materialised into a `Vec` and seeded into a
+/// 40,960-word shared array. Kept because it is the reference the fused path is
+/// checked against.
+// The 4-tuple carries the parsed functions, name table, and the raw data and enum
+// record streams; factoring each into a `type` alias would only scatter it.
 #[allow(clippy::type_complexity)]
 pub fn parse_functions(
     src: &str,
 ) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>) {
+    let mut fns = Vec::new();
+    let (names, data_records, enum_records) =
+        parse_functions_impl(src, false, &mut |_, f| fns.push(f));
+    (fns, names, data_records, enum_records)
+}
+
+/// The same, with `lexer.kel` driven INTO `parse.kel` and no token stream
+/// materialised.
+///
+/// # The two passes, and why there are two
+///
+/// `parse.kel` needs the chunk table before its first token, because a resolved
+/// call index must match the module's chunk order -- and that table is a property
+/// of the WHOLE token stream. No single forward pass supplies it, so the lexer
+/// runs twice: `first_pass` establishes the bounded facts, then the second run
+/// is fused into the parser. That is the classical answer to a forward reference,
+/// and it is what a pipeline cut at this boundary would do with a sidecar file.
+///
+/// The token COUNT comes from the first pass for the same reason: `parse.kel`
+/// finds end of input by comparing its cursor against `toks.len`, which a windowed
+/// feed cannot leave as "however many arrive".
+///
+/// # What it does not change
+///
+/// The output is what [`parse_functions`] returns, and
+/// `the_fused_parse_agrees_with_the_collecting_one` asserts they are equal on real
+/// sources. Fusion changes WHEN a token is produced, not what it is.
+#[allow(clippy::type_complexity)]
+pub fn parse_functions_fused(
+    src: &str,
+) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>) {
+    let mut fns = Vec::new();
+    let (names, data_records, enum_records) =
+        parse_functions_impl(src, true, &mut |_, f| fns.push(f));
+    (fns, names, data_records, enum_records)
+}
+
+/// How many tokens `lexer.kel` produces for `src` — **the count `PARSE_TOKEN_CAP` is
+/// measured against**.
+///
+/// Public because it is NOT the reference tokenizer's count and the difference matters. The
+/// two disagree by one on every source measured, the reference emitting a terminator the
+/// stage's stream does not carry. A caller sizing an input against the cap with
+/// `keleusma::lexer::tokenize(...).len()` is measuring the wrong quantity — the same class
+/// of error as sizing a guard against the wrong array.
+pub fn lex_token_count(src: &str) -> usize {
+    first_pass(src).token_count
+}
+
+/// The declaration a record belongs to, or a diagnostic naming what arrived instead.
+///
+/// **SIX BARE `unwrap()`s USED TO SIT HERE, AND THEY ALL FIRE FOR ONE REASON**: a record
+/// arrived while no declaration was open. Measured cause: a top-level `struct` declaration.
+/// `parse.kel` has no struct handling at all — its declaration record codes are 1..3
+/// (`fn`/`yield`/`loop`), 9 (`data`), 10 (`use`) and 12 (`enum`), with no struct code — so
+/// its tokens are parsed as something else and the records land here with nothing open.
+///
+/// The old failure was `called Option::unwrap() on a None value`, which names neither the
+/// record nor the declaration form that produced it. **A user writing an ordinary
+/// declaration got a Rust panic with no indication the form was unsupported.**
+///
+/// This does not decide whether the form should be supported; it reports what happened.
+fn open_decl(cur: &mut Option<ParsedFn>, code: i64, val: i64) -> &mut ParsedFn {
+    cur.as_mut().unwrap_or_else(|| {
+        panic!(
+            "parse.kel emitted record ({code}, {val}) with no declaration open. The usual \
+             cause is a top-level declaration form the stage does not recognise: it handles \
+             `fn`, `yield`, `loop`, `data`, `use` and `enum`, and a `struct` declaration is \
+             NOT among them."
+        )
+    })
+}
+
+/// How many tokens the fused feed keeps resident.
+///
+/// Three would suffice: the parser reads at its cursor and pushes back by at most
+/// one, so `[cursor - 1, cursor + 1]` covers every access, measured by
+/// `the_parser_never_jumps_more_than_one_token`. Eight is used for margin, and the
+/// margin is the point -- a window sized exactly to the measured bound would turn
+/// any future widening of the parser's reach into a silently wrong parse rather
+/// than an obvious one.
+const FUSED_WINDOW: usize = 8;
+
+/// The token cursor after each resume of `parse.kel`, for measuring how far the
+/// parser actually reaches into its input.
+///
+/// # Why this exists
+///
+/// `toks.packed` is 40,960 words and the driver seeds the whole token stream into
+/// it. That residency is the LAST one in the pipeline, and it is the driver's
+/// rather than the parser's: every one of `parse.kel`'s cursor moves is plus or
+/// minus one, so it is a one-token lookahead scanner with single-token pushback.
+///
+/// Reading the cursor back is what turns that from a claim about the source into
+/// a measurement. A host feeding a sliding window needs to know the parser cannot
+/// jump; this returns the evidence rather than the assurance.
+///
+/// The stage writes `toks.at` on every token read, and a step consumes at most one
+/// token, so consecutive entries differ by at most one in either direction.
+#[must_use]
+pub fn parse_cursor_trace(src: &str) -> Vec<i64> {
     let (tokens, names) = br_lex(src);
     let id_of = |s: &str| {
         names
@@ -613,13 +831,6 @@ pub fn parse_functions(
             .map(|i| i as i64)
             .unwrap_or(-1)
     };
-    // The chunk table must be in the module's actual chunk order so a resolved call index
-    // matches the assembled module. The Rust compiler orders chunks by name (a `BTreeMap`
-    // keyed by function name), not by declaration order, and groups same-named heads into
-    // one chunk. The same order is the deduplicated, lexicographically sorted set of the
-    // program's function names, which is derived from the token stream itself (each
-    // `fn`/`yield`/`loop` keyword is immediately followed by the name identifier), so the
-    // resolution table needs no reference borrow of the user program.
     let chunks: Vec<i64> = chunk_table_from_tokens(&tokens, &names);
     let module = std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
@@ -650,16 +861,216 @@ pub fn parse_functions(
         Value::Int(chunks.len() as i64),
     )
     .unwrap();
+    // THE CHUNK TABLE HAS A CAP AND OVERFLOWING IT REPORTS THE WRONG THING.
+    //
+    // `toks.chunks` holds `PARSE_CHUNK_CAP` entries, and eight load-bearing fields sit
+    // immediately after it in the same shared block: the keyword and type ids, the
+    // eager-operator ids, and the token window's own `base` and `at`. One entry past
+    // the end lands on `require_id`.
+    //
+    // Measured, because the failure mode was not what it looked like. Overflowing by
+    // one does NOT silently corrupt -- it panics -- but it panics with
+    // `LoopLimitExceeded` from inside `parse.kel`, naming neither the chunk table nor
+    // its cap. A caller reading that would look at loop bounds, not at the function
+    // count of their program.
+    //
+    // THIS COMMENT WAS STALE IN FOUR WAYS AND THE DIAGNOSTIC WITH IT. It said the array
+    // was 256, that a 257th entry overflowed, that `wire.kel` hit the cap at 475 chunks,
+    // and that raising the array was "the real fix and NOT done here" -- after the array
+    // had been raised to 1,024, `wire.kel` measured at 486 chunks, and the raise had in
+    // fact been done. **Every number was left behind by the change that moved it**, and
+    // the message told a caller with 1,025 functions about a 257th entry. The counts now
+    // come from `PARSE_CHUNK_CAP` so they cannot drift again.
+    assert!(
+        chunks.len() <= PARSE_CHUNK_CAP,
+        "this program has {} functions and `toks.chunks` in parse.kel holds {}; one entry \
+         past the end overwrites `require_id` and the seven fields after it, including the \
+         token window's `base`. Overflowing surfaces as `LoopLimitExceeded` from inside the \
+         parser, which names neither this table nor its cap.",
+        chunks.len(),
+        PARSE_CHUNK_CAP
+    );
     for (i, &c) in chunks.iter().enumerate() {
         vm.set_shared(&mut shared, BR_P_CHUNKS + i, Value::Int(c))
             .unwrap();
     }
+    // THE WINDOW BASE, SET EXPLICITLY RATHER THAN LEFT TO ZERO-INITIALISATION.
+    // The whole stream is seeded here, so `packed[0]` really is token zero; but
+    // this file's own rule is that an emitter relying on its buffer starting
+    // zeroed breaks the day it writes into a reused one, and a driver relying on
+    // the same is no different. Stating it also makes the contract visible to a
+    // later windowed driver, which sets a base that is not zero.
+    vm.set_shared(&mut shared, BR_P_BASE, Value::Int(0))
+        .unwrap();
     for (i, &(k, v)) in tokens.iter().enumerate() {
         vm.set_shared(&mut shared, BR_P_PACKED + i, Value::Int(k + v * 256))
             .unwrap();
     }
 
-    let mut fns: Vec<ParsedFn> = Vec::new();
+    let mut trace = Vec::new();
+    let mut state = vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call");
+    for _ in 0..(tokens.len() * 16 + 256) {
+        trace.push(br_shared_word(&vm, &shared, BR_P_AT));
+        match state {
+            VmState::Finished(_) => break,
+            _ => {
+                state = match vm.resume_with_shared(&mut shared, Value::Int(0)) {
+                    Ok(st) => st,
+                    Err(_) => break,
+                }
+            }
+        }
+    }
+    trace
+}
+
+/// Drive lexer.kel then parse.kel over `src` and return every function it yields, each
+/// with its guard and body records, plus the interned-name table. Multiheaded functions
+/// appear as several same-named entries in declaration order.
+// The 4-tuple return carries the parsed functions, name table, and the raw data and
+// enum record streams; factoring each into a `type` alias would only scatter it, so
+// allow the complexity lint here as the root test file does file-wide.
+#[allow(clippy::type_complexity)]
+fn parse_functions_impl(
+    src: &str,
+    fused: bool,
+    on_function: &mut dyn FnMut(&[String], ParsedFn),
+) -> (Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>) {
+    // ONE IMPLEMENTATION, TWO FEEDS. The record handling below is long and
+    // stateful, and a second copy of it in a fused driver is precisely the drift
+    // `selfhost_host` already records paying for once. Only the token FEED
+    // differs: collected and seeded whole, or windowed and slid.
+    let first = first_pass(src);
+    let names = first.names.clone();
+    let token_count = first.token_count;
+    // The collecting feed still needs the tokens themselves.
+    let tokens: Vec<(i64, i64)> = if fused { Vec::new() } else { br_lex(src).0 };
+    let id_of = |s: &str| {
+        names
+            .iter()
+            .position(|n| n == s)
+            .map(|i| i as i64)
+            .unwrap_or(-1)
+    };
+    // The chunk table must be in the module's actual chunk order so a resolved call index
+    // matches the assembled module. The Rust compiler orders chunks by name (a `BTreeMap`
+    // keyed by function name), not by declaration order, and groups same-named heads into
+    // one chunk. The same order is the deduplicated, lexicographically sorted set of the
+    // program's function names, which is derived from the token stream itself (each
+    // `fn`/`yield`/`loop` keyword is immediately followed by the name identifier), so the
+    // resolution table needs no reference borrow of the user program.
+    let chunks: Vec<i64> = first.chunks.clone();
+    let module = std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(|| compile_src(&read_stage("kel/parse.kel")))
+        .expect("spawn")
+        .join()
+        .expect("join");
+    let need = required_persistent_capacity_for(&module);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(module, &arena).expect("verify parse.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    // THE TOKEN ARRAY HAS A CAP AND OVERFLOWING IT REPORTS ONE OF TWO WRONG THINGS.
+    //
+    // `toks.packed` holds `PARSE_TOKEN_CAP` tokens. Measured on a program that is one long
+    // left-associative sum, so nothing else binds first:
+    //
+    //   41,015 tokens -> `IndexOutOfBounds(40960, 40960)` from inside the stage
+    //   42,015 tokens -> a shared-slot range error from the seeding loop BELOW, which walks
+    //                    off the end of the whole block
+    //
+    // Which one a caller sees depends on how far over they are, and neither names the token
+    // array or a limit the caller controls. Refused here, before any seeding, with both
+    // numbers. `parse.kel` itself is 32,907 tokens, 80% of this.
+    assert!(
+        token_count <= PARSE_TOKEN_CAP,
+        "this program lexes to {token_count} tokens and `toks.packed` in parse.kel holds \
+         {PARSE_TOKEN_CAP}. Split the source."
+    );
+    vm.set_shared(&mut shared, BR_P_LEN, Value::Int(token_count as i64))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_LIMIT_ID, Value::Int(id_of("limit")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_REQUIRE_ID, Value::Int(id_of("require")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_WORD_ID, Value::Int(id_of("Word")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_BYTE_ID, Value::Int(id_of("Byte")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_BOOL_ID, Value::Int(id_of("Bool")))
+        .unwrap();
+    vm.set_shared(
+        &mut shared,
+        BR_P_CHUNK_COUNT,
+        Value::Int(chunks.len() as i64),
+    )
+    .unwrap();
+    // THE CHUNK TABLE HAS A CAP AND OVERFLOWING IT REPORTS THE WRONG THING.
+    //
+    // `toks.chunks` holds `PARSE_CHUNK_CAP` entries, and eight load-bearing fields sit
+    // immediately after it in the same shared block: the keyword and type ids, the
+    // eager-operator ids, and the token window's own `base` and `at`. One entry past
+    // the end lands on `require_id`.
+    //
+    // Measured, because the failure mode was not what it looked like. Overflowing by
+    // one does NOT silently corrupt -- it panics -- but it panics with
+    // `LoopLimitExceeded` from inside `parse.kel`, naming neither the chunk table nor
+    // its cap. A caller reading that would look at loop bounds, not at the function
+    // count of their program.
+    //
+    // THIS COMMENT WAS STALE IN FOUR WAYS AND THE DIAGNOSTIC WITH IT. It said the array
+    // was 256, that a 257th entry overflowed, that `wire.kel` hit the cap at 475 chunks,
+    // and that raising the array was "the real fix and NOT done here" -- after the array
+    // had been raised to 1,024, `wire.kel` measured at 486 chunks, and the raise had in
+    // fact been done. **Every number was left behind by the change that moved it**, and
+    // the message told a caller with 1,025 functions about a 257th entry. The counts now
+    // come from `PARSE_CHUNK_CAP` so they cannot drift again.
+    assert!(
+        chunks.len() <= PARSE_CHUNK_CAP,
+        "this program has {} functions and `toks.chunks` in parse.kel holds {}; one entry \
+         past the end overwrites `require_id` and the seven fields after it, including the \
+         token window's `base`. Overflowing surfaces as `LoopLimitExceeded` from inside the \
+         parser, which names neither this table nor its cap.",
+        chunks.len(),
+        PARSE_CHUNK_CAP
+    );
+    for (i, &c) in chunks.iter().enumerate() {
+        vm.set_shared(&mut shared, BR_P_CHUNKS + i, Value::Int(c))
+            .unwrap();
+    }
+    // THE WINDOW BASE, SET EXPLICITLY RATHER THAN LEFT TO ZERO-INITIALISATION.
+    // The whole stream is seeded here, so `packed[0]` really is token zero; but
+    // this file's own rule is that an emitter relying on its buffer starting
+    // zeroed breaks the day it writes into a reused one, and a driver relying on
+    // the same is no different. Stating it also makes the contract visible to a
+    // later windowed driver, which sets a base that is not zero.
+    vm.set_shared(&mut shared, BR_P_BASE, Value::Int(0))
+        .unwrap();
+    for (i, &(k, v)) in tokens.iter().enumerate() {
+        vm.set_shared(&mut shared, BR_P_PACKED + i, Value::Int(k + v * 256))
+            .unwrap();
+    }
+    // THE FUSED FEED. A live lexer and a window of `FUSED_WINDOW` tokens, instead
+    // of the whole stream seeded above. Built here rather than in a separate
+    // driver so the record handling below has exactly one implementation.
+    let lex_m = lex_module();
+    let lex_need = required_persistent_capacity_for(&lex_m);
+    let mut lex_arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + lex_need);
+    lex_arena.resize_persistent(lex_need).expect("resize");
+    let mut lex: Option<(Vm<'_, '_>, Vec<u8>)> = if fused {
+        Some(lex_open(&lex_arena, lex_m, src))
+    } else {
+        None
+    };
+    let mut win: alloc::collections::VecDeque<i64> = alloc::collections::VecDeque::new();
+    let mut base: i64 = 0;
+    let mut eof = false;
+
+    // NO VECTOR OF FUNCTIONS HERE. A completed function goes straight to the sink, so
+    // the collecting API owns the accumulation and a fusing caller does not have to.
     let mut cur: Option<ParsedFn> = None;
     // Every data block's header records (DSTART, then PARAM/PTYPE/ASIZE per field, then
     // END), concatenated in declaration order, for the driver's own data-layout assembly.
@@ -669,74 +1080,159 @@ pub fn parse_functions(
     let mut enum_records: Vec<(i64, i64)> = Vec::new();
     let (mut in_body, mut in_guard, mut in_data, mut in_enum, mut in_use) =
         (false, false, false, false, false);
+    // PRIME THE WINDOW BEFORE THE INITIAL CALL, not just before resumes.
+    //
+    // `drive_parse_records_with` runs the hook before every RESUME, but the first
+    // step of the parser happens inside this CALL. Left unprimed, that read lands
+    // on a zeroed `packed` and the parser is fed token zero -- which surfaces far
+    // downstream as `IndexOutOfBounds(-1, 64)` on the OPERATOR STACK, not on the
+    // token array, because the wrong token drives the shunting yard into draining
+    // an empty stack. The index that faults names neither the array at fault nor
+    // the cause.
+    if fused {
+        if let Some((lex_vm, lex_shared)) = lex.as_mut() {
+            while !eof && (win.len() as i64) < FUSED_WINDOW as i64 {
+                match lex_next(lex_vm, lex_shared) {
+                    Some(w) => win.push_back(w),
+                    None => eof = true,
+                }
+            }
+        }
+        vm.set_shared(&mut shared, BR_P_BASE, Value::Int(base))
+            .unwrap();
+        for (i, &w) in win.iter().enumerate() {
+            vm.set_shared(&mut shared, BR_P_PACKED + i, Value::Int(w))
+                .unwrap();
+        }
+    }
+
     let state = vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call");
-    let budget = tokens.len() * 16 + 256;
-    crate::selfhost_host::drive_parse_records(&mut vm, &mut shared, state, budget, |code, val| {
-        if in_body {
-            match code {
-                0 => {}
-                15 => in_body = false,
-                _ => cur.as_mut().unwrap().body.push((code, val)),
-            }
-        } else if in_guard {
-            match code {
-                0 => {}
-                15 => in_guard = false,
-                _ => cur.as_mut().unwrap().guard.push((code, val)),
-            }
-        } else if in_data {
-            if code == 5 {
-                data_records.push((5, 0));
-                in_data = false;
-            } else if code != 0 {
-                data_records.push((code, val));
-            }
-        } else if in_enum {
-            if code == 5 {
-                enum_records.push((5, 0));
-                in_enum = false;
-            } else if code != 0 {
-                enum_records.push((code, val));
-            }
-        } else if in_use {
-            in_use = code != 5;
-        } else {
-            match code {
-                1..=3 => {
-                    cur = Some(ParsedFn {
-                        cat: code,
-                        name: val,
-                        params: 0,
-                        param_types: Vec::new(),
-                        return_type: 0,
-                        guard: Vec::new(),
-                        body: Vec::new(),
-                    })
-                }
-                4 => cur.as_mut().unwrap().params += 1,
-                6 => cur.as_mut().unwrap().param_types.push(val),
-                7 => cur.as_mut().unwrap().return_type = val,
-                9 => {
-                    in_data = true;
-                    data_records.push((9, val));
-                }
-                10 => in_use = true,
-                12 => {
-                    in_enum = true;
-                    enum_records.push((12, val));
-                }
-                16 => in_body = true,
-                17 => in_guard = true,
-                5 => fns.push(cur.take().unwrap()),
-                15 => return ControlFlow::Break(()),
-                _ => {}
+    let budget = token_count * 16 + 256;
+    // SLIDE BEFORE THE RESUME, NEVER AFTER. The parser reads at its cursor the
+    // moment it runs, so a window corrected afterwards is corrected too late.
+    // One token behind the cursor is kept resident, because the parser pushes back
+    // by one and that read must still land inside the window.
+    let before_resume = |vm: &mut Vm<'_, '_>, shared: &mut [u8]| {
+        let Some((lex_vm, lex_shared)) = lex.as_mut() else {
+            return;
+        };
+        let at = match vm.get_shared(shared, BR_P_AT).expect("at") {
+            Value::Int(n) => n,
+            other => panic!("expected Int at BR_P_AT, got {other:?}"),
+        };
+        while !eof && (base + win.len() as i64) < at + FUSED_WINDOW as i64 {
+            match lex_next(lex_vm, lex_shared) {
+                Some(w) => win.push_back(w),
+                None => eof = true,
             }
         }
-        ControlFlow::Continue(())
-    });
-    (fns, names, data_records, enum_records)
+        // ONE TOKEN OF LOOKBEHIND, AND IT IS PROVEN RATHER THAN CHOSEN.
+        //
+        // `toks.at` is written BEFORE the cursor advances, so it names the index
+        // just read: after a read at C the cursor is C+1. With k pushbacks the
+        // next read is at C+1-k, so the trace step is 1-k. Every step is within
+        // plus or minus one, asserted over five sources including a whole real
+        // stage by `the_parser_never_jumps_more_than_one_token`, so k is at most
+        // two and the lowest index ever read is `at - 1`.
+        //
+        // AN EARLIER REVISION USED HALF THE WINDOW AND JUSTIFIED IT WITH A CLAIM
+        // THAT IS FALSE -- that the cursor could sit "several tokens" behind `at`.
+        // It cannot. That widening was a misdiagnosis of `IndexOutOfBounds(-1, 64)`,
+        // whose real cause was an unprimed window at the initial call; the
+        // widening did not fix it and was kept anyway.
+        //
+        // The tight bound is also the more diagnostic one. `base` is a true
+        // absolute index, so a read below it lands negative and faults LOUDLY --
+        // slack would only delay the report of an assumption breaking, never
+        // prevent a wrong parse.
+        let lookbehind = 1i64;
+        while base < at - lookbehind && win.len() > 1 {
+            win.pop_front();
+            base += 1;
+        }
+        vm.set_shared(shared, BR_P_BASE, Value::Int(base)).unwrap();
+        for (i, &w) in win.iter().enumerate() {
+            vm.set_shared(shared, BR_P_PACKED + i, Value::Int(w))
+                .unwrap();
+        }
+    };
+
+    crate::selfhost_host::drive_parse_records_with(
+        &mut vm,
+        &mut shared,
+        state,
+        budget,
+        |code, val| {
+            if in_body {
+                match code {
+                    0 => {}
+                    15 => in_body = false,
+                    _ => open_decl(&mut cur, code, val).body.push((code, val)),
+                }
+            } else if in_guard {
+                match code {
+                    0 => {}
+                    15 => in_guard = false,
+                    _ => open_decl(&mut cur, code, val).guard.push((code, val)),
+                }
+            } else if in_data {
+                if code == 5 {
+                    data_records.push((5, 0));
+                    in_data = false;
+                } else if code != 0 {
+                    data_records.push((code, val));
+                }
+            } else if in_enum {
+                if code == 5 {
+                    enum_records.push((5, 0));
+                    in_enum = false;
+                } else if code != 0 {
+                    enum_records.push((code, val));
+                }
+            } else if in_use {
+                in_use = code != 5;
+            } else {
+                match code {
+                    1..=3 => {
+                        cur = Some(ParsedFn {
+                            cat: code,
+                            name: val,
+                            params: 0,
+                            param_types: Vec::new(),
+                            return_type: 0,
+                            guard: Vec::new(),
+                            body: Vec::new(),
+                        })
+                    }
+                    4 => open_decl(&mut cur, code, val).params += 1,
+                    6 => open_decl(&mut cur, code, val).param_types.push(val),
+                    7 => open_decl(&mut cur, code, val).return_type = val,
+                    9 => {
+                        in_data = true;
+                        data_records.push((9, val));
+                    }
+                    10 => in_use = true,
+                    12 => {
+                        in_enum = true;
+                        enum_records.push((12, val));
+                    }
+                    16 => in_body = true,
+                    17 => in_guard = true,
+                    5 => {
+                        open_decl(&mut cur, code, val);
+                        on_function(&names, cur.take().unwrap())
+                    }
+                    15 => return ControlFlow::Break(()),
+                    _ => {}
+                }
+            }
+            ControlFlow::Continue(())
+        },
+        before_resume,
+    );
+    (names, data_records, enum_records)
 }
 
 /// Self-host-compile a whole program: drive the pipeline over every function, reconstruct
@@ -782,6 +1278,111 @@ pub fn self_host_compile(src: &str) -> Module {
         module.chunks[idx].local_count = lc as u16;
     }
     module
+}
+
+/// Self-host-compile a whole program **without ever holding every function's records**.
+///
+/// Identical output to [`self_host_compile`], which is the point: the boundary between
+/// `parse` and `reconstruct` is cut at FUNCTION granularity, and
+/// `the_fused_compile_agrees_with_the_collecting_one` checks the two modules chunk for
+/// chunk. Only the residency differs.
+///
+/// # What is resident, and what it is worth
+///
+/// [`self_host_compile`] calls [`parse_functions`] first, so every function's postorder
+/// records for the whole program are live before the first one is reconstructed. This
+/// holds one GROUP -- consecutive same-named heads, which are one chunk -- and drops it
+/// as soon as the group is compiled. Measured over the corpus:
+///
+/// | stage | all records | largest group | ratio |
+/// |---|---|---|---|
+/// | `wire` | 8,785 | 214 | 41.1x |
+/// | `parse` | 12,111 | 931 | 13.0x |
+/// | `codegen` | 7,359 | 762 | 9.7x |
+/// | `lexer` | 1,415 | 276 | 5.1x |
+/// | `analyze` | 1,538 | 324 | 4.7x |
+/// | `reconstruct` | 3,222 | 885 | 3.6x |
+/// | `verify_typed` | 1,313 | 382 | 3.4x |
+///
+/// The largest stage benefits most, which is the direction that matters.
+///
+/// # The group is a one-function lookahead, not a whole-input fact
+///
+/// A group ends when the next function's name differs, so a completed function cannot be
+/// compiled until the following header arrives. That is a bounded lookahead of one
+/// function, not a dependency on the whole stream. **In this corpus the largest group is
+/// exactly the largest single function in every stage**, so grouping costs no residency
+/// at all here -- but that is what the corpus contains, not a bound on what the language
+/// admits, and it must not be offered as one.
+pub fn self_host_compile_fused(src: &str) -> Module {
+    let mut module = compile_src(src);
+    // The pending group: consecutive heads sharing a name. Flushed when the name changes
+    // and again at end of input, which is the only place the last group can be closed.
+    let mut group: Vec<ParsedFn> = Vec::new();
+    let mut group_name = String::new();
+
+    let flush = |group: &mut Vec<ParsedFn>, name: &str, module: &mut Module| {
+        if group.is_empty() {
+            return;
+        }
+        let pc = group[0].params;
+        let refs: Vec<&ParsedFn> = group.iter().collect();
+        let body = if is_multihead_group(&refs) {
+            reconstruct_via_kel_multihead(&refs, pc)
+        } else {
+            let category = if group[0].cat == 3 { 2 } else { 0 };
+            reconstruct_via_kel(&group[0].body, category, pc)
+        };
+        let (ops, pool, lc) = run_codegen(&body, pc);
+        let idx = module
+            .chunks
+            .iter()
+            .position(|c| c.name == name)
+            .unwrap_or_else(|| panic!("no chunk named `{name}`"));
+        module.chunks[idx].ops = ops;
+        module.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        module.chunks[idx].local_count = lc as u16;
+        group.clear();
+    };
+
+    parse_functions_impl(src, false, &mut |names, f| {
+        let name = names[f.name as usize].clone();
+        if !group.is_empty() && name != group_name {
+            flush(&mut group, &group_name, &mut module);
+        }
+        group_name = name;
+        group.push(f);
+    });
+    flush(&mut group, &group_name, &mut module);
+    module
+}
+
+/// The peak record residency of a fused compile, for the residency assertions.
+///
+/// Returns `(peak_group_records, total_records)`. Separated from
+/// [`self_host_compile_fused`] so the compile path carries no measurement apparatus, and
+/// so a test asserting the ratio reads the same numbers the compile would hold.
+pub fn fused_compile_residency(src: &str) -> (usize, usize) {
+    let mut group: Vec<ParsedFn> = Vec::new();
+    let mut group_name = String::new();
+    let (mut peak, mut total) = (0usize, 0usize);
+    parse_functions_impl(src, false, &mut |names, f| {
+        let name = names[f.name as usize].clone();
+        if !group.is_empty() && name != group_name {
+            group.clear();
+        }
+        group_name = name;
+        let n = f.body.len() + f.guard.len();
+        total += n;
+        group.push(f);
+        peak = peak.max(
+            group
+                .iter()
+                .map(|g| g.body.len() + g.guard.len())
+                .sum::<usize>(),
+        );
+    });
+    (peak, total)
 }
 
 // -- reconstruct.kel drivers (ported from tests/selfhost_codegen.rs) --------
@@ -3644,10 +4245,6 @@ fn window_emit(
     arena.resize_persistent(need).expect("resize");
     let mut vm = Vm::new(m, &arena).expect("verify wire.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
-    const WARG_SLOT: usize = 1 + 65536 + 1 + 1024 * 4;
-    const FIN_SLOT: usize = WARG_SLOT + 5;
-    const BIN_SLOT: usize = FIN_SLOT + 1024;
-    const HEADER_FIELD_BASE: usize = 990;
     vm.set_shared(&mut shared, WARG_SLOT, Value::Int(chunk_count as i64))
         .expect("warg");
     for (i, &v) in header.iter().enumerate() {
@@ -3697,6 +4294,139 @@ fn window_emit(
     Ok(out)
 }
 
+// `wire.kel`'s shared-block slot map, shared by every windowed emitter here.
+//
+// Hoisted out of `window_emit`, where they were function-local, when a second
+// emitter needed them. Two copies of a slot map is the drift this file's history
+// already records once: the shared block is addressed BY SLOT, so a constant that
+// disagrees with its twin shifts every field after it and the artifact is wrong
+// rather than refused.
+const WARG_SLOT: usize = 1 + 65536 + 1 + 1024 * 4;
+const FIN_SLOT: usize = WARG_SLOT + 5;
+const BIN_SLOT: usize = FIN_SLOT + 1024;
+/// Where the eleven header scalars ride in `fin`, above the chunk-field area.
+const HEADER_FIELD_BASE: usize = 990;
+
+/// Emit the whole `CHUNKS` region by STREAMING, one record per call.
+///
+/// `window_emit` seeds a batch into `fin` and takes one region back, which is why
+/// it inherits the batch's 90-record cap: `fin` is 1,024 words at eleven fields a
+/// chunk. This drives commands 174 and 175 instead — begin once, then one record
+/// per call — so the host holds the artifact and the stage holds one record.
+///
+/// **The three running range cursors are NOT relayed here, and that is the
+/// point.** The batch path takes `first`, `c0`, `t0` and `p0` because a function
+/// entered fresh cannot remember; the stage is a coroutine and carries them in a
+/// private block across the loop's RESET. A host that recomputed them would be
+/// asserting an answer it has no way to check.
+///
+/// The virtual machine is built ONCE and resumed, never re-called. Calling a
+/// suspended coroutine stacks another activation instead of replacing it, and a
+/// module with several hundred chunks exhausts the arena that way — the failure
+/// arrives as an operand-stack error naming neither the call pattern nor the
+/// chunk count.
+fn window_emit_chunks(
+    blob: &[u8],
+    header: &[i64; 11],
+    chunk_fields: &[i64],
+    want: usize,
+) -> Result<Vec<u8>, SelfHostError> {
+    const CMD_BEGIN: i64 = 174;
+    const CMD_STEP: i64 = 175;
+    const FIELDS: usize = 11;
+
+    let m = compile_src(&read_stage("kel/wire.kel"));
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify wire.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+
+    let records = chunk_fields.len() / FIELDS;
+    vm.set_shared(&mut shared, WARG_SLOT, Value::Int(records as i64))
+        .expect("chunk count");
+    for (i, &v) in header.iter().enumerate() {
+        vm.set_shared(&mut shared, FIN_SLOT + HEADER_FIELD_BASE + i, Value::Int(v))
+            .expect("header field");
+    }
+    for (i, &b) in blob.iter().enumerate() {
+        vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(b))
+            .expect("blob");
+    }
+
+    let enter = |vm: &mut Vm<'_, '_>, shared: &mut [u8], cmd: i64| -> Result<i64, SelfHostError> {
+        // The loop block reports its RESET between iterations; skip it, bounded,
+        // so a stage that only ever reset cannot hang the driver.
+        let mut st = match vm.resume_with_shared(shared, Value::Int(cmd)) {
+            Err(crate::vm::VmError::NotSuspended) => vm
+                .call_with_shared(shared, &[Value::Int(cmd)])
+                .map_err(|e| SelfHostError::Unsupported {
+                    detail: alloc::format!("wire.kel faulted on command {cmd}: {e:?}"),
+                })?,
+            other => other.map_err(|e| SelfHostError::Unsupported {
+                detail: alloc::format!("wire.kel faulted on command {cmd}: {e:?}"),
+            })?,
+        };
+        for _ in 0..4 {
+            match st {
+                crate::vm::VmState::Yielded(Value::Int(v)) => return Ok(v),
+                crate::vm::VmState::Reset => {}
+                other => {
+                    return Err(SelfHostError::Unsupported {
+                        detail: alloc::format!("wire.kel returned {other:?} for command {cmd}"),
+                    });
+                }
+            }
+            st = vm
+                .resume_with_shared(shared, Value::Int(cmd))
+                .map_err(|e| SelfHostError::Unsupported {
+                    detail: alloc::format!("wire.kel faulted resuming command {cmd}: {e:?}"),
+                })?;
+        }
+        Err(SelfHostError::Unsupported {
+            detail: alloc::format!("wire.kel reset repeatedly without yielding for {cmd}"),
+        })
+    };
+
+    let began = enter(&mut vm, &mut shared, CMD_BEGIN)?;
+    if began < 0 {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!("wire.kel refused the chunk stream with {began}"),
+        });
+    }
+
+    let mut out = vec![0u8; want];
+    for (j, row) in chunk_fields.chunks_exact(FIELDS).enumerate() {
+        for (f, &v) in row.iter().enumerate() {
+            vm.set_shared(&mut shared, FIN_SLOT + f, Value::Int(v))
+                .expect("chunk field");
+        }
+        let wrote = enter(&mut vm, &mut shared, CMD_STEP)?;
+        if wrote <= 0 {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!("wire.kel refused chunk record {j} with {wrote}"),
+            });
+        }
+        let stride = wrote as usize;
+        let at = j * stride;
+        if at + stride > want {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!(
+                    "chunk record {j} would end at {} in a {want}-byte region",
+                    at + stride
+                ),
+            });
+        }
+        for k in 0..stride {
+            out[at + k] = match vm.get_shared(&shared, 1 + k).expect("read") {
+                Value::Byte(b) => b,
+                other => panic!("shared byte slot held {other:?}"),
+            };
+        }
+    }
+    Ok(out)
+}
+
 /// See [`WindowedArtifact`]. `regions` gives each region's `(kind, base, len)` in
 /// the artifact the caller is assembling.
 pub fn wire_windowed_via_kel(
@@ -3708,20 +4438,20 @@ pub fn wire_windowed_via_kel(
     let (blob, names) = module_input(module);
     let header = header_fields_of(module);
     let fields = chunk_fields_of(module);
-    let chunks_fit = module.chunks.len() <= CHUNK_BATCH_CAP;
-
     let mut out = vec![0u8; artifact_len];
     for &(kind, base, len) in regions {
+        // CHUNKS TAKES THE STREAMING PATH, so the 90-record batch no longer
+        // decides whether a stage is reachable. `parse` (94) and `wire` (475)
+        // were the two it excluded and both emit now.
+        if kind == crate::wire_schema::kind::CHUNKS {
+            let win = window_emit_chunks(&blob, &header, &fields, len)?;
+            out[base..base + len].copy_from_slice(&win[..len]);
+            continue;
+        }
         let cmd = match kind {
             k if k == crate::wire_schema::kind::NAMES => 170,
             k if k == crate::wire_schema::kind::STRING_POOL => 171,
             k if k == crate::wire_schema::kind::HEADER => 172,
-            k if k == crate::wire_schema::kind::CHUNKS => {
-                if !chunks_fit {
-                    continue;
-                }
-                173
-            }
             _ => continue,
         };
         if len > WINDOW {
@@ -3744,7 +4474,10 @@ pub fn wire_windowed_via_kel(
     }
     Ok(WindowedArtifact {
         bytes: out,
-        chunks_emitted: chunks_fit,
+        // Always, now. The field is kept rather than removed because callers read
+        // it, and because a flag that is permanently true is a smaller lie than a
+        // silently deleted one; a future limit would set it false again.
+        chunks_emitted: true,
     })
 }
 

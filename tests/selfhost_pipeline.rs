@@ -118,9 +118,9 @@ fn reference_stream_and_names(src: &str) -> (Vec<(i64, i64)>, Vec<String>) {
 
 // Flat shared-data slot indices of the lexer's intern table, in the `src` block's
 // declaration order: len (1 slot) then bytes (393216) precede it.
-const LEX_ISTART: usize = 1 + 393216;
-const LEX_ILEN: usize = 1 + 393216 + 1280;
-const LEX_ICOUNT: usize = 1 + 393216 + 1280 + 1280;
+const LEX_ISTART: usize = keleusma::selfhost_host::BR_LEX_ISTART;
+const LEX_ILEN: usize = keleusma::selfhost_host::BR_LEX_ILEN;
+const LEX_ICOUNT: usize = keleusma::selfhost_host::BR_LEX_ICOUNT;
 
 fn shared_word(vm: &Vm, buf: &[u8], slot: usize) -> i64 {
     match vm.get_shared(buf, slot).expect("get_shared") {
@@ -344,13 +344,21 @@ fn host_recovers_parser_metadata_from_lexer_output() {
 // chunk_count, chunks[256], require_id, in declaration order.
 const P_LEN: usize = 0;
 const P_PACKED: usize = 1;
-const P_LIMIT_ID: usize = 1 + 40960;
-const P_CHUNK_COUNT: usize = 1 + 40960 + 1;
-const P_CHUNKS: usize = 1 + 40960 + 2;
-const P_REQUIRE_ID: usize = 1 + 40960 + 2 + 256;
-const P_WORD_ID: usize = 1 + 40960 + 2 + 256 + 1;
-const P_BYTE_ID: usize = 1 + 40960 + 2 + 256 + 2;
-const P_BOOL_ID: usize = 1 + 40960 + 2 + 256 + 3;
+// THE SHARED-SLOT LAYOUT LIVES IN ONE PLACE AND THIS IS NOT IT.
+//
+// These were independent copies of the same arithmetic (`1 + 40960 + 2 + 256 + 3`).
+// Widening `toks.chunks` moved the stage's fields and left every copy seeding the
+// keyword and type ids at the old slots, which failed sixty-eight tests with struct
+// byte sizes of 1 instead of 8 and a scalar kind of `Unit` instead of `Int` -- not
+// one of them naming a slot. Aliased to the driver's constants so the next widening
+// moves them.
+const P_LIMIT_ID: usize = keleusma::selfhost_host::BR_P_LIMIT_ID;
+const P_CHUNK_COUNT: usize = keleusma::selfhost_host::BR_P_CHUNK_COUNT;
+const P_CHUNKS: usize = keleusma::selfhost_host::BR_P_CHUNKS;
+const P_REQUIRE_ID: usize = keleusma::selfhost_host::BR_P_REQUIRE_ID;
+const P_WORD_ID: usize = keleusma::selfhost_host::BR_P_WORD_ID;
+const P_BYTE_ID: usize = keleusma::selfhost_host::BR_P_BYTE_ID;
+const P_BOOL_ID: usize = keleusma::selfhost_host::BR_P_BOOL_ID;
 
 /// Compile parse.kel on a 64MB thread; its deeply nested source overflows the
 /// default 2MB test-thread stack in the host compiler's recursive-descent parse.
