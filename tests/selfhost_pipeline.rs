@@ -352,13 +352,13 @@ const P_PACKED: usize = 1;
 // byte sizes of 1 instead of 8 and a scalar kind of `Unit` instead of `Int` -- not
 // one of them naming a slot. Aliased to the driver's constants so the next widening
 // moves them.
-const P_LIMIT_ID: usize = keleusma::selfhost::BR_P_LIMIT_ID;
-const P_CHUNK_COUNT: usize = keleusma::selfhost::BR_P_CHUNK_COUNT;
-const P_CHUNKS: usize = keleusma::selfhost::BR_P_CHUNKS;
-const P_REQUIRE_ID: usize = keleusma::selfhost::BR_P_REQUIRE_ID;
-const P_WORD_ID: usize = keleusma::selfhost::BR_P_WORD_ID;
-const P_BYTE_ID: usize = keleusma::selfhost::BR_P_BYTE_ID;
-const P_BOOL_ID: usize = keleusma::selfhost::BR_P_BOOL_ID;
+const P_LIMIT_ID: usize = keleusma::selfhost_host::BR_P_LIMIT_ID;
+const P_CHUNK_COUNT: usize = keleusma::selfhost_host::BR_P_CHUNK_COUNT;
+const P_CHUNKS: usize = keleusma::selfhost_host::BR_P_CHUNKS;
+const P_REQUIRE_ID: usize = keleusma::selfhost_host::BR_P_REQUIRE_ID;
+const P_WORD_ID: usize = keleusma::selfhost_host::BR_P_WORD_ID;
+const P_BYTE_ID: usize = keleusma::selfhost_host::BR_P_BYTE_ID;
+const P_BOOL_ID: usize = keleusma::selfhost_host::BR_P_BOOL_ID;
 
 /// Compile parse.kel on a 64MB thread; its deeply nested source overflows the
 /// default 2MB test-thread stack in the host compiler's recursive-descent parse.

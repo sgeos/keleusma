@@ -59,13 +59,13 @@ const PACKED: usize = 1;
 // byte sizes of 1 instead of 8 and a scalar kind of `Unit` instead of `Int` -- not
 // one of them naming a slot. Aliased to the driver's constants so the next widening
 // moves them.
-const LIMIT_ID: usize = keleusma::selfhost::BR_P_LIMIT_ID;
-const CHUNK_COUNT: usize = keleusma::selfhost::BR_P_CHUNK_COUNT;
-const CHUNKS: usize = keleusma::selfhost::BR_P_CHUNKS;
-const REQUIRE_ID: usize = keleusma::selfhost::BR_P_REQUIRE_ID;
-const WORD_ID: usize = keleusma::selfhost::BR_P_WORD_ID;
-const BYTE_ID: usize = keleusma::selfhost::BR_P_BYTE_ID;
-const BOOL_ID: usize = keleusma::selfhost::BR_P_BOOL_ID;
+const LIMIT_ID: usize = keleusma::selfhost_host::BR_P_LIMIT_ID;
+const CHUNK_COUNT: usize = keleusma::selfhost_host::BR_P_CHUNK_COUNT;
+const CHUNKS: usize = keleusma::selfhost_host::BR_P_CHUNKS;
+const REQUIRE_ID: usize = keleusma::selfhost_host::BR_P_REQUIRE_ID;
+const WORD_ID: usize = keleusma::selfhost_host::BR_P_WORD_ID;
+const BYTE_ID: usize = keleusma::selfhost_host::BR_P_BYTE_ID;
+const BOOL_ID: usize = keleusma::selfhost_host::BR_P_BOOL_ID;
 
 /// Map the reference token stream into the stage's unified `(kind, value)` pairs. The
 /// operator codes follow the retired body.kel scheme (`Plus` 21 upward); the header
@@ -2438,7 +2438,7 @@ fn the_chunk_table_cap_is_refused_by_the_driver_and_not_by_the_stage() {
         .expect("parse.kel declares chunks: [Word; N]");
     assert_eq!(
         declared,
-        keleusma::selfhost::PARSE_CHUNK_CAP,
+        keleusma::selfhost_host::PARSE_CHUNK_CAP,
         "the stage's chunk array is {declared}; the driver's cap must be updated with it"
     );
 
@@ -2798,7 +2798,7 @@ fn budget_exhaustion_names_the_likely_cause() {
 /// match itself. Its first run flagged exactly one file: this one.
 #[cfg(feature = "self-host")]
 fn alloc_needle() -> String {
-    format!("usize = 1 + {}", keleusma::selfhost::PARSE_TOKEN_CAP)
+    format!("usize = 1 + {}", keleusma::selfhost_host::PARSE_TOKEN_CAP)
 }
 
 #[cfg(feature = "self-host")]
@@ -2852,7 +2852,7 @@ fn no_other_file_restates_the_shared_layout() {
     assert!(
         offenders.is_empty(),
         "these files restate the shared-slot layout instead of using the constants in \
-         `keleusma::selfhost`: {offenders:?}. A copy is correct until the block moves, and \
+         `keleusma::selfhost_host`: {offenders:?}. A copy is correct until the block moves, and \
          then it is silently wrong -- the failure names a struct size, never a slot."
     );
 }
@@ -2883,10 +2883,10 @@ fn wire_kel_parses_now_that_the_chunk_table_admits_it() {
          case and the thing the chunk cap is sized against: PARSE_CHUNK_CAP is {}, so a \
          stage growing toward it is visible here rather than at the wall.",
         fns.len(),
-        keleusma::selfhost::PARSE_CHUNK_CAP
+        keleusma::selfhost_host::PARSE_CHUNK_CAP
     );
     assert!(
-        fns.len() <= keleusma::selfhost::PARSE_CHUNK_CAP,
+        fns.len() <= keleusma::selfhost_host::PARSE_CHUNK_CAP,
         "the corpus worst case has reached the cap it is sized against"
     );
 }

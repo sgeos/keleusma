@@ -2054,16 +2054,16 @@ const BR_P_PACKED: usize = 1;
 // byte sizes of 1 instead of 8 and a scalar kind of `Unit` instead of `Int` -- not
 // one of them naming a slot. Aliased to the driver's constants so the next widening
 // moves them.
-const BR_P_LIMIT_ID: usize = keleusma::selfhost::BR_P_LIMIT_ID;
-const BR_P_CHUNK_COUNT: usize = keleusma::selfhost::BR_P_CHUNK_COUNT;
-const BR_P_CHUNKS: usize = keleusma::selfhost::BR_P_CHUNKS;
-const BR_P_REQUIRE_ID: usize = keleusma::selfhost::BR_P_REQUIRE_ID;
-const BR_P_WORD_ID: usize = keleusma::selfhost::BR_P_WORD_ID;
-const BR_P_BYTE_ID: usize = keleusma::selfhost::BR_P_BYTE_ID;
-const BR_P_BOOL_ID: usize = keleusma::selfhost::BR_P_BOOL_ID;
+const BR_P_LIMIT_ID: usize = keleusma::selfhost_host::BR_P_LIMIT_ID;
+const BR_P_CHUNK_COUNT: usize = keleusma::selfhost_host::BR_P_CHUNK_COUNT;
+const BR_P_CHUNKS: usize = keleusma::selfhost_host::BR_P_CHUNKS;
+const BR_P_REQUIRE_ID: usize = keleusma::selfhost_host::BR_P_REQUIRE_ID;
+const BR_P_WORD_ID: usize = keleusma::selfhost_host::BR_P_WORD_ID;
+const BR_P_BYTE_ID: usize = keleusma::selfhost_host::BR_P_BYTE_ID;
+const BR_P_BOOL_ID: usize = keleusma::selfhost_host::BR_P_BOOL_ID;
 // The eager `and`/`or` ids, appended after `bool_id` (see the `toks` block in parse.kel).
-const BR_P_AND_ID: usize = keleusma::selfhost::BR_P_AND_ID;
-const BR_P_OR_ID: usize = keleusma::selfhost::BR_P_OR_ID;
+const BR_P_AND_ID: usize = keleusma::selfhost_host::BR_P_AND_ID;
+const BR_P_OR_ID: usize = keleusma::selfhost_host::BR_P_OR_ID;
 
 fn br_shared_word(vm: &Vm<'_, '_>, buf: &[u8], slot: usize) -> i64 {
     match vm.get_shared(buf, slot).expect("get_shared") {

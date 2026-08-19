@@ -13,6 +13,33 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**AND THEN CI FAILED THREE JOBS BECAUSE EVERY LOCAL CHECK CARRIED THE FEATURE THAT HID THE BUG
+(2026-08-18).**
+
+Publishing the shared-slot constants from `src/selfhost/mod.rs` put them behind the `self-host`
+feature. The three harnesses that alias them are gated on `compile + verify` only, so under any
+feature set WITHOUT `self-host` they referenced a module that does not exist. `E0433`, three jobs:
+the signatures set, the broad set, and the 1.88 MSRV check.
+
+**I ran one feature set locally and clippy with `self-host` enabled, so every check I made had the
+feature that concealed it.** The handoff already says a default-feature run is not the gate and that
+the gate is a five-entry matrix. Knowing the rule is not the same as having a habit that applies it,
+which is the same shape as the branch-cutting rule this line paid for earlier.
+
+**The fix is not a `#[cfg]` patch.** The constants belong in `selfhost_host`, which is gated on
+`compile + verify` -- exactly the gate the harnesses carry, and a module already documented as
+existing "so the parse-record transport lives in one place instead of being copied into every
+consumer". The layout is the same kind of thing. A `#[cfg]` would have made the constants vanish for
+the harnesses that need them and left the real mismatch in place.
+
+**The correction to the method, in the form that can actually be applied**: compile-check every
+feature set CI runs, READ OUT OF `ci.yml` rather than remembered, before pushing anything that moves
+an item across a module boundary. Four sets, four `cargo check --tests`, about a minute. Verified
+green: `--no-default-features`, `--features signatures`, `--features self-host`,
+`--features signatures,shell`.
+
+---
+
 **THE LAST CAP FELL AND IT WAS NEVER ONE NUMBER: A FAMILY OF ARRAYS, A PAIR OF LOOP LIMITS, AND FOUR
 COPIES OF A LAYOUT (2026-08-18).**
 
