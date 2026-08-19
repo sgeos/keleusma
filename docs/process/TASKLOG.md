@@ -10,6 +10,19 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-18, latest+2).** **NINE COPIES OF TWO SHARED-SLOT LAYOUTS COLLAPSED TO
+> TWO DEFINITIONS.** Raising the chunk table left a FIFTH copy in `compiler/src/main.rs` seeding the
+> parser with offsets wrong by 768 slots; nothing caught it, because `run_parse_pipeline` is reachable
+> only from `main` and its constants are compiled but never executed.
+>
+> **The guard written to prevent this walked `src/` and `tests/` only.** A guard with a scope narrower
+> than its class is the same defect it prevents. It now walks the repository and asserts `compiler/`
+> was reached. The LEXER's block was restated four times as well and had failed nothing only because
+> it has not moved.
+>
+> Corrections: `compiler/` has 86 tests, not zero (my check was scoped to `compiler/src/`), and root
+> `cargo fmt --all` does not reach `compiler/`.
+
 > **Currency note (2026-08-18, latest+1).** **`parse` INTO `reconstruct` IS FUSED** at function
 > granularity, holding one group of same-named heads instead of every function's records.
 > Byte-identical modules, mutation-verified. **Measured 3.4x to 41.1x**, against a recorded estimate

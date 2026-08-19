@@ -23,7 +23,8 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 | **`parse.kel` capacity diagnostics** | **four causes now NAMED; the rest still trap raw** |
 | **the last cap** | **GONE. `wire.kel` PARSES, 486 functions** |
 | **`parse` into `reconstruct`** | **FUSED at function granularity, 3.4x to 41.1x** |
-| branch | `feat/fuse-reconstruct`; #164 and #165 merged, at `1c5a1fc2` |
+| shared-slot layouts | **nine copies collapsed to two definitions** |
+| branch | `fix/compiler-layout-copy`; #164/#165/#166 merged, at `233e9c83` |
 
 ## WHAT THIS INCREMENT DID
 
@@ -117,6 +118,25 @@ largest stage benefits most.
 so a completed function waits for the following HEADER -- a bounded one-function lookahead, not a
 whole-input dependency. The name table is available before the drive. That predicted cost was the
 reason this increment ranked below the diagnostics work; it was not real.
+
+## I SHIPPED A DEFECT MY OWN GUARD WAS WRITTEN TO CATCH
+
+Raising the chunk table moved the parser's shared block, and a FIFTH copy of the layout in
+`compiler/src/main.rs` actively seeds the parser. That binary was reading the keyword and type ids
+from inside the chunk array. Nothing caught it: `run_parse_pipeline` is reachable only from `main`,
+so its constants are compiled by continuous integration and never executed.
+
+**The guard I wrote to prevent this walked `src/` and `tests/`.** A guard with a scope narrower than
+the class it guards is the same defect it was written to prevent. It now walks the repository and
+asserts that `compiler/` was actually reached.
+
+**The lexer's block was restated in four places too** and had failed nothing, because it has not
+moved -- exactly the state the parser's five copies were in the day before. Both layouts are now
+published and chained, all nine copies alias them, and both derivation tests are mutation-verified.
+
+**Two corrections on my own reporting**: I said `compiler/` has zero tests; it has 86, and my check
+was scoped to `compiler/src/`. And root `cargo fmt --all` does not reach `compiler/`, which declares
+its own workspace -- a local gate touching it needs a `cd compiler` pass.
 
 ## Next intended increment
 

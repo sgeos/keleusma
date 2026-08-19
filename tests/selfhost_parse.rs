@@ -2792,13 +2792,35 @@ fn budget_exhaustion_names_the_likely_cause() {
 /// instead of `Int`, and **not one of them named a slot**.
 ///
 /// A list of known offenders would not have caught the fourth copy, so this reads the
-/// directory. `src/selfhost/mod.rs` is the definition site and is the only file allowed to
+/// tree. `src/selfhost_host.rs` is the definition site and is the only file allowed to
 /// spell the layout out.
-/// The offending pattern, assembled at runtime so the file that looks for it does not
-/// match itself. Its first run flagged exactly one file: this one.
+///
+/// # It walked two directories and missed a live fifth copy
+///
+/// The first version walked `src/` and `tests/`. `compiler/src/main.rs` held a fifth copy
+/// and actively seeded the parser with it, so raising the chunk table left that binary
+/// reading the keyword and type ids from inside the chunk array. **Nothing failed**, and
+/// not because that package is untested: `compiler/tests/` holds 86 tests, none of which
+/// reaches the function in question. It is called only from `main`, so its constants are
+/// compiled and never executed, and arithmetic compiles clean whatever it says.
+///
+/// **A guard written to catch a class, given a search scope narrower than the class, is
+/// the same defect it was written to prevent.** This walks the repository, skipping only
+/// build output and dot-directories, and asserts a file count that a narrowed scope would
+/// fail.
+/// The offending patterns, assembled at runtime so the file that looks for them does not
+/// match itself. The first run flagged exactly one file: this one.
+///
+/// **BOTH layouts, because fixing the instance leaves the class.** The parser's block was
+/// restated in five places and the lexer's in four; only the parser's had moved, so only
+/// the parser's had failed anything. The lexer's would have behaved identically the day
+/// its block moved.
 #[cfg(feature = "self-host")]
-fn alloc_needle() -> String {
-    format!("usize = 1 + {}", keleusma::selfhost_host::PARSE_TOKEN_CAP)
+fn alloc_needles() -> Vec<String> {
+    vec![
+        format!("usize = 1 + {}", keleusma::selfhost_host::PARSE_TOKEN_CAP),
+        format!("usize = 1 + {}", keleusma::selfhost_host::LEX_SOURCE_CAP),
+    ]
 }
 
 #[cfg(feature = "self-host")]
@@ -2810,6 +2832,16 @@ fn no_other_file_restates_the_shared_layout() {
         };
         for e in entries.flatten() {
             let p = e.path();
+            let name = p.file_name().map(|n| n.to_string_lossy().into_owned());
+            // Build output and dot-directories only. Everything else is walked, including
+            // the detached `compiler/` and `examples/rtos/` packages, which are exactly
+            // the places a copy hides from a runtime-only search.
+            if name
+                .as_deref()
+                .is_some_and(|n| n == "target" || n.starts_with('.'))
+            {
+                continue;
+            }
             if p.is_dir() {
                 walk(&p, out);
             } else if p.extension().is_some_and(|x| x == "rs") {
@@ -2820,16 +2852,27 @@ fn no_other_file_restates_the_shared_layout() {
 
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
-    walk(&root.join("src"), &mut files);
-    walk(&root.join("tests"), &mut files);
+    walk(root, &mut files);
+    // The whole tree, not two directories. Both numbers are load-bearing: the lower bound
+    // fails if the walk is narrowed again, and the presence check names the directory
+    // whose omission is what let a live copy survive.
     assert!(
-        files.len() > 20,
+        files.len() > 100,
         "only {} source files were found, so this check is reading the wrong tree and \
          would pass vacuously",
         files.len()
     );
+    assert!(
+        files
+            .iter()
+            .any(|f| f.components().any(|c| c.as_os_str() == "compiler")),
+        "the walk found no file under `compiler/`, which is the directory whose omission \
+         let a live fifth copy of the layout survive. This check is narrower than the \
+         class it exists to catch."
+    );
 
-    let allowed = root.join("src").join("selfhost").join("mod.rs");
+    let allowed = root.join("src").join("selfhost_host.rs");
+    // Both layouts are defined in the same file, so one exemption covers both.
     let mut offenders = Vec::new();
     for f in &files {
         if *f == allowed {
@@ -2841,10 +2884,9 @@ fn no_other_file_restates_the_shared_layout() {
         for (i, line) in text.lines().enumerate() {
             // A slot constant computed from the token-array size, rather than taken from
             // `keleusma::selfhost`. Comments are left alone; they mislead but do not break.
-            // Built from parts so this file does not contain its own needle. The first
+            // Built from parts so this file does not contain its own needles. The first
             // run of this check flagged exactly one offender: itself.
-            let needle = alloc_needle();
-            if line.contains(&needle) {
+            if alloc_needles().iter().any(|n| line.contains(n)) {
                 offenders.push(format!("{}:{}", f.display(), i + 1));
             }
         }
