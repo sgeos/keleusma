@@ -1387,6 +1387,26 @@ fn delegated_suspension_plan(module: &Module) -> Option<(usize, usize, usize)> {
     Some((entry, callee_ix, call_ix))
 }
 
+/// Does this module delegate its suspension across one call edge, and to what?
+///
+/// A thin public view of [`delegated_suspension_plan`]. It exists so that a
+/// CENSUS can ask the question over a corpus without restating the predicate,
+/// and it delegates rather than reimplements for exactly that reason: a second
+/// copy of this test would be a second opinion about which modules the lowering
+/// will transform, and the only opinion that matters is the lowering's.
+///
+/// **This is a query, not a switch.** Calling it neither enables the delegated
+/// transform nor changes what `lower_module` does; the mechanism stays behind
+/// `LowerOptions::delegated_suspension`, which remains off by default.
+///
+/// Returns `(entry chunk, callee chunk, call op index)` for a qualifying module
+/// and `None` otherwise. `None` covers both "not a stream entry at all" and
+/// "a stream entry whose shape this transform refuses", which are different
+/// facts; a caller that needs to tell them apart must read the ops itself.
+pub fn delegated_suspension_subject(module: &Module) -> Option<(usize, usize, usize)> {
+    delegated_suspension_plan(module)
+}
+
 fn degenerate_stream_yield(chunk: &Chunk, module: &Module) -> Option<Vec<usize>> {
     if chunk.block_type != BlockType::Stream {
         return None;
