@@ -33,7 +33,40 @@ shared data dv {
     dnet: [Word; 1536],
     is_term: [Word; 1536],
     out_reject: Word,
+    // WHY THE VERDICT IS NOT ENOUGH ON ITS OWN.
+    //
+    // `out_reject` is sound but not informative: a chunk rejected for an operand
+    // underflow and a chunk refused because it nests deeper than the declared cap
+    // are the same value, and a caller cannot tell a PROVEN defect from an
+    // UNANALYSED program. That is the shared-message defect this line has recorded
+    // against four separate guards.
+    //
+    // 0 = the walk completed and the verdict is a real analysis result.
+    // 1 = the walk hit `max_nesting()` and the verdict is default-deny.
+    //
+    // APPENDED LAST. The block is addressed by SLOT and inserting in the middle
+    // shifts every field after the insertion point.
+    out_cause: Word,
 }
+
+// THE DECLARED NESTING CAP. Operator ruling, 2026-08-19: 32 for now.
+//
+// **A DECLARED BOUND, NOT A NUMBER READ OFF TODAY'S CORPUS.** The `v0.3.0` line
+// measured a deepest observed nesting of 19 over 985 chunks in 64 modules and
+// warned -- correctly -- that this is what the corpus CONTAINS and not a bound on
+// what the language ADMITS. A verifier written in Keleusma needs a cap it declares
+// and enforces, with programs past it refused. This is that cap.
+//
+// **FRAMES ARE NESTING PLUS ONE.** `run` pushes a root frame for the whole chunk
+// region before any nested construct, so a chunk at nesting depth `d` occupies
+// `d + 1` frames. The arrays are therefore sized `max_nesting() + 1` and the guard
+// admits exactly `max_nesting()` levels of nesting. Getting this off by one would
+// silently refuse a program at the stated cap, which is a unilateral narrowing.
+fn max_nesting() -> Word { 32 }
+
+// The frame-stack capacity implied by the cap. One source of truth: the arrays
+// below are sized from this and the guard compares against it.
+fn frame_cap() -> Word { max_nesting() + 1 }
 
 // The region-frame work stack. Each frame is one `verify_depth_region([f_ip, f_end))`: `f_depth`
 // its running operand depth, `f_fell` whether it falls through, `f_hb`/`f_bmax` its break-scope
@@ -43,32 +76,55 @@ shared data dv {
 // frame's result. `bad` latches an underflow.
 private data df {
     sp: Word,
-    f_ip: [Word; 128],
-    f_end: [Word; 128],
-    f_depth: [Word; 128],
-    f_fell: [Word; 128],
-    f_hb: [Word; 128],
-    f_bmax: [Word; 128],
-    f_pa: [Word; 128],
-    f_pk: [Word; 128],
-    f_ps: [Word; 128],
-    f_resume: [Word; 128],
-    f_elstart: [Word; 128],
-    f_elend: [Word; 128],
-    f_tf: [Word; 128],
-    f_td: [Word; 128],
+    f_ip: [Word; 33],
+    f_end: [Word; 33],
+    f_depth: [Word; 33],
+    f_fell: [Word; 33],
+    f_hb: [Word; 33],
+    f_bmax: [Word; 33],
+    f_pa: [Word; 33],
+    f_pk: [Word; 33],
+    f_ps: [Word; 33],
+    f_resume: [Word; 33],
+    f_elstart: [Word; 33],
+    f_elend: [Word; 33],
+    f_tf: [Word; 33],
+    f_td: [Word; 33],
     child_fell: Word,
     child_depth: Word,
     child_hb: Word,
     child_bmax: Word,
     bad: Word,
+    // Latches when a push would exceed `frame_cap()`. Separate from `bad`, which
+    // latches a PROVEN operand underflow: conflating them would report an
+    // unanalysed program as a defective one.
+    over: Word,
 }
 
 // Push a fresh frame for region `[ip, end)` with entry depth `depth`; `end` is clamped to
-// `op_count`. A push past the static frame capacity is dropped rather than faulting.
+// `op_count`.
+//
+// **A PUSH PAST THE CAP LATCHES A REFUSAL. IT USED TO BE DROPPED SILENTLY.**
+//
+// The previous text called the drop deliberate. It is not defensible in a
+// VERIFIER: a dropped push means the nested region is never walked, the parent
+// folds in whatever `child_*` the PREVIOUS delivery left behind, and `deliver`
+// later decrements `sp` for a frame that was never pushed. The pass then publishes
+// a verdict computed over a program it did not traverse, and that verdict can be
+// wrong in EITHER direction -- it can miss a real underflow, and it can invent one.
+//
+// The sound behaviour is default-deny, which is also this project's stated
+// conservative-verification stance: a program whose bound the analysis cannot
+// establish is refused rather than admitted. `over` latches so the refusal is
+// reported as UNANALYSED rather than as a proven defect.
+//
+// **THE GUARD PRECEDES THE WRITE.** `sp` is the index about to be written, so the
+// comparison is `>=` against the capacity and the highest index ever written is
+// `frame_cap() - 1`. A guard on the increment instead would fire one write too
+// late, which is the defect this line has recorded against the parser's caps.
 fn push_frame(ip: Word, end: Word, depth: Word) -> Word {
-    if df.sp > 127 {
-        df.sp = df.sp;
+    if df.sp >= frame_cap() {
+        df.over = 1;
     } else {
         let j = df.sp;
         df.f_ip[j] = ip;
@@ -279,6 +335,7 @@ fn depth_step() -> Word {
 fn run() -> Word {
     df.sp = 0;
     df.bad = 0;
+    df.over = 0;
     df.child_fell = 1;
     df.child_depth = 0;
     df.child_hb = 0;
@@ -289,10 +346,20 @@ fn run() -> Word {
             depth_step();
         }
     }
-    if df.bad == 1 {
+    // DEFAULT DENY, AND SAY WHICH KIND OF DENY IT IS. An over-cap chunk is refused
+    // because it was not analysed, not because a defect was proven; the verdict is
+    // the same and the CAUSE is not, and only the cause tells a caller whether
+    // raising the cap would change the answer.
+    if df.over == 1 {
         dv.out_reject = 1;
+        dv.out_cause = 1;
     } else {
-        dv.out_reject = 0;
+        dv.out_cause = 0;
+        if df.bad == 1 {
+            dv.out_reject = 1;
+        } else {
+            dv.out_reject = 0;
+        }
     }
     dv.out_reject
 }

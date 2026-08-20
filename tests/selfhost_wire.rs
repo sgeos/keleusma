@@ -12910,3 +12910,103 @@ fn the_four_formatting_regions_stream_one_record_per_call() {
     }
     assert_eq!(covered, TABLES.len(), "not every table was exercised");
 }
+
+/// **THE `-255` REFUSAL HAS A NEGATIVE TEST AT LAST, AND THE CODE IS AMBIGUOUS.**
+///
+/// Operator ruling, 2026-08-19: add the negative test. `-255` was live in
+/// `wire.kel` with nothing exercising it, which is a branch no case reaches.
+///
+/// # The cause this reaches
+///
+/// `mi_join_header` refuses when the region directory carries no `HEADER` entry,
+/// because it has nowhere to write the header record. Reached here by building a
+/// directory from the real artifact and then dropping that one region, so
+/// everything else about the input is unchanged and the refusal can only come
+/// from the missing region.
+///
+/// # THE CODE IS SHARED, AND THIS TEST IS ONLY SOUND BECAUSE THE OTHER CAUSE
+/// CANNOT FIRE HERE
+///
+/// `-255` has TWO meanings inside one call path. `mi_join_header` first calls
+/// `mi_join`, which reaches `emit_pool_bytes_from_bout` and returns `-255` when
+/// the emitted name bytes exceed `bout_capacity()`; then `mi_join_header` returns
+/// `-255` itself for the missing header region. A caller seeing `-255` cannot say
+/// which happened.
+///
+/// This case is sound because the pool cause is unreachable for this input: the
+/// module's total distinct name bytes are far below the 16,384-byte output buffer,
+/// and the control below proves the very same input joins cleanly once the header
+/// region is restored. **That is a property of the case, not of the code.**
+///
+/// **The neighbouring guards do not share codes** — `mi_join` uses `-233` for a
+/// missing `NAMES` and `-234` for a missing `STRING_POOL` — and the comment above
+/// `emit_name_records_from_nout` states the principle outright, that two guards
+/// sharing one code leave a caller unable to say which fired. The header check is
+/// the odd one out. **Splitting it is a one-line change held for the operator**
+/// rather than taken here, because an error code is an observable.
+#[cfg(feature = "self-host")]
+#[test]
+fn a_missing_header_region_is_refused_rather_than_written_somewhere_else() {
+    use keleusma::wire_schema::kind;
+
+    let src = "fn alpha(a: Word) -> Word { a }\nfn main() -> Word { alpha(1) }";
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+
+    let all = region_counts_for(&want);
+    assert!(
+        all.iter().any(|r| r.0 == kind::HEADER),
+        "the artifact carries no HEADER region, so dropping it changes nothing \
+         and this case measures nothing"
+    );
+    let without: Vec<RegionSpec> = all
+        .iter()
+        .filter(|r| r.0 != kind::HEADER)
+        .cloned()
+        .collect();
+    assert_eq!(
+        without.len() + 1,
+        all.len(),
+        "expected exactly one HEADER region to be dropped"
+    );
+
+    let directory_for = |specs: &[RegionSpec]| -> Vec<u8> {
+        let mut vm = vm_for(WIRE_KEL);
+        let (_, dir) = run_call(
+            &mut vm,
+            &Call {
+                cmd: CMD_BUILD_REGION_TABLE,
+                nregions: specs.len() as i64,
+                seed: &[],
+                regions: specs,
+                fields: &[],
+                names: &[],
+                pool: &[],
+                args: [0, 0, 0, 0, 0],
+                read_len: want.len(),
+            },
+        )
+        .expect("build the region table");
+        dir
+    };
+
+    // THE CONTROL FIRST. The same module and the same driver with the header
+    // region PRESENT must succeed, or the refusal below proves nothing about the
+    // missing region.
+    let ok = keleusma::selfhost::wire_regions_via_kel(&module, &directory_for(&all), all.len());
+    assert!(
+        ok.is_ok(),
+        "the control failed, so the refusal below cannot be attributed to the \
+         missing HEADER region: {:?}",
+        ok.err()
+    );
+
+    let refused =
+        keleusma::selfhost::wire_regions_via_kel(&module, &directory_for(&without), without.len());
+    let err = refused.expect_err("a directory with no HEADER region must be refused");
+    let detail = format!("{err:?}");
+    assert!(
+        detail.contains("-255"),
+        "expected the stage's own `-255` refusal, got {detail}"
+    );
+}
