@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-19 (session 49, ruled refusals)
+**Date**: 2026-08-19 (session 49, token residency stage one)
 
 ## Where things stand
 
@@ -27,6 +27,67 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 | `parse.kel` failure modes named | **THIRTEEN**; eleven counters guarded |
 | **the type checker's INPUT** | **the DECLARED rows now come from the pipeline; the derived ones do not** |
 | branch | `feat/typecheck-bindings-from-pipeline`, cut from `v0.2.3` at `fe2af14f` |
+
+## THE TOKEN BOUND IS OFF THE PRODUCTION PATH, AND THE TEST FOR IT FOUND SOMETHING BIGGER
+
+### `-255` is split, and `-235` was already spent
+
+`mi_join_header` and `mi_join_chunks` both call `mi_join` first, which returns `-255` from a pool
+overflow, and then each returned `-255` itself for a missing header region. One call path, two
+meanings, **opposite remedies** — the stage is too small, against the caller built its input wrongly.
+
+The header checks are `-229`. The natural next number in the `-233`/`-234` missing-region family was
+`-235`, already spent on an unrelated bounds check, so taking it would have recreated the ambiguity.
+The free set was derived by reading every negative code out of the file. The test now asserts `-229`
+**and** asserts the refusal does not carry `-255`, so a reverted split fails by name.
+
+### Stage one: four entry points moved, and nothing in production had been using fusion
+
+`self_host_compile`, `self_host_compile_full`, `self_host_compile_scratch` — the command-line backend
+— and `binding_rows_from_pipeline` now use the fused feed. The fused feed existed, was proven, and was
+unused.
+
+**The cap assertion sat above the branch**, so the fused feed carried a bound meaningless for it.
+Gating it took the 40,960-token limit off every compile a user can start without touching an array.
+
+**The collecting feed is retained on purpose.** It is the fusion oracle. Deleting it would leave
+fusion checked only against the Rust reference, which is a weaker claim about the feed specifically —
+the reference agrees with a whole-program compile, not with a token-delivery order.
+
+### The finding, which is worth more than the test I withdrew
+
+A source past the cap, accepted fused and refused collecting, is the obvious pin. **It ran for over
+ten minutes.** So I measured instead of waiting it out.
+
+```
+tokens=459   fused=1606ms   collecting=1969ms
+tokens=909   fused=2491ms   collecting=2850ms
+tokens=1809  fused=4455ms   collecting=4774ms
+tokens=3609  fused=15062ms  collecting=15315ms
+```
+
+Doubling 1,809 to 3,609 tokens multiplies the time by **3.4**. Superlinear, extrapolating to roughly
+half an hour at 41,000 tokens.
+
+**Both feeds show it, within a few percent of each other.** That localises the cost to the shared
+record handling and driver rather than to token delivery. Two consequences:
+
+- **Stage one is not a regression.** Fused is slightly faster at every size.
+- **Stage two removes the MEMORY bound, and the bound a large input meets first is now TIME.** That
+  is a separate defect in a shared code path, and it is yours to prioritise rather than mine to fix
+  inside this increment.
+
+### Two judgment calls I want on the record
+
+**I refused a timing assertion.** The instrument asserts only that the two feeds agree on the function
+count. A wall-clock threshold is a flake waiting for a loaded machine, and a flaky gate teaches people
+to re-run rather than to read.
+
+**I nearly shipped a guard I had already argued against.** My first instinct for keeping production
+fused was a test grepping `src/` for call sites — the textual-guard shape whose scope keeps turning
+out narrower than its class, exactly like the no-copies guard that walked two directories and missed a
+live fifth copy. The behavioural version was right and unaffordable, so what ships is the gating plus
+this record, with the gap named rather than papered over.
 
 ## THREE RULED REFUSALS IMPLEMENTED, AND ONE OF THEM WAS WORSE THAN A MISSING NUMBER
 

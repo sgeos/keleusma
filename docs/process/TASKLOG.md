@@ -10,6 +10,25 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-19, final+6).** **THE 40,960-TOKEN BOUND IS OFF EVERY PRODUCTION PATH**,
+> and `-255` means one thing again.
+>
+> `-229` is the missing-HEADER-region code. `-255` used to mean both that and a pool overflow inside
+> one call path, with opposite remedies. **`-235` was the natural next number and was already spent**,
+> so the new code sits below its `-233`/`-234` family, derived from the file rather than guessed.
+>
+> **Stage one of the token residency**: `self_host_compile`, `self_host_compile_full`,
+> `self_host_compile_scratch` and `binding_rows_from_pipeline` moved to the fused feed, and
+> `PARSE_TOKEN_CAP` is gated on the collecting one. Nothing in production had used fusion. The
+> collecting feed is RETAINED as the fusion oracle; deleting it would leave fusion checked only
+> against the reference, a weaker claim about the feed.
+>
+> **THE BEHAVIOURAL PIN RAN TEN MINUTES AND WAS WITHDRAWN, WHICH IS THE FINDING.** Cost is
+> **superlinear** in input size -- doubling 1,809 to 3,609 tokens multiplies time by 3.4 -- and
+> **both feeds show it within a few percent**, so it is the shared record handling, not the feed.
+> Fused is slightly faster at every size, so stage one is not a regression. **Stage two removes the
+> MEMORY bound; the bound a large input meets first is now TIME.** Raised for the operator.
+
 > **Currency note (2026-08-19, final+5).** **THREE RULED REFUSALS IMPLEMENTED, BATCHED ON THE
 > OPERATOR'S APPROVAL.** A declared nesting cap of **32** in `verify_depth.kel`, the `-255` negative
 > test in `wire.kel`, and the reserved authenticity region kinds.
