@@ -1393,7 +1393,12 @@ pub fn binding_rows_from_pipeline(src: &str) -> (Vec<String>, Vec<(String, i64, 
     let tag_of = |type_name_id: i64| -> i64 {
         match names.get(type_name_id as usize).map(String::as_str) {
             Some("Word") => 1,
-            Some("Bool") => 2,
+            // **LOWERCASE, AND IT IS THE ONLY PRIMITIVE THAT IS.** `Word`, `Byte`
+            // and `Float` are capitalised; `bool` is not. `Bool` with a capital
+            // letter is an ordinary NAMED type, which the reference refuses to add
+            // to a `Word`, and an earlier revision of this table mapped it here —
+            // telling the type channel that a value of some user type was a boolean.
+            Some("bool") => 2,
             Some("Byte") => 3,
             _ => 0,
         }

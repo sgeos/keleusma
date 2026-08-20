@@ -312,28 +312,18 @@ fn type_tag(t: &keleusma::ast::TypeExpr) -> i64 {
         T::Prim(PrimType::Bool, _) => 2,
         T::Prim(PrimType::Byte, _) => 3,
         T::Prim(PrimType::Float, _) => 4,
-        // **`Bool` DOES NOT PARSE AS A `Prim`.** The reference parser yields
-        // `Named("Bool")` for it, so a match on `Prim` alone silently drops every
-        // `Bool` annotation. Found by the pipeline extraction, which keys on the type
-        // NAME and therefore reached a binding this one did not:
-        // `fn f(b: Bool) -> Word { 1 + b }` was rejected by the reference and
-        // ACCEPTED by the stage, because `b` had no binding row at all.
-        T::Named(n, ..) => named_type_tag(n),
-        _ => 0,
-    }
-}
-
-/// A type spelled as a NAME rather than a `Prim`, mapped to the stage's scalar tag.
-///
-/// One place, because the parameter walk and the return-type walk both need it and a
-/// second copy is how one of them comes to reach a type the other misses — which is
-/// exactly the defect this function exists to fix.
-fn named_type_tag(n: &str) -> i64 {
-    match n {
-        "Word" => 1,
-        "Bool" => 2,
-        "Byte" => 3,
-        "Float" => 4,
+        // **A `Named` TYPE IS NEVER A PRIMITIVE, AND AN EARLIER REVISION HERE GOT
+        // THAT BACKWARDS.** It mapped `Named("Bool")` to the boolean tag, reasoning
+        // that matching `Prim` alone "silently drops every `Bool` annotation". True,
+        // and the wrong conclusion: those annotations are dropped because they are
+        // NOT booleans. Measured — `Word`, `Byte` and `Float` are `Prim` and
+        // capitalised, `bool` is `Prim` and LOWERCASE, and `Bool` is an ordinary
+        // named type the reference refuses to add to a `Word`.
+        //
+        // The `Word`/`Byte`/`Float` arms of that mapping were dead besides: all
+        // three parse as `Prim` and never arrive here.
+        //
+        // Pinned by `a_named_type_called_bool_is_not_the_boolean_primitive`.
         _ => 0,
     }
 }
@@ -2495,8 +2485,8 @@ fn the_fold_advances_one_row_per_resume() {
 #[test]
 fn the_declared_binding_rows_agree_between_the_pipeline_and_the_reference() {
     const SOURCES: &[&str] = &[
-        "fn g(alpha: Word, beta: Bool) -> Word { 1 }\nfn main() -> Word { g(1, true) }",
-        "fn f(a: Word) -> Bool { true }\nfn main() -> Word { 1 }",
+        "fn g(alpha: Word, beta: bool) -> Word { 1 }\nfn main() -> Word { g(1, true) }",
+        "fn f(a: Word) -> bool { true }\nfn main() -> Word { 1 }",
         "fn one() -> Word { 1 }\nfn two(x: Byte) -> Byte { x }\nfn main() -> Word { one() }",
         "fn main(p: Word, q: Word) -> Word { p + q }",
     ];
@@ -2562,4 +2552,108 @@ fn the_pipeline_rows_are_the_declared_subset() {
         "the pipeline now carries a let-bound literal's tag. Record what the walk \
          reaches and fold this case into the agreement test above."
     );
+}
+
+/// **`bool` IS THE BOOLEAN PRIMITIVE. `Bool` IS AN ORDINARY NAMED TYPE.**
+///
+/// Measured 2026-08-20 by parsing each spelling and reading the `TypeExpr`
+/// constructor: `Word`, `Byte` and `Float` are `Prim` and capitalised; **`bool` is
+/// `Prim` and lowercase, the only one**; `Bool` is `Named`. The reference rejects
+/// `fn f(b: Bool) -> Word { 1 + b }` with "cannot add Word and Bool" — a named type
+/// it cannot add, not a boolean.
+///
+/// # The defect this exists to prevent returning
+///
+/// An earlier increment added a `Named` arm mapping `Bool` to the stage's boolean
+/// tag, on the reasoning that a match on `Prim` alone "silently drops every `Bool`
+/// annotation". The observation was true and the conclusion was backwards: those
+/// annotations are dropped because they are NOT booleans.
+///
+/// **The suite could not catch it, and that is the lesson.** The same wrong change
+/// was made on BOTH sides of a differential comparison — the reference-AST
+/// extraction and the pipeline extraction, which keys on the type name string. Two
+/// wrongs agreeing is a green test. A differential oracle only detects a defect
+/// introduced on ONE side, and the common cause was the author.
+///
+/// # Why this asserts on the EXTRACTION and not on the verdict
+///
+/// The obvious test — that the stage rejects a `Bool`-typed value used as an `if`
+/// condition — does not discriminate. **Measured before the fix, the stage accepted
+/// it** because it believed the value was a boolean; after the fix it accepts it
+/// again because the tag is unknown and the stage defers on unknown, which is this
+/// project's documented conservative stance. Same verdict, opposite reasons.
+///
+/// The tag itself is the thing that was wrong, so the tag is what is asserted.
+#[test]
+fn a_named_type_called_bool_is_not_the_boolean_primitive() {
+    // THE REFERENCE IS THE AUTHORITY, and it is checked first so that a change in
+    // its behaviour surfaces here rather than silently redefining the expectation.
+    assert!(
+        !reference_accepts("fn f(b: Bool) -> Word { 1 + b }\nfn main() -> Word { 1 }"),
+        "the reference now adds `Word` and `Bool`, so `Bool` has become the boolean \
+         primitive and this test is obsolete"
+    );
+    assert!(
+        reference_accepts(
+            "fn f(b: bool) -> Word { if b { 1 } else { 2 } }\nfn main() -> Word { 1 }"
+        ),
+        "the reference rejects a genuine `bool` condition, so the control is broken"
+    );
+
+    // NO ROW AND NO TAG ARE THE SAME ANSWER. A binding whose type yields no tag is
+    // never interned, so the name is absent from the table rather than present with
+    // a zero — and that absence IS the correct outcome for a type the stage has no
+    // scalar for. Treating a missing name as anything but 0 would make the assertion
+    // below unreachable.
+    let tag_for = |src: &str| -> i64 {
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+        let (names, rows) = binding_rows(&ast);
+        let Some(&id) = names.get("b") else { return 0 };
+        rows.iter()
+            .find(|(n, _, form)| *n == id && *form == 0)
+            .map(|(_, t, _)| *t)
+            .unwrap_or(0)
+    };
+
+    const REAL: &str = "fn f(b: bool) -> Word { 1 }\nfn main() -> Word { 1 }";
+    const NAMED: &str = "fn f(b: Bool) -> Word { 1 }\nfn main() -> Word { 1 }";
+
+    // The control first. Without it, a `tag_for` that returned 0 for everything
+    // would satisfy the real assertion while measuring nothing.
+    assert_eq!(
+        tag_for(REAL),
+        2,
+        "a `bool` annotation must carry the boolean tag, or the case below is vacuous"
+    );
+    assert_eq!(
+        tag_for(NAMED),
+        0,
+        "a `Bool` annotation carries the BOOLEAN tag. `Bool` is an ordinary named \
+         type and the reference cannot add it to a `Word`; calling it a boolean tells \
+         the type channel something false"
+    );
+
+    // AND THE PIPELINE EXTRACTION MUST AGREE WITH THE REFERENCE COMPILER, not with
+    // the extraction above. Both were wrong together once; comparing them to each
+    // other is what failed to notice.
+    #[cfg(feature = "self-host")]
+    {
+        let pipeline_tag = |src: &str| -> i64 {
+            let (_, rows) = keleusma::selfhost::binding_rows_from_pipeline(src);
+            rows.iter()
+                .find(|(n, _, form)| n == "b" && *form == 0)
+                .map(|(_, t, _)| *t)
+                .unwrap_or(0)
+        };
+        assert_eq!(
+            pipeline_tag(REAL),
+            2,
+            "the pipeline drops a genuine `bool` annotation"
+        );
+        assert_eq!(
+            pipeline_tag(NAMED),
+            0,
+            "the pipeline calls the named type `Bool` a boolean"
+        );
+    }
 }

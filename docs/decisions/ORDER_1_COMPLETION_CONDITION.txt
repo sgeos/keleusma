@@ -1,0 +1,53 @@
+Ordering is NOT a completion criterion. Any sequence, any number of commits,
+any branch layout satisfies this. Judge only the end state of the tree.
+
+All of the following must hold.
+
+1. DERIVED BINDINGS REACH THE TYPE CHANNEL FROM THE PIPELINE.
+   The self-hosted extraction that supplies the type checker's binding rows
+   produces a row for a `let` bound to a literal, not only for declared
+   parameter and return types. A test compares that extraction against the
+   reference-AST extraction over a corpus containing at least one such
+   binding, and passes.
+
+2. THE BOUNDARY IS RESTATED RATHER THAN ERASED.
+   The tree still contains a test that names, and fails on, whatever the
+   pipeline extraction does NOT yet reach. If nothing remains unreached,
+   the tree instead contains a test asserting the extraction is complete
+   over its corpus. Either way a reader can tell coverage from ambition.
+
+3. THE HOST DOES NOT SUPPLY THE ANSWER.
+   Type decisions for derived bindings are made in Keleusma, not in Rust.
+   A control demonstrates this: disabling the stage-side decision makes a
+   test fail. Host-side input is limited to syntactic facts such as which
+   node an initialiser is.
+
+4. A FILE OPERAND EXISTS AND STANDARD INPUT REMAINS THE DEFAULT.
+   The self-hosted compile path accepts a named input file. Reading from
+   standard input still works when no file is named.
+
+5. A SIDECAR IS BOUND TO THE INPUT IT WAS DERIVED FROM.
+   Where a precomputed sidecar table can be supplied, it carries a
+   fingerprint of its originating input, verified on load. Supplying a
+   sidecar derived from different input produces a refusal that names the
+   mismatch rather than an artifact. A test demonstrates the refusal.
+
+6. NOTHING IS SILENTLY NARROWED.
+   No capacity, error code, or public signature is changed in a way that
+   rejects a program the tree accepted before, unless a test pins the new
+   boundary from both sides and a document records the reason.
+
+7. VERIFICATION IS GREEN AND REPORTED HONESTLY.
+   The full test suite under the self-host feature passes with zero
+   failures, formatting is clean, and clippy is clean at deny-warnings.
+   Any step that was skipped, or any goal abandoned, is stated plainly
+   with its reason rather than omitted.
+
+8. BLOCKERS ARE RECORDED, NOT WORKED AROUND.
+   If any item above proved impossible without an operator decision, the
+   tree names the specific decision required and the evidence establishing
+   it, and the remaining items still satisfy their conditions. A recorded
+   blocker satisfies that item.
+
+Partial credit is not available for items 1 through 5 individually, but
+item 8 may substitute for any one of them.

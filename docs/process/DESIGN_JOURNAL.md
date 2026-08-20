@@ -13,6 +13,56 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**I BROKE BOTH SIDES OF A DIFFERENTIAL ORACLE IN ONE INCREMENT, AND IT WENT GREEN (2026-08-20).**
+
+`bool` is the boolean primitive. `Bool` is an ordinary named type. In `d1148e76`, merged in PR #175,
+I added `named_type_tag` mapping `Named("Bool")` to the stage's boolean tag, writing in the commit
+message that a match on `Prim` alone "silently drops every `Bool` annotation". **The observation was
+true and the conclusion was backwards.** Those annotations are dropped because they are NOT booleans.
+I turned correct behaviour into a defect and documented my reasoning confidently while doing it.
+
+**MEASURED, NOT INFERRED**, by parsing each spelling and printing the `TypeExpr` constructor:
+
+```
+Word => Prim      bool => Prim      Byte => Prim      Float => Prim
+word => PARSE FAIL   Bool => Named   byte => PARSE FAIL  float => PARSE FAIL
+```
+
+`bool` is the only lowercase primitive. The reference rejects `fn f(b: Bool) -> Word { 1 + b }` with
+**"cannot add Word and Bool"** -- a named type it will not add, not a boolean. The `Word`, `Byte` and
+`Float` arms of the function I added were dead code besides, since all three arrive as `Prim`.
+
+**WHY NOTHING CAUGHT IT IS THE ACTUAL FINDING.** I made the same wrong change on BOTH SIDES of a
+differential comparison. The reference-AST extraction learned to call `Named("Bool")` a boolean, and
+`binding_rows_from_pipeline`'s `tag_of` keys on the type NAME STRING and mapped `"Bool"` to the same
+tag. **Two wrongs agreeing is a green test.** A differential oracle detects a defect introduced on ONE
+side; here the common cause was the author, in one increment, touching both. Add that to the
+meta-defect list: it is a seventh instance of a suite whose coverage is a property of something other
+than the thing under test.
+
+**THE CONSEQUENCE WAS REAL AND I VERIFIED IT BEFORE CLAIMING IT.** A first test asserted the stage
+rejects a `Bool`-typed value used as an `if` condition. It failed before the fix -- the stage ACCEPTED
+it, a false accept, because it believed the value was boolean.
+
+**THEN THE TEST TURNED OUT NOT TO DISCRIMINATE, AND I REWROTE IT RATHER THAN KEEP A FLATTERING ONE.**
+After the fix the tag is unknown, and the stage defers on unknown, so it accepts again. Same verdict,
+opposite reasons -- a verdict test cannot tell those apart. **The tag was what was wrong, so the tag is
+what is asserted.** The test now checks the extraction directly, with a `bool` control that must carry
+tag 2 so a `tag_for` returning zero for everything cannot pass.
+
+**AND IT COMPARES EACH EXTRACTION TO THE REFERENCE COMPILER RATHER THAN TO THE OTHER**, which is the
+only discipline that would have caught the original. Comparing the two to each other is precisely what
+failed.
+
+**A SMALLER CORRECTION INSIDE THE FIX.** For the `Bool` case the name `b` is absent from the intern
+table entirely, because a binding with no tag is never interned. My helper called `.expect("the
+corpus binds `b`")` and panicked. **Absence IS the correct answer** -- no row and no tag are the same
+statement -- so the helper treats a missing name as tag 0, and says so.
+
+Mutation-verified in both halves: restoring `"Bool"` in the pipeline table fails the test by name.
+
+---
+
 **STAGE TWO IS BLOCKED ON A DOCUMENTED DUPLICATE, AND THE BLOCKER IS A PUBLIC-API DECISION RATHER
 THAN A DEFECT (2026-08-20).**
 
