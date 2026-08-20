@@ -13,6 +13,51 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE TWO SELF-HOSTED COMPILERS HAVE MEASURABLY DIVERGED, AND THE SUPPORT TABLE MEASURES THE WRONG ONE
+(2026-08-20, morning).**
+
+`tests/selfhost_codegen.rs` carries its own `self_host_compile`, and its own comment has warned that
+"a fix to one is not a fix to the other". **That was a hazard. It is now an observed fact.**
+
+```
+fn f() -> Word { let s = "hi"; 1 }
+  reference:     constants [StaticStr("hi"), Int(1)]
+  this file's:   constants [StaticStr("hi"), Int(1)]   -- agrees
+  the library's: constants [Int(3),          Int(1)]   -- the intern id, as an Int
+```
+
+Ops identical in all three; only the pool differs, which is why an ops-only comparison calls it clean.
+
+**I FOUND THIS BY BEING WRONG IN THE USEFUL DIRECTION.** I added a string case expecting `Diverges`,
+because my sweep -- which used the LIBRARY compiler -- had measured a divergence. The boundary test
+came back `Ok`. The table measures the copy, and the copy is the one that is CORRECT. So the table
+records `Ok` for a construct the shipping compiler gets wrong.
+
+**That is not a hypothetical cost of duplication. It is the duplication producing a wrong answer in
+the project's own record of what self-hosting supports.** Third night-time instance and by far the
+most consequential: the duplicate blocks the token residency, needed the boolean-literal slots seeded
+separately, is the subject of the support table, and now demonstrably disagrees with the shipping
+compiler on an observable.
+
+Pinned by `the_two_self_hosted_compilers_disagree_on_a_string_literal`, which asserts the local copy
+AGREES with the reference as its control, so the divergence is attributed to the library rather than
+to the source, and which fails when the two converge -- with the instruction to fold the case in and
+delete the test rather than relax it.
+
+**AND I WITHDREW TWO ITEMS FROM MY OWN COMPLETION CONDITION, WHICH IS THE OTHER FINDING.** Items 4 and
+5 asked for a file operand and a sidecar fingerprint. Checked against the tree: **the staged pipeline
+command they apply to does not exist** -- no phase-selection or sidecar flag anywhere -- and
+`keleusma compile` already takes a file and never reads standard input.
+
+They were not properties of the tree. They were properties of a command nobody has built, and I wrote
+them without checking. **A completion condition must be checkable against the tree as it is, and "does
+this exist" is part of that check.** Skipping it produced two items satisfiable only by building
+unreviewed infrastructure unattended or by weaselling. The withdrawal is recorded in the condition
+itself rather than the items quietly deleted, because a badly written condition is worth more as a
+recorded mistake than as a silent amendment.
+
+---
+
 **ORDER 1 ITEM 3 REACHES `let` BINDINGS, AND ONE FORM WAS BLOCKED BY THE ROW SHAPE RATHER THAN BY THE
 PIPELINE (2026-08-20, morning).**
 
