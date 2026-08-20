@@ -42,14 +42,35 @@ fn source_for(p: &std::path::Path) -> Option<String> {
     Some(src)
 }
 
+/// The directories this file's corpus is built from.
+///
+/// **NAMED AND PRINTED BECAUSE AN UNLABELLED COUNT STARTED A FALSE MYSTERY.**
+/// This file reports 1032 chunks and `spike_bounds_transfer` reports 1027, and
+/// the handoff carried that gap as unresolved with a standing decision not to
+/// write a third walker to adjudicate it.
+///
+/// **There was nothing to adjudicate.** Measured 2026-08-20 by restricting THIS
+/// walker to that file's two directories: it reports **exactly 1027**. The two
+/// instruments never disagreed about a single chunk. This one takes FOUR
+/// directories and 64 modules; that one takes two and 57, lacking
+/// `examples/rtos/scripts` and `compiler/kel`.
+///
+/// Both numbers were always right and neither said what it counted.
+const CORPUS_DIRS: [&str; 4] = [
+    "examples/scripts",
+    "src/selfhost/kel",
+    "examples/rtos/scripts",
+    "compiler/kel",
+];
+
 fn sources() -> Vec<std::path::PathBuf> {
     let root = std::path::Path::new("..");
     let mut out = Vec::new();
     let mut stack: Vec<std::path::PathBuf> = [
-        "examples/scripts",
-        "src/selfhost/kel",
-        "examples/rtos/scripts",
-        "compiler/kel",
+        CORPUS_DIRS[0],
+        CORPUS_DIRS[1],
+        CORPUS_DIRS[2],
+        CORPUS_DIRS[3],
     ]
     .iter()
     .map(|d| root.join(d))
@@ -202,6 +223,7 @@ fn how_deep_does_nesting_go_and_do_breaks_agree_on_depth() {
 
     println!("\n================ nesting depth and break depths, whole corpus");
     println!("  modules compiled            : {}", mods.len());
+    println!("  corpus directories          : {}", CORPUS_DIRS.join(", "));
     println!("  chunks walked               : {chunks}");
     println!(
         "  DEEPEST NESTING OBSERVED    : {} in {}",

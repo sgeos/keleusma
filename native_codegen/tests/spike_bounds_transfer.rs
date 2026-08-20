@@ -15,13 +15,29 @@ use keleusma::verify::{wcet_stream_iteration, wcmu_stream_iteration};
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 use keleusma_native::{LowerOptions, lower_module};
 
+/// The directories this file's corpus is built from.
+///
+/// **NAMED AND PRINTED BECAUSE AN UNLABELLED COUNT STARTED A FALSE MYSTERY.**
+/// This file reports 1027 chunks and `probe_nesting_and_breaks` reports 1032,
+/// and the gap was carried in the handoff as unresolved -- "the gap narrowed
+/// from 14 to 5 and I do not know why" -- with a standing decision not to write
+/// a third walker to adjudicate it.
+///
+/// **There was nothing to adjudicate.** Measured 2026-08-20 by restricting THAT
+/// walker to THESE two directories: it reports **exactly 1027**. The two
+/// instruments never disagreed about any chunk. They walk different corpora:
+/// this one takes two directories and 57 modules, the other takes four
+/// directories and 64 modules, adding `examples/rtos/scripts` and
+/// `compiler/kel`.
+///
+/// So both numbers were always right and neither said what it counted. Printing
+/// the directory list beside the count is the whole fix.
+const CORPUS_DIRS: [&str; 2] = ["examples/scripts", "src/selfhost/kel"];
+
 fn corpus() -> Vec<(std::path::PathBuf, Module)> {
     let root = std::path::Path::new("..");
     let mut out = Vec::new();
-    let mut stack: Vec<std::path::PathBuf> = ["examples/scripts", "src/selfhost/kel"]
-        .iter()
-        .map(|d| root.join(d))
-        .collect();
+    let mut stack: Vec<std::path::PathBuf> = CORPUS_DIRS.iter().map(|d| root.join(d)).collect();
     while let Some(p) = stack.pop() {
         if p.is_dir() {
             if let Ok(rd) = std::fs::read_dir(&p) {
@@ -564,6 +580,11 @@ fn q4_the_stack_model_goes_negative_on_shipped_code() {
         }
     }
 
+    println!(
+        "  corpus directories           : {}",
+        CORPUS_DIRS.join(", ")
+    );
+    println!("  modules compiled             : {}", corpus().len());
     println!("  chunks walked                : {chunks}");
     println!("  chunks reaching NEGATIVE depth: {}", negative.len());
     println!("  most negative offset seen     : {worst}");
