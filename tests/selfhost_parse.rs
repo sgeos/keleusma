@@ -2451,8 +2451,13 @@ fn the_chunk_table_cap_is_refused_by_the_driver_and_not_by_the_stage() {
     );
 
     // AT the cap: accepted. `n` functions plus `main` is `n + 1` chunks.
+    //
+    // THROUGH THE FUSED FEED, like the `wire.kel` case above. This test's subject
+    // is the CHUNK table; a program with 1,024 functions also lexes to 14,334
+    // tokens, and driving the collecting feed here would pin `toks.packed` at that
+    // figure for a reason unrelated to what is being measured.
     let at_cap = src_with(declared - 1);
-    let (fns, ..) = keleusma::selfhost::parse_functions(&at_cap);
+    let (fns, ..) = keleusma::selfhost::parse_functions_fused(&at_cap);
     assert_eq!(
         fns.len(),
         declared,
@@ -2462,7 +2467,7 @@ fn the_chunk_table_cap_is_refused_by_the_driver_and_not_by_the_stage() {
     // ONE PAST the cap: refused by the DRIVER, naming the table, not
     // `LoopLimitExceeded` from inside the stage.
     let past = src_with(declared);
-    let err = std::panic::catch_unwind(|| keleusma::selfhost::parse_functions(&past))
+    let err = std::panic::catch_unwind(|| keleusma::selfhost::parse_functions_fused(&past))
         .err()
         .expect("a program past the cap must be refused");
     let msg = err
@@ -2960,7 +2965,11 @@ fn no_other_file_restates_the_shared_layout() {
 #[test]
 fn wire_kel_parses_now_that_the_chunk_table_admits_it() {
     const WIRE: &str = include_str!("../src/selfhost/kel/wire.kel");
-    let (fns, ..) = keleusma::selfhost::parse_functions(WIRE);
+    // THROUGH THE FUSED FEED. This test's subject is the CHUNK table, and the
+    // token feed is incidental to it. Driving the collecting feed here would pin
+    // `toks.packed` at `wire.kel`'s 24,836 tokens for a reason that has nothing to
+    // do with what the test measures.
+    let (fns, ..) = keleusma::selfhost::parse_functions_fused(WIRE);
     assert_eq!(
         fns.len(),
         486,
@@ -3459,5 +3468,69 @@ fn both_feeds_cost_by_input_size() {
             "tokens={count} fns={} fused_ms={fused_ms} collecting_ms={collecting_ms}",
             fns.len()
         );
+    }
+}
+
+#[cfg(feature = "self-host")]
+/// **EVERY STAGE SOURCE'S TOKEN COUNT, WHICH IS WHAT SIZES THE COLLECTING FEED.**
+///
+/// An instrument. Measured 2026-08-20:
+///
+/// ```text
+///   lexer 2,785      parse 33,445     reconstruct 6,897   codegen 16,448
+///   analyze 3,964    wire 24,836      verify_structural 1,639
+///   verify_depth 1,820   verify_yield 1,630   verify_typed 3,381
+///   verify_types 2,065   verify_datalayout 388
+/// ```
+///
+/// **`parse.kel` is 33,445 and the handoff recorded 32,907**, which had drifted.
+/// Derive the number here rather than quoting prose.
+#[test]
+#[ignore = "instrument"]
+fn stage_source_token_counts() {
+    // Embedded at compile time rather than read by a relative path, which depends
+    // on the working directory a runner happens to choose.
+    for (f, src) in [
+        ("lexer.kel", include_str!("../src/selfhost/kel/lexer.kel")),
+        ("parse.kel", include_str!("../src/selfhost/kel/parse.kel")),
+        (
+            "reconstruct.kel",
+            include_str!("../src/selfhost/kel/reconstruct.kel"),
+        ),
+        (
+            "codegen.kel",
+            include_str!("../src/selfhost/kel/codegen.kel"),
+        ),
+        (
+            "analyze.kel",
+            include_str!("../src/selfhost/kel/analyze.kel"),
+        ),
+        ("wire.kel", include_str!("../src/selfhost/kel/wire.kel")),
+        (
+            "verify_structural.kel",
+            include_str!("../src/selfhost/kel/verify_structural.kel"),
+        ),
+        (
+            "verify_depth.kel",
+            include_str!("../src/selfhost/kel/verify_depth.kel"),
+        ),
+        (
+            "verify_yield.kel",
+            include_str!("../src/selfhost/kel/verify_yield.kel"),
+        ),
+        (
+            "verify_typed.kel",
+            include_str!("../src/selfhost/kel/verify_typed.kel"),
+        ),
+        (
+            "verify_types.kel",
+            include_str!("../src/selfhost/kel/verify_types.kel"),
+        ),
+        (
+            "verify_datalayout.kel",
+            include_str!("../src/selfhost/kel/verify_datalayout.kel"),
+        ),
+    ] {
+        println!("{f} tokens={}", keleusma::selfhost::lex_token_count(src));
     }
 }

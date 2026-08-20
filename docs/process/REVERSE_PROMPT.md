@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-19 (session 49, token residency stage one)
+**Date**: 2026-08-20 (session 49, token residency stage two blocked)
 
 ## Where things stand
 
@@ -27,6 +27,55 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 | `parse.kel` failure modes named | **THIRTEEN**; eleven counters guarded |
 | **the type checker's INPUT** | **the DECLARED rows now come from the pipeline; the derived ones do not** |
 | branch | `feat/typecheck-bindings-from-pipeline`, cut from `v0.2.3` at `fe2af14f` |
+
+## STAGE TWO IS BLOCKED, AND THE BLOCKER IS ONE SMALL DECISION OF YOURS
+
+I stopped rather than work around it. The decision is worth more than the workaround.
+
+### How I established it
+
+Not by reasoning about call sites. I set `toks.packed` to 4,096 and ran the whole suite. Twelve
+failures in exactly two causes, and **not one of them in production code** — stage one had already
+moved every production entry point to the fused feed.
+
+### One cause is fixed and is in this increment
+
+`wire_kel_parses_now_that_the_chunk_table_admits_it` and
+`the_chunk_table_cap_is_refused_by_the_driver_and_not_by_the_stage` both have the **chunk table** as
+their subject. Their token feed is incidental to what they measure, and driving the collecting feed
+pinned the array at 24,836 and 14,334 tokens for unrelated reasons. Both now use the fused feed.
+
+### The other is the blocker, and the file that causes it already documents it
+
+`tests/selfhost_codegen.rs` carries its own `parse_functions` and its own `ParsedFn`. Its own comment
+says why that matters — that the duplication is the reason one defect had to be fixed in three
+places, and that the harness copy of `self_host_compile` does not receive fixes made to the shipping
+one. The harness seeds a whole token stream, so it pins the array at the largest stage source it
+parses.
+
+**The copy is not laziness.** `ParsedFn` has **zero public fields and four public accessors** —
+`category`, `param_count`, `guard_records`, `body_records`. The harness needs the name, parameter
+names and types, the return type and the let bindings, none of which are reachable. The duplicate is
+the only thing the public surface permits.
+
+**So the decision is yours and it is small: widen `ParsedFn`'s accessors so the harness can delete its
+copy.** That closes a documented three-places-to-fix hazard and unblocks the residency work together,
+which is a better trade than either alone. If you would rather not widen the surface, say so and I
+will propose an alternative, but I did not want to pick between them on your behalf.
+
+### What I refused to do
+
+Shrinking to clear the true floor means sizing above `parse.kel`'s 33,445 tokens, so 40,960 becomes
+about 34,816 — **a 15% saving that cuts headroom from 18% to 4%**. Paying churn to make the corpus's
+tightest bound tighter leaves us worse off than today. A partial win that degrades a margin is not a
+partial win, so I did not take it.
+
+### A figure of yours had drifted
+
+`parse.kel` is **33,445** tokens; the handoff records 32,907. Found incidentally. Every stage source
+is now measured by an instrument in the tree rather than quoted from prose. Its first version read
+the sources by relative path at runtime, which depends on the working directory a runner chooses; it
+is `include_str!` now, so a wrong path is a build error rather than a test that measures nothing.
 
 ## THE TOKEN BOUND IS OFF THE PRODUCTION PATH, AND THE TEST FOR IT FOUND SOMETHING BIGGER
 

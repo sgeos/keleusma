@@ -10,6 +10,27 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-20).** **STAGE TWO OF THE TOKEN RESIDENCY IS BLOCKED, ON A PUBLIC-API
+> DECISION RATHER THAN A DEFECT.** Established by probe: `toks.packed` set to 4,096, whole suite run,
+> twelve failures in two causes and **none in production code** -- stage one had already fused every
+> production entry point.
+>
+> **One cause is fixed**: the chunk-cap test and the `wire.kel` test both have the CHUNK table as
+> their subject, so their token feed was incidental; both moved to the fused feed, removing pins at
+> 14,334 and 24,836 tokens.
+>
+> **The other is `tests/selfhost_codegen.rs`'s own `parse_functions` and `ParsedFn`**, a duplicate the
+> file's own comment already names as the reason one defect needed fixing in three places. It exists
+> because `ParsedFn` has **zero public fields and four public accessors**, and the harness needs six
+> more. **The operator's call: widen the accessors so the harness can delete its copy.** That closes
+> the duplication hazard and unblocks the residency together.
+>
+> **NOT TAKEN: a partial shrink.** Clearing `parse.kel`'s 33,445 tokens means 40,960 -> ~34,816, a 15%
+> saving that cuts headroom from 18% to 4%. A partial win that degrades a margin is not a win.
+>
+> **`parse.kel` is 33,445 tokens, not the recorded 32,907.** Every stage source is now measured by an
+> instrument rather than quoted from prose.
+
 > **Currency note (2026-08-19, final+6).** **THE 40,960-TOKEN BOUND IS OFF EVERY PRODUCTION PATH**,
 > and `-255` means one thing again.
 >
