@@ -1,0 +1,117 @@
+// A small mixed-arithmetic routine, written to EXERCISE OPCODES the rest of
+// the corpus never emits.
+//
+// The purpose is coverage and the file says so rather than pretending to be an
+// application. Every other corpus program is a real example; this one exists
+// because "100% of corpus opcode instances lower" was a statement about the
+// corpus and not about the instruction set, and sixteen of the sixty-six
+// opcodes had no witness anywhere.
+//
+// WHAT IT WITNESSES, each verified by compiling and reading the emitted
+// opcodes rather than by reasoning about what a construct should emit:
+//
+//   Byte arithmetic  -> Add, Sub, Mul, Neg   (Word operands take the Checked
+//                                             forms; Byte and Float take these)
+//   Float conversion -> IntToFloat, FloatToInt
+//   Fixed<16>        -> FixedMul, FixedDiv, WordToFixed, FixedToWord
+//   external native  -> CallExternalNative   (`use external host::`)
+//   2-level index    -> BoundsCheck          (a single level emits none)
+//   checked `/` `%`  -> CheckedDiv, CheckedMod  (a BARE `/` emits `Div`)
+//
+// Divisors are constants so no argument vector can make this fault: the
+// differential drives it with twenty-four of them.
+//
+// THE NATIVE BACKEND CURRENTLY REFUSES THIS FILE, AND THAT IS THE POINT.
+// Measured on the tree that added it, `module_refusals` reports three:
+//
+//   byte_mix          UnsupportedOp("Add")
+//   fixed_mix         UnsupportedOp("WordToFixed(16)")
+//   float_round_trip  UnsupportedOp("IntToFloat")
+//
+// Before this file the corpus produced ZERO backend refusals, and that figure
+// was read as "everything lowers". It measured the corpus. The three refusals
+// above are the first concrete, demonstrated items of remaining Workstream A
+// scope, and they exist because a program finally emits the opcodes.
+//
+// So this file is EXPECTED to sit in the differential's exempt set under
+// "the backend refuses it" until those opcodes are lowered. Do not delete it
+// to restore a zero: the zero was the thing that was wrong.
+
+use external host::tick
+
+shared data grid {
+  cells: [[Word; 4]; 4],
+}
+
+// A MULTI-LEVEL indexed access. A single-level one folds its check into
+// `GetDataIndexed`'s own twenty-four-bit operand and emits no `BoundsCheck`;
+// only a per-level access emits the sixteen-bit form.
+fn grid_at(i: Word, j: Word) -> Word {
+  grid.cells[i][j]
+}
+
+fn byte_mix(a: Byte, b: Byte) -> Byte {
+  let sum = a + b;
+  let diff = a - b;
+  let prod = diff * b;
+  let neg = -prod;
+  sum + neg
+}
+
+fn float_round_trip(w: Word) -> Word {
+  let f = w as Float;
+  let scaled = f + 1.5;
+  scaled as Word
+}
+
+fn fixed_mix(w: Word) -> Word {
+  let x = w as Fixed<16>;
+  let two = 2 as Fixed<16>;
+  let scaled = x * two;
+  let halved = scaled / two;
+  halved as Word
+}
+
+// THE CHECKED-ARITHMETIC FORM. A bare `a / b` emits `Div`; only the form with
+// a `zero_divisor` arm emits `CheckedDiv`. `%` admits `zero_divisor` only, while
+// `/` also admits an `overflow` arm for the `i64::MIN / -1` corner.
+//
+// Found by the `v0.2.3` line after eight construct attempts here failed.
+//
+// WHY IT WAS HARD TO FIND: I was searching for an unusual TYPE when the answer
+// was an unusual FORM. I never questioned that `a / b` was the whole division
+// surface, so no amount of probing operand types could have reached it.
+//
+// A `CHANGELOG.md` defect sits nearby but is NOT the reason, and the first
+// account of it given to me was wrong in both directions. Verified here: lines
+// 561 and 571 are BOTH under `## [0.2.0]` (line 497, next header 645), so it is
+// one release section asserting both that the emission path "drops the
+// stamped-zero-flag fallback in favour of the new opcodes" AND that "division
+// and modulo continue to use the stamped-zero-flag pattern". Not staleness
+// across releases -- a self-contradiction within one. And 561 precedes 571, so a
+// top-down reader meets the CORRECT claim first and the wrong one last.
+//
+// NOT a defect, checked before anyone "fixes" it: 561 also says the construct
+// does not catch division by zero. That was true for 0.2.0. `zero_divisor`
+// arrives in 0.2.1 (line 461), so that sentence is correctly historical.
+fn checked_ratio(a: Word, b: Word) -> Word {
+  let q = a / b {
+    ok(v) => v,
+    zero_divisor(n) => 0,
+  };
+  let r = a % b {
+    ok(v) => v,
+    zero_divisor(n) => 0,
+  };
+  q + r
+}
+
+fn main(seed: Word) -> Word {
+  let b = byte_mix(3 as Byte, 5 as Byte);
+  let f = float_round_trip(seed);
+  let q = fixed_mix(seed);
+  let g = grid_at(1, 2);
+  let h = host::tick(seed);
+  let c = checked_ratio(seed, 3);
+  (b as Word) + f + q + g + h + c
+}

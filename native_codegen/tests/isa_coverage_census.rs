@@ -163,15 +163,22 @@ fn which_isa_opcodes_have_no_corpus_witness() {
         }
     }
     println!(
-        "\n  MEASURED 2026-08-20: every one of these IS emittable. Each has a\n  \
-         `fc.emit` site in `src/compiler.rs`, and `Byte` arithmetic witnesses\n  \
-         Add/Sub/Mul in one line each -- verified by compiling snippets, not by\n  \
-         reading. So this list is a CORPUS gap, not dead instruction-set surface,\n  \
-         and an example witnessing all of them is constructible.\n  \
-         What each one NEEDS is the open question: `Word` division emits `Div`\n  \
-         and a runtime array index emits `GetIndex`, so `CheckedDiv`/`CheckedMod`\n  \
-         and `Len`/`BoundsCheck` come from other constructs -- fixed-point and\n  \
-         dynamic-length forms respectively."
+        "\n  TWO REMAIN, and the open question is no longer WHICH CONSTRUCT but\n  \
+         WHETHER ONE EXISTS. Both fire only when a static type is UNKNOWN, so\n  \
+         reaching them needs inference to FAIL rather than an unusual syntax:\n  \
+         \n  \
+         `Len`      (compiler.rs ~7647) fires only when the for-in source has no\n  \
+                    statically known length. Its own comment calls the fallback\n  \
+                    admissible at the bytecode level but possibly verifier-rejected\n  \
+                    in strict mode, which reads as a DEFENSIVE path.\n  \
+         `IsStruct` (compiler.rs ~11364) fires only for a struct pattern whose\n  \
+                    scrutinee is NOT statically that struct; a test asserts the\n  \
+                    fold-out in the ordinary case.\n  \
+         \n  \
+         IF THEY ARE DEFENSIVELY-RETAINED DEAD PATHS, THAT IS THE FINDING, and it\n  \
+         is worth more than two more witnessed opcodes: this project treats opcode\n  \
+         count as a first-order constraint. Neither reachable nor unreachable is\n  \
+         asserted here -- distinguishing them is exactly what this census is for."
     );
     println!("================\n");
 
