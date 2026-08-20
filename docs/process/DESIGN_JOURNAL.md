@@ -13,6 +13,55 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**STAGE TWO IS BLOCKED ON A DOCUMENTED DUPLICATE, AND THE BLOCKER IS A PUBLIC-API DECISION RATHER
+THAN A DEFECT (2026-08-20).**
+
+Shrinking `toks.packed` is not a one-line change, and the probe that established that is the
+increment. Rather than reason about which callers still seed the whole stream, I set the array to
+4,096 and ran the whole suite. Two causes, twelve failing tests, and **not one of them in production
+code** -- stage one had already moved every production entry point to the fused feed.
+
+| cause | tests |
+|---|---|
+| `tests/selfhost_codegen.rs:4079`, the harness's own token feed | 11 |
+| `the_chunk_table_cap_is_refused_by_the_driver_and_not_by_the_stage`, 14,334 tokens | 1 |
+
+**THE SECOND WAS TRIVIALLY FIXABLE AND IS FIXED.** Both it and `wire_kel_parses_now_that_the_chunk
+_table_admits_it` have the CHUNK table as their subject; the token feed is incidental to what they
+measure, and driving the collecting feed pinned the array at 14,334 and 24,836 tokens for reasons
+unrelated to either test. Both now use the fused feed.
+
+**THE FIRST IS THE REAL BLOCKER AND IT IS ALREADY DOCUMENTED IN THE FILE THAT CAUSES IT.**
+`tests/selfhost_codegen.rs` carries its own `fn parse_functions` and its own `ParsedFn`, and its own
+comment says why that matters: *"That duplication is the reason the same defect had to be fixed in
+three places... `self_host_compile` below is a copy of the shipping driver, so a fix to one is not a
+fix to the other."* The harness seeds a whole token stream, so it pins the array at the largest stage
+source it parses.
+
+**WHY THE COPY EXISTS, MEASURED RATHER THAN ASSUMED.** `ParsedFn` has **zero public fields and four
+public accessors** -- `category`, `param_count`, `guard_records`, `body_records`. The harness needs
+the name, the parameter names and types, the return type and the let bindings, none of which are
+reachable. **The duplicate is not laziness; it is the only thing the public surface permits.**
+
+**SO THE DECISION IS THE OPERATOR'S AND IT IS SMALL**: widen `ParsedFn`'s accessors so the harness can
+delete its copy. That removes a documented three-places-to-fix hazard AND unblocks the residency work,
+which is a better trade than either alone.
+
+**WHAT I REFUSED TO DO, AND WHY.** Shrinking to clear the true floor means sizing above `parse.kel`'s
+33,445 tokens, so 40,960 becomes about 34,816 -- a **15% saving that cuts headroom from 18% to 4%**.
+Paying churn to make the tightest bound in the corpus tighter is a worse position than today's, so it
+was not taken. **A partial win that degrades a margin is not a partial win.**
+
+**THE HANDOFF'S TOKEN FIGURE HAD DRIFTED**, found incidentally: `parse.kel` is **33,445** tokens, not
+the recorded 32,907. Every stage is now measured by an instrument in the tree rather than quoted from
+prose, which is the fifth figure this line has had to re-derive after finding it stale.
+
+**A SMALL SELF-CORRECTION.** My first version of that instrument read the stage sources by relative
+path at runtime, which depends on the working directory a runner chooses. It is `include_str!` now --
+compile-time, and wrong-path becomes a build error rather than a test that measures nothing.
+
+---
+
 **THE TOKEN BOUND IS OFF THE PRODUCTION PATH, AND THE TEST THAT WOULD HAVE PROVED IT FOUND A BIGGER
 PROBLEM (2026-08-19).**
 
