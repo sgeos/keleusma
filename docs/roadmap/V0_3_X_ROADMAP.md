@@ -27,6 +27,52 @@ The bytecode shape does not go away. Per `V0_4_0_NATIVE_CODEGEN.md`, native is a
 deployment shape; the bytecode remains the verification artefact and the portable form, and the
 VM remains for embedding and fallback.
 
+## CORRECTION: the entry baseline is NOT a gate on Workstreams A to D
+
+**Operator challenge, 2026-08-20: "I am not convinced native codegen actually requires self
+hosting." Measured, and the challenge is correct.**
+
+The status line above says this line is "Gated on the V0.3.0 full self-hosting solution landing"
+and that "the V0.3.x work has not started". **Both statements are false as written**, and the
+second is falsified by artefacts already in the tree.
+
+**Native code generation consumes BYTECODE. It does not care which compiler produced it.**
+`native_codegen/tests/corpus_differential.rs` builds every module with the Rust reference
+compiler -- `compile(&parse(&tokenize(src)))` -- and lowers it. No self-hosted compiler appears
+anywhere in the native path. Measured on this tree: **64 modules compile, 1027 of 1027 chunks
+lower, 88,246 of 88,246 opcode instances lower, and 44 modules execute natively and agree with the
+virtual machine.**
+
+**Where the original reasoning came from, and why it does not generalise.**
+`V0_3_0_SELF_HOSTING.md` argues that without the self-hosted compiler, V0.4.0 "has nothing to
+compile to native code". That is true of ONE deliverable -- an ahead-of-time self-hosted compiler
+shipped as a static library, removing the virtual machine from the compilation path. It is not a
+precondition for lowering bytecode to native code, which is what Workstreams A to D actually do.
+
+**The self-hosting-style subset is already being lowered.** Each workstream is written as targeting
+"the self-hosted compiler itself" first. That needs the stage SOURCES to exist, not the self-hosted
+compiler to be finished. `src/selfhost/kel/*.kel` are in the corpus today and lower today.
+
+**What genuinely does depend on V0.3.0**: compiling the self-hosted compiler ahead of time so the
+virtual machine leaves the compilation path, and any claim that "the full language lowers" resting
+on a full-language corpus that only a complete self-hosted compiler exercises. **Neither blocks
+Workstream A, B, C or D from proceeding on reference-compiled bytecode.**
+
+**The measured gap is a different one, and it is now named.** "100% of corpus opcode instances
+lower" is a statement about the CORPUS. The milestone is that the whole LANGUAGE lowers. Those are
+different populations: **16 of the 66 declared opcodes have no corpus witness at all**, so the
+100% figure says nothing whatever about them. See
+`native_codegen/tests/isa_coverage_census.rs`, which names them and derives the instruction set
+from `src/bytecode.rs` rather than transcribing it.
+
+**All sixteen are EMITTABLE, so the gap is closable.** Each has an `fc.emit` site in
+`src/compiler.rs`, and `Byte` arithmetic witnesses `Add`, `Sub` and `Mul` in one line each --
+verified by compiling snippets. **An example exercising every opcode is therefore constructible**,
+which would turn "100% of corpus opcode instances lower" into a claim about the instruction set
+rather than about the corpus. The constructs are not all obvious: `Word` division emits `Div`, not
+`CheckedDiv`, and a runtime array index emits `GetIndex`, not `Len`/`BoundsCheck` -- the checked
+and length forms come from the fixed-point and dynamic-length surfaces.
+
 ## Entry baseline (what V0.3.0 hands to V0.3.x)
 
 - A self-hosted compiler that lowers the full language to bytecode, its output byte-identical to
