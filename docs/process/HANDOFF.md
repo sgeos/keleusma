@@ -5,15 +5,18 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **Refreshed 2026-08-19** against the merge at `3ffd5a4c`, with every pinned value re-measured.
-> **SEVEN increments landed since the previous refresh** and it had gone stale in nearly every
-> number. The session's whole subject was diagnostics: `parse.kel` named NONE of its failure modes
-> at the start and names THIRTEEN now, across ELEVEN guarded counters. The last cap that excluded a
-> real stage is gone -- **`wire.kel` parses at 486 functions** -- and `parse` is fused into
-> `reconstruct` at function granularity.
+> **REFRESHED 2026-08-20 against `afe3d22b`**, with every pinned value re-measured rather than
+> carried forward. **THIRTY-ONE COMMITS landed since the previous refresh**, across an unattended
+> overnight run, and its check block had gone stale in every test count.
 >
-> **Read "THE ONE DEFECT THIS SESSION KEPT FINDING" below before touching anything.** It is one
-> mistake made six times, it was always mine rather than the code's, and the fix is mechanical.
+> **THE SESSION'S SUBJECT WAS NOT WHAT IT SET OUT TO BE.** It began on Order 1 item 3 and spent most
+> of its time on FOUR SILENT MISCOMPILES in the self-hosted compiler, three of them found by a
+> deliberate sweep rather than by accident. Read "WHAT THE SWEEP FOUND" and "THE DUPLICATE IS NOW
+> EVIDENCED" below before planning anything.
+>
+> **The single most important item for the operator is the `ParsedFn` accessor decision.** It was
+> first raised as a convenience; by the end of the night the duplicate it sustains had cost four
+> distinct things, including making the construct-support table measure the wrong compiler.
 
 ## Validity
 
@@ -25,32 +28,40 @@ always-current, so it must be able to report itself stale rather than mislead a 
 recorded parent is a claim that nothing else ever lands, and it has failed twice.
 
 ```sh
-git merge-base --is-ancestor 3ffd5a4c HEAD    # must succeed
+git merge-base --is-ancestor afe3d22b HEAD    # must succeed
 
 # Content. If ANY of these differ, say so rather than acting on the state below.
-grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 13
-grep -c '^\s*#\[test\]' tests/selfhost_wire.rs              # 172
-grep -c '^\s*#\[test\]' tests/selfhost_parse.rs             # 87
-grep -c '^\s*#\[test\]' tests/selfhost_codegen.rs           # 135
+grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 16
+grep -c '^\s*#\[test\]' tests/selfhost_wire.rs              # 173
+grep -c '^\s*#\[test\]' tests/selfhost_parse.rs             # 89
+grep -c '^\s*#\[test\]' tests/selfhost_codegen.rs           # 138
+grep -c '^\s*#\[test\]' tests/selfhost_declared_bounds.rs   # 5   (new this session)
 grep -c '^\s*#\[test\]' tests/block_form_statements.rs      # 11
 grep -c '^\s*#\[test\]' tests/consts_region_composition.rs  # 7
 grep -c '^\s*#\[test\]' tests/operand_stack_model.rs        # 6
-grep -oE 'fn highest_command\(\) -> Word \{ [0-9]+ \}' src/selfhost/kel/wire.kel   # 181
+grep -oE 'fn highest_command\(\) -> Word \{ [0-9]+ \}' src/selfhost/kel/wire.kel   # 181, unchanged
 
-# THE `wire.kel` BOUNDS. Unchanged this session; the PARSER's caps are what moved.
+# THE `wire.kel` BOUNDS. Unchanged this session.
 grep -oE 'fn (nm_max_names|mi_max_nodes|fl_max_nodes|ck_max)\(\) -> Word \{ [0-9]+ \}' \
     src/selfhost/kel/wire.kel        # 1024 names, 1365 nodes, 170 flattener, 90 chunk batch
 
-# THE PARSER'S CAPS, ALL NAMED AND ALL GUARDED. One source of truth, in the driver.
-grep -oE 'pub const PARSE_[A-Z_]+: usize = [0-9]+;' src/selfhost_host.rs
+# THE VERIFIER'S DECLARED NESTING CAP. New: it used to DROP a push past 128 silently.
+grep -oE 'fn max_nesting\(\) -> Word \{ [0-9]+ \}' src/selfhost/kel/verify_depth.kel   # 32
+
+# THE PARSER'S CAPS. Unchanged; the token cap now binds only the COLLECTING feed.
+grep -rhoE 'pub const PARSE_[A-Z_]+: usize = [0-9]+;' src/ | sort
 #   OPSTACK 64, LOCALS 64, STMTS 256, PARAMS 32, IF_DEPTH 32, FOR_DEPTH 8,
 #   ARRAY_NEST 8, VARIANTS 256, CALL_DEPTH 8, FIELDS 512, TOKEN 40960, CHUNK 1024
-grep -n 'chunks: \[Word;' src/selfhost/kel/parse.kel   # [Word; 1024] -- `wire` is 486 and PARSES
 
+# THE MARGIN PINS. Moved twice this session, both times for a named reason.
+grep -oE 'assert_eq!\(worst_(names|blob), [0-9]+' tests/selfhost_wire.rs   # 671 names, 35213 bytes
+
+# THE CONSTRUCT-SUPPORT BOUNDARY. **THE ENUM CHANGED SHAPE**: `Gap` split into
+# `Refuses` and `Diverges`, because it was conflating an honest refusal with a
+# silent miscompile. Expect 87 SOk / 1 Refuses / 5 Diverges / 1 RefRejects.
 awk '/let cases: &\[\(&str, Support, &str\)\] = &\[/{f=1;next} f&&/^    \];/{f=0} f' \
     tests/selfhost_codegen.rs \
-  | sed 's://.*::' | grep -oE '\b(SOk|Gap|RefRejects)\b' | sort | uniq -c
-# expect: 4 Gap, 1 RefRejects, 79 SOk
+  | sed 's://.*::' | grep -oE '\b(SOk|Refuses|Diverges|RefRejects)\b' | sort | uniq -c
 ```
 
 **A CHECK THAT PASSES IS NOT A CURRENT DOCUMENT.** IS NOT A CURRENT DOCUMENT.** The last one passed every check six merges after
@@ -145,6 +156,65 @@ but not derived**. A region whose payload came from the harness or the reference
    refuses past **1,024 nodes** (`nm_max_names`, error `-240`), which `wire.kel` hits at 1,148 chunk
    constants. The **flattener out of `wire.fin`** refuses past **170**, `fin` being 1,024 words at six
    words a node. Only the second is derived from a word count.
+
+## WHAT THE SWEEP FOUND, AND WHY IT COULD NOT HAVE BEEN FOUND BY READING
+
+**FOUR SILENT MISCOMPILES IN ONE NIGHT.** Three are fixed; one is recorded and deliberately not.
+
+| construct | symptom | state |
+|---|---|---|
+| `true` / `false` | emitted `GetLocal(0)` where the reference emits `PushImmediate(1)` | **FIXED** |
+| `x as Byte` | emitted `ByteToWord`; the direction was discarded at parse time | **FIXED** |
+| `Named("Bool")` as a type | tagged as the boolean primitive; a false accept | **FIXED** |
+| nested array literal | outer composite sized 16 where the reference computes 32, and a chained index TRUNCATES the body | **RECORDED, NOT FIXED** |
+
+**THE METHOD IS THE DELIVERABLE.** Compile small programs through both compilers and compare **BYTES**,
+classifying THREE ways: identical, refuses loudly, and DIFFERS. Only the third is dangerous; a loud
+refusal is an honest gap. An ops-only comparison would have called the string-literal case clean, and
+it is not.
+
+**WHY THE ORACLE WAS BLIND.** The self-hosting claim rests on compiling the twelve stage sources
+byte-identically. **Those sources use no boolean literal and no `Byte` cast**, so the oracle cannot
+see either construct. Any construct the corpus does not contain is unverified BY CONSTRUCTION. That
+is the seventh recorded instance of a suite whose coverage is a property of its case list, and the
+most consequential, because here the case list is the corpus the whole claim rests on.
+
+**PROPORTIONALITY, AND STATE IT EVERY TIME.** `self_hosted_compile` cross-checks ops, constant pool
+and local count against the reference and refuses on divergence. **Every defect above gave a user a
+loud error, never a wrong artifact.** The exposure is to direct callers of `self_host_compile` that
+skip the check. Reporting one of these without that sentence overstates it badly.
+
+**THREE OF THE FOUR "KNOWN GAPS" WERE NEVER GAPS.** `Support::Gap` conflated refusing with diverging.
+Split, and measured: `eq/struct_tuple_of_impure_struct`, `eq/struct_field_array_of_tuple` and
+`scope/float_arith` all **Diverge**; only `scope/generic_fn` refuses. The table said "gap" and a
+reader takes that as "unsupported".
+
+## THE DUPLICATE IS NOW EVIDENCED, NOT ARGUED. THIS IS THE OPERATOR'S TOP ITEM.
+
+`tests/selfhost_codegen.rs` carries its own `self_host_compile` and its own `ParsedFn`. Its own
+comment has long warned that a fix to one is not a fix to the other. **The two have now measurably
+diverged:**
+
+```
+fn f() -> Word { let s = "hi"; 1 }
+  reference:     constants [StaticStr("hi"), Int(1)]
+  the test copy: constants [StaticStr("hi"), Int(1)]   -- agrees
+  the LIBRARY:   constants [Int(3),          Int(1)]   -- the intern id, as an Int
+```
+
+**The construct-support boundary measures the COPY**, so it records `Ok` for a construct the SHIPPING
+compiler gets wrong. Pinned by `the_two_self_hosted_compilers_disagree_on_a_string_literal`, whose
+control is the copy's agreement with the reference.
+
+**The copy exists because `ParsedFn` has four public accessors and no public fields**, and the harness
+needs six more. **Widening them is the fix**, and the same duplicate:
+
+1. blocks stage two of the token residency,
+2. required the boolean-literal shared slots to be seeded separately,
+3. is the subject of the support table, and
+4. now disagrees with the shipping compiler on an observable.
+
+**It was first put to the operator as a convenience. That framing was wrong.**
 
 ## THE MACRO POSITION
 
@@ -338,6 +408,27 @@ looked complete. **In every case the code was reachable and the evidence was not
   `&vm` missed every multi-line form; clippy found six.
 
 ## Open, held by the operator
+
+**THE ONE ITEM THAT MATTERS MOST: widen `ParsedFn`'s accessors so the duplicate driver in
+`tests/selfhost_codegen.rs` can be deleted.** Evidenced above, four costs, first raised as a
+convenience and that framing was wrong. Everything else here is smaller.
+
+**THREE FURTHER ITEMS FROM THE OVERNIGHT RUN:**
+
+- **Nested array literals mis-size the outer composite and truncate a chained index.** Recorded as
+  `Diverges` with the measured symptom, NOT fixed: two defects inside the composite-layout machinery
+  the flat-byte representation makes load-bearing for memory bounds. Deliberately left for a
+  supervised session.
+- **A string literal yields `Int(intern_id)` in the library compiler** where the reference yields
+  `StaticStr`. `Text` is listed in `CLAUDE.md` among the classes the command-line path refuses, so
+  this may be a known exclusion; it is adjacent to that class rather than plainly inside it.
+- **Two items were WITHDRAWN from the autonomous completion condition** at
+  `../decisions/ORDER_1_COMPLETION_CONDITION.txt`. They specified a file operand and a sidecar
+  fingerprint for a staged pipeline command **that does not exist**, and were written without
+  checking. The underlying requirement still stands in `../decisions/PIPELINE_THEN_MONOLITH.md` for
+  whoever builds the command.
+
+**THE RULINGS OF 2026-08-19 ARE ALL IMPLEMENTED OR RECORDED. Do not re-ask them.**
 
 **A RULING SESSION LANDED 2026-08-19 AND CLEARED THE LIVE LIST. Do not re-ask any of these; the
 ruling is the answer.** Every item that was live is now ruled, and TWO of the rulings were taken
