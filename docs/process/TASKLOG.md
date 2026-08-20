@@ -10,6 +10,23 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-20, later).** **A REGRESSION FROM PR #175 IS FIXED, AND THE REASON IT
+> SHIPPED MATTERS MORE THAN THE BUG.** `bool` is the boolean primitive and `Bool` is an ordinary
+> named type; `d1148e76` taught the type channel to treat the latter as the former, on reasoning that
+> was confidently backwards.
+>
+> **I broke BOTH SIDES of a differential oracle in one increment.** The reference-AST extraction and
+> the pipeline extraction were changed the same wrong way, so they agreed and the suite went green.
+> A differential oracle only detects a defect introduced on ONE side.
+>
+> **The consequence was a false accept**, verified before it was claimed: the stage accepted a
+> `Bool`-typed value as an `if` condition, which the reference rejects. The test that showed this was
+> then REWRITTEN, because after the fix the stage accepts again for a different reason -- deferral on
+> unknown. A verdict test could not discriminate, so the test asserts the TAG, with a `bool` control.
+>
+> The brief and completion condition governing the remaining autonomous work are in
+> `docs/decisions/ORDER_1_REMAINING_BRIEF.md` and `ORDER_1_COMPLETION_CONDITION.txt`.
+
 > **Currency note (2026-08-20).** **STAGE TWO OF THE TOKEN RESIDENCY IS BLOCKED, ON A PUBLIC-API
 > DECISION RATHER THAN A DEFECT.** Established by probe: `toks.packed` set to 4,096, whole suite run,
 > twelve failures in two causes and **none in production code** -- stage one had already fused every
