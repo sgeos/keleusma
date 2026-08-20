@@ -4692,7 +4692,13 @@ fn window_emit_chunks(
     }
 
     let mut out = vec![0u8; want];
-    for (j, row) in chunk_fields.chunks_exact(FIELDS).enumerate() {
+    // `as_chunks` rather than `chunks_exact`, so `row` is a `&[i64; FIELDS]` with
+    // its length known to the type system rather than a slice that happens to be
+    // that long. Clippy's `chunks_exact_to_as_chunks` requires it for a CONSTANT
+    // chunk size, and the lint is MSRV-gated: `as_chunks` stabilised at 1.88, which
+    // is this crate's `rust-version` exactly. Verified against a real 1.88
+    // toolchain, not inferred from the lint firing.
+    for (j, row) in chunk_fields.as_chunks::<FIELDS>().0.iter().enumerate() {
         for (f, &v) in row.iter().enumerate() {
             vm.set_shared(&mut shared, FIN_SLOT + f, Value::Int(v))
                 .expect("chunk field");
