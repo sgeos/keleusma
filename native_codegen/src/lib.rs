@@ -2087,6 +2087,74 @@ fn lower_chunk_body<'ctx>(
                 };
                 st.push(v);
             }
+            // **THE FIXED-POINT CONVERSIONS, REPRODUCED FROM THE VM HANDLER**
+            // rather than from a definition of Q-format arithmetic. Rounding,
+            // saturation and the failure mode are decisions already made in
+            // `vm.rs`, and guessing any of them yields code that lowers, passes
+            // the support census, and computes the wrong number.
+            //
+            // The two opcodes fail DIFFERENTLY on an out-of-range fraction
+            // count, and the VM says why: `WordToFixed` converts an in-range
+            // integer whose result merely overflows the Fixed range, so it
+            // saturates; an out-of-range COUNT is corrupt input, for which
+            // `FixedToWord` fails closed. **The count is a static operand here**,
+            // so both guards become lowering-time refusals rather than emitted
+            // runtime checks — the structural verifier already bounds it, so
+            // neither refusal is reachable from a verified module.
+            Op::FixedToWord(frac_bits) => {
+                if u32::from(*frac_bits) >= WORD_BITS as u32 {
+                    return Err(LowerError::UnsupportedOp(format!(
+                        "FixedToWord({frac_bits}) has a fraction count at or beyond the \
+                         {WORD_BITS}-bit word width; the VM fails closed here and the \
+                         count is static, so the lowering refuses rather than emitting \
+                         a trap"
+                    )));
+                }
+                let v = st.pop();
+                // Arithmetic, sign-preserving: the VM uses `bits >> frac_bits`
+                // on a signed value, so negatives keep their sign.
+                let sh = i64t.const_int(u64::from(*frac_bits), false);
+                st.push(st.b.build_right_shift(v, sh, true, "fx2w").unwrap());
+            }
+            Op::WordToFixed(frac_bits) => {
+                // The VM's corrupt-input arm saturates by sign when the count
+                // reaches the WIDE width. That arm is unreachable from a
+                // verified module and reproducing it would require emitting a
+                // branch for a case that cannot occur, so it is refused.
+                if u32::from(*frac_bits) >= 2 * WORD_BITS as u32 {
+                    return Err(LowerError::UnsupportedOp(format!(
+                        "WordToFixed({frac_bits}) has a fraction count at or beyond the \
+                         wide width; the VM treats this as corrupt input"
+                    )));
+                }
+                let v = st.pop();
+                // Widen, shift, CLAMP, narrow. The VM saturates at the word's
+                // MAX/MIN rather than wrapping, so the clamp is the semantics
+                // and not a safety afterthought.
+                let wide = st.widen(v, i128t, "w2fx.wide");
+                let sh = i128t.const_int(u64::from(*frac_bits), false);
+                let shifted = st.b.build_left_shift(wide, sh, "w2fx.shl").unwrap();
+                // MAX/MIN sign-extended from their 64-bit forms, so the
+                // constants cannot be got wrong by hand-writing 128-bit
+                // literals.
+                let max = st.widen(i64t.const_int(i64::MAX as u64, false), i128t, "w2fx.max");
+                let min = st.widen(i64t.const_int(i64::MIN as u64, true), i128t, "w2fx.min");
+                let over =
+                    st.b.build_int_compare(inkwell::IntPredicate::SGT, shifted, max, "w2fx.over")
+                        .unwrap();
+                let under =
+                    st.b.build_int_compare(inkwell::IntPredicate::SLT, shifted, min, "w2fx.under")
+                        .unwrap();
+                let clamped_hi =
+                    st.b.build_select(over, max, shifted, "w2fx.selhi")
+                        .unwrap()
+                        .into_int_value();
+                let clamped =
+                    st.b.build_select(under, min, clamped_hi, "w2fx.sello")
+                        .unwrap()
+                        .into_int_value();
+                st.push(st.b.build_int_truncate(clamped, i64t, "w2fx").unwrap());
+            }
             Op::Dup => {
                 let v = st.pop();
                 st.push(v);
