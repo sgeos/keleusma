@@ -13,6 +13,55 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE DECLARED BINDING ROWS NOW COME FROM THE PIPELINE, AND THE COMPARISON FOUND A DEFECT IN THE
+REFERENCE EXTRACTION RATHER THAN IN THE STAGE (2026-08-19).**
+
+Order 1 item 3 asks for the type checker's INPUT to stop being Rust walking the reference parser's
+abstract syntax tree. This is the first slice: the bindings a source states outright, which are a
+function's declared return type and each parameter's declared type, are now derived from
+`parse_functions` -- the self-hosted `lexer` into `parse` pipeline -- by
+`binding_rows_from_pipeline`.
+
+**THE PARAMETER'S NAME WAS ALREADY IN THE RECORD STREAM AND THE DRIVER THREW IT AWAY.** The header
+emits `4 + name * 64`; the arm read the code and discarded the payload because a COUNT was all any
+existing consumer needed. `ParsedFn` now carries `param_names`. Nothing was encoded to make this
+work, which is what Order 1 asked for: the parameter name came from an existing record and the
+`let` name came from the record added in the preceding increment under the operator's ruling.
+
+**THE COMPARISON IS BY NAME STRING, NOT BY ID, AND THAT IS NOT A CONVENIENCE.** The two extractions
+live in different identifier spaces -- the reference assigns ids by insertion order as it walks,
+the pipeline uses the lexer's intern table -- so comparing ids would compare the NUMBERING and not
+the content. Names are the thing both claim to describe.
+
+**THE DEFECT THE COMPARISON FOUND WAS MINE, IN THE REFERENCE-SIDE EXTRACTION.** `Bool` DOES NOT
+PARSE AS A `Prim`. The reference parser yields `Named("Bool")` for it, so the harness's
+`TypeExpr::Prim` match silently dropped every `Bool` annotation: `fn f(b: Bool) -> Word { 1 + b }`
+was REJECTED by the reference compiler and ACCEPTED by the stage, because `b` had no binding row at
+all. The pipeline extraction keys on the type NAME and therefore reached a binding the AST walk did
+not. **A second extraction found a hole in the first**, which is the argument for differential
+inputs and not only differential outputs. `named_type_tag` is one function because the parameter
+walk and the return-type walk both need it, and a second copy is how one of them comes to reach a
+type the other misses.
+
+**THE BOUNDARY IS PINNED SO THE SLICE CANNOT BE READ AS COMPLETION.** A `let` bound to a literal or
+a call still produces NO row on the pipeline side: the initialiser's shape lives in the body record
+stream, so reading it means walking the forest rather than the header.
+`the_pipeline_rows_are_the_declared_subset` asserts the reference DOES produce that row -- so the
+pin is non-vacuous -- and that the pipeline does not, and it instructs the next increment to fold
+the case into the agreement test rather than delete the pin.
+
+**RECOVERED FROM AN INTERRUPTED SESSION.** The edits were made before a laptop crash and were never
+committed. Every figure above was re-measured on the recovered tree rather than trusted: 15 of 15
+`selfhost_typecheck` tests pass, `cargo fmt --all --check` and
+`cargo clippy --tests --features signatures,shell,self-host -- -D warnings` both exit zero with the
+code captured OUTSIDE the pipe, and the four-entry feature-matrix `cargo check --tests` sweep
+(`--no-default-features`, `--features signatures`, `--features self-host`,
+`--features signatures,shell`) exits zero on each. The first attempt at that verification reported
+`FMT_EXIT=0` from a `head` rather than from `cargo fmt`, which is the seventh constructed status
+this line has recorded and the reason the rule exists.
+
+---
+
 **IDENTITY NOW TRAVELS WITH THE STRUCTURE, AND I ASSERTED THE BLAST RADIUS BEFORE MEASURING IT
 (2026-08-19).**
 

@@ -10,6 +10,20 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-19, final+3).** **THE TYPE CHECKER'S DECLARED INPUT NOW COMES FROM THE
+> PIPELINE.** Order 1 item 3, first slice: a function's declared return type and each parameter's
+> declared type are derived from `parse_functions` by `binding_rows_from_pipeline`, and agree with
+> the reference-AST extraction compared by NAME STRING rather than by id. **Nothing new was
+> encoded** -- the parameter name was already in the record stream and the driver discarded it.
+>
+> **The comparison found a defect in the REFERENCE-side extraction, not in the stage**: `Bool`
+> parses as `Named("Bool")` and not as a `Prim`, so every `Bool` annotation was silently dropped and
+> `fn f(b: Bool) -> Word { 1 + b }` was accepted by the stage while the reference rejected it.
+>
+> **Derived bindings are still absent** -- a `let` bound to a literal or a call has no pipeline row,
+> because the initialiser's shape is in the body record stream. Pinned, non-vacuously, by
+> `the_pipeline_rows_are_the_declared_subset`.
+
 > **Currency note (2026-08-19, final+2).** **IDENTITY NOW TRAVELS WITH THE STRUCTURE.** Order 1's
 > claim that the type checker's input is available from `parse.kel` plus `reconstruct.kel` was half
 > true: a `Local` record carries a SLOT and no body record mentioned a NAME, while the type channel

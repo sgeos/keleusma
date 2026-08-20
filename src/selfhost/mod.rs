@@ -119,6 +119,13 @@ pub struct ParsedFn {
     return_type: i64,
     guard: Vec<(i64, i64)>,
     body: Vec<(i64, i64)>,
+    /// Each value parameter's interned name id, in declaration order.
+    ///
+    /// **The record already carried this and the driver threw it away**: the header
+    /// emits `4 + name * 64`, and the arm read the code and discarded the payload
+    /// because a count was all anything needed. Parameters are half the bindings a
+    /// type check has to resolve, so the name is kept now rather than recovered.
+    param_names: Vec<i64>,
     /// Each `let` binding's `(frame slot, interned name id)`, in fold order.
     ///
     /// **Kept OUT of `body`.** The record stream `body` holds is what
@@ -1235,10 +1242,15 @@ fn parse_functions_impl(
                             return_type: 0,
                             guard: Vec::new(),
                             body: Vec::new(),
+                            param_names: Vec::new(),
                             let_names: Vec::new(),
                         })
                     }
-                    4 => open_decl(&mut cur, code, val).params += 1,
+                    4 => {
+                        let f = open_decl(&mut cur, code, val);
+                        f.params += 1;
+                        f.param_names.push(val);
+                    }
                     6 => open_decl(&mut cur, code, val).param_types.push(val),
                     7 => open_decl(&mut cur, code, val).return_type = val,
                     9 => {
@@ -1310,6 +1322,67 @@ pub fn self_host_compile(src: &str) -> Module {
         module.chunks[idx].local_count = lc as u16;
     }
     module
+}
+
+/// The type checker's BINDING ROWS, derived from the self-hosted pipeline.
+///
+/// Returns `(name, tag, form)` triples with names as STRINGS rather than interned
+/// ids, so a caller can compare them against an extraction built over a different id
+/// space. `form` matches the stage's `ty.bform`: 0 the value is a tag, 1 it is
+/// another name the stage resolves through one alias hop.
+///
+/// # What this replaces, and why it could not be written until now
+///
+/// Order 1 records that this input should come from `parse.kel` plus
+/// `reconstruct.kel` because "structure is available" there. It was half true.
+/// Function names, declared return types and declared parameter types were all
+/// reachable; **the names of the things being bound were not**. A `Local` record
+/// carries a slot, and the type channel is keyed by names.
+///
+/// Two records closed that. The parameter's name was **already in the stream** —
+/// the header emits `4 + name * 64` and the driver discarded the payload. The
+/// `let` binding's name is the record added under the operator's ruling on that
+/// fork. Neither invents an encoding, which is what Order 1 asked for.
+///
+/// # What it does NOT yet cover
+///
+/// A `let` bound to a literal or a call still has no tag here: the initialiser's
+/// SHAPE lives in the body record stream, and reading it means walking the forest
+/// rather than the header. That walk is the next slice; this one carries the
+/// declared bindings, which are the ones the source states outright.
+pub fn binding_rows_from_pipeline(src: &str) -> (Vec<String>, Vec<(String, i64, i64)>) {
+    let (fns, names, ..) = parse_functions(src);
+    // A type NAME id to the stage's scalar tag. The ids come from the same intern
+    // table the records index, so this is a lookup rather than a second convention.
+    let tag_of = |type_name_id: i64| -> i64 {
+        match names.get(type_name_id as usize).map(String::as_str) {
+            Some("Word") => 1,
+            Some("Bool") => 2,
+            Some("Byte") => 3,
+            _ => 0,
+        }
+    };
+    let name_of = |id: i64| -> Option<String> { names.get(id as usize).cloned() };
+
+    let mut rows: Vec<(String, i64, i64)> = Vec::new();
+    for f in &fns {
+        // The function's own name carries its declared return type, which is what a
+        // `let a = g()` alias hop resolves through.
+        if let Some(n) = name_of(f.name) {
+            let t = tag_of(f.return_type);
+            if t != 0 {
+                rows.push((n, t, 0));
+            }
+        }
+        for (i, &pid) in f.param_names.iter().enumerate() {
+            let Some(n) = name_of(pid) else { continue };
+            let t = f.param_types.get(i).copied().map_or(0, tag_of);
+            if t != 0 {
+                rows.push((n, t, 0));
+            }
+        }
+    }
+    (names, rows)
 }
 
 /// Self-host-compile a whole program **without ever holding every function's records**.

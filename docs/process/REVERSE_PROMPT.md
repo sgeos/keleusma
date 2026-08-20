@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-18 (session 48)
+**Date**: 2026-08-19 (session 49)
 
 ## Where things stand
 
@@ -25,9 +25,47 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 | **`parse` into `reconstruct`** | **FUSED at function granularity, 3.4x to 41.1x** |
 | shared-slot layouts | **nine copies collapsed to two definitions** |
 | `parse.kel` failure modes named | **THIRTEEN**; eleven counters guarded |
-| branch | `feat/typecheck-input-from-pipeline`; #164-#172 merged, at `52cbb6c4` |
+| **the type checker's INPUT** | **the DECLARED rows now come from the pipeline; the derived ones do not** |
+| branch | `feat/typecheck-bindings-from-pipeline`, cut from `v0.2.3` at `fe2af14f` |
 
 ## WHAT THIS INCREMENT DID
+
+**Order 1 item 3, first slice.** The type checker's DECLARED binding rows -- a function's declared
+return type and each parameter's declared type -- now come from `parse_functions`, the self-hosted
+`lexer` into `parse` pipeline, through `binding_rows_from_pipeline`. They are compared against the
+reference-AST extraction by NAME STRING rather than by id, because the two live in different
+identifier spaces and comparing ids would compare the numbering rather than the content.
+
+**Nothing was encoded to make this work.** The parameter's name was ALREADY in the record stream --
+the header emits `4 + name * 64` and the driver discarded the payload because a count was all any
+consumer needed -- and the `let` name is the record added in the previous increment under your
+ruling.
+
+### THE COMPARISON FOUND A DEFECT, AND IT WAS IN MY REFERENCE-SIDE EXTRACTION
+
+**`Bool` does not parse as a `Prim`.** The reference parser yields `Named("Bool")`, so the harness's
+`TypeExpr::Prim` match dropped every `Bool` annotation. `fn f(b: Bool) -> Word { 1 + b }` was
+REJECTED by the reference compiler and ACCEPTED by the stage, because `b` had no binding row at all.
+The pipeline extraction keys on the type NAME and reached a binding the AST walk did not. A second
+extraction found a hole in the first, which is an argument for differential INPUTS and not only
+differential outputs.
+
+### What this slice does NOT establish
+
+**Only the declared bindings.** A `let` bound to a literal or a call still produces no pipeline row:
+the initialiser's shape is in the body record stream, so reading it means walking the forest rather
+than the header. `the_pipeline_rows_are_the_declared_subset` pins that boundary from both sides --
+it asserts the reference DOES produce the row, so it is non-vacuous -- and tells the next increment
+to fold the case in rather than delete the pin.
+
+### Recovered work, re-measured rather than trusted
+
+These edits predate a laptop crash and were never committed. Verified on the recovered tree: 15/15
+`selfhost_typecheck`, `fmt --check` 0, `clippy -D warnings` 0, and the four-entry feature-matrix
+`cargo check --tests` sweep 0 on each. **The first verification attempt reported `FMT_EXIT=0` from a
+`head` rather than from `cargo fmt`** -- the seventh constructed status this line has recorded.
+
+## WHAT THE PREVIOUS INCREMENT DID (session 48)
 
 `parse.kel` reported its capacity limits as raw virtual-machine traps. Measured by feeding the
 stage malformed and oversized sources, not by reading it:
