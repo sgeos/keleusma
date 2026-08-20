@@ -10,6 +10,24 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-20, mid-morning).** **THE TWO SELF-HOSTED COMPILERS HAVE MEASURABLY
+> DIVERGED.** On a string literal the reference and `tests/selfhost_codegen.rs`'s copy both emit
+> `StaticStr("hi")`; `keleusma::selfhost::self_host_compile` emits `Int(3)`, the intern id as an Int.
+> Ops identical, pool different.
+>
+> **THE SUPPORT TABLE MEASURES THE COPY**, so it records `Ok` for a construct the SHIPPING compiler
+> gets wrong. Found by expecting `Diverges` and getting `Ok`. Pinned by
+> `the_two_self_hosted_compilers_disagree_on_a_string_literal`, with the local copy's agreement as
+> the control.
+>
+> **Widening `ParsedFn`'s accessors so the copy can be deleted is now evidenced, not argued.**
+>
+> **TWO ITEMS WERE WITHDRAWN FROM THE AUTONOMOUS COMPLETION CONDITION.** The file operand and sidecar
+> fingerprint describe a staged pipeline command that DOES NOT EXIST -- no phase or sidecar flag is
+> implemented -- and `keleusma compile` already takes a file and never reads standard input. The
+> condition's author did not check before writing them. Recorded in the condition rather than
+> silently amended.
+
 > **Currency note (2026-08-20, morning).** **ORDER 1 ITEM 3 REACHES `let` BINDINGS.** A `let` bound
 > to an integer or a boolean literal now produces a pipeline row, compared against the reference by
 > name string. The pin that told the next increment to fold its case in has been honoured.

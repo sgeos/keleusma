@@ -8011,6 +8011,37 @@ fn self_hosted_construct_support_boundary() {
         ("op/bnot_word", SOk, "fn f(a: Word) -> Word { bnot a }"),
         ("op/bnot_byte", SOk, "fn f(a: Byte) -> Byte { bnot a }"),
         // --- booleans ------------------------------------------------------------
+        // --- string literals, measured 2026-08-20 -------------------------------
+        //
+        // The ops match; the CONSTANT POOL does not. The reference emits
+        // `StaticStr("hi")` and the stage emits `Int(3)`, the lexer's intern id as
+        // a plain integer, because the string path reaches `intern_int` rather than
+        // `intern_str`.
+        //
+        // `CLAUDE.md` lists `Text` among the divergence classes the command-line
+        // path refuses, so this is plausibly a known exclusion rather than a new
+        // defect — but a `StaticStr` literal is ADJACENT to that class, not plainly
+        // the same thing, and the table had no string case either way. Recorded as
+        // measured rather than argued.
+        //
+        // **AN OPS-ONLY COMPARISON WOULD HAVE CALLED THIS CLEAN.** It is why the
+        // sweep that found it compares bytes.
+        // **`Ok` HERE MEANS THIS FILE'S COMPILER, AND THE LIBRARY'S DIVERGES.**
+        //
+        // Measured: the reference and this file's `self_host_compile` both emit
+        // `StaticStr("hi")`; `keleusma::selfhost::self_host_compile` emits
+        // `Int(3)`, the lexer's intern id as a plain integer. Identical ops, a
+        // different constant pool.
+        //
+        // The `Ok` is honest about what this table measures and MISLEADING about
+        // the shipping compiler, which is the whole problem with the table
+        // measuring a copy. Pinned separately and explicitly by
+        // `the_two_self_hosted_compilers_disagree_on_a_string_literal`.
+        (
+            "literal/string",
+            SOk,
+            "fn f() -> Word { let s = \"hi\"; 1 }",
+        ),
         // --- nested composites, measured 2026-08-20 and NOT yet fixed ------------
         //
         // A nested array literal mis-sizes the OUTER composite: two 16-byte inner
@@ -8822,5 +8853,80 @@ fn a_cast_lowers_in_the_direction_it_was_written() {
         narrow.chunks[0].ops, widen.chunks[0].ops,
         "both cast directions emit the same ops, so the direction is being ignored \
          again and the cases above prove nothing"
+    );
+}
+
+/// **THE TWO SELF-HOSTED COMPILERS HAVE MEASURABLY DIVERGED.**
+///
+/// This file carries its own `self_host_compile`, a copy of the shipping driver,
+/// and its own comment has warned for some time that "a fix to one is not a fix to
+/// the other". That was a hazard. **It is now an observed fact.**
+///
+/// Measured 2026-08-20 on `fn f() -> Word { let s = "hi"; 1 }`:
+///
+/// ```text
+///   reference:      constants [StaticStr("hi"), Int(1)]
+///   this file's:    constants [StaticStr("hi"), Int(1)]   — agrees
+///   the library's:  constants [Int(3),          Int(1)]   — the intern id, as an Int
+/// ```
+///
+/// The ops are identical in all three. Only the constant pool differs, which is why
+/// an ops-only comparison would call it clean.
+///
+/// # Why this matters more than the string bug itself
+///
+/// **The construct-support boundary measures THIS file's compiler.** So for any
+/// construct where the two have drifted, the table describes the copy and says
+/// nothing about what ships. `literal/string` is recorded there as `Ok`, which is
+/// true of the measured compiler and misleading about the shipping one.
+///
+/// That is not a hypothetical cost of duplication. It is the duplication producing
+/// a wrong answer in the project's own record of what self-hosting supports.
+///
+/// # Why the copy exists, and what closes it
+///
+/// `ParsedFn` exposes four accessors and no public fields, and this harness needs
+/// six more — the name, parameter names and types, the return type and the let
+/// bindings. The copy is the only thing the public surface permits. **Widening
+/// those accessors so the copy can be deleted is the fix**, and it also unblocks
+/// the token-residency work, which the same duplicate stops.
+///
+/// # What to do when the library is fixed
+///
+/// This test fails. That is the intent: fold the case into the ordinary
+/// byte-identity coverage and delete this test, rather than relaxing it.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_two_self_hosted_compilers_disagree_on_a_string_literal() {
+    use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
+
+    const SRC: &str = "fn f() -> Word { let s = \"hi\"; 1 }";
+    let reference =
+        compile(&parse(&tokenize(SRC).expect("lex")).expect("parse")).expect("reference");
+
+    // THE CONTROL. This file's compiler agrees with the reference, so the
+    // disagreement below is attributable to the LIBRARY's copy rather than to
+    // anything about the source.
+    let local = self_host_compile(SRC);
+    assert_eq!(
+        local.chunks[0].constants, reference.chunks[0].constants,
+        "this file's compiler no longer agrees with the reference either, so the \
+         comparison below attributes the divergence to the wrong compiler"
+    );
+
+    let library = keleusma::selfhost::self_host_compile(SRC);
+    assert_ne!(
+        library.chunks[0].constants, reference.chunks[0].constants,
+        "the library's compiler now agrees with the reference on a string literal. \
+         The two copies have converged on this construct: fold it into the ordinary \
+         byte-identity coverage and delete this test rather than relaxing it"
+    );
+
+    // And name the shape of the disagreement, so a change in HOW they differ is
+    // reported rather than silently satisfying the inequality above.
+    assert_eq!(
+        reference.chunks[0].ops, library.chunks[0].ops,
+        "the two now differ in OPS as well as constants, which is a wider \
+         divergence than this test was written to describe"
     );
 }
