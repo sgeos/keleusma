@@ -339,7 +339,10 @@ looked complete. **In every case the code was reachable and the evidence was not
 
 ## Open, held by the operator
 
-**FOUR OF THESE ARE NOW RULED ON. Do not re-ask them; the ruling is the answer.**
+**A RULING SESSION LANDED 2026-08-19 AND CLEARED THE LIVE LIST. Do not re-ask any of these; the
+ruling is the answer.** Every item that was live is now ruled, and TWO of the rulings were taken
+against STALE information I supplied. Both corrections are recorded in place below rather than
+quietly applied, because the operator answered the question I asked and the question was wrong.
 
 - **Publication remains HELD.** Reaffirmed 2026-08-17.
 - **`CONSTS` representation** — *ruled: Option A, elide the zeros, and no `BYTECODE_VERSION` bump,
@@ -373,21 +376,69 @@ looked complete. **In every case the code was reachable and the evidence was not
     its own `If`/`EndIf` handling and reported 365 of 386 loops disagreeing. `EndIf` RESTORES the
     depth saved at its `If` rather than restoring and then applying its own effect. **Do not compete
     with a validated walker.**
-- **THREE DECISIONS ARE LIVE AND UNANSWERED**, and nothing else is blocked on the operator:
-  * **The input-re-readability fork** in `../decisions/PIPELINE_THEN_MONOLITH.md`. Both the pre-pass
-    and the main pipeline read the SOURCE, so a fused run from a pipe cannot re-read it. Buffer,
-    accept a file operand with standard input as the default, or always split. The V0.2.x line leans
-    to the file operand and said why. It decides whether the monolith is one command or two.
-  * **Whether to raise `parse.kel`'s token array.** It is at 80% -- the stage is 32,907 tokens
-    against 40,960 -- and is the bound the corpus is closest to. It was NAMED rather than widened,
-    because raising a capacity widens what the language admits and that is the operator's call.
-  * **Whether a top-level `struct` declaration should be SUPPORTED or explicitly REFUSED.**
-    `parse.kel` has no struct handling at all: its declaration record codes are 1..3, 9, 10 and 12,
-    with no struct code. The driver now names the situation instead of panicking on a bare
-    `unwrap()`, and deliberately does not decide it.
-- **`MAX_PARSE_DEPTH` does not do its stated job on a small stack.**
-- **`CHANGELOG.md:340`** states the checked-arithmetic push order wrongly in published text.
-- **`-255` is live and has no negative test.**
+- **THE THREE FORMERLY-LIVE DECISIONS, ALL RULED 2026-08-19:**
+  * **The input-re-readability fork** — *ruled: **accept a file operand, keeping standard input as
+    the default.*** The monolith is therefore ONE command and `--chunk` is optional. Recorded in
+    `../decisions/PIPELINE_THEN_MONOLITH.md`, which now also marks the sidecar fingerprint as
+    MANDATORY rather than conditional, since the ruling keeps a sidecar reachable. **Not implemented.**
+  * **Whether to raise `parse.kel`'s token array** — *ruled: leave it at 40,960 for now.* The
+    operator's stated reason reframes the item and is more useful than the ruling: **ideally the
+    tokens stream so that no large buffer is needed at all.**
+    **THE STREAMING IS ALREADY BUILT AND THE CAP WAS NEVER THE LEVER.** `parse.kel` lines 57-80 say
+    every cursor move is plus or minus one, so it is a one-token lookahead scanner with single-token
+    pushback, and `base`/`at` already exist so a host slides the window with no protocol. The fused
+    driver already slides it: `FUSED_WINDOW` is **8** at `src/selfhost/mod.rs:823`, and the comment
+    records that **three would suffice**, measured by `the_parser_never_jumps_more_than_one_token`.
+    What remains is the DECLARATION, not the feed. `packed: [Word; 40960]` reserves 40,960 shared
+    slots whether or not eight are live, and `PARSE_TOKEN_CAP` chains every later slot offset off
+    that number. **Shrinking the array is the right lever and it REMOVES the input bound rather than
+    widening it**; the obstacle is the non-fused whole-seed path, whose remaining callers are NOT yet
+    measured. Filed as its own increment, "retire the token residency", not as a capacity question.
+  * **Whether a top-level `struct` should be SUPPORTED or REFUSED** — *ruled: defer.* Recorded as a
+    V0.3.0 widening item. Supporting evidence taken for the ruling: **none of the twelve stage
+    sources declares a struct**, so the subset does not need it to compile itself.
+- **FURTHER RULINGS FROM THE SAME SESSION:**
+  * **`parse_functions` returning a `Result` rather than panicking** — *ruled: eventually, deferring
+    is acceptable.*
+  * **A declared nesting-depth cap for a verifier written in Keleusma** — *ruled: **use 32 for now.***
+    This answers the `v0.3.0` line's warning directly: 19 is what the corpus contains, 32 is a
+    DECLARED bound with programs past it rejected. **Not implemented.**
+  * **`MAX_PARSE_DEPTH` on a small stack** — *ruled: investigating the mismatch is reasonable and any
+    issue should be corrected, but it is not the highest priority if it does not bite in practice.*
+  * **The ECC plane** — *ruled: add an end-to-end test.* **THE RULING IS ALREADY SATISFIED AND MY
+    REPORT WAS STALE.** See the correction below.
+  * **Reserving the signature and provenance regions and the `AUTH_TIER` field** — *ruled: yes,
+    reserve.* **Genuinely open.** Note the name collision that makes this easy to mis-close:
+    `kind::SIGNATURES` at `0x0016` is PER-CHUNK TYPE DESCRIPTORS, not cryptography, and the
+    cryptographic signature lives in the FRAMING HEADER rather than in a v2 region. No provenance
+    region and no `AUTH_TIER` field exist. **Not implemented.**
+  * **`V0_5_0_KELEUSMA_HOST.md` line 16**, the autonomous-probe-controller example — *ruled: scrub;
+    repo archaeologists are not a concern.* **DONE** in this increment. It was the only occurrence in
+    any tracked document.
+  * **`CHANGELOG.md`** push order — *ruled: correct it, low priority but easy.* **DONE** in this
+    increment.
+  * **`-255` in `wire.kel`** — *ruled: add the negative test.* Three sites, lines 3281, 3334, 3521.
+    **Not implemented.**
+- **TWO RULINGS WERE TAKEN AGAINST STALE INFORMATION I GAVE, AND BOTH ERRORS WERE MINE.**
+  * **The ECC plane is NOT unexercised.** I read item 5 of
+    `../decisions/WIRE_FORMAT_V2_WORD_ORIENTED.md`, which said open, instead of deriving from the
+    tree. `SchemaBuilder::with_ecc` exists at `src/wire_schema.rs:875` and `finish` calls
+    `protect_all`. **EIGHT tests drive it on real compiler output** across
+    `tests/secded_end_to_end.rs` and `tests/ecc_signature_ordering.rs`, each corruption case paired
+    with the same corruption on an unprotected artifact so a caught flip cannot be credited to the
+    CRC. The document entry is corrected in place rather than rewritten.
+  * **The token array item was framed as a capacity question** when the streaming it presupposed was
+    already implemented. See the ruling above.
+  **THE COMMON CAUSE IS THE ONE THIS LINE KEEPS RECORDING**: I derived a status from a document's
+  status field rather than from the system. **Read the tree before putting a question to the
+  operator**, because a wrong question costs their ruling, not just my time.
+- **`MAX_PARSE_DEPTH` does not do its stated job on a small stack.** *Ruled: worth
+  investigating and correcting, but not the top priority absent a practical bite.*
+- ~~**`CHANGELOG.md:340`**~~ **CORRECTED 2026-08-19.** The text was at line **571**, not 340, and it
+  said the runtime pushes `(high, low, flag)`. **Verified against `src/vm.rs:6442`**, which pushes
+  low, then high, then flag -- not against the grammar document, because correcting published text
+  from a second document is how the wrong one wins.
+- **`-255` is live and has no negative test.** *Ruled: add it.* Still open.
 - **`v0.2.3-prerebase-backup`**, local only. Do not delete without being asked.
 - **MSRV**: CI checks 1.85 for `keleusma-arena`, 1.88 for `keleusma`.
 

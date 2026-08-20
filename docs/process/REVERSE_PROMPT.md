@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-19 (session 49)
+**Date**: 2026-08-19 (session 49, ruling record)
 
 ## Where things stand
 
@@ -28,7 +28,55 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 | **the type checker's INPUT** | **the DECLARED rows now come from the pipeline; the derived ones do not** |
 | branch | `feat/typecheck-bindings-from-pipeline`, cut from `v0.2.3` at `fe2af14f` |
 
-## WHAT THIS INCREMENT DID
+## THE LIVE DECISION LIST IS EMPTY, AND I ASKED TWO OF THE QUESTIONS WRONG
+
+Thirteen rulings recorded. The three standing forks are answered and so are ten further items; the
+full record is in `HANDOFF.md` under "Open, held by the operator". This increment changes four
+documents and nothing executable.
+
+### Two of your rulings were taken against stale information I gave you
+
+**The ECC plane is already exercised end to end.** You ruled that it seemed easy to add a test. It
+exists. `SchemaBuilder::with_ecc` is at `src/wire_schema.rs:875`, `finish` calls `protect_all`, and
+eight tests drive it on real compiler output across `tests/secded_end_to_end.rs` and
+`tests/ecc_signature_ordering.rs`. Every corruption case is paired with the same corruption on an
+unprotected artifact, asserted undetected, so a caught flip cannot be credited to the CRC. I read the
+decision document's status field instead of the tree, and the document was stale. It is corrected in
+place.
+
+**Your token-array instinct was right, and better than my framing.** You said that ideally the tokens
+stream so no large buffer is needed. They already do. Every `parse.kel` cursor move is plus or minus
+one, `base` and `at` exist so a host slides the window with no protocol, and the fused driver slides
+it at `FUSED_WINDOW = 8` where three would suffice. **What is left is the declaration, not the feed**
+— `packed: [Word; 40960]` reserves the slots regardless. So shrinking the array is the lever, and it
+REMOVES the input bound rather than widening it. Your ruling to leave the number alone stands and is
+unaffected. Filed as its own increment.
+
+**The common cause is this line's recurring defect in its sharpest form.** I derived a status from a
+document rather than from the system. Previous instances cost a measurement. This one cost two of
+your rulings, which is the scarcer resource.
+
+### What was done here
+
+- `V0_5_0_KELEUSMA_HOST.md` line 16, the probe-controller example, scrubbed. It was the only
+  occurrence in any tracked document.
+- `CHANGELOG.md` push order corrected. **The handoff cited line 340; it is at 571.** Verified against
+  `src/vm.rs:6442`, which pushes low then high then flag — not against `GRAMMAR.md`, because
+  correcting published text on a second document's authority is how the wrong one wins.
+- `PIPELINE_THEN_MONOLITH.md` records the file-operand ruling and marks the sidecar fingerprint
+  mandatory rather than conditional.
+- `WIRE_FORMAT_V2_WORD_ORIENTED.md` item 5 corrected, with the staleness recorded rather than erased.
+
+### What is authorised and NOT yet implemented
+
+The file operand, a declared verifier nesting cap of **32**, the signature and provenance region
+reservations with `AUTH_TIER`, and the `-255` negative test. Each is a separate increment.
+
+**One trap recorded next to the reservation work**: `kind::SIGNATURES` at `0x0016` is per-chunk TYPE
+descriptors, not cryptography, and the cryptographic signature lives in the framing header. A reader
+checking whether a signature region is reserved will find that constant and wrongly stop.
+
+## WHAT THE PIPELINE-BINDINGS INCREMENT DID
 
 **Order 1 item 3, first slice.** The type checker's DECLARED binding rows -- a function's declared
 return type and each parameter's declared type -- now come from `parse_functions`, the self-hosted
