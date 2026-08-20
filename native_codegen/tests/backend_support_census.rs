@@ -202,3 +202,61 @@ fn which_opcodes_does_the_backend_refuse() {
          than the backend"
     );
 }
+
+/// **A FLOAT VALUE ALREADY REACHES THE LOWERING, AND THERE IS NO FLOAT
+/// REPRESENTATION TO HOLD IT IN.**
+///
+/// This is why the generic arithmetic cluster -- `Add`, `Sub`, `Mul`, `Neg` --
+/// must NOT be lowered as integer operations, and it is not visible from the
+/// refusal list.
+///
+/// `Op::Add` is emitted for `Byte` **or** `Float` operands; `Word` takes the
+/// `Checked` forms. Lowering it as `build_int_add` would be right for `Byte` and
+/// would silently miscompile `Float`, adding two f64 bit patterns as integers.
+/// **Today such a program REFUSES, which is the correct answer.**
+///
+/// # The safety is incidental, not structural
+///
+/// Measured: a float-typed function LOWERS WITH NO REFUSAL. Only float
+/// CONSTANTS are guarded, by `Op::Const`. So nothing stops a float value sitting
+/// on the operand stack -- what prevents a miscompile is that no float
+/// OPERATION is supported, so the value is never operated on.
+///
+/// **Whoever adds the first float-capable arithmetic opcode inherits this.**
+/// Give the backend a float representation first, or refuse explicitly on
+/// float-typed operands. Do not assume floats are absent.
+#[test]
+fn a_float_value_reaches_the_lowering_with_no_float_representation() {
+    let identity = module_of("fn p(a: Float) -> Float { a }\nfn main() -> Word { 0 }")
+        .expect("the float identity compiles");
+    let id_refusals: Vec<String> = module_refusals(&identity, LowerOptions::default())
+        .iter()
+        .filter(|(c, _)| c == "p")
+        .map(|(_, e)| format!("{e:?}"))
+        .collect();
+
+    let konst = module_of("fn p() -> Float { 1.5 }\nfn main() -> Word { 0 }")
+        .expect("the float constant compiles");
+    let const_refusals: Vec<String> = module_refusals(&konst, LowerOptions::default())
+        .iter()
+        .filter(|(c, _)| c == "p")
+        .map(|(_, e)| format!("{e:?}"))
+        .collect();
+
+    println!("\n  FLOAT REPRESENTATION HAZARD");
+    println!("    float identity refusals : {id_refusals:?}");
+    println!("    float constant refusals : {const_refusals:?}");
+
+    assert!(
+        !const_refusals.is_empty(),
+        "a float CONSTANT now lowers, so this test's description of the hazard is \
+         stale: it says only constants are guarded."
+    );
+    assert!(
+        id_refusals.is_empty(),
+        "a float-typed function now REFUSES, so a float value may no longer reach \
+         the operand stack. If the backend gained a float representation or an \
+         explicit float refusal, this test has served its purpose -- rewrite it to \
+         pin whichever it is rather than deleting it. Refusals seen: {id_refusals:?}"
+    );
+}
