@@ -73,6 +73,12 @@ rather than about the corpus. The constructs are not all obvious: `Word` divisio
 `CheckedDiv`, and a runtime array index emits `GetIndex`, not `Len`/`BoundsCheck` -- the checked
 and length forms come from the fixed-point and dynamic-length surfaces.
 
+**DONE, IN PART, AND IT FOUND REAL SCOPE.** `examples/scripts/opcode_witness.kel` witnesses ten of
+the sixteen and takes the census to **60 of 66**. **The native backend REFUSES it**, on
+`UnsupportedOp` for `Add`, `WordToFixed(16)` and `IntToFloat` -- the first concrete, demonstrated
+items of remaining Workstream A scope. The corpus's previous zero backend refusals was a fact about
+the corpus, not about the lowering.
+
 ## Entry baseline (what V0.3.0 hands to V0.3.x)
 
 - A self-hosted compiler that lowers the full language to bytecode, its output byte-identical to

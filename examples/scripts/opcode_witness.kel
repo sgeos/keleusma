@@ -1,0 +1,64 @@
+// A small mixed-arithmetic routine, written to EXERCISE OPCODES the rest of
+// the corpus never emits.
+//
+// The purpose is coverage and the file says so rather than pretending to be an
+// application. Every other corpus program is a real example; this one exists
+// because "100% of corpus opcode instances lower" was a statement about the
+// corpus and not about the instruction set, and sixteen of the sixty-six
+// opcodes had no witness anywhere.
+//
+// WHAT IT WITNESSES, each verified by compiling and reading the emitted
+// opcodes rather than by reasoning about what a construct should emit:
+//
+//   Byte arithmetic  -> Add, Sub, Mul, Neg   (Word operands take the Checked
+//                                             forms; Byte and Float take these)
+//   Float conversion -> IntToFloat, FloatToInt
+//   Fixed<16>        -> FixedMul, FixedDiv, WordToFixed, FixedToWord
+//
+// Divisors are constants so no argument vector can make this fault: the
+// differential drives it with twenty-four of them.
+//
+// THE NATIVE BACKEND CURRENTLY REFUSES THIS FILE, AND THAT IS THE POINT.
+// Measured on the tree that added it, `module_refusals` reports three:
+//
+//   byte_mix          UnsupportedOp("Add")
+//   fixed_mix         UnsupportedOp("WordToFixed(16)")
+//   float_round_trip  UnsupportedOp("IntToFloat")
+//
+// Before this file the corpus produced ZERO backend refusals, and that figure
+// was read as "everything lowers". It measured the corpus. The three refusals
+// above are the first concrete, demonstrated items of remaining Workstream A
+// scope, and they exist because a program finally emits the opcodes.
+//
+// So this file is EXPECTED to sit in the differential's exempt set under
+// "the backend refuses it" until those opcodes are lowered. Do not delete it
+// to restore a zero: the zero was the thing that was wrong.
+
+fn byte_mix(a: Byte, b: Byte) -> Byte {
+  let sum = a + b;
+  let diff = a - b;
+  let prod = diff * b;
+  let neg = -prod;
+  sum + neg
+}
+
+fn float_round_trip(w: Word) -> Word {
+  let f = w as Float;
+  let scaled = f + 1.5;
+  scaled as Word
+}
+
+fn fixed_mix(w: Word) -> Word {
+  let x = w as Fixed<16>;
+  let two = 2 as Fixed<16>;
+  let scaled = x * two;
+  let halved = scaled / two;
+  halved as Word
+}
+
+fn main(seed: Word) -> Word {
+  let b = byte_mix(3 as Byte, 5 as Byte);
+  let f = float_round_trip(seed);
+  let q = fixed_mix(seed);
+  (b as Word) + f + q
+}
