@@ -814,6 +814,14 @@ pub fn lex_token_count(src: &str) -> usize {
 /// `Node::LetIn`, the record whose payload carries the frame slot.
 const NODE_LET_IN: i64 = 5;
 
+/// `Node::Literal`. Always an INTEGER: `codegen.kel`'s `push_literal` interns
+/// through `intern_int`, so no other scalar reaches this kind.
+const NODE_LITERAL: i64 = 1;
+
+/// `Node::Unit`, whose payload is the `PushImmediate` operand — `0` Unit, `1`
+/// true, `2` false. Boolean literals ride this kind rather than a new one.
+const NODE_UNIT: i64 = 20;
+
 /// The declaration a record belongs to, or a diagnostic naming what arrived instead.
 ///
 /// **SIX BARE `unwrap()`s USED TO SIT HERE, AND THEY ALL FIRE FOR ONE REASON**: a record
@@ -1437,6 +1445,64 @@ pub fn binding_rows_from_pipeline(src: &str) -> (Vec<String>, Vec<(String, i64, 
             let t = f.param_types.get(i).copied().map_or(0, tag_of);
             if t != 0 {
                 rows.push((n, t, 0));
+            }
+        }
+
+        // --- `let` BINDINGS, VIA THE RECONSTRUCTED FOREST -----------------------
+        //
+        // **NOT BY LOOKING AT THE RECORD NEXT TO THE `LetIn`.** `LetIn` is BINARY
+        // and pops its right child then its left, so the postfix stream for
+        // `let a = 7; a` is `[Literal(7), Local(0), LetIn(0)]` and the record
+        // immediately before the `LetIn` is the CONTINUATION, not the initialiser.
+        // Reasoning from adjacency picks the wrong node every time.
+        //
+        // The forest gives the right answer directly: `lhs` is the initialiser and
+        // `rhs` the continuation. Built by `reconstruct_via_kel`, which is the
+        // validated walker — writing a second one here is the mistake the `v0.3.0`
+        // line recorded when an independently written walk reported 365 of 386
+        // loops disagreeing.
+        if f.let_names.is_empty() {
+            continue;
+        }
+        let body = reconstruct_via_kel(&f.body, f.cat, f.params);
+        for node in &body.nodes {
+            if node.kind != NODE_LET_IN {
+                continue;
+            }
+            // **JOINED BY SLOT, NOT BY POSITION.** `LetIn`'s payload is the frame
+            // slot and `let_names` carries `(slot, name)`. Pairing by fold order
+            // would be positional and would fail silently on a reordering.
+            let Some(&(_, nid)) = f.let_names.iter().find(|(slot, _)| *slot == node.arg) else {
+                continue;
+            };
+            let Some(bound) = name_of(nid) else { continue };
+            let Some(init) = body.nodes.get(node.lhs as usize) else {
+                continue;
+            };
+            match init.kind {
+                // A literal. `push_literal` interns through `intern_int`, so a
+                // kind-1 node is always an integer; booleans are `Unit` carrying
+                // the `PushImmediate` operand.
+                NODE_LITERAL => rows.push((bound, 1, 0)),
+                NODE_UNIT if init.arg == 1 || init.arg == 2 => rows.push((bound, 2, 0)),
+                // **A CALL IS NOT EMITTED HERE, AND THE REASON IS THE ROW SHAPE
+                // RATHER THAN THE PIPELINE.** `let a = g()` is a form-1 alias whose
+                // row carries the TARGET'S NAME ID in the tag position. The two
+                // extractions do not share an id space — the reference numbers by
+                // insertion order as it walks, this one uses the lexer's intern
+                // table — so a form-1 row cannot be compared by name string, which
+                // is the discipline that keeps this honest.
+                //
+                // Emitting one would mean either comparing id spaces (comparing the
+                // numbering rather than the content) or changing the row shape to
+                // carry a target string. The second is the right answer and it is a
+                // slice of its own.
+                //
+                // Everything else — an operator expression above all — needs the
+                // initialiser's NODE INDEX to reach the stage's bounded fixpoint
+                // (form 2), which is a further slice again. Leaving no row means the
+                // stage accepts, the documented conservative stance.
+                _ => {}
             }
         }
     }

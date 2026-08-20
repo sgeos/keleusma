@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-20 (session 49, the support table says which kind of unsupported)
+**Date**: 2026-08-20 (session 49, Order 1 item 3 reaches let bindings)
 
 ## Where things stand
 
@@ -27,6 +27,41 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 | `parse.kel` failure modes named | **THIRTEEN**; eleven counters guarded |
 | **the type checker's INPUT** | **the DECLARED rows now come from the pipeline; the derived ones do not** |
 | branch | `feat/typecheck-bindings-from-pipeline`, cut from `v0.2.3` at `fe2af14f` |
+
+## ORDER 1 ITEM 3 REACHES `let` BINDINGS
+
+A `let` bound to an integer or a boolean literal now produces a pipeline row, compared against the
+reference by name string. `the_pipeline_rows_are_the_declared_subset` told the next increment to fold
+its case into the agreement test rather than delete the pin; that is exactly what happened.
+
+**The trap was adjacency.** `LetIn` is binary and pops its right child then its left, so for
+`let a = 7; a` the stream is `[Literal(7), Local(0), LetIn(0)]` and the record immediately before the
+`LetIn` is the **continuation**, not the initialiser. Classification goes through the reconstructed
+forest, whose `lhs` is the initialiser, built by `reconstruct_via_kel` rather than a second walk
+written here. Joined by **slot**, not by fold position, so a reordering fails loudly.
+
+**A boolean `let` works only because of the boolean-literal fix earlier tonight** — `let b = true`
+yields tag 2 through the `Unit` node carrying the `PushImmediate` operand. Before that repair it was a
+`Local` and produced nothing. The two increments compose, and could not have been done in the other
+order.
+
+### I drew a call arm and then deleted it
+
+`let a = g()` is a form-1 alias whose row carries the target's **name id** in the tag position. The
+two extractions do not share an id space — the reference numbers by insertion order as it walks, the
+pipeline uses the lexer's intern table — **so a form-1 row cannot be compared by name string**, which
+is the discipline that keeps this comparison honest.
+
+The pipeline could produce that row today. Comparing it would mean comparing the numbering rather than
+the content, which is precisely the failure mode of the `Bool`/`bool` regression. **The arm came out
+rather than shipping a comparison that would pass while measuring the wrong thing.** Giving the row
+shape a target string is the right answer and is a slice of its own.
+
+### The pin is restated, not removed
+
+Two forms remain unreached **for different reasons**: a call by the row shape, an operator expression
+by the type channel needing the initialiser's node index. The pin now says which is which, so the next
+increment knows which problem it is solving.
 
 ## THREE OF THE FOUR "KNOWN GAPS" WERE SILENT MISCOMPILES, AND THE TABLE COULD NOT SAY SO
 
