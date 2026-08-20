@@ -3389,3 +3389,75 @@ fn the_data_field_bound_counts_the_whole_program() {
          wrong thing"
     );
 }
+
+/// **BOTH FEEDS' COST BY INPUT SIZE, MEASURED RATHER THAN ASSUMED.**
+///
+/// An instrument, not a verdict, and `#[ignore]`d because it costs a minute.
+/// Prints both feeds at several sizes so a reader sees the SHAPE of the curve
+/// rather than trusting an extrapolation from one point.
+///
+/// # WHY THIS EXISTS: A BEHAVIOURAL TEST WAS WRITTEN HERE AND WITHDRAWN
+///
+/// Stage one of the token-residency work moved every production entry point to
+/// the fused feed and gated `PARSE_TOKEN_CAP` on the collecting feed, so no
+/// compile a user can start carries the 40,960-token bound any more. The obvious
+/// pin was a source past the cap, compiled through the fused feed and refused
+/// through the other.
+///
+/// **It ran for over ten minutes and was withdrawn.** The reason is recorded here
+/// because it is worth more than the test would have been.
+///
+/// # THE COST IS SUPERLINEAR, AND IT IS NOT THE FEED
+///
+/// Measured on 2026-08-19, debug build:
+///
+/// ```text
+///   tokens=459   fused=1606ms   collecting=1969ms
+///   tokens=909   fused=2491ms   collecting=2850ms
+///   tokens=1809  fused=4455ms   collecting=4774ms
+///   tokens=3609  fused=15062ms  collecting=15315ms
+/// ```
+///
+/// Doubling the input from 1,809 to 3,609 tokens multiplies the time by about
+/// 3.4, so the curve is superlinear and extrapolates to roughly half an hour at
+/// 41,000 tokens. **Both feeds show it and their times are within a few percent**,
+/// which localises the cost to the shared record handling and driver rather than
+/// to token delivery. The fused feed is slightly FASTER at every size, so stage
+/// one is not a performance regression.
+///
+/// **What this means for the residency work.** The MEMORY bound is what stage two
+/// removes and it is real. The bound a large input now meets first is TIME, and
+/// that is a separate defect in a shared code path, raised for the operator rather
+/// than fixed here.
+///
+/// The assertion that the two feeds agree on the function count is the part that
+/// can fail; the timings are printed, never asserted, because a wall-clock
+/// threshold in a test is a flake waiting for a loaded machine.
+#[cfg(feature = "self-host")]
+#[test]
+#[ignore = "instrument: costs about a minute; run explicitly with --ignored"]
+fn both_feeds_cost_by_input_size() {
+    for pads in [50usize, 100, 200, 400] {
+        let mut src = String::new();
+        for i in 0..pads {
+            src.push_str(&format!("fn pad{i}() -> Word {{ 0 }}\n"));
+        }
+        src.push_str("fn main() -> Word { 0 }");
+        let count = keleusma::selfhost::lex_token_count(&src);
+        let t = std::time::Instant::now();
+        let (fns, ..) = keleusma::selfhost::parse_functions_fused(&src);
+        let fused_ms = t.elapsed().as_millis();
+        let t = std::time::Instant::now();
+        let (fns2, ..) = keleusma::selfhost::parse_functions(&src);
+        let collecting_ms = t.elapsed().as_millis();
+        assert_eq!(
+            fns.len(),
+            fns2.len(),
+            "the two feeds disagree on function count"
+        );
+        println!(
+            "tokens={count} fns={} fused_ms={fused_ms} collecting_ms={collecting_ms}",
+            fns.len()
+        );
+    }
+}
