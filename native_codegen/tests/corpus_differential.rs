@@ -363,9 +363,35 @@ fn arena_for(m: &Module) -> keleusma_arena::Arena {
 /// measurement, the same error the pre-registered mutation set exists to avoid.
 /// Consecutive small integers reach a dense selector in any module that has one.
 ///
-/// **Cost, since this is paid on every run including CI**: 35s at 4 seeds, 58s
-/// at 24. Sublinear because a `Stream` entry and a zero-parameter entry both
-/// keep a single seed, so the sweep only widens the modules it can widen.
+/// **Cost.** 35s at 4 seeds, 58s at 24 when first recorded. Re-measured
+/// 2026-08-20 on a different host: **30s at 24, 53s at 64**. Wall-clock figures
+/// are host-dependent and the older pair is not thereby wrong. Sublinear because
+/// a `Stream` entry and a zero-parameter entry both keep a single seed, so the
+/// sweep only widens the modules it can widen.
+///
+/// **The claim that this is "paid on every run including CI" was FALSE and is
+/// removed.** Continuous integration does not build `native_codegen` at all —
+/// the package has a detached `[workspace]` on purpose. The cost is paid
+/// locally and by `tools/mutation_sweep.py`, which is a real cost and a smaller
+/// one than "every CI run".
+///
+/// # IS 24 ITSELF A HOLE? MEASURED 2026-08-20: NO EVIDENCE THAT IT IS
+///
+/// 4 was a hole — that is why this constant exists. Nobody had asked the same
+/// question of 24. Raised to **64** and re-run: **482 (module, seed) pairs
+/// became 1242, and NOT ONE new disagreement appeared.** 19 of the 45 comparable
+/// modules widen; the other 26 keep a single vector by construction.
+///
+/// **The widening is arithmetic, not an impression**: 19 x 64 + 26 = 1242 and
+/// 19 x 24 + 26 = 482, both measured rather than derived. So the negative result
+/// is over **760 additional comparisons**, not over a probe that quietly did
+/// nothing.
+///
+/// **What this does NOT establish.** It is not a proof that 24 suffices in
+/// general. `args_for_seed` gives every parameter the SAME value for seeds
+/// past 3, so widening explores a diagonal and not the product space; a defect
+/// needing two parameters to differ would be invisible at any count. Left at 24
+/// because 64 bought nothing measurable and the cost is real.
 const SEEDS: usize = 24;
 
 fn args_for_seed(n: usize, seed: usize) -> Vec<i64> {
@@ -1505,6 +1531,8 @@ fn every_lowering_module_executes_or_is_exempt() {
     let mut executed: Vec<String> = Vec::new();
     let mut vacuous: Vec<String> = Vec::new();
     let mut exempt: Vec<(String, String)> = Vec::new();
+    let mut seed_pairs = 0usize;
+    let mut seed_widened = 0usize;
     let mut disagreed: Vec<String> = Vec::new();
 
     // **Single-module mode**, for the mutation sweep. `tools/mutation_sweep.py`
@@ -1630,6 +1658,10 @@ fn every_lowering_module_executes_or_is_exempt() {
             exempt.push((name, why));
             continue;
         }
+        seed_pairs += runs.len();
+        if runs.len() > 1 {
+            seed_widened += 1;
+        }
         if runs.is_empty() {
             exempt.push((name, "no seed produced a comparable run".into()));
             continue;
@@ -1742,6 +1774,28 @@ fn every_lowering_module_executes_or_is_exempt() {
              \x20      `stage_differential.rs`, which seeds the segment on BOTH sides."
         );
     }
+    println!("  (module, seed) pairs compared : {seed_pairs}");
+    println!("  modules driven at >1 seed     : {seed_widened}");
+
+    // **THE SEED SWEEP'S OWN NON-VACUITY GUARD.**
+    //
+    // `SEEDS` widens only modules with a scalar entry of at least one parameter:
+    // a `Stream` entry and a zero-parameter entry both keep a single vector. If a
+    // change ever collapses that set to nothing, every figure above stays exactly
+    // the same while the sweep silently measures seed 0 only -- which is the state
+    // that hid the `SLT`/`SLE` defect when the count was 4. Measured 2026-08-20:
+    // 19 modules widen, 482 pairs at `SEEDS = 24`.
+    assert!(
+        seed_widened > 0,
+        "no module ran more than one argument vector, so SEEDS is widening nothing \
+         and this whole differential is a seed-0 measurement wearing a sweep's name"
+    );
+    assert!(
+        seed_pairs > executed.len() + vacuous.len(),
+        "{seed_pairs} (module, seed) pairs across {} comparable modules means at most \
+         one vector each; the sweep is not sweeping",
+        executed.len() + vacuous.len()
+    );
     println!("  EXEMPT                : {}", exempt.len());
     for (n, why) in &exempt {
         println!("     {n:26} {why}");
