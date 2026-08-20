@@ -651,6 +651,13 @@ struct Run {
     /// it was seeded, whether or not it ran. This is the honest form of that
     /// question and it is what `is_vacuous` reads.
     wrote_shared: bool,
+    /// The composite return body as FLAT BYTES, one entry per result, empty
+    /// for a scalar-returning entry or when the bytes could not be captured.
+    ///
+    /// **Both sides are reduced to the SAME representation before any claim.**
+    /// Comparing a native pointer against a decoded value would manufacture a
+    /// difference; that error has already been made once on this line.
+    ret_bytes: Vec<Vec<u8>>,
 }
 
 fn run_vm(
@@ -792,6 +799,7 @@ fn run_vm(
         }
     };
     results.push(scalar_of(&first));
+    let mut ret_bytes: Vec<Vec<u8>> = vec![flat_ret_bytes(&first, &arena)];
     if m.chunks[entry].block_type == BlockType::Stream {
         for t in 1..TICKS {
             // One tick is a `Reset` leg then a `Yielded` leg, and the SAME reply
@@ -817,6 +825,7 @@ fn run_vm(
                 };
             }
             results.push(scalar_of(&st));
+            ret_bytes.push(flat_ret_bytes(&st, &arena));
         }
     }
     if SAW_REF_ARG.with(|f| *f.borrow()) {
@@ -837,6 +846,7 @@ fn run_vm(
         wrote_shared: shared != initial_shared,
         log: take_log(),
         shared,
+        ret_bytes,
     })
 }
 
@@ -845,6 +855,26 @@ fn run_vm(
 /// A composite result is compared through the shared segment and the call log
 /// rather than decoded here; marking it keeps the two sides comparable without
 /// pretending to read a body the harness did not build.
+/// PROBE: a composite result's FLAT BYTES, straight from the arena.
+///
+/// No layout opinion of ours: `FlatComposite::resolve` hands back the canonical
+/// body. A scalar or unit result yields none.
+fn flat_ret_bytes(st: &VmState, arena: &keleusma_arena::Arena) -> Vec<u8> {
+    use keleusma::bytecode::{ArrayBody, EnumBody, StructBody, TupleBody};
+    let v = match st {
+        VmState::Yielded(v) | VmState::Finished(v) => v,
+        _ => return Vec::new(),
+    };
+    let fc = match v {
+        Value::Tuple(TupleBody::Flat(f)) => f,
+        Value::Struct(StructBody::Flat(f)) => f,
+        Value::Enum(EnumBody::Flat(f)) => f,
+        Value::Array(ArrayBody::Flat(f)) => f,
+        _ => return Vec::new(),
+    };
+    fc.resolve(arena).map(|b| b.to_vec()).unwrap_or_default()
+}
+
 fn scalar_of(st: &VmState) -> i64 {
     match st {
         VmState::Yielded(Value::Int(v)) | VmState::Finished(Value::Int(v)) => *v,
@@ -1081,6 +1111,40 @@ fn run_native(
         region[canary_at], CANARY,
         "wrote past the {n_region}-byte composite region"
     );
+    // **THE COMPOSITE RETURN, READ BACK FROM OUR OWN BUFFER.**
+    //
+    // The lowered entry returns a POINTER into `region`, which this harness
+    // allocated and passed in as `rp`. That is what makes the read safe, and it
+    // is the decisive difference from the reference-argument case declined
+    // earlier: there the pointer came from the JIT and a wrong guess is a
+    // segfault; here the buffer is ours and the address is bounds-checked
+    // against it before a byte is touched.
+    //
+    // **The size is READ from the module**, `WireShape::Flat { size, .. }` on
+    // the entry's recorded return. No offset, field order, or encoding is
+    // invented here: the callee says WHERE and the module says HOW LONG.
+    let ret_bytes: Vec<Vec<u8>> = {
+        let size = match m.signatures.get(entry).map(|sg| &sg.ret) {
+            Some(WireShape::Flat { size, .. }) => *size as usize,
+            _ => 0,
+        };
+        let base = region.as_ptr() as usize;
+        results
+            .iter()
+            .map(|r| {
+                let addr = *r as usize;
+                let ok = size > 0
+                    && *r > 0
+                    && addr >= base
+                    && addr.saturating_add(size) <= base + n_region;
+                if !ok {
+                    return Vec::new();
+                }
+                // Safe: inside a buffer this function allocated, bounds checked.
+                unsafe { core::slice::from_raw_parts(addr as *const u8, size) }.to_vec()
+            })
+            .collect()
+    };
 
     shared.truncate(n_shared);
     Some(Run {
@@ -1088,7 +1152,22 @@ fn run_native(
         wrote_shared: shared != initial_shared,
         log: take_log(),
         shared,
+        ret_bytes,
     })
+}
+
+/// Do the two sides' captured composite-return bodies differ?
+///
+/// **Only pairs captured on both sides are compared.** A pair where either side
+/// is empty is skipped: the native capture is bounds-checked and can legitimately
+/// decline, and treating a declined read as a difference would invent
+/// disagreements. The count of declined captures is reported separately so the
+/// skip is visible rather than silent.
+fn ret_pairs_differ(v: &Run, n: &Run) -> bool {
+    v.ret_bytes
+        .iter()
+        .zip(&n.ret_bytes)
+        .any(|(a, b)| !a.is_empty() && !b.is_empty() && a != b)
 }
 
 /// Did this run produce any observable work at all?
@@ -1610,6 +1689,7 @@ fn every_lowering_module_executes_or_is_exempt() {
     let mut executed: Vec<String> = Vec::new();
     let mut vacuous: Vec<String> = Vec::new();
     let mut exempt: Vec<(String, String, ExemptClass)> = Vec::new();
+    let mut obs_composite = 0usize;
     let mut obs_multi_result = 0usize;
     let mut obs_single_scalar_only = 0usize;
     let mut obs_single_and_undrivable = 0usize;
@@ -1799,7 +1879,13 @@ fn every_lowering_module_executes_or_is_exempt() {
         for (seed, v, n) in &runs {
             let vm_scalar = v.results.iter().all(|x| *x != i64::MIN);
             let differ = ret_scalar && vm_scalar && v.results != n.results;
-            if differ || v.log != n.log || v.shared != n.shared {
+            // **THE COMPOSITE RETURN IS NOW COMPARED.** Only pairs captured on
+            // BOTH sides take part: an uncaptured one is skipped rather than
+            // read as a difference, which would manufacture disagreements out
+            // of a failed read. How many go uncaptured is reported below, so
+            // the skipping cannot become silent.
+            let ret_bytes_differ = ret_pairs_differ(v, n);
+            if differ || ret_bytes_differ || v.log != n.log || v.shared != n.shared {
                 found = Some((*seed, v, n));
                 break;
             }
@@ -1820,6 +1906,25 @@ fn every_lowering_module_executes_or_is_exempt() {
                     "result[{i}] vm={:?} native={:?}",
                     vm.results.get(i),
                     nat.results.get(i)
+                )
+            } else if ret_pairs_differ(vm, nat) {
+                // Named distinctly: a composite-return difference used to be
+                // impossible to report because the bodies were never compared,
+                // and falling through to the shared-segment arm printed
+                // `shared[0] vm=None native=None`, which describes nothing.
+                let i = vm
+                    .ret_bytes
+                    .iter()
+                    .zip(&nat.ret_bytes)
+                    .position(|(a, b)| !a.is_empty() && !b.is_empty() && a != b)
+                    .unwrap_or(0);
+                let (a, b) = (&vm.ret_bytes[i], &nat.ret_bytes[i]);
+                let k = a.iter().zip(b).position(|(x, y)| x != y).unwrap_or(0);
+                format!(
+                    "composite return[{i}] byte {k} of {}: vm={:?} native={:?}",
+                    a.len(),
+                    a.get(k),
+                    b.get(k)
                 )
             } else if vm.log != nat.log {
                 let i = vm
@@ -1889,7 +1994,21 @@ fn every_lowering_module_executes_or_is_exempt() {
         obs_visited += 1;
         let multi = distinct.len() > 1;
         let logged = runs.iter().any(|(_, v, _)| !v.log.is_empty());
+        // **A COMPARED COMPOSITE RETURN IS AN OBSERVABLE.** Before the bodies
+        // were captured this was invisible, and twelve modules read as agreeing
+        // with nothing compared. They now agree on their whole return body.
+        let composite = runs.iter().any(|(_, v, n)| {
+            !v.ret_bytes.is_empty()
+                && !n.ret_bytes.is_empty()
+                && v.ret_bytes
+                    .iter()
+                    .zip(&n.ret_bytes)
+                    .any(|(a, b)| !a.is_empty() && !b.is_empty())
+        });
         let wrote = runs.iter().any(|(_, v, _)| v.wrote_shared);
+        if composite {
+            obs_composite += 1;
+        }
         if multi {
             obs_multi_result += 1;
         }
@@ -1899,7 +2018,7 @@ fn every_lowering_module_executes_or_is_exempt() {
         if wrote {
             obs_wrote_shared += 1;
         }
-        if !multi && !logged && !wrote {
+        if !multi && !logged && !wrote && !composite {
             obs_single_scalar_only += 1;
             // **CAN this module vary at all?** A module driven at ONE argument
             // vector cannot produce a second distinct result however good the
@@ -1923,6 +2042,19 @@ fn every_lowering_module_executes_or_is_exempt() {
                 // The return shape is READ, not assumed: a module landing here
                 // with a SCALAR return would have a different cause entirely and
                 // must not be labelled with this one.
+                if name.contains("item_scroll") || name.contains("item_potion") {
+                    let (_, v0, n0) = &runs[0];
+                    println!(
+                        "  RETBYTES {name}: vm {} bytes {:?}",
+                        v0.ret_bytes.len(),
+                        &v0.ret_bytes[..v0.ret_bytes.len().min(48)]
+                    );
+                    println!(
+                        "  RETBYTES {name}: nat {} bytes {:?}",
+                        n0.ret_bytes.len(),
+                        &n0.ret_bytes[..n0.ret_bytes.len().min(48)]
+                    );
+                }
                 nothing_compared.push(format!(
                     "{name} ({} vectors, {} params, {} return)",
                     runs.len(),
@@ -1957,6 +2089,7 @@ fn every_lowering_module_executes_or_is_exempt() {
     println!("\n  of these {}, agreement is carried by:", executed.len());
     println!("    {obs_multi_result:>3}  more than one distinct result value");
     println!("    {obs_native_calls:>3}  a native call log");
+    println!("    {obs_composite:>3}  a COMPOSITE RETURN BODY compared byte for byte");
     println!("    {obs_wrote_shared:>3}  writing the shared segment");
     println!("    {obs_single_scalar_only:>3}  NONE of the three -- one scalar, no call, no write");
     println!(
