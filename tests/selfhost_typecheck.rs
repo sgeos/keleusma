@@ -2489,6 +2489,12 @@ fn the_declared_binding_rows_agree_between_the_pipeline_and_the_reference() {
         "fn f(a: Word) -> bool { true }\nfn main() -> Word { 1 }",
         "fn one() -> Word { 1 }\nfn two(x: Byte) -> Byte { x }\nfn main() -> Word { one() }",
         "fn main(p: Word, q: Word) -> Word { p + q }",
+        // LET-BOUND LITERALS, folded in on 2026-08-20 when the pipeline reached
+        // them. `the_pipeline_rows_are_the_declared_subset` told this test to do
+        // exactly that rather than delete its pin.
+        "fn main() -> Word { let a = 7; a }",
+        "fn main() -> bool { let b = true; b }",
+        "fn main() -> Word { let a = 7; let c = 8; a + c }",
     ];
 
     for src in SOURCES {
@@ -2527,30 +2533,80 @@ fn the_declared_binding_rows_agree_between_the_pipeline_and_the_reference() {
     }
 }
 
-/// **THE BOUNDARY: the pipeline carries the declared bindings and not the derived ones.**
+/// **THE BOUNDARY, RESTATED: the pipeline reaches LITERALS and not yet CALLS or
+/// OPERATOR EXPRESSIONS.**
 ///
-/// A `let` bound to a literal is a row the reference extraction produces and the
-/// pipeline does not, because the initialiser's shape is in the body record stream
-/// rather than the header. Pinned so the slice above cannot be read as complete, and
-/// so the next increment fails here and records what it reached.
+/// The previous revision of this pin asserted the pipeline carried NO `let` row at
+/// all, and instructed the next increment to fold the case into the agreement test
+/// rather than delete the pin. That happened on 2026-08-20; a let-bound integer and
+/// a let-bound boolean are both compared against the reference there now.
+///
+/// **The pin is restated rather than removed**, because what it guards has moved
+/// rather than gone. Two forms remain out of reach and they are out of reach for
+/// DIFFERENT reasons, which is the part worth writing down.
+///
+/// # A call is blocked by the ROW SHAPE, not by the pipeline
+///
+/// `let a = g()` is a form-1 alias whose row carries the target's NAME ID in the
+/// tag position. The two extractions do not share an id space — the reference
+/// numbers by insertion order as it walks, the pipeline uses the lexer's intern
+/// table — so a form-1 row cannot be compared by name string, which is the
+/// discipline that keeps this comparison honest.
+///
+/// The pipeline could produce the row today. Comparing it would mean either
+/// comparing id spaces, which compares the numbering rather than the content, or
+/// changing the row shape to carry a target string. **The second is the right
+/// answer and it is a slice of its own.**
+///
+/// # An operator expression is blocked by the CHANNEL
+///
+/// `let d = 1 + 2` needs the initialiser's NODE INDEX to reach the stage's bounded
+/// fixpoint, form 2. That index has to survive into the type channel, which is a
+/// further slice again.
+///
+/// Producing no row means the stage accepts, which is this project's documented
+/// conservative stance rather than an oversight.
 #[cfg(feature = "self-host")]
 #[test]
-fn the_pipeline_rows_are_the_declared_subset() {
-    let src = "fn main() -> Word { let bound = 1; bound }";
-    let ast = parse(&tokenize(src).expect("lex")).expect("parse");
-    let (ref_names, ref_rows) = binding_rows(&ast);
-    let bound_id = *ref_names.get("bound").expect("the reference binds `bound`");
+fn the_pipeline_reaches_literals_but_not_calls_or_operator_expressions() {
+    // The REACHED case first. Without it, a pipeline that returned nothing at all
+    // would satisfy every assertion below while having regressed.
+    let (_, reached) =
+        keleusma::selfhost::binding_rows_from_pipeline("fn main() -> Word { let a = 7; a }");
     assert!(
-        ref_rows.iter().any(|(n, _, f)| *n == bound_id && *f == 0),
-        "the reference does not produce a declared row for a let-bound literal, so \
-         this pin measures nothing"
+        reached
+            .iter()
+            .any(|(n, t, f)| n == "a" && *t == 1 && *f == 0),
+        "the pipeline no longer carries a let-bound literal, which is a regression \
+         rather than a boundary: {reached:?}"
     );
 
-    let (_, pipeline_rows) = keleusma::selfhost::binding_rows_from_pipeline(src);
+    // A CALL. The reference produces a row; the pipeline deliberately does not.
+    const CALL: &str = "fn g() -> Word { 1 }\nfn main() -> Word { let c = g(); c }";
+    let ast = parse(&tokenize(CALL).expect("lex")).expect("parse");
+    let (ref_names, ref_rows) = binding_rows(&ast);
+    let cid = *ref_names.get("c").expect("the reference binds `c`");
     assert!(
-        !pipeline_rows.iter().any(|(n, _, _)| n == "bound"),
-        "the pipeline now carries a let-bound literal's tag. Record what the walk \
-         reaches and fold this case into the agreement test above."
+        ref_rows.iter().any(|(n, _, f)| *n == cid && *f == 1),
+        "the reference does not produce an ALIAS row for a let-bound call, so this \
+         half of the pin measures nothing"
+    );
+    let (_, call_rows) = keleusma::selfhost::binding_rows_from_pipeline(CALL);
+    assert!(
+        !call_rows.iter().any(|(n, _, _)| n == "c"),
+        "the pipeline now carries a let-bound CALL. Give the row shape a target \
+         STRING so it can be compared without comparing id spaces, then fold this \
+         case into the agreement test."
+    );
+
+    // AN OPERATOR EXPRESSION. Reached by the stage's fixpoint, not by this
+    // extraction, and only once the node index survives into the type channel.
+    let (_, op_rows) =
+        keleusma::selfhost::binding_rows_from_pipeline("fn main() -> Word { let d = 1 + 2; d }");
+    assert!(
+        !op_rows.iter().any(|(n, _, _)| n == "d"),
+        "the pipeline now carries a let-bound OPERATOR EXPRESSION. Record which form \
+         it uses and fold the case into the agreement test."
     );
 }
 

@@ -13,6 +13,49 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**ORDER 1 ITEM 3 REACHES `let` BINDINGS, AND ONE FORM WAS BLOCKED BY THE ROW SHAPE RATHER THAN BY THE
+PIPELINE (2026-08-20, morning).**
+
+The declared bindings landed days ago; a `let` bound to a literal produced no pipeline row. It does
+now, and `the_pipeline_rows_are_the_declared_subset` -- which told the next increment to fold its case
+into the agreement test rather than delete the pin -- has been honoured exactly.
+
+**THE TRAP WAS ADJACENCY, AND THE DESIGN NOTE FROM TWO NIGHTS AGO PAID FOR ITSELF.** `LetIn` is BINARY
+and pops its right child then its left, so the stream for `let a = 7; a` is
+`[Literal(7), Local(0), LetIn(0)]` and the record immediately before the `LetIn` is the CONTINUATION.
+Reasoning from adjacency picks the wrong node every time. The forest gives it directly -- `lhs` is the
+initialiser -- and it comes from `reconstruct_via_kel`, the validated walker, rather than a second
+walk written here.
+
+**JOINED BY SLOT, NOT BY POSITION.** `LetIn`'s payload is the frame slot and `let_names` carries
+`(slot, name)`. Fold-order pairing would be positional and would fail silently on a reordering.
+
+**A BOOLEAN `let` WORKS ONLY BECAUSE OF LAST NIGHT'S FIX.** `let b = true` yields tag 2 through the
+`Unit` node carrying the `PushImmediate` operand. Before the boolean-literal repair it would have been
+a `Local` and produced nothing -- so the two increments compose, and the second could not have been
+written first.
+
+**I DREW A CALL ARM AND THEN DELETED IT, WHICH IS THE DECISION WORTH RECORDING.** `let a = g()` is a
+form-1 alias whose row carries the TARGET'S NAME ID in the tag position. The two extractions do not
+share an id space -- the reference numbers by insertion order as it walks, the pipeline uses the
+lexer's intern table -- **so a form-1 row cannot be compared by name string**, which is the discipline
+that keeps this comparison honest.
+
+The pipeline could produce that row today. Comparing it would mean either comparing id spaces, which
+compares the numbering rather than the content, or changing the row shape to carry a target string.
+**The second is right and it is a slice of its own**, so the arm came out rather than shipping a
+comparison that would have passed while measuring the wrong thing. That is the same failure mode as
+the `Bool`/`bool` regression, avoided rather than repeated.
+
+**THE PIN IS RESTATED, NOT REMOVED**, because what it guards moved rather than went. Two forms remain
+unreached FOR DIFFERENT REASONS -- a call by the row shape, an operator expression by the type channel
+needing the node index -- and the pin now says which is which, so the next increment knows which
+problem it is solving.
+
+Mutation-verified: dropping the literal arm fails both the agreement test and the pin.
+
+---
+
 **THREE OF THE FOUR "KNOWN GAPS" WERE SILENT MISCOMPILES, AND THE TABLE COULD NOT SAY SO
 (2026-08-20, night).**
 

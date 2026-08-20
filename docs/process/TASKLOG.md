@@ -10,6 +10,27 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-20, morning).** **ORDER 1 ITEM 3 REACHES `let` BINDINGS.** A `let` bound
+> to an integer or a boolean literal now produces a pipeline row, compared against the reference by
+> name string. The pin that told the next increment to fold its case in has been honoured.
+>
+> **The trap was adjacency**: `LetIn` is binary and pops right then left, so the record before it is
+> the CONTINUATION, not the initialiser. Classification goes through the reconstructed forest, whose
+> `lhs` is the initialiser, using `reconstruct_via_kel` rather than a second walk. Joined by SLOT, not
+> by fold position.
+>
+> **A boolean `let` works only because of the boolean-literal fix earlier tonight**, so the two
+> increments compose and could not have been done in the other order.
+>
+> **A CALL ARM WAS DRAWN AND DELETED.** A form-1 alias row carries the target's NAME ID, and the two
+> extractions do not share an id space, so it cannot be compared by name string. Emitting it would
+> have meant comparing the numbering rather than the content -- the same failure mode as the
+> `Bool`/`bool` regression, avoided rather than repeated. **Giving the row shape a target string is
+> the next slice.**
+>
+> The pin is RESTATED rather than removed: a call is blocked by the ROW SHAPE, an operator expression
+> by the type channel needing the node index. Different problems, and it now says which is which.
+
 > **Currency note (2026-08-20, late night).** **THREE OF THE FOUR "KNOWN GAPS" WERE SILENT
 > MISCOMPILES.** `Support::Gap` conflated "refuses loudly" with "compiles to different bytes", so the
 > table could not say which. Split into `Refuses` and `Diverges`, and measured:
