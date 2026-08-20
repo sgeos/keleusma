@@ -10,6 +10,26 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-20, late night).** **THREE OF THE FOUR "KNOWN GAPS" WERE SILENT
+> MISCOMPILES.** `Support::Gap` conflated "refuses loudly" with "compiles to different bytes", so the
+> table could not say which. Split into `Refuses` and `Diverges`, and measured:
+> `eq/struct_tuple_of_impure_struct`, `eq/struct_field_array_of_tuple` and `scope/float_arith` all
+> **Diverge**; only `scope/generic_fn` genuinely refuses.
+>
+> **THE BOUNDARY IS NOW 86 Ok / 1 Refuses / 5 Diverges / 1 RefRejects**, including two new
+> nested-array cases recorded as `Diverges` and deliberately NOT fixed -- the outer composite is
+> sized 16 where the reference computes 32, and a chained index truncates the body. Two defects in
+> composite-layout machinery, not a change to make unattended.
+>
+> **MY FIRST SPLIT WAS WRONG AND THE EXPECTATIONS CAUGHT IT.** Classifying via
+> `keleusma::selfhost::self_host_compile` reported `Refuses` for a dozen constructs the table calls
+> `Ok`. **The library's compiler and `tests/selfhost_codegen.rs`'s copy are different compilers**, and
+> the byte-identity check uses the copy. **So the support table describes the TEST-LOCAL compiler.**
+>
+> That duplicate has now mattered three times in one night: it blocks the token residency, it needed
+> the boolean-literal slots seeded separately, and it is the subject of the support table. **Widening
+> `ParsedFn`'s accessors so it can be deleted is the central structural fix**, not a convenience.
+
 > **Currency note (2026-08-20, night).** **THE CAST DIRECTION WAS INVERTED**, and the sweep that
 > found it matters more than the fix. `7 as Byte` emitted `ByteToWord` where the reference emits
 > `WordToByte`: `parse.kel` emitted the `Cast` node at the `as` token and DISCARDED the target type
