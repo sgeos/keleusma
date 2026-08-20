@@ -3275,10 +3275,20 @@ fn mi_join() -> Word {
 // numbers. That is a WEAKER claim than the one `NAMES` and `STRING_POOL` carry,
 // where the walk derives everything from the blob itself, and it is written here
 // so a reader does not over-read the coverage.
+// **`-229` IS THE MISSING-HEADER-REGION CODE, AND IT SITS BELOW ITS FAMILY FOR A
+// REASON WORTH RECORDING.**
+//
+// The missing-region family is `-233` for `NAMES` and `-234` for `STRING_POOL`,
+// with `-261` for `CHUNKS` in `mi_join_chunks` below. The natural third member
+// would be `-235`, and `-235` was already spent on an unrelated `nmap` bounds
+// check at the bottom of this file. Picking it anyway would have created exactly
+// the ambiguity this change removes, so the code sits below the family instead of
+// inside it. **Derive a free code from the file before assigning one**; the set
+// was read out of the source rather than guessed.
 fn mi_join_header() -> Word {
     nm.jj = mi_join();
     if nm.jj < 0 { nm.jj } else {
-    if dir_find(kind_header()) < 0 { 0 - 255 } else {
+    if dir_find(kind_header()) < 0 { 0 - 229 } else {
         nm.jh = emit_header_record_at(region_base(dir_find(kind_header())));
         if nm.jh < 0 { nm.jh } else { nm.jj + nm.jh } } }
 }
@@ -3331,7 +3341,7 @@ fn emit_header_record_from(at: Word, b: Word) -> Word {
 fn mi_join_chunks() -> Word {
     nm.jj = mi_join();
     if nm.jj < 0 { nm.jj } else {
-    if dir_find(kind_header()) < 0 { 0 - 255 } else {
+    if dir_find(kind_header()) < 0 { 0 - 229 } else {
     if dir_find(kind_chunks()) < 0 { 0 - 261 } else {
     if wire.warg > ck_max() { 0 - 262 } else {
         nm.jh = emit_header_record_from(
@@ -3514,10 +3524,18 @@ fn emit_pool_bytes_from_bout(at: Word, n: Word) -> Word {
     // names total between those two figures now passes the input guard and
     // overflows the output buffer. `-255` is what catches it.
     //
-    // It still has no negative test, and that is now a GAP rather than a
-    // justified omission: reaching it needs a module with more than 16 KB of
-    // distinct name bytes, which the corpus cannot build (the largest is
-    // `parse` at 7,680).
+    // **`-255` NOW MEANS ONLY THIS.** It used to mean two unrelated things inside
+    // one call path: `mi_join_header` and `mi_join_chunks` both call `mi_join`,
+    // which reaches here, and then each returned `-255` itself for a missing
+    // HEADER region. A caller could not tell a full output buffer from a
+    // malformed directory, and the two call for opposite responses -- one says
+    // the stage is too small, the other says the caller built its input wrongly.
+    // The header checks moved to `-229` on the operator's ruling of 2026-08-19.
+    //
+    // It still has no negative test, and that is a GAP rather than a justified
+    // omission: reaching it needs a module with more than 16 KB of distinct name
+    // bytes, which the corpus cannot build (the largest is `parse` at 7,680).
+    // **That gap is now honest**, because a test that did reach it could name it.
     if n > bout_capacity() { 0 - 255 } else {
         for j in 0..n limit 16384 {
             wire.bytes[at + j] = wire.bout[j];

@@ -12911,10 +12911,11 @@ fn the_four_formatting_regions_stream_one_record_per_call() {
     assert_eq!(covered, TABLES.len(), "not every table was exercised");
 }
 
-/// **THE `-255` REFUSAL HAS A NEGATIVE TEST AT LAST, AND THE CODE IS AMBIGUOUS.**
+/// **A MISSING HEADER REGION IS REFUSED BY ITS OWN CODE, AND HAS A NEGATIVE TEST.**
 ///
-/// Operator ruling, 2026-08-19: add the negative test. `-255` was live in
-/// `wire.kel` with nothing exercising it, which is a branch no case reaches.
+/// Two operator rulings of 2026-08-19, in order: add the negative test for the
+/// live-but-unexercised `-255`, then split the shared code into unique codes per
+/// error once the test showed it meant two things.
 ///
 /// # The cause this reaches
 ///
@@ -12924,26 +12925,30 @@ fn the_four_formatting_regions_stream_one_record_per_call() {
 /// everything else about the input is unchanged and the refusal can only come
 /// from the missing region.
 ///
-/// # THE CODE IS SHARED, AND THIS TEST IS ONLY SOUND BECAUSE THE OTHER CAUSE
-/// CANNOT FIRE HERE
+/// # THE CODE IS NOW UNIQUE TO THIS CAUSE, AND IT WAS NOT WHEN THIS TEST WAS
+/// WRITTEN
 ///
-/// `-255` has TWO meanings inside one call path. `mi_join_header` first calls
+/// `-255` used to mean TWO things inside one call path. `mi_join_header` calls
 /// `mi_join`, which reaches `emit_pool_bytes_from_bout` and returns `-255` when
-/// the emitted name bytes exceed `bout_capacity()`; then `mi_join_header` returns
-/// `-255` itself for the missing header region. A caller seeing `-255` cannot say
-/// which happened.
+/// the emitted name bytes exceed `bout_capacity()`; then `mi_join_header` returned
+/// `-255` itself for the missing header region. A caller seeing `-255` could not
+/// say which happened, and the two call for OPPOSITE responses — one says the
+/// stage is too small, the other says the caller built its input wrongly.
 ///
-/// This case is sound because the pool cause is unreachable for this input: the
-/// module's total distinct name bytes are far below the 16,384-byte output buffer,
-/// and the control below proves the very same input joins cleanly once the header
-/// region is restored. **That is a property of the case, not of the code.**
+/// **Operator ruling, 2026-08-19: split into unique codes per error.** The header
+/// checks in `mi_join_header` and `mi_join_chunks` are `-229`; `-255` now means
+/// only the pool overflow.
 ///
-/// **The neighbouring guards do not share codes** — `mi_join` uses `-233` for a
-/// missing `NAMES` and `-234` for a missing `STRING_POOL` — and the comment above
-/// `emit_name_records_from_nout` states the principle outright, that two guards
-/// sharing one code leave a caller unable to say which fired. The header check is
-/// the odd one out. **Splitting it is a one-line change held for the operator**
-/// rather than taken here, because an error code is an observable.
+/// So this test asserts `-229`, and the assertion is sound because of the CODE
+/// rather than because of the case. The control below is retained anyway: it
+/// proves the identical input joins cleanly once the region is restored, which is
+/// what attributes the refusal to the missing region rather than to anything else
+/// about the directory.
+///
+/// **The family this joins**: `-233` a missing `NAMES`, `-234` a missing
+/// `STRING_POOL`, `-261` a missing `CHUNKS`. `-229` sits below them because
+/// `-235`, the natural next number, was already spent on an unrelated bounds
+/// check.
 #[cfg(feature = "self-host")]
 #[test]
 fn a_missing_header_region_is_refused_rather_than_written_somewhere_else() {
@@ -13006,7 +13011,13 @@ fn a_missing_header_region_is_refused_rather_than_written_somewhere_else() {
     let err = refused.expect_err("a directory with no HEADER region must be refused");
     let detail = format!("{err:?}");
     assert!(
-        detail.contains("-255"),
-        "expected the stage's own `-255` refusal, got {detail}"
+        detail.contains("-229"),
+        "expected the stage's missing-header-region refusal `-229`, got {detail}"
+    );
+    // AND NOT THE CODE IT USED TO SHARE. If this fires, the split was reverted
+    // and every diagnosis of either cause is ambiguous again.
+    assert!(
+        !detail.contains("-255"),
+        "the refusal still carries `-255`, which now means a pool overflow: {detail}"
     );
 }
