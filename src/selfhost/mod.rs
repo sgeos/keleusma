@@ -732,6 +732,31 @@ fn first_pass(src: &str) -> FirstPass {
 /// checked against.
 // The 4-tuple carries the parsed functions, name table, and the raw data and enum
 // record streams; factoring each into a `type` alias would only scatter it.
+/// **NO PRODUCTION PATH CALLS THIS ANY MORE. It is the fusion oracle.**
+///
+/// Every compile entry point — [`self_host_compile`], [`self_host_compile_full`],
+/// [`self_host_compile_scratch`] and [`binding_rows_from_pipeline`] — moved to
+/// [`parse_functions_fused`] on 2026-08-19, under the operator's direction to
+/// retire the token residency.
+///
+/// # Why it is retained rather than deleted
+///
+/// This feed is what proves the fused one correct.
+/// `the_fused_parse_agrees_with_the_collecting_one` and
+/// `the_fused_compile_agrees_with_the_collecting_one` compare the two, and a
+/// differential oracle with one side removed is not an oracle. Deleting it would
+/// leave fusion checked only against the Rust reference, which is a weaker claim
+/// about the FEED specifically: the reference agrees with a whole-program compile,
+/// not with a particular token-delivery order.
+///
+/// # What it costs, and what happens next
+///
+/// It is the reason `toks.packed` is still 40,960 words: this feed seeds the whole
+/// token stream, so the array cannot shrink while any caller does. **The next
+/// increment shrinks the array to a buffer sized for the equivalence corpus**, at
+/// which point this entry point keeps working for every source those two tests
+/// use and stops working for a large one — which is acceptable precisely because
+/// nothing but those tests calls it.
 #[allow(clippy::type_complexity)]
 pub fn parse_functions(
     src: &str,
@@ -1002,10 +1027,21 @@ fn parse_functions_impl(
     // Which one a caller sees depends on how far over they are, and neither names the token
     // array or a limit the caller controls. Refused here, before any seeding, with both
     // numbers. `parse.kel` itself is 32,907 tokens, 80% of this.
+    //
+    // **THE CAP BINDS THE COLLECTING FEED ONLY, AS OF 2026-08-19.** It was
+    // unconditional, which meant the FUSED feed carried a bound it does not need:
+    // fusion writes a window of `FUSED_WINDOW` slots and slides it, so the size of
+    // `packed` says nothing about how long an input it can accept. Every
+    // production entry point is fused, so this refusal no longer reaches any
+    // compile a user can start. It still guards the collecting feed, which really
+    // does seed the whole stream and really does overrun the array.
+    //
+    // Pinned by `the_token_cap_binds_only_the_collecting_feed`, which compiles a
+    // source past the cap through the fused feed and refuses it through the other.
     assert!(
-        token_count <= PARSE_TOKEN_CAP,
+        fused || token_count <= PARSE_TOKEN_CAP,
         "this program lexes to {token_count} tokens and `toks.packed` in parse.kel holds \
-         {PARSE_TOKEN_CAP}. Split the source."
+         {PARSE_TOKEN_CAP}. Split the source, or use the fused feed, which is windowed."
     );
     vm.set_shared(&mut shared, BR_P_LEN, Value::Int(token_count as i64))
         .unwrap();
@@ -1286,7 +1322,7 @@ fn parse_functions_impl(
 /// reference's ops. The result is a runnable module whose every source-defined chunk was
 /// emitted by the self-hosted pipeline.
 pub fn self_host_compile(src: &str) -> Module {
-    let (fns, names, _data_records, _enum_records) = parse_functions(src);
+    let (fns, names, _data_records, _enum_records) = parse_functions_fused(src);
     let mut module = compile_src(src);
     let mut i = 0;
     while i < fns.len() {
@@ -1351,7 +1387,7 @@ pub fn self_host_compile(src: &str) -> Module {
 /// rather than the header. That walk is the next slice; this one carries the
 /// declared bindings, which are the ones the source states outright.
 pub fn binding_rows_from_pipeline(src: &str) -> (Vec<String>, Vec<(String, i64, i64)>) {
-    let (fns, names, ..) = parse_functions(src);
+    let (fns, names, ..) = parse_functions_fused(src);
     // A type NAME id to the stage's scalar tag. The ids come from the same intern
     // table the records index, so this is a lookup rather than a second convention.
     let tag_of = |type_name_id: i64| -> i64 {
@@ -3338,7 +3374,7 @@ fn assemble_chunk_metadata(
 /// modifiers) and self-hosting them is a distinct increment.
 pub fn self_host_compile_full(src: &str) -> Module {
     let mut module = self_host_compile(src);
-    let (fns, names, data_records, enum_records) = parse_functions(src);
+    let (fns, names, data_records, enum_records) = parse_functions_fused(src);
     let dl = assemble_data_layout(&data_records, &names);
     module.schema_hash = crate::bytecode::compute_schema_hash(Some(&dl));
     module.data_layout = Some(dl);
@@ -3439,7 +3475,7 @@ fn shared_data_bytes_of(shared_layout: &[crate::bytecode::SharedSlotLayout]) -> 
 /// `native_return_shapes` are empty.
 pub fn self_host_compile_scratch(src: &str) -> Module {
     use crate::bytecode::{Chunk, ConstValue, SlotVisibility};
-    let (fns, names, data_records, enum_records) = parse_functions(src);
+    let (fns, names, data_records, enum_records) = parse_functions_fused(src);
 
     // Build each source chunk from the pipeline output. Group consecutive same-named heads
     // (a multiheaded function is one chunk), mirroring `self_host_compile`, but emit a fresh

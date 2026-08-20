@@ -1339,6 +1339,14 @@ phase's static worst case is quadratic in `nm_max_names`. Going 256 -> 1024 mult
 **sixteen**, from 65,536 name comparisons to 1,048,576. It costs nothing on real input, where the
 scan runs to `cnt`; it is the BOUND that moves, and the bound is what this project sells.
 
+**`-255` became live and had no negative test. BOTH ARE CLOSED, 2026-08-19.** It has a negative test
+now, and the operator ruled that the shared code be split: `mi_join_header` and `mi_join_chunks` each
+returned `-255` for a MISSING HEADER REGION while `mi_join`, which they both call first, returned it
+for a pool overflow. One call path, two meanings, opposite remedies. The header checks are now `-229`
+and `-255` means only the overflow. **`-235` was the natural next number in the missing-region family
+and was already spent**, so the new code sits below `-233`/`-234` rather than inside their run; the
+free set was derived from the file rather than guessed. Original note follows.
+
 **`-255` became live and has no negative test.** `emit_pool_bytes_from_bout`'s overflow guard was
 argued unreachable because `intern_run` refuses above `bin_capacity()` -- sound only while `bin` and
 `bout` were both 8,192. They are now 49,152 and 16,384, so an input whose names total between the two

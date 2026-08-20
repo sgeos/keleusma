@@ -13,6 +13,66 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE TOKEN BOUND IS OFF THE PRODUCTION PATH, AND THE TEST THAT WOULD HAVE PROVED IT FOUND A BIGGER
+PROBLEM (2026-08-19).**
+
+Two rulings. The `-255` split, and stage one of the token-residency work.
+
+**THE `-255` SPLIT WAS AN OVERSIGHT AND THE FILE SAYS SO IN ITS OWN VOICE.** `mi_join_header` and
+`mi_join_chunks` both call `mi_join` first, which returns `-255` from a pool overflow, and then each
+returned `-255` itself for a missing HEADER region. One call path, two meanings, and the two call for
+OPPOSITE responses -- the stage is too small, against the caller built its input wrongly. The comment
+above `emit_name_records_from_nout` had already chosen `-256` over `-202` on exactly this reasoning.
+The header check was the one place the convention was not applied.
+
+**`-235` WAS THE OBVIOUS CODE AND IT WAS ALREADY SPENT.** The missing-region family is `-233`, `-234`
+and `-261`; the natural third member was taken by an unrelated `nmap` bounds check. Taking it anyway
+would have recreated the ambiguity being removed. The free set was DERIVED by reading every negative
+code out of the file, and `-229` sits below its family with the reason recorded at the site.
+
+**STAGE ONE MOVED FOUR ENTRY POINTS, AND THE INTERESTING PART IS WHAT IT DID NOT MOVE.** Nothing in
+production used the fused feed: it existed, was proven, and was unused, while
+`self_host_compile_scratch` -- the command-line backend -- went through the collecting one. The cap
+assertion sat ABOVE the branch, so the fused feed carried a bound that is meaningless for it. Gating
+it on `!fused` took the 40,960-token bound off every compile a user can start, without touching a
+single array.
+
+**THE COLLECTING FEED IS RETAINED DELIBERATELY AND IS NOW THE ORACLE.** Two tests compare the feeds,
+and a differential oracle with one side deleted is not an oracle. Deleting it would leave fusion
+checked only against the Rust reference, which is a weaker claim about the FEED specifically: the
+reference agrees with a whole-program compile, not with a particular token-delivery order.
+
+**THE BEHAVIOURAL PIN RAN FOR TEN MINUTES AND WAS WITHDRAWN. THAT IS THE FINDING.** A source past the
+cap, accepted fused and refused collecting, is the obvious test. Measured instead of waited out:
+
+```
+tokens=459   fused=1606ms   collecting=1969ms
+tokens=909   fused=2491ms   collecting=2850ms
+tokens=1809  fused=4455ms   collecting=4774ms
+tokens=3609  fused=15062ms  collecting=15315ms
+```
+
+Doubling 1,809 to 3,609 multiplies the time by about **3.4**. Superlinear, extrapolating to roughly
+half an hour at 41,000 tokens.
+
+**BOTH FEEDS SHOW IT AND THEY ARE WITHIN A FEW PERCENT OF EACH OTHER**, which localises the cost to
+the SHARED record handling and driver rather than to token delivery. Two things follow. First, moving
+production to fused is not a regression -- fused is slightly faster at every size. Second, **stage
+two removes the MEMORY bound and the bound a large input meets first is now TIME.** Saying that now
+is the difference between a known limit and a surprise.
+
+**A TIMING ASSERTION WAS CONSIDERED AND REFUSED.** The instrument asserts only that the two feeds
+agree on the function count. A wall-clock threshold in a test is a flake waiting for a loaded machine,
+and a flaky gate teaches people to re-run rather than to read.
+
+**I ALMOST SHIPPED A GUARD I HAD ALREADY ARGUED AGAINST.** My first instinct for keeping production on
+the fused feed was a test grepping `src/` for call sites. That is the textual-guard shape whose scope
+keeps turning out narrower than its class -- the same defect as the no-copies guard that walked two
+directories and missed a live fifth copy. The behavioural version was right and was unaffordable, so
+what ships is the gating plus this record, and the gap is named rather than papered over.
+
+---
+
 **THREE RULED REFUSALS, BATCHED FOR CONTINUOUS INTEGRATION, AND THE MIDDLE ONE WAS A SILENT WRONG
 ANSWER RATHER THAN A MISSING NUMBER (2026-08-19).**
 
