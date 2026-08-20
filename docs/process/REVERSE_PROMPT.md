@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-20 (session 49, boolean literals)
+**Date**: 2026-08-20 (session 49, cast direction and the corpus blind spot)
 
 ## Where things stand
 
@@ -27,6 +27,59 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 | `parse.kel` failure modes named | **THIRTEEN**; eleven counters guarded |
 | **the type checker's INPUT** | **the DECLARED rows now come from the pipeline; the derived ones do not** |
 | branch | `feat/typecheck-bindings-from-pipeline`, cut from `v0.2.3` at `fe2af14f` |
+
+## THE ORACLE'S BLIND SPOT IS SYSTEMATIC, AND I STOPPED GUESSING AT GOALS TO PROVE IT
+
+After the boolean-literal miscompile I tested a hypothesis rather than picking another goal: **that
+bug was not special.** The differential oracle validates the self-hosted compiler against its own
+sources, so any construct those sources do not use is unverified by construction.
+
+Twenty small programs, both compilers, compared as **bytes**. **Two more silent mis-lowerings in the
+first twenty cases.**
+
+### The cast direction was inverted
+
+`fn main() -> Byte { 7 as Byte }` emitted `ByteToWord` where the reference emits `WordToByte`.
+`push_cast` said why in its own comment — "a `Byte as Word` widening" — and it could not do better,
+because `parse.kel` emitted the `Cast` node at the `as` token and then **discarded the target type
+name**. Both directions lowered identically and one was always wrong. A `let b = 7 as Byte; b as Word`
+chain got the first cast wrong and the second right, in one chunk.
+
+**The fix moves which token produces the record**, from `as` to the target type name. Nothing is
+emitted between them, so its position in the stream is unchanged. `Cast` is unary with an unused
+payload — exactly as `Unit` was for the booleans — so no new node kind and nothing for the three
+record decoders to learn. Payload 0 keeps the widening, so existing programs are byte-identical.
+
+**`parse.kel` already had `byte_id` for this.** Third construct in two nights whose information was
+present and thrown away.
+
+### The finding that generalises is the table's shape
+
+| family | cases |
+|---|---|
+| `eq` | **41** |
+| `bool` 10, `op` 8, `comp` 8, `scalar` 6, `prec` 5, `ctrl` 4, `tuple` 1 | 42 |
+| `cast` | **none** |
+
+Forty-one of eighty-eight cases are equality lowering. **A table that thorough in one area and absent
+in another describes how well one feature was tested, not where support ends.** Both miscompiles found
+tonight sit in families it did not cover.
+
+**Widening it family by family is the work I recommend next**, ahead of the goals I started with.
+Recorded in `../decisions/SELFHOST_CORPUS_BLIND_SPOT.md`.
+
+### One divergence recorded and deliberately NOT claimed as a defect
+
+A string literal yields `Int(intern_id)` where the reference yields `StaticStr`; the ops are identical
+and only the constant pool differs. `Text` appears in `CLAUDE.md` among the divergence classes the CLI
+refuses, so this may be a known limitation. **Check before reporting it as new** — that discipline
+cost you a ruling when I misreported the ECC plane.
+
+### Proportionality, stated every time
+
+`self_hosted_compile` cross-checks ops, constant pool and local count against the reference and
+refuses on divergence. Every defect here gives a **loud error** on the shipping path and a wrong
+module only to a direct caller that skips the check.
 
 ## THE SELF-HOSTED COMPILER SILENTLY MIS-LOWERED `true` AND `false`
 

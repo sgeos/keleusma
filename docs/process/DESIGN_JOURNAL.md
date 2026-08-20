@@ -13,6 +13,57 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE CAST DIRECTION WAS INVERTED, AND THE SWEEP THAT FOUND IT IS THE REAL DELIVERABLE
+(2026-08-20).**
+
+After the boolean-literal miscompile I stopped guessing at goals and tested a hypothesis: **the bool
+bug was not special.** The differential oracle validates the self-hosted compiler against its own
+sources, so any construct those sources do not use is unverified by construction. Twenty small
+programs through both compilers, compared as BYTES.
+
+**Two more silent mis-lowerings in the first twenty cases.**
+
+**THE CAST.** `fn main() -> Byte { 7 as Byte }` emitted `ByteToWord` where the reference emits
+`WordToByte`. `push_cast` said why in its own comment -- "a `Byte as Word` widening" -- and it could
+not do better, because `parse.kel` emitted the `Cast` node at the `as` TOKEN and then **discarded the
+target type name**. The direction never reached the node, so both directions lowered identically and
+one was always wrong. A `let b = 7 as Byte; b as Word` chain got the first cast wrong and the second
+right, in one chunk.
+
+**THE FIX MOVES WHICH TOKEN PRODUCES THE RECORD, NOT WHERE IT LANDS.** The `Cast` node is now emitted
+at the target type name rather than at `as`. Nothing is emitted between those two tokens, so the
+record's POSITION in the stream is unchanged -- only its producer. `Cast` is unary and its payload was
+unused, exactly as `Unit`'s was for the booleans, so no new node kind and nothing for the three record
+decoders to learn. Payload 0 selects the widening it always emitted, so every program that compiled
+before is byte-identical.
+
+**`parse.kel` ALREADY HAD `byte_id` FOR THIS.** The `word_id`/`byte_id`/`bool_id` shared slots exist
+to recognise type names by interned id; the cast site simply never consulted them. Third construct in
+two nights whose information was present and thrown away -- after the parameter name the driver
+discarded and the `let` name that needed a record.
+
+**THE FINDING THAT GENERALISES IS THE TABLE'S SHAPE.** Labels by family: `eq` **41**, `bool` 10, `op`
+8, `comp` 8, `scalar` 6, `prec` 5, `ctrl` 4, `tuple` 1. **Forty-one of eighty-eight cases are equality
+lowering, and there was no cast family at all.** A table that thorough in one area and absent in
+another describes how well one feature was tested, not where support ends. Both silent miscompiles
+found tonight sit in families it did not cover.
+
+**A SECOND DIVERGENCE IS RECORDED AND NOT YET CLAIMED AS A DEFECT.** A string literal yields
+`Int(3)` -- the raw intern id -- where the reference yields `StaticStr("hi")`; the ops are identical
+and only the constant pool differs. `Text` appears in `CLAUDE.md` among the divergence classes the CLI
+refuses, so this may be a known limitation. **Check before reporting it as new**, which is the
+discipline the ECC misreport cost an operator ruling to learn.
+
+**AND THE SWEEP'S OWN METHOD NOTES ARE WORTH MORE THAN EITHER FIX.** Compare BYTES, not ops -- the
+string case has identical ops and a different module. Classify three ways, not two: identical,
+self-refuses loudly, and DIFFERS; only the third is dangerous and a loud refusal is an honest gap. And
+a `PARSE-FAIL` in a probe is usually the probe's fault: mine used `let mut`, which this language does
+not have.
+
+Recorded in `../decisions/SELFHOST_CORPUS_BLIND_SPOT.md`.
+
+---
+
 **THE SELF-HOSTED COMPILER SILENTLY MIS-LOWERED `true` AND `false`, AND THE ORACLE COULD NOT SEE IT
 BY CONSTRUCTION (2026-08-20).**
 

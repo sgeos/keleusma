@@ -7993,6 +7993,24 @@ fn self_hosted_construct_support_boundary() {
         ("op/bnot_word", SOk, "fn f(a: Word) -> Word { bnot a }"),
         ("op/bnot_byte", SOk, "fn f(a: Byte) -> Byte { bnot a }"),
         // --- booleans ------------------------------------------------------------
+        // --- casts, a family this table had NO cases for at all ------------------
+        //
+        // `parse.kel` discarded the target type name and `codegen.kel` emitted
+        // `ByteToWord` unconditionally, on the stated assumption that the stages
+        // only cast `Byte as Word`. True of the corpus, false of the language:
+        // `7 as Byte` lowered to a WIDENING. A silent miscompile, and no case here
+        // could have caught it because the family was absent.
+        ("cast/word_to_byte", SOk, "fn f() -> Byte { 7 as Byte }"),
+        (
+            "cast/byte_to_word",
+            SOk,
+            "fn f(a: Byte) -> Word { a as Word }",
+        ),
+        (
+            "cast/round_trip",
+            SOk,
+            "fn f() -> Word { let b = 7 as Byte; b as Word }",
+        ),
         // THE LITERALS, WHICH THIS TABLE DID NOT COVER UNTIL 2026-08-20.
         //
         // Every other boolean case here takes a bool PARAMETER. Not one supplied a
@@ -8659,5 +8677,86 @@ fn boolean_literals_lower_to_the_immediate_and_not_to_a_local_read() {
     assert!(
         STAGES.len() >= 5,
         "the stage list shrank, so the check above walks too little to mean anything"
+    );
+}
+
+/// **THE CAST DIRECTION WAS INVERTED, AND THE TARGET TYPE NEVER REACHED CODEGEN.**
+///
+/// Measured 2026-08-20, before the fix:
+///
+/// ```text
+///   fn main() -> Byte { 7 as Byte }
+///     reference:   Const(0), WordToByte, Return
+///     self-hosted: Const(0), ByteToWord, Return
+/// ```
+///
+/// `push_cast` emitted `ByteToWord` unconditionally and said why in its own
+/// comment — "a `Byte as Word` widening" — which is true of the stage corpus and
+/// false of the language. It could not do better: `parse.kel` emitted the `Cast`
+/// node when the `as` token was seen and then **discarded the target type name**,
+/// so the direction never reached the node. Every cast lowered identically and one
+/// direction was always wrong.
+///
+/// # How it was found, which generalises
+///
+/// Not by reading the code. By compiling twenty small programs through both
+/// compilers and comparing BYTES — the same sweep that had just found the boolean
+/// literals. Two silent mis-lowerings in the first twenty cases.
+///
+/// **The construct-support table had no cast family at all.** Forty-one of its
+/// eighty-eight cases were equality lowering. A table that thorough in one area and
+/// absent in another describes how well one feature was tested, not where support
+/// ends.
+///
+/// # Why the fix cannot regress existing programs
+///
+/// The payload is the target: 1 for `Byte`, 0 for anything else — and 0 selects the
+/// widening this always emitted. A program that compiled before compiles to the same
+/// bytes. Only the record's producing TOKEN moved, from `as` to the type name; its
+/// position in the stream is unchanged because nothing is emitted between them.
+#[cfg(feature = "self-host")]
+#[test]
+fn a_cast_lowers_in_the_direction_it_was_written() {
+    use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
+
+    const CASES: &[&str] = &[
+        // The narrowing, which was the broken direction.
+        "fn main() -> Byte { 7 as Byte }",
+        // The widening, which always worked — and is the control. If this breaks,
+        // the payload defaulting is wrong rather than the new branch.
+        "fn f(a: Byte) -> Word { a as Word }\nfn main() -> Word { 1 }",
+        // Both directions in one body, which is what exposed the asymmetry: the
+        // first cast was wrong and the second right, in the same chunk.
+        "fn main() -> Word { let b = 7 as Byte; b as Word }",
+    ];
+
+    let mut checked = 0;
+    for src in CASES {
+        let reference =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("reference");
+        let mine = keleusma::selfhost::self_host_compile(src);
+        assert_eq!(
+            keleusma::wire_format::module_to_wire_bytes(&reference).expect("reference bytes"),
+            keleusma::wire_format::module_to_wire_bytes(&mine).expect("self-hosted bytes"),
+            "{src}\n  reference:   {:?}\n  self-hosted: {:?}",
+            reference.chunks[0].ops,
+            mine.chunks[0].ops
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, CASES.len(), "not every case was compared");
+
+    // MUST-FIRE on the two directions actually differing. If `WordToByte` and
+    // `ByteToWord` ever lowered the same way, every assertion above would pass
+    // while measuring nothing at all — which is precisely the state this test was
+    // written to end.
+    let narrow = keleusma::selfhost::self_host_compile("fn main() -> Byte { 7 as Byte }");
+    let widen = keleusma::selfhost::self_host_compile(
+        "fn f(a: Byte) -> Word { a as Word }\nfn main() -> Word { 1 }",
+    );
+    assert_ne!(
+        narrow.chunks[0].ops, widen.chunks[0].ops,
+        "both cast directions emit the same ops, so the direction is being ignored \
+         again and the cases above prove nothing"
     );
 }

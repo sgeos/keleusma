@@ -10,6 +10,29 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-20, night).** **THE CAST DIRECTION WAS INVERTED**, and the sweep that
+> found it matters more than the fix. `7 as Byte` emitted `ByteToWord` where the reference emits
+> `WordToByte`: `parse.kel` emitted the `Cast` node at the `as` token and DISCARDED the target type
+> name, so both directions lowered identically and one was always wrong.
+>
+> **Fixed by moving which token produces the record**, from `as` to the target type name. Nothing is
+> emitted between them, so the record's position is unchanged. `Cast` is unary with an unused
+> payload, like `Unit` was for the booleans, so no new node kind. Payload 0 keeps the old widening,
+> so existing programs stay byte-identical. **`byte_id` already existed for this** and the cast site
+> never consulted it.
+>
+> **THE HYPOTHESIS THAT PRODUCED IT**: the bool bug was not special -- the oracle validates the
+> compiler against its own sources, so any construct they do not use is unverified. Twenty programs
+> compared as BYTES found two silent mis-lowerings.
+>
+> **THE BOUNDARY TABLE IS A CENSUS OF ONE FEATURE.** `eq` 41, `bool` 10, `op` 8, `comp` 8, `scalar`
+> 6, `prec` 5, `ctrl` 4, `tuple` 1 -- and no `cast` family at all. Widening it family by family is
+> now the recommended work. See `docs/decisions/SELFHOST_CORPUS_BLIND_SPOT.md`.
+>
+> **One divergence recorded and NOT claimed as a defect**: a string literal yields `Int(intern_id)`
+> where the reference yields `StaticStr`. `Text` is listed in `CLAUDE.md` among the classes the CLI
+> refuses, so check before reporting it as new.
+
 > **Currency note (2026-08-20, later still).** **THE SELF-HOSTED COMPILER SILENTLY MIS-LOWERED
 > `true` AND `false`.** `fn main() -> bool { true }` emitted `GetLocal(0)` where the reference emits
 > `PushImmediate(1)` -- a miscompile, not a refusal, because the Tok space is full and both literals
