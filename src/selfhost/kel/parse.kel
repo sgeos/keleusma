@@ -4876,19 +4876,38 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
         step_enum(k, v)
     } else {
     if da.as_skip == 1 {
-        // The target type name after a plain `as` cast; skip it. The Cast node was
-        // already emitted when the `as` token was seen.
+        // The target type name after a plain `as` cast. **THE CAST NODE IS EMITTED
+        // HERE, NOT AT THE `as` TOKEN**, because the DIRECTION is only knowable once
+        // the target is in hand.
+        //
+        // It used to be emitted at `as` and this name was discarded, so every cast
+        // lowered the same way whatever it was written as. `codegen.kel` said so in
+        // its own comment -- "a `Byte as Word` widening" -- and emitted `ByteToWord`
+        // unconditionally. Measured: `fn main() -> Byte { 7 as Byte }` emitted
+        // `ByteToWord` where the reference emits `WordToByte`, a SILENT MISCOMPILE.
+        //
+        // The payload is the target: 1 for `Byte` (narrowing), 0 for anything else
+        // (the widening this always did), so every program that compiled before is
+        // byte-identical. `byte_id` is host-supplied and guarded `> 0`, exactly like
+        // `and_id`/`or_id`/`true_id`, so an unseeded host keeps the old behaviour.
+        //
+        // Nothing is emitted between the `as` token and this one, so the record's
+        // POSITION in the stream is unchanged -- only which token produces it.
         da.as_skip = 0;
-        0
+        ops.expect_operand = 0;
+        if toks.byte_id > 0 andalso v == toks.byte_id {
+            Node::Cast() as Word + 1 * 64
+        } else {
+            Node::Cast() as Word
+        }
     } else {
     if k == Tok::As() as Word {
-        // A plain `<expr> as Type` cast (not an enum cast, which step_enum consumes):
-        // the operand is on the host stack, so emit a Cast node (kind 26) wrapping it and
-        // arm the skip of the target type name. The stages only cast `Byte as Word`, which
-        // codegen lowers to a single ByteToWord op.
+        // A plain `<expr> as Type` cast (not an enum cast, which step_enum consumes).
+        // The operand is on the host stack; arm the skip so the TARGET TYPE NAME
+        // emits the Cast node, because that is the token that knows the direction.
         da.as_skip = 1;
         ops.expect_operand = 0;
-        Node::Cast() as Word
+        0
     } else {
     if forst.for_sp > 0 andalso forst.for_phase[forst.for_sp - 1] >= 1 andalso forst.for_phase[forst.for_sp - 1] <= 6 {
         step_forheader(k, v)
