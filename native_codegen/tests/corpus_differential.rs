@@ -1610,6 +1610,12 @@ fn every_lowering_module_executes_or_is_exempt() {
     let mut executed: Vec<String> = Vec::new();
     let mut vacuous: Vec<String> = Vec::new();
     let mut exempt: Vec<(String, String, ExemptClass)> = Vec::new();
+    let mut obs_multi_result = 0usize;
+    let mut obs_single_scalar_only = 0usize;
+    let mut obs_single_and_undrivable = 0usize;
+    let mut obs_visited = 0usize;
+    let mut obs_native_calls = 0usize;
+    let mut obs_wrote_shared = 0usize;
     let mut seed_pairs = 0usize;
     let mut seed_widened = 0usize;
     let mut disagreed: Vec<String> = Vec::new();
@@ -1857,6 +1863,53 @@ fn every_lowering_module_executes_or_is_exempt() {
             vacuous.push(name);
             continue;
         }
+        // **WHICH OBSERVABLE CARRIES THIS MODULE'S AGREEMENT.**
+        //
+        // The comparison checks four things, and the headline count checks none
+        // of them individually. A module can be non-vacuous on the strength of a
+        // native-call log alone while returning one value sixty times over, and
+        // "44 executed and agreeing" reads identically either way. Recorded per
+        // module so the distribution is visible rather than inferred.
+        //
+        // **ACROSS EVERY RUN, NOT SEED 0.** The reported observables come from
+        // `runs[0]`, and for a NON-STREAM module that run holds exactly ONE
+        // result -- one seed, one returned scalar. Counting distinct values
+        // there said "one" for every such module however well the seed sweep
+        // exercised it, which measured the harness's reporting convention
+        // rather than the module. A stream module's single run holds one value
+        // per tick, so the two populations only become comparable once every
+        // run is pooled.
+        let mut distinct: Vec<i64> = runs
+            .iter()
+            .flat_map(|(_, v, _)| v.results.clone())
+            .collect();
+        distinct.sort_unstable();
+        distinct.dedup();
+        obs_visited += 1;
+        let multi = distinct.len() > 1;
+        let logged = runs.iter().any(|(_, v, _)| !v.log.is_empty());
+        let wrote = runs.iter().any(|(_, v, _)| v.wrote_shared);
+        if multi {
+            obs_multi_result += 1;
+        }
+        if logged {
+            obs_native_calls += 1;
+        }
+        if wrote {
+            obs_wrote_shared += 1;
+        }
+        if !multi && !logged && !wrote {
+            obs_single_scalar_only += 1;
+            // **CAN this module vary at all?** A module driven at ONE argument
+            // vector cannot produce a second distinct result however good the
+            // lowering is, so "one scalar only" says something about the harness
+            // rather than the emitter. Split, because the two readings differ:
+            // one is a corpus that takes no input, the other is a sweep that
+            // failed to move an output.
+            if runs.len() == 1 {
+                obs_single_and_undrivable += 1;
+            }
+        }
         executed.push(name);
     }
 
@@ -1876,6 +1929,31 @@ fn every_lowering_module_executes_or_is_exempt() {
              \x20      `stage_differential.rs`, which seeds the segment on BOTH sides."
         );
     }
+    // **WHAT CARRIES THE AGREEMENT, since the headline count says nothing about it.**
+    // These are not independent: one module can appear in all three. Reported and
+    // deliberately NOT asserted -- pinning a distribution fails on ordinary corpus
+    // growth and teaches the next reader to delete the check.
+    println!("\n  of these {}, agreement is carried by:", executed.len());
+    println!("    {obs_multi_result:>3}  more than one distinct result value");
+    println!("    {obs_native_calls:>3}  a native call log");
+    println!("    {obs_wrote_shared:>3}  writing the shared segment");
+    println!("    {obs_single_scalar_only:>3}  NONE of the three -- one scalar, no call, no write");
+    println!(
+        "         of those, {obs_single_and_undrivable} were driven at ONE argument vector and \
+         could not have varied"
+    );
+    // **NON-VACUITY ONLY.** The distribution above is REPORTED, never asserted:
+    // pinning it would fail on ordinary corpus growth and teach the next reader
+    // to delete the check. What must hold is that the breakdown looked at every
+    // agreeing module -- a classification that silently skips some would show a
+    // reassuring shape while describing a subset.
+    assert_eq!(
+        obs_visited,
+        executed.len(),
+        "the observable breakdown classified {obs_visited} modules but {} are \
+         reported as executing and agreeing; it is describing a subset",
+        executed.len()
+    );
     println!("  (module, seed) pairs compared : {seed_pairs}");
     println!("  modules driven at >1 seed     : {seed_widened}");
 
