@@ -1614,6 +1614,7 @@ fn every_lowering_module_executes_or_is_exempt() {
     let mut obs_single_scalar_only = 0usize;
     let mut obs_single_and_undrivable = 0usize;
     let mut obs_visited = 0usize;
+    let mut nothing_compared: Vec<String> = Vec::new();
     let mut obs_native_calls = 0usize;
     let mut obs_wrote_shared = 0usize;
     let mut seed_pairs = 0usize;
@@ -1908,6 +1909,26 @@ fn every_lowering_module_executes_or_is_exempt() {
             // failed to move an output.
             if runs.len() == 1 {
                 obs_single_and_undrivable += 1;
+            } else {
+                // **NAMED, not just counted, and naming them found the cause.**
+                // These do not "fail to vary": every one returns a COMPOSITE,
+                // and a composite return is deliberately excluded from the
+                // results comparison -- `vm_scalar` is false, so `differ` is
+                // false whatever either side produced.
+                //
+                // The design justifies that exclusion by saying the call log and
+                // the data segment "cover a composite-returning module's actual
+                // work". **For these modules both are EMPTY**, so the stated
+                // fallback does not exist and NOTHING about them is compared.
+                // The return shape is READ, not assumed: a module landing here
+                // with a SCALAR return would have a different cause entirely and
+                // must not be labelled with this one.
+                nothing_compared.push(format!(
+                    "{name} ({} vectors, {} params, {} return)",
+                    runs.len(),
+                    n_params,
+                    if ret_scalar { "SCALAR" } else { "composite" }
+                ));
             }
         }
         executed.push(name);
@@ -1954,6 +1975,18 @@ fn every_lowering_module_executes_or_is_exempt() {
          reported as executing and agreeing; it is describing a subset",
         executed.len()
     );
+    if !nothing_compared.is_empty() {
+        println!(
+            "\n  *** COUNTED AS AGREEING WITH NOTHING COMPARED ({}) ***",
+            nothing_compared.len()
+        );
+        println!("  Composite return => results excluded by design; log EMPTY; segment UNWRITTEN.");
+        println!("  The exclusion is justified by the log and segment covering the work.");
+        println!("  For these modules they carry nothing, so the justification does not hold.");
+        for u in &nothing_compared {
+            println!("     {u}");
+        }
+    }
     println!("  (module, seed) pairs compared : {seed_pairs}");
     println!("  modules driven at >1 seed     : {seed_widened}");
 
