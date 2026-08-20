@@ -1690,6 +1690,10 @@ fn every_lowering_module_executes_or_is_exempt() {
     let mut vacuous: Vec<String> = Vec::new();
     let mut exempt: Vec<(String, String, ExemptClass)> = Vec::new();
     let mut obs_composite = 0usize;
+    let mut cap_pairs_both = 0usize;
+    let mut cap_pairs_declined = 0usize;
+    let mut cap_partial: Vec<String> = Vec::new();
+    let mut cap_never: Vec<String> = Vec::new();
     let mut obs_multi_result = 0usize;
     let mut obs_single_scalar_only = 0usize;
     let mut obs_single_and_undrivable = 0usize;
@@ -1866,6 +1870,10 @@ fn every_lowering_module_executes_or_is_exempt() {
         // written differentials decode them per module. Here the observable is
         // the call log and the data segment, which cover a composite-returning
         // module's actual work. Stated rather than silently skipped.
+        let ret_is_composite = matches!(
+            m.signatures.get(entry).map(|s| &s.ret),
+            Some(WireShape::Flat { .. })
+        );
         let ret_scalar = matches!(
             m.signatures.get(entry).map(|s| &s.ret),
             Some(WireShape::Scalar { .. })
@@ -2009,6 +2017,32 @@ fn every_lowering_module_executes_or_is_exempt() {
         if composite {
             obs_composite += 1;
         }
+        // **PAIR GRANULARITY, because a module-level count is exactly what hides
+        // a pair-level gap.** `obs_composite` says a module captured AT LEAST
+        // ONCE. A module capturing on seed 0 and declining on the other 23 would
+        // be counted as compared, and the skip would be invisible -- which is the
+        // silent skipping the comparison's own justification claims cannot happen.
+        if ret_is_composite {
+            let mut both = 0usize;
+            let mut declined = 0usize;
+            for (_, v, n) in &runs {
+                for (a, b) in v.ret_bytes.iter().zip(&n.ret_bytes) {
+                    if !a.is_empty() && !b.is_empty() {
+                        both += 1;
+                    } else {
+                        declined += 1;
+                    }
+                }
+            }
+            cap_pairs_both += both;
+            cap_pairs_declined += declined;
+            if declined > 0 {
+                cap_partial.push(format!("{name}: {both} captured, {declined} declined"));
+            }
+            if both == 0 {
+                cap_never.push(name.clone());
+            }
+        }
         if multi {
             obs_multi_result += 1;
         }
@@ -2119,6 +2153,27 @@ fn every_lowering_module_executes_or_is_exempt() {
         for u in &nothing_compared {
             println!("     {u}");
         }
+    }
+    // **THE UNIT IS A RESULT SLOT, NOT A (MODULE, SEED) PAIR.** A stream entry
+    // contributes one slot per TICK and a non-stream entry one per seed, so this
+    // total exceeds the pair count printed below and is NOT comparable to it.
+    // Naming a unit wrongly is the same class of defect this audit exists to catch.
+    println!("\n  COMPOSITE CAPTURE AUDIT (per RESULT SLOT, not per module):");
+    println!("    {cap_pairs_both:>5}  slots with a body captured on BOTH sides");
+    println!("    {cap_pairs_declined:>5}  slots where either side declined");
+    println!(
+        "    {:>5}  modules with AT LEAST ONE declined capture",
+        cap_partial.len()
+    );
+    for c in &cap_partial {
+        println!("        {c}");
+    }
+    println!(
+        "    {:>5}  modules with a composite return captured on NEITHER side",
+        cap_never.len()
+    );
+    for c in &cap_never {
+        println!("        {c}");
     }
     println!("  (module, seed) pairs compared : {seed_pairs}");
     println!("  modules driven at >1 seed     : {seed_widened}");
