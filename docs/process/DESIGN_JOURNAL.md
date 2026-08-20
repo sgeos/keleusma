@@ -13,6 +13,60 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THIRTEEN OPERATOR RULINGS RECORDED, AND TWO OF THEM WERE ANSWERS TO QUESTIONS I ASKED WRONG
+(2026-08-19).**
+
+The live decision list is empty for the first time in this programme. The three standing forks are
+ruled -- a file operand with standard input as the default, leave the token array alone, defer
+top-level `struct` -- along with ten further items.
+
+**THE FINDING IS NOT THE RULINGS. IT IS THAT I PUT TWO STALE QUESTIONS TO THE OPERATOR.**
+
+**The ECC plane was already exercised end to end.** I reported it open because item 5 of
+`WIRE_FORMAT_V2_WORD_ORIENTED.md` says open. It has been closed for some time:
+`SchemaBuilder::with_ecc` sets the flag, `finish` calls `protect_all`, and EIGHT tests drive it on
+real compiler output across `secded_end_to_end.rs` and `ecc_signature_ordering.rs`. That suite is
+better than what I would have written -- every corruption case is paired with the SAME corruption on
+an unprotected artifact, asserted undetected, so a caught flip cannot be credited to the CRC or a
+length check. The operator ruled "seems fairly easy to add something". The correct answer was that
+it exists.
+
+**The token-array question was framed as capacity when the streaming it presupposed was already
+built.** The operator's reply was "unless I am misunderstanding, ideally we just want to stream
+tokens so we do not need a big token buffer". They were not misunderstanding. `parse.kel` lines
+57-80 already say every cursor move is plus or minus one, `base` and `at` already exist so a host
+slides the window with no protocol, and the fused driver already slides it at `FUSED_WINDOW = 8`
+with a comment recording that three would suffice. **What is left is the DECLARATION, not the feed**:
+`packed: [Word; 40960]` reserves the slots regardless, and `PARSE_TOKEN_CAP` chains every later slot
+offset off that number. So the right lever is shrinking the array, which REMOVES the input bound
+instead of widening it, and the ruling to leave the number alone is unaffected.
+
+**THE COMMON CAUSE IS THE ONE THIS LINE HAS NOW RECORDED SEVEN TIMES**, in its sharpest form yet: I
+derived a status from a document's status field rather than from the system. Every previous instance
+cost me a wasted measurement. This one cost an operator ruling, which is a scarcer resource than my
+time. **Read the tree before putting a question up**, and prefer a question that cites a file and a
+line over one that cites a status.
+
+**A SMALLER INSTANCE IN THE SAME SESSION, CAUGHT RATHER THAN SHIPPED.** The handoff cited the
+checked-arithmetic push-order error at `CHANGELOG.md:340`; it is at **571**, and the line at 340 is
+about something else entirely. I verified the correction against `src/vm.rs:6442`, which pushes low
+then high then flag, rather than against `GRAMMAR.md`, which also says `(low, high, flag)`.
+Correcting published text on the authority of a second document is how the wrong document wins, and
+here there were three candidate authorities and only one that executes.
+
+**A NAME COLLISION THAT WOULD HAVE CLOSED A RULING FALSELY.** `kind::SIGNATURES` at `0x0016` is
+per-chunk TYPE descriptors, not cryptography. The cryptographic signature lives in the framing
+header. A reader checking whether a signature region is reserved will find that constant and stop.
+Recorded next to the ruling so the next session does not.
+
+**WHAT THIS INCREMENT ACTUALLY CHANGES** is four documents and nothing executable: the ruling record,
+the corrected ECC status, the scrubbed probe-controller example, and the changelog push order. The
+implementations the rulings authorise -- the file operand, the declared nesting cap of 32, the
+region reservations, and the `-255` negative test -- are separate increments and are named as not
+implemented so a reader cannot mistake the record for the work.
+
+---
+
 **THE DECLARED BINDING ROWS NOW COME FROM THE PIPELINE, AND THE COMPARISON FOUND A DEFECT IN THE
 REFERENCE EXTRACTION RATHER THAN IN THE STAGE (2026-08-19).**
 

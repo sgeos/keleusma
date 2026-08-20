@@ -10,6 +10,24 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-19, final+4).** **THE LIVE DECISION LIST IS EMPTY.** Thirteen operator
+> rulings recorded. The three standing forks are ruled -- a **file operand with standard input as the
+> default**, **leave the token array at 40,960**, and **defer top-level `struct`** -- plus ten more.
+> The full record with each ruling is in `HANDOFF.md` under "Open, held by the operator".
+>
+> **TWO RULINGS WERE TAKEN AGAINST STALE INFORMATION I SUPPLIED, and both errors were mine.** The
+> **ECC plane is already exercised end to end** -- `SchemaBuilder::with_ecc` plus eight tests on real
+> compiler output, each corruption paired with an unprotected control -- and I reported it open
+> because the decision document's status field said so. And the **token-array question was framed as
+> capacity when the streaming it presupposed was already built**: `FUSED_WINDOW` is 8 and three would
+> suffice, so the remaining residency is the `[Word; 40960]` DECLARATION, not the feed.
+>
+> **Read the tree before putting a question to the operator.** A wrong question costs a ruling.
+>
+> This increment changes four documents and nothing executable. The authorised implementations -- the
+> file operand, a declared nesting cap of **32**, the signature/provenance/`AUTH_TIER` reservations,
+> and the `-255` negative test -- are separate increments and are marked NOT IMPLEMENTED.
+
 > **Currency note (2026-08-19, final+3).** **THE TYPE CHECKER'S DECLARED INPUT NOW COMES FROM THE
 > PIPELINE.** Order 1 item 3, first slice: a function's declared return type and each parameter's
 > declared type are derived from `parse_functions` by `binding_rows_from_pipeline`, and agree with
