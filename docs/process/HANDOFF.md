@@ -28,7 +28,7 @@ recorded parent is a claim that nothing else ever lands, and it has failed twice
 git merge-base --is-ancestor 3ffd5a4c HEAD    # must succeed
 
 # Content. If ANY of these differ, say so rather than acting on the state below.
-grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 12
+grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 13
 grep -c '^\s*#\[test\]' tests/selfhost_wire.rs              # 172
 grep -c '^\s*#\[test\]' tests/selfhost_parse.rs             # 87
 grep -c '^\s*#\[test\]' tests/selfhost_codegen.rs           # 135
@@ -89,6 +89,13 @@ verified strict superset and runs in ~48 minutes against ~2h30m.
    construction. See "WHAT 'WITHOUT REBASING' PROTECTS" below.
 3. Verify locally as you go; the gate's invocations are in `.cargo-husky/hooks/pre-push`.
 4. Push, open a **draft PR to `v0.2.3`**, merge on green **at the commit CI ran**.
+
+**A CANCELLED CI RUN IS NOT A GREEN ONE, AND IT LOOKS LIKE ONE IN A SUMMARY.** The version-branch
+run for `52cbb6c4` completed as `cancelled`, with no failure and nothing pushed over it for eight
+hours; the cause is unknown and guessing at one would be worse than recording that. **The commit it
+merged was 22/22 green on its own branch**, and the next version-branch run covered the same content,
+so the gap closed -- but only because someone looked. Read the `conclusion` field, and treat anything
+that is not `success` as unverified.
 
 **VERIFY THE REF AFTER A PUSH, NOT THE HOOK OUTPUT.** `git ls-remote --heads origin <branch>`.
 **Never pipe a push through `tail`** — it truncates the hook log, which happened twice in one session.
