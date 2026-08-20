@@ -658,7 +658,7 @@ fn run_vm(
     table: &[NativeEntry],
     seed: usize,
     preseed: Option<&[u8]>,
-) -> Result<Run, String> {
+) -> Result<Run, (String, ExemptClass)> {
     let _ = take_log();
     SAW_REF_ARG.with(|f| *f.borrow_mut() = false);
     let arena = arena_for(m);
@@ -667,7 +667,12 @@ fn run_vm(
     // reason, not a harness crash.
     let mut vm = match Vm::new(m.clone(), &arena) {
         Ok(v) => v,
-        Err(e) => return Err(format!("the VM refuses to load it: {e:?}")),
+        Err(e) => {
+            return Err((
+                format!("the VM refuses to load it: {e:?}"),
+                ExemptClass::RefusedAtLoad,
+            ));
+        }
     };
     for (idx, (name, argc, shape)) in table.iter().enumerate() {
         if name.is_empty() {
@@ -779,7 +784,12 @@ fn run_vm(
 
     let first = match vm.call_with_shared(&mut shared, &vals) {
         Ok(v) => v,
-        Err(e) => return Err(format!("the VM refuses to run it: {e:?}")),
+        Err(e) => {
+            return Err((
+                format!("the VM refuses to run it: {e:?}"),
+                ExemptClass::FaultsAndIsFaultComparable,
+            ));
+        }
     };
     results.push(scalar_of(&first));
     if m.chunks[entry].block_type == BlockType::Stream {
@@ -788,24 +798,39 @@ fn run_vm(
             // goes to both. A fresh reply on the Reset leg is silently discarded.
             let mut st = match vm.resume_with_shared(&mut shared, Value::Int(t)) {
                 Ok(v) => v,
-                Err(e) => return Err(format!("the VM refuses to resume it: {e:?}")),
+                Err(e) => {
+                    return Err((
+                        format!("the VM refuses to resume it: {e:?}"),
+                        ExemptClass::FaultsAndIsFaultComparable,
+                    ));
+                }
             };
             if matches!(st, VmState::Reset) {
                 st = match vm.resume_with_shared(&mut shared, Value::Int(t)) {
                     Ok(v) => v,
-                    Err(e) => return Err(format!("the VM refuses to resume it: {e:?}")),
+                    Err(e) => {
+                        return Err((
+                            format!("the VM refuses to resume it: {e:?}"),
+                            ExemptClass::FaultsAndIsFaultComparable,
+                        ));
+                    }
                 };
             }
             results.push(scalar_of(&st));
         }
     }
     if SAW_REF_ARG.with(|f| *f.borrow()) {
-        return Err(
+        // **NOT A FAULT. The module ran fine; THIS HARNESS declined to compare
+        // it.** Classified as a harness limit for exactly that reason -- folding
+        // it in with the VM faults put 14 modules in the fault class when only
+        // four belong there, and the wrong total is what exposed it.
+        return Err((
             "a native receives a REFERENCE argument (a string); it is an \
                     arena handle on the VM side and a pointer natively, so the two \
                     do not render as the same integer"
                 .into(),
-        );
+            ExemptClass::HarnessCapacity,
+        ));
     }
     Ok(Run {
         results,
@@ -1265,7 +1290,7 @@ fn the_no_faulting_module_emits_op_trap_fact_has_expired() {
 
     let table = native_table(&m);
     let err = match run_vm(&m, &table, 0, None) {
-        Err(e) => e,
+        Err((e, _class)) => e,
         Ok(_) => panic!(
             "wire.kel no longer faults on the virtual machine. That is a real change in \
              the module or the driver, and it would move wire.kel out of the exempt set \
@@ -1286,6 +1311,60 @@ enum TrapKind {
     /// Faults through an emitter-inserted guard (division, bounds). Valuable,
     /// and NOT evidence about `Op::Trap`.
     Guard,
+}
+
+/// **WHY a module is exempt, attached AT THE SITE that exempts it.**
+///
+/// "19 exempt" reads as 19 modules this line fails to cover, and that is wrong
+/// in both directions. Some cannot be compared by anything — a prelude has no
+/// entry to run. Others are compared perfectly well by a DIFFERENT observable:
+/// `wire.kel` faults on both sides at the same tick, which is agreement the
+/// value differential is structurally unable to see, because a faulting module
+/// has no values.
+///
+/// **Derived, not transcribed.** The class is chosen where the exemption is
+/// created, so it follows the harness's own control flow. A table keyed on the
+/// reason STRING would be a second opinion about code that is right here, and
+/// would drift the moment a message was reworded.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ExemptClass {
+    /// The reference compiler would not build it. Nothing downstream exists to
+    /// compare, and it is not this line's surface.
+    NotAcceptedByReference,
+    /// No entry point. A prelude declares; it does not run.
+    NoRunnableEntry,
+    /// The virtual machine faults. **There are no values to compare, but the
+    /// FACT of the fault is comparable** — this is the class `wire.kel` turned
+    /// out to be in. Eligibility is not admission: a module that both emits
+    /// `Op::Trap` and faults through a guard cannot be admitted to
+    /// `TRAP_SUBJECTS`, because `SIGTRAP` cannot say which fired.
+    FaultsAndIsFaultComparable,
+    /// Covered by a hand-written differential instead. Real coverage, elsewhere.
+    CoveredByAnotherHarness,
+    /// A limit of this harness, not a fact about the module or the lowering.
+    HarnessCapacity,
+    /// The backend declines to lower it. **This one IS this line's deliverable.**
+    BackendRefusal,
+    /// The virtual machine would not LOAD it. Distinct from a run-time fault:
+    /// nothing executed. Kept separate rather than folded into a harness limit
+    /// because a genuine verifier rejection and a harness that declined to load
+    /// a signed module both arrive here, and only the observed instance is the
+    /// second.
+    RefusedAtLoad,
+}
+
+impl ExemptClass {
+    fn label(self) -> &'static str {
+        match self {
+            Self::NotAcceptedByReference => "not accepted by the reference compiler",
+            Self::NoRunnableEntry => "no runnable entry",
+            Self::FaultsAndIsFaultComparable => "faults; comparable by the FAULT observable",
+            Self::CoveredByAnotherHarness => "covered by another harness",
+            Self::HarnessCapacity => "a limit of this harness",
+            Self::BackendRefusal => "the backend refuses to lower it",
+            Self::RefusedAtLoad => "the VM would not load it (nothing executed)",
+        }
+    }
 }
 
 /// A multiheaded function with no matching head, which is what emits `Op::Trap`.
@@ -1430,7 +1509,7 @@ fn a_trapping_programs_native_side_dies_with_sigtrap() {
         // **The premise, checked rather than assumed.** If it stops faulting,
         // this is comparing nothing and must say so instead of passing.
         let vm_err = match run_vm(&m, &table, 0, None) {
-            Err(e) => e,
+            Err((e, _class)) => e,
             Ok(_) => panic!(
                 "{name} no longer faults on the VM side, so it is not a trap subject any more. \
                  Do not delete the row silently -- `NATIVE_EXEMPTION_AUDIT.md` predicts exactly \
@@ -1530,7 +1609,7 @@ const SIGTRAP: i32 = 5;
 fn every_lowering_module_executes_or_is_exempt() {
     let mut executed: Vec<String> = Vec::new();
     let mut vacuous: Vec<String> = Vec::new();
-    let mut exempt: Vec<(String, String)> = Vec::new();
+    let mut exempt: Vec<(String, String, ExemptClass)> = Vec::new();
     let mut seed_pairs = 0usize;
     let mut seed_widened = 0usize;
     let mut disagreed: Vec<String> = Vec::new();
@@ -1557,17 +1636,26 @@ fn every_lowering_module_executes_or_is_exempt() {
             .and_then(|t| parse(&t).ok())
             .and_then(|a| compile(&a).ok())
         else {
-            exempt.push((name, "rejected by the REFERENCE compiler".into()));
+            exempt.push((
+                name,
+                "rejected by the REFERENCE compiler".into(),
+                ExemptClass::NotAcceptedByReference,
+            ));
             continue;
         };
         if !keleusma_native::module_refusals(&m, LowerOptions::default()).is_empty() {
-            exempt.push((name, "the backend refuses it".into()));
+            exempt.push((
+                name,
+                "the backend refuses it".into(),
+                ExemptClass::BackendRefusal,
+            ));
             continue;
         }
         let Some(entry) = m.entry_point else {
             exempt.push((
                 name,
                 "no entry point (a prelude declares, it does not run)".into(),
+                ExemptClass::NoRunnableEntry,
             ));
             continue;
         };
@@ -1575,6 +1663,7 @@ fn every_lowering_module_executes_or_is_exempt() {
             exempt.push((
                 name,
                 "composite entry parameter; covered by a hand-written differential".into(),
+                ExemptClass::CoveredByAnotherHarness,
             ));
             continue;
         }
@@ -1583,6 +1672,7 @@ fn every_lowering_module_executes_or_is_exempt() {
             exempt.push((
                 name,
                 format!("{} natives exceeds {STUBS} stub slots", table.len()),
+                ExemptClass::HarnessCapacity,
             ));
             continue;
         }
@@ -1627,7 +1717,7 @@ fn every_lowering_module_executes_or_is_exempt() {
         }
 
         let mut runs: Vec<(usize, Run, Run)> = Vec::new();
-        let mut bail: Option<String> = None;
+        let mut bail: Option<(String, ExemptClass)> = None;
         for seed in 0..seeds {
             // **The virtual machine runs FIRST, and that ordering is load-bearing.**
             // A module that traps reports an error here; natively the same trap is
@@ -1636,26 +1726,34 @@ fn every_lowering_module_executes_or_is_exempt() {
             // into a named exemption.
             let v = match run_vm(&m, &table, seed, stage.as_deref().ok()) {
                 Ok(v) => v,
-                Err(why) => {
+                Err((why, class)) => {
                     // A LATER seed that traps is not an exemption for the module:
                     // seed 0 already ran. Stop widening and keep what agreed,
                     // rather than discarding coverage the module does have.
+                    //
+                    // **The class comes from `run_vm`, which knows WHICH of its
+                    // refusals this was.** Assigning one here put every refusal
+                    // in the fault class, including ten modules that ran
+                    // perfectly and were declined by this harness.
                     if seed == 0 {
-                        bail = Some(why);
+                        bail = Some((why, class));
                     }
                     break;
                 }
             };
             let Some(n) = run_native(&m, &table, seed, stage.as_deref().ok()) else {
                 if seed == 0 {
-                    bail = Some("entry signature shape the harness does not drive".into());
+                    bail = Some((
+                        "entry signature shape the harness does not drive".into(),
+                        ExemptClass::HarnessCapacity,
+                    ));
                 }
                 break;
             };
             runs.push((seed, v, n));
         }
-        if let Some(why) = bail {
-            exempt.push((name, why));
+        if let Some((why, class)) = bail {
+            exempt.push((name, why, class));
             continue;
         }
         seed_pairs += runs.len();
@@ -1663,7 +1761,11 @@ fn every_lowering_module_executes_or_is_exempt() {
             seed_widened += 1;
         }
         if runs.is_empty() {
-            exempt.push((name, "no seed produced a comparable run".into()));
+            exempt.push((
+                name,
+                "no seed produced a comparable run".into(),
+                ExemptClass::HarnessCapacity,
+            ));
             continue;
         }
         // Seed 0 supplies the reported observables, so the vacuity classification
@@ -1797,9 +1899,110 @@ fn every_lowering_module_executes_or_is_exempt() {
         executed.len() + vacuous.len()
     );
     println!("  EXEMPT                : {}", exempt.len());
-    for (n, why) in &exempt {
+    for (n, why, _class) in &exempt {
         println!("     {n:26} {why}");
     }
+
+    // **WHAT "EXEMPT" ACTUALLY MEANS, BROKEN OUT BY CLASS.**
+    //
+    // A bare count reads as "modules this line fails to cover" and that is wrong
+    // in both directions. A prelude has no entry to run and never will. A module
+    // that faults has no VALUES to compare, but the FACT of its fault is
+    // comparable and `wire.kel` was measured agreeing on both sides at tick 19 --
+    // agreement the value differential is structurally unable to see.
+    //
+    // The class is attached where the exemption is created, so this histogram
+    // follows the harness's control flow rather than a table keyed on wording.
+    println!("\n  exempt, by class:");
+    let all_classes = [
+        ExemptClass::NotAcceptedByReference,
+        ExemptClass::NoRunnableEntry,
+        ExemptClass::FaultsAndIsFaultComparable,
+        ExemptClass::CoveredByAnotherHarness,
+        ExemptClass::HarnessCapacity,
+        ExemptClass::BackendRefusal,
+        ExemptClass::RefusedAtLoad,
+    ];
+    let mut classified = 0usize;
+    for c in all_classes {
+        let n = exempt.iter().filter(|(_, _, k)| *k == c).count();
+        classified += n;
+        if n > 0 {
+            println!("    {n:>3}  {}", c.label());
+        }
+    }
+    // **The histogram must account for every exemption.** A class added at a new
+    // site and left out of `all_classes` would silently vanish from this summary
+    // while the total above stayed right, which is precisely the shape of
+    // under-reporting this whole breakdown exists to remove.
+    assert_eq!(
+        classified,
+        exempt.len(),
+        "the class histogram accounts for {classified} of {} exemptions; a site \
+         introduced a class that `all_classes` does not list",
+        exempt.len()
+    );
+    assert!(
+        !exempt.is_empty(),
+        "no module was exempt at all, so this breakdown describes nothing and its \
+         guards cannot fire"
+    );
+
+    // **THE "COVERED ELSEWHERE" CLAIM, CHECKED RATHER THAN ASSERTED IN PROSE.**
+    //
+    // Thirteen of the nineteen exemptions rest on a claim that some OTHER
+    // harness covers the module: three say so in their reason, and the ten
+    // `piano_roll` modules are declined here for a reference argument while
+    // `module_differential.rs` drives them whole. **Until now that was a
+    // comment.** Rename, narrow or delete one of those hand-written tests and
+    // the exemption stays exactly as it reads while the coverage goes to zero.
+    //
+    // Derived from the sibling harness SOURCES rather than from a list of names,
+    // because a list is the thing that goes stale silently.
+    let sibling_sources: String = {
+        let mut acc = String::new();
+        let mut seen = 0usize;
+        if let Ok(rd) = std::fs::read_dir("tests") {
+            for e in rd.filter_map(|e| e.ok()) {
+                let p = e.path();
+                if p.extension().is_some_and(|x| x == "rs")
+                    && p.file_name().is_some_and(|n| n != "corpus_differential.rs")
+                    && let Ok(t) = std::fs::read_to_string(&p)
+                {
+                    seen += 1;
+                    acc.push_str(&t);
+                }
+            }
+        }
+        // Without this the search below matches nothing and every claim "passes".
+        assert!(
+            seen > 5 && acc.len() > 10_000,
+            "only {seen} sibling harness sources ({} bytes) were read, so the \
+             coverage search would report every module uncovered -- or, worse, \
+             find nothing and be read as agreement",
+            acc.len()
+        );
+        acc
+    };
+    let uncovered: Vec<&str> = exempt
+        .iter()
+        .filter(|(_, _, k)| {
+            matches!(
+                k,
+                ExemptClass::CoveredByAnotherHarness | ExemptClass::HarnessCapacity
+            )
+        })
+        .map(|(n, _, _)| n.as_str())
+        .filter(|n| !sibling_sources.contains(*n))
+        .collect();
+    assert!(
+        uncovered.is_empty(),
+        "these modules are exempt from THIS differential on the understanding that \
+         another harness covers them, and no sibling harness source mentions them. \
+         Either the covering test was renamed or removed, or the exemption was \
+         never justified:\n  {}",
+        uncovered.join("\n  ")
+    );
     if !disagreed.is_empty() {
         println!("  DISAGREED             : {}", disagreed.len());
         for d in &disagreed {
