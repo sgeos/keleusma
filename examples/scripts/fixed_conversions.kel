@@ -27,6 +27,20 @@ fn scale_and_back(w: Word) -> Word {
   f as Word
 }
 
+// A Q-format multiply, added once `FixedMul` lowered. The VM SATURATES here
+// rather than wrapping -- `fixed_checked_outputs` in `vm.rs` states the contrast
+// with the checked families explicitly -- so a large product is a compared case
+// and not an edge one.
+fn scaled_square(w: Word) -> Word {
+  // `lsl 30` before the conversion is what puts the PRODUCT past the saturation
+  // boundary. Without it the harness drives w in 0..19, the square stays around
+  // 2.4 million, and the clamp is never reached -- measured, not assumed:
+  // bypassing the clamp produced NO disagreement until this shift was added.
+  let f = (w lsl 30) as Fixed<16>;
+  let p = f * f;
+  p as Word
+}
+
 fn main(w: Word) -> Word {
-  scale_and_back(w)
+  scale_and_back(w) + scaled_square(w)
 }

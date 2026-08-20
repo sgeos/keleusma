@@ -2101,6 +2101,57 @@ fn lower_chunk_body<'ctx>(
             // so both guards become lowering-time refusals rather than emitted
             // runtime checks — the structural verifier already bounds it, so
             // neither refusal is reachable from a verified module.
+            // **`FixedMul` LOWERS; `FixedDiv` DOES NOT, and the difference is a
+            // RUNTIME FAULT rather than a difficulty.**
+            //
+            // Both are widen-shift-clamp in the VM and both SATURATE, unlike the
+            // checked families which wrap — `fixed_checked_outputs` says so
+            // directly. `FixedMul` has no runtime failure: an out-of-range
+            // fraction count is static and refused below, and every product
+            // saturates rather than faulting.
+            //
+            // `FixedDiv` returns `VmError::DivisionByZero` on a zero divisor,
+            // unconditionally and with no construct to catch it. Reproducing
+            // that natively needs the runtime-fault lowering, which
+            // `RUNTIME_FAULTS.md` defers to V0.4.0 — and the existing trap
+            // branch here is gated on `OverflowPolicy::Trap`, so it is a policy,
+            // not the unconditional fault the VM raises. Refusing is the honest
+            // answer until that path exists.
+            Op::FixedMul(frac_bits) => {
+                if u32::from(*frac_bits) >= WORD_BITS as u32 {
+                    return Err(LowerError::UnsupportedOp(format!(
+                        "FixedMul({frac_bits}) has a fraction count at or beyond the \
+                         {WORD_BITS}-bit word width; the VM fails closed here and the \
+                         count is static, so the lowering refuses"
+                    )));
+                }
+                let rhs = st.pop();
+                let lhs = st.pop();
+                let a = st.widen(lhs, i128t, "fxm.a");
+                let c = st.widen(rhs, i128t, "fxm.b");
+                let product = st.b.build_int_mul(a, c, "fxm.p").unwrap();
+                // Arithmetic shift: the VM uses `product >> frac_bits` on a
+                // signed wide value, so a negative product keeps its sign.
+                let sh = i128t.const_int(u64::from(*frac_bits), false);
+                let shifted = st.b.build_right_shift(product, sh, true, "fxm.sh").unwrap();
+                let max = st.widen(i64t.const_int(i64::MAX as u64, false), i128t, "fxm.max");
+                let min = st.widen(i64t.const_int(i64::MIN as u64, true), i128t, "fxm.min");
+                let over =
+                    st.b.build_int_compare(inkwell::IntPredicate::SGT, shifted, max, "fxm.over")
+                        .unwrap();
+                let under =
+                    st.b.build_int_compare(inkwell::IntPredicate::SLT, shifted, min, "fxm.under")
+                        .unwrap();
+                let hi =
+                    st.b.build_select(over, max, shifted, "fxm.selhi")
+                        .unwrap()
+                        .into_int_value();
+                let clamped =
+                    st.b.build_select(under, min, hi, "fxm.sello")
+                        .unwrap()
+                        .into_int_value();
+                st.push(st.b.build_int_truncate(clamped, i64t, "fxm").unwrap());
+            }
             Op::FixedToWord(frac_bits) => {
                 if u32::from(*frac_bits) >= WORD_BITS as u32 {
                     return Err(LowerError::UnsupportedOp(format!(
