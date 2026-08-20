@@ -14,6 +14,8 @@
 //                                             forms; Byte and Float take these)
 //   Float conversion -> IntToFloat, FloatToInt
 //   Fixed<16>        -> FixedMul, FixedDiv, WordToFixed, FixedToWord
+//   external native  -> CallExternalNative   (`use external host::`)
+//   2-level index    -> BoundsCheck          (a single level emits none)
 //
 // Divisors are constants so no argument vector can make this fault: the
 // differential drives it with twenty-four of them.
@@ -33,6 +35,19 @@
 // So this file is EXPECTED to sit in the differential's exempt set under
 // "the backend refuses it" until those opcodes are lowered. Do not delete it
 // to restore a zero: the zero was the thing that was wrong.
+
+use external host::tick
+
+shared data grid {
+  cells: [[Word; 4]; 4],
+}
+
+// A MULTI-LEVEL indexed access. A single-level one folds its check into
+// `GetDataIndexed`'s own twenty-four-bit operand and emits no `BoundsCheck`;
+// only a per-level access emits the sixteen-bit form.
+fn grid_at(i: Word, j: Word) -> Word {
+  grid.cells[i][j]
+}
 
 fn byte_mix(a: Byte, b: Byte) -> Byte {
   let sum = a + b;
@@ -60,5 +75,7 @@ fn main(seed: Word) -> Word {
   let b = byte_mix(3 as Byte, 5 as Byte);
   let f = float_round_trip(seed);
   let q = fixed_mix(seed);
-  (b as Word) + f + q
+  let g = grid_at(1, 2);
+  let h = host::tick(seed);
+  (b as Word) + f + q + g + h
 }
