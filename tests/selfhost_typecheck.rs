@@ -312,6 +312,28 @@ fn type_tag(t: &keleusma::ast::TypeExpr) -> i64 {
         T::Prim(PrimType::Bool, _) => 2,
         T::Prim(PrimType::Byte, _) => 3,
         T::Prim(PrimType::Float, _) => 4,
+        // **`Bool` DOES NOT PARSE AS A `Prim`.** The reference parser yields
+        // `Named("Bool")` for it, so a match on `Prim` alone silently drops every
+        // `Bool` annotation. Found by the pipeline extraction, which keys on the type
+        // NAME and therefore reached a binding this one did not:
+        // `fn f(b: Bool) -> Word { 1 + b }` was rejected by the reference and
+        // ACCEPTED by the stage, because `b` had no binding row at all.
+        T::Named(n, ..) => named_type_tag(n),
+        _ => 0,
+    }
+}
+
+/// A type spelled as a NAME rather than a `Prim`, mapped to the stage's scalar tag.
+///
+/// One place, because the parameter walk and the return-type walk both need it and a
+/// second copy is how one of them comes to reach a type the other misses — which is
+/// exactly the defect this function exists to fix.
+fn named_type_tag(n: &str) -> i64 {
+    match n {
+        "Word" => 1,
+        "Bool" => 2,
+        "Byte" => 3,
+        "Float" => 4,
         _ => 0,
     }
 }
@@ -614,7 +636,7 @@ fn operand_form(
 /// one row for two meanings. The subset's stage sources do not do this and the
 /// corpus does not exercise it; a shadowing case would need the table split.
 fn binding_rows(ast: &keleusma::ast::Program) -> BindingRows {
-    use keleusma::ast::{Expr, Pattern, Stmt, TypeExpr};
+    use keleusma::ast::{Expr, Pattern, Stmt};
     use keleusma::visitor::Visitor;
     use std::collections::BTreeMap;
 
@@ -629,18 +651,16 @@ fn binding_rows(ast: &keleusma::ast::Program) -> BindingRows {
     for f in &ast.functions {
         // A declared return type, keyed by the function's own name.
         let fid = id_of(&mut names, &f.name);
-        if let TypeExpr::Prim(p, _) = &f.return_type {
-            let t = prim_tag(p);
-            if t != 0 {
-                rows.push((fid, t, 0));
-            }
+        let t = type_tag(&f.return_type);
+        if t != 0 {
+            rows.push((fid, t, 0));
         }
         // Declared parameter types.
         for prm in &f.params {
-            if let (Pattern::Variable(n, _), Some(TypeExpr::Prim(p, _))) =
-                (&prm.pattern, &prm.type_expr)
-            {
-                let t = prim_tag(p);
+            // Through `type_tag` rather than `prim_tag`, so a `Bool` annotation --
+            // which the parser yields as `Named("Bool")` -- is not silently dropped.
+            if let (Pattern::Variable(n, _), Some(ty)) = (&prm.pattern, &prm.type_expr) {
+                let t = type_tag(ty);
                 if t != 0 {
                     let id = id_of(&mut names, n);
                     rows.push((id, t, 0));
@@ -2445,5 +2465,101 @@ fn the_fold_advances_one_row_per_resume() {
         "thirty-six extra rows cost {} extra resumes. One row per resume is the property \
          the conversion claims; anything else means the stage is batching internally.",
         many_steps - few_steps
+    );
+}
+
+/// **THE DECLARED BINDING ROWS NOW COME FROM THE PIPELINE, AND AGREE WITH THE
+/// REFERENCE EXTRACTION.**
+///
+/// Order 1 asks for the type checker's input to come from `parse.kel` plus
+/// `reconstruct.kel` rather than from Rust walking the reference AST. This is the
+/// first slice of that: the bindings the source states outright — a function's
+/// declared return type and each parameter's declared type.
+///
+/// # Why the comparison is by NAME STRING and not by id
+///
+/// The two extractions live in different id spaces. The reference one assigns ids by
+/// insertion order as it walks; the pipeline uses the lexer's intern table. Comparing
+/// ids would compare the numbering, not the content. **Names are the thing both
+/// claim to describe**, so the rows are compared as `(name, tag, form)` with the name
+/// spelled out.
+///
+/// # What this does NOT establish
+///
+/// Only the DECLARED bindings. A `let` bound to a literal or a call is still absent
+/// from the pipeline side: its initialiser's shape lives in the body record stream,
+/// and reading it means walking the forest rather than the header. That is the next
+/// slice, and `the_pipeline_rows_are_the_declared_subset` below pins the boundary so
+/// it cannot be mistaken for completeness.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_declared_binding_rows_agree_between_the_pipeline_and_the_reference() {
+    const SOURCES: &[&str] = &[
+        "fn g(alpha: Word, beta: Bool) -> Word { 1 }\nfn main() -> Word { g(1, true) }",
+        "fn f(a: Word) -> Bool { true }\nfn main() -> Word { 1 }",
+        "fn one() -> Word { 1 }\nfn two(x: Byte) -> Byte { x }\nfn main() -> Word { one() }",
+        "fn main(p: Word, q: Word) -> Word { p + q }",
+    ];
+
+    for src in SOURCES {
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+        let (ref_names, ref_rows) = binding_rows(&ast);
+
+        // The reference rows carry ids; render them as names for comparison, and keep
+        // only the DECLARED ones (form 0), which is all the pipeline claims so far.
+        let ref_name_of = |id: i64| -> Option<String> {
+            ref_names
+                .iter()
+                .find(|(_, v)| **v == id)
+                .map(|(k, _)| k.clone())
+        };
+        let mut want: Vec<(String, i64, i64)> = ref_rows
+            .iter()
+            .filter(|(_, _, form)| *form == 0)
+            .filter_map(|(n, t, f)| ref_name_of(*n).map(|s| (s, *t, *f)))
+            .collect();
+
+        let (_, pipeline_rows) = keleusma::selfhost::binding_rows_from_pipeline(src);
+        let mut got = pipeline_rows.clone();
+
+        want.sort();
+        got.sort();
+        assert!(
+            !want.is_empty(),
+            "{src:?}: the reference produced no declared rows, so this case measures \
+             nothing"
+        );
+        assert_eq!(
+            got, want,
+            "{src:?}: the pipeline extraction disagrees with the reference on the \
+             DECLARED bindings"
+        );
+    }
+}
+
+/// **THE BOUNDARY: the pipeline carries the declared bindings and not the derived ones.**
+///
+/// A `let` bound to a literal is a row the reference extraction produces and the
+/// pipeline does not, because the initialiser's shape is in the body record stream
+/// rather than the header. Pinned so the slice above cannot be read as complete, and
+/// so the next increment fails here and records what it reached.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_pipeline_rows_are_the_declared_subset() {
+    let src = "fn main() -> Word { let bound = 1; bound }";
+    let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+    let (ref_names, ref_rows) = binding_rows(&ast);
+    let bound_id = *ref_names.get("bound").expect("the reference binds `bound`");
+    assert!(
+        ref_rows.iter().any(|(n, _, f)| *n == bound_id && *f == 0),
+        "the reference does not produce a declared row for a let-bound literal, so \
+         this pin measures nothing"
+    );
+
+    let (_, pipeline_rows) = keleusma::selfhost::binding_rows_from_pipeline(src);
+    assert!(
+        !pipeline_rows.iter().any(|(n, _, _)| n == "bound"),
+        "the pipeline now carries a let-bound literal's tag. Record what the walk \
+         reaches and fold this case into the agreement test above."
     );
 }
