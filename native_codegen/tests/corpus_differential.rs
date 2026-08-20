@@ -1181,11 +1181,77 @@ const KNOWN_DISAGREEMENTS: &[&str] = &[];
 /// So a synthetic subject is not a convenience here; it is the only way to reach
 /// the opcode. A multiheaded function whose guards all fail emits
 /// `Trap(NoMatchingHead)`.
+///
+/// # THAT CORPUS FACT EXPIRED ON 2026-08-20, AND `wire.kel` IS THE COUNTEREXAMPLE
+///
+/// "No module in the shipped corpus that faults on the virtual machine emits
+/// `Op::Trap` at all" was measured on 2026-08-14 and is **now false**.
+/// `wire.kel` faults on the virtual machine — `IndexOutOfBounds` at tick 19 —
+/// **and** emits `Op::Trap`. Pinned by
+/// `the_no_faulting_module_emits_op_trap_fact_has_expired`, which fails if either
+/// half stops holding, so the claim cannot quietly come back.
+///
+/// **It is still NOT admissible as a subject here, and the reason is the point.**
+/// Neither kind fits, and that is the taxonomy being right rather than
+/// insufficient:
+///
+/// - `Guard` is refused because the module emits `Op::Trap`.
+/// - `Op` would be a lie about WHICH fault was observed: the virtual machine
+///   reports a BOUNDS fault, not the opcode.
+///
+/// Admitting it under either label would let a `SIGTRAP` that might be the guard
+/// be counted as opcode coverage, or the reverse. **`SIGTRAP` proves a fault, not
+/// which**, so in a module containing both there is nothing to disambiguate them.
+/// A synthetic subject remains the only way to reach the opcode ON PURPOSE.
 const TRAP_SUBJECTS: &[(&str, &str, TrapKind)] = &[
     ("synthetic:no_matching_head", "NoMatchingHead", TrapKind::Op),
     ("faulty.kel", "DivisionByZero", TrapKind::Guard),
     ("rogue_dungen.kel", "IndexOutOfBounds", TrapKind::Guard),
 ];
+
+/// **A CORPUS FACT THIS FILE ASSERTS HAS EXPIRED, and one counterexample settles it.**
+///
+/// `TRAP_SUBJECTS` records that no corpus module which faults on the virtual
+/// machine emits `Op::Trap`. That was measured 2026-08-14 and justified the
+/// synthetic subject. `wire.kel` has grown a great deal since and now does both.
+///
+/// **A universal claim falls to one counterexample**, so this names `wire.kel`
+/// rather than re-walking the corpus. Both halves are asserted separately so a
+/// failure says WHICH half moved: a module that stops faulting and a module that
+/// stops emitting the opcode are different events with different consequences.
+///
+/// **What this does NOT establish.** It says nothing about whether the fault the
+/// virtual machine reports IS the `Op::Trap` — it is not; it is a bounds fault.
+/// That distinction is exactly why `wire.kel` is not a `TRAP_SUBJECTS` row.
+#[test]
+fn the_no_faulting_module_emits_op_trap_fact_has_expired() {
+    let src = subject_source("wire.kel").expect("wire.kel is in the corpus");
+    let m = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
+
+    let emits_trap = m
+        .chunks
+        .iter()
+        .any(|c| c.ops.iter().any(|o| matches!(o, Op::Trap(_))));
+    assert!(
+        emits_trap,
+        "wire.kel no longer emits Op::Trap. The 2026-08-14 corpus fact may hold again;          re-measure it across the corpus before restoring the claim in TRAP_SUBJECTS."
+    );
+
+    let table = native_table(&m);
+    let err = match run_vm(&m, &table, 0, None) {
+        Err(e) => e,
+        Ok(_) => panic!(
+            "wire.kel no longer faults on the virtual machine. That is a real change in \
+             the module or the driver, and it would move wire.kel out of the exempt set \
+             in every_lowering_module_executes_or_is_exempt. Re-measure both."
+        ),
+    };
+    assert!(
+        err.contains("IndexOutOfBounds"),
+        "wire.kel faults, but not with the bounds fault measured on 2026-08-20; got {err}. \
+         The KIND is what is pinned here, not the operands, which are computed and move."
+    );
+}
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum TrapKind {
