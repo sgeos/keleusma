@@ -1947,6 +1947,62 @@ fn every_lowering_module_executes_or_is_exempt() {
         "no module was exempt at all, so this breakdown describes nothing and its \
          guards cannot fire"
     );
+
+    // **THE "COVERED ELSEWHERE" CLAIM, CHECKED RATHER THAN ASSERTED IN PROSE.**
+    //
+    // Thirteen of the nineteen exemptions rest on a claim that some OTHER
+    // harness covers the module: three say so in their reason, and the ten
+    // `piano_roll` modules are declined here for a reference argument while
+    // `module_differential.rs` drives them whole. **Until now that was a
+    // comment.** Rename, narrow or delete one of those hand-written tests and
+    // the exemption stays exactly as it reads while the coverage goes to zero.
+    //
+    // Derived from the sibling harness SOURCES rather than from a list of names,
+    // because a list is the thing that goes stale silently.
+    let sibling_sources: String = {
+        let mut acc = String::new();
+        let mut seen = 0usize;
+        if let Ok(rd) = std::fs::read_dir("tests") {
+            for e in rd.filter_map(|e| e.ok()) {
+                let p = e.path();
+                if p.extension().is_some_and(|x| x == "rs")
+                    && p.file_name().is_some_and(|n| n != "corpus_differential.rs")
+                    && let Ok(t) = std::fs::read_to_string(&p)
+                {
+                    seen += 1;
+                    acc.push_str(&t);
+                }
+            }
+        }
+        // Without this the search below matches nothing and every claim "passes".
+        assert!(
+            seen > 5 && acc.len() > 10_000,
+            "only {seen} sibling harness sources ({} bytes) were read, so the \
+             coverage search would report every module uncovered -- or, worse, \
+             find nothing and be read as agreement",
+            acc.len()
+        );
+        acc
+    };
+    let uncovered: Vec<&str> = exempt
+        .iter()
+        .filter(|(_, _, k)| {
+            matches!(
+                k,
+                ExemptClass::CoveredByAnotherHarness | ExemptClass::HarnessCapacity
+            )
+        })
+        .map(|(n, _, _)| n.as_str())
+        .filter(|n| !sibling_sources.contains(*n))
+        .collect();
+    assert!(
+        uncovered.is_empty(),
+        "these modules are exempt from THIS differential on the understanding that \
+         another harness covers them, and no sibling harness source mentions them. \
+         Either the covering test was renamed or removed, or the exemption was \
+         never justified:\n  {}",
+        uncovered.join("\n  ")
+    );
     if !disagreed.is_empty() {
         println!("  DISAGREED             : {}", disagreed.len());
         for d in &disagreed {
