@@ -160,9 +160,26 @@ fn the_census_query_rejects_a_plain_function_module() {
     );
 }
 
-/// The census itself. Prints every module and asserts only that the walk was not
-/// vacuous; the COUNT is reported rather than pinned, because pinning it would
-/// make a future real subject look like a regression.
+/// The census itself, and **the zero is PINNED rather than merely printed**.
+///
+/// # This reverses a deliberate choice, and the reason it can be reversed
+///
+/// This file was written to REPORT the count and not pin it, on the ground that
+/// pinning zero "would make a future real subject look like a regression". That
+/// objection is about APPEARANCE, and appearance is what an assertion message
+/// controls. Left reporting-only, the arrival of a real subject is **silent**:
+/// nothing goes red, and the only way anyone learns is by running this binary
+/// with `--nocapture` and reading it. A snapshot is not a guard.
+///
+/// So the count is pinned and the failure message says, in the place a reader
+/// will actually meet it, that a failure here is **NEWS AND NOT A DEFECT** —
+/// the transform finally has a real subject, and what it wants is the handoff
+/// row updated, not the assertion deleted.
+///
+/// **Both directions still matter.** The vacuity floors below are what stop the
+/// pin from passing for the wrong reason: a walk that read the wrong tree, or a
+/// corpus with no `Stream` entry at all, would both satisfy `subjects.is_empty()`
+/// while establishing nothing.
 #[test]
 fn which_corpus_modules_delegate_a_suspension() {
     let corpus = corpus();
@@ -213,5 +230,25 @@ fn which_corpus_modules_delegate_a_suspension() {
         stream_entries > 0,
         "no module in the corpus has a Stream entry, so a delegated suspension \
          was impossible by construction and the zero says nothing"
+    );
+
+    // THE PIN. Ordered after the vacuity floors deliberately: if the walk read
+    // the wrong tree, that is the failure worth reporting, not this one.
+    assert!(
+        subjects.is_empty(),
+        "A DELEGATED-SUSPENSION SUBJECT HAS APPEARED IN THE CORPUS. This is \
+         NEWS, not a defect, and it is the event this pin exists to make loud \
+         rather than silent.\n\n{}\n\nThe transform behind \
+         `LowerOptions::delegated_suspension` has had no witness but a synthetic \
+         one since `aaa87a01`. It now has a real one, which is a precondition \
+         several open items were waiting on.\n\nWHAT TO DO: update the \
+         delegated-suspension row in docs/process/handoffs/v0.3.0.md with the \
+         subject and the date, and decide whether the transform should still be \
+         flagged off. DO NOT delete this assertion to make the suite green.",
+        subjects
+            .iter()
+            .map(|s| format!("  {s}"))
+            .collect::<Vec<_>>()
+            .join("\n")
     );
 }
