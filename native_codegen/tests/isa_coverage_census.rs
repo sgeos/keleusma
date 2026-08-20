@@ -163,11 +163,15 @@ fn which_isa_opcodes_have_no_corpus_witness() {
         }
     }
     println!(
-        "\n  An unwitnessed opcode is NOT thereby a lowering gap. It may be one the\n  \
-         compiler never emits at all -- `Add`/`Sub`/`Mul`/`Neg` are unwitnessed\n  \
-         because Keleusma's totality discipline emits the Checked forms instead.\n  \
-         Separating 'the corpus does not exercise it' from 'no compiler path\n  \
-         emits it' is the next measurement, and this census does not make it."
+        "\n  MEASURED 2026-08-20: every one of these IS emittable. Each has a\n  \
+         `fc.emit` site in `src/compiler.rs`, and `Byte` arithmetic witnesses\n  \
+         Add/Sub/Mul in one line each -- verified by compiling snippets, not by\n  \
+         reading. So this list is a CORPUS gap, not dead instruction-set surface,\n  \
+         and an example witnessing all of them is constructible.\n  \
+         What each one NEEDS is the open question: `Word` division emits `Div`\n  \
+         and a runtime array index emits `GetIndex`, so `CheckedDiv`/`CheckedMod`\n  \
+         and `Len`/`BoundsCheck` come from other constructs -- fixed-point and\n  \
+         dynamic-length forms respectively."
     );
     println!("================\n");
 

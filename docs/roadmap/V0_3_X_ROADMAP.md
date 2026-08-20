@@ -65,6 +65,14 @@ different populations: **16 of the 66 declared opcodes have no corpus witness at
 `native_codegen/tests/isa_coverage_census.rs`, which names them and derives the instruction set
 from `src/bytecode.rs` rather than transcribing it.
 
+**All sixteen are EMITTABLE, so the gap is closable.** Each has an `fc.emit` site in
+`src/compiler.rs`, and `Byte` arithmetic witnesses `Add`, `Sub` and `Mul` in one line each --
+verified by compiling snippets. **An example exercising every opcode is therefore constructible**,
+which would turn "100% of corpus opcode instances lower" into a claim about the instruction set
+rather than about the corpus. The constructs are not all obvious: `Word` division emits `Div`, not
+`CheckedDiv`, and a runtime array index emits `GetIndex`, not `Len`/`BoundsCheck` -- the checked
+and length forms come from the fixed-point and dynamic-length surfaces.
+
 ## Entry baseline (what V0.3.0 hands to V0.3.x)
 
 - A self-hosted compiler that lowers the full language to bytecode, its output byte-identical to
