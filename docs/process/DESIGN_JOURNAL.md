@@ -13,6 +13,46 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THREE OF THE FOUR "KNOWN GAPS" WERE SILENT MISCOMPILES, AND THE TABLE COULD NOT SAY SO
+(2026-08-20, night).**
+
+`Support::Gap` meant two things: a construct the stage REFUSES loudly, and a construct it compiles to
+DIFFERENT BYTES. **Those are not the same thing.** A refusal tells the caller it is unsupported; a
+divergence is a wrong module with only the reference cross-check between it and an artifact. This is
+the shared-message defect this line has recorded against four guards in the stage sources -- found
+here in the INSTRUMENT that measures them.
+
+**SPLITTING IT RECLASSIFIED 75% OF THE KNOWN GAPS INTO A MORE SERIOUS CATEGORY**, measured rather
+than assumed. `eq/struct_tuple_of_impure_struct`, `eq/struct_field_array_of_tuple` and
+`scope/float_arith` all **Diverge**. Only `scope/generic_fn` genuinely **Refuses**. The table said
+"gap" and any reader would take that as "does not support"; for three of four the truth was "silently
+miscompiles".
+
+**MY FIRST VERSION OF THE SPLIT WAS WRONG AND THE EXPECTATIONS CAUGHT IT INSTANTLY.** I classified by
+calling `keleusma::selfhost::self_host_compile`, and a dozen constructs this table has always called
+`Ok` came back `Refuses` -- struct construction, struct field reads, most of the struct equality
+family. **The library's compiler and this file's compiler are DIFFERENT COMPILERS.** The file carries
+its own copy of the driver, as its own comment records, and `assert_self_host_byte_identical` uses the
+copy. Classifying with one and comparing with the other measured two different things.
+
+**SO THE BOUNDARY TABLE DESCRIBES THE TEST-LOCAL COMPILER, NOT THE SHIPPING ONE.** That is the third
+time in one night this duplicate has mattered: it blocks the token-residency work, it needed the
+boolean-literal slots seeded separately, and now it turns out to be the subject of the support table.
+**Widening `ParsedFn`'s accessors so the copy can be deleted is looking less like a convenience and
+more like the central structural fix.**
+
+**THE INSTRUMENT ONLY CAUGHT MY ERROR BECAUSE THE EXPECTATIONS WERE ALREADY WRITTEN DOWN.** Twelve
+`Ok` entries disagreeing at once is unmistakable; the same mistake in a table without expectations
+would have looked like a discovery. That is the argument for a table of expected verdicts over a
+report of observed ones.
+
+**Nested array literals are recorded as `Diverges` and NOT fixed.** The outer composite is sized 16
+where the reference computes 32, and a chained index truncates the body entirely. Two defects in the
+composite-layout machinery that the flat-byte representation makes load-bearing for memory bounds --
+not a change to make unattended, per the brief's own rule.
+
+---
+
 **THE CAST DIRECTION WAS INVERTED, AND THE SWEEP THAT FOUND IT IS THE REAL DELIVERABLE
 (2026-08-20).**
 

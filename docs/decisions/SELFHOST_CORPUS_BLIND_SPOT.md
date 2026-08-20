@@ -93,3 +93,74 @@ one, or the severity reads far higher than it is.
   different module; an ops-only comparison would have called it clean.
 - **Classify three ways, not two**: identical, self-refuses loudly, and DIFFERS.
   Only the third is dangerous. A loud refusal is an honest gap.
+
+---
+
+# Round two of the sweep (2026-08-20, later)
+
+Twenty-two more cases, corpus-verified syntax. **19 identical, 1 honest loud
+refusal, 1 DIFFERS, 1 bad probe.** The yield is falling, which is itself the
+useful signal: the first twenty cases found two defects, the next twenty-two found
+one.
+
+## THE FINDING: nested array literals mis-size the outer composite
+
+```
+fn main() -> Word { let a = [[1, 2], [3, 4]]; 1 }
+  reference outer: NewComposite(Flat { kind: Array, count: 2, byte_size: 32 })
+  self-hosted:     NewComposite(Flat { kind: Array, count: 2, byte_size: 16 })
+```
+
+**The outer array of two 16-byte arrays is sized as 16 rather than 32.** The
+element byte size is not propagated; the outer composite is sized as if its
+elements were scalars.
+
+With a chained index the body is additionally **TRUNCATED**:
+
+```
+fn main() -> Word { let a = [[1, 2], [3, 4]]; a[0][1] }
+  reference:   ... SetLocal(0), GetLocal(0), Const(4),
+               GetIndex(FlatNested { size: 16, variant: Array }),
+               Const(0), GetIndex(Flat { kind: Int }), Return
+  self-hosted: ... NewComposite(..16), Return
+```
+
+No `SetLocal`, no `GetLocal`, neither `GetIndex`. The stage returns the constructed
+value instead of the indexed element.
+
+**A FLAT array is byte-identical** (`let a = [1, 2]; a[1]`), so this is specific to
+nesting, not to arrays.
+
+## WHY THIS ONE IS RECORDED RATHER THAN FIXED
+
+The four fixes taken tonight -- the `bool`/`Bool` tag, the boolean literals, the
+cast direction -- were each a small change with a precedent already in the tree,
+and each was mutation-verified in under an hour. **This one has neither property.**
+It is two defects (a byte-size computation and a dropped index chain) in the
+composite-layout machinery, which the B28 flat-byte representation makes
+load-bearing for worst-case memory bounds.
+
+**Attempting it unsupervised at this hour would violate the brief's own rule**:
+pin rather than repair when the change is not small and well-precedented, and say
+so. The boundary case records the truth so the table stops overstating support; the
+fix is a well-specified increment for a session with an operator awake.
+
+## Proportionality, as always
+
+`self_hosted_compile` cross-checks ops against the reference and refuses on
+divergence, so this is a loud error on the shipping path and a wrong module only
+for a direct caller that skips the check.
+
+## Honest gaps found, which are NOT defects
+
+`struct P { a: Word }` with a field read makes the stage **refuse loudly**. That is
+the correct behaviour for an unsupported construct and is worth distinguishing from
+the silent cases -- a loud refusal is an honest gap.
+
+## Probe error to avoid repeating
+
+`checked_add` came back PROBE-BAD on a parse failure. The checked-arithmetic arm
+syntax is not what I guessed; take it from `examples/scripts/10_multbyte.kel`, which
+uses `overflow(_, l) => (1, l)` inside the construct's own form rather than as a
+trailing expression clause. **Second probe-syntax error in two sweeps** -- generate
+probes from corpus sources, not from memory of the grammar.

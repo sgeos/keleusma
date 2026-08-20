@@ -7929,16 +7929,34 @@ fn self_host_compiles_eager_and_or() {
 // Keep this table in sync as the self-hosted subset grows toward full self-hosting.
 // ============================================================================
 
+/// How the self-hosted compiler handles a construct.
+///
+/// **`Gap` USED TO MEAN TWO THINGS AND THEY ARE NOT THE SAME THING.** A construct
+/// the stage REFUSES loudly is an honest gap: the caller learns it is unsupported.
+/// A construct the stage compiles to DIFFERENT BYTES is a silent miscompile, and
+/// only a cross-check stands between it and a wrong artifact.
+///
+/// Both were `Gap`, so the table could not tell them apart — the same
+/// shared-message defect this tree has recorded against four guards in the stage
+/// sources, here in the instrument that measures them. Three silent miscompiles
+/// were found by hand on 2026-08-20 precisely because the table could not report
+/// the distinction.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Support {
+    /// Byte-identical to the reference.
     Ok,
-    Gap,
+    /// The stage refuses to compile it, loudly. An honest gap.
+    Refuses,
+    /// The stage compiles it and produces DIFFERENT BYTES. A silent miscompile,
+    /// caught on the shipping path only by the reference cross-check.
+    Diverges,
+    /// The reference compiler itself rejects the source.
     RefRejects,
 }
 
 #[test]
 fn self_hosted_construct_support_boundary() {
-    use Support::{Gap, Ok as SOk, RefRejects};
+    use Support::{Diverges, Ok as SOk, RefRejects, Refuses};
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
     // (construct label, expected support, source). Labels are stable identifiers for the
@@ -7993,6 +8011,29 @@ fn self_hosted_construct_support_boundary() {
         ("op/bnot_word", SOk, "fn f(a: Word) -> Word { bnot a }"),
         ("op/bnot_byte", SOk, "fn f(a: Byte) -> Byte { bnot a }"),
         // --- booleans ------------------------------------------------------------
+        // --- nested composites, measured 2026-08-20 and NOT yet fixed ------------
+        //
+        // A nested array literal mis-sizes the OUTER composite: two 16-byte inner
+        // arrays yield `byte_size: 16` where the reference computes 32, because the
+        // element size is not propagated. With a chained index the body is
+        // additionally TRUNCATED -- no SetLocal, no GetLocal, neither GetIndex --
+        // so the stage returns the constructed value instead of the element.
+        //
+        // A FLAT array is byte-identical, so this is specific to nesting.
+        //
+        // Recorded as `Diverges` rather than fixed: it is two defects inside the
+        // composite-layout machinery that the flat-byte representation makes
+        // load-bearing for memory bounds, which is not a change to make unattended.
+        (
+            "nested/array_of_array_literal",
+            Diverges,
+            "fn f() -> Word { let a = [[1, 2], [3, 4]]; 1 }",
+        ),
+        (
+            "nested/array_of_array_index",
+            Diverges,
+            "fn f() -> Word { let a = [[1, 2], [3, 4]]; a[0][1] }",
+        ),
         // --- casts, a family this table had NO cases for at all ------------------
         //
         // `parse.kel` discarded the target type name and `codegen.kel` emitted
@@ -8345,7 +8386,7 @@ fn self_hosted_construct_support_boundary() {
         // All three composite kinds now nest, so the impure case is an enum with a COMPOSITE payload.
         (
             "eq/struct_tuple_of_impure_struct__GAP",
-            Gap,
+            Diverges,
             "struct Q { z: Word }\nenum E { A(Q), B }\nstruct P { e: E }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
         ),
         // The flat array-equality family has no nested form, so an array whose ELEMENT contains a
@@ -8368,7 +8409,7 @@ fn self_hosted_construct_support_boundary() {
         ),
         (
             "eq/struct_field_array_of_tuple__GAP",
-            Gap,
+            Diverges,
             "struct P { x: Word }\nstruct S { g: [(P, Word); 2] }\nfn f(a: S, b: S) -> bool { a == b }",
         ),
         (
@@ -8394,12 +8435,12 @@ fn self_hosted_construct_support_boundary() {
         // --- out of scope for the self-hosted subset -----------------------------
         (
             "scope/float_arith__GAP",
-            Gap,
+            Diverges,
             "fn f(a: Float, b: Float) -> Float { a + b }",
         ),
         (
             "scope/generic_fn__GAP",
-            Gap,
+            Refuses,
             "fn id<T>(x: T) -> T { x }\nfn f() -> Word { id(1) }",
         ),
         // --- removed V0.1.x surface (reference rejects) --------------------------
@@ -8413,10 +8454,30 @@ fn self_hosted_construct_support_boundary() {
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
     let mut mismatches: Vec<String> = Vec::new();
-    let (mut n_ok, mut n_gap, mut n_rej) = (0usize, 0usize, 0usize);
+    let (mut n_ok, mut n_refuse, mut n_diverge, mut n_rej) = (0usize, 0usize, 0usize, 0usize);
     for (label, expected, src) in cases {
+        // THREE OUTCOMES, NOT TWO. Refusing and diverging were one bucket, which
+        // is how three silent miscompiles sat here unreported: a construct that
+        // compiles to the wrong bytes looked exactly like one that says no.
         let actual = if catch_unwind(AssertUnwindSafe(|| compile_src(src))).is_err() {
             Support::RefRejects
+        } else if catch_unwind(AssertUnwindSafe(|| {
+            // THIS FILE'S OWN `self_host_compile`, deliberately, because
+            // `assert_self_host_byte_identical` below uses it too and the two must
+            // agree about which compiler is being classified.
+            //
+            // **THE LIBRARY'S `self_host_compile` IS A DIFFERENT COMPILER.** This
+            // file carries a copy of the driver, as its own comment records, and
+            // calling the library one here reported `Refuses` for a dozen
+            // constructs this table has always classified `Ok` — struct
+            // construction, struct field reads, and most of the struct equality
+            // family. Caught immediately, and only because the expectations were
+            // already written down.
+            self_host_compile(src);
+        }))
+        .is_err()
+        {
+            Support::Refuses
         } else if catch_unwind(AssertUnwindSafe(|| {
             assert_self_host_byte_identical(src);
         }))
@@ -8424,11 +8485,12 @@ fn self_hosted_construct_support_boundary() {
         {
             Support::Ok
         } else {
-            Support::Gap
+            Support::Diverges
         };
         match actual {
             Support::Ok => n_ok += 1,
-            Support::Gap => n_gap += 1,
+            Support::Refuses => n_refuse += 1,
+            Support::Diverges => n_diverge += 1,
             Support::RefRejects => n_rej += 1,
         }
         if actual != *expected {
@@ -8444,11 +8506,13 @@ fn self_hosted_construct_support_boundary() {
          Gap, a supported construct REGRESSED -- fix the code. Changes:\n  {}",
         mismatches.join("\n  ")
     );
-    // Sanity: the boundary keeps a non-trivial supported set and at least the known gaps.
+    // Sanity: the boundary keeps a non-trivial supported set and reaches every
+    // outcome. A classifier that never produces one of its four verdicts is not
+    // classifying, and each of these has been degenerate at some point.
     assert!(n_ok >= 40, "supported set shrank unexpectedly (ok={n_ok})");
     assert!(
-        n_gap >= 1 && n_rej >= 1,
-        "classifier degenerate (gap={n_gap}, rej={n_rej})"
+        n_refuse >= 1 && n_diverge >= 1 && n_rej >= 1,
+        "classifier degenerate (refuses={n_refuse}, diverges={n_diverge}, rejects={n_rej})"
     );
 }
 

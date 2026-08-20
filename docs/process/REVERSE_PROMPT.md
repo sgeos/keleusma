@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-20 (session 49, cast direction and the corpus blind spot)
+**Date**: 2026-08-20 (session 49, the support table says which kind of unsupported)
 
 ## Where things stand
 
@@ -27,6 +27,52 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 | `parse.kel` failure modes named | **THIRTEEN**; eleven counters guarded |
 | **the type checker's INPUT** | **the DECLARED rows now come from the pipeline; the derived ones do not** |
 | branch | `feat/typecheck-bindings-from-pipeline`, cut from `v0.2.3` at `fe2af14f` |
+
+## THREE OF THE FOUR "KNOWN GAPS" WERE SILENT MISCOMPILES, AND THE TABLE COULD NOT SAY SO
+
+`Support::Gap` meant two things — a construct the stage **refuses loudly**, and one it compiles to
+**different bytes**. Those are not the same thing. A refusal tells the caller it is unsupported; a
+divergence is a wrong module with only the reference cross-check standing between it and an artifact.
+
+Splitting it reclassified three of the four known gaps into the more serious category, measured
+rather than assumed:
+
+| case | was | is |
+|---|---|---|
+| `eq/struct_tuple_of_impure_struct` | Gap | **Diverges** |
+| `eq/struct_field_array_of_tuple` | Gap | **Diverges** |
+| `scope/float_arith` | Gap | **Diverges** |
+| `scope/generic_fn` | Gap | Refuses |
+
+The table said "gap", and any reader takes that as "does not support". For three of four the truth
+was "silently miscompiles". **The boundary is now 86 Ok / 1 Refuses / 5 Diverges / 1 RefRejects.**
+
+### My first version of the split was wrong, and only the written expectations caught it
+
+I classified by calling the library's `self_host_compile`, and a dozen constructs this table has
+always called `Ok` came back `Refuses` — struct construction, struct field reads, most of the struct
+equality family.
+
+**The library's compiler and `tests/selfhost_codegen.rs`'s copy are different compilers**, and the
+byte-identity check uses the copy. So **the support table describes the test-local compiler, not the
+shipping one.**
+
+That duplicate has now mattered three times in one night: it blocks the token-residency work, it
+needed the boolean-literal slots seeded separately, and it turns out to be the subject of the support
+table. **Widening `ParsedFn`'s accessors so it can be deleted is the central structural fix**, not the
+convenience I described it as when I first put it to you.
+
+Twelve `Ok` entries disagreeing at once is unmistakable. The same mistake in a table that merely
+reported observed verdicts would have looked like a discovery — which is the argument for expected
+verdicts over observed ones.
+
+### Nested arrays: recorded, not fixed
+
+The outer composite is sized 16 where the reference computes 32, and a chained index truncates the
+body entirely — no `SetLocal`, no `GetLocal`, neither `GetIndex`. A flat array is byte-identical, so
+this is specific to nesting. Two defects inside the composite-layout machinery that the flat-byte
+representation makes load-bearing for memory bounds. **Not a change to make unattended**, per the
+brief's own rule, so it is a `Diverges` case with the measured symptom recorded.
 
 ## THE ORACLE'S BLIND SPOT IS SYSTEMATIC, AND I STOPPED GUESSING AT GOALS TO PROVE IT
 
