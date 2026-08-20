@@ -163,22 +163,22 @@ fn which_isa_opcodes_have_no_corpus_witness() {
         }
     }
     println!(
-        "\n  ALL of these are EMITTABLE -- each has an `fc.emit` site in\n  \
-         `src/compiler.rs`. What resists is finding a CONSTRUCT that reaches\n  \
-         them. Tried and rejected, each by compiling rather than reasoning:\n  \
+        "\n  TWO REMAIN, and the open question is no longer WHICH CONSTRUCT but\n  \
+         WHETHER ONE EXISTS. Both fire only when a static type is UNKNOWN, so\n  \
+         reaching them needs inference to FAIL rather than an unusual syntax:\n  \
          \n  \
-         `Len`        : a `for` over a data-block array folds the length to a\n  \
-                        constant; only a NON-statically-known length reaches it.\n  \
-         `IsStruct`   : a struct pattern whose scrutinee IS that struct folds the\n  \
-                        test out; an enum-carried struct emits `IsEnum`; a generic\n  \
-                        scrutinee folded out too.\n  \
-         `CheckedDiv` : neither `Multiword<N,F>` nor scalar `Fixed<N>` division\n  \
-         `CheckedMod`   reaches them -- those emit `Div`/`Mod` and inline shifts.\n  \
-                        NO construct identified.\n  \
+         `Len`      (compiler.rs ~7647) fires only when the for-in source has no\n  \
+                    statically known length. Its own comment calls the fallback\n  \
+                    admissible at the bytecode level but possibly verifier-rejected\n  \
+                    in strict mode, which reads as a DEFENSIVE path.\n  \
+         `IsStruct` (compiler.rs ~11364) fires only for a struct pattern whose\n  \
+                    scrutinee is NOT statically that struct; a test asserts the\n  \
+                    fold-out in the ordinary case.\n  \
          \n  \
-         Eight construct attempts were made. Recorded as unidentified rather\n  \
-         than guessed at a ninth time: five earlier guesses were wrong and each\n  \
-         was caught only by compiling."
+         IF THEY ARE DEFENSIVELY-RETAINED DEAD PATHS, THAT IS THE FINDING, and it\n  \
+         is worth more than two more witnessed opcodes: this project treats opcode\n  \
+         count as a first-order constraint. Neither reachable nor unreachable is\n  \
+         asserted here -- distinguishing them is exactly what this census is for."
     );
     println!("================\n");
 
