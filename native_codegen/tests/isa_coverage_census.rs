@@ -163,15 +163,22 @@ fn which_isa_opcodes_have_no_corpus_witness() {
         }
     }
     println!(
-        "\n  MEASURED 2026-08-20: every one of these IS emittable. Each has a\n  \
-         `fc.emit` site in `src/compiler.rs`, and `Byte` arithmetic witnesses\n  \
-         Add/Sub/Mul in one line each -- verified by compiling snippets, not by\n  \
-         reading. So this list is a CORPUS gap, not dead instruction-set surface,\n  \
-         and an example witnessing all of them is constructible.\n  \
-         What each one NEEDS is the open question: `Word` division emits `Div`\n  \
-         and a runtime array index emits `GetIndex`, so `CheckedDiv`/`CheckedMod`\n  \
-         and `Len`/`BoundsCheck` come from other constructs -- fixed-point and\n  \
-         dynamic-length forms respectively."
+        "\n  ALL of these are EMITTABLE -- each has an `fc.emit` site in\n  \
+         `src/compiler.rs`. What resists is finding a CONSTRUCT that reaches\n  \
+         them. Tried and rejected, each by compiling rather than reasoning:\n  \
+         \n  \
+         `Len`        : a `for` over a data-block array folds the length to a\n  \
+                        constant; only a NON-statically-known length reaches it.\n  \
+         `IsStruct`   : a struct pattern whose scrutinee IS that struct folds the\n  \
+                        test out; an enum-carried struct emits `IsEnum`; a generic\n  \
+                        scrutinee folded out too.\n  \
+         `CheckedDiv` : neither `Multiword<N,F>` nor scalar `Fixed<N>` division\n  \
+         `CheckedMod`   reaches them -- those emit `Div`/`Mod` and inline shifts.\n  \
+                        NO construct identified.\n  \
+         \n  \
+         Eight construct attempts were made. Recorded as unidentified rather\n  \
+         than guessed at a ninth time: five earlier guesses were wrong and each\n  \
+         was caught only by compiling."
     );
     println!("================\n");
 
