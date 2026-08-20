@@ -6571,7 +6571,7 @@ fn rows_for_kind(view: &keleusma_wire::WireView<'_>, kind: u16) -> Vec<Vec<i64>>
     if kind == w::kind::SHARED_LAYOUT {
         let raw = view.region_bytes(&region).expect("payload");
         let mut out = Vec::new();
-        for c in raw.chunks_exact(16) {
+        for c in raw.as_chunks::<16>().0.iter() {
             out.push(vec![
                 i64::from(u32::from_le_bytes([c[0], c[1], c[2], c[3]])),
                 i64::from(c[4]),
@@ -6591,7 +6591,7 @@ fn rows_for_kind(view: &keleusma_wire::WireView<'_>, kind: u16) -> Vec<Vec<i64>>
             i64::from(u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]))
         };
         let mut out = Vec::new();
-        for c in raw.chunks_exact(8) {
+        for c in raw.as_chunks::<8>().0.iter() {
             out.push(match kind {
                 k if k == w::kind::DATA_SLOTS => {
                     // Field 3 is a U16 `run`, not a byte. It read `c[6]` alone
@@ -11094,7 +11094,12 @@ fn keleusma_produces_the_constant_node_table_for_scalar_roots() {
             );
         }
         nodes_seen += roots.len();
-        named_nodes_seen += want_fin.chunks_exact(6).filter(|n| n[0] == 7).count();
+        named_nodes_seen += want_fin
+            .as_chunks::<6>()
+            .0
+            .iter()
+            .filter(|n| n[0] == 7)
+            .count();
     }
 
     // MUST-FIRE on the corpus. A table of zero nodes compares nothing, and a
@@ -12697,7 +12702,7 @@ fn the_chunk_region_streams_one_record_per_call_past_the_old_batch_cap() {
         // than one record and never learns where the region lives.
         let mut got = vec![0u8; stored.len()];
         let fields = chunk_inputs(&rows);
-        for (j, row) in fields.chunks_exact(11).enumerate() {
+        for (j, row) in fields.as_chunks::<11>().0.iter().enumerate() {
             for (f, v) in row.iter().enumerate() {
                 vm.set_shared(&mut shared, FIN_SLOT + f, Value::Int(*v))
                     .expect("field");
