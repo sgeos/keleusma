@@ -554,6 +554,18 @@ pub const BR_P_BASE: usize = BR_P_OR_ID + 1;
 /// window knows where to slide it without the stage needing a protocol to ask.
 pub const BR_P_AT: usize = BR_P_BASE + 1;
 
+/// The interned id of `true`, so `parse.kel` can recognise the literal.
+///
+/// **The token space is full**, so `true` and `false` are lexed as ordinary
+/// identifiers, exactly like the eager `and`/`or`. Without these ids the stage
+/// resolved them as variable references and emitted `GetLocal` where the reference
+/// emits `PushImmediate` — a silent miscompile the self-compilation oracle could
+/// not see, because no stage source contains a boolean literal.
+pub const BR_P_TRUE_ID: usize = BR_P_AT + 1;
+
+/// The interned id of `false`. See [`BR_P_TRUE_ID`].
+pub const BR_P_FALSE_ID: usize = BR_P_TRUE_ID + 1;
+
 #[cfg(test)]
 mod shared_layout_tests {
     use super::*;

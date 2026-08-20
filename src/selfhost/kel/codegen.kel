@@ -921,9 +921,14 @@ fn push_index_assign(p: Word) -> Word {
     push_visit(ast.lhs[p])
 }
 
-// Unit (kind 20): the value of a statement-only block, PushImmediate(0).
+// Unit (kind 20): `PushImmediate(args)`. The opcode's own encoding is `0 = Unit`,
+// `1 = true`, `2 = false`, so ONE node kind carries all three and the payload is the
+// operand verbatim.
+//
+// The payload was unused and always zero until boolean literals reached the stage,
+// so every existing program still emits `PushImmediate(0)` and is byte-identical.
 fn push_unit(p: Word) -> Word {
-    push_emit(wire.pushimm)
+    push_emit(wire.pushimm + ast.args[p] * wire.radix)
 }
 
 // ExprStmtIn (kind 21): `<expr>; <cont>`. Emit the expression ops, then PopN(1) to

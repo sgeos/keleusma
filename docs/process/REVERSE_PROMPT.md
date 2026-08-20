@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-20 (session 49, token residency stage two blocked)
+**Date**: 2026-08-20 (session 49, boolean literals)
 
 ## Where things stand
 
@@ -27,6 +27,63 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 | `parse.kel` failure modes named | **THIRTEEN**; eleven counters guarded |
 | **the type checker's INPUT** | **the DECLARED rows now come from the pipeline; the derived ones do not** |
 | branch | `feat/typecheck-bindings-from-pipeline`, cut from `v0.2.3` at `fe2af14f` |
+
+## THE SELF-HOSTED COMPILER SILENTLY MIS-LOWERED `true` AND `false`
+
+Found while probing the record stream for an unrelated goal. Measured against the reference:
+
+```
+fn main() -> bool { true }         reference: PushImmediate(1), Return
+                                 self-hosted: GetLocal(0), Return
+```
+
+**A miscompile, not a refusal.** `true` reached the record stream as node kind 2, `Local`, slot 0, and
+sat in the intern table as an ordinary identifier. The value read was whatever occupied that slot.
+
+**The cause was already documented for a different pair of keywords.** The token space is full, which
+`parse.kel` records for the eager `and`/`or` — lexed as identifiers, recognised by interned id.
+`true` and `false` fall through the identical hole and were never given the identical treatment.
+
+**Your shipping path was never exposed, and I checked rather than assumed.** `self_hosted_compile`
+cross-checks every chunk's ops, constant pool and local count against the reference and refuses on
+divergence, so `--compiler self-hosted` gave a loud error and never a wrong artifact. The exposure was
+to direct callers that skip that check.
+
+### Why the oracle could not see it
+
+**No stage source uses a boolean literal in code.** The self-hosting claim rests on compiling those
+sources byte-identically, so the oracle covers only what they contain. The construct-support table did
+cover booleans — every case taking a bool PARAMETER, not one a literal — so it overstated support by
+omission. Four cases added; **the boundary is now 83 SOk / 4 Gap / 1 RefRejects**.
+
+This is the seventh instance of a suite whose coverage is a property of its case list, and the most
+consequential, because here the case list is the corpus the whole self-hosting claim rests on.
+
+### The fix adds no node kind
+
+`PushImmediate` already encodes `0 = Unit`, `1 = true`, `2 = false`, and `Unit` is a leaf whose payload
+was unused and always zero. One kind carries all three, so none of the three record decoders learns
+anything new — the hazard that failed eight tests the last time a kind was added. Existing programs
+still emit `PushImmediate(0)` and stay byte-identical.
+
+### Three self-corrections, all caught by machinery rather than by care
+
+- **The harness copy bit again.** The boundary test returned `Gap` for all four new cases while a
+  direct probe showed byte identity, because `tests/selfhost_codegen.rs` carries its own copy of the
+  driver and seeds the parser block itself. The same duplicate that blocks the token-residency work.
+- **My own must-fire guard fired on its own documentation** — the word `true` inside the comment
+  explaining the fix, plus sixty-nine occurrences in `codegen.kel`'s prose. It strips comments now. A
+  guard that fires on its own explanation measures the wrong thing as surely as one that cannot fire.
+- **An earlier figure I reported to you was produced by a broken instrument.** I claimed "zero of
+  twelve stage sources" from a grep that returned zero while the words were plainly present in
+  comments. The conclusion held — zero in CODE, re-verified with comments stripped — but the
+  measurement did not. A figure that happens to be right is not a measurement.
+
+### The margin pin moved for a reason I could name in advance
+
+669 → 671 names and 35,154 → 35,213 blob bytes. The two names are `true_id` and `false_id` exactly.
+Eighth move, second one predicted, and the first to cost two names rather than the diagnostics
+programme's usual three per cause — because this was a missing feature, not a named refusal.
 
 ## STAGE TWO IS BLOCKED, AND THE BLOCKER IS ONE SMALL DECISION OF YOURS
 

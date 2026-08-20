@@ -10,6 +10,29 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-20, later still).** **THE SELF-HOSTED COMPILER SILENTLY MIS-LOWERED
+> `true` AND `false`.** `fn main() -> bool { true }` emitted `GetLocal(0)` where the reference emits
+> `PushImmediate(1)` -- a miscompile, not a refusal, because the Tok space is full and both literals
+> arrived as ordinary identifiers. Same hole the eager `and`/`or` fall through; the fix follows that
+> precedent in operand position.
+>
+> **NO NEW NODE KIND.** `PushImmediate` already encodes `0 = Unit`, `1 = true`, `2 = false`, and
+> `Unit`'s payload was unused, so one kind carries all three and the three record decoders learn
+> nothing new. Existing programs stay byte-identical.
+>
+> **THE ORACLE WAS SILENT BY CONSTRUCTION**: no stage source uses a boolean literal in code, and the
+> self-hosting claim rests on compiling those sources. The construct-support table covered booleans
+> only as PARAMETERS, so it overstated support by omission. **The boundary is now 83 SOk / 4 Gap /
+> 1 RefRejects.**
+>
+> **The shipping CLI was never exposed** -- `self_hosted_compile` cross-checks ops, pool and local
+> count against the reference and refuses on divergence.
+>
+> Two self-corrections: the harness copy in `tests/selfhost_codegen.rs` needed the new slots
+> separately, and my own must-fire guard fired on the word `true` inside its own explanatory comment
+> until it stripped comments. An earlier "zero of twelve" figure came from a grep that was wrong; the
+> conclusion held, the instrument did not.
+
 > **Currency note (2026-08-20, later).** **A REGRESSION FROM PR #175 IS FIXED, AND THE REASON IT
 > SHIPPED MATTERS MORE THAN THE BUG.** `bool` is the boolean primitive and `Bool` is an ordinary
 > named type; `d1148e76` taught the type channel to treat the latter as the former, on reasoning that

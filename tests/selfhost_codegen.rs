@@ -2064,6 +2064,8 @@ const BR_P_BOOL_ID: usize = keleusma::selfhost_host::BR_P_BOOL_ID;
 // The eager `and`/`or` ids, appended after `bool_id` (see the `toks` block in parse.kel).
 const BR_P_AND_ID: usize = keleusma::selfhost_host::BR_P_AND_ID;
 const BR_P_OR_ID: usize = keleusma::selfhost_host::BR_P_OR_ID;
+const BR_P_TRUE_ID: usize = keleusma::selfhost_host::BR_P_TRUE_ID;
+const BR_P_FALSE_ID: usize = keleusma::selfhost_host::BR_P_FALSE_ID;
 
 fn br_shared_word(vm: &Vm<'_, '_>, buf: &[u8], slot: usize) -> i64 {
     match vm.get_shared(buf, slot).expect("get_shared") {
@@ -2175,6 +2177,14 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
     vm.set_shared(&mut shared, BR_P_BOOL_ID, Value::Int(id_of("Bool")))
         .unwrap();
     vm.set_shared(&mut shared, BR_P_AND_ID, Value::Int(id_of("and")))
+        .unwrap();
+    // THE BOOLEAN LITERAL IDS. This harness is a COPY of the shipping driver, so
+    // a slot added there is not added here, and the boundary test drives THIS one.
+    // Omitting them makes `true` resolve as a variable reference again — the exact
+    // miscompile the driver-side fix removes.
+    vm.set_shared(&mut shared, BR_P_TRUE_ID, Value::Int(id_of("true")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_FALSE_ID, Value::Int(id_of("false")))
         .unwrap();
     vm.set_shared(&mut shared, BR_P_OR_ID, Value::Int(id_of("or")))
         .unwrap();
@@ -4061,6 +4071,14 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, V
     vm.set_shared(&mut shared, BR_P_BOOL_ID, Value::Int(id_of("Bool")))
         .unwrap();
     vm.set_shared(&mut shared, BR_P_AND_ID, Value::Int(id_of("and")))
+        .unwrap();
+    // THE BOOLEAN LITERAL IDS. This harness is a COPY of the shipping driver, so
+    // a slot added there is not added here, and the boundary test drives THIS one.
+    // Omitting them makes `true` resolve as a variable reference again — the exact
+    // miscompile the driver-side fix removes.
+    vm.set_shared(&mut shared, BR_P_TRUE_ID, Value::Int(id_of("true")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_FALSE_ID, Value::Int(id_of("false")))
         .unwrap();
     vm.set_shared(&mut shared, BR_P_OR_ID, Value::Int(id_of("or")))
         .unwrap();
@@ -7975,6 +7993,29 @@ fn self_hosted_construct_support_boundary() {
         ("op/bnot_word", SOk, "fn f(a: Word) -> Word { bnot a }"),
         ("op/bnot_byte", SOk, "fn f(a: Byte) -> Byte { bnot a }"),
         // --- booleans ------------------------------------------------------------
+        // THE LITERALS, WHICH THIS TABLE DID NOT COVER UNTIL 2026-08-20.
+        //
+        // Every other boolean case here takes a bool PARAMETER. Not one supplied a
+        // literal, and the stage MIS-LOWERED both: `true` arrived as an ordinary
+        // identifier, resolved as a variable reference, and emitted `GetLocal(0)`
+        // where the reference emits `PushImmediate(1)`. A silent miscompile, and
+        // the table overstated support by omission.
+        //
+        // The self-compilation oracle could not see it: NONE of the twelve stage
+        // sources contains a `true` or `false` literal, so the corpus cannot reach
+        // the construct at all.
+        ("bool/true_literal", SOk, "fn f() -> bool { true }"),
+        ("bool/false_literal", SOk, "fn f() -> bool { false }"),
+        (
+            "bool/literal_bound",
+            SOk,
+            "fn f() -> bool { let b = true; b }",
+        ),
+        (
+            "bool/literal_condition",
+            SOk,
+            "fn f() -> Word { if true { 1 } else { 2 } }",
+        ),
         ("bool/not", SOk, "fn f(a: bool) -> bool { not a }"),
         (
             "bool/andalso",
@@ -8501,4 +8542,122 @@ fn the_fused_compile_holds_one_group_not_the_program() {
             got_total as f64 / got_peak as f64
         );
     }
+}
+
+/// **THE STAGE MIS-LOWERED BOOLEAN LITERALS, AND THE CORPUS COULD NOT SEE IT.**
+///
+/// Measured 2026-08-20, before the fix:
+///
+/// ```text
+///   fn main() -> bool { true }   reference: PushImmediate(1), Return
+///                                self-hosted: GetLocal(0), Return
+/// ```
+///
+/// A **silent miscompile**, not a refusal. The token space is full, so `true` and
+/// `false` are lexed as ordinary identifiers — the same hole the eager `and`/`or`
+/// fall through, which were given interned-id recognition and these were not. The
+/// stage resolved them as variable references and read whatever occupied the
+/// matching slot.
+///
+/// # Why nothing caught it, which is the part worth keeping
+///
+/// **NOT ONE of the twelve stage sources contains a `true` or `false` literal.** The
+/// self-hosted compiler's correctness claim rests on compiling its own sources
+/// byte-identically, so the oracle is silent on any construct those sources do not
+/// use. The construct-support table covered booleans — and every case took a bool
+/// PARAMETER, never a literal, so it overstated support by omission.
+///
+/// That is this line's recorded meta-defect in its most consequential form: a
+/// suite whose coverage is a property of its case list rather than of the thing
+/// under test, where the case list is the corpus the self-hosting claim rests on.
+///
+/// # What bounded the damage
+///
+/// `self_hosted_compile`, the shipping command-line path, cross-checks every chunk's
+/// ops, constant pool and local count against the reference and refuses on
+/// divergence. A user got a loud error, never a wrong artifact. The exposure was to
+/// direct callers that skip that check.
+///
+/// # The fix carries no new node kind
+///
+/// `PushImmediate` already encodes `0 = Unit`, `1 = true`, `2 = false`, and `Unit`
+/// is a leaf whose payload was unused and always zero. One kind expresses all three,
+/// so nothing had to be taught to the leaf table or to the three decoders of the
+/// parse record stream — the hazard that failed eight tests the last time a kind was
+/// added.
+#[cfg(feature = "self-host")]
+#[test]
+fn boolean_literals_lower_to_the_immediate_and_not_to_a_local_read() {
+    use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
+
+    // The control first, and it is the load-bearing one: `Unit` shares this node
+    // kind, so a change that broke the zero payload would break every
+    // statement-only block. If this regresses, the generalisation is wrong.
+    const CASES: &[&str] = &[
+        "fn main() -> bool { true }",
+        "fn main() -> bool { false }",
+        "fn main() -> bool { let b = true; b }",
+        "fn main() -> Word { if true { 1 } else { 2 } }",
+        // Unit, i.e. the payload-zero case the generalisation must leave alone.
+        "shared data d { n: Word }\nfn main() -> Word { d.n = 1; d.n }",
+    ];
+
+    let mut checked = 0;
+    for src in CASES {
+        let reference =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("reference");
+        let mine = keleusma::selfhost::self_host_compile(src);
+        let a = keleusma::wire_format::module_to_wire_bytes(&reference).expect("reference bytes");
+        let b = keleusma::wire_format::module_to_wire_bytes(&mine).expect("self-hosted bytes");
+        assert_eq!(
+            a, b,
+            "{src}\n  reference:   {:?}\n  self-hosted: {:?}",
+            reference.chunks[0].ops, mine.chunks[0].ops
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, CASES.len(), "not every case was compared");
+
+    // MUST-FIRE on the corpus fact that hid this. If a stage source ever gains a
+    // boolean literal in CODE, the self-compilation oracle starts covering this
+    // construct and the reasoning above stops being the explanation.
+    //
+    // **COMMENTS ARE STRIPPED, AND THE FIRST VERSION OF THIS GUARD DID NOT STRIP
+    // THEM.** It fired immediately — on the word `true` inside the very comment
+    // explaining the fix, and on sixty-nine occurrences in `codegen.kel`'s prose.
+    // A guard that fires on its own documentation measures the wrong thing just as
+    // surely as one that cannot fire at all.
+    const STAGES: &[(&str, &str)] = &[
+        ("parse.kel", include_str!("../src/selfhost/kel/parse.kel")),
+        (
+            "codegen.kel",
+            include_str!("../src/selfhost/kel/codegen.kel"),
+        ),
+        ("wire.kel", include_str!("../src/selfhost/kel/wire.kel")),
+        ("lexer.kel", include_str!("../src/selfhost/kel/lexer.kel")),
+        (
+            "reconstruct.kel",
+            include_str!("../src/selfhost/kel/reconstruct.kel"),
+        ),
+    ];
+    let offenders: Vec<&str> = STAGES
+        .iter()
+        .filter(|(_, body)| {
+            body.lines()
+                .map(|l| l.split("//").next().unwrap_or(""))
+                .flat_map(|code| code.split(|c: char| !c.is_alphanumeric() && c != '_'))
+                .any(|w| w == "true" || w == "false")
+        })
+        .map(|(name, _)| *name)
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "{offenders:?} now contain a boolean literal in code, so the \
+         self-compilation oracle covers this construct and the explanation \
+         recorded above is stale"
+    );
+    assert!(
+        STAGES.len() >= 5,
+        "the stage list shrank, so the check above walks too little to mean anything"
+    );
 }

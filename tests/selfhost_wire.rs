@@ -12620,8 +12620,17 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // point of the pin is that a stage growing toward either bound is reported here
     // with the number rather than surfacing later as an `Unsupported` at some call
     // site.
-    assert_eq!(worst_names, 669, "the worst-case name count moved");
-    assert_eq!(worst_blob, 35154, "the worst-case blob size moved");
+    // The EIGHTH move: recognising the boolean literals `true`/`false`, which the
+    // stage had been resolving as variable references and mis-lowering to
+    // `GetLocal`. 669 -> 671 names, and the two are `true_id` and `false_id`
+    // exactly -- two shared-block fields, no error code and no guard, because this
+    // was a missing feature rather than a named refusal. **The second move predicted
+    // in advance, and the first whose count came out at two rather than the
+    // programme's usual three per cause.**
+    assert_eq!(worst_names, 671, "the worst-case name count moved");
+    // 35,154 -> 35,213 bytes, 59 for the two field names plus the comment-free
+    // identifiers the recognition introduces.
+    assert_eq!(worst_blob, 35213, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**
