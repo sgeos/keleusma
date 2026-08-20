@@ -16,6 +16,7 @@
 //   Fixed<16>        -> FixedMul, FixedDiv, WordToFixed, FixedToWord
 //   external native  -> CallExternalNative   (`use external host::`)
 //   2-level index    -> BoundsCheck          (a single level emits none)
+//   checked `/` `%`  -> CheckedDiv, CheckedMod  (a BARE `/` emits `Div`)
 //
 // Divisors are constants so no argument vector can make this fault: the
 // differential drives it with twenty-four of them.
@@ -71,11 +72,46 @@ fn fixed_mix(w: Word) -> Word {
   halved as Word
 }
 
+// THE CHECKED-ARITHMETIC FORM. A bare `a / b` emits `Div`; only the form with
+// a `zero_divisor` arm emits `CheckedDiv`. `%` admits `zero_divisor` only, while
+// `/` also admits an `overflow` arm for the `i64::MIN / -1` corner.
+//
+// Found by the `v0.2.3` line after eight construct attempts here failed.
+//
+// WHY IT WAS HARD TO FIND: I was searching for an unusual TYPE when the answer
+// was an unusual FORM. I never questioned that `a / b` was the whole division
+// surface, so no amount of probing operand types could have reached it.
+//
+// A `CHANGELOG.md` defect sits nearby but is NOT the reason, and the first
+// account of it given to me was wrong in both directions. Verified here: lines
+// 561 and 571 are BOTH under `## [0.2.0]` (line 497, next header 645), so it is
+// one release section asserting both that the emission path "drops the
+// stamped-zero-flag fallback in favour of the new opcodes" AND that "division
+// and modulo continue to use the stamped-zero-flag pattern". Not staleness
+// across releases -- a self-contradiction within one. And 561 precedes 571, so a
+// top-down reader meets the CORRECT claim first and the wrong one last.
+//
+// NOT a defect, checked before anyone "fixes" it: 561 also says the construct
+// does not catch division by zero. That was true for 0.2.0. `zero_divisor`
+// arrives in 0.2.1 (line 461), so that sentence is correctly historical.
+fn checked_ratio(a: Word, b: Word) -> Word {
+  let q = a / b {
+    ok(v) => v,
+    zero_divisor(n) => 0,
+  };
+  let r = a % b {
+    ok(v) => v,
+    zero_divisor(n) => 0,
+  };
+  q + r
+}
+
 fn main(seed: Word) -> Word {
   let b = byte_mix(3 as Byte, 5 as Byte);
   let f = float_round_trip(seed);
   let q = fixed_mix(seed);
   let g = grid_at(1, 2);
   let h = host::tick(seed);
-  (b as Word) + f + q + g + h
+  let c = checked_ratio(seed, 3);
+  (b as Word) + f + q + g + h + c
 }
