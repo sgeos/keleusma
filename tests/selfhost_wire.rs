@@ -11458,34 +11458,40 @@ fn the_produced_sequence_emits_names_and_pool_byte_identically() {
 fn the_windowed_path_reaches_every_stage_it_can_walk() {
     use keleusma::wire_schema::kind;
 
-    /// What each stage is expected to do, and why.
-    enum Expect {
-        /// Every region emitted, chunks included.
-        Full,
-        /// Regions emitted, chunks omitted: past the 90-record batch.
-        NoChunks,
-        /// Not reachable: the constant forest is past the walk's node cap.
-        WalkRefuses,
-    }
-
-    let stages: &[(&str, Expect)] = &[
-        ("lexer", Expect::Full),
-        ("parse", Expect::NoChunks),
-        ("reconstruct", Expect::Full),
-        ("codegen", Expect::Full),
-        ("analyze", Expect::Full),
-        ("verify_structural", Expect::Full),
-        ("verify_yield", Expect::Full),
-        ("verify_depth", Expect::Full),
-        ("verify_typed", Expect::Full),
-        ("verify_datalayout", Expect::Full),
-        ("wire", Expect::WalkRefuses),
+    // THE `Expect` ENUM IS GONE, and its absence is the result of the arc.
+    //
+    // It carried three cases: `Full`, `NoChunks` for a stage past the 90-record
+    // chunk batch, and `WalkRefuses` for one whose constant forest exceeded the
+    // module-input walk's node cap. Both exclusions are removed and for DIFFERENT
+    // reasons, which is why they are recorded here rather than summed away:
+    //
+    // * `parse` (94 chunks) was past the batch. Streaming one record per call
+    //   removed the cap rather than raising it -- the batch carries existed so a
+    //   host could relay three running range cursors, and a coroutine carries them
+    //   itself.
+    // * `wire` (1,148 constant nodes) was measured against `nm_max_names()`, a
+    //   bound on the NAME arrays, by a guard that should have been checking the
+    //   node table's 1,365. Every one of its constants is `Int`, so the walk
+    //   interned nothing and the arrays it was compared against were untouched.
+    //
+    // A future limit would bring the branching back. Keeping dead variants to
+    // hold the place would mean a reader could not tell which cases are live.
+    let stages: &[&str] = &[
+        "lexer",
+        "parse",
+        "reconstruct",
+        "codegen",
+        "analyze",
+        "verify_structural",
+        "verify_yield",
+        "verify_depth",
+        "verify_typed",
+        "verify_datalayout",
+        "wire",
     ];
 
     let mut full = 0;
-    let mut no_chunks = 0;
-    let mut refused = 0;
-    for (stage, expect) in stages {
+    for stage in stages {
         let path = format!("src/selfhost/kel/{stage}.kel");
         let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
         let module = compile(&parse(&tokenize(&src).expect("lex")).expect("parse"))
@@ -11506,44 +11512,18 @@ fn the_windowed_path_reaches_every_stage_it_can_walk() {
 
         let got = keleusma::selfhost::wire_windowed_via_kel(&module, want.len(), &regions);
 
-        if matches!(expect, Expect::WalkRefuses) {
-            let err = got.err().unwrap_or_else(|| {
-                panic!(
-                    "{stage}: the driver ACCEPTED a module whose constant forest is past the \
-                     walk's cap; emitting it would mean the walk silently truncated"
-                )
-            });
-            // The REASON is asserted. A refusal for some other cause is not this
-            // limit being respected.
-            let detail = format!("{err:?}");
-            assert!(
-                detail.contains("-240") || detail.contains("240"),
-                "{stage}: refused, but not by the walk's node cap: {detail}"
-            );
-            refused += 1;
-            continue;
-        }
-
         let got = got.unwrap_or_else(|e| panic!("{stage}: the windowed driver refused: {e:?}"));
-        let expect_chunks = matches!(expect, Expect::Full);
-        assert_eq!(
+        assert!(
             got.chunks_emitted,
-            expect_chunks,
-            "{stage}: chunks_emitted is {} with {} chunks against a cap of 90",
-            got.chunks_emitted,
+            "{stage}: chunks_emitted is false with {} chunks. Both former exclusions are gone; \
+             a false here means a limit has returned and this test's comment above no longer \
+             describes the tree.",
             module.chunks.len()
         );
-        if expect_chunks {
-            full += 1;
-        } else {
-            no_chunks += 1;
-        }
+        full += 1;
 
         let mut compared = 0;
         for k in [kind::NAMES, kind::STRING_POOL, kind::HEADER, kind::CHUNKS] {
-            if k == kind::CHUNKS && !got.chunks_emitted {
-                continue;
-            }
             let region = view.find_region(k).expect("region");
             let base = region.byte_offset().expect("offset");
             let stored = view.region_bytes(&region).expect("payload");
@@ -11564,9 +11544,17 @@ fn the_windowed_path_reaches_every_stage_it_can_walk() {
         );
     }
 
-    assert_eq!(full, 9, "nine stages should emit every region");
-    assert_eq!(no_chunks, 1, "only `parse` is past the batch cap");
-    assert_eq!(refused, 1, "only `wire` is past the walk's node cap");
+    // ELEVEN OF ELEVEN. Both former exclusions are gone and for different
+    // reasons, which is why they are named rather than summed: `parse` was past
+    // the 90-record chunk batch, removed by streaming one record per call, and
+    // `wire` was measured against the NAME arrays by a guard that should have
+    // been checking the node table.
+    assert_eq!(
+        full,
+        stages.len(),
+        "every stage should emit every region the driver reaches"
+    );
+    assert_eq!(stages.len(), 11, "the corpus is eleven stages");
 }
 
 /// MUST FIRE: the windowed path reaches a stage the absolute-offset path cannot.
@@ -12596,16 +12584,38 @@ fn every_stage_fits_the_driver_caps_with_margin() {
         worst_names = worst_names.max(names);
         worst_blob = worst_blob.max(blob.len());
     }
-    // Pinned so a change in the worst case is visible rather than absorbed, and
-    // it has already earned that once. Adding `semi_terminates_nothing` to
-    // `parse.kel` for the empty statement moved the worst case from 627 names
-    // and 33,395 bytes to 628 and 33,480 — one chunk name and its blob record.
-    // The margins are 61% and 68% of the caps, so the increment was admissible;
-    // the point of the pin is that a stage growing toward either bound is
-    // reported here with the number rather than surfacing later as an
-    // `Unsupported` at some call site.
-    assert_eq!(worst_names, 628, "the worst-case name count moved");
-    assert_eq!(worst_blob, 33480, "the worst-case blob size moved");
+    // Pinned so a change in the worst case is visible rather than absorbed, and it
+    // has now earned that SIX TIMES. `semi_terminates_nothing` for the empty
+    // statement moved it from 627 names and 33,395 bytes to 628 and 33,480; the
+    // `toks.base` and `toks.at` window fields moved it again to 630 and 33,500 —
+    // two data-block field names and their blob records. The capacity diagnostics
+    // moved it to 645 and 34,118: thirteen guard functions and the two `ps.perr_*`
+    // fields, which is the count exactly. **None of the three changes was about
+    // names, and no author would have thought to check.** That is the entire
+    // argument for the pin.
+    //
+    // The fourth was raising the chunk table from 256 to 1024: the NAME count did not
+    // move at all, because widening an array adds no name, but the blob grew 30 bytes
+    // in data-layout records. A change that moves one of these two and not the other is
+    // the normal case, not a surprise.
+    //
+    // The fifth was naming five more capacity diagnostics: 645 -> 660 names (fifteen
+    // guard, cap and code functions) and 34,148 -> 34,785 blob bytes (thirty-one arrays
+    // gaining a spare slot across five families). The sixth named two more, swept rather
+    // than tripped over: 660 -> 666 names and 34,785 -> 35,045 blob bytes.
+    //
+    // **THE RUNNING COST OF THE DIAGNOSTICS PROGRAMME IS NOW 39 NAMES**, against a
+    // 1,024-name cap, leaving 65% margin at 666. Roughly three names per cause named --
+    // an error code, a capacity, and a guard. That is the unit price of naming a cause
+    // rather than trapping on it, and stating it here is what keeps "just add a named
+    // refusal" from reading as free.
+    //
+    // The margins are 63% and 69% of the caps, so the increment is admissible; the
+    // point of the pin is that a stage growing toward either bound is reported here
+    // with the number rather than surfacing later as an `Unsupported` at some call
+    // site.
+    assert_eq!(worst_names, 666, "the worst-case name count moved");
+    assert_eq!(worst_blob, 35045, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**
@@ -12638,14 +12648,16 @@ fn the_chunk_region_streams_one_record_per_call_past_the_old_batch_cap() {
     const CMD_STREAM_STEP: i64 = 175;
     const OLD_BATCH_CAP: usize = 90;
 
-    // `parse` ONLY, and `wire` is checked separately below for a limit that is
-    // NOT this one. `wire` has 475 chunks and would exceed the batch cap, but it
-    // never reaches the emit at all: its 1,148 constant nodes exceed the
-    // module-input walk's 1,024-node bound and it refuses with `-240` before any
-    // record is written. Treating it as a subject here would have reported the
-    // chunk cap as still binding when a different limit fired, which is the
-    // conflation this file's own history keeps recording.
-    for stage in ["parse"] {
+    // BOTH STAGES NOW, and `wire` joining is the point of the latest slice.
+    //
+    // It was excluded here for a reason that was NOT the chunk cap: its 1,148
+    // constant nodes were measured against `nm_max_names()`, a bound on the NAME
+    // arrays, and it refused with `-240` before a record was written. Every one of
+    // those constants is `Int`, so the walk interned nothing and the arrays it was
+    // being checked against were never touched. The node table it writes into
+    // holds 1,365. With the two bounds separated, `wire` emits its own 475-chunk
+    // region -- the last stage the emit path excluded.
+    for stage in ["parse", "wire"] {
         let path = format!("src/selfhost/kel/{stage}.kel");
         let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
         let module = compile(&parse(&tokenize(&src).expect("lex")).expect("parse"))
@@ -12713,46 +12725,182 @@ fn the_chunk_region_streams_one_record_per_call_past_the_old_batch_cap() {
     }
 }
 
-/// **`wire` IS STILL EXCLUDED, AND BY A DIFFERENT LIMIT.** Asserted so the two
-/// are not conflated.
+/// **THE TWO BOUNDS ARE SEPARATE NUMBERS BOUNDING SEPARATE THINGS**, and this is
+/// the test that keeps them apart.
 ///
-/// Removing the 90-record chunk batch cap admits `parse`. It does NOT admit
-/// `wire`, whose 1,148 constant nodes exceed the module-input walk's 1,024-node
-/// bound: it refuses with `-240` before a single record is emitted, so its 475
-/// chunks never reach the question.
+/// The module-input walk refused a forest of more than 1,024 NODES using
+/// `nm_max_names()` — the cap that sizes the NAME arrays, `nin` at 2,048 words
+/// and `nmap` at 1,024 entries. The two are comparable numbers and otherwise
+/// unrelated, so the guard read as though it were checking capacity while
+/// checking someone else's.
 ///
-/// This is asserted rather than noted because the first version of the test above
-/// took `wire` as a subject and read its `-240` as the chunk cap still binding. A
-/// refusal proves which limit fired only if the test says which one it expected.
+/// It excluded `wire.kel` from its own emit path at 1,148 constant nodes, every
+/// one of them `Int` — so the walk interned nothing and the arrays it was
+/// measured against were never touched.
+///
+/// # Why this is asserted rather than left to the byte-identity tests
+///
+/// Those pass whenever a stage is admitted. Nothing in them would notice the two
+/// bounds silently becoming one number again, which is how this defect existed in
+/// the first place. Reading both out of the source and requiring them to differ
+/// is what makes the separation a property rather than a coincidence.
 #[cfg(feature = "self-host")]
 #[test]
-fn wire_is_excluded_by_the_node_walk_and_not_by_the_chunk_cap() {
-    const CMD_STREAM_BEGIN: i64 = 174;
-    const NODE_CAP_REFUSAL: i64 = -240;
+fn the_node_bound_and_the_name_bound_are_not_the_same_number() {
+    const SRC: &str = include_str!("../src/selfhost/kel/wire.kel");
 
-    let src = std::fs::read_to_string("src/selfhost/kel/wire.kel").expect("read wire.kel");
-    let module = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
+    let literal = |name: &str| -> usize {
+        let line = SRC
+            .lines()
+            .find(|l| l.trim_start().starts_with(&format!("fn {name}()")))
+            .unwrap_or_else(|| panic!("wire.kel declares {name}"));
+        line.rsplit_once('{')
+            .and_then(|(_, t)| t.split_once('}'))
+            .and_then(|(n, _)| n.trim().parse().ok())
+            .unwrap_or_else(|| panic!("{name} has a literal body"))
+    };
 
-    // The premise: it really does carry more constant nodes than the walk admits.
-    let chunk_consts: usize = module.chunks.iter().map(|c| c.constants.len()).sum();
-    assert!(
-        chunk_consts > 1024,
-        "wire carries {chunk_consts} chunk constants, within the 1,024-node walk bound, so          the refusal below would be for some other reason"
+    let nodes = literal("mi_max_nodes");
+    let names = literal("nm_max_names");
+    assert_ne!(
+        nodes, names,
+        "the node bound and the name bound are both {nodes}. They bound different arrays and          were one number once; a forest of {nodes} scalars interns no names at all."
     );
 
-    let (blob, _names) = keleusma::selfhost::module_input(&module);
-    let mut vm = vm_for(WIRE_KEL);
-    let mut shared = vec![0u8; vm.shared_data_bytes()];
-    for (i, b) in blob.iter().enumerate() {
-        vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(*b))
-            .expect("blob");
-    }
+    // The node bound must be what the node table actually holds, or it is another
+    // number standing in for a capacity it does not describe.
+    const BYTES: usize = 65536;
+    const NODE_BYTES: usize = 6 * 8;
+    assert_eq!(
+        nodes,
+        BYTES / NODE_BYTES,
+        "the node bound is {nodes} against a {BYTES}-byte table at {NODE_BYTES} bytes a node"
+    );
 
-    match enter(&mut vm, &mut shared, CMD_STREAM_BEGIN).expect("begin") {
-        VmState::Yielded(Value::Int(n)) => assert_eq!(
-            n, NODE_CAP_REFUSAL,
-            "wire refused with {n}, not the node-walk code {NODE_CAP_REFUSAL}. If it now              SUCCEEDS, the node bound moved and the exclusion recorded across the process              documents is stale."
-        ),
-        other => panic!("begin returned {other:?}"),
+    // And the stage this separation admitted really is past the old bound.
+    let src = std::fs::read_to_string("src/selfhost/kel/wire.kel").expect("read wire.kel");
+    let module = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
+    let chunk_consts: usize = module.chunks.iter().map(|c| c.constants.len()).sum();
+    assert!(
+        chunk_consts > names && chunk_consts <= nodes,
+        "wire carries {chunk_consts} chunk constants, which is not between the old bound          ({names}) and the real one ({nodes}), so it no longer demonstrates the difference"
+    );
+}
+
+/// The largest region of one kind found while surveying, with the stage that
+/// produced it and its reference rows.
+///
+/// A named type because clippy is right that the bare tuple was doing too much:
+/// three unrelated things held positionally, where swapping the last two still
+/// compiles.
+type RegionSubject<'a> = (&'a str, Vec<u8>, Vec<Vec<i64>>);
+
+/// Four record tables stream one record per call, past their input bounds.
+///
+/// Each `emit_*_records` refuses past `fin_capacity()` divided by its field
+/// count, so 256 records for a four-field table. These paths hold ONE record and
+/// have no such bound.
+///
+/// # What this covers, at the strength it actually has
+///
+/// **These format records the host hands them.** `DATA_SLOTS`'s run-length
+/// grouping, a signature's parameter range, a shape's size — every one is decided
+/// outside the stage. That makes these regions ENCODED BUT NOT DERIVED, the same
+/// standing the `HEADER` record has, and a coverage claim counting them beside
+/// `NAMES` — which the stage computes from the module blob — would overstate what
+/// is self-hosted. Together they are 16.3% of the corpus body against the 79%
+/// already reached, but not 16.3% of the same quality.
+///
+/// Each subject is the stage with the LARGEST region of its kind, chosen by
+/// measurement, so a case is past the old bound rather than merely representative.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_four_formatting_regions_stream_one_record_per_call() {
+    use keleusma::wire_schema::kind;
+    // (kind, command, fields per record)
+    const TABLES: &[(u16, i64, usize)] = &[
+        (kind::DATA_SLOTS, 178, 4),
+        (kind::SHAPES, 179, 4),
+        (kind::SIGNATURES, 180, 4),
+        (kind::ENUM_VARIANTS, 181, 3),
+    ];
+    const STAGES: &[&str] = &[
+        "lexer",
+        "parse",
+        "codegen",
+        "reconstruct",
+        "verify_structural",
+        "verify_typed",
+    ];
+
+    let mut covered = 0;
+    for (k, cmd, nfields) in TABLES {
+        let mut best: Option<RegionSubject<'_>> = None;
+        for stage in STAGES {
+            let path = format!("src/selfhost/kel/{stage}.kel");
+            let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+            let module = compile(&parse(&tokenize(&src).expect("lex")).expect("parse"))
+                .unwrap_or_else(|e| panic!("{stage}: compile: {e:?}"));
+            let want =
+                keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+            let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
+            let Some(region) = view.find_region(*k) else {
+                continue;
+            };
+            let stored = view.region_bytes(&region).expect("payload").to_vec();
+            if stored.is_empty() {
+                continue;
+            }
+            if best.as_ref().is_none_or(|(_, b, _)| stored.len() > b.len()) {
+                best = Some((stage, stored, rows_for_kind(&view, *k)));
+            }
+        }
+        let Some((stage, stored, rows)) = best else {
+            panic!("no stage carries a non-empty region {k:#06x}, so nothing is exercised");
+        };
+        assert!(
+            !rows.is_empty(),
+            "{stage}: region {k:#06x} has bytes but no rows, so the row model is wrong"
+        );
+
+        let mut vm = vm_for(WIRE_KEL);
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        let mut got = vec![0u8; stored.len()];
+
+        for (j, row) in rows.iter().enumerate() {
+            assert!(
+                row.len() >= *nfields,
+                "{stage}: region {k:#06x} row {j} has {} fields, fewer than the {nfields} the                  command reads",
+                row.len()
+            );
+            for (f, v) in row.iter().take(*nfields).enumerate() {
+                vm.set_shared(&mut shared, FIN_SLOT + f, Value::Int(*v))
+                    .expect("field");
+            }
+            let wrote = match enter(&mut vm, &mut shared, *cmd).expect("step") {
+                VmState::Yielded(Value::Int(n)) => n,
+                other => panic!("{stage}: region {k:#06x} step {j} returned {other:?}"),
+            };
+            assert!(
+                wrote > 0,
+                "{stage}: region {k:#06x} step {j} refused with {wrote}"
+            );
+            let stride = wrote as usize;
+            for b in 0..stride {
+                got[j * stride + b] = match vm.get_shared(&shared, 1 + b).expect("read") {
+                    Value::Byte(v) => v,
+                    other => panic!("shared byte slot held {other:?}"),
+                };
+            }
+        }
+
+        assert_eq!(
+            got,
+            stored,
+            "{stage}: the streamed region {k:#06x} differs from the reference over {} records",
+            rows.len()
+        );
+        covered += 1;
     }
+    assert_eq!(covered, TABLES.len(), "not every table was exercised");
 }

@@ -51,13 +51,21 @@ use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, required_persistent_capacity_for}
 // is one packed `tok+payload*64` word per token (not two `kinds`/`vals` arrays).
 const LEN: usize = 0;
 const PACKED: usize = 1;
-const LIMIT_ID: usize = 1 + 40960;
-const CHUNK_COUNT: usize = 1 + 40960 + 1;
-const CHUNKS: usize = 1 + 40960 + 2;
-const REQUIRE_ID: usize = 1 + 40960 + 2 + 256;
-const WORD_ID: usize = 1 + 40960 + 2 + 256 + 1;
-const BYTE_ID: usize = 1 + 40960 + 2 + 256 + 2;
-const BOOL_ID: usize = 1 + 40960 + 2 + 256 + 3;
+// THE SHARED-SLOT LAYOUT LIVES IN ONE PLACE AND THIS IS NOT IT.
+//
+// These were independent copies of the same arithmetic (`1 + 40960 + 2 + 256 + 3`).
+// Widening `toks.chunks` moved the stage's fields and left every copy seeding the
+// keyword and type ids at the old slots, which failed sixty-eight tests with struct
+// byte sizes of 1 instead of 8 and a scalar kind of `Unit` instead of `Int` -- not
+// one of them naming a slot. Aliased to the driver's constants so the next widening
+// moves them.
+const LIMIT_ID: usize = keleusma::selfhost_host::BR_P_LIMIT_ID;
+const CHUNK_COUNT: usize = keleusma::selfhost_host::BR_P_CHUNK_COUNT;
+const CHUNKS: usize = keleusma::selfhost_host::BR_P_CHUNKS;
+const REQUIRE_ID: usize = keleusma::selfhost_host::BR_P_REQUIRE_ID;
+const WORD_ID: usize = keleusma::selfhost_host::BR_P_WORD_ID;
+const BYTE_ID: usize = keleusma::selfhost_host::BR_P_BYTE_ID;
+const BOOL_ID: usize = keleusma::selfhost_host::BR_P_BOOL_ID;
 
 /// Map the reference token stream into the stage's unified `(kind, value)` pairs. The
 /// operator codes follow the retired body.kel scheme (`Plus` 21 upward); the header
@@ -2165,4 +2173,1211 @@ fn an_impl_block_captures_its_method_names() {
     assert_eq!(got.impls[0].len(), 1, "its one method name (cap) captured");
     assert_eq!(got.traits.len(), 1, "the trait captured too");
     assert_eq!(got.funcs[0].3, vec![(1, 5)]); // top: Literal 5
+}
+
+/// **THE PARSER NEEDS A WINDOW, NOT THE STREAM**, and this measures it rather
+/// than asserting it.
+///
+/// `toks.packed` is 40,960 words and the driver seeds the whole token stream into
+/// it. That is the last residency in the pipeline, and it belongs to the DRIVER:
+/// every one of `parse.kel`'s cursor assignments is plus or minus one, so it is a
+/// one-token lookahead scanner with single-token pushback — the shape a Turbo
+/// Pascal front end has.
+///
+/// Counting `ps.cursor = ` in the source would establish that syntactically and
+/// prove nothing about execution: a cursor set by some other route, or a read at
+/// an index the cursor does not hold, would both pass. The stage now writes its
+/// cursor back on every token read, so this reads the EXECUTED sequence.
+///
+/// # What a passing run licenses
+///
+/// If consecutive cursors differ by at most one, a host can feed a window of two
+/// tokens and slide it, because it can never be surprised by a jump. That is what
+/// makes the 40,960-word array removable rather than merely large.
+///
+/// **It does not mean the driver does that yet.** It still seeds the whole
+/// stream; this is the property the change would rest on, measured in advance
+/// rather than discovered afterwards.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_parser_never_jumps_more_than_one_token() {
+    // Sources with the constructs most likely to seek: nested calls, an operator
+    // chain the shunting yard drains, a match, and a `for` with a limit.
+    const CASES: &[(&str, &str)] = &[
+        ("scalar", "fn main() -> Word { 42 }"),
+        (
+            "operators",
+            "fn f(a: Word, b: Word) -> Word { a + b * a - b + a * b }\nfn main() -> Word { f(1, 2) }",
+        ),
+        (
+            "nested-calls",
+            "fn g(x: Word) -> Word { x + 1 }\n\
+             fn f(a: Word) -> Word { g(g(g(a))) }\n\
+             fn main() -> Word { f(1) }",
+        ),
+        (
+            "match-and-for",
+            "private data d { s: Word }\n\
+             fn f(n: Word) -> Word { for i in 0..n limit 8 { d.s = d.s + i; } d.s }\n\
+             fn main() -> Word { match f(3) { _ => 1, } }",
+        ),
+        // The largest real stage, so the case is a program rather than a snippet.
+        ("lexer-stage", include_str!("../src/selfhost/kel/lexer.kel")),
+    ];
+
+    let mut checked = 0;
+    for (label, src) in CASES {
+        let trace = keleusma::selfhost::parse_cursor_trace(src);
+        assert!(
+            trace.len() > 4,
+            "{label}: the trace is {} entries, too short to measure motion",
+            trace.len()
+        );
+
+        let mut worst = 0i64;
+        for w in trace.windows(2) {
+            let step = w[1] - w[0];
+            if step.abs() > worst.abs() {
+                worst = step;
+            }
+        }
+        assert!(
+            worst.abs() <= 1,
+            "{label}: the cursor moved by {worst} in one step. A host feeding a sliding \
+             window would have been surprised by that jump, and the two-token window this \
+             measurement licenses would have read the wrong token."
+        );
+
+        // MUST-NOT-FIRE. A trace that never moved would satisfy the bound above
+        // for a reason that has nothing to do with the parser being well behaved.
+        let advanced = trace.last().copied().unwrap_or(0);
+        assert!(
+            advanced > 0,
+            "{label}: the cursor never advanced, so the bound above is vacuous"
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, CASES.len(), "not every case was measured");
+}
+
+/// **THE FUSED PARSE AGREES WITH THE COLLECTING ONE**, which is the only thing
+/// that makes the fusion safe to prefer.
+///
+/// `parse_functions` collects every token into a `Vec` and seeds all of them into
+/// a 40,960-word shared array. `parse_functions_fused` drives `lexer.kel` INTO
+/// `parse.kel`, holding eight tokens and sliding.
+///
+/// Fusion changes WHEN a token is produced, not what it is, so the two must return
+/// the same functions, the same name table, and the same data and enum record
+/// streams. Anything else is a defect in the window arithmetic — the pushback
+/// landing outside the window, or a slide taken after the parser had already read.
+///
+/// # Why real stages rather than snippets
+///
+/// A snippet parses inside one window and would pass for a feed that never slid at
+/// all. These sources are thousands of tokens, so the window turns over hundreds
+/// of times, and the sizes are asserted so a corpus shrinking back under the
+/// window is reported rather than silently making the test vacuous.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_fused_parse_agrees_with_the_collecting_one() {
+    const STAGES: &[&str] = &["verify_datalayout", "verify_yield", "analyze", "lexer"];
+    const WINDOW: usize = 8;
+
+    let mut checked = 0;
+    for stage in STAGES {
+        let path = format!("src/selfhost/kel/{stage}.kel");
+        let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+
+        let (want_fns, want_names, want_data, want_enums) =
+            keleusma::selfhost::parse_functions(&src);
+        let (got_fns, got_names, got_data, got_enums) =
+            keleusma::selfhost::parse_functions_fused(&src);
+
+        // The premise: the window really does turn over. A source that fits in
+        // eight tokens would satisfy every assertion below without sliding once.
+        let trace = keleusma::selfhost::parse_cursor_trace(&src);
+        let reach = trace.iter().copied().max().unwrap_or(0);
+        assert!(
+            reach as usize > WINDOW * 20,
+            "{stage}: the parser reached token {reach}, barely past the {WINDOW}-token \
+             window, so the sliding this test exists to check is hardly exercised"
+        );
+
+        assert_eq!(
+            got_names, want_names,
+            "{stage}: the intern tables differ, so the two lexer runs disagree"
+        );
+        assert_eq!(
+            got_fns.len(),
+            want_fns.len(),
+            "{stage}: {} functions fused against {} collected",
+            got_fns.len(),
+            want_fns.len()
+        );
+        for (i, (g, w)) in got_fns.iter().zip(want_fns.iter()).enumerate() {
+            assert_eq!(
+                g.body_records(),
+                w.body_records(),
+                "{stage}: function {i} body records differ"
+            );
+            assert_eq!(
+                g.guard_records(),
+                w.guard_records(),
+                "{stage}: function {i} guard records differ"
+            );
+            assert_eq!(
+                (g.category(), g.param_count()),
+                (w.category(), w.param_count()),
+                "{stage}: function {i} header differs"
+            );
+        }
+        assert_eq!(got_data, want_data, "{stage}: data records differ");
+        assert_eq!(got_enums, want_enums, "{stage}: enum records differ");
+        checked += 1;
+    }
+    assert_eq!(checked, STAGES.len(), "not every stage was compared");
+}
+
+/// **THE PUSHBACK DEPTH, DERIVED FROM THE CURSOR TRACE**, because the fused feed's
+/// lookbehind rests on it.
+///
+/// `parse_functions_fused` keeps ONE token behind the cursor. That is not a
+/// choice, it is the bound: `toks.at` is written before the cursor advances, so it
+/// names the index just read. After a read at `C` the cursor is `C+1`; with `k`
+/// pushbacks the next read is at `C+1-k`, so a trace step of `1-k` reports `k`
+/// directly.
+///
+/// `the_parser_never_jumps_more_than_one_token` already bounds every step to plus
+/// or minus one, which bounds `k` at two and puts the lowest read at `at - 1`.
+/// This states the consequence explicitly so a later reader does not have to
+/// re-derive it, and so a parser that started pushing back further fails HERE,
+/// naming the cause, rather than in the fused driver as an out-of-bounds index.
+///
+/// A wider lookbehind was used at first, justified by a claim that the cursor
+/// could sit "several tokens" behind `at`. It cannot. That was a misdiagnosis of a
+/// fault whose real cause was an unprimed window, and the widening did not fix it.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_parser_pushes_back_at_most_two_tokens() {
+    const SOURCES: &[(&str, &str)] = &[
+        ("lexer-stage", include_str!("../src/selfhost/kel/lexer.kel")),
+        (
+            "analyze-stage",
+            include_str!("../src/selfhost/kel/analyze.kel"),
+        ),
+    ];
+
+    let mut deepest_seen = 0i64;
+    for (label, src) in SOURCES {
+        let trace = keleusma::selfhost::parse_cursor_trace(src);
+        assert!(trace.len() > 100, "{label}: trace too short to measure");
+        for w in trace.windows(2) {
+            // step == 1 - k, so k == 1 - step.
+            let k = 1 - (w[1] - w[0]);
+            assert!(
+                k <= 2,
+                "{label}: {k} consecutive pushbacks. The fused feed keeps one token \
+                 behind the cursor, which covers k <= 2; at {k} it would read below its \
+                 window base."
+            );
+            deepest_seen = deepest_seen.max(k);
+        }
+    }
+
+    // MUST-NOT-FIRE. A trace that only ever advanced would satisfy the bound for a
+    // reason that has nothing to do with pushback, and the lookbehind would be
+    // untested rather than proven.
+    assert!(
+        deepest_seen >= 1,
+        "no pushback occurred in any source, so the bound above is vacuous and the \
+         fused feed's lookbehind rests on nothing"
+    );
+}
+
+/// **THE CHUNK-TABLE CAP, AND THE DIAGNOSTIC IT USED TO GIVE.**
+///
+/// `toks.chunks` in `parse.kel` is `[Word; 256]`, and eight load-bearing fields sit
+/// immediately after it in the same shared block: `require_id`, `word_id`,
+/// `byte_id`, `bool_id`, `and_id`, `or_id`, and the token window's `base` and `at`.
+///
+/// # What was measured, because the failure was not what it looked like
+///
+/// I predicted a silent corruption window — a 257th entry landing on `require_id`
+/// with no error. **That prediction was wrong.** Overflowing by one panics
+/// immediately. But it panics with `LoopLimitExceeded` from inside `parse.kel`,
+/// naming neither this table nor its cap, so a caller would look at loop bounds
+/// rather than at the 257th function in their program.
+///
+/// The driver now refuses with both numbers. This test pins the boundary from both
+/// sides, because a guard that fired one entry early would be just as wrong and no
+/// existing test would notice.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_chunk_table_cap_is_refused_by_the_driver_and_not_by_the_stage() {
+    fn src_with(n: usize) -> String {
+        let mut s = String::new();
+        for i in 0..n {
+            s.push_str(&format!("fn f{i:04}(a: Word) -> Word {{ a + {i} }}\n"));
+        }
+        s.push_str("fn main() -> Word { f0000(1) }\n");
+        s
+    }
+
+    // The cap read out of the stage, so the two cannot drift. Compared against the
+    // driver's published constant rather than a literal: this assertion used to spell
+    // 256 and would have had to be edited by hand on every widening, which is the same
+    // restatement habit that failed sixty-eight tests when the block moved.
+    const STAGE: &str = include_str!("../src/selfhost/kel/parse.kel");
+    let declared: usize = STAGE
+        .lines()
+        .find(|l| l.trim_start().starts_with("chunks: [Word;"))
+        .and_then(|l| l.split(';').nth(1))
+        .and_then(|t| t.split(']').next())
+        .and_then(|n| n.trim().parse().ok())
+        .expect("parse.kel declares chunks: [Word; N]");
+    assert_eq!(
+        declared,
+        keleusma::selfhost_host::PARSE_CHUNK_CAP,
+        "the stage's chunk array is {declared}; the driver's cap must be updated with it"
+    );
+
+    // AT the cap: accepted. `n` functions plus `main` is `n + 1` chunks.
+    let at_cap = src_with(declared - 1);
+    let (fns, ..) = keleusma::selfhost::parse_functions(&at_cap);
+    assert_eq!(
+        fns.len(),
+        declared,
+        "a program with exactly {declared} chunks must parse; the guard fires too early"
+    );
+
+    // ONE PAST the cap: refused by the DRIVER, naming the table, not
+    // `LoopLimitExceeded` from inside the stage.
+    let past = src_with(declared);
+    let err = std::panic::catch_unwind(|| keleusma::selfhost::parse_functions(&past))
+        .err()
+        .expect("a program past the cap must be refused");
+    let msg = err
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| err.downcast_ref::<&str>().map(|s| (*s).to_string()))
+        .unwrap_or_default();
+    assert!(
+        msg.contains("toks.chunks") && msg.contains("functions"),
+        "the refusal was {msg:?}, which does not name the chunk table. A diagnostic that \
+         does not name the cause sends a reader to the wrong place, which is the whole \
+         defect this guard replaces."
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// THE CAPACITY DIAGNOSTICS. Four causes that used to arrive as raw virtual-machine traps.
+// ---------------------------------------------------------------------------------------
+
+#[cfg(feature = "self-host")]
+const PARSE_STAGE: &str = include_str!("../src/selfhost/kel/parse.kel");
+
+/// The declared length of `parse.kel`'s array `name`, or `None` if it declares no such array.
+#[cfg(feature = "self-host")]
+fn declared_len(name: &str) -> Option<usize> {
+    PARSE_STAGE
+        .lines()
+        .map(str::trim)
+        .find(|l| l.starts_with(&format!("{name}: [Word;")))
+        .and_then(|l| l.split(';').nth(1))
+        .and_then(|t| t.split(']').next())
+        .and_then(|n| n.trim().parse().ok())
+}
+
+/// Every array `parse.kel` indexes with `expr`, found by reading the stage rather than by
+/// listing them here.
+///
+/// **This function exists because listing them by hand is what failed.** Widening
+/// `let_names` and `scope_slot` left the 65-binding trap exactly where it was, because six
+/// further arrays — `let_tuple`, `let_struct`, `let_array`, `let_array_struct`,
+/// `let_array_size` and `let_enum` — are written at the same counter, and the 65th binding
+/// reaches one of those first. Eight arrays, of which I had found two by inspection.
+#[cfg(feature = "self-host")]
+fn arrays_indexed_by(expr: &str) -> Vec<String> {
+    let needle = format!("[{expr}]");
+    let mut out = Vec::new();
+    for (i, _) in PARSE_STAGE.match_indices(&needle) {
+        let head = &PARSE_STAGE[..i];
+        let name: String = head
+            .chars()
+            .rev()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        // Field accesses read `block.field[...]`; the array is the field.
+        if !name.is_empty() && !out.contains(&name) {
+            out.push(name);
+        }
+    }
+    out.sort();
+    out
+}
+
+/// A `Word` constant returned by a nullary function in `parse.kel`, e.g. `pe_cap_op`.
+#[cfg(feature = "self-host")]
+fn stage_const(name: &str) -> Option<i64> {
+    PARSE_STAGE
+        .lines()
+        .map(str::trim)
+        .find(|l| l.starts_with(&format!("fn {name}() -> Word {{")))
+        .and_then(|l| l.split('{').nth(1))
+        .and_then(|t| t.split('}').next())
+        .and_then(|n| {
+            let n = n.trim();
+            // The tag base is written `0 - 900`, since the subset has no negative literal.
+            if let Some(rest) = n.strip_prefix("0 - ") {
+                rest.trim().parse::<i64>().ok().map(|v| -v)
+            } else {
+                n.parse().ok()
+            }
+        })
+}
+
+/// Runs `parse_functions` and returns the refusal message, or `None` if it was accepted.
+#[cfg(feature = "self-host")]
+fn refusal(src: &str) -> Option<String> {
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        keleusma::selfhost::parse_functions(src);
+    }));
+    r.err().map(|e| {
+        e.downcast_ref::<String>()
+            .cloned()
+            .or_else(|| e.downcast_ref::<&str>().map(|s| (*s).to_string()))
+            .unwrap_or_else(|| "<non-string panic>".to_string())
+    })
+}
+
+#[cfg(feature = "self-host")]
+fn src_lets(n: usize) -> String {
+    let mut s = String::from("fn f() -> Word {\n");
+    for i in 0..n {
+        s.push_str(&format!("    let v{i} = {i};\n"));
+    }
+    s.push_str("    v0\n}\n");
+    s
+}
+
+#[cfg(feature = "self-host")]
+fn src_parens(n: usize) -> String {
+    let mut s = String::from("fn f() -> Word { let x = ");
+    for _ in 0..n {
+        s.push('(');
+    }
+    s.push('1');
+    for _ in 0..n {
+        s.push(')');
+    }
+    s.push_str("; x }");
+    s
+}
+
+#[cfg(feature = "self-host")]
+fn src_stmts(n: usize) -> String {
+    let mut s = String::from("data d { a: Word = 0 }\nfn f() -> Word {\n");
+    for i in 0..n {
+        s.push_str(&format!("    d.a = {i};\n"));
+    }
+    s.push_str("    d.a\n}\n");
+    s
+}
+
+/// **EVERY ARRAY BEHIND A GUARDED COUNTER MUST CARRY THE SPARE SLOT, and the set is read
+/// out of the stage rather than listed here.**
+///
+/// The guard is on the pointer and the write happens before the increment, so each guarded
+/// array is declared one longer than its usable capacity. An array that is written at a
+/// guarded counter but was never widened still traps at the old index, and the guard above
+/// it never fires — which is exactly what happened to six of the eight local-binding
+/// arrays, and no test would have caught it, because the two I had widened were the two I
+/// had looked at.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_parse_guard_caps_match_their_arrays() {
+    let cases: &[(&str, &str, usize)] = &[
+        (
+            "ops.opsp",
+            "pe_cap_op",
+            keleusma::selfhost_host::PARSE_OPSTACK_CAP,
+        ),
+        (
+            "stmt.let_count",
+            "pe_cap_let",
+            keleusma::selfhost_host::PARSE_LOCALS_CAP,
+        ),
+        (
+            "stmt.stmt_count",
+            "pe_cap_stmt",
+            keleusma::selfhost_host::PARSE_STMTS_CAP,
+        ),
+        (
+            "ps.pcount",
+            "pe_cap_param",
+            keleusma::selfhost_host::PARSE_PARAMS_CAP,
+        ),
+        (
+            "branch.if_sp",
+            "pe_cap_if",
+            keleusma::selfhost_host::PARSE_IF_DEPTH_CAP,
+        ),
+        (
+            "forst.for_sp",
+            "pe_cap_for",
+            keleusma::selfhost_host::PARSE_FOR_DEPTH_CAP,
+        ),
+        (
+            "call.al_sp",
+            "pe_cap_anest",
+            keleusma::selfhost_host::PARSE_ARRAY_NEST_CAP,
+        ),
+        (
+            "enums.enum_count",
+            "pe_cap_variant",
+            keleusma::selfhost_host::PARSE_VARIANTS_CAP,
+        ),
+        (
+            "call.call_sp",
+            "pe_cap_calldepth",
+            keleusma::selfhost_host::PARSE_CALL_DEPTH_CAP,
+        ),
+        (
+            "fields.field_count",
+            "pe_cap_field",
+            keleusma::selfhost_host::PARSE_FIELDS_CAP,
+        ),
+    ];
+
+    for &(counter, cap_fn, driver_cap) in cases {
+        let cap = stage_const(cap_fn)
+            .unwrap_or_else(|| panic!("parse.kel declares no `fn {cap_fn}() -> Word`"));
+        assert_eq!(
+            cap as usize, driver_cap,
+            "the stage's {cap_fn} is {cap} and the driver restates it as {driver_cap}. A \
+             driver whose cap has drifted from the stage's prints a number the reader \
+             cannot act on."
+        );
+
+        let arrays = arrays_indexed_by(counter);
+        assert!(
+            !arrays.is_empty(),
+            "no array is indexed by `{counter}`, so this case reads nothing and the guard \
+             on it is unverified"
+        );
+        for a in &arrays {
+            let Some(len) = declared_len(a) else { continue };
+            assert_eq!(
+                len,
+                cap as usize + 1,
+                "`{a}` is indexed by `{counter}`, whose guard holds the pointer at {cap}, \
+                 but `{a}` is declared [Word; {len}]. It must be {} — the usable capacity \
+                 plus the spare slot the overflowing write lands in. Widening the counter's \
+                 other arrays and not this one leaves the original trap in place.",
+                cap + 1
+            );
+        }
+    }
+}
+
+/// The driver's diagnostic tag base is the stage's, checked rather than assumed.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_parse_diagnostic_tag_base_matches() {
+    let base = stage_const("pe_tag_base").expect("parse.kel declares `fn pe_tag_base()`");
+    assert_eq!(
+        base,
+        keleusma::selfhost_host::PARSE_DIAG_TAG_BASE,
+        "the stage emits diagnostics at or below {base} and the driver recognises them at \
+         or below {}. A mismatch either swallows a diagnostic as a parse record or treats a \
+         parse record as a diagnostic.",
+        keleusma::selfhost_host::PARSE_DIAG_TAG_BASE
+    );
+}
+
+/// **THE HEADLINE DEFECT, ENCODED: two unrelated 64-entry limits gave the SAME message.**
+///
+/// `ops.opstack` and `stmt.let_names` are both 64 entries, so 65 local bindings and 65
+/// nested parentheses both produced `IndexOutOfBounds(64, 64)` — byte-identical, naming an
+/// array size and neither the construct at fault nor a cap the reader controls. This test
+/// fails if they ever converge again.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_two_sixty_four_caps_no_longer_give_the_same_message() {
+    let locals = refusal(&src_lets(65)).expect("65 local bindings must be refused");
+    let nesting = refusal(&src_parens(65)).expect("65 nested parentheses must be refused");
+    assert_ne!(
+        locals, nesting,
+        "the two 64-entry caps report identically again, which is the defect this path \
+         exists to remove"
+    );
+    assert!(
+        locals.contains("local bindings") && !locals.contains("nesting"),
+        "the local-binding refusal was {locals:?}"
+    );
+    assert!(
+        nesting.contains("nesting") && !nesting.contains("local bindings"),
+        "the nesting refusal was {nesting:?}"
+    );
+}
+
+/// Local bindings: at the cap accepted, one past refused, and the refusal names the cap.
+///
+/// Pinned from BOTH sides. A guard firing one binding early would refuse a program that
+/// works today, and the accepting half is the only thing that would catch it.
+#[cfg(feature = "self-host")]
+#[test]
+fn too_many_local_bindings_is_named_and_the_boundary_holds() {
+    let cap = keleusma::selfhost_host::PARSE_LOCALS_CAP;
+    assert!(
+        refusal(&src_lets(cap)).is_none(),
+        "a function with exactly {cap} local bindings must parse; the guard fires too early"
+    );
+    let msg = refusal(&src_lets(cap + 1)).expect("one binding past the cap must be refused");
+    assert!(
+        msg.contains("local bindings")
+            && msg.contains(&(cap + 1).to_string())
+            && msg.contains(&cap.to_string()),
+        "the refusal was {msg:?}, which does not name both the count reached and the cap. \
+         It used to be `IndexOutOfBounds(64, 64)`."
+    );
+}
+
+/// Expression nesting: at the cap accepted, one past refused, and the refusal says so.
+#[cfg(feature = "self-host")]
+#[test]
+fn expression_nesting_is_named_and_the_boundary_holds() {
+    let cap = keleusma::selfhost_host::PARSE_OPSTACK_CAP;
+    assert!(
+        refusal(&src_parens(cap)).is_none(),
+        "an expression with exactly {cap} nested parentheses must parse; the guard fires \
+         too early. This half is load-bearing: holding the pointer at the last USABLE slot \
+         instead of at a spare one would refuse this program, which parses today."
+    );
+    let msg = refusal(&src_parens(cap + 1)).expect("one level past the cap must be refused");
+    assert!(
+        msg.contains("nesting") && msg.contains(&(cap + 1).to_string()),
+        "the refusal was {msg:?}, which does not name expression nesting"
+    );
+}
+
+/// Statements in one body: at the cap accepted, one past refused, named.
+#[cfg(feature = "self-host")]
+#[test]
+fn too_many_statements_is_named_and_the_boundary_holds() {
+    let cap = keleusma::selfhost_host::PARSE_STMTS_CAP;
+    assert!(
+        refusal(&src_stmts(cap)).is_none(),
+        "a body with exactly {cap} statements must parse; the guard fires too early"
+    );
+    let msg = refusal(&src_stmts(cap + 1)).expect("one statement past the cap must be refused");
+    assert!(
+        msg.contains("statements") && msg.contains(&(cap + 1).to_string()),
+        "the refusal was {msg:?}, which does not name the statement table. It used to be \
+         `IndexOutOfBounds(256, 256)`."
+    );
+}
+
+/// **An unmatched `]` used to index -1 into a 64-entry array.**
+///
+/// `IndexOutOfBounds(-1, 64)` named `opstack`'s size, and the reader's actual fault was a
+/// bracket several tokens earlier. Measured on two inputs, because the second reaches the
+/// same site through a different path.
+#[cfg(feature = "self-host")]
+#[test]
+fn an_unmatched_bracket_is_named_rather_than_indexing_minus_one() {
+    for src in [
+        "fn f() -> Word { let x = 1]; x }",
+        "fn f() -> Word { ] ) } { [ ( }",
+    ] {
+        let msg = refusal(src).unwrap_or_else(|| panic!("{src:?} must be refused"));
+        assert!(
+            msg.contains("unmatched closing bracket"),
+            "the refusal for {src:?} was {msg:?}, which does not name the bracket"
+        );
+        assert!(
+            !msg.contains("IndexOutOfBounds"),
+            "the refusal for {src:?} is still a raw index trap: {msg:?}"
+        );
+    }
+}
+
+/// An unterminated block exhausts the driver's step budget, and the message now names that
+/// as the likely cause rather than reporting a budget the reader did not set.
+#[cfg(feature = "self-host")]
+#[test]
+fn budget_exhaustion_names_the_likely_cause() {
+    let msg = refusal("fn f() -> Word { let x = 1; x ").expect("an unclosed body must be refused");
+    assert!(
+        msg.contains("unterminated"),
+        "the refusal was {msg:?}, which names only the budget"
+    );
+}
+
+/// **THE LAYOUT COPIES MUST NOT COME BACK, and this walks the tree rather than a list.**
+///
+/// The shared block is addressed by slot. Three harnesses each carried their own copy of
+/// the arithmetic (`1 + 40960 + 2 + 256 + 3`); widening `toks.chunks` moved the stage's
+/// fields and left all three seeding the keyword and type ids at the old slots. Sixty-eight
+/// tests failed reporting struct byte sizes of 1 instead of 8 and a scalar kind of `Unit`
+/// instead of `Int`, and **not one of them named a slot**.
+///
+/// A list of known offenders would not have caught the fourth copy, so this reads the
+/// tree. `src/selfhost_host.rs` is the definition site and is the only file allowed to
+/// spell the layout out.
+///
+/// # It walked two directories and missed a live fifth copy
+///
+/// The first version walked `src/` and `tests/`. `compiler/src/main.rs` held a fifth copy
+/// and actively seeded the parser with it, so raising the chunk table left that binary
+/// reading the keyword and type ids from inside the chunk array. **Nothing failed**, and
+/// not because that package is untested: `compiler/tests/` holds 86 tests, none of which
+/// reaches the function in question. It is called only from `main`, so its constants are
+/// compiled and never executed, and arithmetic compiles clean whatever it says.
+///
+/// **A guard written to catch a class, given a search scope narrower than the class, is
+/// the same defect it was written to prevent.** This walks the repository, skipping only
+/// build output and dot-directories, and asserts a file count that a narrowed scope would
+/// fail.
+/// The offending patterns, assembled at runtime so the file that looks for them does not
+/// match itself. The first run flagged exactly one file: this one.
+///
+/// **BOTH layouts, because fixing the instance leaves the class.** The parser's block was
+/// restated in five places and the lexer's in four; only the parser's had moved, so only
+/// the parser's had failed anything. The lexer's would have behaved identically the day
+/// its block moved.
+#[cfg(feature = "self-host")]
+fn alloc_needles() -> Vec<String> {
+    vec![
+        format!("usize = 1 + {}", keleusma::selfhost_host::PARSE_TOKEN_CAP),
+        format!("usize = 1 + {}", keleusma::selfhost_host::LEX_SOURCE_CAP),
+    ]
+}
+
+#[cfg(feature = "self-host")]
+#[test]
+fn no_other_file_restates_the_shared_layout() {
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            let name = p.file_name().map(|n| n.to_string_lossy().into_owned());
+            // Build output and dot-directories only. Everything else is walked, including
+            // the detached `compiler/` and `examples/rtos/` packages, which are exactly
+            // the places a copy hides from a runtime-only search.
+            if name
+                .as_deref()
+                .is_some_and(|n| n == "target" || n.starts_with('.'))
+            {
+                continue;
+            }
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                out.push(p);
+            }
+        }
+    }
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    walk(root, &mut files);
+    // The whole tree, not two directories. Both numbers are load-bearing: the lower bound
+    // fails if the walk is narrowed again, and the presence check names the directory
+    // whose omission is what let a live copy survive.
+    assert!(
+        files.len() > 100,
+        "only {} source files were found, so this check is reading the wrong tree and \
+         would pass vacuously",
+        files.len()
+    );
+    assert!(
+        files
+            .iter()
+            .any(|f| f.components().any(|c| c.as_os_str() == "compiler")),
+        "the walk found no file under `compiler/`, which is the directory whose omission \
+         let a live fifth copy of the layout survive. This check is narrower than the \
+         class it exists to catch."
+    );
+
+    let allowed = root.join("src").join("selfhost_host.rs");
+    // Both layouts are defined in the same file, so one exemption covers both.
+    let mut offenders = Vec::new();
+    for f in &files {
+        if *f == allowed {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(f) else {
+            continue;
+        };
+        for (i, line) in text.lines().enumerate() {
+            // A slot constant computed from the token-array size, rather than taken from
+            // `keleusma::selfhost`. Comments are left alone; they mislead but do not break.
+            // Built from parts so this file does not contain its own needles. The first
+            // run of this check flagged exactly one offender: itself.
+            if alloc_needles().iter().any(|n| line.contains(n)) {
+                offenders.push(format!("{}:{}", f.display(), i + 1));
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "these files restate the shared-slot layout instead of using the constants in \
+         `keleusma::selfhost_host`: {offenders:?}. A copy is correct until the block moves, and \
+         then it is silently wrong -- the failure names a struct size, never a slot."
+    );
+}
+
+/// **THE PAYOFF: `wire.kel` PARSES.**
+///
+/// `wire.kel` is the largest stage in the corpus at 486 chunks, and the 256-entry chunk
+/// table excluded it from the parser entirely. It was the last cap keeping a real stage
+/// out, and it stood while four emit-side caps fell around it.
+///
+/// # Raising it was three edits, and the first two did not work
+///
+/// The chunk index is not one array's index. Widening `toks.chunks` alone left the wall in
+/// place and moved the symptom: first to `LoopLimitExceeded`, from two
+/// `for i in 0..toks.chunk_count limit 256` loops, and then to `IndexOutOfBounds(388, 256)`,
+/// from the six `chunkret.ret_*` arrays, which are addressed by a chunk number too. **A cap
+/// is a family**, and `every_chunk_indexed_array_admits_the_chunk_cap` derives that family
+/// from the stage so the next widening cannot repeat this.
+#[cfg(feature = "self-host")]
+#[test]
+fn wire_kel_parses_now_that_the_chunk_table_admits_it() {
+    const WIRE: &str = include_str!("../src/selfhost/kel/wire.kel");
+    let (fns, ..) = keleusma::selfhost::parse_functions(WIRE);
+    assert_eq!(
+        fns.len(),
+        486,
+        "`wire.kel` parsed to {} chunks. The count is pinned because it is the corpus worst \
+         case and the thing the chunk cap is sized against: PARSE_CHUNK_CAP is {}, so a \
+         stage growing toward it is visible here rather than at the wall.",
+        fns.len(),
+        keleusma::selfhost_host::PARSE_CHUNK_CAP
+    );
+    assert!(
+        fns.len() <= keleusma::selfhost_host::PARSE_CHUNK_CAP,
+        "the corpus worst case has reached the cap it is sized against"
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// FIVE MORE CAPS, FOUND BY SWEEPING RATHER THAN BY TRIPPING OVER THEM.
+// ---------------------------------------------------------------------------------------
+
+#[cfg(feature = "self-host")]
+fn src_params(n: usize) -> String {
+    let ps: Vec<String> = (0..n).map(|i| format!("p{i}: Word")).collect();
+    format!("fn f({}) -> Word {{ p0 }}\n", ps.join(", "))
+}
+
+#[cfg(feature = "self-host")]
+fn src_ifs(n: usize) -> String {
+    let mut s = String::from("fn f(a: Word) -> Word {\n");
+    for _ in 0..n {
+        s.push_str("if a > 0 {\n");
+    }
+    s.push_str("a\n");
+    for _ in 0..n {
+        s.push_str("} else { 0 }\n");
+    }
+    s.push_str("}\n");
+    s
+}
+
+#[cfg(feature = "self-host")]
+fn src_fors(n: usize) -> String {
+    let mut s = String::from("private data d { a: Word = 0 }\nfn f() -> Word {\n");
+    for i in 0..n {
+        s.push_str(&format!("for i{i} in 0..2 limit 4 {{\n"));
+    }
+    s.push_str("d.a = d.a + 1;\n");
+    for _ in 0..n {
+        s.push_str("}\n");
+    }
+    s.push_str("d.a\n}\n");
+    s
+}
+
+#[cfg(feature = "self-host")]
+fn src_array_nest(n: usize) -> String {
+    let mut s = String::from("fn f() -> Word { let xs = ");
+    for _ in 0..n {
+        s.push('[');
+    }
+    s.push('1');
+    for _ in 0..n {
+        s.push(']');
+    }
+    s.push_str("; 0 }");
+    s
+}
+
+#[cfg(feature = "self-host")]
+fn src_variants(n: usize) -> String {
+    let vs: Vec<String> = (0..n).map(|i| format!("V{i}")).collect();
+    format!("enum E {{ {} }}\nfn f() -> Word {{ 1 }}\n", vs.join(", "))
+}
+
+/// **FIVE MORE CAPS, EACH PINNED FROM BOTH SIDES AND EACH NAMING ITS OWN CAUSE.**
+///
+/// Found by sweeping the stage's fixed arrays with generated programs rather than by
+/// tripping over them, which is how the first four were found. All five reported raw
+/// index traps before this:
+///
+/// | construct | admits | refused with |
+/// |---|---|---|
+/// | parameters on one function | 32 | `IndexOutOfBounds(32, 32)` |
+/// | `if` nesting | 32 | `IndexOutOfBounds(32, 32)` |
+/// | `for` nesting | 8 | `IndexOutOfBounds(8, 8)` |
+/// | array-literal nesting | 8 | `IndexOutOfBounds(8, 8)` |
+/// | enum variants, whole program | 256 | `IndexOutOfBounds(256, 256)` |
+///
+/// **TWO MORE PAIRS SHARED A MESSAGE.** Parameters and `if` nesting were byte-identical,
+/// as were `for` nesting and array-literal nesting. The morning's increment fixed one such
+/// pair and called it the headline; sweeping found two more one array-size down.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_remaining_caps_are_named_and_their_boundaries_hold() {
+    use keleusma::selfhost_host as h;
+    let cases: &[(&str, usize, &dyn Fn(usize) -> String, &str)] = &[
+        ("parameters", h::PARSE_PARAMS_CAP, &src_params, "parameters"),
+        (
+            "if nesting",
+            h::PARSE_IF_DEPTH_CAP,
+            &src_ifs,
+            "`if` nesting",
+        ),
+        (
+            "for nesting",
+            h::PARSE_FOR_DEPTH_CAP,
+            &src_fors,
+            "`for` nesting",
+        ),
+        (
+            "array nesting",
+            h::PARSE_ARRAY_NEST_CAP,
+            &src_array_nest,
+            "array-literal nesting",
+        ),
+        (
+            "variants",
+            h::PARSE_VARIANTS_CAP,
+            &src_variants,
+            "enum variants",
+        ),
+    ];
+    for &(label, cap, make, phrase) in cases {
+        assert!(
+            refusal(&make(cap)).is_none(),
+            "{label}: exactly {cap} must be admitted; the guard fires too early and would \
+             refuse a program that parses today"
+        );
+        let msg = refusal(&make(cap + 1))
+            .unwrap_or_else(|| panic!("{label}: one past {cap} must be refused"));
+        assert!(
+            msg.contains(phrase) && msg.contains(&(cap + 1).to_string()),
+            "{label}: the refusal was {msg:?}, which does not name the construct and the \
+             count it reached"
+        );
+        assert!(
+            !msg.contains("IndexOutOfBounds"),
+            "{label}: still a raw index trap: {msg:?}"
+        );
+    }
+}
+
+/// **THE TWO PAIRS THAT SHARED A MESSAGE MUST STAY DISTINCT.**
+///
+/// `ps.pnames` and `branch.if_seq` are both 32; `forst.for_seq` and `call.al_count` are
+/// both 8. Four unrelated limits, two messages, before this. Encoded so they cannot
+/// converge again — the same check the 64-entry pair already carries.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_same_sized_caps_do_not_share_a_message() {
+    use keleusma::selfhost_host as h;
+    let thirty_twos = [
+        refusal(&src_params(h::PARSE_PARAMS_CAP + 1)).expect("params must refuse"),
+        refusal(&src_ifs(h::PARSE_IF_DEPTH_CAP + 1)).expect("if depth must refuse"),
+    ];
+    assert_ne!(
+        thirty_twos[0], thirty_twos[1],
+        "parameters and `if` nesting report identically again; both arrays are 32 entries \
+         and that is the only thing they have in common"
+    );
+    let eights = [
+        refusal(&src_fors(h::PARSE_FOR_DEPTH_CAP + 1)).expect("for depth must refuse"),
+        refusal(&src_array_nest(h::PARSE_ARRAY_NEST_CAP + 1)).expect("array nest must refuse"),
+    ];
+    assert_ne!(
+        eights[0], eights[1],
+        "`for` nesting and array-literal nesting report identically again; both arrays are \
+         8 entries and that is the only thing they have in common"
+    );
+}
+
+/// **THE ENUM BOUND IS A WHOLE-PROGRAM TOTAL, NOT A PER-ENUM ONE.**
+///
+/// 128 enums of two variants refuse at exactly the same point as one enum of 257. No
+/// message naming an array size could convey that, which is the argument for the stage
+/// naming the cause itself. Measured, because "256 variants" reads as per-declaration.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_enum_variant_bound_counts_the_whole_program() {
+    let cap = keleusma::selfhost_host::PARSE_VARIANTS_CAP;
+    let many_enums = |n: usize| {
+        let mut s = String::new();
+        for i in 0..n {
+            s.push_str(&format!("enum E{i} {{ A, B }}\n"));
+        }
+        s.push_str("fn f() -> Word { 1 }\n");
+        s
+    };
+    assert!(
+        refusal(&many_enums(cap / 2)).is_none(),
+        "{} enums of two variants is exactly the cap and must be admitted",
+        cap / 2
+    );
+    let msg = refusal(&many_enums(cap / 2 + 1)).expect("one enum past the total must refuse");
+    assert!(
+        msg.contains("TOTAL ACROSS THE WHOLE PROGRAM"),
+        "the refusal was {msg:?}; a reader who sees only a per-enum count will split the \
+         wrong thing"
+    );
+}
+
+/// A source that lexes to exactly `want` tokens.
+///
+/// Built from a long left-associative sum, which costs two tokens per term and drains the
+/// operator stack after each one, so nothing but the token array binds. Parity is corrected
+/// with empty statements — one token each, and admitted only because the trailing-semicolon
+/// work made the empty statement legal in both parsers.
+///
+/// Counted with [`keleusma::selfhost::lex_token_count`], the stage's own lexer, because that
+/// is what the cap governs. The reference tokenizer reports one more.
+#[cfg(feature = "self-host")]
+fn src_of_token_count(want: usize) -> String {
+    let build = |terms: usize, semis: usize| {
+        let mut s = String::from("fn f() -> Word { let x = 1");
+        for _ in 0..terms {
+            s.push_str(" + 1");
+        }
+        s.push(';');
+        for _ in 0..semis {
+            s.push(';');
+        }
+        s.push_str(" x }");
+        s
+    };
+    // MEASURED WITH THE STAGE'S OWN LEXER, NOT THE REFERENCE ONE. The cap governs
+    // `lexer.kel`'s output, and the two counts disagree by one on every source measured.
+    // Targeting the reference count made this test's `cap + 1` case land on `cap`, so the
+    // guard did not fire and the test failed for the right reason.
+    let base = keleusma::selfhost::lex_token_count(&build(0, 0));
+    assert!(
+        want >= base,
+        "cannot build a source shorter than {base} tokens"
+    );
+    let terms = (want - base) / 2;
+    let semis = (want - base) % 2;
+    let src = build(terms, semis);
+    let got = keleusma::selfhost::lex_token_count(&src);
+    assert_eq!(got, want, "the generator missed its target token count");
+    src
+}
+
+/// **THE TOKEN ARRAY, WHOSE OVERFLOW REPORTED ONE OF TWO WRONG THINGS.**
+///
+/// `toks.packed` holds `PARSE_TOKEN_CAP` tokens, and which failure a caller saw depended on
+/// how far over they were. Measured:
+///
+/// | tokens | reported |
+/// |---|---|
+/// | 41,015 | `IndexOutOfBounds(40960, 40960)` from inside the stage |
+/// | 42,015 | `NativeError("shared slot index 41995 out of range")` from the driver's seeding loop |
+///
+/// Neither names the token array. **This is the bound the corpus is closest to**:
+/// `parse.kel` is 32,907 tokens, 80% of it.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_token_cap_is_named_and_its_boundary_holds() {
+    let cap = keleusma::selfhost_host::PARSE_TOKEN_CAP;
+    assert!(
+        refusal(&src_of_token_count(cap)).is_none(),
+        "a source of exactly {cap} tokens must parse; the guard fires too early"
+    );
+    let msg = refusal(&src_of_token_count(cap + 1)).expect("one token past the cap must refuse");
+    assert!(
+        msg.contains("toks.packed") && msg.contains(&(cap + 1).to_string()),
+        "the refusal was {msg:?}, which does not name the token array and the count reached"
+    );
+    // Checked by the raw forms' SIGNATURES rather than by their text. The message
+    // deliberately quotes both failures it replaces, so an assertion looking for
+    // "IndexOutOfBounds" matches the explanation as readily as the fault -- the same
+    // self-matching mistake the no-copies guard made against its own needle.
+    assert!(
+        !msg.starts_with("resume parse.kel") && !msg.contains("NativeError"),
+        "the refusal is still one of the two raw failures: {msg:?}"
+    );
+}
+
+/// **A `struct` DECLARATION PANICKED THE DRIVER WITH A BARE `unwrap()`.**
+///
+/// `parse.kel` has no struct handling at all: its declaration record codes are 1..3
+/// (`fn`/`yield`/`loop`), 9 (`data`), 10 (`use`) and 12 (`enum`), with no struct code. Its
+/// tokens are parsed as something else and the records arrive with no declaration open,
+/// where six bare `unwrap()`s used to sit.
+///
+/// The old failure was `called Option::unwrap() on a None value` — a Rust panic naming
+/// neither the record nor the form. **This test does not assert that `struct` should be
+/// rejected**, only that the failure says what happened; whether the form is supported is a
+/// language decision and not this test's business.
+#[cfg(feature = "self-host")]
+#[test]
+fn an_unrecognised_declaration_is_named_rather_than_unwrapped() {
+    let msg = refusal("struct S { a: Word }\nfn f() -> Word { 1 }\n")
+        .expect("a struct declaration must be refused rather than accepted silently");
+    assert!(
+        msg.contains("no declaration open") && msg.contains("struct"),
+        "the refusal was {msg:?}, which does not name what arrived or the likely cause"
+    );
+    assert!(
+        !msg.contains("Option::unwrap"),
+        "the refusal is still a bare unwrap panic: {msg:?}"
+    );
+}
+
+#[cfg(feature = "self-host")]
+fn src_calls(n: usize) -> String {
+    let mut s = String::from("fn g(a: Word) -> Word { a }\nfn f() -> Word { ");
+    for _ in 0..n {
+        s.push_str("g(");
+    }
+    s.push('1');
+    for _ in 0..n {
+        s.push(')');
+    }
+    s.push_str(" }\n");
+    s
+}
+
+#[cfg(feature = "self-host")]
+fn src_fields(n: usize) -> String {
+    let fs: Vec<String> = (0..n).map(|i| format!("f{i}: Word = 0")).collect();
+    format!(
+        "private data d {{ {} }}\nfn g() -> Word {{ d.f0 }}\n",
+        fs.join(", ")
+    )
+}
+
+/// **TWO MORE CAPS, AND `IndexOutOfBounds(8, 8)` HAD A THIRD SHARER.**
+///
+/// Found by continuing the sweep rather than by tripping over them:
+///
+/// | construct | admits | reported |
+/// |---|---|---|
+/// | call nesting `g(g(g(…)))` | 8 | `IndexOutOfBounds(8, 8)` |
+/// | data-block fields, whole program | 512 | `IndexOutOfBounds(512, 512)` |
+///
+/// `for` nesting and array-literal nesting already shared `(8, 8)`; call nesting made three.
+///
+/// # Swept and found clear, so the next sweep can skip them
+///
+/// Data blocks and `use` declarations show no wall through 64; tuple elements none through
+/// 32; array-literal **elements** none through 1,025 — which is a different quantity from
+/// array-literal **nesting**, capped at 8.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_swept_caps_are_named_and_their_boundaries_hold() {
+    use keleusma::selfhost_host as h;
+    let cases: &[(&str, usize, &dyn Fn(usize) -> String, &str)] = &[
+        (
+            "call nesting",
+            h::PARSE_CALL_DEPTH_CAP,
+            &src_calls,
+            "call nesting",
+        ),
+        (
+            "data fields",
+            h::PARSE_FIELDS_CAP,
+            &src_fields,
+            "data-block fields",
+        ),
+    ];
+    for &(label, cap, make, phrase) in cases {
+        assert!(
+            refusal(&make(cap)).is_none(),
+            "{label}: exactly {cap} must be admitted; the guard fires too early"
+        );
+        let msg = refusal(&make(cap + 1))
+            .unwrap_or_else(|| panic!("{label}: one past {cap} must be refused"));
+        assert!(
+            msg.contains(phrase) && msg.contains(&(cap + 1).to_string()),
+            "{label}: the refusal was {msg:?}"
+        );
+        assert!(
+            !msg.starts_with("resume parse.kel"),
+            "{label}: still a raw trap: {msg:?}"
+        );
+    }
+}
+
+/// **THREE CONSTRUCTS SHARED `IndexOutOfBounds(8, 8)` AND MUST STAY DISTINCT.**
+///
+/// `forst.for_seq`, `call.al_count` and `call.call_chunk` are all 8 entries, which is the
+/// only thing they have in common. Encoded so they cannot converge again.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_three_eight_entry_caps_do_not_share_a_message() {
+    use keleusma::selfhost_host as h;
+    let msgs = [
+        refusal(&src_fors(h::PARSE_FOR_DEPTH_CAP + 1)).expect("for depth must refuse"),
+        refusal(&src_array_nest(h::PARSE_ARRAY_NEST_CAP + 1)).expect("array nest must refuse"),
+        refusal(&src_calls(h::PARSE_CALL_DEPTH_CAP + 1)).expect("call depth must refuse"),
+    ];
+    for i in 0..msgs.len() {
+        for j in (i + 1)..msgs.len() {
+            assert_ne!(
+                msgs[i], msgs[j],
+                "two of the three 8-entry caps report identically again"
+            );
+        }
+    }
+}
+
+/// **THE DATA-FIELD BOUND IS A WHOLE-PROGRAM TOTAL, like the enum one.**
+///
+/// Two blocks of 256 fields refuse at the same point as one block of 513. Measured, because
+/// "512 fields" reads as per-declaration and a reader would split the wrong thing.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_data_field_bound_counts_the_whole_program() {
+    let cap = keleusma::selfhost_host::PARSE_FIELDS_CAP;
+    let split = |blocks: usize, per: usize| {
+        let mut s = String::new();
+        for b in 0..blocks {
+            let fs: Vec<String> = (0..per).map(|i| format!("f{i}: Word = 0")).collect();
+            s.push_str(&format!("private data d{b} {{ {} }}\n", fs.join(", ")));
+        }
+        s.push_str("fn g() -> Word { d0.f0 }\n");
+        s
+    };
+    assert!(
+        refusal(&split(2, cap / 2)).is_none(),
+        "two blocks of {} fields is exactly the total and must be admitted",
+        cap / 2
+    );
+    let msg = refusal(&split(2, cap / 2 + 1)).expect("one field past the total must refuse");
+    assert!(
+        msg.contains("TOTAL ACROSS THE WHOLE PROGRAM"),
+        "the refusal was {msg:?}; a reader who sees only a per-block count will split the \
+         wrong thing"
+    );
 }
