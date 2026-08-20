@@ -13,6 +13,64 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE SELF-HOSTED COMPILER SILENTLY MIS-LOWERED `true` AND `false`, AND THE ORACLE COULD NOT SEE IT
+BY CONSTRUCTION (2026-08-20).**
+
+Found while probing the record stream for an unrelated goal. Measured against the reference:
+
+```
+fn main() -> bool { true }          reference: PushImmediate(1), Return
+                                  self-hosted: GetLocal(0), Return
+fn main() -> Word { if true {..} }   reference: PushImmediate(1), If(4), ...
+                                  self-hosted: GetLocal(0), If(4), ...
+```
+
+**A SILENT MISCOMPILE, NOT A REFUSAL.** `true` reached the record stream as `(2, 0)` -- node kind 2,
+`Local`, slot 0 -- and `"true"` sat in the intern table as an ordinary identifier. The value read was
+whatever occupied the matching slot.
+
+**THE CAUSE WAS ALREADY DOCUMENTED FOR A DIFFERENT PAIR OF KEYWORDS.** The Tok space is full, which
+`parse.kel` records for the eager `and`/`or`: they are lexed as identifiers and recognised by interned
+id. `true` and `false` fall through the identical hole and were never given the identical treatment.
+The fix follows that precedent exactly, in OPERAND position rather than operator position.
+
+**NO NEW NODE KIND, AND THAT WAS THE DESIGN DECISION WORTH MAKING.** `PushImmediate` already encodes
+`0 = Unit`, `1 = true`, `2 = false`, and `Unit` is a leaf whose payload was unused and always zero.
+One kind expresses all three. A new kind would have had to be taught to the leaf table and to all
+THREE decoders of the parse record stream -- the hazard that failed eight tests the last time a kind
+was added here. Existing programs emit `PushImmediate(0)` exactly as before, so byte identity holds.
+
+**WHY THE DIFFERENTIAL ORACLE WAS SILENT.** No stage source uses a boolean literal in code. The
+self-hosted compiler's correctness claim rests on compiling its own sources byte-identically, so the
+oracle covers only constructs those sources contain. **Seventh instance of the meta-defect**, and the
+most consequential: the case list here IS the corpus the whole self-hosting claim rests on. The
+construct-support table did cover booleans -- every case taking a bool PARAMETER, not one a literal --
+so it overstated support by omission. Four cases added, the boundary is now 83 SOk.
+
+**WHAT BOUNDED THE DAMAGE, CHECKED RATHER THAN ASSUMED.** `self_hosted_compile` cross-checks every
+chunk's ops, constant pool and local count against the reference and refuses on divergence, so the
+shipping command-line path gave a loud error and never a wrong artifact. The exposure was to direct
+callers that skip the check.
+
+**THE HARNESS-COPY HAZARD FIRED ON SCHEDULE.** The boundary test came back `Gap` for all four new
+cases while a direct probe showed byte identity. `tests/selfhost_codegen.rs` carries its own copy of
+the driver and seeds the parser's shared block itself, so a slot appended in the driver does not
+reach it. This is the same duplicate that blocks the token-residency work, earning its keep as a
+hazard twice in one night.
+
+**MY OWN MUST-FIRE GUARD FIRED, AND IT WAS RIGHT TO.** I wrote a check asserting no stage source
+contains a boolean literal, and it failed instantly -- on the word `true` inside the very comment
+explaining the fix, and on sixty-nine occurrences in `codegen.kel`'s prose. **A guard that fires on
+its own documentation measures the wrong thing as surely as one that cannot fire at all.** It strips
+comments now.
+
+**AND THE EARLIER MEASUREMENT I REPORTED WAS SIMPLY WRONG.** I had claimed "zero of twelve stage
+sources" from a `grep -cE` that returned zero for every file while the words were plainly present in
+comments. The conclusion survived -- zero in CODE, verified with comments stripped -- but the
+instrument that produced it did not. **A figure that happens to be right is not a measurement.**
+
+---
+
 **I BROKE BOTH SIDES OF A DIFFERENTIAL ORACLE IN ONE INCREMENT, AND IT WENT GREEN (2026-08-20).**
 
 `bool` is the boolean primitive. `Bool` is an ordinary named type. In `d1148e76`, merged in PR #175,

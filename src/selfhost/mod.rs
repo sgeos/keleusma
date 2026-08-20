@@ -227,8 +227,9 @@ const CATEGORY: usize = 1 + 1024 * 4 + 256 * 5 + 1;
 // narrower `self-host` feature this module carries.
 use crate::selfhost_host::{
     BR_LEX_ICOUNT, BR_LEX_ILEN, BR_LEX_ISTART, BR_P_AT, BR_P_BASE, BR_P_BOOL_ID, BR_P_BYTE_ID,
-    BR_P_CHUNK_COUNT, BR_P_CHUNKS, BR_P_LEN, BR_P_LIMIT_ID, BR_P_PACKED, BR_P_REQUIRE_ID,
-    BR_P_WORD_ID, PARSE_CHUNK_CAP, PARSE_LET_NAME_TAG, PARSE_TOKEN_CAP,
+    BR_P_CHUNK_COUNT, BR_P_CHUNKS, BR_P_FALSE_ID, BR_P_LEN, BR_P_LIMIT_ID, BR_P_PACKED,
+    BR_P_REQUIRE_ID, BR_P_TRUE_ID, BR_P_WORD_ID, PARSE_CHUNK_CAP, PARSE_LET_NAME_TAG,
+    PARSE_TOKEN_CAP,
 };
 
 fn br_shared_word(vm: &Vm<'_, '_>, buf: &[u8], slot: usize) -> i64 {
@@ -895,6 +896,14 @@ pub fn parse_cursor_trace(src: &str) -> Vec<i64> {
         .unwrap();
     vm.set_shared(&mut shared, BR_P_BYTE_ID, Value::Int(id_of("Byte")))
         .unwrap();
+    // THE BOOLEAN LITERALS, seeded like the eager `and`/`or` ids and for the same
+    // reason: the Tok space is full, so `true` and `false` arrive as identifiers.
+    // Without these the stage resolved them as variable references and emitted
+    // `GetLocal` where the reference emits `PushImmediate`.
+    vm.set_shared(&mut shared, BR_P_TRUE_ID, Value::Int(id_of("true")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_FALSE_ID, Value::Int(id_of("false")))
+        .unwrap();
     vm.set_shared(&mut shared, BR_P_BOOL_ID, Value::Int(id_of("Bool")))
         .unwrap();
     vm.set_shared(
@@ -1052,6 +1061,14 @@ fn parse_functions_impl(
     vm.set_shared(&mut shared, BR_P_WORD_ID, Value::Int(id_of("Word")))
         .unwrap();
     vm.set_shared(&mut shared, BR_P_BYTE_ID, Value::Int(id_of("Byte")))
+        .unwrap();
+    // THE BOOLEAN LITERALS, seeded like the eager `and`/`or` ids and for the same
+    // reason: the Tok space is full, so `true` and `false` arrive as identifiers.
+    // Without these the stage resolved them as variable references and emitted
+    // `GetLocal` where the reference emits `PushImmediate`.
+    vm.set_shared(&mut shared, BR_P_TRUE_ID, Value::Int(id_of("true")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_FALSE_ID, Value::Int(id_of("false")))
         .unwrap();
     vm.set_shared(&mut shared, BR_P_BOOL_ID, Value::Int(id_of("Bool")))
         .unwrap();

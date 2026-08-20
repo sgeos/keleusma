@@ -78,6 +78,22 @@ shared data toks {
     // tests.
     base: Word,
     at: Word,
+    // THE INTERNED IDS OF `true` AND `false`, host-supplied like `and_id`/`or_id`.
+    //
+    // **THE TOKEN SPACE IS FULL**, which this file already records for the eager
+    // `and`/`or`: they are lexed as identifiers and recognised by id. `true` and
+    // `false` fall through the same hole and were never given the same treatment,
+    // so they arrived as ordinary identifiers and resolved to whatever local
+    // happened to occupy the matching slot -- a SILENT MISCOMPILE rather than a
+    // refusal. Measured: `fn main() -> bool { true }` emitted `GetLocal(0)` where
+    // the reference emits `PushImmediate(1)`.
+    //
+    // Zero when unset, and recognition is guarded on `> 0`, so a host that does not
+    // seed them behaves exactly as before rather than misfiring on id zero.
+    //
+    // APPENDED LAST, like `and_id`/`or_id` and `base`/`at` before them.
+    true_id: Word,
+    false_id: Word,
 }
 
 // The unified token vocabulary (body.kel's `enum Tok` extended with the header keywords).
@@ -4496,8 +4512,27 @@ fn step_normal(k: Word, v: Word) -> Word {
             ops.expect_operand = 1;
             0
         } else {
+        // In OPERAND position, `true`/`false` are the boolean literals rather than
+        // variable references. Same mechanism as `and`/`or` above and for the same
+        // reason -- the Tok space is full, so both arrive as identifiers -- but in
+        // the opposite position, which is why the guard is `expect_operand == 1`.
+        //
+        // **THE NODE IS `Unit` CARRYING AN OPERAND, NOT A NEW KIND.** `PushImmediate`
+        // already encodes `0 = Unit`, `1 = true`, `2 = false`, and `Unit` is a leaf
+        // whose payload was unused, so the existing kind expresses all three exactly.
+        // A new node kind would have to be taught to the leaf table AND to all THREE
+        // decoders of this record stream, which is how eight tests failed the last
+        // time a kind was added here.
+        if ops.expect_operand == 1 andalso toks.true_id > 0 andalso v == toks.true_id {
+            ops.expect_operand = 0;
+            Node::Unit() as Word + 1 * 64
+        } else {
+        if ops.expect_operand == 1 andalso toks.false_id > 0 andalso v == toks.false_id {
+            ops.expect_operand = 0;
+            Node::Unit() as Word + 2 * 64
+        } else {
             step_ident(v)
-        } }
+        } } } }
     } else {
     if k == Tok::LParen() as Word {
         ops.opstack[ops.opsp] = OpCode::Paren() as Word;
