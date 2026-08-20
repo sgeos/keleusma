@@ -2274,6 +2274,14 @@ const DV_DREQ: usize = 1 + 1536 * 2;
 const DV_DNET: usize = 1 + 1536 * 3;
 const DV_IS_TERM: usize = 1 + 1536 * 4;
 const DV_OUT_REJECT: usize = 1 + 1536 * 5;
+/// Why `verify_depth.kel` returned the verdict it did.
+///
+/// 0 means the walk completed, so the verdict is a real analysis result. 1 means
+/// the chunk nests deeper than the stage's declared cap and the verdict is
+/// default-deny. **Only the cause distinguishes a proven defect from an
+/// unanalysed program**, and only the cause says whether raising the cap would
+/// change the answer.
+const DV_OUT_CAUSE: usize = 2 + 1536 * 5;
 
 /// The compiled `verify_depth.kel` stage module, cached after the first build.
 ///
@@ -2350,6 +2358,65 @@ pub fn depth_reject_chunk_via_kel(chunk: &crate::bytecode::Chunk) -> bool {
         Value::Int(n) => n != 0,
         o => panic!("expected Int at out_reject, got {o:?}"),
     }
+}
+
+/// Why `verify_depth.kel` rejected `chunk`, distinguishing a proven operand
+/// underflow from a refusal to analyse.
+///
+/// # Why this exists beside [`depth_reject_chunk_via_kel`]
+///
+/// The stage declares a nesting cap and refuses a chunk past it, default-deny, in
+/// line with this project's conservative-verification stance. That refusal and a
+/// proven underflow are the SAME verdict, so a caller reading only the verdict
+/// cannot tell a defective program from one the analysis declined. **A caller
+/// deciding whether to raise the cap needs this and the verdict does not carry
+/// it.**
+///
+/// Returns [`DepthVerdict::Accept`], [`DepthVerdict::Underflow`], or
+/// [`DepthVerdict::OverCap`].
+pub fn depth_verdict_chunk_via_kel(chunk: &crate::bytecode::Chunk) -> DepthVerdict {
+    let m = verify_depth_kel_module();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify verify_depth.kel");
+    let mut shared = seed_verify_depth_shared(&vm, chunk);
+    match vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call verify_depth.kel")
+    {
+        VmState::Yielded(Value::Int(_)) => {}
+        other => panic!("unexpected verify_depth.kel state: {other:?}"),
+    }
+    let reject = match vm.get_shared(&shared, DV_OUT_REJECT).unwrap() {
+        Value::Int(n) => n != 0,
+        o => panic!("expected Int at out_reject, got {o:?}"),
+    };
+    let cause = match vm.get_shared(&shared, DV_OUT_CAUSE).unwrap() {
+        Value::Int(n) => n,
+        o => panic!("expected Int at out_cause, got {o:?}"),
+    };
+    match (reject, cause) {
+        (false, _) => DepthVerdict::Accept,
+        (true, 1) => DepthVerdict::OverCap,
+        (true, _) => DepthVerdict::Underflow,
+    }
+}
+
+/// The outcome of the self-hosted operand-stack depth-balance pass.
+///
+/// `Underflow` and `OverCap` are both rejections, and keeping them distinct is the
+/// point: one is a proven property of the program and the other is a statement
+/// about the analysis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DepthVerdict {
+    /// The walk completed and found no operand-stack underflow.
+    Accept,
+    /// The walk completed and proved an op would underflow the operand stack.
+    Underflow,
+    /// The chunk nests deeper than the stage's declared cap, so it was refused
+    /// without being analysed. **Not evidence of a defect.**
+    OverCap,
 }
 
 /// Run the WHOLE self-hosted verifier over a module -- every check `verify()` performs, all

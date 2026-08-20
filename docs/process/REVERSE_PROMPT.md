@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-19 (session 49, ruling record)
+**Date**: 2026-08-19 (session 49, ruled refusals)
 
 ## Where things stand
 
@@ -27,6 +27,70 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 | `parse.kel` failure modes named | **THIRTEEN**; eleven counters guarded |
 | **the type checker's INPUT** | **the DECLARED rows now come from the pipeline; the derived ones do not** |
 | branch | `feat/typecheck-bindings-from-pipeline`, cut from `v0.2.3` at `fe2af14f` |
+
+## THREE RULED REFUSALS IMPLEMENTED, AND ONE OF THEM WAS WORSE THAN A MISSING NUMBER
+
+Batched on your approval. The trade is recorded rather than assumed: one gate cycle instead of three,
+against a bisect that now lands on all three at once and a revert that takes all three.
+
+### The nesting cap was not the finding. The silent drop was.
+
+`verify_depth.kel`'s `push_frame` read `if df.sp > 127 { df.sp = df.sp; }` — a no-op branch,
+documented as a deliberate drop. **In a verifier that is not defensible.** A dropped push means the
+nested region is never walked, the parent folds in whatever `child_*` the PREVIOUS delivery left
+behind, and `deliver` later decrements `sp` for a frame that was never pushed. The pass then
+publishes a verdict over a program it did not traverse, and that verdict can be wrong in **either**
+direction — it can miss a real underflow and it can invent one.
+
+**It is not a hole in anything shipped, and I checked before saying anything.** The stage is reached
+only through `depth_reject_chunk_via_kel` and its composition; it is not wired into
+`self_hosted_compile`, and the shipping verifier is still the Rust `src/verify.rs`. This is a latent
+defect in a stage being validated toward Order 2.
+
+**128 was never a declared cap.** It was an array size with a silent-drop guard, which is what the
+`v0.3.0` line warned against. Your 32 replaces a silent wrong answer with default-deny.
+
+**Frames are nesting plus one**, because `run` pushes a root frame before any nested construct. The
+arrays are sized 33 and the guard admits exactly 32 levels. Pinned from both sides and
+mutation-verified — lowering the cap to 31 fails the accepting half by name.
+
+**The verdict alone would have repeated the shared-message defect**, so `dv` gains `out_cause`
+(appended) and the driver gains `DepthVerdict` with `Accept`, `Underflow` and `OverCap`. Only the
+cause says whether raising the cap would change the answer.
+
+### `-255` is ambiguous, and the test is sound by the case rather than by the code
+
+It means two things in one call path. `mi_join_header` calls `mi_join`, which returns `-255` from a
+pool overflow, and then returns `-255` itself for a missing header region. The test reaches the second
+because the first cannot fire for its input, and a control proves the identical input joins cleanly
+with the region restored. The test says all of this in its own doc comment.
+
+**Its neighbours use `-233` and `-234` for exactly this reason**, and the comment above
+`emit_name_records_from_nout` states the principle outright. The header check is the odd one out.
+**Splitting it is one line and I held it for you**, because an error code is an observable.
+
+### The reservations are free, and the collision that nearly made them look done is not
+
+`CRYPTO_SIGNATURES`, `PROVENANCE` and `AUTH_TIER` at `0x0024..0x0026`, checked against every live kind
+and against the parity-plane convention, pinned as unemitted with a vacuity guard. `AUTH_TIER` is a
+region rather than a header field deliberately: a new header field changes every artifact's bytes and
+a region changes nothing until emitted.
+
+### Risks, stated because you asked for them in the pull request
+
+- **Batching.** A bisect lands on all three; a revert takes all three.
+- **The cap narrows the pass from 128 to 32.** That is the intent, not a side effect. The corpus is
+  unaffected, and a chunk nesting 33 to 128 that the pass previously walked is now refused.
+- **The frame arrays shrank from 128 to 33**, which changes `verify_depth.kel`'s private data size.
+- **`-255` remains ambiguous.** The test is sound; the code is not yet.
+
+### Two probe errors of my own, both caught by the compiler rather than by care
+
+I reached for `Op::PushBool` and `Op::PushInt`, which do not exist — the encoding is `PushImmediate`
+with a documented operand table. And my reserved-kind test parsed a framed module as a wire container
+and got `BadMagic`; the fix was `parse_wire_sections`, the public accessor, rather than rebuilding a
+`WireAuxBody` in the test, which would have been a second encoding free to drift from the one under
+test.
 
 ## THE LIVE DECISION LIST IS EMPTY, AND I ASKED TWO OF THE QUESTIONS WRONG
 

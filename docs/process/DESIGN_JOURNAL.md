@@ -13,6 +13,75 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THREE RULED REFUSALS, BATCHED FOR CONTINUOUS INTEGRATION, AND THE MIDDLE ONE WAS A SILENT WRONG
+ANSWER RATHER THAN A MISSING NUMBER (2026-08-19).**
+
+Three operator rulings implemented together on the operator's approval to batch. Batching is a real
+trade and it is recorded rather than assumed: a bisect now lands on all three at once and a revert
+takes all three, against three saved gate cycles of roughly forty-eight minutes each.
+
+**THE NESTING CAP WAS NOT THE INTERESTING PART. THE SILENT DROP WAS.** `verify_depth.kel`'s
+`push_frame` read `if df.sp > 127 { df.sp = df.sp; }` -- a no-op branch, documented as a deliberate
+drop. In a VERIFIER that is not defensible. A dropped push means the nested region is never walked,
+the parent folds in whatever `child_*` the PREVIOUS delivery left behind, and `deliver` later
+decrements `sp` for a frame that was never pushed. The pass then publishes a verdict over a program
+it did not traverse, and **that verdict can be wrong in either direction**: it can miss a real
+underflow and it can invent one.
+
+**THE SEVERITY DEPENDS ENTIRELY ON TWO FACTS I CHECKED BEFORE CLAIMING ANYTHING.** `verify_depth.kel`
+is reached only through `depth_reject_chunk_via_kel` and its composition in
+`structural_reject_module_via_kel`; it is NOT wired into `self_hosted_compile`, and the shipping
+verifier is still the Rust `src/verify.rs`. So this is a latent defect in a stage being validated
+toward Order 2, **not** a hole in a released artifact. Saying so is the difference between a report
+and an alarm.
+
+**128 WAS NEVER A DECLARED CAP.** It was an array size with a silent-drop guard, which is exactly
+what the `v0.3.0` line warned against when they said a Keleusma verifier needs a declared cap with
+programs past it rejected rather than a number read off today's sources. The ruling of 32 replaces a
+silent wrong answer with default-deny, which is this project's stated conservative-verification
+stance applied where it had not been.
+
+**FRAMES ARE NESTING PLUS ONE, AND GETTING THAT BACKWARD WOULD HAVE NARROWED THE LANGUAGE SILENTLY.**
+`run` pushes a root frame for the whole chunk before any nested construct, so depth `d` occupies
+`d + 1` frames. The arrays are sized `max_nesting() + 1 = 33` and the guard admits exactly 32 levels.
+The boundary is pinned from both sides and **mutation-verified**: lowering the cap to 31 fails the
+accepting half by name, `left: OverCap, right: Accept`.
+
+**THE VERDICT ALONE WOULD HAVE REPEATED THE SHARED-MESSAGE DEFECT.** An over-cap refusal and a proven
+underflow are the same `out_reject`. A caller reading only that cannot tell a defective program from
+one the analysis declined, and cannot tell whether raising the cap would change the answer. `dv` gains
+`out_cause`, APPENDED, and the driver gains `DepthVerdict` with three cases.
+
+**THE `-255` TEST IS SOUND BY THE CASE, NOT BY THE CODE, AND THAT IS SAID IN THE TEST.** `-255` has
+TWO meanings inside one call path: `mi_join_header` calls `mi_join`, which returns `-255` from a pool
+overflow in `emit_pool_bytes_from_bout`, and then returns `-255` itself for a missing header region.
+The test reaches the second because the first cannot fire for an input whose name bytes are far below
+the 16,384-byte buffer, and the control proves the identical input joins cleanly with the region
+restored. **The neighbouring guards use `-233` and `-234` for exactly this reason** and the comment
+above `emit_name_records_from_nout` states the principle. The header check is the odd one out.
+**Splitting it is one line and it is HELD for the operator, because an error code is an observable.**
+
+**THE RESERVATIONS ARE FREE AND THE COLLISION THAT NEARLY MADE THEM LOOK DONE IS NOT.**
+`kind::SIGNATURES` at `0x0016` is per-chunk TYPE descriptors; the cryptographic signature lives in the
+framing header. A reader checking whether a signature region is reserved finds that constant and
+stops. `CRYPTO_SIGNATURES`, `PROVENANCE` and `AUTH_TIER` take `0x0024..0x0026`, are checked against
+every live kind AND against the parity-plane convention that derives a plane as `k | ECC_KIND_BIT`,
+and are pinned as unemitted in the firing direction with a vacuity guard.
+
+**TWO PROBE ERRORS OF MY OWN, BOTH CAUGHT BY THE COMPILER RATHER THAN BY CARE.** I reached for
+`Op::PushBool` and `Op::PushInt`, which do not exist -- the encoding is `PushImmediate` with a
+documented operand table. And my reserved-kind test parsed a FRAMED module as a wire container and
+got `BadMagic`; the fix was `parse_wire_sections`, the public accessor, rather than rebuilding a
+`WireAuxBody` in the test, which would have been a second encoding free to drift from the one under
+test.
+
+**A SOURCE-LEVEL PROBE COULD NOT HAVE MEASURED THIS.** The reference parser's `MAX_PARSE_DEPTH` is 24
+and is shared between chain position and arm-body nesting, so a source with 33 nested `if`s is refused
+by the PARSER and never reaches the pass. The chunks are assembled from ops for that reason, and the
+reason is written in the file.
+
+---
+
 **THIRTEEN OPERATOR RULINGS RECORDED, AND TWO OF THEM WERE ANSWERS TO QUESTIONS I ASKED WRONG
 (2026-08-19).**
 

@@ -10,6 +10,25 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-19, final+5).** **THREE RULED REFUSALS IMPLEMENTED, BATCHED ON THE
+> OPERATOR'S APPROVAL.** A declared nesting cap of **32** in `verify_depth.kel`, the `-255` negative
+> test in `wire.kel`, and the reserved authenticity region kinds.
+>
+> **THE CAP WAS NOT THE FINDING. THE SILENT DROP WAS.** `push_frame` discarded a push past 128
+> frames, so the nested region went unwalked, the parent folded in the PREVIOUS delivery's
+> `child_*`, and the pass published a verdict over a program it had not traversed -- wrong in either
+> direction. **Not a hole in anything shipped**: the stage is reached only through
+> `depth_reject_chunk_via_kel` and is not wired into `self_hosted_compile`. Now default-deny, with
+> `out_cause` separating an unanalysed program from a proven underflow. Mutation-verified.
+>
+> **`-255` IS AMBIGUOUS AND THE TEST SAYS SO.** It means both a pool overflow inside `mi_join` and a
+> missing header region in `mi_join_header`, in one call path. The test is sound because the pool
+> cause cannot fire for its input, proven by a control. **Splitting the code is one line and is HELD
+> for the operator**, since an error code is an observable.
+>
+> **Batching risk, recorded rather than assumed**: a bisect lands on all three and a revert takes all
+> three.
+
 > **Currency note (2026-08-19, final+4).** **THE LIVE DECISION LIST IS EMPTY.** Thirteen operator
 > rulings recorded. The three standing forks are ruled -- a **file operand with standard input as the
 > default**, **leave the token array at 40,960**, and **defer top-level `struct`** -- plus ten more.
