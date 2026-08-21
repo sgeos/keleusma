@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-20 (session 49, closing handoff)
+**Date**: 2026-08-21 (session 50, autonomous loop)
 
 ## Where things stand
 
@@ -18,15 +18,75 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 |---|---|
 | all twelve stages | `loop main(...)` coroutines |
 | emit path | 11 of 11 stages; every emit-side cap removed |
-| `lexer` into `parse` | FUSED, one-token window, byte-identical on four stages |
-| architecture | one binary, selectable phases — documented, unbuilt |
-| **`parse.kel` capacity diagnostics** | **four causes now NAMED; the rest still trap raw** |
-| **the last cap** | **GONE. `wire.kel` PARSES, 486 functions** |
-| **`parse` into `reconstruct`** | **FUSED at function granularity, 3.4x to 41.1x** |
-| shared-slot layouts | **nine copies collapsed to two definitions** |
-| `parse.kel` failure modes named | **THIRTEEN**; eleven counters guarded |
-| **the type checker's INPUT** | **the DECLARED rows now come from the pipeline; the derived ones do not** |
-| branch | `feat/typecheck-bindings-from-pipeline`, cut from `v0.2.3` at `fe2af14f` |
+| **the shipping compiler vs the 95-case boundary** | **byte-identical 43 -> 76, differs 21 -> 11, faults 30 -> 7** |
+| **constant-pool tags** | **carried; all three (`Int`/`StaticStr`/`Bool`) witnessed** |
+| **struct/trait/impl declarations** | **skipped rather than faulting; 22 more cases byte-identical** |
+| the type checker's INPUT | the DECLARED rows come from the pipeline; the derived ones do not |
+| branch | `fix/selfhost-pool-tags`, cut from `v0.2.3`, rebased onto `b729a2a9` |
+
+## SESSION 50 — WHAT I DID WHILE YOU SLEPT, AND THE ONE THING THAT NEEDS YOU
+
+You asked for as much self-directed development as could be carried out without input. Your queue
+was the handoff's stated first priority, but two of its four items are yours to judge, so I took
+the unblocked work with evidence already in the tree.
+
+### The defect, and the larger one the sweep found
+
+`codegen.kel` streams its constant pool as values then TAGS. The shipping driver read the tags
+into a discard binding and rebuilt every entry as `Int`, so a string constant became the integer
+of its intern id. The comment justifying the discard said the stage sources are all-`Int` — true
+of the corpus, false of the contract, and the seventh instance of that same meta-defect.
+
+Sweeping for other discards found a bigger one: `parse.kel` emits struct, trait and impl
+declaration records, the driver had no state for them, and it panicked. **The copy of that loop in
+`tests/selfhost_codegen.rs` carried the skip all along**, which is why the construct-support
+boundary — which measures the copy — never saw it.
+
+Measured over all 95 boundary cases, baseline taken by **stashing my own change** rather than
+assumed: byte-identical **43 -> 76**, differs 21 -> 11, faults 30 -> 7. No case got worse.
+
+**29 cases declare a struct. The shipping compiler faulted on all 29, and 27 are recorded `SOk`.**
+That is a much stronger statement of the duplicate's cost than the string literal it replaces.
+
+### THE ONE THING THAT NEEDS YOU
+
+**A boundary moved, and it touches your deferred ruling.** Programs the tree refused now compile.
+Your 2026-08-19 ruling was "Top-level struct support. Defer."
+
+My reading: this is not that work. No struct layout is derived from the pipeline; a struct program
+compiles because its layout comes from the reference scaffold and its chunk ops now lower without
+faulting. **If you read the ruling more broadly, the skip should come out** —
+`docs/decisions/POOL_TAG_RESIDENCY_BRIEF.md` names the three hunks, and the pool fix is entirely
+independent of it.
+
+### What I did NOT do, and why
+
+- **Did not repair the six eager-boolean miscompiles** the boundary calls `Ok`. The fix is in
+  operator lowering; making it in the same change would leave the census above unattributable,
+  which is exactly how a `bool`/`Bool` regression shipped last session.
+- **Did not merge #201 or #210.** Both are green at 22/22, and I escalated both to you as judgment
+  calls; merging them myself would undo that. **I did merge #211**, my own process docs.
+- **Did not touch any `.kel` stage.** No opcode, no `BYTECODE_VERSION` change.
+
+### What I got wrong, since it is the more useful half
+
+- **The pipe ate an exit code again — third recorded instance in this project.** I backgrounded
+  `cargo test | tail -60`, the harness reported exit 0, and the suite had FAILED. Caught by reading
+  the output, not the status.
+- **That failure was mine**: a test pinned the old boundary and my skip broke it. Inverted rather
+  than deleted.
+- **I predicted the `Bool` witness needed a struct.** It does not — tuple, array and enum equality
+  all reach `intern_bool`. The construct that reaches a branch is not always the one it is named
+  after.
+- **I amended a commit after testing it**, so the pushed tree was not byte-identical to the tested
+  one. Re-ran the affected file rather than assuming the formatting change was inert.
+
+### Verification
+
+Local gate green with every exit code captured **outside** the pipe: fmt, all four CI feature sets,
+clippy at deny-warnings, tests under `self-host` and under default features, and the doc build.
+Zero failures. CI is the binding gate and runs on the pushed commit.
+
 
 ## CLOSING SUMMARY — WHAT THIS SESSION DID AND WHAT IS WAITING ON YOU
 

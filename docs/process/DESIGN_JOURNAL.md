@@ -13,6 +13,73 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE HOST DISCARDED A FIELD ITS OWN STAGE COMPUTED, AND THE SWEEP FOUND SOMETHING BIGGER
+(2026-08-21, session 50).**
+
+`codegen.kel` streams its constant pool as a count, the values, then the TAGS -- 0 `Int`,
+1 `StaticStr` (the value being the lexer intern id, which the host must resolve), 2 `Bool`. The
+shipping driver read the tags into `let _tag` and dropped them, rebuilding every entry as
+`ConstValue::Int`.
+
+**The comment on the discard is the defect confessing.** It said the stage sources are all-`Int`,
+so the tags do not matter. That is a true statement about the CORPUS and a false one about the
+CONTRACT, and it is the seventh instance of the meta-defect this line keeps recording: a property
+of the case list mistaken for a property of the thing under test. The byte-identity oracle
+compiles the twelve stage sources; none contains a string literal or an equality comparison, so
+neither tag was ever observed.
+
+**Both compilers read the SAME stage source.** `tests/common/mod.rs::stage_path` rewrites a
+`compiler/kel/` request to `src/selfhost/kel/`, and `compiler/kel/` holds only `prelude.kel`. So
+the divergence was entirely host-side, which is what made the attribution clean: one returned
+`Vec<i64>` and the other `Vec<(i64, i64)>`.
+
+**THE SWEEP FOUND THE LARGER ONE.** Looking for other reads-then-drops: `parse.kel` emits
+STRUCTSTART 18, TRAITSTART 19 and IMPLSTART 20, and the driver had no state for them, so those
+records reached the function dispatch with nothing open and it panicked by name.
+`tests/selfhost_codegen.rs`'s copy of the same loop carried the skip all along -- in two places.
+
+Measured over the 95 boundary cases, baseline taken by STASHING the change rather than assumed:
+
+| | before | after |
+|---|---|---|
+| byte-identical | 43 | **76** |
+| differs | 21 | 11 |
+| faults | 30 | 7 |
+
+29 cases declare a struct; the shipping compiler faulted on all 29, and **27 of them are recorded
+`SOk`**. The boundary did not merely drift on one construct.
+
+**TWO THINGS I EXPECTED AND GOT WRONG, both in the cheap direction.** I planned a struct-equality
+witness for the `Bool` tag because `intern_bool` is documented as serving `push_struct_eq` -- and
+tuple, array and enum equality all reach it with no `struct` at all. *The construct that reaches a
+branch is not always the construct the branch is named after.* Second, an all-unit enum equality
+bakes all three tags in one pool, which is a stronger single witness than three separate ones
+because it also pins the intern ORDER.
+
+**THE PIPE ATE AN EXIT CODE AGAIN, THIRD RECORDED INSTANCE.** I backgrounded
+`cargo test | tail -60`; the harness reported exit 0 and the suite had FAILED. Found by reading
+the output, not the status. The failure was real and mine: a test pinned the old boundary, that a
+`struct` declaration must be REFUSED with a named message. Inverted rather than deleted, and it
+now records all three states the behaviour has had.
+
+**A CONSEQUENCE WORTH THE OPERATOR'S ATTENTION.** With 18..20 skipped, no construct tried reaches
+`open_decl`'s named panic -- plain `struct`, `trait`, `impl` and a const-generic `struct` all
+parse. Recorded as **not found**, not as unreachable, matching the `Op::IsStruct` distinction.
+
+**LEFT UNREPAIRED DELIBERATELY.** Six eager-boolean constructs the boundary calls `Ok` that the
+shipping compiler miscompiles. The fix is in operator lowering; repairing it in the same change
+would make the census above unattributable, which is exactly how a `bool`/`Bool` regression
+shipped last session by changing both sides of a differential comparison at once. Pinned in the
+failing direction so the repair reports itself.
+
+**Proportionality, which belongs beside every claim here.** `self_hosted_compile` cross-checks
+against the reference and refuses on divergence, so none of this reached a user as a wrong module.
+The exposure was to direct callers of the `self_host_compile*` entry points.
+
+Brief, census and revert recipe: `docs/decisions/POOL_TAG_RESIDENCY_BRIEF.md`.
+
+---
+
 **THE CHAINED-INDEX DEFECT IS NOT TRUNCATION, AND I STOPPED RATHER THAN BUILD A FEATURE
 (2026-08-20, evening).**
 

@@ -3245,29 +3245,57 @@ fn the_token_cap_is_named_and_its_boundary_holds() {
     );
 }
 
-/// **A `struct` DECLARATION PANICKED THE DRIVER WITH A BARE `unwrap()`.**
+/// **A `struct` DECLARATION PANICKED THE DRIVER, THEN WAS NAMED, AND IS NOW SKIPPED.**
 ///
-/// `parse.kel` has no struct handling at all: its declaration record codes are 1..3
-/// (`fn`/`yield`/`loop`), 9 (`data`), 10 (`use`) and 12 (`enum`), with no struct code. Its
-/// tokens are parsed as something else and the records arrive with no declaration open,
-/// where six bare `unwrap()`s used to sit.
+/// Three states, and the middle one is why this test is inverted rather than deleted.
 ///
-/// The old failure was `called Option::unwrap() on a None value` — a Rust panic naming
-/// neither the record nor the form. **This test does not assert that `struct` should be
-/// rejected**, only that the failure says what happened; whether the form is supported is a
-/// language decision and not this test's business.
+/// 1. Six bare `unwrap()`s gave `called Option::unwrap() on a None value`, naming neither the
+///    record nor the form.
+/// 2. Replaced by a message naming both. This test asserted that refusal, and said in its own
+///    doc that it took no position on whether `struct` should be SUPPORTED.
+/// 3. The driver now skips a `struct`, `trait` or `impl` declaration to its `END`, as
+///    `tests/selfhost_codegen.rs`'s copy of the same loop always did, and the program compiles.
+///
+/// # What changed and what did not
+///
+/// `parse.kel` was NOT modified. It already emitted STRUCTSTART 18, TRAITSTART 19 and
+/// IMPLSTART 20; the shipping driver had no state for them and the records fell through to the
+/// function dispatch. The doc on this test used to say the stage "has no struct handling at
+/// all", which the record codes falsify.
+///
+/// **This is not the deferred top-level-struct work.** No struct LAYOUT is derived from the
+/// pipeline; a struct-using program compiles because its layout comes from the scaffold and
+/// its chunk ops now lower without faulting. Deriving the layout remains deferred.
+///
+/// # The named refusal has lost its witness, which is recorded rather than celebrated
+///
+/// With 18..20 skipped, no construct tried reaches `open_decl`'s named panic: plain `struct`,
+/// `trait`, `impl`, and a const-generic `struct` all parse. It is recorded as **not found**,
+/// NOT as unreachable — the same distinction this line drew for `Op::IsStruct`. The message
+/// is retained because a future record code arriving with nothing open is exactly what it is
+/// for, and an unreachable-today guard is not the same as a useless one.
 #[cfg(feature = "self-host")]
 #[test]
-fn an_unrecognised_declaration_is_named_rather_than_unwrapped() {
-    let msg = refusal("struct S { a: Word }\nfn f() -> Word { 1 }\n")
-        .expect("a struct declaration must be refused rather than accepted silently");
+fn a_struct_trait_or_impl_declaration_is_skipped_rather_than_faulting() {
+    for src in [
+        "struct S { a: Word }\nfn f() -> Word { 1 }\n",
+        "trait T { fn g(self) -> Word; }\nfn f() -> Word { 1 }\n",
+        "struct S { a: Word }\nimpl S { fn g(self) -> Word { self.a } }\nfn f() -> Word { 1 }\n",
+        "struct S<const N: Word> { a: Word }\nfn f() -> Word { 1 }\n",
+    ] {
+        assert!(
+            refusal(src).is_none(),
+            "{src:?} was refused. If a declaration form must be refused again, say which and \
+             why here rather than relaxing this loop"
+        );
+    }
+
+    // Non-vacuity. If `refusal` returned `None` for everything -- a harness fault rather than a
+    // parse success -- the loop above would pass while establishing nothing.
     assert!(
-        msg.contains("no declaration open") && msg.contains("struct"),
-        "the refusal was {msg:?}, which does not name what arrived or the likely cause"
-    );
-    assert!(
-        !msg.contains("Option::unwrap"),
-        "the refusal is still a bare unwrap panic: {msg:?}"
+        refusal(&src_lets(10_000)).is_some(),
+        "the refusal harness reports no failure for a source that must exceed a stage bound, \
+         so the assertions above measure nothing"
     );
 }
 
