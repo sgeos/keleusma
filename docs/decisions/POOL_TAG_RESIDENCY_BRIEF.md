@@ -454,3 +454,17 @@ This is the same shape as the entry the handoff already carries about a CANCELLE
 in a summary, and as the rule about never classifying a state as failure by exclusion: **the
 absence of a signal is not the presence of a passing one**, and both are one line in a status
 listing. Base future branches on the version branch and describe the stack in the body.
+
+## The one sweep item left open is now closed, and it is NOT a defect
+
+The class sweep flagged `window_emit`'s `names: usize`, accepted and read into a discard, as
+"flagged, not resolved". Resolved 2026-08-21: **`wire.kel` derives the name count itself.**
+`name_count()` is a pure function of the blob it was given and is returned by command 18, so a
+host-supplied count would be a second answer to a question the stage already answers — the drift
+this crate has now paid for four times over.
+
+The parameter is annotated in place rather than removed, so the next reader does not repeat the
+investigation, and the note says plainly that removing it would be a cleanup rather than a repair.
+
+**A discarded value is not automatically a defect.** Three of the four this session were; this one
+is not, and reporting it as a fifth would have been the more comfortable and less accurate answer.
