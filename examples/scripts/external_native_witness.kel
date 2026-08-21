@@ -1,0 +1,27 @@
+// `CallExternalNative`, SPLIT OUT BECAUSE THE HARNESS CANNOT DRIVE IT.
+//
+// The differential registers `host::tick` as a VERIFIED native, and a module
+// declaring `use external host::tick` emits `CallExternalNative`. The virtual
+// machine refuses that combination at load:
+//
+//   "native `host::tick` registered as verified but bytecode invokes it as
+//    external"
+//
+// So a module using an external native cannot be EXECUTED by this harness at
+// all, whatever the backend does with it. THAT IS A HARNESS FACT, NOT A BACKEND
+// REFUSAL -- `CallExternalNative` lowers, and the opcode census reports it as
+// lowered.
+//
+// IT WAS ALSO NOT THE REASON I EXPECTED. `opcode_witness.kel` was split to make
+// its arithmetic executable, on the assumption that `FixedDiv`, `Len` and
+// `IsStruct` were the only things holding it out of the comparison. They were
+// not: this native held it out too, and the split surfaced that rather than
+// fixing it. The assumption was the finding.
+//
+// Kept as its own file so the opcode retains a corpus witness while the
+// programs that CAN execute are free to.
+use external host::tick
+
+fn main(seed: Word) -> Word {
+  host::tick(seed)
+}

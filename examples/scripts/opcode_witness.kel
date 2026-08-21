@@ -14,7 +14,10 @@
 //                                             forms; Byte and Float take these)
 //   (Float conversion moved to `float_witness.kel` -- see below)
 //   Fixed<16>        -> FixedMul, FixedDiv, WordToFixed, FixedToWord
-//   external native  -> CallExternalNative   (`use external host::`)
+//   (external native moved to `external_native_witness.kel` -- the harness
+//    registers host::tick as VERIFIED, so a module calling it as external
+//    cannot be EXECUTED here at all, which held this file out of the
+//    comparison for a reason unrelated to the backend)
 //   2-level index    -> BoundsCheck          (a single level emits none)
 //   checked `/` `%`  -> CheckedDiv, CheckedMod  (a BARE `/` emits `Div`)
 //   for-in over `if` -> Len                   (an `if` EXPRESSION as the source
@@ -55,10 +58,6 @@
 // "the backend refuses it" until those opcodes are lowered. Do not delete it
 // to restore a zero: the zero was the thing that was wrong.
 
-use external host::tick
-
-struct P { a: Word, b: Word }
-
 
 shared data grid {
   cells: [[Word; 4]; 4],
@@ -77,14 +76,6 @@ fn byte_mix(a: Byte, b: Byte) -> Byte {
   let prod = diff * b;
   let neg = -prod;
   sum + neg
-}
-
-fn fixed_mix(w: Word) -> Word {
-  let x = w as Fixed<16>;
-  let two = 2 as Fixed<16>;
-  let scaled = x * two;
-  let halved = scaled / two;
-  halved as Word
 }
 
 // THE CHECKED-ARITHMETIC FORM. A bare `a / b` emits `Div`; only the form with
@@ -121,105 +112,14 @@ fn checked_ratio(a: Word, b: Word) -> Word {
   q + r
 }
 
-// `Op::IsStruct` — THE LAST UNWITNESSED OPCODE, and the construct is the
-// `v0.2.3` line's after nine failed attempts of their own.
-//
-// It fires only when `named_type_name(ty) != Some(pattern_type)`, so it needs
-// the pattern's type to be UNKNOWN at the test. An UNANNOTATED struct-parameter
-// pattern does it; annotating the parameter folds the test out, which is the
-// control their test asserts.
-//
-// AND IT IS A DIFFERENT CASE FROM `Op::Len`, WHICH IS WHY BOTH ARE HERE.
-// Measured on this tree rather than taken from their report:
-//
-//   witness        verify()   module_wcmu   arena     load     run
-//   Op::Len        accepts    REFUSES       REFUSED   n/a      never runs
-//   Op::IsStruct   accepts    accepts       OK        LOADS    TRAPS
-//
-// `Op::Len`'s witness cannot be ADMITTED -- the strict iteration-bound check
-// refuses it before it can load, which is the conservative-verification stance
-// working as designed. `Op::IsStruct`'s witness satisfies EVERY load-time check,
-// receives a memory bound, loads, and then dies at call time with
-// `InvalidBytecode("Op::IsStruct on a flat struct; the type test is a
-// compile-time constant")`.
-//
-// THAT SECOND ONE IS NOT THE SAME KIND OF FACT. `InvalidBytecode` is the class
-// `verify()` exists to exclude AT LOAD TIME, so a legal program reaching it at
-// RUN time is a load-time hole rather than a bad program. `src/verify.rs` is
-// read-only to BOTH lines, so neither has repaired it and it is recorded for the
-// operator. See the handoff.
-fn is_struct_witness(p: P) -> Word {
-  destructure(p)
-}
-
-// The UNANNOTATED pattern is what leaves the type unknown at the test. Writing
-// `fn destructure(p: P)` here folds `Op::IsStruct` out and the witness is lost.
-fn destructure(P { a, b }) -> Word {
-  a + b
-}
-
-// `Op::Len` — AND THE CONSTRUCT CAME FROM THE V0.2.X LINE, not from this one.
-//
-// `Len` fires only when the for-in source has NO STATICALLY KNOWN LENGTH, so
-// reaching it needs INFERENCE TO FAIL rather than an unusual syntax. Between the
-// two lines, FOURTEEN guessed constructs failed. What worked was not a fifteenth
-// guess: it was reading `static_for_in_length`'s own match arms for what they
-// OMIT. They handle ArrayLiteral, Call, FieldAccess, Ident, ArrayIndex and Match,
-// then fall through to `_ => None`. `Expr::If` is not among them.
-//
-// THE METHOD IS THE TRANSFERABLE PART. When a fallback path resists probing,
-// read the guard's arm list for the omission instead of enumerating constructs
-// against it.
-//
-// `Op::IsStruct` is the remaining unwitnessed opcode and the identical trick
-// does NOT reach it: its guard reads a type from `infer_expr_type`, which has no
-// `Expr::If` arm either, yet the test still folds out. Making inference fail is
-// NECESSARY BUT NOT SUFFICIENT there, and what suppresses it is not established.
-// Nine attempts are recorded in the `v0.2.3` line's `tests/opcode_reachability.rs`
-// so a tenth does not repeat them. NOT written as unreachable by either line.
-//
-// THE BODY DISCARDS, and that is the corpus idiom rather than laziness: local
-// bindings are immutable, so accumulation across iterations is not expressible
-// in an atomic-total `fn` body at all. `04_for_in.kel` says so and uses the same
-// shape. A first draft here carried `let mut total` and would not have compiled.
-//
-// THIS FUNCTION MAKES THE WHOLE MODULE INADMISSIBLE, AND THAT IS NOT A MISTAKE.
-// `verify()` accepts it, but `auto_arena_capacity_for` REFUSES it: the loop "has
-// no statically extractable iteration bound". The two facts are ONE fact.
-// `Op::Len` fires exactly when the for-in source has no statically known length,
-// and a loop whose trip count is not statically known is exactly what the bound
-// extractor refuses. So the property that makes the opcode reachable is the
-// property that makes the loop unbounded.
-//
-// MEASURED, ruling out the obvious objection: giving both arms the SAME length
-// makes the trip count two on every path and provable by inspection, and it is
-// STILL refused, because neither the length guard nor the bound extractor looks
-// THROUGH an `Expr::If`. Second-category conservative rejection, not first.
-//
-// CONSEQUENCE FOR THIS FILE: it can never be given an arena while this function
-// is present, so it can never leave the differential's exempt set by lowering
-// alone. `probe_len_reachability.rs` pins that, including the harness panic that
-// would follow if all four refused opcodes were lowered without adding a
-// bound-refusal exemption class first. Read that file before "fixing" this one.
-fn len_witness(c: bool) -> Word {
-  let a = [1, 2];
-  let b = [3, 4];
-  for x in if c { a } else { b } {
-    let _d = x;
-  }
-  0
-}
-
 fn main(seed: Word) -> Word {
-  let b = byte_mix(3 as Byte, 5 as Byte);
-  let q = fixed_mix(seed);
+  // **DRIVEN BY THE ARGUMENT, NOT BY LITERALS.** An executable module whose
+  // arithmetic is fed constants gives twenty-four comparisons of one value
+  // against itself, which this line has already recorded as inflating an
+  // agreement count. The differential supplies a varying `seed`, so the byte
+  // operands vary with it and the mask is exercised across the wrap.
+  let b = byte_mix(seed as Byte, (seed + 200) as Byte);
   let g = grid_at(1, 2);
-  let h = host::tick(seed);
   let c = checked_ratio(seed, 3);
-  // Called so the chunk is REACHABLE, not merely present. An uncalled function
-  // still compiles and still emits its opcodes, but the differential would
-  // never drive it.
-  let l = len_witness(true);
-  let s = is_struct_witness(P { a: 1, b: 2 });
-  (b as Word) + q + g + h + c + l + s
+  (b as Word) + g + c
 }
