@@ -13,6 +13,19 @@
 //! verdict for each, and is careful never to report "I could not find one" as
 //! "none exists".
 //!
+//! # "REACHABLE" NEEDS QUALIFYING ON THIS PROJECT, AND THE FIRST VERDICT HERE
+//! SHOWS WHY
+//!
+//! `Op::Len` is reachable in BYTECODE. The program that witnesses it cannot be
+//! given a memory bound: `verify()` accepts it and `module_wcmu` refuses it,
+//! because the same missing `Expr::If` case defeats both the static-length lookup
+//! and the loop-bound extractor.
+//!
+//! On a language whose value proposition is definitive worst-case execution time
+//! and memory usage, an opcode reachable only in a program the resource analysis
+//! rejects is closer to unwitnessed than a bare "reachable" suggests. **Neither
+//! framing alone is honest**, so both are asserted.
+//!
 //! # The technique, which generalises
 //!
 //! Both opcodes are emitted only as a FALLBACK when a static type is unknown. So
@@ -25,14 +38,23 @@
 use keleusma::bytecode::Op;
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 
-fn ops_of(src: &str) -> Vec<Op> {
+fn module_of(src: &str) -> keleusma::bytecode::Module {
     let ast = parse(&tokenize(src).expect("lex")).expect("parse");
-    let module = compile(&ast).expect("the reference must accept the probe");
-    module.chunks.iter().flat_map(|c| c.ops.clone()).collect()
+    compile(&ast).expect("the reference must accept the probe")
 }
 
-/// **`Op::Len` IS REACHABLE. The construct is an `if` EXPRESSION as a `for`-in
-/// source.**
+fn ops_of(src: &str) -> Vec<Op> {
+    module_of(src)
+        .chunks
+        .iter()
+        .flat_map(|c| c.ops.clone())
+        .collect()
+}
+
+/// **`Op::Len` IS REACHABLE IN BYTECODE, AND THE WITNESSING PROGRAM CANNOT BE
+/// GIVEN A MEMORY BOUND.** Both halves matter on this project.
+///
+/// The construct is an `if` EXPRESSION as a `for`-in source.
 ///
 /// `Op::Len` is emitted only when `static_for_in_length` returns `None`. That
 /// function matches on `ArrayLiteral`, `Call`, `FieldAccess`, `Ident`,
@@ -48,6 +70,9 @@ fn ops_of(src: &str) -> Vec<Op> {
 /// `None` for everything would fail here rather than look like a win.
 #[test]
 fn a_for_in_over_an_if_expression_reaches_op_len() {
+    const WITNESS: &str = "fn f(c: bool) -> Word { let a = [1, 2]; let b = [3, 4]; \
+                           for x in if c { a } else { b } { let _d = x; } 0 }\n\
+                           fn main() -> Word { f(true) }";
     let reached = ops_of(
         "fn f(c: bool) -> Word { let a = [1, 2]; let b = [3, 4]; \
          for x in if c { a } else { b } { let _d = x; } 0 }\n\
@@ -58,6 +83,54 @@ fn a_for_in_over_an_if_expression_reaches_op_len() {
         "an `if`-expression `for`-in source no longer reaches `Op::Len`; if \
          `static_for_in_length` gained an `Expr::If` arm, this opcode may have no \
          remaining producer and that is worth knowing"
+    );
+
+    // **AND THE QUALIFICATION THAT CHANGES WHAT "REACHABLE" MEANS HERE.**
+    //
+    // Raised by the `v0.3.0` line and verified here rather than taken on report.
+    // `verify()` ACCEPTS this program; `module_wcmu` REFUSES it, with "loop at
+    // instruction 20 has no statically extractable iteration bound".
+    //
+    // **THE TWO FACTS ARE ONE FACT.** `Op::Len` is emitted exactly when the
+    // `for`-in source has no statically known length, and a loop whose trip count
+    // is not statically known is exactly what the bound extractor refuses. The
+    // property that makes the opcode reachable IS the property that makes the loop
+    // unbounded. They are not two limitations that might be lifted separately.
+    //
+    // **THE OBVIOUS OBJECTION IS RULED OUT.** "The arms differ in length, so of
+    // course the bound is unknown" — no: both arms here are length TWO, the trip
+    // count is two on every path, and it is still refused. Neither
+    // `static_for_in_length` nor the bound extractor looks THROUGH an `Expr::If`.
+    // It is the same omission twice, which makes this the SECOND category of
+    // conservative rejection in `LANGUAGE_DESIGN.md` — provable in principle,
+    // analysis not implemented — rather than the first.
+    //
+    // **NOT A DEFECT.** A verifier refusing a bound it cannot prove is the
+    // documented stance. It is recorded because it qualifies the reachability
+    // claim: on a language whose value proposition is definitive WCET and WCMU,
+    // an opcode reachable only in a program the resource analysis rejects is
+    // closer to unwitnessed than the headline suggests.
+    assert!(
+        keleusma::verify::verify(&module_of(WITNESS)).is_ok(),
+        "the structural verifier now rejects the witness, so the split between \
+         `verify` accepting and the bound analysis refusing no longer holds"
+    );
+    assert!(
+        keleusma::verify::module_wcmu(&module_of(WITNESS), &[]).is_err(),
+        "the resource analysis now BOUNDS the `Op::Len` witness. That closes the \
+         qualification above: the opcode is reachable in an admissible program, \
+         and this comment should be rewritten rather than deleted"
+    );
+    // The must-not-fire half: a statically-sized `for`-in IS boundable, so the
+    // refusal above is attributable to the unknown length rather than to `for`-in.
+    assert!(
+        keleusma::verify::module_wcmu(
+            &module_of("fn main() -> Word { let xs = [10, 20]; for x in xs { let _d = x; } 0 }"),
+            &[]
+        )
+        .is_ok(),
+        "a statically-sized `for`-in is no longer boundable either, so the refusal \
+         above says nothing about the unknown length specifically"
     );
 
     // THE CONTROLS. Each of these IS handled by `static_for_in_length`, so each
