@@ -5,18 +5,18 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-08-20 against `afe3d22b`**, with every pinned value re-measured rather than
-> carried forward. **THIRTY-ONE COMMITS landed since the previous refresh**, across an unattended
-> overnight run, and its check block had gone stale in every test count.
+> **REFRESHED 2026-08-20 (late) against `f091a668`**, every pinned value re-measured. **NINE COMMITS
+> since the previous refresh, which was itself the same day** — this session ran long and the tree
+> moved under its own handoff twice.
 >
-> **THE SESSION'S SUBJECT WAS NOT WHAT IT SET OUT TO BE.** It began on Order 1 item 3 and spent most
-> of its time on FOUR SILENT MISCOMPILES in the self-hosted compiler, three of them found by a
-> deliberate sweep rather than by accident. Read "WHAT THE SWEEP FOUND" and "THE DUPLICATE IS NOW
-> EVIDENCED" below before planning anything.
+> **THE SESSION'S SUBJECT WAS NOT WHAT IT SET OUT TO BE, TWICE.** It began on Order 1 item 3 and spent
+> most of its length on **five silent miscompiles** in the self-hosted compiler, four fixed and one
+> specified-but-not-fixed. Read "WHAT THE SWEEP FOUND" and "THE THREE UNREACHED-CODE FINDINGS" before
+> planning anything.
 >
-> **The single most important item for the operator is the `ParsedFn` accessor decision.** It was
-> first raised as a convenience; by the end of the night the duplicate it sustains had cost four
-> distinct things, including making the construct-support table measure the wrong compiler.
+> **THE OPERATOR'S QUEUE IS THE FIRST THING TO CLEAR.** Two pull requests and two decisions are
+> waiting, listed under "Open, held by the operator". The `ParsedFn` accessor decision is the one that
+> unblocks the most.
 
 ## Validity
 
@@ -28,37 +28,37 @@ always-current, so it must be able to report itself stale rather than mislead a 
 recorded parent is a claim that nothing else ever lands, and it has failed twice.
 
 ```sh
-git merge-base --is-ancestor afe3d22b HEAD    # must succeed
+git merge-base --is-ancestor f091a668 HEAD    # must succeed
 
 # Content. If ANY of these differ, say so rather than acting on the state below.
 grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 16
 grep -c '^\s*#\[test\]' tests/selfhost_wire.rs              # 173
 grep -c '^\s*#\[test\]' tests/selfhost_parse.rs             # 89
-grep -c '^\s*#\[test\]' tests/selfhost_codegen.rs           # 138
-grep -c '^\s*#\[test\]' tests/selfhost_declared_bounds.rs   # 5   (new this session)
+grep -c '^\s*#\[test\]' tests/selfhost_codegen.rs           # 139
+grep -c '^\s*#\[test\]' tests/selfhost_declared_bounds.rs   # 5
+grep -c '^\s*#\[test\]' tests/opcode_reachability.rs        # 2   (new this session)
 grep -c '^\s*#\[test\]' tests/block_form_statements.rs      # 11
 grep -c '^\s*#\[test\]' tests/consts_region_composition.rs  # 7
 grep -c '^\s*#\[test\]' tests/operand_stack_model.rs        # 6
-grep -oE 'fn highest_command\(\) -> Word \{ [0-9]+ \}' src/selfhost/kel/wire.kel   # 181, unchanged
 
-# THE `wire.kel` BOUNDS. Unchanged this session.
-grep -oE 'fn (nm_max_names|mi_max_nodes|fl_max_nodes|ck_max)\(\) -> Word \{ [0-9]+ \}' \
-    src/selfhost/kel/wire.kel        # 1024 names, 1365 nodes, 170 flattener, 90 chunk batch
+# `tests/stage_command_reach.rs` is NOT in this list on purpose: it lands with PR
+# #210, which is open at the time of writing. If it exists, #210 merged.
 
-# THE VERIFIER'S DECLARED NESTING CAP. New: it used to DROP a push past 128 silently.
+# THE STAGE BOUNDS. `wire.kel` unchanged; `verify_depth.kel`'s cap is new and
+# REPLACED A SILENT DROP.
+grep -oE 'fn (nm_max_names|mi_max_nodes|fl_max_nodes|ck_max|highest_command)\(\) -> Word \{ [0-9]+ \}' \
+    src/selfhost/kel/wire.kel     # 1024, 1365, 170, 90, and highest_command 181
 grep -oE 'fn max_nesting\(\) -> Word \{ [0-9]+ \}' src/selfhost/kel/verify_depth.kel   # 32
+
+# THE MARGIN PINS. Moved twice this session, both times for a NAMED reason.
+grep -oE 'assert_eq!\(worst_(names|blob), [0-9]+' tests/selfhost_wire.rs   # 672, 35233
 
 # THE PARSER'S CAPS. Unchanged; the token cap now binds only the COLLECTING feed.
 grep -rhoE 'pub const PARSE_[A-Z_]+: usize = [0-9]+;' src/ | sort
-#   OPSTACK 64, LOCALS 64, STMTS 256, PARAMS 32, IF_DEPTH 32, FOR_DEPTH 8,
-#   ARRAY_NEST 8, VARIANTS 256, CALL_DEPTH 8, FIELDS 512, TOKEN 40960, CHUNK 1024
 
-# THE MARGIN PINS. Moved twice this session, both times for a named reason.
-grep -oE 'assert_eq!\(worst_(names|blob), [0-9]+' tests/selfhost_wire.rs   # 671 names, 35213 bytes
-
-# THE CONSTRUCT-SUPPORT BOUNDARY. **THE ENUM CHANGED SHAPE**: `Gap` split into
-# `Refuses` and `Diverges`, because it was conflating an honest refusal with a
-# silent miscompile. Expect 87 SOk / 1 Refuses / 5 Diverges / 1 RefRejects.
+# THE CONSTRUCT-SUPPORT BOUNDARY. **THE ENUM HAS FOUR VARIANTS, NOT THREE**: `Gap`
+# split into `Refuses` and `Diverges` because it conflated an honest refusal with a
+# silent miscompile. Expect 88 SOk / 1 Refuses / 5 Diverges / 1 RefRejects.
 awk '/let cases: &\[\(&str, Support, &str\)\] = &\[/{f=1;next} f&&/^    \];/{f=0} f' \
     tests/selfhost_codegen.rs \
   | sed 's://.*::' | grep -oE '\b(SOk|Refuses|Diverges|RefRejects)\b' | sort | uniq -c
@@ -159,64 +159,61 @@ but not derived**. A region whose payload came from the harness or the reference
 
 ## WHAT THE SWEEP FOUND, AND WHY IT COULD NOT HAVE BEEN FOUND BY READING
 
-**FOUR SILENT MISCOMPILES IN ONE NIGHT.** Three are fixed; one is recorded and deliberately not.
+**FIVE SILENT MISCOMPILES.** Four fixed; one specified and deliberately not fixed.
 
 | construct | symptom | state |
 |---|---|---|
 | `true` / `false` | emitted `GetLocal(0)` where the reference emits `PushImmediate(1)` | **FIXED** |
-| `x as Byte` | emitted `ByteToWord`; the direction was discarded at parse time | **FIXED** |
+| `x as Byte` | emitted `ByteToWord`; the target type was discarded at parse time | **FIXED** |
 | `Named("Bool")` as a type | tagged as the boolean primitive; a false accept | **FIXED** |
-| nested array literal | outer composite sized 16 where the reference computes 32, and a chained index TRUNCATES the body | **RECORDED, NOT FIXED** |
+| nested array LITERAL | outer composite sized 16 where the reference computes 32 | **FIXED** |
+| nested array INDEX | `a[0][1]` — the second `[1]` parses as an **ArrayLit** | **SPECIFIED, NOT FIXED** |
 
-**THE METHOD IS THE DELIVERABLE.** Compile small programs through both compilers and compare **BYTES**,
-classifying THREE ways: identical, refuses loudly, and DIFFERS. Only the third is dangerous; a loud
-refusal is an honest gap. An ops-only comparison would have called the string-literal case clean, and
-it is not.
+**THE METHOD IS THE DELIVERABLE.** Compile small programs through both compilers and compare
+**BYTES**, classifying THREE ways: identical, refuses loudly, DIFFERS. Only the third is dangerous; a
+loud refusal is an honest gap. An ops-only comparison calls the string-literal case clean, and it is
+not.
 
-**WHY THE ORACLE WAS BLIND.** The self-hosting claim rests on compiling the twelve stage sources
+**WHY THE ORACLE WAS BLIND.** Self-hosting is validated by compiling the twelve stage sources
 byte-identically. **Those sources use no boolean literal and no `Byte` cast**, so the oracle cannot
-see either construct. Any construct the corpus does not contain is unverified BY CONSTRUCTION. That
-is the seventh recorded instance of a suite whose coverage is a property of its case list, and the
-most consequential, because here the case list is the corpus the whole claim rests on.
+see either. Any construct the corpus does not contain is unverified BY CONSTRUCTION.
 
 **PROPORTIONALITY, AND STATE IT EVERY TIME.** `self_hosted_compile` cross-checks ops, constant pool
 and local count against the reference and refuses on divergence. **Every defect above gave a user a
-loud error, never a wrong artifact.** The exposure is to direct callers of `self_host_compile` that
-skip the check. Reporting one of these without that sentence overstates it badly.
+loud error, never a wrong artifact.** The exposure is to direct callers of `self_host_compile`.
+Omitting that sentence overstates any of these badly.
 
-**THREE OF THE FOUR "KNOWN GAPS" WERE NEVER GAPS.** `Support::Gap` conflated refusing with diverging.
-Split, and measured: `eq/struct_tuple_of_impure_struct`, `eq/struct_field_array_of_tuple` and
-`scope/float_arith` all **Diverge**; only `scope/generic_fn` refuses. The table said "gap" and a
-reader takes that as "unsupported".
+**THE INDEX DEFECT IS NOT TRUNCATION, contrary to this document's own earlier claim.** `parse.kel`
+emits records and they are WRONG records. Chained indexing is unsupported: `ps.aa_phase` arms only
+after a let-bound array `Local` and never re-arms. **`let b = a[0]; b[1]` diverges too**, so the chain
+is not the trigger. A fix needs a binding record for an array-typed element, a nested-variant postfix
+phase, and chain re-arming — a FEATURE, not a defect fix. The boundary carries the specification.
 
-## THE DUPLICATE IS NOW EVIDENCED, NOT ARGUED. THIS IS THE OPERATOR'S TOP ITEM.
+## THE THREE UNREACHED-CODE FINDINGS, WHICH ARE ONE CLASS
 
-`tests/selfhost_codegen.rs` carries its own `self_host_compile` and its own `ParsedFn`. Its own
-comment has long warned that a fix to one is not a fix to the other. **The two have now measurably
-diverged:**
+**PRESENCE, DISPATCH, AND EVEN AN ANNOUNCEMENT ARE NOT EVIDENCE THAT CODE RUNS.**
 
-```
-fn f() -> Word { let s = "hi"; 1 }
-  reference:     constants [StaticStr("hi"), Int(1)]
-  the test copy: constants [StaticStr("hi"), Int(1)]   -- agrees
-  the LIBRARY:   constants [Int(3),          Int(1)]   -- the intern id, as an Int
-```
+1. The `v0.3.0` line found **`Op::Reset` never lowered anywhere**, credited only because a CHUNK
+   containing it lowered. A mutation crediting it moved their figure to 57 of 66 **with every test
+   still green**.
+2. **`Op::IsStruct` has no witness.** Emitted only when a scrutinee's type is unknown; nine
+   constructs tried, none reaches it. **Recorded as "not found", NOT as unreachable.**
+3. **Commands 176/177 (`fl_stream_begin`/`fl_stream_step`) are dispatched and driven by nothing** —
+   written, dispatched, and announced to the other line. This **changes the cost of `CONSTS`**: the
+   route is written but never executed, so taking it means writing the driver AND validating
+   never-run code.
 
-**The construct-support boundary measures the COPY**, so it records `Ok` for a construct the SHIPPING
-compiler gets wrong. Pinned by `the_two_self_hosted_compilers_disagree_on_a_string_literal`, whose
-control is the copy's agreement with the reference.
+**The cheap check is to search for callers before costing work that depends on code.** That was
+learned three times before being written down.
 
-**The copy exists because `ParsedFn` has four public accessors and no public fields**, and the harness
-needs six more. **Widening them is the fix**, and the same duplicate:
+**`Op::Len` IS reachable** — an `if` expression as a `for`-in source — **and the witnessing program
+cannot be given a memory bound**. `verify()` accepts it; `module_wcmu` refuses it, and the same
+missing `Expr::If` case defeats both the static-length lookup and the bound extractor. Both arms at
+length two are still refused, so it is the SECOND category of conservative rejection. On a language
+whose value proposition is definitive WCET and WCMU, **"reachable" needed qualifying and both framings
+are asserted**.
 
-1. blocks stage two of the token residency,
-2. required the boolean-literal shared slots to be seeded separately,
-3. is the subject of the support table, and
-4. now disagrees with the shipping compiler on an observable.
-
-**It was first put to the operator as a convenience. That framing was wrong.**
-
-## THE MACRO POSITION
+## THE MACRO POSITION## THE MACRO POSITION
 
 **V0.2.x completes when the five success criteria in
 [`../roadmap/V0_2_X_ROADMAP.md`](../roadmap/V0_2_X_ROADMAP.md) hold. None do.** Order 1 needs:
@@ -409,129 +406,61 @@ looked complete. **In every case the code was reachable and the evidence was not
 
 ## Open, held by the operator
 
-**THE ONE ITEM THAT MATTERS MOST: widen `ParsedFn`'s accessors so the duplicate driver in
-`tests/selfhost_codegen.rs` can be deleted.** Evidenced above, four costs, first raised as a
-convenience and that framing was wrong. Everything else here is smaller.
+**FOUR ITEMS. TWO PULL REQUESTS AND TWO DECISIONS.** Nothing else is blocked on the operator, and the
+unblocked queue is genuinely thin.
 
-**THREE FURTHER ITEMS FROM THE OVERNIGHT RUN:**
+**1. THE `ParsedFn` ACCESSOR DECISION — the one that unblocks the most.**
 
-- **Nested array literals mis-size the outer composite and truncate a chained index.** Recorded as
-  `Diverges` with the measured symptom, NOT fixed: two defects inside the composite-layout machinery
-  the flat-byte representation makes load-bearing for memory bounds. Deliberately left for a
-  supervised session.
-- **A string literal yields `Int(intern_id)` in the library compiler** where the reference yields
-  `StaticStr`. `Text` is listed in `CLAUDE.md` among the classes the command-line path refuses, so
-  this may be a known exclusion; it is adjacent to that class rather than plainly inside it.
-- **Two items were WITHDRAWN from the autonomous completion condition** at
-  `../decisions/ORDER_1_COMPLETION_CONDITION.txt`. They specified a file operand and a sidecar
-  fingerprint for a staged pipeline command **that does not exist**, and were written without
-  checking. The underlying requirement still stands in `../decisions/PIPELINE_THEN_MONOLITH.md` for
-  whoever builds the command.
+**THREE read-only accessors**, not the six an earlier revision of this file claimed. `ParsedFn` has
+nine private fields and four public accessors; `tests/selfhost_codegen.rs` needs `name` (read 71
+times), `param_types` (4) and `return_type` (2), and carries a full copy of the struct AND the driver
+because it cannot reach them.
 
-**THE RULINGS OF 2026-08-19 ARE ALL IMPLEMENTED OR RECORDED. Do not re-ask them.**
+**THE DUPLICATE IS EVIDENCED, NOT ARGUED.** It has cost four separate things:
+- blocks stage two of the token-residency work;
+- required the boolean-literal shared slots to be seeded a second time;
+- **is the compiler the construct-support table actually measures**;
+- **has measurably diverged from the shipping compiler** — on a string literal the reference and the
+  copy both emit `StaticStr("hi")` while `keleusma::selfhost::self_host_compile` emits `Int(3)`.
 
-**A RULING SESSION LANDED 2026-08-19 AND CLEARED THE LIVE LIST. Do not re-ask any of these; the
-ruling is the answer.** Every item that was live is now ruled, and TWO of the rulings were taken
-against STALE information I supplied. Both corrections are recorded in place below rather than
-quietly applied, because the operator answered the question I asked and the question was wrong.
+So the support table reports `Ok` for a construct the SHIPPING compiler gets wrong. Pinned by
+`the_two_self_hosted_compilers_disagree_on_a_string_literal`.
 
-- **Publication remains HELD.** Reaffirmed 2026-08-17.
-- **`CONSTS` representation** — *ruled: Option A, elide the zeros, and no `BYTECODE_VERSION` bump,
-  because no version-2 artifact has ever been published.* **DONE**, merged at `81ddd260`.
-- **`Op::cost()`** recalibration — *ruled: close it sometime after Order 1.*
-- **Derived operands in type rejection** — *ruled: before publishing V0.3.0.* Whether a V0.2.x version
-  ships before V0.3.0 is itself undecided.
-- **The Japanese FAQ entry** is stale and renders as English — *ruled: correct eventually.*
-- **The `for` trailing-semicolon asymmetry** — *ruled: accept it, shape A.* **DONE**, merged at
-  `1f0e5e19`. Both parsers implement the empty statement and agree byte-identically.
-- **A WINDOWED COMPILER, in the Turbo Pascal sense, is a stated goal.** Measured: ten of the twelve
-  stages are already `loop main(resume) -> Word` coroutines stepped one yield at a time, and bounded
-  working set is forced by the language rather than by discipline. `wire.kel` and `verify_types.kel`
-  are the two that are not. **I claimed a windowed verifier was blocked because a bound needs a whole
-  chunk's control-flow graph; the operator challenged it and was right.** The analysis is a fold over
-  a well-nested bracket structure with a stack of depth equal to the nesting level. What is not
-  forward-only is the IMPLEMENTATION: the walk jumps on `Loop(target)`, the `If` arm peeks at
-  `ops[target - 1]` for an `Else`, `trace_const_set_local` scans BACKWARD for a bound constant, and
-  `loop_body_advances_induction` scans FORWARD to the body tail. Each has a bounded-state streaming
-  equivalent — decide at `EndLoop` rather than at `Loop`, and carry a slot-to-last-constant map.
-  **BOTH FORMERLY-OPEN QUESTIONS ARE NOW ANSWERED** by the `v0.3.0` line, by measurement over 985
-  chunks in 64 modules, in their handoff rewrite (PR #159).
-  * **The break fold holds.** 0 of 386 loops carrying a break disagree on operand depth, guarded by a
-    must-fire control on a synthetic unbalanced loop. The assumption was safe.
-  * **Nesting depth still has NO static cap, and 19 is NOT one.** The deepest observed is 19, in
-    `parse.kel::body_step`. Their warning is the load-bearing part and is repeated here verbatim in
-    spirit: **that is what the corpus contains, not a bound on what the language admits, and it must
-    never be offered as one.** A verifier written in Keleusma needs a DECLARED cap with programs past
-    it rejected, not a number read off today's sources.
-  * They also warn against a second walker: one written independently for the break question invented
-    its own `If`/`EndIf` handling and reported 365 of 386 loops disagreeing. `EndIf` RESTORES the
-    depth saved at its `If` rather than restoring and then applying its own effect. **Do not compete
-    with a validated walker.**
-- **THE THREE FORMERLY-LIVE DECISIONS, ALL RULED 2026-08-19:**
-  * **The input-re-readability fork** — *ruled: **accept a file operand, keeping standard input as
-    the default.*** The monolith is therefore ONE command and `--chunk` is optional. Recorded in
-    `../decisions/PIPELINE_THEN_MONOLITH.md`, which now also marks the sidecar fingerprint as
-    MANDATORY rather than conditional, since the ruling keeps a sidecar reachable. **Not implemented.**
-  * **Whether to raise `parse.kel`'s token array** — *ruled: leave it at 40,960 for now.* The
-    operator's stated reason reframes the item and is more useful than the ruling: **ideally the
-    tokens stream so that no large buffer is needed at all.**
-    **THE STREAMING IS ALREADY BUILT AND THE CAP WAS NEVER THE LEVER.** `parse.kel` lines 57-80 say
-    every cursor move is plus or minus one, so it is a one-token lookahead scanner with single-token
-    pushback, and `base`/`at` already exist so a host slides the window with no protocol. The fused
-    driver already slides it: `FUSED_WINDOW` is **8** at `src/selfhost/mod.rs:823`, and the comment
-    records that **three would suffice**, measured by `the_parser_never_jumps_more_than_one_token`.
-    What remains is the DECLARATION, not the feed. `packed: [Word; 40960]` reserves 40,960 shared
-    slots whether or not eight are live, and `PARSE_TOKEN_CAP` chains every later slot offset off
-    that number. **Shrinking the array is the right lever and it REMOVES the input bound rather than
-    widening it**; the obstacle is the non-fused whole-seed path, whose remaining callers are NOT yet
-    measured. Filed as its own increment, "retire the token residency", not as a capacity question.
-  * **Whether a top-level `struct` should be SUPPORTED or REFUSED** — *ruled: defer.* Recorded as a
-    V0.3.0 widening item. Supporting evidence taken for the ruling: **none of the twelve stage
-    sources declares a struct**, so the subset does not need it to compile itself.
-- **FURTHER RULINGS FROM THE SAME SESSION:**
-  * **`parse_functions` returning a `Result` rather than panicking** — *ruled: eventually, deferring
-    is acceptable.*
-  * **A declared nesting-depth cap for a verifier written in Keleusma** — *ruled: **use 32 for now.***
-    This answers the `v0.3.0` line's warning directly: 19 is what the corpus contains, 32 is a
-    DECLARED bound with programs past it rejected. **Not implemented.**
-  * **`MAX_PARSE_DEPTH` on a small stack** — *ruled: investigating the mismatch is reasonable and any
-    issue should be corrected, but it is not the highest priority if it does not bite in practice.*
-  * **The ECC plane** — *ruled: add an end-to-end test.* **THE RULING IS ALREADY SATISFIED AND MY
-    REPORT WAS STALE.** See the correction below.
-  * **Reserving the signature and provenance regions and the `AUTH_TIER` field** — *ruled: yes,
-    reserve.* **Genuinely open.** Note the name collision that makes this easy to mis-close:
-    `kind::SIGNATURES` at `0x0016` is PER-CHUNK TYPE DESCRIPTORS, not cryptography, and the
-    cryptographic signature lives in the FRAMING HEADER rather than in a v2 region. No provenance
-    region and no `AUTH_TIER` field exist. **Not implemented.**
-  * **`V0_5_0_KELEUSMA_HOST.md` line 16**, the autonomous-probe-controller example — *ruled: scrub;
-    repo archaeologists are not a concern.* **DONE** in this increment. It was the only occurrence in
-    any tracked document.
-  * **`CHANGELOG.md`** push order — *ruled: correct it, low priority but easy.* **DONE** in this
-    increment.
-  * **`-255` in `wire.kel`** — *ruled: add the negative test.* Three sites, lines 3281, 3334, 3521.
-    **Not implemented.**
-- **TWO RULINGS WERE TAKEN AGAINST STALE INFORMATION I GAVE, AND BOTH ERRORS WERE MINE.**
-  * **The ECC plane is NOT unexercised.** I read item 5 of
-    `../decisions/WIRE_FORMAT_V2_WORD_ORIENTED.md`, which said open, instead of deriving from the
-    tree. `SchemaBuilder::with_ecc` exists at `src/wire_schema.rs:875` and `finish` calls
-    `protect_all`. **EIGHT tests drive it on real compiler output** across
-    `tests/secded_end_to_end.rs` and `tests/ecc_signature_ordering.rs`, each corruption case paired
-    with the same corruption on an unprotected artifact so a caught flip cannot be credited to the
-    CRC. The document entry is corrected in place rather than rewritten.
-  * **The token array item was framed as a capacity question** when the streaming it presupposed was
-    already implemented. See the ruling above.
-  **THE COMMON CAUSE IS THE ONE THIS LINE KEEPS RECORDING**: I derived a status from a document's
-  status field rather than from the system. **Read the tree before putting a question to the
-  operator**, because a wrong question costs their ruling, not just my time.
-- **`MAX_PARSE_DEPTH` does not do its stated job on a small stack.** *Ruled: worth
-  investigating and correcting, but not the top priority absent a practical bite.*
-- ~~**`CHANGELOG.md:340`**~~ **CORRECTED 2026-08-19.** The text was at line **571**, not 340, and it
-  said the runtime pushes `(high, low, flag)`. **Verified against `src/vm.rs:6442`**, which pushes
-  low, then high, then flag -- not against the grammar document, because correcting published text
-  from a second document is how the wrong one wins.
-- **`-255` is live and has no negative test.** *Ruled: add it.* Still open.
-- **`v0.2.3-prerebase-backup`**, local only. Do not delete without being asked.
-- **MSRV**: CI checks 1.85 for `keleusma-arena`, 1.88 for `keleusma`.
+*Options*: widen the three accessors and delete the copy (recommended); widen them gated on
+`self-host`; or leave it and accept that the table describes a compiler that is not the one shipping.
+
+**2. TWO PULL REQUESTS OPEN AGAINST `v0.2.3`:**
+- **#201**, one clause in the `CHANGELOG.md` V0.2.0 entry that CONTRADICTS another statement in the
+  same release section. Flagged for review because editing historical release text is a judgment call
+  rather than a repair. One clause, trivially revertible.
+- **#210**, pinning that commands 176/177 are dispatched and unreached. Its guard is TEXTUAL — it
+  greps driver source for two function names — which is the shape argued against all session, and it
+  passes vacuously if those functions are renamed. Stated in the pull request rather than hidden.
+
+**3. THE DEAD `native@1c1ffb1e` GATE RECORD.** `scripts/gate-status.sh` reports it STALLED at 34%,
+step 5, zero failures, **last write over 227 hours ago**, with its predecessor marked ABANDONED and
+"a wait on it will never end". No process runs against that worktree and it is clean. The `v0.3.0`
+line has confirmed nothing of theirs waits on it. Untouched because it is their worktree.
+
+**4. THE RULINGS OF 2026-08-19 ARE ALL IMPLEMENTED OR RECORDED. Do not re-ask them.**
+
+## WHAT A RESUMING SESSION SHOULD DO FIRST
+
+**Clear the operator queue before starting anything**, because two of the four items change what the
+tree means rather than what it does.
+
+Then, if development continues, the honestly-costed options are:
+
+- **`CONSTS`, Order 1 item 1.** The flattener already emits a byte-identical region and batching is
+  the route, BUT commands 176/177 have never run — budget for validating them, and drive them from a
+  test first so the stage side is proven independently of the driver.
+- **Chained array indexing.** Specification is in the boundary table; it is a parser feature.
+- **`Op::IsStruct` reachability.** Nine constructs tried and recorded. The target is making inference
+  FAIL, and note that the trick which works for `Op::Len` does NOT work here — necessary but not
+  sufficient.
+
+**Do not resume by sweeping for more miscompiles.** The yield fell from two in twenty probes, to one
+in twenty-two, to zero; the shallow layer is worked out.
 
 ## A NOTE ON THE `/goal` MECHANISM, IF THE OPERATOR USES IT
 

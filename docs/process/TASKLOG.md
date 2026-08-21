@@ -105,6 +105,20 @@ Current sprint source of truth.
 > the boolean-literal slots seeded separately, and it is the subject of the support table. **Widening
 > `ParsedFn`'s accessors so it can be deleted is the central structural fix**, not a convenience.
 
+> **Currency note (2026-08-20, closing).** **HANDOFF REFRESHED against `f091a668`**, every value
+> re-measured and the check block executed. Nine commits since the previous refresh, which was the
+> same day.
+>
+> **THE OPERATOR QUEUE IS FOUR ITEMS**: the `ParsedFn` accessor decision (THREE accessors, and the
+> duplicate it sustains has measurably diverged from the shipping compiler), PR #201, PR #210, and
+> the dead `native@1c1ffb1e` gate record.
+>
+> **SESSION TOTAL: five silent miscompiles found, four fixed, one specified.** Plus `Op::Len`
+> witnessed and qualified, the support table split into `Refuses`/`Diverges` — which reclassified
+> three of four known gaps — and Order 1 item 3 reaching `let` bindings.
+>
+> **DO NOT RESUME BY SWEEPING.** Yield fell two-in-twenty, one-in-twenty-two, then zero.
+
 > **Currency note (2026-08-20, night).** **THE CAST DIRECTION WAS INVERTED**, and the sweep that
 > found it matters more than the fix. `7 as Byte` emitted `ByteToWord` where the reference emits
 > `WordToByte`: `parse.kel` emitted the `Cast` node at the `as` token and DISCARDED the target type
