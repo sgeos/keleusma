@@ -143,6 +143,37 @@ fn the_if_source_reaches_op_len_and_verifies() {
     );
 }
 
+/// **TWO INDEPENDENT BOUND ENTRY POINTS REFUSE IT, and that is not redundancy.**
+///
+/// The finding below rests on `auto_arena_capacity_for`. If that were the only
+/// evidence, "the Len witness is unbounded" and "one arena-sizing helper happens
+/// to refuse it" would be indistinguishable. `module_wcmu` is a different public
+/// entry into the resource analysis, and it refuses too.
+///
+/// **Reached independently by the `v0.2.3` line through `module_wcmu` while this
+/// line used `auto_arena_capacity_for`**, before either knew which the other had
+/// called. Re-run here rather than taken on report.
+#[test]
+fn a_second_bound_entry_point_refuses_it_too() {
+    let m = build(IF_SOURCE);
+    assert!(
+        keleusma::verify::module_wcmu(&m, &[]).is_err(),
+        "`module_wcmu` accepts the Len witness while `auto_arena_capacity_for` \
+         refuses it. The two disagreeing is a finding in itself and means the \
+         refusal recorded in this file is a property of ONE helper rather than \
+         of the resource analysis"
+    );
+    // The control: the bounded form must pass BOTH, or "refuses" above is just
+    // "this entry point refuses everything".
+    let plain = build(PLAIN_SOURCE);
+    assert!(
+        keleusma::verify::module_wcmu(&plain, &[]).is_ok(),
+        "`module_wcmu` refuses the ORDINARY for-in as well, so its refusal above \
+         says nothing about the `if` source: {:?}",
+        keleusma::verify::module_wcmu(&plain, &[]).err()
+    );
+}
+
 /// **THE FINDING.** Verified bytecode, refused a bound.
 #[test]
 fn the_only_known_len_witness_cannot_be_given_a_resource_bound() {
