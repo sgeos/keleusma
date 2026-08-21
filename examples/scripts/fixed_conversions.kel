@@ -41,6 +41,35 @@ fn scaled_square(w: Word) -> Word {
   p as Word
 }
 
+// **THE NEGATIVE SATURATION BRANCH, which nothing reached until this existed.**
+//
+// Every argument vector the differential supplies is NON-NEGATIVE:
+// `args_for_seed` yields `(i+1)*3+1`, `5`, `0`, `(n-i)*3+1`, then `k-4` for
+// k in 4..23. So `shifted < MIN` could never fire, and the MIN clamp of both
+// conversions and the multiply was unverified while the suite was green.
+// Measured, not assumed: disabling the MIN clamp alone produced NO disagreement.
+//
+// The PROGRAM produces the negative rather than the harness being reshaped to
+// supply one -- changing `args_for_seed` to emit negatives would be tuning the
+// input generator to this file, which is the move refused elsewhere in this
+// corpus for the same reason.
+fn negative_scale(w: Word) -> Word {
+  let neg = 0 - w;
+  let big = neg lsl 46;
+  let f = big as Fixed<16>;
+  f as Word
+}
+
+// **A NEGATIVE PRODUCT.** `scaled_square` cannot reach `FixedMul`'s MIN clamp:
+// a square is never negative. Measured the same way -- disabling that clamp
+// alone produced no disagreement until this function existed.
+fn negative_product(w: Word) -> Word {
+  let a = ((0 - w) lsl 30) as Fixed<16>;
+  let b = (w lsl 30) as Fixed<16>;
+  let p = a * b;
+  p as Word
+}
+
 fn main(w: Word) -> Word {
-  scale_and_back(w) + scaled_square(w)
+  scale_and_back(w) + scaled_square(w) + negative_scale(w) + negative_product(w)
 }
