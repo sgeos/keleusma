@@ -310,3 +310,64 @@ test file are two implementations of the same thing, and **the construct-support
 only the copy.** Every divergence found this session was a slot, a tag or a record the copy handled
 and the shipping driver did not. That is the evidence for the accessor decision, and it is now
 three findings deep rather than one.
+
+---
+
+# THE FOURTH DEFECT, AND THE GUARD THAT MAKES THE CLASS SELF-DETECTING (2026-08-21)
+
+## `bad scalar kind tag 131080`, and the number is the whole diagnosis
+
+Op tag 53 has **two** forms. The flat form packs `offset + kind_tag*65536`; the flat-nested form,
+a nested composite tuple element extracted and re-wrapped, packs
+`offset + size*65536 + variant*2^32`. They are disambiguated by operand magnitude.
+
+The shipping driver decoded only the flat one — it had no `TupleField::FlatNested` arm at all,
+though the type it constructs was already used elsewhere in the same file. So a struct-typed tuple
+element's packed word was read as a scalar-kind tag. For `size = 8, variant = Struct(2)` the
+operand is 8,590,458,880 and `operand / 65536` is **131,080**, which is the number in the fault.
+
+`tests/selfhost_codegen.rs` has carried both arms all along, behind the same magnitude guard.
+
+**Diagnosed entirely by reading**, while a gate held the build — the arithmetic was checked against
+the fault message before any edit, rather than the fix being tried to see what happened.
+
+## The final census
+
+| | baseline | + pool tag & declaration skip | + eager `and`/`or` | + flat-nested tuple |
+|---|---|---|---|---|
+| byte-identical | 43 | 76 | 82 | **88** |
+| differs | 21 | 11 | 5 | **5** |
+| faults | 30 | 7 | 7 | **1** |
+| reference rejects | 1 | 1 | 1 | 1 |
+
+**The shipping compiler now reaches the same verdict as the boundary on all 95 cases.** Every
+remaining non-identical case is one the table already labels `Diverges`, `Refuses` or
+`RefRejects`. No construct recorded `Ok` differs or faults any more.
+
+## FOUR DEFECTS, ONE CAUSE — and this is the finding, not the four fixes
+
+| defect | symptom |
+|---|---|
+| the constant-pool tag was discarded | a string constant became the integer of its intern id |
+| struct/trait/impl declarations had no skip state | the driver faulted on 29 cases |
+| the eager `and`/`or` ids were never seeded | `a and b` compiled to `a` |
+| op tag 53 had no flat-nested arm | a struct-typed tuple element faulted in kind decoding |
+
+Every one was a slot, a tag, a record or an arm that `tests/selfhost_codegen.rs`'s copy of the
+driver handled and the shipping driver did not. **The construct-support boundary exercises only
+the copy**, so the project's own record of what self-hosting supports was describing a compiler
+that is not the one that ships.
+
+## The guard, which is the durable part
+
+`the_shipping_compiler_matches_the_boundary_it_is_recorded_against` runs the SAME hoisted case
+table through `keleusma::selfhost::self_host_compile` and asserts **per-case verdict agreement**,
+not a count. A count is satisfiable by one construct regressing while another is repaired; per-case
+agreement is not, and it names the construct when it breaks.
+
+The table is hoisted into a function rather than copied, because a second copy of it would have
+been the nine-copies defect a third time.
+
+**This does not make the duplicate safe. It makes the drift visible.** The copy is still a second
+implementation of the driver; the accessor decision that would let it be deleted is still open, and
+is now four findings better evidenced than when it was raised.

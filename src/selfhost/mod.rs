@@ -436,6 +436,26 @@ fn decode_op(w: i64) -> Op {
             size: (operand % 65536) as u16,
             variant: composite_kind_from_tag(operand / 65536),
         }),
+        // **TAG 53 HAS TWO FORMS AND THIS DRIVER DECODED ONLY ONE.**
+        //
+        // A tuple field read. The FLAT-NESTED form -- a nested composite tuple element
+        // extracted and re-wrapped -- packs `offset + size*65536 + variant*2^32`; the FLAT
+        // form packs `offset + kind_tag*65536`, which is under 2^20. They are disambiguated
+        // by operand magnitude, exactly as `tests/selfhost_codegen.rs` has always done.
+        //
+        // Without the first arm a struct-typed tuple element fell into the second and its
+        // packed word was read as a scalar-kind tag: for `size = 8, variant = Struct(2)` the
+        // operand is 8,590,458,880, and `operand / 65536` is 131,080 -- the "bad scalar kind
+        // tag 131080" that six `Ok`-recorded boundary cases faulted with. A LOUD fault rather
+        // than a wrong op, but a fault on a construct the boundary reports as supported.
+        //
+        // The sibling arms for `GetField` (47/48) and `GetIndex` (49/56) use distinct op tags
+        // for the two forms, so only the tuple read needs the magnitude guard.
+        53 if operand >= 4294967296 => Op::GetTupleField(TupleField::FlatNested {
+            offset: (operand % 65536) as u16,
+            size: ((operand / 65536) % 65536) as u16,
+            variant: composite_kind_from_tag(operand / 4294967296),
+        }),
         // A flat tuple field read: operand packs offset + kind_tag*65536.
         53 => Op::GetTupleField(TupleField::Flat {
             offset: (operand % 65536) as u16,

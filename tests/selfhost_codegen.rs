@@ -7954,14 +7954,125 @@ enum Support {
     RefRejects,
 }
 
+/// **THE SHIPPING COMPILER IS MEASURED AGAINST THE SAME TABLE, AND IT NOW AGREES.**
+///
+/// # Why this test exists
+///
+/// [`self_hosted_construct_support_boundary`] classifies THIS FILE's copy of the driver. The
+/// crate ships a different one, and for as long as only the copy was measured, four separate
+/// silent defects in the shipping compiler were invisible to the project's own record of what
+/// self-hosting supports:
+///
+/// | defect | symptom |
+/// |---|---|
+/// | the constant-pool tag was discarded | a string constant became the integer of its intern id |
+/// | struct/trait/impl declarations had no skip state | the driver faulted on 29 cases |
+/// | the eager `and`/`or` ids were never seeded | `a and b` compiled to `a` |
+/// | tag 53 had no flat-nested arm | a struct-typed tuple element faulted in kind decoding |
+///
+/// Every one was something the copy handled and the shipping driver did not. Measured over this
+/// table, the shipping compiler went from 43 byte-identical to 88 of 95.
+///
+/// # What it pins, which is stronger than a count
+///
+/// Not "N cases pass" but **the two compilers reach the same verdict on every case**. A count can
+/// be satisfied by one construct regressing while another is repaired; per-case agreement cannot.
+/// The day the driver and the copy drift again, this names the construct.
+///
+/// # This does not make the duplicate safe, it makes the drift visible
+///
+/// The copy is still a second implementation and this test is a smoke alarm, not a repair. The
+/// accessor decision that would let it be deleted is still open.
+#[cfg(feature = "self-host")]
 #[test]
-fn self_hosted_construct_support_boundary() {
-    use Support::{Diverges, Ok as SOk, RefRejects, Refuses};
+fn the_shipping_compiler_matches_the_boundary_it_is_recorded_against() {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
-    // (construct label, expected support, source). Labels are stable identifiers for the
-    // boundary; keep them descriptive. Grouped by category.
-    let cases: &[(&str, Support, &str)] = &[
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let mut mismatches: Vec<String> = Vec::new();
+    let mut reached = [0usize; 4];
+    for (label, expected, src) in boundary_cases() {
+        let actual = if catch_unwind(AssertUnwindSafe(|| compile_src(src))).is_err() {
+            Support::RefRejects
+        } else {
+            // The SHIPPING entry point, which is the whole point of this test.
+            match catch_unwind(AssertUnwindSafe(|| {
+                keleusma::selfhost::self_host_compile(src)
+            })) {
+                Err(_) => Support::Refuses,
+                Ok(lib) => {
+                    let reference = compile_src(src);
+                    // Ops, constant pool and local count -- the same three fields
+                    // `self_hosted_compile` cross-checks before it will emit a module.
+                    let same = lib.chunks.len() == reference.chunks.len()
+                        && lib
+                            .chunks
+                            .iter()
+                            .zip(reference.chunks.iter())
+                            .all(|(a, b)| {
+                                a.name == b.name
+                                    && a.ops == b.ops
+                                    && a.constants == b.constants
+                                    && a.local_count == b.local_count
+                            });
+                    if same { Support::Ok } else { Support::Diverges }
+                }
+            }
+        };
+        reached[match actual {
+            Support::Ok => 0,
+            Support::Refuses => 1,
+            Support::Diverges => 2,
+            Support::RefRejects => 3,
+        }] += 1;
+        if actual != *expected {
+            mismatches.push(format!(
+                "{label}: boundary records {expected:?}, shipping compiler gives {actual:?}"
+            ));
+        }
+    }
+    std::panic::set_hook(prev);
+
+    assert!(
+        mismatches.is_empty(),
+        "the SHIPPING compiler no longer matches the boundary this table records. Each line is a \
+         construct where the crate's own record of self-hosting support is wrong about what \
+         ships. If a case improved, update its verdict here; if it regressed, the driver and \
+         `tests/selfhost_codegen.rs`'s copy of it have drifted again:\n  {}",
+        mismatches.join("\n  ")
+    );
+
+    // Non-vacuity, in both directions. A table of one case, or one where every verdict were the
+    // same, would satisfy the loop above while establishing nothing.
+    assert!(
+        boundary_cases().len() >= 90,
+        "the case table shrank to {}; this test's reach is a property of the table",
+        boundary_cases().len()
+    );
+    assert!(
+        reached[0] >= 80,
+        "only {} cases are byte-identical through the shipping compiler; this test was written \
+         when 88 of 95 were",
+        reached[0]
+    );
+    assert!(
+        reached.iter().filter(|&&n| n > 0).count() >= 3,
+        "the shipping compiler reached fewer than three distinct verdicts, so the classifier is \
+         not discriminating"
+    );
+}
+
+/// The construct-support case table, hoisted so **two** compilers can be measured against it.
+///
+/// It lived inside [`self_hosted_construct_support_boundary`] and therefore described only the
+/// compiler that test classifies, which is THIS FILE's copy of the driver. Four silent
+/// miscompiles in the shipping compiler sat unreported behind that, because nothing ever ran the
+/// table against `keleusma::selfhost::self_host_compile`. Copying the table into a second file
+/// would have been the nine-copies defect again, so it is hoisted instead.
+fn boundary_cases() -> &'static [(&'static str, Support, &'static str)] {
+    use Support::{Diverges, Ok as SOk, RefRejects, Refuses};
+    &[
         // --- scalars -------------------------------------------------------------
         (
             "scalar/word_arith",
@@ -8512,7 +8623,16 @@ fn self_hosted_construct_support_boundary() {
             RefRejects,
             "fn f() -> Word { let g = |x| x; g(1) }",
         ),
-    ];
+    ]
+}
+
+#[test]
+fn self_hosted_construct_support_boundary() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    // (construct label, expected support, source). Labels are stable identifiers for the
+    // boundary; keep them descriptive. Grouped by category.
+    let cases = boundary_cases();
 
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
