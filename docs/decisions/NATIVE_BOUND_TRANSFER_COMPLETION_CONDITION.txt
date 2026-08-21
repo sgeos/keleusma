@@ -1,0 +1,54 @@
+COMPLETION CONDITION — native bound transfer (Workstream E)
+
+Ordering is explicitly NOT a completion criterion. Any order satisfies this.
+
+All of the following must hold as observable properties of the tree.
+
+1. A test in the native code generator compares, over the real corpus, the
+   backend's operand-stack provisioning against the per-chunk figure the
+   bytecode verifier computes. It reports the MAXIMUM observed requirement and
+   the headroom against the provisioning, not merely a pass or fail.
+
+2. A test compares, over the real corpus, the backend's composite-region byte
+   demand against the heap figure the bytecode verifier computes for the same
+   module. Whether the demand is bounded by the verified figure is stated
+   explicitly as a result, in whichever direction the measurement went.
+
+3. Both comparisons assert a non-trivial denominator: the number of chunks or
+   modules actually compared is asserted to be substantial and is printed, so a
+   comparison over an empty or tiny set fails rather than passes.
+
+4. Units are not conflated. Any place a slot count and a byte count are brought
+   together states the conversion explicitly, or the two are kept separate.
+
+5. The backend's operand-stack-too-deep refusal is either demonstrated by a
+   test that constructs a subject reaching it, or the tree records that nothing
+   reaches it and that an untriggered guard is not a demonstrated guard.
+
+6. At least one of the new comparisons is shown to be load-bearing by a recorded
+   mutation: the transcript states what was changed, that the changed version
+   produced a different result or a failure, and that the change was reverted
+   with the revert verified.
+
+7. Any margin reported is accompanied by its denominator and by an explicit
+   statement that a comfortable margin over this corpus is not a proof of the
+   general property.
+
+8. If a violation is found, it is named precisely and is NOT resolved by
+   widening the provisioning or by relaxing an assertion. If no violation is
+   found, the tree does not claim the bound is proven.
+
+9. The resume document for this line records the outcome with every figure taken
+   from a run rather than carried forward, and its stated test count matches the
+   suite.
+
+10. The files recorded as read-only for this line are unmodified: the bytecode
+    verifier, the virtual machine, the bytecode definitions, the self-hosted
+    compiler sources, and the continuous-integration workflows.
+
+11. The native code generator's own suite passes with zero failures, and its
+    formatting and lint checks pass, with the pass/fail judgement taken from
+    something other than a truncated or piped view of the output.
+
+12. Work that is finished is committed and pushed. Nothing required by the
+    points above is left only in the working tree.
