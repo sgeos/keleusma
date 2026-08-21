@@ -503,15 +503,38 @@ decide, so it is decided: **folded at compile time**, not rejected at load. Reje
 would make a legal program fail EARLIER; folding makes it WORK, and the witness now returns the
 right answer rather than merely not trapping. Revertible if the operator disagrees.
 
-**3. A NEW QUESTION, AND IT IS GENUINELY THE OPERATOR'S: SHOULD `Op::IsStruct` EXIST?**
+**3. THE LOAD-TIME HOLE IS NARROWED, NOT CLOSED — AND MY EARLIER CLAIM THAT THE OPCODE HAD NO
+PRODUCER WAS WRONG.**
 
-Closing the hole removed the only producer. **No construct known to this tree emits `Op::IsStruct`.**
-Recorded as *no producer found*, never as unreachable — the `Op::Reset` distinction.
+**RETRACTED WITHIN THE HOUR, BY THE `v0.3.0` LINE, USING MY OWN METHOD.** Do not act on the removal
+framing that stood here briefly.
 
-On an instruction set whose opcode count is a **stated rad-hard design constraint**, an opcode with
-no producer is a removal candidate. That is an ISA decision, not a test's. The `v0.3.0` line has been
-asked to try producing it independently after absorbing the change; **two lines failing separately is
-a materially stronger basis than one**, and they have committed to reporting either outcome.
+| construct | emits | verifies | runs |
+|---|---|---|---|
+| generic struct destructured in a parameter | yes | yes | **traps `InvalidBytecode`** |
+| pattern `P` against annotation `Q` | yes | yes | **traps `InvalidBytecode`** |
+| tuple-typed annotation | yes | yes | traps `NoMatchingHead` |
+| array-typed annotation | yes | yes | traps `NoMatchingHead` |
+| **unannotated parameter** (what the fold fixed) | no | yes | **`Int(3)`** |
+
+Reproduced independently on this tree before accepting it.
+
+**THE FOLD'S ORIGINAL JUSTIFICATION WAS FALSE.** It claimed the type checker refuses every
+mismatch. It does not: `fn g(P { a, b }: Q)` compiles with two DISTINCT structs, and a struct
+pattern is admitted against a tuple- or array-typed annotation. The comment in `src/compiler.rs`
+now says so.
+
+**WHAT IS ACTUALLY OPEN, AND IT IS PROBABLY A TYPE-CHECKER QUESTION.** A struct pattern matched
+against an unrelated struct, a tuple, or an array is arguably ill-typed AT THE SOURCE. Closing it
+in the type checker would remove the emission rather than fold it, and would close two load-time
+holes at once. That is a language decision, not a lowering fix, which is why it is recorded rather
+than patched.
+
+**HOW I GOT IT WRONG, because the shape recurs.** I found the original witness by reading the
+guard's match arms for what they OMIT. Validating my own repair, I reverted to guessing three
+constructs and generalised from them. The other line applied MY method to MY code — read the
+emission condition, enumerate the `TypeExpr` variants that make `named_type_name` return `None`
+while a struct pattern is still accepted — and had four counterexamples in under an hour.
 
 **3. THE DEAD `native@1c1ffb1e` GATE RECORD.** Unchanged: stalled 227+ hours, no process, worktree
 clean, the `v0.3.0` line confirms nothing waits on it. Untouched because it is theirs.

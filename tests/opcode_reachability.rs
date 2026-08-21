@@ -323,46 +323,108 @@ fn the_is_struct_witness_now_compiles_verifies_and_runs() {
     );
 }
 
-/// **NO CONSTRUCT KNOWN TO THIS TREE PRODUCES `Op::IsStruct`.**
+/// **`Op::IsStruct` STILL HAS PRODUCERS, AND TWO OF THEM STILL REACH THE LOAD-TIME HOLE.**
 ///
-/// Recorded as **not found**, never as unreachable. Twenty-odd constructs have been tried across
-/// two sessions and two development lines; the one that worked turned out to be a compiler defect,
-/// and repairing it removed the only producer.
+/// This test asserted the opposite for about an hour. **I was wrong, and the way I got it wrong is
+/// the part worth keeping.**
 ///
-/// # What was tried
+/// I found the original witness by reading the guard's match arms for what they OMIT — the method
+/// that cracked `Op::Len` after fourteen guessed constructs had failed. Then, validating my own
+/// repair, I reverted to guessing: three constructs, none emitted, and I generalised to "no
+/// producer found" and told the operator the opcode was a removal candidate.
 ///
-/// Ten match-scrutinee shapes (the sibling test enumerates them), and the parameter-declaration
-/// route that did work until the fold was widened. The guard is
-/// `named_type_name(ty) != Some(pattern_type)` and the type checker forbids the two from
-/// differing, so the inequality is satisfiable only when the scrutinee's type is ABSENT — and
-/// absence is now folded rather than treated as disagreement.
+/// The `v0.3.0` line disproved it within the hour, using my own method against my own code: read
+/// the emission condition, then enumerate which `TypeExpr` variants make `named_type_name` return
+/// `None` while a struct pattern is still ACCEPTED. Four constructs, reproduced here independently.
 ///
-/// # Why this is a finding rather than a loose end
+/// | construct | emits | verifies | runs |
+/// |---|---|---|---|
+/// | generic struct destructured in a parameter | yes | yes | **traps `InvalidBytecode`** |
+/// | pattern `P` against annotation `Q` | yes | yes | **traps `InvalidBytecode`** |
+/// | tuple-typed annotation | yes | yes | traps `NoMatchingHead` |
+/// | array-typed annotation | yes | yes | traps `NoMatchingHead` |
 ///
-/// The opcode count of this instruction set is a stated rad-hard design constraint. An opcode that
-/// no source program can produce is a candidate for removal, and that is an operator decision
-/// about the ISA, not a test's to make. **This test exists so the question is visible and so that
-/// anything which starts producing the opcode reports itself.**
+/// # What the fold did and did not do
+///
+/// It closed the UNANNOTATED-parameter case, which the sibling test pins by asserting the witness
+/// now returns `Int(3)`. It **narrowed** the fallback rather than eliminating it.
+///
+/// # The deeper finding, which is not a lowering defect
+///
+/// The first two rows disprove the justification the fold was originally given: that the type
+/// checker refuses every mismatch. It does not. `fn g(P { a, b }: Q)` compiles with two DISTINCT
+/// structs, and a struct pattern is admitted against a tuple- or array-typed annotation.
+///
+/// **Those look like type-checker admissions rather than lowering defects.** Closing them at the
+/// source would remove the emission rather than fold it, which is why they are recorded here rather
+/// than patched in the lowering.
 #[test]
-fn no_known_construct_produces_op_is_struct() {
-    let probes = [
-        // The former witness: a struct pattern on an un-annotated parameter.
-        "struct P { a: Word, b: Word }\nfn g(P { a, b }) -> Word { a + b }\nfn main() -> Word { g(P { a: 1, b: 2 }) }",
-        // Multiheaded, which routes through the same parameter-pattern path.
-        "struct P { a: Word, b: Word }\nfn g(P { a, b }) -> Word { a + b }\nfn g(x) -> Word { 0 }\nfn main() -> Word { g(P { a: 1, b: 2 }) }",
-        // A tuple parameter containing a struct pattern, un-annotated.
-        "struct P { a: Word, b: Word }\nfn g((P { a, b }, n)) -> Word { a + b + n }\nfn g(x) -> Word { 0 }\nfn main() -> Word { g((P { a: 1, b: 2 }, 3)) }",
+fn op_is_struct_still_has_producers_and_two_still_trap() {
+    // The two that reach the load-time hole: verify, take a bound, load, then die.
+    let holes = [
+        (
+            "generic struct destructured in a parameter",
+            "struct P<T> { a: T, b: T }\nfn g(P { a, b }: P<Word>) -> Word { a + b }\nfn main() -> Word { g(P { a: 1, b: 2 }) }",
+        ),
+        (
+            "pattern P against annotation Q",
+            "struct P { a: Word, b: Word }\nstruct Q { a: Word, b: Word }\nfn g(P { a, b }: Q) -> Word { a + b }\nfn main() -> Word { g(Q { a: 1, b: 2 }) }",
+        ),
     ];
-    for src in probes {
+    for (label, src) in holes {
+        let module = module_of(src);
         assert!(
-            !ops_of(src).iter().any(|o| matches!(o, Op::IsStruct(_))),
-            "{src:?} produces `Op::IsStruct`. That is a WITNESS: qualify it the way the others \
-             were -- does it verify, receive a bound, load, and run? -- before recording the \
-             opcode as reachable"
+            module
+                .chunks
+                .iter()
+                .any(|c| c.ops.iter().any(|o| matches!(o, Op::IsStruct(_)))),
+            "{label}: no longer emits `Op::IsStruct`. If a repair closed it, this test's census is \
+             stale -- say which constructs remain"
         );
-        // Non-vacuity: each probe must actually compile, or the loop proves nothing.
-        assert!(!ops_of(src).is_empty(), "a probe compiled to no ops at all");
+        keleusma::verify::verify(&module).expect("the structural verifier accepts it");
+        keleusma::verify::module_wcmu(&module, &[]).expect("it receives a memory bound");
+
+        let arena = keleusma::Arena::with_capacity(keleusma::vm::DEFAULT_ARENA_CAPACITY);
+        let mut vm = keleusma::vm::Vm::new(module, &arena)
+            .expect("it LOADS; that is what makes this a load-time hole rather than a refusal");
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        let err = vm.call_with_shared(&mut shared, &[]).expect_err(
+            "it now RUNS. That is a repair: say which side closed it and update the census above",
+        );
+        assert!(
+            format!("{err:?}").contains("IsStruct"),
+            "{label}: fails for some other reason now ({err:?}), so this no longer measures the \
+             flat-struct type test"
+        );
     }
+
+    // Two more producers whose programs fail for a DIFFERENT reason. Kept separate because a test
+    // that lumped them with the holes above would report four load-time holes where there are two.
+    for (label, src) in [
+        (
+            "tuple-typed annotation",
+            "struct P { a: Word, b: Word }\nfn g(P { a, b }: (Word, Word)) -> Word { a + b }\nfn main() -> Word { g((1, 2)) }",
+        ),
+        (
+            "array-typed annotation",
+            "struct P { a: Word, b: Word }\nfn g(P { a, b }: [Word; 2]) -> Word { a + b }\nfn main() -> Word { g([1, 2]) }",
+        ),
+    ] {
+        assert!(
+            ops_of(src).iter().any(|o| matches!(o, Op::IsStruct(_))),
+            "{label}: no longer emits `Op::IsStruct`"
+        );
+    }
+
+    // **THE CONTROL, WHICH IS WHAT THE FOLD ACTUALLY FIXED.** Without it this test would read as
+    // "the repair did nothing", and it did something specific.
+    const FIXED: &str = "struct P { a: Word, b: Word }\n\
+                         fn g(P { a, b }) -> Word { a + b }\n\
+                         fn main() -> Word { g(P { a: 1, b: 2 }) }";
+    assert!(
+        !ops_of(FIXED).iter().any(|o| matches!(o, Op::IsStruct(_))),
+        "the unannotated-parameter case emits `Op::IsStruct` again; the fold regressed"
+    );
 }
 
 /// **THE THREE "SHOULD NEVER HAVE BEEN EMITTED" REFUSALS, AND WHAT IS LEFT OF THEM.**
@@ -394,13 +456,16 @@ fn no_known_construct_produces_op_is_struct() {
 /// check, which is the conservative-verification stance working as designed. It was never a hole.
 ///
 /// `Op::IsStruct`'s witness satisfied every load-time check and died at call time, which WAS a
-/// hole, and folding the irrefutable type test closed it. That left the opcode with no producer.
+/// hole. Folding the irrefutable type test closed **that construct** — and, for about an hour, this
+/// file claimed it had closed the opcode. **It had not.** Four producers survive and two still trap;
+/// see `op_is_struct_still_has_producers_and_two_still_trap`.
 ///
-/// **This test therefore asserts an asymmetry that is now permanent-looking rather than
-/// incidental**: one opcode has a witness that cannot be admitted, and the other has no witness at
-/// all. Both are worth knowing on an instruction set whose opcode count is a design constraint.
+/// **The asymmetry this test asserts is therefore narrower than it first read**: `Op::Len` has a
+/// witness that cannot be ADMITTED, and `Op::IsStruct` has witnesses that are admitted and then
+/// fail. Both matter on an instruction set whose opcode count is a design constraint, and neither
+/// is a claim that an opcode is unreachable.
 #[test]
-fn op_len_has_an_inadmissible_witness_and_op_is_struct_has_none() {
+fn op_len_has_an_inadmissible_witness_and_op_is_struct_a_narrowed_one() {
     const LEN_WITNESS: &str = "fn f(c: bool) -> Word { let a = [1, 2]; let b = [3, 4]; \
                                for x in if c { a } else { b } { let _d = x; } 0 }\n\
                                fn main() -> Word { f(true) }";
@@ -423,14 +488,17 @@ fn op_len_has_an_inadmissible_witness_and_op_is_struct_has_none() {
          catching it; if it loads and then traps, the refusal merely moved later, which is worse"
     );
 
-    // `Op::IsStruct` has no producer. Asserted through the construct that used to be its witness,
-    // so this fails the moment anything starts producing it again.
-    const FORMER: &str = "struct P { a: Word, b: Word }\n\
+    // **`Op::IsStruct` STILL HAS PRODUCERS.** This asserts only the narrower true thing: the
+    // construct the fold closed no longer emits it. The surviving producers, two of which still
+    // trap, are enumerated in `op_is_struct_still_has_producers_and_two_still_trap`.
+    //
+    // An earlier revision asserted here that the opcode had NO producer, which was wrong and was
+    // disproved by the other line within the hour.
+    const FOLDED: &str = "struct P { a: Word, b: Word }\n\
                           fn g(P { a, b }) -> Word { a + b }\n\
                           fn main() -> Word { g(P { a: 1, b: 2 }) }";
     assert!(
-        !ops_of(FORMER).iter().any(|o| matches!(o, Op::IsStruct(_))),
-        "`Op::IsStruct` has a producer again. Qualify it as the others were -- verify, bound, load, \
-         run -- and if it traps, the load-time hole is back"
+        !ops_of(FOLDED).iter().any(|o| matches!(o, Op::IsStruct(_))),
+        "the unannotated-parameter case emits `Op::IsStruct` again; the fold regressed"
     );
 }

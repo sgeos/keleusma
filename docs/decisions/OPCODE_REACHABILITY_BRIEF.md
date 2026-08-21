@@ -152,20 +152,60 @@ when the scrutinee's type is merely absent the pattern's own type is the answer.
 The witness now returns `Int(3)`, **asserted as a value** rather than as the absence of a trap: a
 fold that changed the program's meaning would be worse than the trap it replaced.
 
-## THE QUESTION THIS LEAVES, WHICH IS THE OPERATOR'S
+## RETRACTED — I CLAIMED THE OPCODE HAD NO PRODUCER, AND IT HAS FOUR
 
-Repairing the defect removed the only producer. **No construct known to this tree emits
-`Op::IsStruct`.** Recorded as *no producer found*, never as *unreachable* — the distinction the
-`v0.3.0` line established with `Op::Reset`, where an opcode was credited as lowered because a chunk
-containing it lowered.
+For about an hour this document said repairing the defect removed the only producer, and that the
+opcode was a removal candidate for an ISA whose opcode count is a rad-hard constraint. **That was
+wrong.** The `v0.3.0` line disproved it and I reproduced their counterexamples independently before
+accepting them.
 
-On an instruction set whose opcode count is a **stated rad-hard design constraint**, an opcode with
-no producer is a candidate for removal. The `v0.3.0` line has been asked to attempt production
-independently after absorbing the change, and has committed to reporting either result. **Two lines
-failing separately is a materially stronger basis for that decision than one.**
+| construct | emits | verifies | runs |
+|---|---|---|---|
+| generic struct destructured in a parameter | yes | yes | **traps `InvalidBytecode`** |
+| pattern `P` against annotation `Q` | yes | yes | **traps `InvalidBytecode`** |
+| tuple-typed annotation | yes | yes | traps `NoMatchingHead` |
+| array-typed annotation | yes | yes | traps `NoMatchingHead` |
+| unannotated parameter | no | yes | `Int(3)` |
 
-The fallback and the virtual machine's refusal both remain in place, and would matter if inference
-ever reached that site with a real disagreement.
+**The load-time hole is NARROWED, not closed.** The fold fixed exactly the construct it was tested
+against.
+
+## HOW THE OVERCLAIM HAPPENED, WHICH IS THE TRANSFERABLE PART
+
+I found the original witness by **reading the guard's match arms for what they omit** — the method
+that cracked `Op::Len` after fourteen guessed constructs failed across two sessions.
+
+Then I validated my own repair by **guessing three constructs**, observing none emitted, and
+generalising to "no producer found".
+
+The other line applied my method to my code: read the emission condition
+`ty.is_some() && named_type_name(ty) != Some(type_name)`, then enumerate which `TypeExpr` variants
+make `named_type_name` return `None` **while a struct pattern is still accepted**. Four
+counterexamples, inside an hour.
+
+**A method used to find a defect is not automatically applied to validating its repair**, and the
+repair is where the incentive to stop looking is strongest. That is the lesson, and it is mine
+rather than theirs.
+
+They also reported their own first attempt was eleven guessed constructs, six of which did not
+compile — so both lines guessed first and both were rescued by reading. The difference is that they
+were guessing about someone else's change.
+
+## THE JUSTIFICATION WAS FALSE, NOT MERELY INCOMPLETE
+
+The fold's comment claimed the type checker "refuses the mismatch outright". It does not.
+`fn g(P { a, b }: Q)` compiles with two distinct structs. The "known and different" state the
+condition treats as needing a runtime test is one the type checker admits today, and
+`src/compiler.rs` now records that.
+
+## WHAT IS ACTUALLY OPEN, AND IT IS A LANGUAGE QUESTION
+
+A struct pattern matched against an unrelated struct, a tuple, or an array is arguably **ill-typed
+at the source**. Closing it in the type checker would remove the emission rather than fold it, and
+would close two load-time holes at once. That is a language decision rather than a lowering fix.
+
+**No claim is made here about whether `Op::IsStruct` should exist.** It has producers; the removal
+question is not live on this evidence.
 
 ## A SURVEY THAT CAME BACK CLEAN, RECORDED WITH WHAT WAS SEARCHED
 
