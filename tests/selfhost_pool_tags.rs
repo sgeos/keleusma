@@ -13,15 +13,24 @@
 //! The 95 boundary cases in `tests/selfhost_codegen.rs`, run through
 //! `keleusma::selfhost::self_host_compile` and compared against the reference:
 //!
-//! | | before | after |
-//! |---|---|---|
-//! | byte-identical | 43 | **76** |
-//! | differs | 21 | 11 |
-//! | faults | 30 | 7 |
-//! | reference rejects | 1 | 1 |
+//! | | baseline | + pool tag & declaration skip | + eager `and`/`or` seeding |
+//! |---|---|---|---|
+//! | byte-identical | 43 | 76 | **82** |
+//! | differs | 21 | 11 | **5** |
+//! | faults | 30 | 7 | 7 |
+//! | reference rejects | 1 | 1 | 1 |
 //!
-//! **Every case that differs after also differed before.** Nothing here made a case worse;
-//! the residue is pre-existing and is pinned below so it stays visible.
+//! **Every case that differs still is one the boundary already labels `Diverges`.** No case the
+//! boundary calls `Ok` differs any more; the only `Ok` cases the shipping compiler cannot handle
+//! are the six that FAULT, pinned below. Nothing here made a case worse.
+//!
+//! # The third defect was the same shape as the first two
+//!
+//! `parse.kel` guards its eager `and`/`or` recognition on host-supplied ids, and the shipping
+//! driver seeded neither while `tests/selfhost_codegen.rs` seeded both. Unseeded, the operator and
+//! its RIGHT OPERAND were dropped: `a and b` compiled to `a`. The comment above the boolean-literal
+//! seeding in the driver claimed the eager ids were "already seeded like" it — describing the
+//! sibling file's state, not its own.
 //!
 //! # Proportionality, which belongs beside every claim in this file
 //!
@@ -232,23 +241,30 @@ fn a_struct_declaration_compiles_rather_than_faulting() {
 
 // -- the residue, pinned so it stays visible ---------------------------------------------
 
-/// **SIX CONSTRUCTS THE BOUNDARY CALLS `Ok` THAT THE SHIPPING COMPILER MISCOMPILES.**
+/// **THE EAGER BOOLEAN OPERATORS LOWER BYTE-IDENTICALLY, AND FOR A WHILE THEY DID NOT.**
 ///
-/// Eager boolean operators and their precedence. Found by the census, PRE-EXISTING, and
-/// deliberately not repaired here: the fix is in operator lowering and has nothing to do with
-/// the constant pool, and repairing it in the same change would make this file's before/after
-/// measurement unattributable.
+/// This test asserted the DIVERGENCE when it was written, hours before it was repaired. Inverted
+/// rather than deleted: the six constructs below were recorded `Ok` by the construct-support
+/// boundary while the shipping compiler **silently dropped the operator and its right operand**.
+/// `a and b` compiled to `[GetLocal(0), Return]` — that is `a`, so `true and false` returned
+/// `true`.
 ///
-/// # Why this is pinned in the FAILING direction
+/// # The cause, which is the same shape as the two defects above it
 ///
-/// A test asserting the divergence fails the day it is fixed, which is the notice that the
-/// count in this file's header is stale. Deleting it instead would lose the record that six
-/// `Ok` verdicts were wrong.
+/// `parse.kel` recognises `and`/`or` only when the host seeds their interned ids, guarded `> 0` so
+/// an unseeded host keeps the old behaviour. The shipping driver seeded neither, at either of its
+/// two token feeds; `tests/selfhost_codegen.rs` seeded both, at both of its own. **Three defects,
+/// one cause: the driver and its test-file copy are two implementations of the same thing and only
+/// one of them is exercised by the boundary.**
 ///
-/// The `and`/`or` here are the EAGER operators, not `andalso`/`orelse`.
+/// # It took BOTH repairs, which is why they are pinned together
+///
+/// Seeding the ids alone made all six agree on OPS and still differ in the constant pool —
+/// `Int(0)` where the reference bakes `Bool(false)` — because the pool tag was still being
+/// discarded. Neither fix completes this construct alone.
 #[test]
-fn the_shipping_compiler_still_diverges_on_the_eager_boolean_operators() {
-    let known = [
+fn the_eager_boolean_operators_lower_byte_identically() {
+    let repaired = [
         "fn f(a: bool, b: bool) -> bool { a and b }",
         "fn f(a: bool, b: bool) -> bool { a or b }",
         "fn f(a: bool, b: bool, c: bool) -> bool { a or b and c }",
@@ -256,24 +272,34 @@ fn the_shipping_compiler_still_diverges_on_the_eager_boolean_operators() {
         "fn f(x: bool, y: Word, z: Word) -> bool { x and y < z }",
         "fn f(a: bool, b: bool, c: bool) -> bool { a and b xor c }",
     ];
-    for src in known {
+    for src in repaired {
+        let r = reference(src);
+        // Non-vacuity: the eager lowering is what bakes a Bool constant. A source that stopped
+        // producing one would satisfy the comparison while testing a different lowering.
         assert!(
-            !agrees(&keleusma::selfhost::self_host_compile(src), &reference(src)),
-            "{src:?} now AGREES with the reference. That is a repair, not a failure: fold it \
-             into the ordinary coverage, drop it from this list, and correct the census in \
-             this file's header"
+            pool(&r).iter().any(|c| matches!(c, ConstValue::Bool(_))),
+            "the reference bakes no Bool for {src:?}, so this no longer witnesses the eager \
+             lowering"
+        );
+        assert!(
+            agrees(&keleusma::selfhost::self_host_compile(src), &r),
+            "the shipping compiler diverged on {src:?}. If the ops match and only the pool \
+             differs, the constant-pool TAG is being discarded again; if the ops are shorter \
+             than the reference's, the `and`/`or` ids are unseeded and the operator was dropped"
         );
     }
-    // The control. Without it a compiler that diverged on everything would pass above.
-    let control = "fn f(a: bool, b: bool) -> bool { a andalso b }";
-    assert!(
-        agrees(
-            &keleusma::selfhost::self_host_compile(control),
-            &reference(control)
-        ),
-        "the short-circuit control diverges too, so the list above does not isolate the \
-         EAGER operators and this test attributes the divergence wrongly"
-    );
+
+    // The short-circuit forms are a control in the other direction: they never depended on the
+    // seeded ids and agreed throughout, so they cannot distinguish a repair from a no-op.
+    for src in [
+        "fn f(a: bool, b: bool) -> bool { a andalso b }",
+        "fn f(a: bool, b: bool) -> bool { a orelse b }",
+    ] {
+        assert!(agrees(
+            &keleusma::selfhost::self_host_compile(src),
+            &reference(src)
+        ));
+    }
 }
 
 /// **A TUPLE WHOSE ELEMENT IS A STRUCT STILL FAULTS, AND IT IS A DIFFERENT FAULT.**

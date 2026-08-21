@@ -252,3 +252,61 @@ With 18..=20 skipped, **no construct tried reaches `open_decl`'s named panic** �
 `trait`, `impl` and a const-generic `struct` all parse. Recorded as **not found**, not as
 unreachable, matching the distinction drawn for `Op::IsStruct`. The message is retained because a
 future record code arriving with nothing open is what it exists for.
+
+---
+
+# THE THIRD DEFECT, FOUND BY THE RESIDUE THIS BRIEF LEFT BEHIND (2026-08-21)
+
+The census left six constructs the boundary calls `Ok` that the shipping compiler miscompiled.
+They were deliberately not repaired in the same change, so the earlier census stayed attributable.
+Repaired now, separately, and the diagnosis is the same shape as the other two.
+
+## `a and b` compiled to `a`
+
+Not a subtle divergence. The eager `and`/`or` operator and its **right operand** were dropped:
+
+```text
+  reference:  GetLocal(0), SetLocal(2), GetLocal(1), GetLocal(2), If, Else, PopN(1), Const(0), EndIf, Return
+  shipping:   GetLocal(0), Return
+```
+
+So `true and false` returned `true`. `andalso`, `orelse`, `xor` and `not` were all correct
+throughout, which is why nothing else in the suite noticed.
+
+## The cause: the driver seeded neither id, and its comment said it did
+
+`parse.kel` recognises the eager operators only when the host supplies their interned ids, guarded
+`and_id > 0` so an unseeded host keeps the old behaviour. **The shipping driver seeded neither, at
+either of its two token feeds. `tests/selfhost_codegen.rs` seeded both, at both of its own.**
+
+The comment above the boolean-literal seeding in the shipping driver read *"seeded like the eager
+`and`/`or` ids and for the same reason"* — a true statement about the sibling file, copied across
+with the code it described. **A comment can be a false claim about its own file, and this one had
+been for as long as it existed.**
+
+## Both repairs are needed, and neither completes the construct alone
+
+Seeding the ids made all six agree on **ops** and still differ in the pool — `Int(0)` where the
+reference bakes `Bool(false)` — because the tag was still being discarded. The two fixes compose
+exactly, which is why the pin covering them is one test rather than two.
+
+## The census after all three repairs
+
+| | baseline | + pool tag & declaration skip | + eager `and`/`or` |
+|---|---|---|---|
+| byte-identical | 43 | 76 | **82** |
+| differs | 21 | 11 | **5** |
+| faults | 30 | 7 | 7 |
+
+**Every remaining difference is a case the boundary already labels `Diverges`.** No construct the
+boundary calls `Ok` differs any more. The only `Ok` cases the shipping compiler still cannot handle
+are the six that FAULT in scalar-kind decoding on a tuple whose element is a struct — a distinct,
+unfixed gap, pinned in the failing direction.
+
+## THE ONE-LINE VERSION, WHICH IS THE THING WORTH REMEMBERING
+
+**Three separate silent miscompiles, one cause.** The shipping driver and the copy of it in the
+test file are two implementations of the same thing, and **the construct-support boundary exercises
+only the copy.** Every divergence found this session was a slot, a tag or a record the copy handled
+and the shipping driver did not. That is the evidence for the accessor decision, and it is now
+three findings deep rather than one.
