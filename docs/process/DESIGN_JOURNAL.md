@@ -13,6 +13,50 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE FIFTH SILENT MISCOMPILE, AND A COST ESTIMATE THAT WAS WRONG IN THE HELPFUL DIRECTION
+(2026-08-21, midday).**
+
+`a[0][1]` parsed its second `[1]` as an array LITERAL. A `let` recorded its value as an array of
+`Word` whatever the elements were, so the first index emitted a scalar read and nothing armed a
+second one.
+
+**THE RECORDED SPECIFICATION SAID THREE COORDINATED PIECES AND THE PREVIOUS SESSION STOPPED ON
+THAT BASIS. TWO ALREADY EXISTED.** The `]` handler already emits `GetIndex(FlatNested{size,
+Array})` and already re-arms the scalar index postfix; `step_structarrayaccess` is already generic
+over the variant. Only the binding side was missing -- a record for an element that is itself an
+array, beside the existing scalar-element and struct-element cases.
+
+This is the unreached-stage-commands lesson run in the other direction. There, checking for callers
+revealed hidden COST and changed `CONSTS` from "batching is the route" to "the route is written but
+never executed". Here the same check revealed hidden PROGRESS. **The rule is symmetric and neither
+direction is the safe assumption.**
+
+**THE HAZARD I CHECKED BEFORE EDITING.** `stmt`, `ps` and `da` are `private data`; only `toks` is
+`shared data`. The append-never-insert rule that this line paid for governs the host-addressed
+block, and it did not bind here -- but I would not have known that by guessing, and inserting a
+field into a slot-addressed block shifts every field after it.
+
+**THE STATE RECORD I ADDED FIRES ON EVERY NESTED INDEX, INCLUDING ONE NEVER BOUND.** A record set
+broadly and consumed narrowly is exactly the shape that leaks into an unrelated later binding, so
+five shapes are MEASURED rather than argued from the clear-sites -- including a nested index used
+inline with no binding, and two in sequence. All identical.
+
+**THE MARGIN PINS MOVED AND BOTH DELTAS DECOMPOSE.** Names 672 -> 676, and the four are the four
+identifiers added: **the first move in ten whose count matched what its author predicted before
+measuring**, which the pin's own header notes is unusual. Blob 35,233 -> 35,333: 72 characters of
+names plus 7 bytes each of encoding overhead, and the NINTH move independently confirms that
+figure at 13 characters for a 20-byte delta. Two moves, different counts, one constant. A delta
+nobody can decompose is indistinguishable from a delta nobody looked at.
+
+**AN ORDERING TRAP I AVOIDED BY NOTICING RATHER THAN BY RULE.** I cut the handoff-refresh branch
+from a tip that did not yet contain the chained-index merge, and its boundary read 88 SOk against
+the 90 that was about to be true. Writing the refresh there would have baked in numbers I already
+knew were stale, and a handoff whose check block fails on the next tip is worse than no refresh.
+Same discipline as merging on a positive count: **do not record a measurement you know is about to
+be superseded.**
+
+---
+
 **THE HOST DISCARDED A FIELD ITS OWN STAGE COMPUTED, AND THE SWEEP FOUND SOMETHING BIGGER
 (2026-08-21, session 50).**
 

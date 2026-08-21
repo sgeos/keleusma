@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-21 (session 50, autonomous loop, five increments)
+**Date**: 2026-08-21 (session 50, autonomous loop, eight pull requests merged)
 
 ## Where things stand
 
@@ -24,11 +24,10 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 | the type checker's INPUT | the DECLARED rows come from the pipeline; the derived ones do not |
 | branch | `fix/selfhost-pool-tags`, cut from `v0.2.3`, rebased onto `b729a2a9` |
 
-## SESSION 50 — FOUR SILENT MISCOMPILES, ONE CAUSE, AND ONE THING THAT NEEDS YOU
+## SESSION 50 — FIVE SILENT MISCOMPILES CLOSED, AND TWO DECISIONS THAT NEED YOU
 
-You asked for as much self-directed development as could be carried out without input. Your queue
-was the handoff's stated first priority, but four of its items are yours to judge, so I took the
-unblocked work with evidence already in the tree and kept going.
+You asked for as much self-directed development as could be carried out without input, and left the
+machine running. Eight pull requests are merged; the queue on this line is empty.
 
 ### What was wrong
 
@@ -36,69 +35,65 @@ unblocked work with evidence already in the tree and kept going.
 |---|---|---|
 | the constant-pool tag was discarded | a string constant became the integer of its intern id | 212 |
 | struct/trait/impl declarations had no skip state | the driver faulted on 29 boundary cases | 212 |
-| the eager `and`/`or` ids were never seeded | **`a and b` compiled to `a`**, so `true and false` was `true` | 213 |
+| the eager `and`/`or` ids were never seeded | **`a and b` compiled to `a`** | 213 |
 | op tag 53 had no flat-nested arm | a struct-typed tuple element faulted in kind decoding | 214 |
+| a nested array index parsed as an array LITERAL | **`a[0][1]` silently miscompiled** | 218 |
 
-**One cause.** The shipping driver and the copy of it in `tests/selfhost_codegen.rs` are two
-implementations of the same thing, and the construct-support boundary exercises only the copy.
-Every one of the four was a slot, a tag, a record or an arm the copy had and the driver did not.
+The first four had **one cause**: the shipping driver and the copy of it in
+`tests/selfhost_codegen.rs` are two implementations of the same thing, and the construct-support
+boundary exercised only the copy. The fifth was a genuine parser gap.
 
-**Census over the 95 boundary cases, baseline taken by stashing each change rather than assumed:**
-
-| | baseline | +212 | +213 | +214 |
-|---|---|---|---|---|
-| byte-identical | 43 | 76 | 82 | **88** |
-| differs | 21 | 11 | 5 | **5** |
-| faults | 30 | 7 | 7 | **1** |
-
-The shipping compiler now reaches the same verdict as the boundary on **all 95 cases**.
+**Census over the 95 boundary cases, each baseline taken by stashing the change rather than
+assumed:** byte-identical **43 -> 90**, differs 21 -> 3, faults 30 -> 1. The shipping compiler now
+reaches the same verdict as the boundary on all 95, and the three that differ are already labelled.
 
 **Proportionality, which belongs beside every line of this.** `self_hosted_compile` cross-checks
 against the reference and refuses on divergence, so **none of it reached a user as a wrong
-module**. The exposure was to direct callers of the `self_host_compile*` entry points.
+module**. Exposure was to direct callers of the `self_host_compile*` entry points.
 
-### THE ONE THING THAT NEEDS YOU
+### TWO DECISIONS, AND BOTH ARE ABOUT OWNERSHIP
 
-**#212 moves a boundary against your ruling that deferred the area.** Programs the tree refused now
-compile. Your 2026-08-19 ruling was "Top-level struct support. Defer."
+**1. `src/verify.rs` has no owner.** My handoff records it as the `v0.3.0` line's and read-only
+here; theirs records it as mine and read-only there. Each of us has been declining to touch it out
+of deference to the other. Their framing is better than mine: the risk is not the unrepaired
+defect, it is that a surface nobody believes they own is one where **either line might edit
+believing itself entitled**, and from each side the mistake reads as the other's record being
+wrong. A wrong owner is safer than no owner, because a wrong owner still gets caught.
 
-My reading: this is not that work. No struct layout is derived from the pipeline; a struct program
-compiles because its layout comes from the reference scaffold and its chunk ops now lower without
-faulting. **If you read the ruling more broadly, the skip should come out** — the brief names the
-three hunks, and the pool-tag half is independent of it.
+**2. Where the `Op::IsStruct` repair belongs** — load time in `verify.rs`, or compile time by
+folding the type test out when the pattern's own type is known regardless of the scrutinee's.
+
+`Op::IsStruct` is now witnessed: a struct pattern on an **un-annotated parameter**, missed by
+seventeen attempts across both lines because everyone tried to make a scrutinee's type DIFFER from
+the pattern's, which the type checker forbids. **Its witness verifies, receives a memory bound,
+loads, and then traps `InvalidBytecode`** — the class `verify()` exists to exclude. Of the three
+such refusals the VM carries, it is the only one a loaded program can reach.
 
 ### What I did NOT do
 
-- **Did not merge anything but #211**, my own process docs. #201 and #210 were escalated to you as
-  judgment calls and #212–#215 are this session's work; merging my own escalation would defeat it.
-- **Did not touch any `.kel` stage.** No opcode, no `BYTECODE_VERSION` change. All four fixes are
-  host-side.
-- **Did not repair the six eager-boolean cases in the same change as the census** that measured
-  them, so the before/after stayed attributable.
+- **Did not touch `src/verify.rs`.** Pinned both ways instead, firing in the failing direction, so
+  whichever side repairs it gets a test naming the other.
+- **Did not merge the `v0.3.0` line's #217.** It is theirs.
+- **Did not add an opcode or change `BYTECODE_VERSION`.** Four of the five fixes are host-side; the
+  fifth changed `parse.kel`, which still self-compiles byte-identically.
 
-### What I got wrong, since it is the more useful half
+### What I got wrong
 
-- **The pipe ate an exit code — third recorded instance in this project.** A backgrounded
-  `cargo test | tail` reported exit 0 while the suite had FAILED. Caught by reading output, not
-  status. Every gate since captures exit codes outside the pipe.
-- **That failure was mine**: my declaration skip broke a test pinning the old refusal.
-- **I predicted the `Bool` witness needed a struct.** It does not — tuple, array and enum equality
-  all reach it. The construct that reaches a branch is not always the one it is named after.
-- **My structural guard failed its own first mutation test.** It compared sets of seeded slot
-  names, and the library has two token feeds, so deleting one of two seedings left the name present
-  via the other — exactly this defect class. Now counted and calibrated.
-- **Its extraction was wrong twice** before that: a depth-blind scan gave a false positive, then a
-  mis-anchored one silently compared two empty sets. Only the non-vacuity assertion caught the
-  second.
-- **I opened two pull requests that got no CI at all** because `ci.yml` filters `pull_request` on
-  the base branch and they were stacked on feature branches. "No checks reported" reads exactly
-  like a slow start. Recorded in the handoff as a method rule.
+- **The pipe ate an exit code — third instance in this project.** A backgrounded `cargo test | tail`
+  reported exit 0 while the suite had FAILED. Every gate since captures exit codes outside the pipe.
+- **My structural parity guard failed its own first mutation test**, because it compared sets of
+  names and the driver has two token feeds. Now counted.
+- **Two of my pull requests got no CI at all**, because `ci.yml` filters on the base branch and they
+  were stacked. "No checks reported" reads exactly like a slow start.
+- **I wrote `let mut` in a probe again.** Not in the language, recorded in the handoff, fourth time.
+- **I nearly reported that the two fallback opcodes fail the same way.** They do not — one is
+  refused at load, the other traps at run. Running both witnesses instead of one caught it.
 
 ### Verification
 
-Every branch gated locally with exit codes captured outside the pipe: fmt, all four CI feature
-sets, clippy at deny-warnings, tests under `self-host` and default features, and the doc build.
-Zero failures. The refreshed handoff's check block was executed, not merely written.
+Every branch gated locally with exit codes captured outside the pipe, and every merge made on a
+positive `SUCCESS=22` rather than on the absence of a failure. The refreshed handoff's check block
+was executed, not merely written.
 
 ## CLOSING SUMMARY — WHAT THIS SESSION DID AND WHAT IS WAITING ON YOU
 
