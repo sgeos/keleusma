@@ -1,0 +1,46 @@
+// A fixed-point scaling round trip, written so the native differential can
+// COMPARE the two conversion opcodes rather than merely accept them.
+//
+// `opcode_witness.kel` witnesses many opcodes but refuses to lower as a whole,
+// because one refusing chunk exempts the module. Nothing in it is compared. This
+// file uses ONLY opcodes the backend accepts, so it lowers, executes, and is
+// checked against the virtual machine on every argument vector.
+//
+// WHAT IS EXERCISED, and the boundary is deliberate:
+//
+//   `w as Fixed<16>` -> WordToFixed(16), which the VM SATURATES at the word's
+//                       MAX/MIN rather than wrapping.
+//   `f as Word`      -> FixedToWord(16), an arithmetic right shift.
+//
+// The `lsl 46` puts the saturation boundary inside the range the harness drives:
+// the conversion shifts a further 16 bits, so `w << 62` is representable at
+// w = 1 and saturates from w = 2 upward. Both regimes are therefore compared,
+// and w = 0 covers the zero case the VM handles separately.
+//
+// That shift is chosen to span the boundary, and saying so is the point: this
+// is a coverage program, not an application, and the file declares it rather
+// than pretending otherwise.
+
+fn scale_and_back(w: Word) -> Word {
+  let big = w lsl 46;
+  let f = big as Fixed<16>;
+  f as Word
+}
+
+// A Q-format multiply, added once `FixedMul` lowered. The VM SATURATES here
+// rather than wrapping -- `fixed_checked_outputs` in `vm.rs` states the contrast
+// with the checked families explicitly -- so a large product is a compared case
+// and not an edge one.
+fn scaled_square(w: Word) -> Word {
+  // `lsl 30` before the conversion is what puts the PRODUCT past the saturation
+  // boundary. Without it the harness drives w in 0..19, the square stays around
+  // 2.4 million, and the clamp is never reached -- measured, not assumed:
+  // bypassing the clamp produced NO disagreement until this shift was added.
+  let f = (w lsl 30) as Fixed<16>;
+  let p = f * f;
+  p as Word
+}
+
+fn main(w: Word) -> Word {
+  scale_and_back(w) + scaled_square(w)
+}
