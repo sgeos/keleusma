@@ -246,77 +246,71 @@ fn no_match_scrutinee_reaches_op_is_struct() {
     }
 }
 
-/// **`Op::IsStruct` IS REACHABLE, AND ITS WITNESS COMPILES, VERIFIES, AND THEN
-/// TRAPS AT RUN TIME.** The second half is the finding.
+/// **THE LOAD-TIME HOLE IS CLOSED, AND CLOSING IT LEFT `Op::IsStruct` WITH NO PRODUCER.**
 ///
-/// The construct is a **struct pattern on a parameter with no type annotation**:
+/// This test asserted, hours earlier, that a struct pattern on an un-annotated parameter reached
+/// `Op::IsStruct` and that its witness **verified, received a memory bound, loaded, and then
+/// trapped `InvalidBytecode`**. That was a hole in the load-time check, since `InvalidBytecode` is
+/// exactly the class `verify()` exists to exclude.
 ///
-/// ```text
-///   struct P { a: Word, b: Word }
-///   fn g(P { a, b }) -> Word { a + b }
-/// ```
+/// # What was repaired, and why in the compiler rather than the verifier
 ///
-/// # Why seventeen earlier attempts missed it
+/// Two repairs were available. Rejecting the module in `verify()` would have made a legal program
+/// fail EARLIER. Folding the irrefutable type test at compile time makes it **work**. The second is
+/// strictly better for a program the type checker accepts.
 ///
-/// `Op::IsStruct` is emitted only when `named_type_name(ty) != Some(pattern_type)`.
-/// Every earlier attempt, including eight of mine, tried to make the two DIFFER —
-/// and **the type checker forbids that outright**, with "struct pattern `P` does
-/// not match scrutinee type". The inequality is therefore only satisfiable when
-/// `ty` is `None`.
+/// The fold already existed; it was conditional on the SCRUTINEE's type matching the pattern's, and
+/// an un-annotated parameter has no scrutinee type at all. **An absent type is not an unconfirmed
+/// one.** The type checker has already established the match — it refuses a mismatch outright —
+/// so when the scrutinee's type is merely absent, the pattern's own type is the answer.
 ///
-/// The `match` path takes its type from `infer_expr_type`, which does omit `If`,
-/// `MethodCall` and nine other variants — the same reading that cracked `Op::Len`.
-/// It is a dead end here, and the reason is worth keeping: **a match scrutinee is
-/// an expression, and every expression that survives type checking here also
-/// survives inference.**
+/// # The consequence, which is an ISA finding rather than a tidy ending
 ///
-/// The other call site is the FUNCTION-PARAMETER path, which takes the declared
-/// `param.type_expr` — and a parameter written without an annotation has none.
-/// **The route was never an expression whose type is hard to infer; it was a
-/// declaration site with no type to lose.**
+/// With the fold widened, **no construct known to this tree produces `Op::IsStruct`.** The only
+/// witness ever found was a compiler defect, and repairing it removed the witness.
 ///
-/// # What the witness does, which is the part that matters
-///
-/// | stage | result |
-/// |---|---|
-/// | compile | emits `IsStruct(0)` |
-/// | `verify()` | **accepts** |
-/// | `module_wcmu()` | **succeeds**, `[(224, 0), (224, 16)]` |
-/// | execution | **traps `InvalidBytecode`** |
-///
-/// The virtual machine refuses the op it was handed: *"Op::IsStruct on a flat
-/// struct; the type test is a compile-time constant."* The compiler's own comment
-/// says the fold exists to keep a flat struct away from this op — and the fold is
-/// conditional on a type that an un-annotated parameter does not have, so a flat
-/// struct reaches it anyway.
-///
-/// **`InvalidBytecode` is the class `verify()` exists to exclude at load time.** A
-/// legal program reaching it at run time is a hole in the load-time check, not a
-/// bad program. Pinned rather than repaired: `src/verify.rs` is held read-only by
-/// the `v0.3.0` line pending an announcement, and the compiler-side alternative —
-/// folding the test out when the pattern's own type is known regardless of the
-/// scrutinee's — is a judgment call about which side owns the invariant.
+/// On an instruction set whose opcode count is a stated rad-hard design constraint, an opcode with
+/// no producer is worth more as a finding than as a curiosity. **It is recorded as "no producer
+/// found", never as "unreachable"** — the fallback and the virtual machine's refusal both remain,
+/// and would matter if inference ever reached that site with a real disagreement.
 #[test]
-fn op_is_struct_is_reachable_and_its_witness_traps_at_run_time() {
+fn the_is_struct_witness_now_compiles_verifies_and_runs() {
     const SRC: &str = "struct P { a: Word, b: Word }\n\
                        fn g(P { a, b }) -> Word { a + b }\n\
                        fn main() -> Word { g(P { a: 1, b: 2 }) }";
 
     let module = module_of(SRC);
     assert!(
-        module
+        !module
             .chunks
             .iter()
             .any(|c| c.ops.iter().any(|o| matches!(o, Op::IsStruct(_)))),
-        "no `Op::IsStruct` emitted. If the compiler now folds the test out for an \
-         un-annotated parameter, that is a REPAIR of the trap recorded below: say so \
-         here and re-verify the opcode census, which counted this opcode unwitnessed"
+        "`Op::IsStruct` is emitted again for an un-annotated parameter. If that is deliberate, the \
+         load-time hole this test records is open again: the witness verifies and then traps"
     );
 
-    // **THE CONTROL, AND IT IS THE WHOLE ARGUMENT.** The same program with the
-    // parameter annotated folds the test out. Without this, the assertion above
-    // would be satisfied by a compiler that emitted `IsStruct` for every struct
-    // pattern, which would say nothing about the missing annotation being the cause.
+    keleusma::verify::verify(&module).expect("the witness must verify");
+    keleusma::verify::module_wcmu(&module, &[]).expect("the witness must receive a memory bound");
+
+    // **THE HALF THAT WAS FAILING BEFORE.** It loaded and then died at call time; now it runs and
+    // returns the right answer, which is what distinguishes a repair from a relocation of the
+    // failure to a different stage.
+    let arena = keleusma::Arena::with_capacity(keleusma::vm::DEFAULT_ARENA_CAPACITY);
+    let mut vm = keleusma::vm::Vm::new(module, &arena).expect("the witness must load");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    let state = vm
+        .call_with_shared(&mut shared, &[])
+        .expect("the witness must RUN; a trap here means the load-time hole is open again");
+    assert!(
+        matches!(
+            state,
+            keleusma::vm::VmState::Finished(keleusma::bytecode::Value::Int(3))
+        ),
+        "the witness ran but computed {state:?} rather than 1 + 2; folding the type test changed \
+         the program's meaning, which is worse than the trap it replaced"
+    );
+
+    // The CONTROL: the annotated form was always folded and must still be.
     const ANNOTATED: &str = "struct P { a: Word, b: Word }\n\
                              fn g(p: P) -> Word { match p { P { a, b } => a + b, _ => 0 } }\n\
                              fn main() -> Word { g(P { a: 1, b: 2 }) }";
@@ -324,61 +318,56 @@ fn op_is_struct_is_reachable_and_its_witness_traps_at_run_time() {
         !ops_of(ANNOTATED)
             .iter()
             .any(|o| matches!(o, Op::IsStruct(_))),
-        "the annotated control ALSO emits `Op::IsStruct`, so the witness above does \
-         not isolate the missing type annotation and this test attributes it wrongly"
+        "the annotated control now emits `Op::IsStruct`, so the fold regressed for the case it \
+         always covered"
     );
-
-    // `verify()` accepts it, which is why the trap is a load-time hole rather than
-    // a rejected program.
-    keleusma::verify::verify(&module).expect(
-        "`verify()` now rejects the witness. If that is deliberate, this trap became a \
-         load-time refusal, which is the sound direction -- record it here",
-    );
-
-    // And it is given a memory bound, so the resource analysis does not exclude it
-    // either. Contrast `Op::Len`, whose witness `module_wcmu` refuses.
-    keleusma::verify::module_wcmu(&module, &[])
-        .expect("the witness no longer receives a WCMU bound; the contrast with `Op::Len` moved");
 }
 
-/// **THE WITNESS TRAPS, AND THE MESSAGE NAMES THE CAUSE.**
+/// **NO CONSTRUCT KNOWN TO THIS TREE PRODUCES `Op::IsStruct`.**
 ///
-/// Separated from the reachability assertion because the two can come apart: a
-/// repair on either side changes exactly one of them, and a single test would not
-/// say which. Pinned in the FIRING direction, so the day this executes cleanly the
-/// failure is the notice.
+/// Recorded as **not found**, never as unreachable. Twenty-odd constructs have been tried across
+/// two sessions and two development lines; the one that worked turned out to be a compiler defect,
+/// and repairing it removed the only producer.
+///
+/// # What was tried
+///
+/// Ten match-scrutinee shapes (the sibling test enumerates them), and the parameter-declaration
+/// route that did work until the fold was widened. The guard is
+/// `named_type_name(ty) != Some(pattern_type)` and the type checker forbids the two from
+/// differing, so the inequality is satisfiable only when the scrutinee's type is ABSENT — and
+/// absence is now folded rather than treated as disagreement.
+///
+/// # Why this is a finding rather than a loose end
+///
+/// The opcode count of this instruction set is a stated rad-hard design constraint. An opcode that
+/// no source program can produce is a candidate for removal, and that is an operator decision
+/// about the ISA, not a test's to make. **This test exists so the question is visible and so that
+/// anything which starts producing the opcode reports itself.**
 #[test]
-fn the_is_struct_witness_is_refused_by_the_virtual_machine() {
-    const SRC: &str = "struct P { a: Word, b: Word }\n\
-                       fn g(P { a, b }) -> Word { a + b }\n\
-                       fn main() -> Word { g(P { a: 1, b: 2 }) }";
-
-    let arena = keleusma::Arena::with_capacity(keleusma::vm::DEFAULT_ARENA_CAPACITY);
-    let mut vm = keleusma::vm::Vm::new(module_of(SRC), &arena)
-        .expect("the module loads; the refusal is at CALL time, not construction");
-    let mut shared = vec![0u8; vm.shared_data_bytes()];
-    let err = vm.call_with_shared(&mut shared, &[]).expect_err(
-        "the witness now RUNS. That is a repair: the compiler stopped emitting \
-                     `Op::IsStruct` for a flat struct, or the VM learned to execute it. Either \
-                     way the load-time hole recorded here is closed -- say which, and update \
-                     the sibling test",
-    );
-    let text = alloc_msg(&err);
-    assert!(
-        text.contains("IsStruct"),
-        "the witness fails for some other reason now ({text}), so this test no longer \
-         measures the flat-struct type test"
-    );
+fn no_known_construct_produces_op_is_struct() {
+    let probes = [
+        // The former witness: a struct pattern on an un-annotated parameter.
+        "struct P { a: Word, b: Word }\nfn g(P { a, b }) -> Word { a + b }\nfn main() -> Word { g(P { a: 1, b: 2 }) }",
+        // Multiheaded, which routes through the same parameter-pattern path.
+        "struct P { a: Word, b: Word }\nfn g(P { a, b }) -> Word { a + b }\nfn g(x) -> Word { 0 }\nfn main() -> Word { g(P { a: 1, b: 2 }) }",
+        // A tuple parameter containing a struct pattern, un-annotated.
+        "struct P { a: Word, b: Word }\nfn g((P { a, b }, n)) -> Word { a + b + n }\nfn g(x) -> Word { 0 }\nfn main() -> Word { g((P { a: 1, b: 2 }, 3)) }",
+    ];
+    for src in probes {
+        assert!(
+            !ops_of(src).iter().any(|o| matches!(o, Op::IsStruct(_))),
+            "{src:?} produces `Op::IsStruct`. That is a WITNESS: qualify it the way the others \
+             were -- does it verify, receive a bound, load, and run? -- before recording the \
+             opcode as reachable"
+        );
+        // Non-vacuity: each probe must actually compile, or the loop proves nothing.
+        assert!(!ops_of(src).is_empty(), "a probe compiled to no ops at all");
+    }
 }
 
-fn alloc_msg(e: &keleusma::vm::VmError) -> String {
-    format!("{e:?}")
-}
-
-/// **THE TWO UNWITNESSED OPCODES FAIL IN DIFFERENT PLACES, AND ONLY ONE IS A HOLE.**
+/// **THE THREE "SHOULD NEVER HAVE BEEN EMITTED" REFUSALS, AND WHAT IS LEFT OF THEM.**
 ///
-/// The virtual machine carries exactly three refusals of the form "this op should
-/// never have been emitted", and between them they name only two opcodes:
+/// The virtual machine carries exactly three refusals of that shape, naming only two opcodes:
 ///
 /// ```text
 ///   Op::Len      on a flat array;  length is a compile-time constant
@@ -386,63 +375,62 @@ fn alloc_msg(e: &keleusma::vm::VmError) -> String {
 ///   Op::IsStruct on a flat struct; the type test is a compile-time constant
 /// ```
 ///
-/// Those are precisely the two the opcode census could not witness, which is not a
-/// coincidence: both are emitted only as a dynamic fallback when a static type is
-/// unknown, and both are refused when the value turns out to be statically known
-/// after all.
+/// Those are precisely the two the opcode census could not witness, which is not a coincidence:
+/// both are emitted only as a dynamic fallback when a static type is unknown, and both are refused
+/// when the value turns out to be statically known after all.
 ///
-/// **The symmetry stops there, and the difference is the whole point.**
+/// # The history, because the shape of it is the lesson
 ///
-/// | witness | `verify()` | `module_wcmu` | load | run |
-/// |---|---|---|---|---|
-/// | `Op::Len` | accepts | **refuses** | **`Vm::new` REFUSES** | never runs |
-/// | `Op::IsStruct` | accepts | accepts | loads | **traps** |
+/// | | `Op::Len` | `Op::IsStruct` |
+/// |---|---|---|
+/// | witness found | an `if` expression as a `for`-in source | a struct pattern on an un-annotated parameter |
+/// | `verify()` | accepts | accepted |
+/// | resource analysis | **refuses** | accepted |
+/// | load | **`Vm::new` REFUSES** | loaded |
+/// | run | never runs | **trapped** |
+/// | now | unchanged | **repaired; no producer remains** |
 ///
-/// `Op::Len`'s witness is caught at LOAD time by the strict iteration-bound check,
-/// which is the conservative-verification stance working exactly as designed: a
-/// program whose bound cannot be established is refused before it can execute.
+/// `Op::Len`'s witness cannot be admitted at all — refused at LOAD by the strict iteration-bound
+/// check, which is the conservative-verification stance working as designed. It was never a hole.
 ///
-/// `Op::IsStruct`'s witness satisfies every load-time check and dies at call time.
-/// **Of the three refusals above, it is the only one a program that actually
-/// loaded can reach.** That makes it a load-time hole rather than one instance of
-/// a general pattern — and the general-pattern reading was the one this file
-/// nearly recorded before both witnesses were run instead of one.
+/// `Op::IsStruct`'s witness satisfied every load-time check and died at call time, which WAS a
+/// hole, and folding the irrefutable type test closed it. That left the opcode with no producer.
+///
+/// **This test therefore asserts an asymmetry that is now permanent-looking rather than
+/// incidental**: one opcode has a witness that cannot be admitted, and the other has no witness at
+/// all. Both are worth knowing on an instruction set whose opcode count is a design constraint.
 #[test]
-fn the_two_fallback_opcodes_fail_at_different_stages() {
+fn op_len_has_an_inadmissible_witness_and_op_is_struct_has_none() {
     const LEN_WITNESS: &str = "fn f(c: bool) -> Word { let a = [1, 2]; let b = [3, 4]; \
                                for x in if c { a } else { b } { let _d = x; } 0 }\n\
                                fn main() -> Word { f(true) }";
-    const IS_WITNESS: &str = "struct P { a: Word, b: Word }\n\
-                              fn g(P { a, b }) -> Word { a + b }\n\
-                              fn main() -> Word { g(P { a: 1, b: 2 }) }";
 
-    // Both compile and both satisfy the structural verifier, so the divergence
-    // below is about the RESOURCE check and the run, not about well-formedness.
+    // `Op::Len` is still produced, and its witness is still refused at LOAD rather than trapping.
     let len_mod = module_of(LEN_WITNESS);
-    let is_mod = module_of(IS_WITNESS);
-    keleusma::verify::verify(&len_mod).expect("the `Op::Len` witness must still verify");
-    keleusma::verify::verify(&is_mod).expect("the `Op::IsStruct` witness must still verify");
-
-    // The `Op::Len` witness is REFUSED AT LOAD. This is the sound direction and is
-    // stronger than the "module_wcmu refuses" this file recorded previously: the
-    // program cannot be executed at all, not merely left unbounded.
-    let arena = keleusma::Arena::with_capacity(keleusma::vm::DEFAULT_ARENA_CAPACITY);
-    let refused = keleusma::vm::Vm::new(len_mod, &arena);
     assert!(
-        refused.is_err(),
-        "the `Op::Len` witness now LOADS. If it also runs, the load-time bound check \
-         stopped catching it and this opcode joins `Op::IsStruct` as a hole; if it \
-         loads and then traps, the refusal merely moved later, which is worse"
+        len_mod
+            .chunks
+            .iter()
+            .any(|c| c.ops.iter().any(|o| matches!(o, Op::Len))),
+        "the `Op::Len` witness stopped producing the opcode; if it has no producer either, both \
+         fallbacks are now unwitnessed and that is a larger ISA finding"
+    );
+    keleusma::verify::verify(&len_mod).expect("the `Op::Len` witness must still verify");
+    let arena = keleusma::Arena::with_capacity(keleusma::vm::DEFAULT_ARENA_CAPACITY);
+    assert!(
+        keleusma::vm::Vm::new(len_mod, &arena).is_err(),
+        "the `Op::Len` witness now LOADS. If it also runs, the load-time bound check stopped \
+         catching it; if it loads and then traps, the refusal merely moved later, which is worse"
     );
 
-    // The `Op::IsStruct` witness LOADS, and fails only when called.
-    let arena2 = keleusma::Arena::with_capacity(keleusma::vm::DEFAULT_ARENA_CAPACITY);
-    let mut vm = keleusma::vm::Vm::new(is_mod, &arena2)
-        .expect("the `Op::IsStruct` witness must still load; its refusal is at CALL time");
-    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    // `Op::IsStruct` has no producer. Asserted through the construct that used to be its witness,
+    // so this fails the moment anything starts producing it again.
+    const FORMER: &str = "struct P { a: Word, b: Word }\n\
+                          fn g(P { a, b }) -> Word { a + b }\n\
+                          fn main() -> Word { g(P { a: 1, b: 2 }) }";
     assert!(
-        vm.call_with_shared(&mut shared, &[]).is_err(),
-        "the `Op::IsStruct` witness now RUNS, so the load-time hole is closed. Say which \
-         side closed it -- the compiler folding the test out, or the VM executing it"
+        !ops_of(FORMER).iter().any(|o| matches!(o, Op::IsStruct(_))),
+        "`Op::IsStruct` has a producer again. Qualify it as the others were -- verify, bound, load, \
+         run -- and if it traps, the load-time hole is back"
     );
 }

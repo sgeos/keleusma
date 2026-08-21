@@ -11358,7 +11358,31 @@ fn compile_pattern_test(
             // carries no type name, away from `Op::IsStruct`). Fall back to
             // the runtime test only when the type is not statically known,
             // where the boxed body answers it.
-            if named_type_name(ty) != Some(type_name.as_str()) {
+            //
+            // **AN ABSENT TYPE IS NOT AN UNCONFIRMED ONE, AND CONFLATING THEM
+            // PRODUCED A PROGRAM THAT VERIFIED AND THEN TRAPPED.** `ty` is
+            // `None` for a parameter written without an annotation, so
+            // `fn g(P { a, b }) -> Word { a + b }` took the fallback, emitted
+            // `Op::IsStruct` against a FLAT struct, and the virtual machine
+            // refused it at run time -- "the type test is a compile-time
+            // constant" -- after `verify()` had accepted the module and
+            // `module_wcmu` had given it a bound. `InvalidBytecode` is the
+            // class `verify()` exists to exclude, so that was a load-time hole
+            // rather than a bad program.
+            //
+            // The type checker has ALREADY established that a struct pattern
+            // matches its scrutinee; it refuses the mismatch outright with
+            // "struct pattern `P` does not match scrutinee type". So when the
+            // scrutinee's type is merely ABSENT here, the pattern's own type is
+            // the answer and the test is still irrefutable. Only a scrutinee
+            // whose type is KNOWN AND DIFFERENT needs the runtime test -- a
+            // state the type checker does not admit today, which is why this
+            // opcode now has no producer. That is recorded in
+            // `tests/opcode_reachability.rs` rather than treated as licence to
+            // delete the fallback: the virtual machine's refusal remains the
+            // backstop if inference ever reaches this site with a real
+            // disagreement.
+            if ty.is_some() && named_type_name(ty) != Some(type_name.as_str()) {
                 fc.emit(Op::GetLocal(value_slot));
                 let t_const = fc.add_string_constant(type_name);
                 fc.emit(Op::IsStruct(t_const));
