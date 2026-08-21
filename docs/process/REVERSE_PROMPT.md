@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-21 (session 50, autonomous loop)
+**Date**: 2026-08-21 (session 50, autonomous loop, five increments)
 
 ## Where things stand
 
@@ -24,69 +24,81 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 | the type checker's INPUT | the DECLARED rows come from the pipeline; the derived ones do not |
 | branch | `fix/selfhost-pool-tags`, cut from `v0.2.3`, rebased onto `b729a2a9` |
 
-## SESSION 50 — WHAT I DID WHILE YOU SLEPT, AND THE ONE THING THAT NEEDS YOU
+## SESSION 50 — FOUR SILENT MISCOMPILES, ONE CAUSE, AND ONE THING THAT NEEDS YOU
 
 You asked for as much self-directed development as could be carried out without input. Your queue
-was the handoff's stated first priority, but two of its four items are yours to judge, so I took
-the unblocked work with evidence already in the tree.
+was the handoff's stated first priority, but four of its items are yours to judge, so I took the
+unblocked work with evidence already in the tree and kept going.
 
-### The defect, and the larger one the sweep found
+### What was wrong
 
-`codegen.kel` streams its constant pool as values then TAGS. The shipping driver read the tags
-into a discard binding and rebuilt every entry as `Int`, so a string constant became the integer
-of its intern id. The comment justifying the discard said the stage sources are all-`Int` — true
-of the corpus, false of the contract, and the seventh instance of that same meta-defect.
+| defect | symptom | PR |
+|---|---|---|
+| the constant-pool tag was discarded | a string constant became the integer of its intern id | 212 |
+| struct/trait/impl declarations had no skip state | the driver faulted on 29 boundary cases | 212 |
+| the eager `and`/`or` ids were never seeded | **`a and b` compiled to `a`**, so `true and false` was `true` | 213 |
+| op tag 53 had no flat-nested arm | a struct-typed tuple element faulted in kind decoding | 214 |
 
-Sweeping for other discards found a bigger one: `parse.kel` emits struct, trait and impl
-declaration records, the driver had no state for them, and it panicked. **The copy of that loop in
-`tests/selfhost_codegen.rs` carried the skip all along**, which is why the construct-support
-boundary — which measures the copy — never saw it.
+**One cause.** The shipping driver and the copy of it in `tests/selfhost_codegen.rs` are two
+implementations of the same thing, and the construct-support boundary exercises only the copy.
+Every one of the four was a slot, a tag, a record or an arm the copy had and the driver did not.
 
-Measured over all 95 boundary cases, baseline taken by **stashing my own change** rather than
-assumed: byte-identical **43 -> 76**, differs 21 -> 11, faults 30 -> 7. No case got worse.
+**Census over the 95 boundary cases, baseline taken by stashing each change rather than assumed:**
 
-**29 cases declare a struct. The shipping compiler faulted on all 29, and 27 are recorded `SOk`.**
-That is a much stronger statement of the duplicate's cost than the string literal it replaces.
+| | baseline | +212 | +213 | +214 |
+|---|---|---|---|---|
+| byte-identical | 43 | 76 | 82 | **88** |
+| differs | 21 | 11 | 5 | **5** |
+| faults | 30 | 7 | 7 | **1** |
+
+The shipping compiler now reaches the same verdict as the boundary on **all 95 cases**.
+
+**Proportionality, which belongs beside every line of this.** `self_hosted_compile` cross-checks
+against the reference and refuses on divergence, so **none of it reached a user as a wrong
+module**. The exposure was to direct callers of the `self_host_compile*` entry points.
 
 ### THE ONE THING THAT NEEDS YOU
 
-**A boundary moved, and it touches your deferred ruling.** Programs the tree refused now compile.
-Your 2026-08-19 ruling was "Top-level struct support. Defer."
+**#212 moves a boundary against your ruling that deferred the area.** Programs the tree refused now
+compile. Your 2026-08-19 ruling was "Top-level struct support. Defer."
 
 My reading: this is not that work. No struct layout is derived from the pipeline; a struct program
 compiles because its layout comes from the reference scaffold and its chunk ops now lower without
-faulting. **If you read the ruling more broadly, the skip should come out** —
-`docs/decisions/POOL_TAG_RESIDENCY_BRIEF.md` names the three hunks, and the pool fix is entirely
-independent of it.
+faulting. **If you read the ruling more broadly, the skip should come out** — the brief names the
+three hunks, and the pool-tag half is independent of it.
 
-### What I did NOT do, and why
+### What I did NOT do
 
-- **Did not repair the six eager-boolean miscompiles** the boundary calls `Ok`. The fix is in
-  operator lowering; making it in the same change would leave the census above unattributable,
-  which is exactly how a `bool`/`Bool` regression shipped last session.
-- **Did not merge #201 or #210.** Both are green at 22/22, and I escalated both to you as judgment
-  calls; merging them myself would undo that. **I did merge #211**, my own process docs.
-- **Did not touch any `.kel` stage.** No opcode, no `BYTECODE_VERSION` change.
+- **Did not merge anything but #211**, my own process docs. #201 and #210 were escalated to you as
+  judgment calls and #212–#215 are this session's work; merging my own escalation would defeat it.
+- **Did not touch any `.kel` stage.** No opcode, no `BYTECODE_VERSION` change. All four fixes are
+  host-side.
+- **Did not repair the six eager-boolean cases in the same change as the census** that measured
+  them, so the before/after stayed attributable.
 
 ### What I got wrong, since it is the more useful half
 
-- **The pipe ate an exit code again — third recorded instance in this project.** I backgrounded
-  `cargo test | tail -60`, the harness reported exit 0, and the suite had FAILED. Caught by reading
-  the output, not the status.
-- **That failure was mine**: a test pinned the old boundary and my skip broke it. Inverted rather
-  than deleted.
+- **The pipe ate an exit code — third recorded instance in this project.** A backgrounded
+  `cargo test | tail` reported exit 0 while the suite had FAILED. Caught by reading output, not
+  status. Every gate since captures exit codes outside the pipe.
+- **That failure was mine**: my declaration skip broke a test pinning the old refusal.
 - **I predicted the `Bool` witness needed a struct.** It does not — tuple, array and enum equality
-  all reach `intern_bool`. The construct that reaches a branch is not always the one it is named
-  after.
-- **I amended a commit after testing it**, so the pushed tree was not byte-identical to the tested
-  one. Re-ran the affected file rather than assuming the formatting change was inert.
+  all reach it. The construct that reaches a branch is not always the one it is named after.
+- **My structural guard failed its own first mutation test.** It compared sets of seeded slot
+  names, and the library has two token feeds, so deleting one of two seedings left the name present
+  via the other — exactly this defect class. Now counted and calibrated.
+- **Its extraction was wrong twice** before that: a depth-blind scan gave a false positive, then a
+  mis-anchored one silently compared two empty sets. Only the non-vacuity assertion caught the
+  second.
+- **I opened two pull requests that got no CI at all** because `ci.yml` filters `pull_request` on
+  the base branch and they were stacked on feature branches. "No checks reported" reads exactly
+  like a slow start. Recorded in the handoff as a method rule.
 
 ### Verification
 
-Local gate green with every exit code captured **outside** the pipe: fmt, all four CI feature sets,
-clippy at deny-warnings, tests under `self-host` and under default features, and the doc build.
-Zero failures. CI is the binding gate and runs on the pushed commit.
-
+Every branch gated locally with exit codes captured outside the pipe: fmt, all four CI feature
+sets, clippy at deny-warnings, tests under `self-host` and default features, and the doc build.
+Zero failures. The refreshed handoff's check block was executed, not merely written.
 
 ## CLOSING SUMMARY — WHAT THIS SESSION DID AND WHAT IS WAITING ON YOU
 

@@ -5,18 +5,15 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-08-20 (late) against `f091a668`**, every pinned value re-measured. **NINE COMMITS
-> since the previous refresh, which was itself the same day** — this session ran long and the tree
-> moved under its own handoff twice.
+> **REFRESHED 2026-08-21 against `37a5bf9b`** (branch `test/selfhost-driver-parity`, the tip of a
+> five-deep stack), every pinned value re-measured and the check block executed.
 >
-> **THE SESSION'S SUBJECT WAS NOT WHAT IT SET OUT TO BE, TWICE.** It began on Order 1 item 3 and spent
-> most of its length on **five silent miscompiles** in the self-hosted compiler, four fixed and one
-> specified-but-not-fixed. Read "WHAT THE SWEEP FOUND" and "THE THREE UNREACHED-CODE FINDINGS" before
-> planning anything.
+> **THE SESSION FOUND AND CLOSED FOUR SILENT MISCOMPILES IN THE SHIPPING SELF-HOSTED COMPILER, AND
+> THEY ALL HAD ONE CAUSE.** Read "FOUR DEFECTS, ONE CAUSE" below before planning anything.
 >
-> **THE OPERATOR'S QUEUE IS THE FIRST THING TO CLEAR.** Two pull requests and two decisions are
-> waiting, listed under "Open, held by the operator". The `ParsedFn` accessor decision is the one that
-> unblocks the most.
+> **FIVE PULL REQUESTS ARE OPEN AND ALL FIVE NEED THE OPERATOR.** One of them moves a boundary
+> against a ruling that deferred the area; it is flagged, not slipped in, and carries a revert
+> recipe.
 
 ## Validity
 
@@ -28,13 +25,15 @@ always-current, so it must be able to report itself stale rather than mislead a 
 recorded parent is a claim that nothing else ever lands, and it has failed twice.
 
 ```sh
-git merge-base --is-ancestor f091a668 HEAD    # must succeed
+git merge-base --is-ancestor 37a5bf9b HEAD    # must succeed
 
 # Content. If ANY of these differ, say so rather than acting on the state below.
 grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 16
 grep -c '^\s*#\[test\]' tests/selfhost_wire.rs              # 173
 grep -c '^\s*#\[test\]' tests/selfhost_parse.rs             # 89
-grep -c '^\s*#\[test\]' tests/selfhost_codegen.rs           # 139
+grep -c '^\s*#\[test\]' tests/selfhost_codegen.rs           # 140  (+1: the shipping-compiler guard)
+grep -c '^\s*#\[test\]' tests/selfhost_pool_tags.rs          # 8    (new 2026-08-21)
+grep -c '^\s*#\[test\]' tests/selfhost_driver_parity.rs      # 4    (new 2026-08-21)
 grep -c '^\s*#\[test\]' tests/selfhost_declared_bounds.rs   # 5
 grep -c '^\s*#\[test\]' tests/opcode_reachability.rs        # 2   (new this session)
 grep -c '^\s*#\[test\]' tests/block_form_statements.rs      # 11
@@ -59,8 +58,11 @@ grep -rhoE 'pub const PARSE_[A-Z_]+: usize = [0-9]+;' src/ | sort
 # THE CONSTRUCT-SUPPORT BOUNDARY. **THE ENUM HAS FOUR VARIANTS, NOT THREE**: `Gap`
 # split into `Refuses` and `Diverges` because it conflated an honest refusal with a
 # silent miscompile. Expect 88 SOk / 1 Refuses / 5 Diverges / 1 RefRejects.
-awk '/let cases: &\[\(&str, Support, &str\)\] = &\[/{f=1;next} f&&/^    \];/{f=0} f' \
-    tests/selfhost_codegen.rs \
+# **THE TABLE MOVED INTO A FUNCTION** so a second test can measure the SHIPPING
+# compiler against it. The `use Support::{...}` line inside it contributes one of
+# each name and must be excluded, or every count reads one too high.
+awk '/fn boundary_cases\(\)/,/^}/' tests/selfhost_codegen.rs \
+  | grep -v '^    use Support::' \
   | sed 's://.*::' | grep -oE '\b(SOk|Refuses|Diverges|RefRejects)\b' | sort | uniq -c
 ```
 
@@ -147,7 +149,8 @@ push cancelled run `31932202253` and `31932359730` replaced it.
 | **`parse.kel` failure modes named** | **THIRTEEN**, across **ELEVEN** guarded counters |
 | shared-slot layouts | **nine copies collapsed to two definitions**, in `selfhost_host` |
 | architecture | one binary, selectable phases -- see `../decisions/PIPELINE_THEN_MONOLITH.md` |
-| construct-support boundary | **79 SOk / 4 Gap / 1 RefRejects**, 84 cases |
+| construct-support boundary | **88 SOk / 1 Refuses / 5 Diverges / 1 RefRejects**, 95 cases |
+| **the SHIPPING compiler against that table** | **88 identical / 5 differs / 1 faults / 1 ref-rejects — it AGREES with the boundary on all 95** |
 | operand-stack models | **agree on every one of the 66 opcodes**; the known list is EMPTY |
 
 **WHAT EACH EMITTED REGION OWES TO WHOM, because the distinction is the coverage claim.**
@@ -168,6 +171,50 @@ but not derived**. A region whose payload came from the harness or the reference
    refuses past **1,024 nodes** (`nm_max_names`, error `-240`), which `wire.kel` hits at 1,148 chunk
    constants. The **flattener out of `wire.fin`** refuses past **170**, `fin` being 1,024 words at six
    words a node. Only the second is derived from a word count.
+
+## FOUR DEFECTS, ONE CAUSE (2026-08-21) — READ THIS FIRST
+
+**The shipping self-hosted compiler and the copy of it in `tests/selfhost_codegen.rs` are two
+implementations of the same driver, and the construct-support boundary exercises only the copy.**
+Every divergence found on 2026-08-21 was a slot, a tag, a record or an arm the copy handled and
+the shipping driver did not.
+
+| defect | symptom | where |
+|---|---|---|
+| the constant-pool tag was discarded | a string constant became the integer of its intern id | #212 |
+| struct/trait/impl declarations had no skip state | the driver faulted on 29 boundary cases | #212 |
+| the eager `and`/`or` ids were never seeded | **`a and b` compiled to `a`** | #213 |
+| op tag 53 had no flat-nested arm | a struct-typed tuple element faulted in kind decoding | #214 |
+
+**Census over the 95 boundary cases, baseline taken by STASHING each change rather than assumed:**
+
+| | baseline | +#212 | +#213 | +#214 |
+|---|---|---|---|---|
+| byte-identical | 43 | 76 | 82 | **88** |
+| differs | 21 | 11 | 5 | **5** |
+| faults | 30 | 7 | 7 | **1** |
+
+**The shipping compiler now reaches the same verdict as the boundary on all 95 cases.** Every
+remaining non-identical case is one the table already labels `Diverges`, `Refuses` or
+`RefRejects`.
+
+**PROPORTIONALITY, AND STATE IT EVERY TIME.** `self_hosted_compile` cross-checks against the
+reference and refuses on divergence, so **none of this reached a user as a wrong module**. The
+exposure was to direct callers of the `self_host_compile*` entry points.
+
+**TWO GUARDS NOW COVER THE CLASS, AND NEITHER IS SUFFICIENT ALONE.**
+- `the_shipping_compiler_matches_the_boundary_it_is_recorded_against` measures the SAME hoisted
+  case table through the shipping compiler and asserts **per-case verdict agreement**, not a
+  count. Bounded by the 95 cases.
+- `tests/selfhost_driver_parity.rs` compares the two drivers by STRUCTURE — decode arms, seeded
+  slots, declaration record codes — so it does not depend on corpus coverage. **It would have
+  caught three of the four, not all four**, and says so in a table; the pool tag is semantics
+  inside an arm rather than the presence of an arm.
+
+**THE PARITY GUARD FAILED ITS OWN FIRST MUTATION TEST**, and the reason generalises: it compared
+SETS of seeded slot names, and the library has TWO token feeds, so deleting one of two seedings
+left the name present via the other. Now counted, calibrated against `BR_P_WORD_ID`'s own count so
+a third feed cannot silently weaken it. **A guard that has not been made to fail is a guess.**
 
 ## WHAT THE SWEEP FOUND, AND WHY IT COULD NOT HAVE BEEN FOUND BY READING
 
@@ -418,61 +465,56 @@ looked complete. **In every case the code was reachable and the evidence was not
 
 ## Open, held by the operator
 
-**FOUR ITEMS. TWO PULL REQUESTS AND TWO DECISIONS.** Nothing else is blocked on the operator, and the
-unblocked queue is genuinely thin.
+**FIVE PULL REQUESTS AND TWO DECISIONS.** Nothing is blocked on anything else.
 
-**1. THE `ParsedFn` ACCESSOR DECISION — the one that unblocks the most.**
+**THE PULL REQUESTS, ALL AGAINST `v0.2.3`, ALL DRAFT, IN STACK ORDER:**
 
-**THREE read-only accessors**, not the six an earlier revision of this file claimed. `ParsedFn` has
-nine private fields and four public accessors; `tests/selfhost_codegen.rs` needs `name` (read 71
-times), `param_types` (4) and `return_type` (2), and carries a full copy of the struct AND the driver
-because it cannot reach them.
+| # | what | note |
+|---|---|---|
+| **212** | constant-pool tag + struct/trait/impl declaration skip | **22/22 green.** Moves a boundary; see below |
+| **213** | eager `and`/`or` id seeding | needs #212; neither completes the construct alone |
+| **214** | flat-nested tuple field + the shipping-compiler guard | |
+| **215** | the structural driver-parity guard | contains 212–214 as ancestors |
+| **201** | one self-contradicting clause in the CHANGELOG V0.2.0 entry | **22/22 green**, held because editing published release text is a judgment call |
+| **210** | pins that stage commands 176/177 are dispatched and unreached | guard is TEXTUAL and passes vacuously on a rename; stated in the PR |
 
-**THE DUPLICATE IS EVIDENCED, NOT ARGUED.** It has cost four separate things:
-- blocks stage two of the token-residency work;
-- required the boolean-literal shared slots to be seeded a second time;
-- **is the compiler the construct-support table actually measures**;
-- **has measurably diverged from the shipping compiler** — on a string literal the reference and the
-  copy both emit `StaticStr("hi")` while `keleusma::selfhost::self_host_compile` emits `Int(3)`.
+**#212 MOVES A BOUNDARY AGAINST A RULING THAT DEFERRED THE AREA.** Programs the tree previously
+refused now compile. The ruling of 2026-08-19 was "Top-level struct support. Defer."
 
-So the support table reports `Ok` for a construct the SHIPPING compiler gets wrong. Pinned by
-`the_two_self_hosted_compilers_disagree_on_a_string_literal`.
+The reading offered: this is not that work, because no struct LAYOUT is derived from the pipeline —
+a struct program compiles because its layout comes from the reference scaffold and its chunk ops now
+lower without faulting. **If the ruling is read more broadly, the skip should come out.**
+`docs/decisions/POOL_TAG_RESIDENCY_BRIEF.md` names the three hunks; the pool-tag half is independent.
 
-*Options*: widen the three accessors and delete the copy (recommended); widen them gated on
-`self-host`; or leave it and accept that the table describes a compiler that is not the one shipping.
+**THE `ParsedFn` ACCESSOR DECISION IS NOW FOUR FINDINGS BETTER EVIDENCED.** Three read-only
+accessors (`name`, `param_types`, `return_type`) would let the duplicate be deleted. The string
+literal that first evidenced it is repaired; in its place stand the four defects above, every one
+caused by the duplicate existing. **The two new guards make the drift visible; they do not make the
+duplicate safe.**
 
-**2. TWO PULL REQUESTS OPEN AGAINST `v0.2.3`:**
-- **#201**, one clause in the `CHANGELOG.md` V0.2.0 entry that CONTRADICTS another statement in the
-  same release section. Flagged for review because editing historical release text is a judgment call
-  rather than a repair. One clause, trivially revertible.
-- **#210**, pinning that commands 176/177 are dispatched and unreached. Its guard is TEXTUAL — it
-  greps driver source for two function names — which is the shape argued against all session, and it
-  passes vacuously if those functions are renamed. Stated in the pull request rather than hidden.
+**THE DEAD `native@1c1ffb1e` GATE RECORD.** Unchanged: stalled 227+ hours, no process, worktree
+clean, the `v0.3.0` line confirms nothing waits on it. Untouched because it is theirs.
 
-**3. THE DEAD `native@1c1ffb1e` GATE RECORD.** `scripts/gate-status.sh` reports it STALLED at 34%,
-step 5, zero failures, **last write over 227 hours ago**, with its predecessor marked ABANDONED and
-"a wait on it will never end". No process runs against that worktree and it is clean. The `v0.3.0`
-line has confirmed nothing of theirs waits on it. Untouched because it is their worktree.
-
-**4. THE RULINGS OF 2026-08-19 ARE ALL IMPLEMENTED OR RECORDED. Do not re-ask them.**
+**THE RULINGS OF 2026-08-19 ARE ALL IMPLEMENTED OR RECORDED. Do not re-ask them.**
 
 ## WHAT A RESUMING SESSION SHOULD DO FIRST
 
-**Clear the operator queue before starting anything**, because two of the four items change what the
-tree means rather than what it does.
+**Clear the operator queue.** Five pull requests, and #212's boundary move is the one that changes
+what the tree means rather than what it does.
 
-Then, if development continues, the honestly-costed options are:
+**DO NOT RESUME BY SWEEPING THE DRIVER FOR MORE OF THE SAME CLASS.** It is worked out on all three
+structural surfaces — decode arms, seeded slots, declaration records — and
+`tests/selfhost_driver_parity.rs` now asserts that. The remaining yield is zero.
 
-- **`CONSTS`, Order 1 item 1.** The flattener already emits a byte-identical region and batching is
-  the route, BUT commands 176/177 have never run — budget for validating them, and drive them from a
-  test first so the stage side is proven independently of the driver.
-- **Chained array indexing.** Specification is in the boundary table; it is a parser feature.
-- **`Op::IsStruct` reachability.** Nine constructs tried and recorded. The target is making inference
-  FAIL, and note that the trick which works for `Op::Len` does NOT work here — necessary but not
-  sufficient.
+Then, the honestly-costed options, unchanged in substance:
 
-**Do not resume by sweeping for more miscompiles.** The yield fell from two in twenty probes, to one
-in twenty-two, to zero; the shallow layer is worked out.
+- **`CONSTS`, Order 1 item 1.** Commands 176/177 have never run: budget for validating them, and
+  drive them from a test first so the stage side is proven independently of the driver.
+- **Chained array indexing.** Specification is in the boundary table; a parser feature, not a fix.
+- **`Op::IsStruct` reachability.** Nine constructs tried and recorded; the trick that works for
+  `Op::Len` does NOT work here.
+- **The five remaining `Diverges` cases.** All already labelled as such: nested array index (the
+  parser feature above), float arithmetic, and two composite-equality gaps.
 
 ## A NOTE ON THE `/goal` MECHANISM, IF THE OPERATOR USES IT
 
