@@ -867,6 +867,8 @@ pub fn lower_chunk<'ctx>(
             // `lower_chunk` sees no module, so it resolves no call and needs no
             // per-site offsets; it refuses `Op::Call` for the same reason.
             call_regions: &[],
+            // Nobody is asking this single-chunk path what it lowered.
+            visited: None,
         },
     )
 }
@@ -891,7 +893,7 @@ pub fn lower_module<'ctx>(
     program: &Module,
     opts: LowerOptions,
 ) -> Result<Vec<FunctionValue<'ctx>>, LowerError> {
-    lower_module_with(ctx, module, program, opts, None)
+    lower_module_with(ctx, module, program, opts, None, None)
 }
 
 /// Every chunk-level refusal in `program`, rather than only the first.
@@ -915,7 +917,7 @@ pub fn module_refusals(program: &Module, opts: LowerOptions) -> Vec<(String, Low
     let ctx = Context::create();
     let m = ctx.create_module("refusals");
     let mut sink = Vec::new();
-    let outcome = lower_module_with(&ctx, &m, program, opts, Some(&mut sink));
+    let outcome = lower_module_with(&ctx, &m, program, opts, Some(&mut sink), None);
     // **A MODULE-LEVEL REFUSAL USED TO BE INVISIBLE HERE, and callers read the
     // emptiness of this vector as "the backend accepts it".**
     //
@@ -942,12 +944,79 @@ pub fn module_refusals(program: &Module, opts: LowerOptions) -> Vec<(String, Low
     sink
 }
 
+/// One chunk's refusal: the chunk's name and why it was refused.
+///
+/// `MODULE_LEVEL_REFUSAL` in the name position means the whole module was
+/// rejected rather than any one chunk.
+pub type ChunkRefusal = (String, LowerError);
+
+/// Which op indices the lowering visited, per chunk, parallel to
+/// `Module::chunks`.
+///
+/// `Some(indices)` for a chunk that lowered to completion; `None` for one that
+/// refused, whose partial record is deliberately withheld because its last entry
+/// is the op that failed. See [`module_lowered_op_indices`].
+pub type LoweredOpIndices = Vec<Option<Vec<usize>>>;
+
+/// Per-chunk record of which op indices the lowering ACTUALLY VISITED, beside
+/// the same refusals [`module_refusals`] reports.
+///
+/// Returns a vector parallel to `program.chunks`: `Some(indices)` for a chunk
+/// that lowered to completion, `None` for one that refused. A module-level
+/// refusal yields `None` for every chunk, since nothing in it was lowered.
+///
+/// # Why chunk-level success is not enough, and what this exists to prevent
+///
+/// **The op loop skips code no edge reaches.** `break;` lowers to an
+/// unconditional branch and whatever follows it in the opcode stream is
+/// unreachable, so `lower_chunk_body` marks itself `dead` and steps over those
+/// ops without ever entering their match arms. An opcode occurring ONLY in such
+/// a region of an otherwise clean chunk was therefore never lowered, and
+/// concluding "this chunk lowered, so the backend supports every opcode in it"
+/// would credit a lowering that does not exist — which is the same shape as
+/// every coverage error this line has recorded: a signal answering a narrower
+/// question than the one asked.
+///
+/// **Indices, not names.** The refusal list carries chunk NAMES, and a module
+/// holding two chunks of one name makes a name lookup ambiguous exactly when it
+/// matters. This is positional, so it cannot be confused.
+///
+/// # What a visited index does NOT mean
+///
+/// **Not that the emitted code is correct.** It means the backend produced
+/// something for that op. Correctness belongs to the differential oracle.
+pub fn module_lowered_op_indices(
+    program: &Module,
+    opts: LowerOptions,
+) -> (Vec<ChunkRefusal>, LoweredOpIndices) {
+    let ctx = Context::create();
+    let m = ctx.create_module("lowered_ops");
+    let mut sink = Vec::new();
+    let mut visits = Vec::new();
+    let outcome = lower_module_with(&ctx, &m, program, opts, Some(&mut sink), Some(&mut visits));
+    // A module-level refusal returns BEFORE the chunk loop, so `visits` is short
+    // or empty rather than all-`None`. Normalising here keeps the postcondition
+    // ("parallel to `program.chunks`") true for every caller, instead of leaving
+    // each one to rediscover the case. `Diagnostic` is the diagnostic-mode
+    // sentinel and is not a refusal — see `module_refusals`.
+    if let Err(e) = outcome
+        && !matches!(e, LowerError::Diagnostic(_))
+    {
+        sink.push((MODULE_LEVEL_REFUSAL.to_string(), e));
+        return (sink, vec![None; program.chunks.len()]);
+    }
+    debug_assert_eq!(visits.len(), program.chunks.len());
+    visits.resize(program.chunks.len(), None);
+    (sink, visits)
+}
+
 fn lower_module_with<'ctx>(
     ctx: &'ctx Context,
     module: &LlvmModule<'ctx>,
     program: &Module,
     opts: LowerOptions,
     mut refusals: Option<&mut Vec<(String, LowerError)>>,
+    mut visits: Option<&mut Vec<Option<Vec<usize>>>>,
 ) -> Result<Vec<FunctionValue<'ctx>>, LowerError> {
     check_word_width(program.word_bits_log2)?;
     let i64t = ctx.i64_type();
@@ -1110,6 +1179,7 @@ fn lower_module_with<'ctx>(
             }
         }
         let call_regions = region::plan_call_site_regions(program, i);
+        let seen = core::cell::RefCell::new(Vec::new());
         let cfg = BodyCfg {
             opts,
             degenerate_yield: tail.as_deref(),
@@ -1117,10 +1187,21 @@ fn lower_module_with<'ctx>(
             natives: &program.native_names,
             native_shapes: &program.native_return_shapes,
             call_regions: &call_regions,
+            visited: visits.as_ref().map(|_| &seen),
         };
         match lower_chunk_body(ctx, module, chunk, *func, &declared, data, cfg) {
-            Ok(_) => {}
+            Ok(_) => {
+                // A CLEAN chunk, so every recorded index lowered. See
+                // `BodyCfg::visited` for why a refused chunk's list is dropped
+                // instead: its last entry is the op that failed.
+                if let Some(v) = visits.as_mut() {
+                    v.push(Some(seen.into_inner()));
+                }
+            }
             Err(e) => {
+                if let Some(v) = visits.as_mut() {
+                    v.push(None);
+                }
                 // In diagnostic mode, record and carry on to the NEXT CHUNK.
                 //
                 // A chunk's own lowering still stops at its first refusal, since
@@ -1269,6 +1350,26 @@ struct BodyCfg<'a> {
     /// block fixes it without changing any signature: the callee still receives
     /// one region pointer and never names an arena.
     call_regions: &'a [(usize, u32)],
+    /// Where to record the op indices this body actually LOWERED, if anywhere.
+    ///
+    /// **Exists because "the chunk lowered" does not imply "every op in it was
+    /// lowered".** The op loop skips anything in code no edge reaches (`if dead
+    /// { continue; }`), and the compiler emits such code routinely — a `break`
+    /// is an unconditional branch and whatever follows it in the opcode stream
+    /// is unreachable. So an opcode witnessed ONLY in a dead region of an
+    /// otherwise clean chunk was never visited, and a census that inferred
+    /// support from chunk-level success would credit the backend with a lowering
+    /// it does not have.
+    ///
+    /// Recorded at the TOP of the iteration, before the arm runs. That is sound
+    /// for the only consumer, [`module_lowered_op_indices`], because a chunk's
+    /// lowering stops at its first refusal and the consumer keeps this list only
+    /// for chunks that lowered CLEANLY — in which case every recorded index
+    /// succeeded. It is NOT sound to read for a refused chunk, whose last
+    /// recorded index is the one that failed.
+    ///
+    /// A `RefCell` rather than `&mut` so `BodyCfg` stays `Copy`.
+    visited: Option<&'a core::cell::RefCell<Vec<usize>>>,
 }
 
 /// The external symbol a declared native binds to.
@@ -1643,6 +1744,7 @@ fn lower_chunk_body<'ctx>(
         natives,
         native_shapes,
         call_regions,
+        visited,
     } = cfg;
     let i64t = ctx.i64_type();
     let i128t = ctx.i128_type();
@@ -1833,6 +1935,13 @@ fn lower_chunk_body<'ctx>(
 
         if dead {
             continue;
+        }
+
+        // The op is about to be lowered. See `BodyCfg::visited` for why this is
+        // recorded here rather than after the arm, and why only a CLEAN chunk's
+        // list may be read.
+        if let Some(v) = visited {
+            v.borrow_mut().push(i);
         }
 
         // **A tuple field read IS a struct field read.** `TupleField` and
