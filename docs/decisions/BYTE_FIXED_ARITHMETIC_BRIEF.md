@@ -66,6 +66,30 @@ it was never required to lower `Byte` and `Fixed`.**
 - **Mutate the mask.** If breaking the `Byte` mask leaves the suite green, no program exercises the
   wrap, and the coverage claim is empty.
 
+## STATUS UPDATE — the guard has LANDED, and one fact in this brief was refined
+
+The widened float guard is in the tree with a test per route. **One route's boundary was not what
+this brief assumed**: a module that DECLARES a float data slot and never reads it LOWERS; only an
+ACCESS refuses. That is safe by construction — an unread slot puts no float on the operand stack —
+and it is stronger than the "declaration refuses" claim it replaced.
+
+**Exact semantics, measured from the virtual machine rather than assumed:**
+
+| op | `Byte` | `Fixed` |
+|---|---|---|
+| `Add`, `Sub` | i64 op then `& 0xFF` | plain wrapping i64 |
+| `Neg` | `wrapping_neg` on `u8`, so `(-a) & 0xFF` | plain wrapping i64 |
+| `Mul` | i64 mul then `& 0xFF` | **never emitted** — `Fixed * Fixed` is `FixedMul` |
+
+So `Op::Mul` is `Byte`-only once `Float` is excluded, and admitting an eight-byte operand for it
+would be admitting a case that cannot occur. **Refuse it rather than handle it**: a lowering arm for
+an unreachable case is untested code that looks tested.
+
+**Width is the discriminator and it is only trustworthy where the signature says so.** `GetLocal`
+carries a signature-derived width ONLY when the chunk never writes that local; anything written is
+`Unknown`. So the dispatch must **refuse on `Unknown`** rather than guess — which costs coverage and
+cannot mispack, the same trade already made for composite packing.
+
 ## What a good outcome looks like
 
 `Add`, `Sub` and `Neg` lower for `Byte` and `Fixed`, verified by the differential oracle actually

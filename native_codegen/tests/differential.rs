@@ -2565,3 +2565,102 @@ fn an_enum_match_agrees_with_the_vm() {
         }
     }
 }
+
+/// **BYTE ARITHMETIC AGREES WITH THE VIRTUAL MACHINE, INCLUDING AT THE WRAP.**
+///
+/// `Op::Add`, `Op::Sub`, `Op::Mul` and `Op::Neg` were recorded for a long time
+/// as blocked on the operator's float representation. They were not: the opcode
+/// is emitted for `Byte`, `Fixed` AND `Float`, and only the last needs a
+/// representation this backend lacks. With the module-level float guard closing
+/// every route a float can take, a matched `Byte` pair is unambiguous.
+///
+/// **The corpus does NOT exercise this**, which is why these tests exist rather
+/// than a corpus figure. `opcode_witness.kel` still refuses on `FixedDiv`, `Len`
+/// and `IsStruct`, so the differential never drives its `byte_mix`. Four opcodes
+/// lowering with nothing executing them is precisely the shape this line keeps
+/// finding, so the check is hand-written and the boundary values are the point.
+///
+/// **The wrap is the whole content.** The virtual machine computes a `Byte` in
+/// `i64` and masks with `& 0xFF`; a lowering that omitted the mask agrees on
+/// every small case and diverges only past 255. `200 + 100` and `3 - 5` are the
+/// two cases that catch it.
+#[test]
+fn byte_addition_agrees_with_the_vm_including_the_wrap() {
+    let src = "fn main(a: Word, b: Word) -> Word {
+        let x = a as Byte;
+        let y = b as Byte;
+        (x + y) as Word
+    }";
+    // 200+100 = 300 -> 44 after the mask. Without the mask the sides differ.
+    for args in [[2, 3], [200, 100], [255, 1], [255, 255], [0, 0]] {
+        assert_agrees(src, &args);
+    }
+}
+
+/// Subtraction below zero, which wraps upward on a `u8`.
+#[test]
+fn byte_subtraction_agrees_with_the_vm_including_the_borrow() {
+    let src = "fn main(a: Word, b: Word) -> Word {
+        let x = a as Byte;
+        let y = b as Byte;
+        (x - y) as Word
+    }";
+    // 3-5 = -2 -> 254. An unmasked lowering yields -2 and disagrees.
+    for args in [[5, 3], [3, 5], [0, 1], [255, 255], [0, 255]] {
+        assert_agrees(src, &args);
+    }
+}
+
+/// Multiplication, where the product leaves eight bits almost immediately.
+#[test]
+fn byte_multiplication_agrees_with_the_vm_including_the_overflow() {
+    let src = "fn main(a: Word, b: Word) -> Word {
+        let x = a as Byte;
+        let y = b as Byte;
+        (x * y) as Word
+    }";
+    // 16*16 = 256 -> 0, the smallest product that vanishes under the mask.
+    for args in [[3, 4], [16, 16], [255, 255], [17, 15], [0, 200]] {
+        assert_agrees(src, &args);
+    }
+}
+
+/// Negation, which the virtual machine performs as `u8::wrapping_neg`.
+#[test]
+fn byte_negation_agrees_with_the_vm() {
+    let src = "fn main(a: Word) -> Word {
+        let x = a as Byte;
+        (-x) as Word
+    }";
+    // -0 is 0; -1 is 255. An unmasked lowering yields -1 and disagrees.
+    for args in [[0], [1], [128], [255], [100]] {
+        assert_agrees(src, &args);
+    }
+}
+
+/// **A MATCHED `Fixed` PAIR IS REFUSED, NOT MISLOWERED.**
+///
+/// `Fixed` arithmetic would be a plain wrapping `i64` operation, so it looks
+/// like it should fall out of the same arm. It does not, because a `Fixed`
+/// parameter's declared width is `Unknown` — `width_of_tag` maps `Byte`, `Bool`
+/// and `Word` and nothing else.
+///
+/// **That is the conservative direction and it is deliberate.** Widening
+/// `width_of_tag` would also newly admit composites carrying `Fixed` fields,
+/// which is a broader change with its own packing risk and does not belong
+/// bundled with arithmetic. Refusing costs coverage and cannot mispack.
+#[test]
+fn a_fixed_pair_is_refused_rather_than_lowered_as_an_integer_add() {
+    let src = "fn p(a: Fixed<16>, b: Fixed<16>) -> Fixed<16> { a + b }\nfn main() -> Word { 0 }";
+    let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let refusals = keleusma_native::module_refusals(&m, keleusma_native::LowerOptions::default());
+    assert!(
+        refusals
+            .iter()
+            .any(|(_, e)| format!("{e:?}").contains("operand widths")),
+        "a Fixed pair no longer refuses on unknown operand width. If `width_of_tag` \
+         learned `Fixed`, that is a WIDENING and not merely this arm changing: \
+         composites carrying Fixed fields now pack too. Verify that separately \
+         rather than deleting this. Refusals: {refusals:?}"
+    );
+}

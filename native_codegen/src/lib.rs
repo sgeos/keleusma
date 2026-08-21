@@ -1442,6 +1442,46 @@ struct BodyCfg<'a> {
 /// symbol would silently bind both call sites to whichever the host defined,
 /// and the differential oracle would only catch it if the corpus happened to
 /// call both.
+/// Result width for the generic arithmetic surface, or `None` to refuse.
+///
+/// **Refusing is the default and the point.** A matched `Byte` pair yields a
+/// `Byte`; a matched eight-byte pair yields the same width, which after the
+/// module-level float guard can only be `Fixed`. Everything else -- an unknown
+/// width, a mismatched pair, a body operand -- is refused, because a guess here
+/// is a silent wrong answer rather than a fault.
+///
+/// `byte_only` refuses the eight-byte case, for `Op::Mul`, whose `Fixed` form
+/// the compiler emits as `Op::FixedMul` instead.
+fn arith_result_width(l: Width, r: Width, byte_only: bool) -> Option<Width> {
+    match (l, r) {
+        (Width::Scalar(1), Width::Scalar(1)) => Some(Width::Scalar(1)),
+        (Width::Scalar(8), Width::Scalar(8)) if !byte_only => Some(Width::Scalar(8)),
+        _ => None,
+    }
+}
+
+/// Truncate to eight bits when the result is a `Byte`, and leave it alone
+/// otherwise.
+///
+/// **The asymmetry is the whole content.** A `Byte` must be masked to hold the
+/// representation invariant that makes `ByteToWord` a no-op. A `Fixed` must NOT
+/// be, and masking one would truncate it to eight bits while every later field
+/// offset still looked correct -- a silent wrong answer of exactly the kind the
+/// `Width::Body` split exists to prevent.
+fn mask_if_byte<'ctx>(
+    b: &inkwell::builder::Builder<'ctx>,
+    i64t: inkwell::types::IntType<'ctx>,
+    v: inkwell::values::IntValue<'ctx>,
+    out: Width,
+) -> inkwell::values::IntValue<'ctx> {
+    if out == Width::Scalar(1) {
+        b.build_and(v, i64t.const_int(0xFF, false), "bmask")
+            .unwrap()
+    } else {
+        v
+    }
+}
+
 fn native_symbol(name: &str) -> String {
     let mut s = String::from("kel_native_");
     for c in name.chars() {
@@ -2766,6 +2806,71 @@ fn lower_chunk_body<'ctx>(
             // unsupported for an unrelated reason recorded in the inventory:
             // `Op::Add` cannot be lowered without knowing whether its operands
             // are `Byte` or `Fixed`, and the opcode does not say.
+            // **THE GENERIC ARITHMETIC SURFACE: `Byte` and `Fixed` only.**
+            //
+            // These were recorded for a long time as blocked on the operator's
+            // float representation. **They were not.** `Op::Add` is emitted for
+            // `Byte`, `Fixed` AND `Float` -- three types, where two separate
+            // records each named two and disagreed. `Fixed` arithmetic is a
+            // plain wrapping `i64` operation because the format is
+            // scale-independent; `Byte` is the same operation plus a mask to
+            // eight bits. **Only `Float` needs a representation this backend
+            // lacks**, and the module-level guard now excludes it by every route
+            // it can take, tested per route in `float_guard_routes.rs`.
+            //
+            // Semantics taken from the virtual machine, not assumed:
+            // `binary_arith` computes a `Byte` in `i64` and masks with `& 0xFF`;
+            // `Fixed` is `wrapping_add`/`wrapping_sub` on the underlying bits.
+            // LLVM's `add`/`sub`/`mul` wrap by default (no `nsw`), which is the
+            // matching behaviour.
+            //
+            // **WIDTH IS THE DISCRIMINATOR AND IT REFUSES WHEN UNSURE.** A
+            // `GetLocal` carries a signature-derived width only where the chunk
+            // never writes that local; anything written is `Unknown`. An unknown
+            // or mismatched pair is REFUSED rather than guessed, which costs
+            // coverage and cannot mispack -- the same trade the composite
+            // packing already makes.
+            Op::Add | Op::Sub | Op::Mul => {
+                let (wl, wr) = (st.width_at(1), st.width_at(0));
+                // `Op::Mul` on `Fixed` does not exist: the compiler emits
+                // `Op::FixedMul(n)` for it. Admitting an eight-byte operand here
+                // would add a lowering arm for a case that cannot occur, which
+                // is untested code that looks tested.
+                let byte_only = matches!(op, Op::Mul);
+                let out = arith_result_width(wl, wr, byte_only).ok_or_else(|| {
+                    LowerError::UnsupportedOp(format!(
+                        "{op:?} with operand widths {wl:?} and {wr:?}: this backend \
+                         lowers the generic arithmetic surface only for a matched \
+                         Byte pair (1 byte each) or, for Add and Sub, a matched \
+                         Fixed pair (8 bytes each). Refusing rather than guessing, \
+                         since a wrong choice here is a silent wrong answer"
+                    ))
+                })?;
+                let rhs = st.pop();
+                let lhs = st.pop();
+                let raw = match op {
+                    Op::Add => st.b.build_int_add(lhs, rhs, "gadd").unwrap(),
+                    Op::Sub => st.b.build_int_sub(lhs, rhs, "gsub").unwrap(),
+                    _ => st.b.build_int_mul(lhs, rhs, "gmul").unwrap(),
+                };
+                st.push_w(mask_if_byte(&st.b, i64t, raw, out), out);
+            }
+            // The unary half of the same surface. The virtual machine negates a
+            // `Byte` with `u8::wrapping_neg`, which is `(-a) & 0xFF`, and a
+            // `Fixed` with `i64::wrapping_neg`.
+            Op::Neg => {
+                let w = st.width_at(0);
+                let out = arith_result_width(w, w, false).ok_or_else(|| {
+                    LowerError::UnsupportedOp(format!(
+                        "Neg with operand width {w:?}: lowered only for a Byte (1 \
+                         byte) or a Fixed (8 bytes) operand, and refused rather \
+                         than guessed otherwise"
+                    ))
+                })?;
+                let v = st.pop();
+                let raw = st.b.build_int_neg(v, "gneg").unwrap();
+                st.push_w(mask_if_byte(&st.b, i64t, raw, out), out);
+            }
             Op::WordToByte => {
                 let v = st.pop();
                 let m =

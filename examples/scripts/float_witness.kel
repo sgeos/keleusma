@@ -1,0 +1,31 @@
+// THE FLOAT-USING HALF OF `opcode_witness.kel`, SPLIT OUT SO ITS REFUSAL DOES
+// NOT COST EVERY OTHER OPCODE ITS WITNESS.
+//
+// This file exists because of a measured regression, not a preference. When the
+// native backend's float guard was widened to catch a float CONSTANT -- a route
+// that previously escaped it, because the guard scanned signatures only -- the
+// whole of `opcode_witness.kel` became refused at MODULE level. It carries
+// `let scaled = f + 1.5;`, so one float constant took `BoundsCheck`,
+// `CheckedDiv`, `CheckedMod` and `CallExternalNative` out of the lowering
+// census with it, even though none of them has anything to do with floats.
+//
+// THE FIX BELONGS IN THE CORPUS, NOT IN THE GUARD. Weakening a correct refusal
+// to recover coverage is the trade this line refuses on principle. Splitting the
+// program is the alternative that costs nothing true.
+//
+// WHAT IT WITNESSES: `IntToFloat` and `FloatToInt`, which the backend refuses
+// and will keep refusing until the float representation is decided -- the entry
+// application binary interface is `i64` where a double belongs, so there is a
+// live defect and not merely a missing feature. This file is EXPECTED to sit in
+// the differential's exempt set as a backend refusal.
+//
+// Divisors and operands are constants so no argument vector can make it fault.
+fn float_round_trip(w: Word) -> Word {
+  let f = w as Float;
+  let scaled = f + 1.5;
+  scaled as Word
+}
+
+fn main(seed: Word) -> Word {
+  float_round_trip(seed)
+}

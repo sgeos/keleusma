@@ -12,7 +12,7 @@
 //
 //   Byte arithmetic  -> Add, Sub, Mul, Neg   (Word operands take the Checked
 //                                             forms; Byte and Float take these)
-//   Float conversion -> IntToFloat, FloatToInt
+//   (Float conversion moved to `float_witness.kel` -- see below)
 //   Fixed<16>        -> FixedMul, FixedDiv, WordToFixed, FixedToWord
 //   external native  -> CallExternalNative   (`use external host::`)
 //   2-level index    -> BoundsCheck          (a single level emits none)
@@ -26,10 +26,14 @@
 // THE NATIVE BACKEND CURRENTLY REFUSES THIS FILE, AND THAT IS THE POINT.
 // Re-measured 2026-08-20 with `module_refusals`, which reports FOUR:
 //
-//   byte_mix          UnsupportedOp("Add")
 //   fixed_mix         UnsupportedOp("FixedDiv(16)")
-//   float_round_trip  UnsupportedOp("IntToFloat")
 //   len_witness       UnsupportedOp("Len")
+//   is_struct_witness UnsupportedOp("IsStruct")
+//
+// `byte_mix` NO LONGER REFUSES: `Op::Add`, `Op::Sub`, `Op::Mul` and `Op::Neg`
+// now lower for a matched Byte pair. `float_round_trip` MOVED OUT entirely, to
+// `float_witness.kel` -- its single float constant was refusing this whole
+// module and taking four unrelated opcodes' witnesses with it.
 //
 // TWO OF THOSE ROWS MOVED SINCE THIS FILE WAS WRITTEN, in both directions, which
 // is why the set is re-measured rather than carried forward. `fixed_mix` used to
@@ -73,12 +77,6 @@ fn byte_mix(a: Byte, b: Byte) -> Byte {
   let prod = diff * b;
   let neg = -prod;
   sum + neg
-}
-
-fn float_round_trip(w: Word) -> Word {
-  let f = w as Float;
-  let scaled = f + 1.5;
-  scaled as Word
 }
 
 fn fixed_mix(w: Word) -> Word {
@@ -214,7 +212,6 @@ fn len_witness(c: bool) -> Word {
 
 fn main(seed: Word) -> Word {
   let b = byte_mix(3 as Byte, 5 as Byte);
-  let f = float_round_trip(seed);
   let q = fixed_mix(seed);
   let g = grid_at(1, 2);
   let h = host::tick(seed);
@@ -224,5 +221,5 @@ fn main(seed: Word) -> Word {
   // never drive it.
   let l = len_witness(true);
   let s = is_struct_witness(P { a: 1, b: 2 });
-  (b as Word) + f + q + g + h + c + l + s
+  (b as Word) + q + g + h + c + l + s
 }
