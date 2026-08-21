@@ -13,6 +13,46 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**`Op::Len` IS REACHABLE; `Op::IsStruct` RESISTED, AND FALSIFYING MY OWN HYPOTHESIS IS THE RESULT
+(2026-08-20, afternoon).**
+
+The `v0.3.0` line's opcode census stood at 64 of 66 with two unwitnessed after eight construct
+attempts. **They reframed it correctly and that reframing is what solved it**: the question is not
+"which construct" but "whether one exists", and both opcodes are emitted only as a FALLBACK when a
+static type is unknown. **The target is making INFERENCE FAIL, not finding an unusual shape.**
+
+**`Op::Len`: FOUND.** `static_for_in_length` matches `ArrayLiteral`, `Call`, `FieldAccess`, `Ident`,
+`ArrayIndex` and `Match`, then falls through to `_ => None`. **`Expr::If` is not among them.** So
+`for x in if c { a } else { b }` takes the fallback and emits `Op::Len`. Confirmed with a constant
+and a runtime condition, and pinned with six controls -- one per handled source kind -- so a
+regression that made the guard return `None` for everything fails rather than looks like a win.
+
+**THE METHOD IS THE TRANSFERABLE PART.** Six of my probes varied the SHAPE of the source. The one
+that worked came from reading the guard's own match arms for what they OMIT. Eight failed attempts on
+the other line plus six of mine, all guessing; one reading of the arm list, immediate answer.
+
+**`Op::IsStruct`: NOT FOUND IN NINE ATTEMPTS, AND MY HYPOTHESIS WAS WRONG.** The guard is
+`named_type_name(ty) != Some(type_name)`, `ty` coming from `infer_expr_type`, which has **no
+`Expr::If` arm either** -- so the same trick should work. **It does not**, with a constant or a
+runtime condition. Making inference fail is NECESSARY BUT NOT SUFFICIENT; something further along the
+struct-pattern path suppresses the test, and what that is has not been established.
+
+**Recording a falsified hypothesis is worth more here than another guess.** The test states what was
+tried -- plain local, `if` expression both ways, call result, array index, nested match, struct field
+-- and says explicitly that "not found" is NOT "unreachable". If a later attempt reaches it, the test
+fails and instructs its author to pin the construct rather than relax the assertion.
+
+**IF NOTHING CAN REACH IT, THAT IS THE FINDING**, and a larger one than a witnessed opcode: an
+instruction set whose count is a stated rad-hard constraint carrying an opcode with no producer.
+
+**I MADE THE SAME PROBE-SYNTAX MISTAKE MY OWN BRIEF WARNS ABOUT, ONE HOUR AFTER WRITING IT.** The
+first `for`-in probe used a `limit` clause, which the reference rejects with "a `limit` clause
+requires a range `for` loop". The brief says to generate probes from corpus sources rather than from
+memory of the grammar; I generated from memory. Third probe-syntax error in three sweeps. **Knowing
+the rule is not the same as having the habit.**
+
+---
+
 **THE TWO SELF-HOSTED COMPILERS HAVE MEASURABLY DIVERGED, AND THE SUPPORT TABLE MEASURES THE WRONG ONE
 (2026-08-20, morning).**
 
