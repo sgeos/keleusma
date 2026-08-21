@@ -147,3 +147,52 @@ not reach them. The distinction is load-bearing: it is what makes a future diver
   the full region harness rather than approximating it.
 - **Multi-node streaming is unexercised.** One node in, one record out is proven; the cursor
   advancing across a forest is not.
+
+---
+
+# RESULT — THE EQUIVALENCE CLAIM, AND IT CLEARS THE CAP (2026-08-21)
+
+**The streaming path reproduces the reference encoder's `CONSTS` region byte for byte, for a
+forest the walk refuses.**
+
+| case | nodes | walk (cmd 141) | streaming |
+|---|---|---|---|
+| one constant | 1 | accepts | byte-identical to the reference |
+| 200 constants | 200 | **refuses `-240`** | **byte-identical to the reference** |
+
+The 200-node case is the point. `fl_max_nodes()` is 170 because the whole forest must sit in
+`wire.fin`; the streaming path holds ONE node and is not bounded by it. **This is not "streaming
+also works" — it is streaming doing what the walk cannot**, which is the entire justification for
+the path.
+
+## What makes the comparison trustworthy
+
+- **The oracle is `encode_aux_body`, the Rust encoder**, not `fl_walk`. For the 200-node case
+  `fl_walk` could not have served as an oracle at all, since it refuses the input.
+- **The refusal is asserted by CODE.** `-240` is the node cap specifically; a different code would
+  mean the input failed for an unrelated reason, and this line has recorded three near-misses where
+  a refusal was read as the wrong limit.
+- **The all-scalar precondition is asserted per node.** Breadth-first and linear order coincide
+  only when nothing has children; a composite entering the corpus would make the comparison
+  silently measure two different orders.
+- **A vacuity guard requires some case to exceed the cap**, so the test cannot degrade into the
+  small case alone and keep passing.
+
+## Two incidental findings
+
+**`fn main() -> Word { 42 }` has exactly ONE constant.** The first version of this test used it
+alone and therefore proved a single record while reading as though it proved a region. Caught by
+measuring the corpus rather than trusting the label "scalars-only".
+
+**A 200-term expression overflows the parser stack** rather than producing a parse error. That is
+the recorded dispatch-depth ceiling, and it is why the corpus here uses 200 flat `let` statements
+instead of one long sum. Recorded because the failure mode is a crash in the test binary, which
+reads as a harness fault rather than a language bound.
+
+## What is still NOT done
+
+- **The driver is unwired.** `CONSTS` remains host-supplied for the stages past the walk cap, and a
+  region whose payload comes from the host is **not covered** by the self-hosting claim. Nothing
+  here changes that; it changes what the remaining work costs and how attributable it is.
+- **No stage source has been streamed end to end.** The 200-node corpus is synthetic. `parse.kel`
+  carries 817 constants and streaming it through the driver is the actual Order 1 deliverable.
