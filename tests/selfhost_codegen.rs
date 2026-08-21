@@ -8888,78 +8888,73 @@ fn a_cast_lowers_in_the_direction_it_was_written() {
     );
 }
 
-/// **THE TWO SELF-HOSTED COMPILERS HAVE MEASURABLY DIVERGED.**
+/// **THE TWO SELF-HOSTED COMPILERS AGREED, THEN DIVERGED, AND NOW AGREE AGAIN.**
 ///
-/// This file carries its own `self_host_compile`, a copy of the shipping driver,
-/// and its own comment has warned for some time that "a fix to one is not a fix to
-/// the other". That was a hazard. **It is now an observed fact.**
+/// This test asserted the DISAGREEMENT when it was written on 2026-08-20. It is inverted
+/// rather than deleted, because the fact it recorded is worth keeping: for a period the
+/// construct-support boundary below reported `Ok` for a construct the SHIPPING compiler got
+/// wrong, and a deleted test loses both halves of that.
 ///
-/// Measured 2026-08-20 on `fn f() -> Word { let s = "hi"; 1 }`:
+/// Measured 2026-08-20, before the repair:
 ///
 /// ```text
 ///   reference:      constants [StaticStr("hi"), Int(1)]
-///   this file's:    constants [StaticStr("hi"), Int(1)]   — agrees
+///   this file's:    constants [StaticStr("hi"), Int(1)]   — agreed
 ///   the library's:  constants [Int(3),          Int(1)]   — the intern id, as an Int
 /// ```
 ///
-/// The ops are identical in all three. Only the constant pool differs, which is why
-/// an ops-only comparison would call it clean.
+/// The ops were identical in all three. Only the constant pool differed, which is why an
+/// ops-only comparison called it clean.
 ///
-/// # Why this matters more than the string bug itself
+/// # The cause, and why it is not a stage defect
 ///
-/// **The construct-support boundary measures THIS file's compiler.** So for any
-/// construct where the two have drifted, the table describes the copy and says
-/// nothing about what ships. `literal/string` is recorded there as `Ok`, which is
-/// true of the measured compiler and misleading about the shipping one.
+/// `codegen.kel` emits the pool as values then TAGS, and the shipping driver read the tags
+/// into a discard binding on the stated grounds that the stage sources are all-`Int`. True of
+/// the corpus, false of the contract. Repaired host-side in `src/selfhost/mod.rs`; the stage
+/// was not touched. See `tests/selfhost_pool_tags.rs` and
+/// `docs/decisions/POOL_TAG_RESIDENCY_BRIEF.md`.
 ///
-/// That is not a hypothetical cost of duplication. It is the duplication producing
-/// a wrong answer in the project's own record of what self-hosting supports.
+/// # What this does NOT settle
 ///
-/// # Why the copy exists, and what closes it
-///
-/// `ParsedFn` exposes four accessors and no public fields, and this harness needs
-/// six more — the name, parameter names and types, the return type and the let
-/// bindings. The copy is the only thing the public surface permits. **Widening
-/// those accessors so the copy can be deleted is the fix**, and it also unblocks
-/// the token-residency work, which the same duplicate stops.
-///
-/// # What to do when the library is fixed
-///
-/// This test fails. That is the intent: fold the case into the ordinary
-/// byte-identity coverage and delete this test, rather than relaxing it.
+/// **The boundary below still measures THIS file's compiler, not the shipping one**, and the
+/// census in `tests/selfhost_pool_tags.rs` records eleven cases where they still differ and
+/// seven where the shipping compiler faults. The duplicate remains the reason those go
+/// unreported here. This test now checks three-way agreement so the next drift is caught
+/// rather than assumed absent.
 #[cfg(feature = "self-host")]
 #[test]
-fn the_two_self_hosted_compilers_disagree_on_a_string_literal() {
+fn the_two_self_hosted_compilers_agree_on_a_string_literal() {
     use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 
     const SRC: &str = "fn f() -> Word { let s = \"hi\"; 1 }";
     let reference =
         compile(&parse(&tokenize(SRC).expect("lex")).expect("parse")).expect("reference");
 
-    // THE CONTROL. This file's compiler agrees with the reference, so the
-    // disagreement below is attributable to the LIBRARY's copy rather than to
-    // anything about the source.
+    // Non-vacuity: the construct must actually produce a StaticStr, or three empty pools
+    // would satisfy every assertion below.
+    assert!(
+        reference.chunks[0]
+            .constants
+            .iter()
+            .any(|c| matches!(c, keleusma::bytecode::ConstValue::StaticStr(_))),
+        "the reference no longer bakes a StaticStr here, so this test measures nothing"
+    );
+
     let local = self_host_compile(SRC);
     assert_eq!(
         local.chunks[0].constants, reference.chunks[0].constants,
-        "this file's compiler no longer agrees with the reference either, so the \
-         comparison below attributes the divergence to the wrong compiler"
+        "this file's compiler diverged from the reference"
     );
 
     let library = keleusma::selfhost::self_host_compile(SRC);
-    assert_ne!(
-        library.chunks[0].constants, reference.chunks[0].constants,
-        "the library's compiler now agrees with the reference on a string literal. \
-         The two copies have converged on this construct: fold it into the ordinary \
-         byte-identity coverage and delete this test rather than relaxing it"
-    );
-
-    // And name the shape of the disagreement, so a change in HOW they differ is
-    // reported rather than silently satisfying the inequality above.
     assert_eq!(
-        reference.chunks[0].ops, library.chunks[0].ops,
-        "the two now differ in OPS as well as constants, which is a wider \
-         divergence than this test was written to describe"
+        library.chunks[0].constants, reference.chunks[0].constants,
+        "the SHIPPING compiler diverged from the reference on a string literal again. The \
+         previous cause was the constant-pool tag being discarded in the driver"
+    );
+    assert_eq!(
+        library.chunks[0].ops, reference.chunks[0].ops,
+        "ops diverged, which is a wider divergence than the pool"
     );
 }
 

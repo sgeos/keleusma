@@ -464,7 +464,7 @@ fn decode_op(w: i64) -> Op {
 
 /// Drive the codegen; return its emitted ops, the constant pool it built, and the
 /// local-frame size (`local_count`) it computed.
-fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<i64>, i64) {
+fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<(i64, i64)>, i64) {
     let src = read_stage("kel/codegen.kel");
     let m = compile_src(&src);
     let need = required_persistent_capacity_for(&m);
@@ -545,15 +545,26 @@ fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<i64>, i64) {
     }
 
     // Phase 2: the pool the stage built. Size, then that many raw values, then that many raw
-    // tags (0 Int, 1 StaticStr). The stage sources are all-Int, so the tags are consumed and
-    // discarded here; the tagged protocol only matters for a program with a string literal.
+    // tags. **THE TAG IS PART OF THE VALUE AND MUST BE CARRIED OUT OF HERE.**
+    //
+    // `codegen.kel` interns three tags in three separate functions with tag-aware dedup:
+    // 0 `Int` (`intern_int`), 1 `StaticStr` (`intern_str`, the value being the LEXER INTERN
+    // ID rather than the bytes), and 2 `Bool` (`intern_bool`, reached from `push_struct_eq`).
+    //
+    // This loop used to read the tags into `let _tag` and drop them, on the stated grounds
+    // that "the stage sources are all-Int". That was a true statement about the CORPUS and a
+    // false one about the CONTRACT: the byte-identity oracle compiles the stage sources, none
+    // of which contains a string literal or a struct equality, so neither tag was ever
+    // observed. Every pool entry was then rebuilt as `ConstValue::Int`, turning a `StaticStr`
+    // into the integer of its intern id. See `docs/decisions/POOL_TAG_RESIDENCY_BRIEF.md`.
     let count = next_word(&mut vm, &mut shared);
-    let pool = (0..count)
+    let values: Vec<i64> = (0..count)
         .map(|_| next_word(&mut vm, &mut shared))
         .collect();
-    for _ in 0..count {
-        let _tag = next_word(&mut vm, &mut shared);
-    }
+    let pool = values
+        .into_iter()
+        .map(|v| (v, next_word(&mut vm, &mut shared)))
+        .collect();
     // Phase 3: the local-frame size the stage computed.
     let local_count = next_word(&mut vm, &mut shared);
     (ops, pool, local_count)
@@ -1156,6 +1167,18 @@ fn parse_functions_impl(
     // Every enum's header records (ENUMSTART, then EVARIANT/EDISC per variant, then END),
     // for the driver's own enum-layout assembly.
     let mut enum_records: Vec<(i64, i64)> = Vec::new();
+    // **A STRUCT, TRAIT OR IMPL DECLARATION IS SKIPPED TO ITS `END`, NOT LEFT TO FALL
+    // THROUGH.** `parse.kel` emits STRUCTSTART 18, TRAITSTART 19 and IMPLSTART 20 followed
+    // by the declaration's own PARAM/PTYPE records. Without this state those records reach
+    // the `match` below with no function open and `open_decl` panics by name — which is what
+    // the shipping driver did for every program containing a `struct`, while
+    // `tests/selfhost_codegen.rs`'s copy of this loop carried the skip and compiled them.
+    // See `docs/decisions/POOL_TAG_RESIDENCY_BRIEF.md`.
+    //
+    // The declaration contributes no chunk and no scaffold record here: a struct's layout
+    // reaches codegen through the BODY record stream (the StructEqField/GetField families),
+    // not through its declaration.
+    let mut in_skip_decl = false;
     let (mut in_body, mut in_guard, mut in_data, mut in_enum, mut in_use) =
         (false, false, false, false, false);
     // PRIME THE WINDOW BEFORE THE INITIAL CALL, not just before resumes.
@@ -1292,6 +1315,8 @@ fn parse_functions_impl(
                 }
             } else if in_use {
                 in_use = code != 5;
+            } else if in_skip_decl {
+                in_skip_decl = code != 5;
             } else {
                 match code {
                     1..=3 => {
@@ -1325,6 +1350,7 @@ fn parse_functions_impl(
                     }
                     16 => in_body = true,
                     17 => in_guard = true,
+                    18..=20 => in_skip_decl = true, // struct/trait/impl declaration
                     5 => {
                         open_decl(&mut cur, code, val);
                         on_function(&names, cur.take().unwrap())
@@ -1338,6 +1364,82 @@ fn parse_functions_impl(
         before_resume,
     );
     (names, data_records, enum_records)
+}
+
+/// Turn `codegen.kel`'s tagged constant pool into the reference compiler's `ConstValue`s.
+///
+/// **ONE DEFINITION, USED BY EVERY ENTRY POINT.** Three call sites each rebuilt the pool
+/// inline as `ConstValue::Int`, which is how the tag came to be dropped in three places at
+/// once; a fourth entry point added later would have copied the fourth. The nine-copies
+/// shared-layout defect this crate already paid for is the same shape.
+///
+/// # The tag protocol, which is the stage's and not this function's
+///
+/// | tag | `ConstValue` | what the value word holds |
+/// |---|---|---|
+/// | 0 | `Int` | the integer itself |
+/// | 1 | `StaticStr` | the **lexer intern id**, resolved here through `names` |
+/// | 2 | `Bool` | 0 or 1 |
+///
+/// A `StaticStr` is the only entry needing `names`, and it is why this cannot be a plain
+/// `From` impl on the pair.
+///
+/// # Failure modes
+///
+/// An intern id outside `names` and an unrecognised tag both panic by name rather than
+/// producing a silently wrong constant. Both are stage/host protocol violations: neither is
+/// reachable from a user program, and a wrong constant would be a silent miscompile, which is
+/// the class this function exists to close.
+fn pool_to_constants(pool: &[(i64, i64)], names: &[String]) -> Vec<ConstValue> {
+    pool.iter()
+        .map(|&(v, tag)| match tag {
+            0 => ConstValue::Int(v),
+            1 => {
+                let raw = names.get(v as usize).unwrap_or_else(|| {
+                    panic!(
+                        "codegen.kel interned StaticStr id {v}, which is outside the \
+                         {}-entry lexer name table",
+                        names.len()
+                    )
+                });
+                ConstValue::StaticStr(unescape_string(raw))
+            }
+            2 => ConstValue::Bool(v != 0),
+            other => panic!(
+                "codegen.kel emitted constant-pool tag {other}, which this host does not \
+                 know. A new tag needs a `ConstValue` mapping here, not a default"
+            ),
+        })
+        .collect()
+}
+
+/// Resolve the escape sequences the reference compiler bakes into a `StaticStr`.
+///
+/// The lexer's name table holds a string literal's content **as written**, so `\n` is a
+/// backslash followed by an `n`. The reference bakes the escaped byte, so comparing the two
+/// requires this. Handling the four the reference handles — newline, tab, quote, backslash —
+/// and passing anything else through unchanged, which matches the reference's own behaviour
+/// on an unknown escape.
+fn unescape_string(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' && i + 1 < bytes.len() {
+            out.push(match bytes[i + 1] {
+                b'n' => b'\n',
+                b't' => b'\t',
+                b'"' => b'"',
+                b'\\' => b'\\',
+                other => other,
+            });
+            i += 2;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).expect("a string literal's unescaped content is valid UTF-8")
 }
 
 /// Self-host-compile a whole program: drive the pipeline over every function, reconstruct
@@ -1379,7 +1481,7 @@ pub fn self_host_compile(src: &str) -> Module {
             .position(|c| c.name == name)
             .unwrap_or_else(|| panic!("no chunk named `{name}`"));
         module.chunks[idx].ops = ops;
-        module.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        module.chunks[idx].constants = pool_to_constants(&pool, &names);
         module.chunks[idx].local_count = lc as u16;
     }
     module
@@ -1550,7 +1652,12 @@ pub fn self_host_compile_fused(src: &str) -> Module {
     let mut group: Vec<ParsedFn> = Vec::new();
     let mut group_name = String::new();
 
-    let flush = |group: &mut Vec<ParsedFn>, name: &str, module: &mut Module| {
+    // **THE NAME TABLE IS A PARAMETER, NOT A RE-DERIVATION.** A `StaticStr` pool entry
+    // carries the lexer's intern id, so resolving it needs the table, and this closure runs
+    // INSIDE the streaming callback where the table is what the feed has interned so far.
+    // Calling `parse_functions_fused` a second time here to obtain one would discard the
+    // bounded record residency this entry point exists to provide.
+    let flush = |group: &mut Vec<ParsedFn>, name: &str, module: &mut Module, names: &[String]| {
         if group.is_empty() {
             return;
         }
@@ -1569,20 +1676,22 @@ pub fn self_host_compile_fused(src: &str) -> Module {
             .position(|c| c.name == name)
             .unwrap_or_else(|| panic!("no chunk named `{name}`"));
         module.chunks[idx].ops = ops;
-        module.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        module.chunks[idx].constants = pool_to_constants(&pool, names);
         module.chunks[idx].local_count = lc as u16;
         group.clear();
     };
 
-    parse_functions_impl(src, false, &mut |names, f| {
+    let (names, ..) = parse_functions_impl(src, false, &mut |names, f| {
         let name = names[f.name as usize].clone();
         if !group.is_empty() && name != group_name {
-            flush(&mut group, &group_name, &mut module);
+            flush(&mut group, &group_name, &mut module, names);
         }
         group_name = name;
         group.push(f);
     });
-    flush(&mut group, &group_name, &mut module);
+    // The trailing group is flushed against the FINAL table, which is a superset of every
+    // intermediate one: the interner only grows, and an id it has issued keeps its meaning.
+    flush(&mut group, &group_name, &mut module, &names);
     module
 }
 
@@ -3562,7 +3671,7 @@ fn shared_data_bytes_of(shared_layout: &[crate::bytecode::SharedSlotLayout]) -> 
 /// times `VALUE_SLOT_SIZE_BYTES`). The stages declare no natives, so `native_names` and
 /// `native_return_shapes` are empty.
 pub fn self_host_compile_scratch(src: &str) -> Module {
-    use crate::bytecode::{Chunk, ConstValue, SlotVisibility};
+    use crate::bytecode::{Chunk, SlotVisibility};
     let (fns, names, data_records, enum_records) = parse_functions_fused(src);
 
     // Build each source chunk from the pipeline output. Group consecutive same-named heads
@@ -3597,7 +3706,7 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
         chunks.push(Chunk {
             name,
             ops,
-            constants: pool.iter().map(|&v| ConstValue::Int(v)).collect(),
+            constants: pool_to_constants(&pool, &names),
             struct_templates: Vec::new(),
             local_count: lc as u16,
             param_count: *param_count,
