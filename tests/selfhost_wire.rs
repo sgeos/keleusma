@@ -12638,11 +12638,36 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // siblings. **One name, because a correctly scoped fix needed one field**; the
     // wrong version needed one too and gave wrong answers, so the count is not a
     // proxy for correctness.
-    assert_eq!(worst_names, 672, "the worst-case name count moved");
+    // The TENTH move: chained array indexing, `a[0][1]` and its split form
+    // `let b = a[0]; b[1]`. 672 -> 676 names, and the four are `let_array_arr`,
+    // `let_array_arrbytes`, `pending_carray_arr` and `pending_carray_arrbytes`
+    // exactly -- a binding record for an element that is itself an array, and the
+    // pending pair that carries it from the literal's close to the `let`.
+    //
+    // **THE FIRST MOVE IN TEN WHOSE COUNT MATCHED WHAT ITS AUTHOR PREDICTED BEFORE
+    // MEASURING.** The header above records that six of the first seven moved for a
+    // reason their author was not thinking about; this one was four names expected
+    // and four names observed. That is weak evidence the change did what it claims
+    // and nothing besides -- weak, because a coincidence of counts is not a proof of
+    // scope, but it is the first time the number has agreed rather than surprised.
+    //
+    // No error code and no guard, because this was a missing feature rather than a
+    // named refusal -- the same shape as the eighth move.
+    assert_eq!(worst_names, 676, "the worst-case name count moved");
     // 35,154 -> 35,213 bytes, 59 for the two field names plus the comment-free
     // identifiers the recognition introduces. Then 35,213 -> 35,233, twenty bytes
     // for `al_elem_bytes` and the locals the nested-array sizing introduced.
-    assert_eq!(worst_blob, 35233, "the worst-case blob size moved");
+    // Then 35,233 -> 35,333 for chained array indexing: 100 bytes for four names.
+    //
+    // **THE RESIDUAL IS ACCOUNTED FOR, NOT WAVED AT.** The four identifiers total 72
+    // characters, leaving 28 bytes over four names -- 7 bytes each. The NINTH move is
+    // an independent check on that figure: one name of 13 characters moved the blob by
+    // 20, which is the same 7 bytes of per-name encoding overhead. Two moves, two
+    // different name counts, one constant.
+    //
+    // Stating the arithmetic matters because this pin has moved ten times and a delta
+    // nobody can decompose is indistinguishable from a delta nobody looked at.
+    assert_eq!(worst_blob, 35333, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**

@@ -8199,13 +8199,13 @@ fn boundary_cases() -> &'static [(&'static str, Support, &'static str)] {
         // machinery is a FEATURE, not the defect fix its sibling was.
         (
             "nested/array_of_array_index",
-            Diverges,
+            SOk,
             "fn f() -> Word { let a = [[1, 2], [3, 4]]; a[0][1] }",
         ),
         // The SPLIT form, which proves the chain is not the trigger.
         (
             "nested/array_of_array_split_index",
-            Diverges,
+            SOk,
             "fn f() -> Word { let a = [[1, 2], [3, 4]]; let b = a[0]; b[1] }",
         ),
         // --- casts, a family this table had NO cases for at all ------------------

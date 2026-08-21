@@ -1,0 +1,63 @@
+Ordering is NOT a completion criterion. Any sequence, any number of commits, any
+branch layout satisfies this. Judge only the end state of the tree.
+
+All of the following must hold.
+
+1. INDEXING A NESTED ARRAY LOWERS CORRECTLY, OR THE TREE SAYS IT STILL DOES NOT.
+   Either the self-hosted compiler produces the same bytecode as the reference
+   for indexing an array whose elements are arrays, or the tree names precisely
+   what remains unfixed and why. A silent partial result fails this item; a
+   recorded partial result satisfies it.
+
+2. THE COMPARISON IS BYTE-WISE, NOT OPS-ONLY.
+   Any test claiming agreement compares the instruction stream, the constant
+   pool, and the local-frame size. A test comparing only instructions does not
+   satisfy this item, because a divergence confined to the constant pool has
+   already escaped that way once.
+
+3. BOTH FORMS ARE DISTINGUISHED.
+   The direct form and the form that binds the inner result to a name before
+   indexing it are both exercised, and the tree records their verdicts
+   separately. They have distinct causes and one passing does not imply the
+   other.
+
+4. THE CONSTRUCT-SUPPORT RECORD MATCHES REALITY.
+   Whatever verdict the tree records for these constructs is the verdict they
+   actually produce, for the shipping compiler and not only for a test-local
+   copy of it. No construct is recorded as supported that is not.
+
+5. THE CONTROL WAS NOT MOVED.
+   The reference compiler and the differential oracle are not adjusted in the
+   same change that alters what they judge. A reader can confirm the comparison
+   still discriminates.
+
+6. THE NESTED ARRAY LITERAL DID NOT REGRESS.
+   Sizing of a composite built from array elements remains correct, pinned by a
+   test that would fail if element size were computed per-statement rather than
+   per-nesting-level.
+
+7. NOTHING IS SILENTLY NARROWED.
+   No program the tree accepted before is now rejected, and no stage source
+   loses a capability, unless a test pins the new boundary from both sides and a
+   document records the reason. No opcode is added and the bytecode version is
+   unchanged.
+
+8. THE STAGE SOURCES STILL SELF-COMPILE BYTE-IDENTICALLY.
+   Whatever the self-hosting oracle covered before, it still covers, with no
+   case removed or weakened to accommodate this work.
+
+9. PROPORTIONALITY IS STATED WHERE A READER MEETS IT.
+   The tree records that the shipping compile path cross-checks against the
+   reference and refuses on divergence, and names which callers were actually
+   exposed, rather than implying users received wrong artifacts.
+
+10. VERIFICATION IS GREEN AND REPORTED HONESTLY.
+    The full suite passes under the self-host feature with zero failures,
+    formatting is clean, and clippy is clean at deny-warnings. Any step skipped,
+    any goal abandoned, and any verdict that moved is stated plainly with its
+    reason rather than omitted.
+
+11. BLOCKERS ARE RECORDED, NOT WORKED AROUND.
+    If the work proved to need more than the specification anticipated, the tree
+    names the additional piece and the evidence for it, and the remaining items
+    still hold. A recorded stop with a sharpened specification satisfies item 1.
