@@ -108,3 +108,76 @@ Stop and record, naming the specific decision required and the evidence for it. 
 workaround that widens scope unattended is worse than a clean stop, because the
 operator loses the choice. Three items are already waiting on them; do not add a
 fourth by proceeding on a guess.
+
+---
+
+# CLOSED — AND THE CLOSURE CREATED AN ISA QUESTION (2026-08-21)
+
+`Op::IsStruct` was witnessed, qualified, and the defect that produced the witness was repaired.
+
+## The witness, and why seventeen attempts missed it
+
+A struct pattern on a parameter with **no type annotation**: `fn g(P { a, b }) -> Word { a + b }`.
+
+The guard is `named_type_name(ty) != Some(pattern_type)`. Every attempt across two lines tried to
+make the two DIFFER — and **the type checker forbids that outright**, refusing with "struct pattern
+`P` does not match scrutinee type". The inequality is satisfiable only when the scrutinee's type is
+ABSENT, and a match scrutinee always has one. **The route was never an expression whose inference
+fails; it was a declaration site with no type to lose.**
+
+## What the witness did, which was the real finding
+
+`verify()` accepted it, `module_wcmu` gave it a bound, it loaded, and it **trapped
+`InvalidBytecode`** at call time. That is the class `verify()` exists to exclude, so it was a hole
+in the load-time check rather than a bad program.
+
+Of the three "should never have been emitted" refusals the virtual machine carries — two for
+`Op::Len`, one for `Op::IsStruct` — **this was the only one a program that actually loaded could
+reach.** `Op::Len`'s witness is refused at LOAD by the strict iteration-bound check, which is the
+conservative-verification stance working as designed.
+
+I was one step from reporting that the class generalised. Running both witnesses instead of one
+caught it.
+
+## The repair, and why in the compiler
+
+Two sites were available. Rejecting in `verify.rs` would make a legal program fail EARLIER; folding
+the irrefutable test makes it **work**. The fold already existed and was conditional on the
+SCRUTINEE's type matching the pattern's — and an un-annotated parameter has no scrutinee type at
+all.
+
+**An absent type is not an unconfirmed one.** The type checker has already established the match, so
+when the scrutinee's type is merely absent the pattern's own type is the answer.
+
+The witness now returns `Int(3)`, **asserted as a value** rather than as the absence of a trap: a
+fold that changed the program's meaning would be worse than the trap it replaced.
+
+## THE QUESTION THIS LEAVES, WHICH IS THE OPERATOR'S
+
+Repairing the defect removed the only producer. **No construct known to this tree emits
+`Op::IsStruct`.** Recorded as *no producer found*, never as *unreachable* — the distinction the
+`v0.3.0` line established with `Op::Reset`, where an opcode was credited as lowered because a chunk
+containing it lowered.
+
+On an instruction set whose opcode count is a **stated rad-hard design constraint**, an opcode with
+no producer is a candidate for removal. The `v0.3.0` line has been asked to attempt production
+independently after absorbing the change, and has committed to reporting either result. **Two lines
+failing separately is a materially stronger basis for that decision than one.**
+
+The fallback and the virtual machine's refusal both remain in place, and would matter if inference
+ever reached that site with a real disagreement.
+
+## A SURVEY THAT CAME BACK CLEAN, RECORDED WITH WHAT WAS SEARCHED
+
+The `v0.3.0` line built a witness-integrity guard because **a witness that stops witnessing is
+invisible** when coverage is reported as a number — their census would have dropped from 66 to 65
+with nothing going red.
+
+Searched this tree for the same shape: coverage claims asserted as a bare count, and thresholds that
+tolerate silent loss. **None found.** The construct-support boundary asserts per-case verdicts and
+collects mismatches by label; the reachability tests assert per-construct; the four `>=` assertions
+are non-vacuity guards on corpus size, which is the correct use of a threshold rather than a
+coverage claim.
+
+A negative result is worth recording only alongside what was looked at, which is why the search is
+stated rather than just its outcome.

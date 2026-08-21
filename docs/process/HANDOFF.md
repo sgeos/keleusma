@@ -493,26 +493,25 @@ looked complete. **In every case the code was reachable and the evidence was not
 **THE PULL-REQUEST QUEUE IS EMPTY ON THIS LINE.** Eight merged 2026-08-21: #201, #210, #212, #213,
 #214, #215, #216, #218. Two DECISIONS remain, and both are about ownership rather than code.
 
-**1. WHO OWNS `src/verify.rs`? IT CURRENTLY HAS NO OWNER.**
+**1. WITHDRAWN — `src/verify.rs` WAS NEVER OWNERLESS.** Both records said it belongs to `v0.2.3`;
+the phrasing was indexical and both lines misread it from opposite sides. See the ownership table
+above. **Do not spend a ruling on this.** Recorded rather than deleted because the escalation
+happened and the convention that caused it is the finding.
 
-Surfaced by the `v0.3.0` line and confirmed against both records. **This handoff lists the file as
-theirs and read-only here; their handoff lists it as ours and read-only there.** Each line has been
-declining to touch it out of deference to the other.
+**2. THE `Op::IsStruct` REPAIR SITE — ANSWERED, NOT PENDING.** With ownership settled it was mine to
+decide, so it is decided: **folded at compile time**, not rejected at load. Rejecting in `verify.rs`
+would make a legal program fail EARLIER; folding makes it WORK, and the witness now returns the
+right answer rather than merely not trapping. Revertible if the operator disagrees.
 
-Their framing of the risk is better than mine: the danger is not the unrepaired defect, it is that
-a surface nobody believes they own is one where **either line might edit believing itself
-entitled** — and from each side the mistake reads as the other's record being wrong. **A wrong
-owner is safer than no owner, because a wrong owner still gets caught.**
+**3. A NEW QUESTION, AND IT IS GENUINELY THE OPERATOR'S: SHOULD `Op::IsStruct` EXIST?**
 
-Neither line has edited it. Neither will until this is ruled.
+Closing the hole removed the only producer. **No construct known to this tree emits `Op::IsStruct`.**
+Recorded as *no producer found*, never as unreachable — the `Op::Reset` distinction.
 
-**2. WHERE DOES THE `Op::IsStruct` REPAIR BELONG?**
-
-Two coherent answers, and it is a judgment about which side owns the invariant:
-- **Load time**, in `verify.rs` — `InvalidBytecode` is precisely what that pass exists to exclude.
-- **Compile time**, in `compiler.rs` — fold the type test out when the PATTERN's own type is known,
-  regardless of the scrutinee's. The fold already exists; it is conditional on a type an
-  un-annotated parameter does not have.
+On an instruction set whose opcode count is a **stated rad-hard design constraint**, an opcode with
+no producer is a removal candidate. That is an ISA decision, not a test's. The `v0.3.0` line has been
+asked to try producing it independently after absorbing the change; **two lines failing separately is
+a materially stronger basis than one**, and they have committed to reporting either outcome.
 
 **3. THE DEAD `native@1c1ffb1e` GATE RECORD.** Unchanged: stalled 227+ hours, no process, worktree
 clean, the `v0.3.0` line confirms nothing waits on it. Untouched because it is theirs.
@@ -567,9 +566,37 @@ across a dozen iterations quoted prose, never a file. Consequences worth knowing
 
 `v0.3.0` carries native code generation. Their mailbox is
 `git show origin/v0.3.0:docs/process/handoffs/v0.3.0.md`; mine is
-[`handoffs/v0.2.3.md`](./handoffs/v0.2.3.md). Poll at increment boundaries. They hold
-`src/wire_schema.rs`, `src/bytecode.rs`, `src/vm.rs`, `src/verify.rs` and `.github/workflows/`
-read-only and announce before widening. **Extend the same courtesy.**
+[`handoffs/v0.2.3.md`](./handoffs/v0.2.3.md). Poll at increment boundaries.
+
+### OWNERSHIP, NAMED ABSOLUTELY — AND THE OLD WORDING COST AN OPERATOR ESCALATION
+
+| surface | owner |
+|---|---|
+| `src/wire_schema.rs` | **v0.2.3** |
+| `src/bytecode.rs` | **v0.2.3** |
+| `src/vm.rs` | **v0.2.3** |
+| `src/verify.rs` | **v0.2.3** |
+| `src/selfhost/` | **v0.2.3** |
+| `.github/workflows/` | **v0.2.3** |
+| native code generation (`compiler/` native backend and its corpus) | **v0.3.0** |
+
+The owner may edit; the other line holds it read-only and announces before widening. **Extend the
+same courtesy.**
+
+**THIS SENTENCE USED TO READ "They hold ... read-only", AND THE OTHER LINE'S READ "Their surfaces
+are read-only here".** Both said the same thing — these are v0.2.3's — but "they" and "their" are
+INDEXICAL: they resolve against whoever is holding the document, so a reader arriving in the other
+line's handoff resolves them backwards and gets the exact inversion.
+
+That is what happened on 2026-08-21. The `v0.3.0` line read their own record as saying `verify.rs`
+was mine to hold read-only, concluded the file had NO owner, and escalated an ownership question to
+their operator. **I accepted their reading and passed the same question to mine, without reading
+both texts** — thirty lines below the sentence in question, this file says *"neither of us is a
+reliable narrator about the other's code ... check the claim against the code before acting on it,
+especially when it says someone else must act."*
+
+Both lines now name owners absolutely. **Never write "their surfaces" in a document the other line
+reads.**
 
 **NEITHER OF US IS A RELIABLE NARRATOR ABOUT THE OTHER'S CODE, and we now have three instances.**
 They reported `reconstruct` blocked on a `pub` when `parse_functions` was already public; I reported
