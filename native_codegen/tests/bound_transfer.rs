@@ -214,6 +214,20 @@ fn does_any_corpus_module_reach_the_operand_stack_ceiling() {
 /// bottom region **not at all**. Workstream E needs a bound covering that pool,
 /// and there is not one today.
 ///
+/// # WHERE the gap is, which is the actionable part
+///
+/// `auto_arena_capacity_for` is the documented way for a host to size an arena,
+/// and it returns the sum of exactly four terms: the operand-stack bytes, the
+/// call-frame bytes, the module's auxiliary arena bytes, and `max_heap_bytes`.
+/// **None of them is the backend's region.** `max_heap_bytes` is the only term
+/// that could plausibly cover composite bodies, and it is the one demonstrated
+/// below to be exceeded.
+///
+/// So the gap is not that a figure is slightly low. **The sizing API has no term
+/// for that pool**, and closing Workstream E here means adding one — which is a
+/// question about the arena accounting model and plausibly an operator's, since
+/// it changes what a host is told to provision.
+///
 /// **Reported as a measured inequality rather than pinned to eleven.** The set
 /// moves with the corpus. What is asserted is that the inequality is reachable
 /// at all, which is the whole negative claim.
