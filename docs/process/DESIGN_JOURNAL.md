@@ -13,6 +13,45 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**A NESTED ARRAY LITERAL NOW SIZES ITS OUTER COMPOSITE, AND MY FIRST FIX WAS WORSE THAN THE BUG
+(2026-08-20, evening).**
+
+Recorded as `Diverges` overnight and deliberately left; taken now with the stopping rule written in
+advance. **One of two defects is closed.**
+
+The array-literal close handled exactly two element kinds: a STRUCT, whose byte size it looked up,
+and everything else, assumed to be a `Word` at eight bytes. **An ARRAY element is neither**, so
+`[[1, 2], [3, 4]]` fell through to `count * 8` and sized its outer composite as 16 where the reference
+computes 32. Depth two, depth three and a non-square inner length are all byte-identical now.
+
+**MY FIRST FIX RETURNED A WORSE WRONG ANSWER THAN THE BUG, AND THAT IS THE PART WORTH KEEPING.** I
+carried "the byte size of the most recently closed array" in a single flat field on `stmt`. **It leaks
+across SIBLINGS.** In `[[1, 2], [3, 4]]` the second inner array read the FIRST one's size and doubled
+to 32; the outer then doubled again to 64. The bug produced 16 where 32 was right; my fix produced 64.
+
+**The size belongs to a NESTING LEVEL, not to a moment in time.** It is now a per-level array parallel
+to the element counter, written by a closing inner array into its PARENT's slot and cleared from its
+own, so a later sibling starts from no assumption.
+
+**THE SECOND ATTEMPT FAULTED IMMEDIATELY WITH INDEX -1**, because the nesting pointer is decremented
+before the slot is read. **An off-by-one that faults on its first run is the good outcome.** The flat
+flag's version did not fault -- it returned a plausible number that was wrong, which is the failure
+mode this whole session has been about.
+
+**A PROBE OF MINE PANICKED AND I NEARLY REPORTED A REGRESSION I HAD NOT CAUSED.** The struct-array
+control failed with "a `struct` declaration is NOT among them" -- the documented top-level `struct`
+gap, which `parse.kel` has never handled. Confirmed by running the boundary on the STASHED tree before
+concluding anything. **Check whether the failure predates the change before calling it a regression.**
+
+**THE CHAINED INDEX `a[0][1]` IS UNTOUCHED AND STAYS `Diverges`.** Two defects; one closed. The family
+is not claimed.
+
+**THE MARGIN PIN MOVED A NINTH TIME, 671 -> 672 names**, the one name being `al_elem_bytes`. Worth
+noting that the WRONG fix would have cost one name too, so the count is not a proxy for correctness --
+which is exactly why the pin is a pin and not a computed value.
+
+---
+
 **`Op::Len` IS REACHABLE; `Op::IsStruct` RESISTED, AND FALSIFYING MY OWN HYPOTHESIS IS THE RESULT
 (2026-08-20, afternoon).**
 

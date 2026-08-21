@@ -8044,20 +8044,18 @@ fn self_hosted_construct_support_boundary() {
         ),
         // --- nested composites, measured 2026-08-20 and NOT yet fixed ------------
         //
-        // A nested array literal mis-sizes the OUTER composite: two 16-byte inner
-        // arrays yield `byte_size: 16` where the reference computes 32, because the
-        // element size is not propagated. With a chained index the body is
-        // additionally TRUNCATED -- no SetLocal, no GetLocal, neither GetIndex --
-        // so the stage returns the constructed value instead of the element.
+        // **TWO DEFECTS, AND ONLY ONE IS CLOSED.** The literal's outer composite used
+        // to be sized 16 where the reference computes 32 -- two 16-byte inner arrays
+        // -- because the element size was not propagated: the close handled a struct
+        // element and otherwise assumed `Word`, so an ARRAY element fell through to
+        // `count * 8`. Fixed 2026-08-20; the element size is now carried per NESTING
+        // LEVEL rather than per moment, which a flat flag got wrong by leaking across
+        // siblings.
         //
-        // A FLAT array is byte-identical, so this is specific to nesting.
-        //
-        // Recorded as `Diverges` rather than fixed: it is two defects inside the
-        // composite-layout machinery that the flat-byte representation makes
-        // load-bearing for memory bounds, which is not a change to make unattended.
+        // The chained INDEX is a separate defect and remains below.
         (
             "nested/array_of_array_literal",
-            Diverges,
+            SOk,
             "fn f() -> Word { let a = [[1, 2], [3, 4]]; 1 }",
         ),
         (
@@ -8928,5 +8926,72 @@ fn the_two_self_hosted_compilers_disagree_on_a_string_literal() {
         reference.chunks[0].ops, library.chunks[0].ops,
         "the two now differ in OPS as well as constants, which is a wider \
          divergence than this test was written to describe"
+    );
+}
+
+/// **A NESTED ARRAY LITERAL SIZES ITS OUTER COMPOSITE BY ITS ELEMENTS.**
+///
+/// The close handled two element kinds — a struct, whose byte size it looked up,
+/// and everything else, which it assumed was a `Word` at eight bytes. **An array
+/// element is neither**, so `[[1, 2], [3, 4]]` sized its outer composite as 16
+/// where the reference computes 32. A silent miscompile, not a refusal.
+///
+/// # The wrong fix, recorded because it is the instructive one
+///
+/// My first attempt carried "the byte size of the most recently closed array" in a
+/// single flag. **It leaks across SIBLINGS.** In `[[1, 2], [3, 4]]` the second
+/// inner array read the first one's size and doubled to 32, then the outer doubled
+/// again to 64 — a worse answer than the bug it replaced.
+///
+/// The size belongs to a **nesting level**, not to a moment in time. It is now
+/// carried in a per-level array parallel to the element counter, written by a
+/// closing inner array into its parent's slot.
+///
+/// The second attempt then faulted immediately with an index of -1, because the
+/// nesting pointer is decremented before the slot is read. **An off-by-one that
+/// faults on its first run is the good outcome**; the flat flag's version returned
+/// a plausible wrong number instead.
+///
+/// # What this does NOT close
+///
+/// The chained index `a[0][1]` still truncates the body and stays recorded as
+/// `Diverges` in the support table. Two defects, and this is one of them.
+#[cfg(feature = "self-host")]
+#[test]
+fn a_nested_array_literal_sizes_its_outer_composite_by_its_elements() {
+    use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
+
+    // Depth two, depth three, and a non-square inner length, so a fix that merely
+    // squared the count would fail here.
+    const NESTED: &[&str] = &[
+        "fn main() -> Word { let a = [[1, 2], [3, 4]]; 1 }",
+        "fn main() -> Word { let a = [[1, 2, 3], [4, 5, 6]]; 1 }",
+        "fn main() -> Word { let a = [[[1, 2]], [[3, 4]]]; 1 }",
+    ];
+    // THE CONTROL. A flat array was always byte-identical, so if this regresses the
+    // change broke the ordinary path rather than fixing the nested one.
+    const FLAT: &str = "fn main() -> Word { let a = [1, 2]; 1 }";
+
+    let identical = |src: &str| -> bool {
+        let reference =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("reference");
+        let mine = keleusma::selfhost::self_host_compile(src);
+        keleusma::wire_format::module_to_wire_bytes(&reference).expect("a")
+            == keleusma::wire_format::module_to_wire_bytes(&mine).expect("b")
+    };
+
+    assert!(identical(FLAT), "a FLAT array literal regressed");
+    let mut checked = 0;
+    for src in NESTED {
+        assert!(
+            identical(src),
+            "{src}: the nested literal is not byte-identical"
+        );
+        checked += 1;
+    }
+    assert_eq!(
+        checked,
+        NESTED.len(),
+        "not every nesting depth was compared"
     );
 }
