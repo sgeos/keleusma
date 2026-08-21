@@ -45,7 +45,8 @@
 // That is not hypothetical: the `Op::IsStruct` construct was repaired out of
 // existence by the `v0.2.3` line one hour after this corpus adopted it.
 
-struct P { a: Word, b: Word }
+// GENERIC on purpose -- see `is_struct_witness` below.
+struct P<T> { a: T, b: T }
 
 
 fn fixed_mix(w: Word) -> Word {
@@ -84,14 +85,33 @@ fn fixed_mix(w: Word) -> Word {
 // RUN time is a load-time hole rather than a bad program. `src/verify.rs` is
 // read-only to BOTH lines, so neither has repaired it and it is recorded for the
 // operator. See the handoff.
-fn is_struct_witness(p: P) -> Word {
+// **THE WITNESS IS THE GENERIC INSTANTIATION, AND THAT IS DELIBERATE.**
+//
+// The original witness was an UNANNOTATED struct parameter. The `v0.2.3` line
+// repaired the load-time hole behind it by folding the irrefutable type test
+// away, which is the right repair -- and it stopped this file emitting the
+// opcode. `witness_integrity.rs` caught that on the first run after absorption,
+// naming the file and the opcode, which is what it exists for.
+//
+// MEASURED AFTER THE FOLD: `Op::IsStruct` is NOT producerless. A GENERIC struct
+// destructured in a parameter still emits it, still verifies, still takes a
+// bound, still loads, and still dies with
+// `InvalidBytecode("Op::IsStruct on a flat struct")`. The non-generic control
+// returns `Int(3)`, so the repair works for exactly the case it was written for.
+//
+// So the witness moves to the form that SURVIVES the repair. It emits on both
+// trees -- before the fold and after -- which is why it can be adopted here
+// ahead of absorbing that change.
+fn is_struct_witness(p: P<Word>) -> Word {
   destructure(p)
 }
 
 
 // The UNANNOTATED pattern is what leaves the type unknown at the test. Writing
 // `fn destructure(p: P)` here folds `Op::IsStruct` out and the witness is lost.
-fn destructure(P { a, b }) -> Word {
+// ANNOTATED with the generic instantiation. An un-annotated parameter is the
+// construct the fold now covers; this one it does not.
+fn destructure(P { a, b }: P<Word>) -> Word {
   a + b
 }
 
