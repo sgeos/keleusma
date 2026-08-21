@@ -33,6 +33,29 @@
 //! failure mode that made an earlier guard in this tree pass while checking nothing.
 //!
 //! It is a smoke alarm for a structural class. It is not a substitute for deleting the duplicate.
+//!
+//! # THE EXTRACTION IS PARSED, NOT WINDOWED, AND THAT DISTINCTION HAS A COST RECORD
+//!
+//! Every derivation here matches structure — brace depth, paren matching — rather than a fixed
+//! number of characters. A window is a guess about FORMATTING, and rustfmt decides formatting.
+//!
+//! Two failure directions, and guarding one does not guard the other:
+//!
+//! - **Too loose**: a marker written in a form prose can take will eventually match prose. This
+//!   tree has three instances — a must-fire guard that fired on the comment explaining the fix it
+//!   guarded, a no-copies guard that flagged itself, and the `v0.3.0` line's witness extractor
+//!   matching its own English header.
+//! - **Too tight**: a pattern narrower than the thing it describes silently omits members. The
+//!   `v0.3.0` line hit this the same day — a grep for `mis-compilation` missed four sites saying
+//!   `mis-compiled`, reporting a class of three where there were seven — **in the very file where
+//!   they had just written down the too-loose rule.**
+//!
+//! The seeding extractor here was too tight: it asked whether `set_shared` appeared within sixty
+//! characters before a slot name. Mutation-tested both ways. With a call reformatted past that
+//! window, the old form reports the slot seeded ZERO times when it is seeded once — **the guard
+//! still fails, but with the wrong number, sending its reader to hunt a deletion that never
+//! happened.** Too-tight does not only cause silent passes; it also causes confidently wrong
+//! failures.
 
 #![cfg(feature = "self-host")]
 
@@ -194,22 +217,58 @@ fn both_drivers_decode_the_same_op_tags() {
 /// not; the failure direction that matters is the library seeding fewer, or on fewer paths.
 #[test]
 fn the_shipping_driver_seeds_every_slot_the_copy_does_at_every_feed() {
+    /// Slot names being SET, counted by parsing each `set_shared` call's ARGUMENT LIST.
+    ///
+    /// # Why not a fixed lookback, which is what this was
+    ///
+    /// The first version asked whether `set_shared` appeared within sixty characters before the
+    /// name. That is a guess about FORMATTING, and rustfmt decides formatting. A call broken
+    /// across more lines than the window spans would be missed, the slot would count as unseeded,
+    /// and **the guard would pass while the defect it exists for was present** — the too-tight
+    /// direction of the same failure that makes a marker match prose.
+    ///
+    /// The `v0.3.0` line hit the too-tight form the same day: a grep for `mis-compilation` missed
+    /// four sites saying `mis-compiled`, reporting a class of three where there were seven. **They
+    /// had guarded the too-loose direction in that very file and never considered the other one.**
+    ///
+    /// Paren-matching the argument list has no window to outgrow.
     fn seed_counts(s: &str) -> std::collections::BTreeMap<String, usize> {
         let mut out = std::collections::BTreeMap::new();
+        let bytes = s.as_bytes();
         let mut from = 0;
-        while let Some(rel) = s[from..].find("BR_P_") {
-            let i = from + rel;
-            let end = s[i..]
-                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-                .map_or(s.len(), |k| i + k);
-            let name = &s[i..end];
-            // Only names actually being SET. `set_shared` may sit up to a couple of lines back
-            // when rustfmt breaks the call, so the window spans more than one line.
-            let ctx_start = i.saturating_sub(60);
-            if s[ctx_start..i].contains("set_shared") {
-                *out.entry(name.to_string()).or_insert(0) += 1;
+        while let Some(rel) = s[from..].find("set_shared") {
+            let call = from + rel;
+            // Advance to the opening paren, then match to its close. A call that never opens one
+            // is not a call, and skipping it is correct rather than a silent loss.
+            let Some(open_rel) = s[call..].find('(') else {
+                break;
+            };
+            let open = call + open_rel;
+            let (mut depth, mut i) = (0usize, open);
+            while i < bytes.len() {
+                match bytes[i] {
+                    b'(' => depth += 1,
+                    b')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                i += 1;
             }
-            from = end;
+            let args = &s[open..i.min(bytes.len())];
+            let mut at = 0;
+            while let Some(k) = args[at..].find("BR_P_") {
+                let b = at + k;
+                let e = args[b..]
+                    .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                    .map_or(args.len(), |q| b + q);
+                *out.entry(args[b..e].to_string()).or_insert(0) += 1;
+                at = e;
+            }
+            from = i.max(call + 1);
         }
         out
     }
