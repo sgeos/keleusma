@@ -1704,6 +1704,8 @@ fn every_lowering_module_executes_or_is_exempt() {
     let mut seed_pairs = 0usize;
     let mut seed_widened = 0usize;
     let mut disagreed: Vec<String> = Vec::new();
+    // Names found under `src/selfhost/kel`, for the Order-1 gate report below.
+    let mut stage_files: Vec<String> = Vec::new();
 
     // **Single-module mode**, for the mutation sweep. `tools/mutation_sweep.py`
     // runs this binary once per module in its own PROCESS, so a mutation that
@@ -1714,6 +1716,13 @@ fn every_lowering_module_executes_or_is_exempt() {
 
     for p in sources() {
         let name = p.file_name().unwrap().to_str().unwrap().to_string();
+        // **Stage membership comes from the PATH, not from a list of names.** A
+        // hand-written roster of twelve is exactly the thing that goes stale
+        // silently when a stage is added or removed, which is the failure the
+        // instruction-set census exists to prevent.
+        if p.components().any(|c| c.as_os_str() == "selfhost") {
+            stage_files.push(name.clone());
+        }
         if let Some(want) = &only
             && &name != want
         {
@@ -2126,6 +2135,85 @@ fn every_lowering_module_executes_or_is_exempt() {
     println!("    {obs_composite:>3}  a COMPOSITE RETURN BODY compared byte for byte");
     println!("    {obs_wrote_shared:>3}  writing the shared segment");
     println!("    {obs_single_scalar_only:>3}  NONE of the three -- one scalar, no call, no write");
+
+    // ================= THE ROADMAP'S ORDER-1 GATE, AS A MEASURED FIGURE
+    //
+    // `V0_3_X_ROADMAP.md` states the gate in words -- "the self-hosted
+    // compiler's own bytecode runs correctly as native code, differential-tested
+    // against the VM" -- and NOTHING HAS EVER SAID WHETHER IT IS MET. This
+    // harness already drives every stage; it simply never separated them from
+    // the other fifty-odd modules. No second walker is introduced: these are the
+    // same results, partitioned by where the source lives.
+    //
+    // **THIS DELIBERATELY DOES NOT ASSERT THAT THE GATE IS MET.** "Eleven of
+    // twelve agree" is the shape of headline this file already inflated once,
+    // when `is_vacuous` asked whether a SEEDED segment was non-zero -- which it
+    // is before a module executes a single operation -- and three stages left
+    // the vacuous set for no reason at all. The figure is reported with the
+    // qualifications beside it and a reader draws the conclusion.
+    {
+        let in_stage = |n: &String| stage_files.contains(n);
+        let ex: Vec<&String> = executed.iter().filter(|n| in_stage(n)).collect();
+        let vac: Vec<&String> = vacuous.iter().filter(|n| in_stage(n)).collect();
+        let exm: Vec<&(String, String, ExemptClass)> =
+            exempt.iter().filter(|(n, _, _)| in_stage(n)).collect();
+        let dis: Vec<&String> = disagreed.iter().filter(|n| in_stage(n)).collect();
+
+        println!("\n================ ORDER-1 GATE (self-hosted stages)");
+        println!("  stage sources found       : {}", stage_files.len());
+        println!("  EXECUTE and AGREE         : {}", ex.len());
+        println!("  agree but VACUOUS         : {}", vac.len());
+        for n in &vac {
+            println!("     {n}");
+        }
+        println!("  EXEMPT                    : {}", exm.len());
+        for (n, why, _) in &exm {
+            println!("     {n:24} {why}");
+        }
+        println!("  DISAGREE                  : {}", dis.len());
+        for n in &dis {
+            println!("     {n}");
+        }
+        println!(
+            "\n  THREE STATES, KEPT APART. Exempt is not failed, and vacuous is not\n  \
+             agreeing about anything. A stage counted in one column is not in\n  \
+             another, and the four sum to the sources found.\n  \
+             \n  \
+             TWO QUALIFICATIONS BELONG BESIDE THIS FIGURE, NOT ELSEWHERE:\n  \
+             \n  \
+             `verify_datalayout.kel` NEVER RUNS, and is blocked BY DESIGN rather\n  \
+             than by a defect: its verdict accumulates across three\n  \
+             differently-encoded phases in the retained buffer. Do not invent a\n  \
+             batch-zero seed for it.\n  \
+             \n  \
+             `wire.kel` is EXEMPT AND IS NOT A DISAGREEMENT. Measured separately:\n  \
+             both sides fault at tick 19, the virtual machine naming\n  \
+             IndexOutOfBounds and the native side raising SIGTRAP. But SIGTRAP\n  \
+             proves A fault and not WHICH, so that is agreement in the FACT and\n  \
+             the POSITION of the fault, not in its identity. It must not be\n  \
+             rounded up to agreement.\n  \
+             \n  \
+             THE STAGES ARE SEEDED. Read the carrier breakdown above before\n  \
+             treating any stage's agreement as substantive."
+        );
+        println!("================");
+
+        // A report over an empty stage set must FAIL rather than look like a
+        // result. The rest is reported, not pinned: the distribution moves with
+        // the corpus and with the harness.
+        assert!(
+            stage_files.len() >= 10,
+            "only {} self-hosted stage sources were found, so this Order-1 report \
+             is reading the wrong tree and its zero says nothing",
+            stage_files.len()
+        );
+        assert_eq!(
+            ex.len() + vac.len() + exm.len() + dis.len(),
+            stage_files.len(),
+            "the Order-1 columns do not partition the stage sources, so a stage \
+             has fallen out of the accounting while the columns still look sane"
+        );
+    }
     println!(
         "         of those, {obs_single_and_undrivable} were driven at ONE argument vector and \
          could not have varied"
