@@ -27,11 +27,25 @@
 //! runs.** The cheap check is to search for callers before costing work that
 //! depends on it.
 //!
+//! # UPDATE 2026-08-21: THEY HAVE NOW BEEN EXECUTED, AND THIS TEST NARROWED
+//!
+//! `tests/selfhost_wire.rs` now drives both commands directly: a scalar node
+//! streams a record matching the documented layout, and all three refusals
+//! (`-264` a node with children, `-265` an interning tag, `-266` a range-carrying
+//! tag) have been made to fire with an accepting control beside them.
+//!
+//! **So "driven by nothing" is no longer true and this test no longer claims it.**
+//! What remains true, and is what this file now pins, is that the DRIVER does not
+//! drive them — the route to `CONSTS` is still unwired. That distinction is the
+//! whole point: the stage side is validated, so a divergence found while wiring
+//! the driver is attributable to the driver rather than to three-way uncertainty
+//! between stage, driver and seam.
+//!
 //! # This test does not assert they are dead
 //!
 //! They are the intended route for `CONSTS` and should not be deleted. The test
-//! records that they are currently unreached, and fails when that changes, so
-//! whoever drives them updates the record rather than discovering the gap again.
+//! records that the DRIVER has not yet reached them, and fails when that changes,
+//! so whoever wires it updates the record rather than discovering the gap again.
 
 #![cfg(feature = "self-host")]
 
@@ -57,12 +71,17 @@ fn dispatched_commands() -> Vec<u32> {
     out
 }
 
-/// **THE CONSTANT-NODE STREAMING COMMANDS ARE DISPATCHED AND UNREACHED.**
+/// **THE CONSTANT-NODE STREAMING COMMANDS ARE DISPATCHED AND THE DRIVER DOES NOT
+/// REACH THEM.**
 ///
-/// Pinned in the firing direction: when something drives them, this fails and its
-/// author records that the path is now exercised.
+/// Narrowed 2026-08-21 from "unreached" to "unreached BY THE DRIVER", because
+/// `tests/selfhost_wire.rs` now executes both. The stage side is validated; the
+/// wiring is not written.
+///
+/// Pinned in the firing direction: when the driver drives them, this fails and its
+/// author records that the route is now wired.
 #[test]
-fn the_constant_streaming_commands_are_dispatched_but_driven_by_nothing() {
+fn the_constant_streaming_commands_are_dispatched_but_the_driver_does_not_reach_them() {
     const DRIVER: &str = include_str!("../src/selfhost/mod.rs");
     const STREAM_FNS: &[&str] = &["fl_stream_begin", "fl_stream_step"];
 
