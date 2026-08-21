@@ -7500,6 +7500,17 @@ fn the_interner_reports_an_input_it_cannot_hold() {
 // composite constants to depth 2 in about a kilobyte.
 
 const CMD_FLATTEN_EMIT_CONSTS: i64 = 141;
+/// The constant-node streaming commands: reset, then one node in, one record out.
+const CMD_FL_STREAM_BEGIN: i64 = 176;
+const CMD_FL_STREAM_STEP: i64 = 177;
+/// `const_stride()` in `wire.kel`.
+const CONST_RECORD_STRIDE: usize = 16;
+/// `fl_max_nodes()` in `wire.kel`: the forest the WALK can hold in `wire.fin`.
+const FL_MAX_NODES: usize = 170;
+/// Flat-scalar tags from `wire.kel`, named so a refusal case reads as its cause.
+const TAG_INT: i64 = 3;
+const TAG_STATIC_STR: i64 = 7;
+const TAG_ARRAY: i64 = 9;
 
 /// Sources whose chunk constant pools contain composites. Every one is a real
 /// compiled module, so the oracle is `encode_aux_body`.
@@ -8647,6 +8658,291 @@ fn the_walk_interns_in_breadth_first_order() {
 
         assert_eq!(art, want, "{label}: the artifact Keleusma built differs");
     }
+}
+
+/// **THE CONSTANT-NODE STREAMING PATH, EXECUTED FOR THE FIRST TIME.**
+///
+/// Commands 176 `fl_stream_begin` and 177 `fl_stream_step` were written, dispatched, and
+/// announced to the `v0.3.0` line as landed — and until this test, **nothing had ever called
+/// them**. `tests/stage_command_reach.rs` pinned that, with `CMD_STEP = 175` directly below them
+/// as the control that IS driven.
+///
+/// # Why the path exists
+///
+/// `fl_walk` is capped at 170 nodes because the whole forest must sit in `wire.fin`, 1,024 words
+/// at six words a node, and it needs a QUEUE: a composite's record carries `(first, count)` into
+/// children numbered after every node at its own depth, so it cannot write a record until it knows
+/// how many nodes precede its children.
+///
+/// **A forest of scalars has no children.** The queue never grows past the roots, the walk
+/// degenerates to a linear scan, and it becomes one node in, one record out with no state but a
+/// cursor. Every constant across all eleven stages is `Int`, pinned by
+/// `tests/consts_region_composition.rs`, so this path covers the corpus entirely.
+///
+/// # It emits at window offset zero, which is what makes it streamable
+///
+/// The host places the sixteen bytes, so unlike command 141 this needs no region and no
+/// directory. That is the whole point: the stage holds one node, not the forest.
+#[test]
+fn the_constant_streaming_path_emits_a_record_for_a_scalar() {
+    let mut vm = vm_for(WIRE_KEL);
+
+    // `fl.scur` is private data and PERSISTS across calls on one VM, so the reset is a real
+    // precondition rather than a formality.
+    assert_eq!(
+        run_flatten(&mut vm, CMD_FL_STREAM_BEGIN, &[], [0, 0, 0, 0, 0]),
+        0,
+        "the streaming reset refused"
+    );
+
+    // One scalar Int node: tag, payload, children, names_first, flags, disc.
+    let node: [i64; 6] = [TAG_INT, 0x0102_0304_0506_0708, 0, 0, 0, 0];
+    let (ret, bytes) = run_call(
+        &mut vm,
+        &Call {
+            cmd: CMD_FL_STREAM_STEP,
+            nregions: 0,
+            seed: &[],
+            regions: &[],
+            fields: &node,
+            names: &[],
+            pool: &[],
+            args: [0, 0, 0, 0, 0],
+            read_len: CONST_RECORD_STRIDE,
+        },
+    )
+    .expect("run");
+
+    assert_eq!(
+        ret, CONST_RECORD_STRIDE as i64,
+        "the step must return the record stride it wrote; {ret} is a refusal code"
+    );
+
+    // The record layout, from `wire.kel`: tag u16 @0, flags u16 @2, aux u32 @4, payload u64 @8.
+    // Built here from the OFFSETS rather than from a captured blob, so a layout change fails
+    // loudly instead of being re-baselined.
+    let mut want = [0u8; CONST_RECORD_STRIDE];
+    want[0..2].copy_from_slice(&(TAG_INT as u16).to_le_bytes());
+    want[2..4].copy_from_slice(&0u16.to_le_bytes());
+    want[4..8].copy_from_slice(&0u32.to_le_bytes());
+    want[8..16].copy_from_slice(&0x0102_0304_0506_0708u64.to_le_bytes());
+    assert_eq!(
+        bytes, want,
+        "the streamed record is not the documented layout"
+    );
+
+    // **`aux` IS WRITTEN AS ZERO, NOT LEFT ALONE.** The window is reused between calls, so a
+    // stale index from an earlier record is exactly the kind of wrong answer that looks right.
+    assert_eq!(&bytes[4..8], &[0, 0, 0, 0], "aux was not cleared");
+}
+
+/// **EVERY REFUSAL THE STREAMING PATH DECLARES, MADE TO FIRE.**
+///
+/// A path whose refusals have never fired is a path whose refusals are guesses. Each case asserts
+/// WHICH code came back, because `-264`, `-265` and `-266` are three different causes and a test
+/// checking only that something refused would pass on any of them.
+///
+/// These refusals are load-bearing rather than incidental: a composite reaching this path would be
+/// emitted with a zero range and a zero `aux` — structurally valid, silently wrong, and
+/// indistinguishable downstream from a correct record.
+#[test]
+fn the_streaming_path_refuses_everything_it_cannot_represent() {
+    let mut vm = vm_for(WIRE_KEL);
+    run_flatten(&mut vm, CMD_FL_STREAM_BEGIN, &[], [0, 0, 0, 0, 0]);
+
+    // A node with children: the streaming path has no queue to number them into.
+    assert_eq!(
+        run_flatten(
+            &mut vm,
+            CMD_FL_STREAM_STEP,
+            &[TAG_INT, 0, 1, 0, 0, 0],
+            [0, 0, 0, 0, 0]
+        ),
+        -264,
+        "a node with children was accepted by a path that cannot number them"
+    );
+
+    // A tag that interns: this path never seeds the interner, so admitting one would emit a
+    // record citing index 0 against an empty table.
+    assert_eq!(
+        run_flatten(
+            &mut vm,
+            CMD_FL_STREAM_STEP,
+            &[TAG_STATIC_STR, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0]
+        ),
+        -265,
+        "an interning tag was accepted by a path with no interner"
+    );
+
+    // A tag carrying a range: `aux` would be written zero and the range silently lost.
+    assert_eq!(
+        run_flatten(
+            &mut vm,
+            CMD_FL_STREAM_STEP,
+            &[TAG_ARRAY, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0]
+        ),
+        -266,
+        "a range-carrying tag was accepted by a path that writes aux as zero"
+    );
+
+    // **THE CONTROL.** Without it, a path that refused everything would satisfy all three
+    // assertions above and look thoroughly tested.
+    assert_eq!(
+        run_flatten(
+            &mut vm,
+            CMD_FL_STREAM_STEP,
+            &[TAG_INT, 7, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0]
+        ),
+        CONST_RECORD_STRIDE as i64,
+        "the accepting control was refused, so the refusals above discriminate nothing"
+    );
+}
+
+/// **THE STREAMED RECORDS ARE THE REFERENCE'S `CONSTS` REGION, BYTE FOR BYTE — INCLUDING A
+/// FOREST THE WALK REFUSES.**
+///
+/// This is the claim Order 1 needs, and the second half is what makes it worth having. The walk
+/// is capped at `fl_max_nodes()` = 170 because the whole forest must sit in `wire.fin`. **The
+/// larger case here is 200 nodes: command 141 refuses it with `-240`, and the streaming path
+/// reproduces the reference's region exactly.**
+///
+/// That is the whole argument for the streaming path in one assertion pair — not "it also works",
+/// but "it does what the walk cannot".
+///
+/// # The oracle is the reference encoder, not `fl_walk`
+///
+/// `fl_walk` is the path that has always run, but it is still Keleusma. `encode_aux_body` is the
+/// Rust encoder the whole differential programme is measured against. Comparing against it makes
+/// this a differential result rather than an internal-consistency one — and for the 200-node case
+/// `fl_walk` could not serve as an oracle anyway, since it refuses the input.
+///
+/// # Ordering is not a confound, and the precondition is asserted rather than assumed
+///
+/// The walk is breadth-first; the streaming path is a linear scan. For a forest of SCALARS those
+/// coincide, because no node has children. The test checks every node really has none: if a
+/// composite entered this corpus the two orders would diverge and the comparison would be
+/// measuring something other than what it claims.
+///
+/// # Why a scalar corpus is the right scope rather than a limitation
+///
+/// Every constant across all eleven stages is `Int`, pinned by
+/// `tests/consts_region_composition.rs`. This path covers that corpus entirely and the general
+/// case not at all — and refuses the general case loudly, which the sibling test proves.
+#[test]
+fn the_streamed_records_reproduce_the_reference_consts_region() {
+    use keleusma::wire_schema::kind;
+
+    // The small case is a control on the harness itself; the large one is the point. 200 exceeds
+    // the 170-node walk cap, so it cannot be produced by `fl_walk` at all.
+    let many: String = (0..200)
+        .map(|i| format!("let v{i} = {}; ", 1000 + i))
+        .collect();
+    let big = format!("fn main() -> Word {{ {many} v0 }}");
+    let cases: [(&str, &str); 2] = [
+        ("one constant", "fn main() -> Word { 42 }"),
+        ("200 constants, past the walk cap", &big),
+    ];
+
+    let mut saw_past_the_cap = false;
+
+    for (label, src) in cases {
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+        let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
+
+        let roots = encoder_const_roots(&module);
+        let fields = preorder_of(&roots);
+        let nnodes = node_count(&roots);
+        assert!(
+            nnodes > 0,
+            "{label}: no constants, so this case measures nothing"
+        );
+
+        // **THE ALL-SCALAR PRECONDITION, ASSERTED RATHER THAN ASSUMED.** A node with children
+        // would make breadth-first and linear order diverge, and this comparison would stop
+        // meaning what it says.
+        for i in 0..nnodes {
+            assert_eq!(
+                fields[i * 6 + 2],
+                0,
+                "{label}: node {i} has children; the order equivalence this test relies on does                  not hold for composites"
+            );
+        }
+
+        let region = view
+            .find_region(kind::CONSTS)
+            .expect("the reference emitted a CONSTS region");
+        let reference_bytes = view.region_bytes(&region).expect("payload").to_vec();
+        assert_eq!(
+            reference_bytes.len(),
+            nnodes * CONST_RECORD_STRIDE,
+            "{label}: the reference region is not {nnodes} records; the input model disagrees              with the encoder and nothing below would mean anything"
+        );
+
+        let mut vm = vm_for(WIRE_KEL);
+
+        // **THE WALK REFUSES THE LARGE FOREST, AND THAT REFUSAL IS THE JUSTIFICATION.** Asserted
+        // by CODE, not merely as "some refusal": `-240` is the node cap specifically, and a
+        // different code here would mean the input failed for an unrelated reason.
+        if nnodes > FL_MAX_NODES {
+            saw_past_the_cap = true;
+            assert_eq!(
+                run_flatten(
+                    &mut vm,
+                    CMD_FLATTEN_EMIT_CONSTS,
+                    &fields,
+                    [roots.len() as i64, nnodes as i64, 0, 0, 0]
+                ),
+                -240,
+                "{label}: the walk accepted {nnodes} nodes, above its {FL_MAX_NODES} cap. If the                  cap moved, this test's premise moved with it"
+            );
+        }
+
+        // Stream it one node at a time. The stage holds ONE node, never the forest, which is why
+        // it is not bounded by the cap above.
+        assert_eq!(
+            run_flatten(&mut vm, CMD_FL_STREAM_BEGIN, &[], [0, 0, 0, 0, 0]),
+            0,
+            "{label}: the streaming reset refused"
+        );
+        let mut streamed = Vec::with_capacity(reference_bytes.len());
+        for i in 0..nnodes {
+            let (ret, bytes) = run_call(
+                &mut vm,
+                &Call {
+                    cmd: CMD_FL_STREAM_STEP,
+                    nregions: 0,
+                    seed: &[],
+                    regions: &[],
+                    fields: &fields[i * 6..(i + 1) * 6],
+                    names: &[],
+                    pool: &[],
+                    args: [0, 0, 0, 0, 0],
+                    read_len: CONST_RECORD_STRIDE,
+                },
+            )
+            .expect("run");
+            assert_eq!(
+                ret, CONST_RECORD_STRIDE as i64,
+                "{label}: node {i} of {nnodes} was refused with code {ret}"
+            );
+            streamed.extend_from_slice(&bytes);
+        }
+
+        assert_eq!(
+            streamed, reference_bytes,
+            "{label}: the streamed CONSTS region differs from the reference encoder's"
+        );
+    }
+
+    assert!(
+        saw_past_the_cap,
+        "no case exceeded the walk cap, so this test no longer demonstrates the streaming path          doing what the walk cannot"
+    );
 }
 
 /// Command 141 must still REFUSE a `STATIC_STR`, because it never seeds the
