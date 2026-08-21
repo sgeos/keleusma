@@ -13,16 +13,30 @@
 //! The 95 boundary cases in `tests/selfhost_codegen.rs`, run through
 //! `keleusma::selfhost::self_host_compile` and compared against the reference:
 //!
-//! | | baseline | + pool tag & declaration skip | + eager `and`/`or` seeding |
-//! |---|---|---|---|
-//! | byte-identical | 43 | 76 | **82** |
-//! | differs | 21 | 11 | **5** |
-//! | faults | 30 | 7 | 7 |
-//! | reference rejects | 1 | 1 | 1 |
+//! | | baseline | + pool tag | + declaration skip | + eager `and`/`or` | + flat-nested tuple |
+//! |---|---|---|---|---|---|
+//! | byte-identical | 43 | — | 76 | 82 | **88** |
+//! | differs | 21 | — | 11 | 5 | **5** |
+//! | faults | 30 | — | 7 | 7 | **1** |
+//! | reference rejects | 1 | 1 | 1 | 1 | 1 |
 //!
-//! **Every case that differs still is one the boundary already labels `Diverges`.** No case the
-//! boundary calls `Ok` differs any more; the only `Ok` cases the shipping compiler cannot handle
-//! are the six that FAULT, pinned below. Nothing here made a case worse.
+//! **THE SHIPPING COMPILER NOW MATCHES THE BOUNDARY'S VERDICT ON ALL 95 CASES.** Every remaining
+//! non-identical case is one the table already labels `Diverges`, `Refuses` or `RefRejects`. No
+//! construct recorded `Ok` differs or faults any more. Pinned per-case, not by count, in
+//! `tests/selfhost_codegen.rs::the_shipping_compiler_matches_the_boundary_it_is_recorded_against`.
+//!
+//! # FOUR DEFECTS, ONE CAUSE
+//!
+//! | defect | symptom |
+//! |---|---|
+//! | the constant-pool tag was discarded | a string constant became the integer of its intern id |
+//! | struct/trait/impl declarations had no skip state | the driver faulted on 29 cases |
+//! | the eager `and`/`or` ids were never seeded | `a and b` compiled to `a` |
+//! | op tag 53 had no flat-nested arm | a struct-typed tuple element faulted in kind decoding |
+//!
+//! **Every one was something `tests/selfhost_codegen.rs`'s copy of the driver handled and the
+//! shipping driver did not**, and the construct-support boundary exercises only the copy. That is
+//! the evidence behind the open accessor decision, and it is now four findings deep.
 //!
 //! # The third defect was the same shape as the first two
 //!
@@ -302,35 +316,45 @@ fn the_eager_boolean_operators_lower_byte_identically() {
     }
 }
 
-/// **A TUPLE WHOSE ELEMENT IS A STRUCT STILL FAULTS, AND IT IS A DIFFERENT FAULT.**
+/// **A TUPLE WHOSE ELEMENT IS A STRUCT: THE LAST OF THE FOUR, AND THE SMALLEST FIX.**
 ///
-/// These six stopped panicking in the declaration dispatch and now fault deeper, in scalar
-/// kind decoding (`bad scalar kind tag 131080`). That is a distinct, unfixed gap and not a
-/// regression: before the declaration skip they never reached the code that faults.
+/// These six faulted with `bad scalar kind tag 131080` and the number is the whole diagnosis.
+/// Op tag 53 has two forms — flat, packing `offset + kind_tag*65536`, and flat-nested, packing
+/// `offset + size*65536 + variant*2^32` — disambiguated by operand magnitude. The shipping
+/// driver decoded only the flat one, so a struct-typed tuple element's packed word was read as a
+/// scalar-kind tag: `size = 8, variant = Struct(2)` gives operand 8,590,458,880, and dividing by
+/// 65536 gives exactly 131,080.
 ///
-/// Pinned as "faults" rather than "diverges" because the two are different verdicts and this
-/// line has recorded four separate occasions where a shared failure message hid two causes.
+/// `tests/selfhost_codegen.rs` has carried both arms all along.
+///
+/// # Pinned with the control that makes it attributable
+///
+/// A tuple of SCALARS compiled correctly throughout, so it cannot distinguish a repair from a
+/// no-op — which is exactly why it is the control. If it ever fails, this test is measuring
+/// tuples in general rather than the struct element.
 #[test]
-fn a_tuple_element_of_struct_type_still_faults_in_the_shipping_compiler() {
-    let known = [
+fn a_tuple_element_of_struct_type_lowers_byte_identically() {
+    for src in [
         "struct P { x: Word }\nfn f(a: (P, Word), b: (P, Word)) -> bool { a == b }",
+        "struct I { v: Word }\nstruct M { i: I }\nfn f(a: (M, Word), b: (M, Word)) -> bool { a == b }",
         "struct P { x: Word }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
+        "struct Q { z: Word }\nstruct P { q: Q }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
         "struct P { u: (Word, Word) }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
         "struct P { x: Word }\nfn f(a: [(P, Word); 2], b: [(P, Word); 2]) -> bool { a == b }",
-    ];
-    for src in known {
-        let r = std::panic::catch_unwind(|| keleusma::selfhost::self_host_compile(src));
+    ] {
         assert!(
-            r.is_err(),
-            "{src:?} no longer faults. If it now compiles, move it out of this list and \
-             correct the census in this file's header"
+            agrees(&keleusma::selfhost::self_host_compile(src), &reference(src)),
+            "the shipping compiler diverged on {src:?}. A fault naming a scalar kind tag well \
+             above 7 means op tag 53's flat-nested arm is gone again"
         );
     }
-    // The control: a tuple of SCALARS compiles, so the fault above is attributable to the
-    // struct element rather than to tuples in general.
+
     let control = "fn f(a: (Word,Word), b: (Word,Word)) -> bool { a == b }";
-    assert!(agrees(
-        &keleusma::selfhost::self_host_compile(control),
-        &reference(control)
-    ));
+    assert!(
+        agrees(
+            &keleusma::selfhost::self_host_compile(control),
+            &reference(control)
+        ),
+        "the scalar-tuple control diverges, so the cases above do not isolate the struct element"
+    );
 }
