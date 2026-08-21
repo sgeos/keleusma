@@ -1,0 +1,45 @@
+COMPLETION CONDITION — mis-compilation refusal reachability
+
+Ordering is explicitly NOT a completion criterion. Any order satisfies this.
+
+All of the following must hold as observable properties of the tree.
+
+1. The tree records how many refusals in the virtual machine belong to the
+   "should never have been emitted" class, derived by inspection rather than
+   transcribed from a prior claim, and names the opcodes they cover.
+
+2. For each such site, the tree records a reachability verdict measured across
+   the full chain: the program compiles, the structural verifier accepts it, a
+   resource bound is granted, the module loads, and execution reaches the site.
+   A verdict short of that chain is reported as the shorter result it is, not as
+   reachability.
+
+3. Probes that fail to compile are counted and reported separately from probes
+   that compile and do not reach a site. Any negative states the compiling
+   denominator.
+
+4. No negative is recorded as proof of unreachability. Where a site was not
+   reached, the tree says what was tried, so the record reads as a bounded
+   search rather than a conclusion.
+
+5. Where a site is unreachable because the resource analysis refuses the
+   precondition that would reach it, that mechanism is stated, not merely the
+   outcome.
+
+6. A test pins each reachable site, so a later change that closes or opens one
+   fails rather than silently moving a figure. A failure message says which
+   direction the change went and that it is news rather than a defect.
+
+7. The virtual machine and the bytecode verifier are unmodified, along with the
+   other surfaces recorded as owned by the other line. Any repair implied by a
+   finding is reported rather than made.
+
+8. Every figure stated in the resume document for this line matches a run, and
+   its stated test count matches the suite.
+
+9. The native code generator's suite passes with zero failures and its
+   formatting and lint checks pass, with the pass/fail judgement taken from
+   something other than a truncated or piped view of the output.
+
+10. Work that is finished is committed and pushed. Nothing required above is
+    left only in the working tree.
