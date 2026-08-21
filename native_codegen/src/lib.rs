@@ -684,6 +684,20 @@ fn resolve_shared_scalar<'ctx>(
     }
 }
 
+/// Why a data slot of this kind is refused.
+///
+/// **A DATA SLOT IS NOT A COMPOSITE BODY FIELD, and the distinction is why
+/// `Fixed` is lowered in one and refused here.** A body field is INTERNAL: the
+/// compiler packs it, the same program reads it, and no one outside sees the
+/// layout, so the backend agreeing with the reference is a fact rather than a
+/// choice. A shared data slot is **HOST-VISIBLE**, and its layout is an
+/// application binary interface -- the same class of question as the string ABI
+/// (ruled provisional) and the float ABI (undecided, blocking two opcodes).
+///
+/// So the `Fixed` case here stays refused deliberately, not by omission, even
+/// though the identical-looking exclusion on `GetField` and `GetIndex` was
+/// lifted. Settling a host-visible layout by writing whichever version compiles
+/// is the trade this line refuses.
 fn alloc_format_kind(tag: u8) -> String {
     match tag {
         0 => String::from("Unit slot; the flat representation of Unit is unsettled"),
@@ -3279,7 +3293,14 @@ fn lower_chunk_body<'ctx>(
             Op::GetIndex(keleusma::bytecode::ArrayElem::Flat { kind }) => {
                 use keleusma::value_layout::ScalarKind as SK;
                 let elem: u64 = match kind {
-                    SK::Int => 8,
+                    // **`Fixed` IS HANDLED EXACTLY LIKE `Int`, and that is
+                    // measured rather than assumed.** A Q-format value is an
+                    // `i64` of fixed-point bits occupying a full slot, and the
+                    // reference packs `struct { a: Fixed<16>, b: Fixed<16> }` at
+                    // sixteen bytes -- identical to a pair of `Word`s. THE BITS
+                    // ARE THE VALUE: no zero-extension, no mask, no rescale.
+                    // Scaling lives in the opcodes that consume them.
+                    SK::Int | SK::Fixed => 8,
                     SK::Byte | SK::Bool => 1,
                     other => {
                         return Err(LowerError::UnsupportedOp(format!(
@@ -3422,7 +3443,16 @@ fn lower_chunk_body<'ctx>(
                     .unwrap()
                 };
                 let (v, w) = match kind {
-                    SK::Int => {
+                    // **`Fixed` READS EXACTLY LIKE `Int`.** Eight raw bytes of
+                    // Q-format bits, unaligned like every other body access. The
+                    // bits ARE the value -- do not zero-extend, mask, or rescale
+                    // them; the consuming opcode knows the scale.
+                    //
+                    // It fell to the catch-all until 2026-08-21, one increment
+                    // after the operand WIDTH was widened. Packing a field and
+                    // reading it back are separate arms, and only packing
+                    // followed from the width.
+                    SK::Int | SK::Fixed => {
                         let iv =
                             st.b.build_load(i64t, addr, "cfint")
                                 .unwrap()

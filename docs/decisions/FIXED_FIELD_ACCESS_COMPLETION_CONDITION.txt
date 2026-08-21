@@ -1,0 +1,45 @@
+COMPLETION CONDITION — fixed-point field access
+
+Ordering is explicitly NOT a completion criterion. Any order satisfies this.
+
+All of the following must hold as observable properties of the tree.
+
+1. Reading a fixed-point scalar out of a composite body — both a struct field
+   and an array element — is lowered, and the value is not zero-extended,
+   masked, or rescaled.
+
+2. A corpus program that builds a composite carrying fixed-point fields and
+   reads them back EXECUTES and agrees with the virtual machine. The count of
+   executed-and-agreeing modules is taken from a run and is not lower than
+   before this work.
+
+3. The exclusions governing a shared DATA SLOT remain in place, and the tree
+   states why they are a different class from the composite-body ones: a slot
+   layout is host-visible and is an interface question, while a body field is
+   internal to the program.
+
+4. The tree records that these exclusions formed a family of similar-looking
+   sites, and which members were changed and which were deliberately not.
+
+5. No change creates any path by which a float value is lowered as an integer
+   operation. A module carrying a float remains refused.
+
+6. The report states plainly whether the opcode-support headline moved, and does
+   not present unchanged figures as evidence of change.
+
+7. If a newly-lowered program disagrees with the virtual machine, the change is
+   reverted and the disagreement recorded rather than the assertion relaxed.
+
+8. Every figure stated in the resume document for this line matches a run, and
+   its stated test count matches the suite.
+
+9. The files recorded as read-only for this line are unmodified: the virtual
+   machine, the bytecode verifier, the bytecode definitions, the self-hosted
+   compiler sources, and the continuous-integration workflows.
+
+10. The native code generator's suite passes with zero failures and its
+    formatting and lint checks pass, with the pass/fail judgement taken from
+    something other than a truncated or piped view of the output.
+
+11. Work that is finished is committed and pushed. Nothing required above is
+    left only in the working tree.
