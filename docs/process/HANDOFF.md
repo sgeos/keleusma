@@ -116,6 +116,18 @@ branch out from under a green result. It is not a ban on `git rebase`. If a sequ
 conflicts, rebasing BEFORE its first push is safe (CI runs once, on the final commit); leaving it
 conflicting produces **no CI run at all, silently**, which is the outcome the rule exists to prevent.
 
+**A PULL REQUEST BASED ON A FEATURE BRANCH GETS NO CI AT ALL, SILENTLY.** Measured 2026-08-21.
+`ci.yml` filters `pull_request` on the **base** branch (`main` or `v*`), so a stacked pull request
+whose base is another feature branch triggers **no workflow**: no failure, no queue, no run to
+read. `gh pr checks` reports "no checks reported", which is indistinguishable from a slow start and
+was left unnoticed through two pull requests.
+
+Re-targeting the base is not enough on its own -- a base change emits `edited`, which is not one of
+the default `pull_request` types -- so the run must be provoked, by closing and reopening the pull
+request (`reopened` IS a default type) or by pushing to it. **Prefer basing on the version branch
+from the start** and describing the stack in the body; the diff is noisier and the verification is
+real.
+
 **A default-feature run is not the gate.** `cargo test --workspace` and `--features compile` both miss
 `self-host`. The gate is a five-entry feature matrix.
 

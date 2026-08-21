@@ -435,3 +435,22 @@ count instead of a literal, so adding a third feed cannot silently weaken it. Al
 fire, and the message names the slot and both counts.
 
 **A guard that has not been made to fail is a guess.** This one was a guess for about ten minutes.
+
+---
+
+# A PROCESS FINDING FROM SHIPPING THESE FOUR (2026-08-21)
+
+**A pull request based on a feature branch gets no CI at all, and it looks like a slow queue.**
+
+`ci.yml` filters `pull_request` on the **base** branch, `main` or `v*`. Two of this session's pull
+requests were stacked on their predecessors, so their base matched neither pattern and **no
+workflow ran** — not a failure, not a queue, an absence. `gh pr checks` said "no checks reported",
+which reads the same as "just started".
+
+Re-targeting the base did not provoke a run either: a base change emits `edited`, which is not one
+of the default `pull_request` types. Closing and reopening does, because `reopened` is.
+
+This is the same shape as the entry the handoff already carries about a CANCELLED run looking green
+in a summary, and as the rule about never classifying a state as failure by exclusion: **the
+absence of a signal is not the presence of a passing one**, and both are one line in a status
+listing. Base future branches on the version branch and describe the stack in the body.
