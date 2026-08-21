@@ -1,0 +1,63 @@
+// FIXED-POINT ARITHMETIC, IN THE CORPUS BECAUSE THE HAND-WRITTEN DIFFERENTIAL
+// CANNOT DRIVE IT.
+//
+// `Op::Add`, `Op::Sub` and `Op::Neg` lower for a matched `Fixed` pair. Verifying
+// that needs a function TAKING `Fixed` parameters: an operand's width is trusted
+// only where a signature states it and the chunk never writes the local, so a
+// `let x = w as Fixed<16>` is `Unknown` and refuses. The entry point cannot take
+// `Fixed`, because the harness and the virtual machine both pass integers.
+//
+// So the probe is necessarily MULTI-FUNCTION, and the hand-written differential
+// lowers `chunks[0]` while running the ENTRY POINT in the virtual machine --
+// different functions whenever a program has more than one. That harness now
+// refuses a multi-function source rather than comparing two unrelated things;
+// this file is the route that remains.
+//
+// A FALSE PASS IS WHAT EXPOSED ALL OF THIS. A two-function test compared
+// `add_fx` natively against `main` in the virtual machine and PASSED, because
+// fixed-point scaling is linear and `((a<<16) + (b<<16)) >> 16` equals `a + b`.
+// Agreement by mathematical accident, between two functions that were never the
+// same one.
+//
+// The corpus differential drives whole modules through the entry point on both
+// sides, so it compares like with like.
+
+fn add_fx(x: Fixed<16>, y: Fixed<16>) -> Fixed<16> {
+  x + y
+}
+
+fn sub_fx(x: Fixed<16>, y: Fixed<16>) -> Fixed<16> {
+  x - y
+}
+
+fn neg_fx(x: Fixed<16>) -> Fixed<16> {
+  -x
+}
+
+// A COMPOSITE CARRYING `Fixed` FIELDS IS DELIBERATELY ABSENT, and the reason is
+// a gap this file found by trying.
+//
+// The width widening made such a composite PACK -- the reference sizes
+// `struct { a: Fixed<16>, b: Fixed<16> }` at sixteen bytes, identical to a pair
+// of `Word`s, so eight bytes per field is what the reference already does. But
+// READING one back refuses:
+//
+//   pair_sum: UnsupportedOp("GetField reading Fixed is not lowered")
+//
+// Packing a field and reading it are separate arms, and only the first followed
+// from the width. One refusing chunk exempts a whole MODULE from the
+// differential, so leaving the composite here would have cost the arithmetic
+// below its execution -- the same lesson that split this corpus by outcome in
+// the first place.
+//
+// `GetField` on a `Fixed` is therefore an open, demonstrated gap rather than
+// something this increment quietly widened past.
+
+fn main(seed: Word) -> Word {
+  let x = seed as Fixed<16>;
+  let y = (seed + 3) as Fixed<16>;
+  let s = add_fx(x, y);
+  let d = sub_fx(x, y);
+  let n = neg_fx(x);
+  (s as Word) + (d as Word) + (n as Word)
+}

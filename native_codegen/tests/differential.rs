@@ -62,6 +62,33 @@ fn native_result(src: &str, args: &[i64]) -> i64 {
     let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
     check_word_width(m.word_bits_log2).expect("word width");
 
+    // **THE PRECONDITION THIS HARNESS ALWAYS HAD AND NEVER CHECKED.**
+    //
+    // `vm_result` calls the module's ENTRY POINT. This function lowers
+    // `chunks[0]`. For a single-function program those are the same chunk, which
+    // is why every test here has been valid. **For a multi-function program they
+    // are DIFFERENT FUNCTIONS**, and `assert_agrees` then compares one function
+    // against another and reports agreement or disagreement about nothing.
+    //
+    // Measured, by writing one: a two-function fixed-point test compared
+    // `add_fx` natively against `main` in the virtual machine and PASSED --
+    // because scaling is linear, so `((a<<16) + (b<<16)) >> 16` equals `a + b`
+    // and the two happened to coincide. A false pass by mathematical accident is
+    // exactly the shape this line keeps finding, and it was self-inflicted.
+    //
+    // The precondition is now enforced rather than assumed. A multi-function
+    // program fails here with an explanation instead of producing a number.
+    assert_eq!(
+        m.entry_point,
+        Some(0),
+        "this harness lowers chunks[0] natively and calls the ENTRY POINT in the \
+         virtual machine. They coincide only for a single-function program. This \
+         source has its entry at {:?}, so the two sides would run DIFFERENT \
+         FUNCTIONS and any agreement would be about nothing. Use the corpus \
+         differential, which drives whole modules, for anything multi-function.",
+        m.entry_point
+    );
+
     let ctx = Context::create();
     let lm = ctx.create_module("kel");
     lower_chunk(
@@ -2638,29 +2665,29 @@ fn byte_negation_agrees_with_the_vm() {
     }
 }
 
-/// **A MATCHED `Fixed` PAIR IS REFUSED, NOT MISLOWERED.**
+/// **FIXED-POINT ARITHMETIC IS VERIFIED IN THE CORPUS, NOT HERE, AND THE REASON
+/// IS THIS HARNESS'S OWN LIMIT.**
 ///
-/// `Fixed` arithmetic would be a plain wrapping `i64` operation, so it looks
-/// like it should fall out of the same arm. It does not, because a `Fixed`
-/// parameter's declared width is `Unknown` — `width_of_tag` maps `Byte`, `Bool`
-/// and `Word` and nothing else.
+/// A `Fixed` operand's width is trusted only where a signature states it and the
+/// chunk never writes the local — so exercising `Op::Add` on a `Fixed` pair
+/// needs a function TAKING `Fixed` parameters. The entry point cannot: this
+/// harness and the virtual machine both pass `Value::Int`. So any fixed-point
+/// probe here is necessarily MULTI-FUNCTION, which the precondition in
+/// `native_result` now refuses.
 ///
-/// **That is the conservative direction and it is deliberate.** Widening
-/// `width_of_tag` would also newly admit composites carrying `Fixed` fields,
-/// which is a broader change with its own packing risk and does not belong
-/// bundled with arithmetic. Refusing costs coverage and cannot mispack.
+/// **Four tests lived here and one of them passed falsely** before that
+/// precondition existed, comparing `add_fx` natively against `main` in the
+/// virtual machine. See `examples/scripts/fixed_arithmetic.kel`, which the
+/// corpus differential drives as a whole module.
 #[test]
-fn a_fixed_pair_is_refused_rather_than_lowered_as_an_integer_add() {
-    let src = "fn p(a: Fixed<16>, b: Fixed<16>) -> Fixed<16> { a + b }\nfn main() -> Word { 0 }";
+fn fixed_arithmetic_is_covered_by_the_corpus_and_not_by_this_harness() {
+    let src = "fn add_fx(x: Fixed<16>, y: Fixed<16>) -> Fixed<16> { x + y }\n\
+               fn main(a: Word, b: Word) -> Word { add_fx(a as Fixed<16>, b as Fixed<16>) as Word }";
     let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
-    let refusals = keleusma_native::module_refusals(&m, keleusma_native::LowerOptions::default());
-    assert!(
-        refusals
-            .iter()
-            .any(|(_, e)| format!("{e:?}").contains("operand widths")),
-        "a Fixed pair no longer refuses on unknown operand width. If `width_of_tag` \
-         learned `Fixed`, that is a WIDENING and not merely this arm changing: \
-         composites carrying Fixed fields now pack too. Verify that separately \
-         rather than deleting this. Refusals: {refusals:?}"
+    assert_ne!(
+        m.entry_point,
+        Some(0),
+        "a fixed-point probe became SINGLE-FUNCTION, so this harness could drive \
+         it after all and the corpus program is no longer the only route"
     );
 }

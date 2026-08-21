@@ -134,7 +134,24 @@ fn alloc_vec_unknown(n: usize) -> Vec<Width> {
 fn width_of_tag(t: TypeTag) -> Width {
     match t {
         TypeTag::Byte | TypeTag::Bool => Width::Scalar(1),
+        // **`Fixed` IS EIGHT BYTES, AND THAT IS MEASURED RATHER THAN ASSUMED.**
+        // The reference packs `struct { a: Fixed<16>, b: Fixed<16> }` at
+        // `byte_size: 16`, identical to a pair of `Word`s. A Q-format value is
+        // an `i64` of fixed-point bits, so it occupies a full slot.
+        //
+        // It was `Unknown` until 2026-08-21, and NOT for a stated reason: it sat
+        // inside an assertion whose doc comment justified only `Composite`. This
+        // line declined to widen it on the ground that doing so "would newly
+        // admit composites carrying `Fixed` fields, a packing change with its
+        // own risk" -- a risk that was asserted and never measured. The risk of
+        // widening is the risk of GUESSING a width, and there is nothing here to
+        // guess.
+        TypeTag::Fixed => Width::Scalar(8),
         TypeTag::Word => Width::Scalar(8),
+        // `Composite` stays unknown because a body length is genuinely not
+        // carried on the tag. `Float` stays unknown because this backend has no
+        // float representation at all -- redundant with the module-level guard
+        // that refuses a float by every route, and kept as a second line.
         _ => Width::Unknown,
     }
 }

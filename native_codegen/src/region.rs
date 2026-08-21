@@ -288,19 +288,44 @@ mod width_tests {
         assert_ne!(scalar, body);
     }
 
-    /// A composite parameter's body length is not carried on its type tag, so
-    /// it must stay unknown rather than be guessed at a word.
+    /// **THIS ASSERTION USED TO BUNDLE THREE TAGS UNDER ONE RATIONALE, and the
+    /// rationale covered exactly one of them.**
+    ///
+    /// It read "a composite parameter's body length is not carried on its type
+    /// tag" and then asserted `Composite`, `Float` AND `Fixed` were all unknown.
+    /// That sentence is true of `Composite` and says nothing about the others.
+    /// `Float` had a good reason living elsewhere; **`Fixed` had no stated
+    /// reason anywhere**, and it was measurably wrong — the reference packs a
+    /// `Fixed` field at eight bytes, exactly like a `Word`.
+    ///
+    /// **A bundle inherits the credibility of its best-justified member.** Each
+    /// tag now carries its own reason, so a wrong one cannot hide behind a right
+    /// one.
     #[test]
-    fn a_composite_tag_has_no_known_width() {
+    fn a_composite_body_length_is_not_on_its_tag() {
         assert_eq!(width_of_tag(TypeTag::Composite), Width::Unknown);
-        assert_eq!(width_of_tag(TypeTag::Float), Width::Unknown);
-        assert_eq!(width_of_tag(TypeTag::Fixed), Width::Unknown);
     }
 
-    /// The two tags whose packed width the signature really does state.
+    /// `Float` stays unknown because this backend has NO float representation.
+    ///
+    /// Redundant with the module-level guard, which refuses a float by every
+    /// route it can take, and kept deliberately as a second line: the guard is
+    /// about admission, this is about what a width would mean if one arrived.
+    #[test]
+    fn a_float_tag_has_no_width_because_it_has_no_representation() {
+        assert_eq!(width_of_tag(TypeTag::Float), Width::Unknown);
+    }
+
+    /// The tags whose packed width the signature really does state.
+    ///
+    /// **`Fixed` belongs here and did not until 2026-08-21.** A Q-format value
+    /// is an `i64` of fixed-point bits and occupies a full slot; measured, the
+    /// reference packs `struct { a: Fixed<16>, b: Fixed<16> }` at `byte_size:
+    /// 16`, identical to a pair of `Word`s.
     #[test]
     fn scalar_tags_state_their_width() {
         assert_eq!(width_of_tag(TypeTag::Word), Width::Scalar(8));
+        assert_eq!(width_of_tag(TypeTag::Fixed), Width::Scalar(8));
         assert_eq!(width_of_tag(TypeTag::Byte), Width::Scalar(1));
         assert_eq!(width_of_tag(TypeTag::Bool), Width::Scalar(1));
     }
