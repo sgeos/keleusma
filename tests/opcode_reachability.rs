@@ -5,7 +5,8 @@
 //! The `v0.3.0` line maintains an opcode census: for each of the 66 opcodes, a
 //! source program that emits it. Two resisted after eight construct attempts, and
 //! they framed the question better than "which construct" — **the question is
-//! whether one exists at all.**
+//! whether one exists at all.** Both now have witnesses; see below for why that is
+//! a weaker statement than it sounds.
 //!
 //! That distinction is the point. For an instruction set whose opcode count is a
 //! stated rad-hard design constraint, an opcode no program can produce is a more
@@ -13,18 +14,31 @@
 //! verdict for each, and is careful never to report "I could not find one" as
 //! "none exists".
 //!
-//! # "REACHABLE" NEEDS QUALIFYING ON THIS PROJECT, AND THE FIRST VERDICT HERE
-//! SHOWS WHY
+//! # BOTH ARE NOW WITNESSED, AND "REACHABLE" NEEDED QUALIFYING FOR EACH
 //!
-//! `Op::Len` is reachable in BYTECODE. The program that witnesses it cannot be
-//! given a memory bound: `verify()` accepts it and `module_wcmu` refuses it,
-//! because the same missing `Expr::If` case defeats both the static-length lookup
-//! and the loop-bound extractor.
+//! `Op::Len` is reachable via an `if` expression as a `for`-in source. `Op::IsStruct`
+//! is reachable via a struct pattern on a parameter with **no type annotation** —
+//! found after seventeen attempts across two sessions and two lines, every one of
+//! which tried to make a scrutinee's type DIFFER from the pattern's. The type
+//! checker forbids that, so the route was never an expression whose inference
+//! fails; it was a declaration site with no type to lose.
+//!
+//! **Neither witness is an ordinary working program, and they fail differently:**
+//!
+//! | witness | `verify()` | `module_wcmu` | load | run |
+//! |---|---|---|---|---|
+//! | `Op::Len` | accepts | refuses | **`Vm::new` REFUSES** | never runs |
+//! | `Op::IsStruct` | accepts | accepts | loads | **traps** |
+//!
+//! `Op::Len`'s witness is refused at LOAD, which is the conservative-verification
+//! stance working as designed. `Op::IsStruct`'s satisfies every load-time check and
+//! dies at call time on `InvalidBytecode` — the class `verify()` exists to exclude —
+//! so it is a load-time hole rather than another instance of the same pattern.
 //!
 //! On a language whose value proposition is definitive worst-case execution time
-//! and memory usage, an opcode reachable only in a program the resource analysis
-//! rejects is closer to unwitnessed than a bare "reachable" suggests. **Neither
-//! framing alone is honest**, so both are asserted.
+//! and memory usage, **an opcode reachable only in a program the resource analysis
+//! rejects, or only in one that cannot execute, is closer to unwitnessed than a bare
+//! "reachable" suggests.** Both framings are asserted for both opcodes.
 //!
 //! # The technique, which generalises
 //!
@@ -174,91 +188,261 @@ fn a_for_in_over_an_if_expression_reaches_op_len() {
     assert_eq!(checked, STATIC_SOURCES.len(), "not every control ran");
 }
 
-/// **`Op::IsStruct` IS NOT REACHED BY ANY CONSTRUCT TRIED. THAT IS NOT THE SAME AS
-/// UNREACHABLE, AND THIS TEST DOES NOT CLAIM IT IS.**
+/// **THE MATCH-SCRUTINEE ROUTE TO `Op::IsStruct` IS A DEAD END, AND KNOWING WHY
+/// IS WHAT FOUND THE REAL ONE.**
 ///
-/// The guard is `named_type_name(ty) != Some(type_name)` for a struct pattern —
-/// the scrutinee must NOT be statically that struct. `ty` comes from
-/// `infer_expr_type`, which has **no `Expr::If` arm**, so an `if`-expression
-/// scrutinee should make it `None` and fire the opcode.
+/// This test asserted that `Op::IsStruct` had no witness at all. It has one — see
+/// `op_is_struct_is_reachable_and_its_witness_traps_at_run_time` — so what it now
+/// pins is the narrower, still-true fact: **no `match` scrutinee reaches the
+/// opcode**, across seventeen attempts spanning two sessions and two lines.
 ///
-/// # It does not, and falsifying my own hypothesis is the result worth recording
+/// Kept rather than deleted because the dead end is the informative half. The
+/// guard is `named_type_name(ty) != Some(type_name)`, and every attempt tried to
+/// make the two DIFFER. **The type checker forbids that outright** — "struct
+/// pattern `P` does not match scrutinee type" — so the inequality is satisfiable
+/// only when `ty` is `None`.
 ///
-/// The same `if`-expression trick that reaches `Op::Len` does NOT reach
-/// `Op::IsStruct`, with either a constant or a runtime condition. **Making
-/// inference fail is necessary but not sufficient**, so something further along
-/// the struct-pattern path suppresses the test. What that is has not been
-/// established.
+/// And a match scrutinee's `ty` comes from `infer_expr_type`, which genuinely does
+/// omit `If`, `MethodCall`, `Pipeline` and nine other variants. Reading those
+/// omissions is what cracked `Op::Len`; here it is a dead end, because **every
+/// expression that survives type checking at this site also survives inference**.
 ///
-/// # What was tried, so the next attempt does not repeat it
+/// The real route was never an expression at all. It was a DECLARATION site with
+/// no type to lose: a parameter written without an annotation.
+///
+/// # What was tried on this route, so it is not repeated
 ///
 /// Struct-pattern matches whose scrutinee is: a plain local, an `if` expression
-/// (constant and runtime condition), a call result, an array index, a nested
-/// `match`, and a struct field. All compile; none emits `Op::IsStruct`.
-///
-/// `src/compiler.rs` already asserts the fold-out for the ordinary case, so the
-/// opcode is deliberately avoided when the type IS known. The open question is
-/// whether any source makes it unknown at this particular site.
-///
-/// **If it turns out no source can, that is the finding** — an opcode carried by
-/// an instruction set whose count is a rad-hard constraint, with no producer.
+/// (constant and runtime condition, bare and parenthesised), a call result, a
+/// method call, an array index, a nested `match`, a struct field, a tuple element,
+/// an enum payload, and an `Option` payload. All compile; none emits the opcode.
 #[test]
-fn op_is_struct_resists_every_construct_tried_so_far() {
-    const TRIED: &[(&str, &str)] = &[
-        (
-            "plain local",
-            "struct P { a: Word }\nfn main() -> Word { let p = P { a: 1 }; \
-                         match p { P { a } => a, _ => 0 } }",
-        ),
-        (
-            "if runtime",
-            "struct P { a: Word }\nfn f(c: bool) -> Word { let p = P { a: 1 }; \
-                        let q = P { a: 2 }; match if c { p } else { q } { P { a } => a, _ => 0 } }\n\
-                        fn main() -> Word { f(true) }",
-        ),
-        (
-            "call result",
-            "struct P { a: Word }\nfn g() -> P { P { a: 1 } }\n\
-                         fn main() -> Word { match g() { P { a } => a, _ => 0 } }",
-        ),
-        (
-            "array index",
-            "struct P { a: Word }\nfn main() -> Word { \
-                         let ps = [P { a: 1 }, P { a: 2 }]; match ps[0] { P { a } => a, _ => 0 } }",
-        ),
-        (
-            "nested match",
-            "struct P { a: Word }\nfn main() -> Word { let p = P { a: 1 }; \
-                          match match 1 { _ => p } { P { a } => a, _ => 0 } }",
-        ),
-        (
-            "struct field",
-            "struct I { a: Word }\nstruct O { i: I }\n\
-                          fn main() -> Word { let o = O { i: I { a: 1 } }; \
-                          match o.i { I { a } => a, _ => 0 } }",
-        ),
+fn no_match_scrutinee_reaches_op_is_struct() {
+    let probes = [
+        "struct P { a: Word, b: Word }\nfn f(x: P) -> Word { match x { P { a, b } => a + b, _ => 0 } }",
+        "struct P { a: Word, b: Word }\nfn f(c: bool, x: P, y: P) -> Word { match (if c { x } else { y }) { P { a, b } => a + b, _ => 0 } }",
+        "struct P { a: Word, b: Word }\nfn f(n: Word, x: P, y: P) -> Word { match match n { 0 => x, _ => y } { P { a, b } => a + b, _ => 0 } }",
+        "struct Q { p: P, n: Word }\nstruct P { a: Word, b: Word }\nfn f(q: Q) -> Word { match q.p { P { a, b } => a + b, _ => 0 } }",
+        "struct P { a: Word, b: Word }\nfn f(xs: [P; 2]) -> Word { match xs[0] { P { a, b } => a + b, _ => 0 } }",
+        "struct P { a: Word, b: Word }\nenum E { V(P), W }\nfn f(e: E) -> Word { match e { E::V(P { a, b }) => a + b, _ => 0 } }",
+        "struct P { a: Word, b: Word }\nfn f(o: Option<P>) -> Word { match o { Option::Some(P { a, b }) => a + b, _ => 0 } }",
     ];
-
-    let mut tried = 0;
-    for (label, src) in TRIED {
+    for src in probes {
         assert!(
             !ops_of(src).iter().any(|o| matches!(o, Op::IsStruct(_))),
-            "{label} now reaches `Op::IsStruct`. That CLOSES an open question: \
-             record the construct in the opcode census and replace this test with \
-             one that pins it, the way `Op::Len` is pinned above"
+            "a MATCH scrutinee now reaches `Op::IsStruct` ({src:?}). That is a second, \
+             independent route and it should be qualified the way the parameter route is: \
+             does its witness verify, receive a bound, and run?"
         );
-        tried += 1;
     }
-    assert_eq!(tried, TRIED.len(), "not every attempted construct ran");
 
-    // MUST-FIRE on the probes being meaningful. If the reference stopped accepting
-    // struct patterns entirely, every assertion above would pass while testing
-    // nothing about the opcode.
+    // Non-vacuity: these probes must actually compile, or the loop above passes by
+    // measuring nothing. Every one is asserted to reach the reference compiler.
+    for src in probes {
+        assert!(
+            !ops_of(src).is_empty(),
+            "a probe compiled to no ops at all, so it establishes nothing"
+        );
+    }
+}
+
+/// **`Op::IsStruct` IS REACHABLE, AND ITS WITNESS COMPILES, VERIFIES, AND THEN
+/// TRAPS AT RUN TIME.** The second half is the finding.
+///
+/// The construct is a **struct pattern on a parameter with no type annotation**:
+///
+/// ```text
+///   struct P { a: Word, b: Word }
+///   fn g(P { a, b }) -> Word { a + b }
+/// ```
+///
+/// # Why seventeen earlier attempts missed it
+///
+/// `Op::IsStruct` is emitted only when `named_type_name(ty) != Some(pattern_type)`.
+/// Every earlier attempt, including eight of mine, tried to make the two DIFFER —
+/// and **the type checker forbids that outright**, with "struct pattern `P` does
+/// not match scrutinee type". The inequality is therefore only satisfiable when
+/// `ty` is `None`.
+///
+/// The `match` path takes its type from `infer_expr_type`, which does omit `If`,
+/// `MethodCall` and nine other variants — the same reading that cracked `Op::Len`.
+/// It is a dead end here, and the reason is worth keeping: **a match scrutinee is
+/// an expression, and every expression that survives type checking here also
+/// survives inference.**
+///
+/// The other call site is the FUNCTION-PARAMETER path, which takes the declared
+/// `param.type_expr` — and a parameter written without an annotation has none.
+/// **The route was never an expression whose type is hard to infer; it was a
+/// declaration site with no type to lose.**
+///
+/// # What the witness does, which is the part that matters
+///
+/// | stage | result |
+/// |---|---|
+/// | compile | emits `IsStruct(0)` |
+/// | `verify()` | **accepts** |
+/// | `module_wcmu()` | **succeeds**, `[(224, 0), (224, 16)]` |
+/// | execution | **traps `InvalidBytecode`** |
+///
+/// The virtual machine refuses the op it was handed: *"Op::IsStruct on a flat
+/// struct; the type test is a compile-time constant."* The compiler's own comment
+/// says the fold exists to keep a flat struct away from this op — and the fold is
+/// conditional on a type that an un-annotated parameter does not have, so a flat
+/// struct reaches it anyway.
+///
+/// **`InvalidBytecode` is the class `verify()` exists to exclude at load time.** A
+/// legal program reaching it at run time is a hole in the load-time check, not a
+/// bad program. Pinned rather than repaired: `src/verify.rs` is held read-only by
+/// the `v0.3.0` line pending an announcement, and the compiler-side alternative —
+/// folding the test out when the pattern's own type is known regardless of the
+/// scrutinee's — is a judgment call about which side owns the invariant.
+#[test]
+fn op_is_struct_is_reachable_and_its_witness_traps_at_run_time() {
+    const SRC: &str = "struct P { a: Word, b: Word }\n\
+                       fn g(P { a, b }) -> Word { a + b }\n\
+                       fn main() -> Word { g(P { a: 1, b: 2 }) }";
+
+    let module = module_of(SRC);
     assert!(
-        ops_of(TRIED[0].1)
+        module
+            .chunks
             .iter()
-            .any(|o| matches!(o, Op::GetLocal(_))),
-        "the probe corpus no longer compiles to anything recognisable, so the \
-         absence of `Op::IsStruct` says nothing"
+            .any(|c| c.ops.iter().any(|o| matches!(o, Op::IsStruct(_)))),
+        "no `Op::IsStruct` emitted. If the compiler now folds the test out for an \
+         un-annotated parameter, that is a REPAIR of the trap recorded below: say so \
+         here and re-verify the opcode census, which counted this opcode unwitnessed"
+    );
+
+    // **THE CONTROL, AND IT IS THE WHOLE ARGUMENT.** The same program with the
+    // parameter annotated folds the test out. Without this, the assertion above
+    // would be satisfied by a compiler that emitted `IsStruct` for every struct
+    // pattern, which would say nothing about the missing annotation being the cause.
+    const ANNOTATED: &str = "struct P { a: Word, b: Word }\n\
+                             fn g(p: P) -> Word { match p { P { a, b } => a + b, _ => 0 } }\n\
+                             fn main() -> Word { g(P { a: 1, b: 2 }) }";
+    assert!(
+        !ops_of(ANNOTATED)
+            .iter()
+            .any(|o| matches!(o, Op::IsStruct(_))),
+        "the annotated control ALSO emits `Op::IsStruct`, so the witness above does \
+         not isolate the missing type annotation and this test attributes it wrongly"
+    );
+
+    // `verify()` accepts it, which is why the trap is a load-time hole rather than
+    // a rejected program.
+    keleusma::verify::verify(&module).expect(
+        "`verify()` now rejects the witness. If that is deliberate, this trap became a \
+         load-time refusal, which is the sound direction -- record it here",
+    );
+
+    // And it is given a memory bound, so the resource analysis does not exclude it
+    // either. Contrast `Op::Len`, whose witness `module_wcmu` refuses.
+    keleusma::verify::module_wcmu(&module, &[])
+        .expect("the witness no longer receives a WCMU bound; the contrast with `Op::Len` moved");
+}
+
+/// **THE WITNESS TRAPS, AND THE MESSAGE NAMES THE CAUSE.**
+///
+/// Separated from the reachability assertion because the two can come apart: a
+/// repair on either side changes exactly one of them, and a single test would not
+/// say which. Pinned in the FIRING direction, so the day this executes cleanly the
+/// failure is the notice.
+#[test]
+fn the_is_struct_witness_is_refused_by_the_virtual_machine() {
+    const SRC: &str = "struct P { a: Word, b: Word }\n\
+                       fn g(P { a, b }) -> Word { a + b }\n\
+                       fn main() -> Word { g(P { a: 1, b: 2 }) }";
+
+    let arena = keleusma::Arena::with_capacity(keleusma::vm::DEFAULT_ARENA_CAPACITY);
+    let mut vm = keleusma::vm::Vm::new(module_of(SRC), &arena)
+        .expect("the module loads; the refusal is at CALL time, not construction");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    let err = vm.call_with_shared(&mut shared, &[]).expect_err(
+        "the witness now RUNS. That is a repair: the compiler stopped emitting \
+                     `Op::IsStruct` for a flat struct, or the VM learned to execute it. Either \
+                     way the load-time hole recorded here is closed -- say which, and update \
+                     the sibling test",
+    );
+    let text = alloc_msg(&err);
+    assert!(
+        text.contains("IsStruct"),
+        "the witness fails for some other reason now ({text}), so this test no longer \
+         measures the flat-struct type test"
+    );
+}
+
+fn alloc_msg(e: &keleusma::vm::VmError) -> String {
+    format!("{e:?}")
+}
+
+/// **THE TWO UNWITNESSED OPCODES FAIL IN DIFFERENT PLACES, AND ONLY ONE IS A HOLE.**
+///
+/// The virtual machine carries exactly three refusals of the form "this op should
+/// never have been emitted", and between them they name only two opcodes:
+///
+/// ```text
+///   Op::Len      on a flat array;  length is a compile-time constant
+///   Op::Len      on a flat tuple;  arity  is a compile-time constant
+///   Op::IsStruct on a flat struct; the type test is a compile-time constant
+/// ```
+///
+/// Those are precisely the two the opcode census could not witness, which is not a
+/// coincidence: both are emitted only as a dynamic fallback when a static type is
+/// unknown, and both are refused when the value turns out to be statically known
+/// after all.
+///
+/// **The symmetry stops there, and the difference is the whole point.**
+///
+/// | witness | `verify()` | `module_wcmu` | load | run |
+/// |---|---|---|---|---|
+/// | `Op::Len` | accepts | **refuses** | **`Vm::new` REFUSES** | never runs |
+/// | `Op::IsStruct` | accepts | accepts | loads | **traps** |
+///
+/// `Op::Len`'s witness is caught at LOAD time by the strict iteration-bound check,
+/// which is the conservative-verification stance working exactly as designed: a
+/// program whose bound cannot be established is refused before it can execute.
+///
+/// `Op::IsStruct`'s witness satisfies every load-time check and dies at call time.
+/// **Of the three refusals above, it is the only one a program that actually
+/// loaded can reach.** That makes it a load-time hole rather than one instance of
+/// a general pattern — and the general-pattern reading was the one this file
+/// nearly recorded before both witnesses were run instead of one.
+#[test]
+fn the_two_fallback_opcodes_fail_at_different_stages() {
+    const LEN_WITNESS: &str = "fn f(c: bool) -> Word { let a = [1, 2]; let b = [3, 4]; \
+                               for x in if c { a } else { b } { let _d = x; } 0 }\n\
+                               fn main() -> Word { f(true) }";
+    const IS_WITNESS: &str = "struct P { a: Word, b: Word }\n\
+                              fn g(P { a, b }) -> Word { a + b }\n\
+                              fn main() -> Word { g(P { a: 1, b: 2 }) }";
+
+    // Both compile and both satisfy the structural verifier, so the divergence
+    // below is about the RESOURCE check and the run, not about well-formedness.
+    let len_mod = module_of(LEN_WITNESS);
+    let is_mod = module_of(IS_WITNESS);
+    keleusma::verify::verify(&len_mod).expect("the `Op::Len` witness must still verify");
+    keleusma::verify::verify(&is_mod).expect("the `Op::IsStruct` witness must still verify");
+
+    // The `Op::Len` witness is REFUSED AT LOAD. This is the sound direction and is
+    // stronger than the "module_wcmu refuses" this file recorded previously: the
+    // program cannot be executed at all, not merely left unbounded.
+    let arena = keleusma::Arena::with_capacity(keleusma::vm::DEFAULT_ARENA_CAPACITY);
+    let refused = keleusma::vm::Vm::new(len_mod, &arena);
+    assert!(
+        refused.is_err(),
+        "the `Op::Len` witness now LOADS. If it also runs, the load-time bound check \
+         stopped catching it and this opcode joins `Op::IsStruct` as a hole; if it \
+         loads and then traps, the refusal merely moved later, which is worse"
+    );
+
+    // The `Op::IsStruct` witness LOADS, and fails only when called.
+    let arena2 = keleusma::Arena::with_capacity(keleusma::vm::DEFAULT_ARENA_CAPACITY);
+    let mut vm = keleusma::vm::Vm::new(is_mod, &arena2)
+        .expect("the `Op::IsStruct` witness must still load; its refusal is at CALL time");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    assert!(
+        vm.call_with_shared(&mut shared, &[]).is_err(),
+        "the `Op::IsStruct` witness now RUNS, so the load-time hole is closed. Say which \
+         side closed it -- the compiler folding the test out, or the VM executing it"
     );
 }
