@@ -13,6 +13,127 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE CHAINED-INDEX DEFECT IS NOT TRUNCATION, AND I STOPPED RATHER THAN BUILD A FEATURE
+(2026-08-20, evening).**
+
+The second half of the nested-array family. **My own first report of it was wrong about the
+mechanism**, which is why diagnosing before fixing mattered here.
+
+I recorded it as "the body is TRUNCATED -- no SetLocal, no GetLocal, neither GetIndex", implying
+codegen dropped ops. **It does not.** `parse.kel` emits records, and they are the WRONG records:
+
+```
+a[1]      ->  Local(0), Literal(1), Index                 -- correct
+a[0][1]   ->  Local(0), Literal(0), Index, Literal(1), ArrayLit
+```
+
+**The second `[1]` parses as an ARRAY LITERAL.** The truncated op stream is downstream fallout from a
+malformed node forest, not a codegen bug -- and I would have gone looking in codegen on the strength
+of my own note.
+
+**CHAINED INDEXING IS NOT SUPPORTED BY THE PARSER AT ALL.** `ps.aa_phase` is armed only after a
+let-bound array `Local` is emitted, and nothing re-arms it once an index completes, so the next `[`
+falls through to the array-literal branch. **`let b = a[0]; b[1]` diverges too**, which rules out the
+chain as the trigger: it is indexing a nested array at all. That case is now in the boundary table
+precisely because it discriminates.
+
+**WHY I STOPPED.** A fix needs three coordinated pieces: a binding record saying the element is an
+ARRAY of byte size N (`let_array` covers a scalar kind and `let_array_struct`/`let_array_size` a
+struct; there is nothing for an array), a nested-variant postfix phase, and re-arming after an index.
+**That is a FEATURE, not the defect fix its sibling was**, and my record on this exact file today is
+two wrong attempts on a strictly simpler change -- one of which returned a worse answer than the bug.
+
+The stopping rule written this morning said to stop if the work reached beyond the size computation
+and index lowering. It has not reached the arena or WCMU, so the letter of the rule permits
+continuing; **the spirit does not**, because "three coordinated pieces of parser state machinery" is
+the thing the rule exists to catch. Recording that distinction rather than quietly taking the
+permissive reading.
+
+**WHAT IS RECORDED IS A SPECIFICATION, NOT A SYMPTOM.** The next attempt starts from what the parser
+needs rather than from "the body is truncated", and the machinery for a nested variant already exists
+in `step_structarrayaccess` with `da.fa_index_variant`. That is worth more than a half-built feature.
+
+---
+
+**A NESTED ARRAY LITERAL NOW SIZES ITS OUTER COMPOSITE, AND MY FIRST FIX WAS WORSE THAN THE BUG
+(2026-08-20, evening).**
+
+Recorded as `Diverges` overnight and deliberately left; taken now with the stopping rule written in
+advance. **One of two defects is closed.**
+
+The array-literal close handled exactly two element kinds: a STRUCT, whose byte size it looked up,
+and everything else, assumed to be a `Word` at eight bytes. **An ARRAY element is neither**, so
+`[[1, 2], [3, 4]]` fell through to `count * 8` and sized its outer composite as 16 where the reference
+computes 32. Depth two, depth three and a non-square inner length are all byte-identical now.
+
+**MY FIRST FIX RETURNED A WORSE WRONG ANSWER THAN THE BUG, AND THAT IS THE PART WORTH KEEPING.** I
+carried "the byte size of the most recently closed array" in a single flat field on `stmt`. **It leaks
+across SIBLINGS.** In `[[1, 2], [3, 4]]` the second inner array read the FIRST one's size and doubled
+to 32; the outer then doubled again to 64. The bug produced 16 where 32 was right; my fix produced 64.
+
+**The size belongs to a NESTING LEVEL, not to a moment in time.** It is now a per-level array parallel
+to the element counter, written by a closing inner array into its PARENT's slot and cleared from its
+own, so a later sibling starts from no assumption.
+
+**THE SECOND ATTEMPT FAULTED IMMEDIATELY WITH INDEX -1**, because the nesting pointer is decremented
+before the slot is read. **An off-by-one that faults on its first run is the good outcome.** The flat
+flag's version did not fault -- it returned a plausible number that was wrong, which is the failure
+mode this whole session has been about.
+
+**A PROBE OF MINE PANICKED AND I NEARLY REPORTED A REGRESSION I HAD NOT CAUSED.** The struct-array
+control failed with "a `struct` declaration is NOT among them" -- the documented top-level `struct`
+gap, which `parse.kel` has never handled. Confirmed by running the boundary on the STASHED tree before
+concluding anything. **Check whether the failure predates the change before calling it a regression.**
+
+**THE CHAINED INDEX `a[0][1]` IS UNTOUCHED AND STAYS `Diverges`.** Two defects; one closed. The family
+is not claimed.
+
+**THE MARGIN PIN MOVED A NINTH TIME, 671 -> 672 names**, the one name being `al_elem_bytes`. Worth
+noting that the WRONG fix would have cost one name too, so the count is not a proxy for correctness --
+which is exactly why the pin is a pin and not a computed value.
+
+---
+
+**`Op::Len` IS REACHABLE; `Op::IsStruct` RESISTED, AND FALSIFYING MY OWN HYPOTHESIS IS THE RESULT
+(2026-08-20, afternoon).**
+
+The `v0.3.0` line's opcode census stood at 64 of 66 with two unwitnessed after eight construct
+attempts. **They reframed it correctly and that reframing is what solved it**: the question is not
+"which construct" but "whether one exists", and both opcodes are emitted only as a FALLBACK when a
+static type is unknown. **The target is making INFERENCE FAIL, not finding an unusual shape.**
+
+**`Op::Len`: FOUND.** `static_for_in_length` matches `ArrayLiteral`, `Call`, `FieldAccess`, `Ident`,
+`ArrayIndex` and `Match`, then falls through to `_ => None`. **`Expr::If` is not among them.** So
+`for x in if c { a } else { b }` takes the fallback and emits `Op::Len`. Confirmed with a constant
+and a runtime condition, and pinned with six controls -- one per handled source kind -- so a
+regression that made the guard return `None` for everything fails rather than looks like a win.
+
+**THE METHOD IS THE TRANSFERABLE PART.** Six of my probes varied the SHAPE of the source. The one
+that worked came from reading the guard's own match arms for what they OMIT. Eight failed attempts on
+the other line plus six of mine, all guessing; one reading of the arm list, immediate answer.
+
+**`Op::IsStruct`: NOT FOUND IN NINE ATTEMPTS, AND MY HYPOTHESIS WAS WRONG.** The guard is
+`named_type_name(ty) != Some(type_name)`, `ty` coming from `infer_expr_type`, which has **no
+`Expr::If` arm either** -- so the same trick should work. **It does not**, with a constant or a
+runtime condition. Making inference fail is NECESSARY BUT NOT SUFFICIENT; something further along the
+struct-pattern path suppresses the test, and what that is has not been established.
+
+**Recording a falsified hypothesis is worth more here than another guess.** The test states what was
+tried -- plain local, `if` expression both ways, call result, array index, nested match, struct field
+-- and says explicitly that "not found" is NOT "unreachable". If a later attempt reaches it, the test
+fails and instructs its author to pin the construct rather than relax the assertion.
+
+**IF NOTHING CAN REACH IT, THAT IS THE FINDING**, and a larger one than a witnessed opcode: an
+instruction set whose count is a stated rad-hard constraint carrying an opcode with no producer.
+
+**I MADE THE SAME PROBE-SYNTAX MISTAKE MY OWN BRIEF WARNS ABOUT, ONE HOUR AFTER WRITING IT.** The
+first `for`-in probe used a `limit` clause, which the reference rejects with "a `limit` clause
+requires a range `for` loop". The brief says to generate probes from corpus sources rather than from
+memory of the grammar; I generated from memory. Third probe-syntax error in three sweeps. **Knowing
+the rule is not the same as having the habit.**
+
+---
+
 **THE TWO SELF-HOSTED COMPILERS HAVE MEASURABLY DIVERGED, AND THE SUPPORT TABLE MEASURES THE WRONG ONE
 (2026-08-20, morning).**
 

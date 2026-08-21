@@ -10,6 +10,42 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-20, evening).** **NESTED ARRAY LITERALS FIXED; CHAINED INDEXING
+> DIAGNOSED AND DELIBERATELY NOT FIXED.**
+>
+> The literal's outer composite was sized `count * 8` because the close handled a struct element and
+> otherwise assumed `Word`. Fixed with a PER-NESTING-LEVEL element size; a flat "last array closed"
+> flag leaks across siblings and gave 64 where 32 was right -- **worse than the bug**. Boundary moves
+> `nested/array_of_array_literal` to `Ok`.
+>
+> **THE INDEX HALF IS NOT TRUNCATION, contrary to my own first report.** `parse.kel` emits records
+> and they are wrong: in `a[0][1]` the second `[1]` parses as an **ArrayLit**. Chained indexing is
+> unsupported -- `ps.aa_phase` arms only after a let-bound array Local and never re-arms.
+> `let b = a[0]; b[1]` diverges too, so the chain is not the trigger; that case is now in the table
+> because it discriminates.
+>
+> **Stopped deliberately**: a fix needs a binding record for an array element, a nested-variant
+> postfix phase, and chain re-arming. That is a feature, not a defect fix. The boundary carries the
+> specification rather than the symptom.
+
+> **Currency note (2026-08-20, afternoon).** **`Op::Len` IS REACHABLE; `Op::IsStruct` RESISTED NINE
+> ATTEMPTS.** Raised by the `v0.3.0` line's opcode census, stuck at 64 of 66.
+>
+> **The reframing solved it**: both are emitted only as a FALLBACK when a static type is unknown, so
+> the target is making INFERENCE FAIL rather than finding an unusual shape. `static_for_in_length`
+> has no `Expr::If` arm, so `for x in if c { a } else { b }` takes `_ => None` and emits `Op::Len`.
+> Pinned with six controls, one per handled source kind.
+>
+> **THE METHOD IS THE TRANSFERABLE PART**: read the guard's match arms for what they OMIT. Fourteen
+> guessed constructs across two lines failed; one reading of the arm list answered it.
+>
+> **`Op::IsStruct` falsified my hypothesis.** `infer_expr_type` has no `Expr::If` arm either, so the
+> same trick should work and does not. Making inference fail is necessary but NOT SUFFICIENT.
+> Recorded as "not found, here is what was tried", explicitly NOT as "unreachable" — if nothing can
+> reach it, that is the larger finding for an ISA whose opcode count is a rad-hard constraint.
+>
+> Brief and completion condition at `docs/decisions/OPCODE_REACHABILITY_*`.
+
 > **Currency note (2026-08-20, mid-morning).** **THE TWO SELF-HOSTED COMPILERS HAVE MEASURABLY
 > DIVERGED.** On a string literal the reference and `tests/selfhost_codegen.rs`'s copy both emit
 > `StaticStr("hi")`; `keleusma::selfhost::self_host_compile` emits `Int(3)`, the intern id as an Int.

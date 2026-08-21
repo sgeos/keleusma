@@ -12632,10 +12632,17 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // was a missing feature rather than a named refusal. **The second move predicted
     // in advance, and the first whose count came out at two rather than the
     // programme's usual three per cause.**
-    assert_eq!(worst_names, 671, "the worst-case name count moved");
+    // The NINTH move: sizing a nested array literal's outer composite by its
+    // elements. 671 -> 672 names, and the one name is `al_elem_bytes` exactly --
+    // a per-nesting-level element size, replacing a flat flag that leaked across
+    // siblings. **One name, because a correctly scoped fix needed one field**; the
+    // wrong version needed one too and gave wrong answers, so the count is not a
+    // proxy for correctness.
+    assert_eq!(worst_names, 672, "the worst-case name count moved");
     // 35,154 -> 35,213 bytes, 59 for the two field names plus the comment-free
-    // identifiers the recognition introduces.
-    assert_eq!(worst_blob, 35213, "the worst-case blob size moved");
+    // identifiers the recognition introduces. Then 35,213 -> 35,233, twenty bytes
+    // for `al_elem_bytes` and the locals the nested-array sizing introduced.
+    assert_eq!(worst_blob, 35233, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**
