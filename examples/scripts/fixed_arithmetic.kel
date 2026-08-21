@@ -21,6 +21,18 @@
 //
 // The corpus differential drives whole modules through the entry point on both
 // sides, so it compares like with like.
+//
+// WITNESSES: Add, Sub, Neg, GetField, GetIndex, NewComposite
+//
+// THE LINE ABOVE IS A MACHINE-CHECKED CLAIM, not a comment.
+// `witness_integrity.rs` compiles this file and asserts every opcode named
+// there is actually emitted. A witness that silently STOPS witnessing --
+// because the reference compiler folded the construct away, or because a
+// function moved to another file -- would otherwise drop a census figure
+// with nothing going red.
+//
+// That is not hypothetical: the `Op::IsStruct` construct was repaired out of
+// existence by the `v0.2.3` line one hour after this corpus adopted it.
 
 fn add_fx(x: Fixed<16>, y: Fixed<16>) -> Fixed<16> {
   x + y

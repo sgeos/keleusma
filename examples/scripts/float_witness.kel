@@ -20,6 +20,19 @@
 // the differential's exempt set as a backend refusal.
 //
 // Divisors and operands are constants so no argument vector can make it fault.
+//
+// WITNESSES: IntToFloat, FloatToInt
+//
+// THE LINE ABOVE IS A MACHINE-CHECKED CLAIM, not a comment.
+// `witness_integrity.rs` compiles this file and asserts every opcode named
+// there is actually emitted. A witness that silently STOPS witnessing --
+// because the reference compiler folded the construct away, or because a
+// function moved to another file -- would otherwise drop a census figure
+// with nothing going red.
+//
+// That is not hypothetical: the `Op::IsStruct` construct was repaired out of
+// existence by the `v0.2.3` line one hour after this corpus adopted it.
+
 fn float_round_trip(w: Word) -> Word {
   let f = w as Float;
   let scaled = f + 1.5;
