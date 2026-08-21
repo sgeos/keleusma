@@ -1,0 +1,41 @@
+COMPLETION CONDITION — mis-compilation class correction
+
+Ordering is explicitly NOT a completion criterion. Any order satisfies this.
+
+All of the following must hold as observable properties of the tree.
+
+1. The tree records that the previously stated count of mis-compilation refusal
+   sites was too low, states the corrected count, and states why the earlier
+   extraction missed sites. A silent amendment does not satisfy this.
+
+2. The full set of distinct messages raised as invalid-bytecode errors is
+   extracted from the virtual machine's source and reported, so any
+   classification of them can be audited rather than trusted.
+
+3. Any grouping of those sites into a "should never have been emitted" subset is
+   presented as an editorial reading, with the basis for the grouping shown. It
+   is not presented as a measurement.
+
+4. A reachability claim is stated over a named population, and that population is
+   given. No claim of unreachability is made from a bounded search; where nothing
+   reached a site, the tree says what was searched.
+
+5. The previously established reachability results remain stated: which site is
+   reachable through the full chain, and for those not reached, the mechanism
+   rather than only the outcome.
+
+6. A test fails if the extraction finds nothing, so a broken extraction cannot
+   read as a clean result.
+
+7. The virtual machine and the bytecode verifier are unmodified, along with the
+   other surfaces owned by the other line.
+
+8. Every figure stated in the resume document for this line matches a run, and
+   its stated test count matches the suite.
+
+9. The native code generator's suite passes with zero failures and its
+   formatting and lint checks pass, with the pass/fail judgement taken from
+   something other than a truncated or piped view of the output.
+
+10. Work that is finished is committed and pushed. Nothing required above is
+    left only in the working tree.

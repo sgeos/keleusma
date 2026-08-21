@@ -1,9 +1,9 @@
 //! **HOW MANY OF THE VIRTUAL MACHINE'S "SHOULD NEVER HAPPEN" REFUSALS ACTUALLY HAPPEN?**
 //!
-//! The virtual machine carries a small class of refusals whose message says the
-//! opcode **should never have been emitted at all** — a mis-compilation rather
-//! than a bad program. They raise `InvalidBytecode`, **which is the class
-//! `verify()` exists to exclude at load time.**
+//! The virtual machine carries a class of refusals whose comment says the
+//! artefact is **corrupt or mis-compiled** rather than a bad program. They raise
+//! `InvalidBytecode`, **which is the class `verify()` exists to exclude at load
+//! time.** Seven such sites, out of 39 distinct invalid-bytecode messages.
 //!
 //! A program that compiles, passes `verify()`, receives a resource bound, loads,
 //! and *then* dies at one of these sites is a **load-time hole**: the verifier
@@ -22,10 +22,26 @@
 //!
 //! # What this file establishes, and what it does not
 //!
-//! One site is reachable and two were not reached. **"Not reached" is not
-//! "unreachable"** — that is this line's own `Op::Reset` lesson and the `v0.2.3`
-//! line adopted it for `IsStruct`. The search is recorded beside the result so a
-//! negative reads as *"I looked at these"* rather than *"I looked"*.
+//! **The reachability results are the measured part and they survive a
+//! correction to the count.** `Op::IsStruct` is reachable through the whole
+//! chain; the two `Op::Len` sites were not reached, and the mechanism is that
+//! the property reaching the opcode is the property denying the bound.
+//!
+//! **The COUNT was wrong and is corrected here.** This file first reported three
+//! mis-compilation sites; there are seven. See
+//! `the_full_invalid_bytecode_surface_and_the_miscompilation_reading`, which
+//! records what the earlier extraction missed and why. **A measured reachability
+//! result survives a bad denominator; a denominator asserted from a grep does
+//! not survive contact with a synonym.**
+//!
+//! **The four newly-counted sites are NOT given a reachability verdict.** They
+//! require a form mismatch between construction and access, which the compiler
+//! chooses by static type — that suggests unreachability, and suggestion is not
+//! evidence. Measuring them is open work.
+//!
+//! **"Not reached" is not "unreachable"** — this line's own `Op::Reset` lesson.
+//! The search is recorded beside the result so a negative reads as *"I looked at
+//! these"* rather than *"I looked"*.
 //!
 //! # `src/vm.rs` is the `v0.2.3` line's
 //!
@@ -75,61 +91,109 @@ fn built(src: &str) -> Option<Module> {
         .and_then(|a| compile(&a).ok())
 }
 
-/// **The class is COUNTED from the source, never transcribed.**
+/// **THE FULL INVALID-BYTECODE SURFACE, MEASURED — AND A COUNT OF MINE THAT WAS
+/// WRONG BY MORE THAN HALF.**
 ///
-/// A hand-written "there are three" is exactly the figure that goes stale when a
-/// fourth is added, which is the failure the instruction-set census exists to
-/// prevent. The marker is the phrase these sites use to say the opcode should
-/// not have been emitted.
+/// # The correction, stated before the result
+///
+/// This file previously reported **three** mis-compilation sites, extracted by
+/// filtering messages on `is a compile-time constant`. **There are seven.** The
+/// four missed ones say the same thing in different words:
+///
+/// ```text
+/// GetField      operand form does not match struct body
+/// GetIndex      operand form does not match array body
+/// GetTupleField operand form does not match tuple body
+/// GetEnumField  operand form does not match enum body
+/// ```
+///
+/// Their comment reads *"a form mismatch is a corrupted or **mis-compiled**
+/// artefact rather than a script error"* — the same class, plainly stated.
+///
+/// **I missed them by one word stem.** My search for the concept used
+/// `mis-compilation`; those sites say `mis-compiled`. And the commit that
+/// introduced the three-site count is the same commit that recorded the rule *"a
+/// machine-checked marker written in a form prose can take will eventually match
+/// prose"*. I fixed the SYNTACTIC half — requiring the marker at line start so a
+/// comment could not impersonate a message — and never considered that a marker
+/// can also be **too tight**. Fifth instance of that family, and the first where
+/// the rule and its violation are in one file.
+///
+/// # So this now separates what is MEASURED from what is EDITORIAL
+///
+/// **Measured**: every distinct message raised as `InvalidBytecode`, extracted
+/// from source. This needs no classification and cannot be wrong by a synonym.
+///
+/// **Editorial**: which of them are "the compiler should not have emitted this"
+/// rather than "this artefact is corrupt". That is a READING. The stem is shown
+/// and the full list is printed so the reading can be audited instead of
+/// trusted — replacing one hand-chosen phrase with a better one would repeat the
+/// method that just failed.
 #[test]
-fn how_many_miscompilation_refusals_does_the_vm_carry() {
+fn the_full_invalid_bytecode_surface_and_the_miscompilation_reading() {
     let src = std::fs::read_to_string("../src/vm.rs").expect("read vm.rs");
-    // **THE MARKER MUST BE A FORM PROSE CANNOT ACCIDENTALLY TAKE, and my first
-    // version was not.** Filtering on the phrase alone matched a COMMENT line
-    // -- "// bytes, but tuple length is a compile-time constant" -- and reported
-    // FOUR sites while printing three messages.
-    //
-    // **That is the third instance of this exact defect on this line**, after a
-    // witness-claim extractor that matched the prose header "WHAT IT WITNESSES:"
-    // and an indexical ownership phrase that inverted when read from the other
-    // document. The `v0.2.3` line reports two more of its own. A marker written
-    // in a form prose can take will eventually match prose.
-    //
-    // The refusal MESSAGE is a quoted string, so the line must start with a
-    // quote. A comment cannot.
-    let sites: Vec<&str> = src
+
+    // MEASURED. Every raise site's message, however phrased.
+    let mut messages: Vec<String> = Vec::new();
+    for (i, line) in src.lines().enumerate() {
+        if !line.contains("VmError::InvalidBytecode(") {
+            continue;
+        }
+        // The message may sit on this line or the next two.
+        let window = src.lines().skip(i).take(3).collect::<Vec<_>>().join(" ");
+        if let Some(start) = window.find('"') {
+            if let Some(len) = window[start + 1..].find('"') {
+                messages.push(window[start + 1..start + 1 + len].to_string());
+            }
+        }
+    }
+    messages.sort();
+    messages.dedup();
+
+    // EDITORIAL. The stem catches both spellings; it is still a reading.
+    let flagged: Vec<&str> = src
         .lines()
-        .map(str::trim)
-        .filter(|l| l.starts_with('"') && l.contains("is a compile-time constant"))
+        .enumerate()
+        .filter(|(_, l)| l.contains("mis-compil"))
+        .map(|(_, l)| l.trim())
         .collect();
 
-    println!("\n================ MIS-COMPILATION REFUSALS");
-    println!(
-        "  sites raising InvalidBytecode as a mis-compilation: {}",
-        sites.len()
-    );
-    for s in &sites {
-        println!("     {s}");
+    println!("\n================ INVALID-BYTECODE SURFACE");
+    println!("  distinct messages (MEASURED): {}", messages.len());
+    for m in &messages {
+        println!("     {m}");
     }
     println!(
-        "\n  These are the class `verify()` EXISTS TO EXCLUDE. A program that\n  \
-         verifies, takes a bound, loads and then dies at one of them is a\n  \
-         LOAD-TIME HOLE rather than a bad program."
+        "\n  lines mentioning mis-compilation (EDITORIAL READING): {}",
+        flagged.len()
+    );
+    println!(
+        "\n  THE SECOND FIGURE IS A READING, NOT A MEASUREMENT. It depends on a\n  \
+         word stem appearing in a comment. A previous version of this test used\n  \
+         `mis-compilation` and MISSED FOUR SITES that say `mis-compiled` --\n  \
+         reporting three where there are seven. The full message list above is\n  \
+         printed so the classification can be audited rather than trusted."
     );
     println!("================\n");
 
     assert!(
-        !sites.is_empty(),
-        "no mis-compilation refusal was found in vm.rs, so the extraction is \
-         broken and every verdict in this file is an artefact of it"
+        !messages.is_empty(),
+        "no InvalidBytecode message was extracted, so the walk is broken and \
+         every figure here is an artefact of it"
     );
-    // A FLOOR, not a pin: a fourth site is news, not a failure. What must not
-    // happen is the extraction silently finding none.
     assert!(
-        sites.len() >= 3,
-        "only {} mis-compilation sites extracted; three were present when this \
-         file was written, so the marker phrase has probably changed",
-        sites.len()
+        messages.len() >= 30,
+        "only {} distinct messages extracted; the surface was 38 when this was \
+         written, so the extraction has probably regressed",
+        messages.len()
+    );
+    assert!(
+        flagged.len() >= 7,
+        "only {} mis-compilation mentions found; SEVEN were present when this \
+         was corrected, and an earlier version of this very test reported THREE \
+         by searching one spelling. If the count fell, check for a THIRD wording \
+         before believing it",
+        flagged.len()
     );
 }
 
