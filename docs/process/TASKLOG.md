@@ -10,6 +10,31 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-21, session 50).** **THE SHIPPING SELF-HOSTED COMPILER DISCARDED ITS
+> OWN STAGE'S CONSTANT-POOL TAGS, AND DROPPED EVERY STRUCT DECLARATION.**
+>
+> `codegen.kel` emits the pool as values then TAGS (0 Int, 1 StaticStr carrying the intern id,
+> 2 Bool); the driver read them into a discard and rebuilt everything as `Int`. Sweeping for other
+> discards found `parse.kel`'s STRUCTSTART/TRAITSTART/IMPLSTART records reaching the function
+> dispatch with nothing open, where the driver panicked -- while `tests/selfhost_codegen.rs`'s copy
+> of the same loop carried the skip all along.
+>
+> Measured over the 95 boundary cases, baseline taken by stashing the change: byte-identical
+> **43 -> 76**, differs 21 -> 11, faults 30 -> 7. No case got worse. **29 cases declare a struct and
+> the shipping compiler faulted on all 29; 27 are recorded `SOk`.**
+>
+> **A BOUNDARY MOVED AND IT TOUCHES A DEFERRED RULING.** Programs the tree refused now compile.
+> The 2026-08-19 ruling deferred "top-level struct support"; this derives no struct layout, so my
+> reading is that it is not that work -- but it is flagged, and
+> `docs/decisions/POOL_TAG_RESIDENCY_BRIEF.md` carries a three-hunk revert recipe if the operator
+> reads the ruling more broadly.
+>
+> **Left unrepaired deliberately**: six eager-boolean constructs the boundary calls `Ok` that the
+> shipping compiler miscompiles, pinned in the failing direction. Repairing them in the same change
+> would make the census unattributable.
+>
+> Stage sources untouched; no opcode and no `BYTECODE_VERSION` change.
+
 > **Currency note (2026-08-20, evening).** **NESTED ARRAY LITERALS FIXED; CHAINED INDEXING
 > DIAGNOSED AND DELIBERATELY NOT FIXED.**
 >
