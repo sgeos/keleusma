@@ -725,6 +725,45 @@ fn rewrite_pattern_enum_name(
     }
 }
 
+/// Rewrite a struct pattern's TYPE NAME from its generic form to a specialization.
+///
+/// # Why this exists, and why its absence was invisible
+///
+/// [`rewrite_pattern_enum_name`] has done this for enums since generics landed, and its
+/// `Pattern::Struct` arm recurses into a struct pattern's FIELDS while ignoring the struct's own
+/// name. So enums got their pattern names rewritten on specialization and structs did not.
+///
+/// Nothing noticed, because a struct pattern whose name no longer matches its scrutinee does not
+/// fail type checking on a PARAMETER — parameters are bound, never checked — and the lowering then
+/// falls back to a runtime `Op::IsStruct`, which the virtual machine refuses on a flat struct. The
+/// symptom was a program that verified, received a memory bound, loaded, and trapped
+/// `InvalidBytecode` at call time. See `tests/opcode_reachability.rs`.
+fn rewrite_pattern_struct_name(pattern: &mut Pattern, original: &str, spec: &str) {
+    match pattern {
+        Pattern::Struct(name, field_patterns, _span) => {
+            if name == original {
+                *name = spec.to_string();
+            }
+            for fp in field_patterns.iter_mut() {
+                if let Some(p) = fp.pattern.as_mut() {
+                    rewrite_pattern_struct_name(p, original, spec);
+                }
+            }
+        }
+        Pattern::Tuple(sub_patterns, _span) => {
+            for sub in sub_patterns.iter_mut() {
+                rewrite_pattern_struct_name(sub, original, spec);
+            }
+        }
+        Pattern::Enum(_name, _variant, sub_patterns, _span) => {
+            for sub in sub_patterns.iter_mut() {
+                rewrite_pattern_struct_name(sub, original, spec);
+            }
+        }
+        Pattern::Literal(_, _) | Pattern::Wildcard(_) | Pattern::Variable(_, _) => {}
+    }
+}
+
 fn specialize_enum(
     enum_def: &EnumDef,
     type_args: &[TypeExpr],
@@ -838,7 +877,20 @@ fn specialize_structs(
     for func in &mut program.functions {
         for param in &mut func.params {
             if let Some(t) = &param.type_expr {
-                param.type_expr = Some(resolve_generic_type_to_spec(t, &struct_specs));
+                let spec = resolve_generic_type_to_spec(t, &struct_specs);
+                // **THE PATTERN MUST FOLLOW THE TYPE.** Rewriting `P<Word>` to `P__Word` here
+                // while leaving a `P { a, b }` pattern beside it naming `P` leaves the two
+                // disagreeing, and nothing downstream objects: a parameter pattern is bound but
+                // never type-checked, so the lowering falls back to a runtime `Op::IsStruct` that
+                // the virtual machine refuses on a flat struct. Enums have had this rewrite since
+                // generics landed; structs did not.
+                if let (TypeExpr::Named(original, ..), TypeExpr::Named(spec_name, ..)) = (t, &spec)
+                    && original != spec_name
+                {
+                    let (original, spec_name) = (original.clone(), spec_name.clone());
+                    rewrite_pattern_struct_name(&mut param.pattern, &original, &spec_name);
+                }
+                param.type_expr = Some(spec);
             }
         }
         func.return_type = resolve_generic_type_to_spec(&func.return_type, &struct_specs);

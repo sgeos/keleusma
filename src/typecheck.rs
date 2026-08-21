@@ -2484,6 +2484,8 @@ fn check_function(ctx: &mut Ctx, func: &mut FunctionDef) -> Result<(), TypeError
         .map(|s| s.params.clone())
         .unwrap_or_default();
     for (param, param_type) in func.params.iter().zip(sig_params.iter()) {
+        // SPIKE: parameters were only BOUND, never CHECKED.
+        check_pattern_against_type(ctx, &param.pattern, param_type)?;
         bind_pattern(ctx, &param.pattern, param_type.clone());
     }
     // Bind const parameters as `Word` values in the function scope, so a
