@@ -196,3 +196,61 @@ reads as a harness fault rather than a language bound.
   here changes that; it changes what the remaining work costs and how attributable it is.
 - **No stage source has been streamed end to end.** The 200-node corpus is synthetic. `parse.kel`
   carries 817 constants and streaming it through the driver is the actual Order 1 deliverable.
+
+---
+
+# STOPPED HERE, DELIBERATELY — THE DRIVER NEEDS SOMETHING THE ANALYSIS DID NOT COUNT
+
+Wrong turn 7 of this brief says to stop and record if the work widens. It widened, and this records
+where.
+
+## What the driver would need, measured against the code
+
+| piece | status |
+|---|---|
+| the streaming stage commands | **validated** — correct, and past the walk cap |
+| a place to branch in the region loop | **exists** — `CHUNKS` is the precedent |
+| the window guard blocking a large region | **not a problem** — the `CHUNKS` branch `continue`s before it, and the streaming path emits at window offset zero with the host placing each record |
+| `CONSTS` reaching the emitter at all | **it does not** — it falls into `_ => continue` and is silently skipped, which is why the region is host-supplied |
+| **a faithful model of which constants the encoder emits** | **absent from the library** |
+
+The last line is the cost nobody counted.
+
+## Why that model is not a small thing
+
+`tests/selfhost_wire.rs::encoder_const_roots` is not a neutral helper. It **mirrors encoder rules**,
+and its own comment says the rule is *mirrored rather than approximated* — including the
+all-default private-pool elision, which the encoder applies by writing `first = ABSENT` and storing
+no records. Its comment states the consequence plainly: a model counting them would over-count the
+region by the whole data segment, **which on a real stage is most of it**.
+
+So wiring the driver requires either:
+
+- **duplicating that model into `src/selfhost/mod.rs`** — a second implementation of an encoder
+  rule, exercised in one place and not the other, which is precisely the defect class that produced
+  four silent miscompiles earlier in this same session; or
+- **lifting it out of the tests into the library** — a refactor across a file many other tests
+  depend on, and one that changes what the differential oracle is made of.
+
+Neither is a small change, and the first is the one that would look small.
+
+## THE PATTERN IN THE ESTIMATES IS THE FINDING
+
+Four cost estimates in this area have now been checked against the code:
+
+| estimate | reality |
+|---|---|
+| the interning-order conflict blocks `CONSTS` | **unreachable** for this corpus |
+| the recorded region figures | **superseded** by the all-default elision, 85% smaller |
+| chained indexing needs three coordinated pieces | **two already existed** |
+| the remaining `CONSTS` work is driver wiring | **wiring plus an encoder model** |
+
+Three ran high, one ran low. **The pattern is not a direction — it is that none of them survived
+contact with the code.** That is the argument for checking every one rather than for applying a
+correction factor.
+
+## What a resuming session should decide first
+
+**Which of the two routes above** — duplicate or lift — before writing any driver code. It is a
+judgment about where the encoder's rules should live, and answering it while mid-edit is how a
+duplicate gets created by default rather than by choice.
