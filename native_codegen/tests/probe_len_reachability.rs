@@ -51,7 +51,7 @@
 //! cleanly. `the_witness_module_cannot_be_given_an_arena` pins that, so the day
 //! it matters someone meets an explanation instead of a stack trace.
 use keleusma::bytecode::Module;
-use keleusma::vm::auto_arena_capacity_for;
+use keleusma::vm::{auto_arena_capacity_for, required_persistent_capacity_for};
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 
 /// The construct, from the `v0.2.3` line. An `if` EXPRESSION as the for-in
@@ -77,6 +77,15 @@ fn f(c: bool) -> Word {
   0
 }
 fn main() -> Word { f(true) }
+";
+
+/// The `Op::IsStruct` witness, from the `v0.2.3` line after nine failed attempts
+/// of their own. The parameter pattern is UNANNOTATED, so the pattern's type is
+/// unknown at the test; annotating it folds the test out.
+const IS_STRUCT_SOURCE: &str = "\
+struct P { a: Word, b: Word }
+fn g(P { a, b }) -> Word { a + b }
+fn main() -> Word { g(P { a: 1, b: 2 }) }
 ";
 
 /// The ordinary form, which emits no `Len` and IS bounded. The control that
@@ -245,5 +254,70 @@ fn the_witness_module_cannot_be_given_an_arena() {
          `expect(\"arena capacity\")` will PANIC rather than exempt cleanly. \
          This is NEWS -- four refused opcodes were lowered -- but the harness \
          needs a bound-refusal exemption class before the file can be driven."
+    );
+}
+
+/// **`Op::IsStruct` IS THE OTHER CASE, AND IT IS THE SHARPER ONE.**
+///
+/// Measured on this tree rather than taken from the `v0.2.3` line's report:
+///
+/// | witness | `verify()` | `module_wcmu` | arena | load | run |
+/// |---|---|---|---|---|---|
+/// | `Op::Len` | accepts | REFUSES | REFUSED | n/a | never runs |
+/// | `Op::IsStruct` | accepts | accepts | OK | **LOADS** | **TRAPS** |
+///
+/// `Op::Len`'s witness cannot be ADMITTED — refused before it can load, which is
+/// the conservative-verification stance working as designed and therefore not a
+/// hole. **`Op::IsStruct`'s witness satisfies EVERY load-time check**, receives a
+/// memory bound, loads, and then dies at call time with `InvalidBytecode`.
+///
+/// **That is not the same kind of fact.** `InvalidBytecode` is the class
+/// `verify()` exists to exclude AT LOAD TIME, so a legal program reaching it at
+/// RUN time is a load-time hole rather than a bad program. **`src/verify.rs` is
+/// read-only to BOTH lines** — the `v0.2.3` line believed it was this line's and
+/// this line's handoff records it as theirs, so NEITHER has repaired it. It is
+/// recorded for the operator, with the ownership question named as its own item.
+///
+/// **This test fires in the FAILING direction on a repair.** If the trap stops
+/// happening, that is the hole being closed and the census row wants rewriting,
+/// not this assertion deleting.
+#[test]
+fn the_is_struct_witness_loads_and_then_traps() {
+    let m = build(IS_STRUCT_SOURCE);
+    assert!(
+        m.chunks.iter().any(|c| c
+            .ops
+            .iter()
+            .any(|o| format!("{o:?}").starts_with("IsStruct"))),
+        "the witness no longer emits Op::IsStruct. If the compiler now folds the \
+         test out for an unannotated parameter, that is a REPAIR: say so and \
+         re-measure the coverage census, which counts this opcode witnessed"
+    );
+    assert!(
+        keleusma::verify::verify(&m).is_ok(),
+        "the structural verifier rejects it, which would make this a DIFFERENT \
+         finding -- the hole recorded here is that it does NOT"
+    );
+
+    let cap = auto_arena_capacity_for(&m, &[]).expect(
+        "the IsStruct witness was refused a bound. That makes it the same case as \
+         Op::Len rather than the contrasting one, and the table in this file's \
+         docs is then wrong rather than merely stale",
+    );
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = keleusma_arena::Arena::with_capacity(cap + need + (4 << 20));
+    arena.resize_persistent(need).expect("persistent fits");
+    let mut vm = keleusma::vm::Vm::new(m, &arena)
+        .expect("the witness must LOAD -- that it does is half the finding");
+
+    let mut shared: Vec<u8> = Vec::new();
+    let err = vm
+        .call_with_shared(&mut shared, &[])
+        .expect_err("THE WITNESS RAN CLEANLY. The load-time hole is closed: a program that reaches Op::IsStruct no longer traps. Rewrite the row, do not delete this.");
+    let text = format!("{err:?}");
+    assert!(
+        text.contains("InvalidBytecode"),
+        "the witness failed for a DIFFERENT reason than InvalidBytecode, so this \
+         test no longer measures the load-time hole it names: {text}"
     );
 }
