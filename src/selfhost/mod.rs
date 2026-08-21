@@ -4720,6 +4720,18 @@ fn window_emit(
         vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(b))
             .expect("blob");
     }
+    // **`names` IS ACCEPTED AND DELIBERATELY UNUSED, AND THAT IS NOT AN OVERSIGHT.**
+    //
+    // Investigated 2026-08-21 after a sweep for discarded stage inputs flagged it, because a
+    // parameter read into a discard is the exact shape of four defects repaired that day. This
+    // one is not: `wire.kel` derives the name count itself -- `name_count()` is a function of the
+    // blob it was given, returned by command 18 -- so a host-supplied count would be a SECOND
+    // answer to a question the stage already answers, which is the drift this file records
+    // paying for repeatedly. The only host-supplied argument in this block is `chunk_count`, at
+    // `WARG_SLOT`.
+    //
+    // Kept in the signature rather than removed so every windowed emitter takes the same
+    // arguments; removing it is a safe cleanup, not a repair.
     let _ = names;
     let st = match vm.call_with_shared(&mut shared, &[Value::Int(cmd)]) {
         Ok(st) => st,

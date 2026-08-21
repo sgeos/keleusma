@@ -371,3 +371,100 @@ been the nine-copies defect a third time.
 **This does not make the duplicate safe. It makes the drift visible.** The copy is still a second
 implementation of the driver; the accessor decision that would let it be deleted is still open, and
 is now four findings better evidenced than when it was raised.
+
+---
+
+# CLOSING THE CLASS BY STRUCTURE RATHER THAN BY CORPUS (2026-08-21)
+
+The four repairs were each found by a corpus case. **A corpus is finite**, so the remaining
+question is what the two drivers still differ on that no case exercises. Answered by deriving the
+sets from the source rather than from the part of the system I happened to be thinking about,
+which is this line's own recorded lesson.
+
+## Three surfaces, all now closed
+
+| surface | shipping driver | test-file copy | verdict |
+|---|---|---|---|
+| op-word decode arms | 63 tags, one guarded (53) | 63 tags, one guarded (53) | identical |
+| shared slots seeded | 14 names, each on both feeds | 13 names | library is a superset |
+| declaration record codes | 12 arms | 12 arms | identical |
+
+The copy holds a **second** record dispatch, in `parse_function_records`, whose arm set
+legitimately differs — it handles codes 2 and 3 rather than 6 and 7. Matching against that one
+reports a divergence that is not one, so the extraction identifies the dispatch by an arm it must
+contain rather than by position.
+
+## `tests/selfhost_driver_parity.rs`, and its honest limits
+
+The guard compares the three surfaces directly, so it does not depend on corpus coverage. **It
+would have caught three of the four defects, not all four.** The pool-tag discard is invisible to
+it: both files read the tag stream and differed in what they did with it afterwards, which is
+semantics inside an arm rather than the presence of an arm. Stated in the test itself, in a table,
+because a guard that overstates its reach is worse than a narrower one that does not.
+
+It is also a **textual guard over source text**, the weakest shape of test, and this line has
+argued against exactly that elsewhere. Two things earn it its place: it complements a corpus guard
+whose reach is bounded by 95 cases, and every set it derives is asserted non-vacuous, so a broken
+extraction fails rather than passes empty.
+
+## THE INSTRUMENT WAS WRONG TWICE, AND BOTH TIMES IT SAID SO
+
+Recorded because it is the cheap version of the failure the guard exists to prevent.
+
+1. **A false positive on the first run.** The copy inlines its scalar-kind decoding where the
+   library factors it into helpers, so a depth-blind scan collected the copy's nested
+   `0 => ScalarKind::Unit` arms and reported a divergence that did not exist. Depth is
+   load-bearing.
+2. **A silent no-op after fixing that.** Anchoring on the function header rather than the `match`
+   header handed the depth filter a body one level too shallow, and it found nothing. **The
+   non-vacuity assertion caught it** — without it the test would have passed while comparing two
+   empty sets.
+
+## AND THE GUARD ITSELF FAILED ITS FIRST MUTATION TEST
+
+Three mutations were run against the repaired tree, each removing one thing the guard claims to
+detect. **The seeding mutation did not fire.**
+
+The cause was real, not incidental. The library has two token feeds and seeds each slot once per
+feed; the test compared **sets of names**, so removing one of the two seedings left the name
+present via the other. **A slot seeded on one path and not the other is exactly this defect
+class**, and the guard was blind to it.
+
+Now counted rather than merely present, with the threshold calibrated against `BR_P_WORD_ID`'s own
+count instead of a literal, so adding a third feed cannot silently weaken it. All three mutations
+fire, and the message names the slot and both counts.
+
+**A guard that has not been made to fail is a guess.** This one was a guess for about ten minutes.
+
+---
+
+# A PROCESS FINDING FROM SHIPPING THESE FOUR (2026-08-21)
+
+**A pull request based on a feature branch gets no CI at all, and it looks like a slow queue.**
+
+`ci.yml` filters `pull_request` on the **base** branch, `main` or `v*`. Two of this session's pull
+requests were stacked on their predecessors, so their base matched neither pattern and **no
+workflow ran** — not a failure, not a queue, an absence. `gh pr checks` said "no checks reported",
+which reads the same as "just started".
+
+Re-targeting the base did not provoke a run either: a base change emits `edited`, which is not one
+of the default `pull_request` types. Closing and reopening does, because `reopened` is.
+
+This is the same shape as the entry the handoff already carries about a CANCELLED run looking green
+in a summary, and as the rule about never classifying a state as failure by exclusion: **the
+absence of a signal is not the presence of a passing one**, and both are one line in a status
+listing. Base future branches on the version branch and describe the stack in the body.
+
+## The one sweep item left open is now closed, and it is NOT a defect
+
+The class sweep flagged `window_emit`'s `names: usize`, accepted and read into a discard, as
+"flagged, not resolved". Resolved 2026-08-21: **`wire.kel` derives the name count itself.**
+`name_count()` is a pure function of the blob it was given and is returned by command 18, so a
+host-supplied count would be a second answer to a question the stage already answers — the drift
+this crate has now paid for four times over.
+
+The parameter is annotated in place rather than removed, so the next reader does not repeat the
+investigation, and the note says plainly that removing it would be a cleanup rather than a repair.
+
+**A discarded value is not automatically a defect.** Three of the four this session were; this one
+is not, and reporting it as a fifth would have been the more comfortable and less accurate answer.
