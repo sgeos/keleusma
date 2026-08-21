@@ -1,0 +1,39 @@
+COMPLETION CONDITION — form-mismatch reachability
+
+Ordering is explicitly NOT a completion criterion. Any order satisfies this.
+
+All of the following must hold as observable properties of the tree.
+
+1. Each of the four body-form-mismatch refusal sites carries either a
+   demonstrated reachability across the full chain, or a bounded search recorded
+   with the probes listed and the number that compiled stated.
+
+2. The earlier wording that these sites "suggest unreachability" is replaced by
+   whichever of the above the measurement supports. A suggestion is not left
+   standing as a verdict.
+
+3. The tree states how the body form and the operand form are each chosen, since
+   the verdict rests on whether anything can decide them twice.
+
+4. Probes are derived from the corpus or from the code that chooses the form, and
+   any probe that fails to compile is counted separately from one that compiles
+   and does not reach a site.
+
+5. No claim of unreachability is made. Where nothing reached a site, the record
+   says what was searched.
+
+6. If any probe reaches a site, it is reported as a defect to the line that owns
+   the compiler and the virtual machine, and the tree records the report.
+
+7. The compiler, virtual machine, bytecode verifier, self-hosted compiler
+   sources, and continuous-integration workflows are unmodified.
+
+8. Every figure stated in the resume document for this line matches a run, and
+   its stated test count matches the suite.
+
+9. The native code generator's suite passes with zero failures and its
+   formatting and lint checks pass, with the pass/fail judgement taken from
+   something other than a truncated or piped view of the output.
+
+10. Work that is finished is committed and pushed. Nothing required above is
+    left only in the working tree.

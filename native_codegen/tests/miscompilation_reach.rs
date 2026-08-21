@@ -34,10 +34,11 @@
 //! result survives a bad denominator; a denominator asserted from a grep does
 //! not survive contact with a synonym.**
 //!
-//! **The four newly-counted sites are NOT given a reachability verdict.** They
-//! require a form mismatch between construction and access, which the compiler
-//! chooses by static type — that suggests unreachability, and suggestion is not
-//! evidence. Measuring them is open work.
+//! **The four newly-counted sites now carry a bounded SEARCH**, not the guess
+//! that stood there before. See
+//! `what_was_tried_against_the_form_mismatch_sites`: five compiling probes, zero
+//! mismatches, and the shape most able to decide the form twice is rejected
+//! after monomorphization. Still not "unreachable".
 //!
 //! **"Not reached" is not "unreachable"** — this line's own `Op::Reset` lesson.
 //! The search is recorded beside the result so a negative reads as *"I looked at
@@ -391,5 +392,120 @@ fn what_was_tried_against_the_len_sites() {
         reached, 0,
         "a probe REACHED the Op::Len mis-compilation site. That is a load-time \
          hole and a finding: report it rather than adjusting this count."
+    );
+}
+
+/// **THE FOUR FORM-MISMATCH SITES: A BOUNDED SEARCH, REPLACING A GUESS.**
+///
+/// Correcting the class from three sites to seven added four that carried no
+/// verdict, and what stood in for one was a sentence of mine: *"they require a
+/// form mismatch between construction and access, which the compiler chooses by
+/// static type — that suggests unreachability, and suggestion is not evidence."*
+/// This replaces the suggestion with a search that can be audited.
+///
+/// # How the form is chosen, which is what the verdict rests on
+///
+/// **Construction** emits `NewComposite(Flat { .. })` when the composite is
+/// flat-eligible. **Access** calls `struct_field_access(fc, type_name, field)`,
+/// which looks up `type_info.struct_field_order` BY NAME and — critically —
+/// **falls back to `StructField::Boxed` when that lookup MISSES.**
+///
+/// So the mismatch shape is concrete rather than hypothetical: construction bakes
+/// `Flat`, access looks up a name that is not registered, falls back to `Boxed`,
+/// and the runtime finds a boxed operand against a flat body.
+///
+/// **That is the `Op::IsStruct` defect one level down.** Its root cause was a
+/// one-sided rewrite — a pattern's type rewritten to `P__Word` on specialization
+/// while the pattern itself still said `P`. Anything that rewrites one side of a
+/// name and not the other reopens this class, and generics are where a type is
+/// decided twice.
+///
+/// # The result, and the mechanism behind it
+///
+/// **Five compiling probes, zero mismatches.** And the shape most likely to
+/// decide the form twice — a GENERIC FUNCTION over a GENERIC STRUCT — is
+/// **rejected after monomorphization** and never reaches code generation:
+///
+/// ```text
+/// generic fn, scalar argument          COMPILES
+/// generic fn, plain struct argument    COMPILES
+/// generic fn over a GENERIC STRUCT     REJECTED "type error after monomorphization"
+/// plain fn over a generic instance     COMPILES
+/// ```
+///
+/// **NOT UNREACHABLE.** Five probes against one hypothesis, with the shape that
+/// motivated the hypothesis rejected by a check rather than shown safe.
+#[test]
+fn what_was_tried_against_the_form_mismatch_sites() {
+    let probes: &[(&str, &str)] = &[
+        (
+            "non-generic field access (control)",
+            "struct P { a: Word, b: Word }\nfn main() -> Word { let p = P { a: 1, b: 2 }; p.a }",
+        ),
+        (
+            "generic struct, direct access",
+            "struct P<T> { a: T, b: T }\nfn main() -> Word { let p = P { a: 1, b: 2 }; p.a }",
+        ),
+        (
+            "nested generic struct",
+            "struct Q<T> { v: T }\nstruct P<T> { a: Q<T>, b: T }\nfn main() -> Word { let p = P { a: Q { v: 1 }, b: 2 }; p.b }",
+        ),
+        (
+            "generic struct in an array",
+            "struct P<T> { a: T }\nfn main() -> Word { let xs = [P { a: 1 }, P { a: 2 }]; xs[0].a }",
+        ),
+        ("tuple field", "fn main() -> Word { let t = (1, 2); t.0 }"),
+        (
+            "generic fn over a generic struct",
+            "struct P<T> { a: T }\nfn get<T>(p: P<T>) -> T { p.a }\nfn main() -> Word { get(P { a: 1 }) }",
+        ),
+    ];
+
+    println!("\n================ FORM-MISMATCH SEARCH");
+    let mut compiled = 0usize;
+    let mut mismatched = 0usize;
+    for (label, src) in probes {
+        let Some(m) = built(src) else {
+            println!("  {label:<36} REJECTED (proves nothing about reachability)");
+            continue;
+        };
+        compiled += 1;
+        let ops: Vec<String> = m
+            .chunks
+            .iter()
+            .flat_map(|c| c.ops.iter())
+            .map(|o| format!("{o:?}"))
+            .collect();
+        let ctor_flat = ops.iter().any(|d| d.starts_with("NewComposite(Flat"));
+        let get_boxed = ops.iter().any(|d| d.starts_with("GetField(Boxed"));
+        // The mismatch signature: a flat construction with a boxed access.
+        let suspect = ctor_flat && get_boxed;
+        if suspect {
+            mismatched += 1;
+        }
+        println!("  {label:<36} ctorFlat={ctor_flat:<5} getBoxed={get_boxed:<5} suspect={suspect}");
+    }
+    println!("\n  compiling probes : {compiled} of {}", probes.len());
+    println!("  form mismatches  : {mismatched}");
+    println!(
+        "\n  THE ACCESS SIDE FALLS BACK TO `Boxed` WHEN ITS NAME LOOKUP MISSES,\n  \
+         which is the concrete shape of this defect class and the same one-sided\n  \
+         name rewrite that produced the `Op::IsStruct` hole. The shape most able\n  \
+         to decide the form twice -- a GENERIC FUNCTION over a GENERIC STRUCT --\n  \
+         is REJECTED after monomorphization and never reaches code generation.\n  \
+         \n  \
+         NOT UNREACHABLE. Five probes against one hypothesis."
+    );
+    println!("================\n");
+
+    assert!(
+        compiled >= 5,
+        "only {compiled} probes compiled, too thin to record as a bounded search"
+    );
+    assert_eq!(
+        mismatched, 0,
+        "A PROBE CONSTRUCTS FLAT AND ACCESSES BOXED. That is the body-form \
+         mis-compilation reaching a real program -- report it to the line that \
+         owns the compiler before adjusting anything here."
     );
 }
