@@ -144,6 +144,25 @@ fn checked_ratio(a: Word, b: Word) -> Word {
 // bindings are immutable, so accumulation across iterations is not expressible
 // in an atomic-total `fn` body at all. `04_for_in.kel` says so and uses the same
 // shape. A first draft here carried `let mut total` and would not have compiled.
+//
+// THIS FUNCTION MAKES THE WHOLE MODULE INADMISSIBLE, AND THAT IS NOT A MISTAKE.
+// `verify()` accepts it, but `auto_arena_capacity_for` REFUSES it: the loop "has
+// no statically extractable iteration bound". The two facts are ONE fact.
+// `Op::Len` fires exactly when the for-in source has no statically known length,
+// and a loop whose trip count is not statically known is exactly what the bound
+// extractor refuses. So the property that makes the opcode reachable is the
+// property that makes the loop unbounded.
+//
+// MEASURED, ruling out the obvious objection: giving both arms the SAME length
+// makes the trip count two on every path and provable by inspection, and it is
+// STILL refused, because neither the length guard nor the bound extractor looks
+// THROUGH an `Expr::If`. Second-category conservative rejection, not first.
+//
+// CONSEQUENCE FOR THIS FILE: it can never be given an arena while this function
+// is present, so it can never leave the differential's exempt set by lowering
+// alone. `probe_len_reachability.rs` pins that, including the harness panic that
+// would follow if all four refused opcodes were lowered without adding a
+// bound-refusal exemption class first. Read that file before "fixing" this one.
 fn len_witness(c: bool) -> Word {
   let a = [1, 2];
   let b = [3, 4];
