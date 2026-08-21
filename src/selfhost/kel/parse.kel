@@ -806,6 +806,16 @@ private data stmt {
     // let-binding analogue of an array-of-struct parameter).
     let_array_struct: [Word; 65],
     let_array_size: [Word; 65],
+    // A let-bound array whose ELEMENT IS ITSELF AN ARRAY. `let_array_arr` holds the inner
+    // element's scalar kind plus one (0 = this binding is not an array of arrays) and
+    // `let_array_arrbytes` the inner array's byte size, which together are what
+    // `GetIndex(FlatNested{size, Array})` needs.
+    //
+    // Without these, `let a = [[1, 2], [3, 4]]; a[0][1]` recorded the binding as an array of
+    // WORDS, so the first `[0]` emitted a scalar index and nothing armed a second one -- the
+    // `[1]` then fell through to the array-LITERAL branch and the program silently miscompiled.
+    let_array_arr: [Word; 65],
+    let_array_arrbytes: [Word; 65],
     // Per `let` binding, 0 or the enum's name id plus one when the binding's value root returned an
     // enum (a call of an enum-returning function), so a `match` over the binding lowers to IsEnum.
     let_enum: [Word; 65],
@@ -1004,6 +1014,11 @@ private data stmt {
     // its byte size, so a `let a = [P{..}, ..]` binding records the struct-array element type.
     pending_carray_struct: Word,
     pending_carray_size: Word,
+    // The array-of-array analogue of `pending_carray_struct`/`pending_carray_size`: the inner
+    // element kind plus one, and the inner array's byte size, carried from an array literal's
+    // close to the `let` that binds it.
+    pending_carray_arr: Word,
+    pending_carray_arrbytes: Word,
     pending_cenum: Word,
     // A block's folded-statement table. Sized to the largest stage function body: a
     // codegen.kel emitter such as `push_forlimit` is a single flat block of about 78
@@ -1472,6 +1487,21 @@ fn resolve_plain_ident(v: Word) -> Word {
             ops.expect_operand = 0;
             Node::Local() as Word + stmt.scope_slot[ps.let_hit] * 64
         } else {
+        if stmt.let_array_arr[ps.let_hit] > 0 {
+            // A let-bound array of ARRAYS: arm the same postfix an array-of-struct uses, with
+            // variant 1 (Array) rather than 2 (Struct). `step_structarrayaccess` is already
+            // generic over the variant, and the `]` handler already emits
+            // GetIndex(FlatNested{size, Array}) and RE-ARMS the scalar index postfix for the
+            // following `[j]`. Only this arming was missing, which is why the chain fell into
+            // the array-literal branch instead.
+            ps.sa_size = stmt.let_array_arrbytes[ps.let_hit];
+            ps.sa_arrkind = stmt.let_array_arr[ps.let_hit] - 1;
+            ps.sa_variant = 1;
+            ps.sa_struct = 0;
+            ps.sa_phase = 1;
+            ops.expect_operand = 0;
+            Node::Local() as Word + stmt.scope_slot[ps.let_hit] * 64
+        } else {
         if stmt.let_array[ps.let_hit] > 0 {
             ps.aa_kind = stmt.let_array[ps.let_hit] - 1;
             ps.aa_phase = 1;
@@ -1494,7 +1524,7 @@ fn resolve_plain_ident(v: Word) -> Word {
                 ps.last_enum = stmt.let_enum[ps.let_hit];
             }
             ln
-        } } } }
+        } } } } }
     } else {
         ps.found_flag = 0;
         for i in 0..ps.pcount limit 32 {
@@ -1991,6 +2021,8 @@ fn step_enum_unit_finalize() -> Word {
     stmt.pending_cstruct = 0;
     stmt.pending_carray = 0;
     stmt.pending_carray_struct = 0;
+    stmt.pending_carray_arr = 0;
+    stmt.pending_carray_arrbytes = 0;
     stmt.pending_cenum = call.en_unit_ename + 1;
     // Mark this whole value as an enum so a following `==`/`!=` captures it as the LEFT operand's
     // enum type (`op_lenum`), enabling enum equality with a literal construction on the left
@@ -2176,6 +2208,8 @@ fn step_iclosing() -> Word {
             stmt.pending_ctuple = 0;
             stmt.pending_cstruct = 0;
             stmt.pending_carray_struct = 0;
+    stmt.pending_carray_arr = 0;
+    stmt.pending_carray_arrbytes = 0;
             stmt.pending_carray_size = 0;
             stmt.pending_cenum = 0;
             // This array's own element size: a struct's, an inner array's, or a `Word`'s.
@@ -2198,8 +2232,18 @@ fn step_iclosing() -> Word {
                 stmt.pending_carray_struct = elem_struct;
                 stmt.pending_carray_size = my_elem;
             } else {
+            if elem_array_bytes > 0 {
+                // OUR ELEMENT IS ITSELF AN ARRAY. `stmt.pending_carray` still holds what the
+                // INNER array's own close recorded (its element kind plus one), because nothing
+                // between the two closes clears it -- so it is read here BEFORE this close
+                // overwrites it. Reading it afterwards yields this array's kind, not its
+                // element's, which is the wrong answer by one level of nesting.
+                stmt.pending_carray_arr = stmt.pending_carray;
+                stmt.pending_carray_arrbytes = elem_array_bytes;
+                stmt.pending_carray = 0;
+            } else {
                 stmt.pending_carray = 3 + 1;
-            }
+            } }
             Node::ArrayLit() as Word + (count * my_elem * 1024 + count) * 64
         } else {
             ops.opsp = op_pop(ops.opsp);
@@ -2220,6 +2264,11 @@ fn step_iclosing() -> Word {
                         // extracted inner array with GetIndex(Flat{inner element kind})).
                         ps.aa_phase = 1;
                         ps.aa_kind = da.fa_index_arrkind;
+                        // The extracted inner array is itself an ARRAY VALUE, so a `let` that
+                        // binds it must record an array binding of the inner element kind --
+                        // otherwise `let b = a[0]; b[1]` binds `b` as a scalar and the `[1]`
+                        // has nothing to arm.
+                        stmt.pending_carray = da.fa_index_arrkind + 1;
                         Node::ArrIndexNested() as Word + (da.fa_index_size + 1 * 65536) * 64
                     } else {
                     if da.fa_index_variant == 0 {
@@ -2372,6 +2421,8 @@ fn struct_eq_start(op: Word) -> Word {
     stmt.pending_cstruct = 0;
     stmt.pending_carray = 0;
     stmt.pending_carray_struct = 0;
+    stmt.pending_carray_arr = 0;
+    stmt.pending_carray_arrbytes = 0;
     stmt.pending_cenum = 0;
     stmt.sq_tb = ps.pcount + stmt.slot_count;
     stmt.slot_count = stmt.slot_count + 1;
@@ -2401,6 +2452,8 @@ fn tuple_eq_start(op: Word) -> Word {
     stmt.pending_cstruct = 0;
     stmt.pending_carray = 0;
     stmt.pending_carray_struct = 0;
+    stmt.pending_carray_arr = 0;
+    stmt.pending_carray_arrbytes = 0;
     stmt.pending_cenum = 0;
     stmt.sq_tb = ps.pcount + stmt.slot_count;
     stmt.slot_count = stmt.slot_count + 1;
@@ -2430,6 +2483,8 @@ fn array_eq_start(op: Word) -> Word {
     stmt.pending_cstruct = 0;
     stmt.pending_carray = 0;
     stmt.pending_carray_struct = 0;
+    stmt.pending_carray_arr = 0;
+    stmt.pending_carray_arrbytes = 0;
     stmt.pending_cenum = 0;
     let tb = ps.pcount + stmt.slot_count;
     stmt.slot_count = stmt.slot_count + 1;
@@ -2464,6 +2519,8 @@ fn array_of_struct_eq_start(op: Word) -> Word {
     stmt.pending_cstruct = 0;
     stmt.pending_carray = 0;
     stmt.pending_carray_struct = 0;
+    stmt.pending_carray_arr = 0;
+    stmt.pending_carray_arrbytes = 0;
     stmt.pending_cenum = 0;
     stmt.sq_tb = ps.pcount + stmt.slot_count;
     stmt.slot_count = stmt.slot_count + 1;
@@ -2510,6 +2567,8 @@ fn array_of_tuple_eq_start(op: Word) -> Word {
     stmt.pending_cstruct = 0;
     stmt.pending_carray = 0;
     stmt.pending_carray_struct = 0;
+    stmt.pending_carray_arr = 0;
+    stmt.pending_carray_arrbytes = 0;
     stmt.pending_cenum = 0;
     stmt.sq_tb = ps.pcount + stmt.slot_count;
     stmt.slot_count = stmt.slot_count + 1;
@@ -2571,6 +2630,8 @@ fn array_of_array_eq_start(op: Word) -> Word {
     stmt.pending_cstruct = 0;
     stmt.pending_carray = 0;
     stmt.pending_carray_struct = 0;
+    stmt.pending_carray_arr = 0;
+    stmt.pending_carray_arrbytes = 0;
     stmt.pending_cenum = 0;
     let tb = ps.pcount + stmt.slot_count;
     stmt.slot_count = stmt.slot_count + 1;
@@ -3207,6 +3268,8 @@ fn struct_eq_nested_start_kind(op: Word, is_tuple: Word) -> Word {
     stmt.pending_cstruct = 0;
     stmt.pending_carray = 0;
     stmt.pending_carray_struct = 0;
+    stmt.pending_carray_arr = 0;
+    stmt.pending_carray_arrbytes = 0;
     stmt.pending_cenum = 0;
     stmt.sq_tb = ps.pcount + stmt.slot_count;
     stmt.slot_count = stmt.slot_count + 1;
@@ -3598,6 +3661,8 @@ fn enum_eq_start(op: Word) -> Word {
     stmt.pending_cstruct = 0;
     stmt.pending_carray = 0;
     stmt.pending_carray_struct = 0;
+    stmt.pending_carray_arr = 0;
+    stmt.pending_carray_arrbytes = 0;
     stmt.pending_cenum = 0;
     stmt.sq_tb = ps.pcount + stmt.slot_count;
     stmt.slot_count = stmt.slot_count + 1;
@@ -3646,6 +3711,8 @@ fn array_of_enum_eq_start(op: Word) -> Word {
     stmt.pending_cstruct = 0;
     stmt.pending_carray = 0;
     stmt.pending_carray_struct = 0;
+    stmt.pending_carray_arr = 0;
+    stmt.pending_carray_arrbytes = 0;
     stmt.pending_cenum = 0;
     stmt.sq_tb = ps.pcount + stmt.slot_count;
     stmt.slot_count = stmt.slot_count + 1;
@@ -3783,6 +3850,8 @@ fn emit_op(op: Word) -> Word {
     stmt.pending_cstruct = 0;
     stmt.pending_carray = 0;
     stmt.pending_carray_struct = 0;
+    stmt.pending_carray_arr = 0;
+    stmt.pending_carray_arrbytes = 0;
     stmt.pending_cenum = 0;
     // A bitwise op (band/bor/bxor) on two BYTE operands lowers promote-operate-truncate (a Byte
     // result); any other operator yields a Word/bool. `byte_bitwise_op` does the detection so this
@@ -3976,6 +4045,8 @@ fn step_closing() -> Word {
             stmt.pending_cstruct = 0;
             stmt.pending_carray = 0;
             stmt.pending_carray_struct = 0;
+    stmt.pending_carray_arr = 0;
+    stmt.pending_carray_arrbytes = 0;
             stmt.pending_cenum = call.en_ename[call.en_sp] + 1;
             // Mark this whole value as an enum so a following `==`/`!=` captures it as the LEFT
             // operand's enum type (`op_lenum`), enabling `E::V(x) == e` with the payload
@@ -4001,6 +4072,8 @@ fn step_closing() -> Word {
             stmt.pending_cstruct = 0;
             stmt.pending_carray = 0;
             stmt.pending_carray_struct = 0;
+    stmt.pending_carray_arr = 0;
+    stmt.pending_carray_arrbytes = 0;
             stmt.pending_cenum = 0;
             Node::TupleInit() as Word + (call.tp_count[call.tp_sp] * 8 * 1024 + call.tp_count[call.tp_sp]) * 64
         } else {
@@ -4090,6 +4163,8 @@ fn step_sc_closing() -> Word {
         stmt.pending_cstruct = structdefs.sc_name[structdefs.sc_sp] + 1;
         stmt.pending_carray = 0;
         stmt.pending_carray_struct = 0;
+    stmt.pending_carray_arr = 0;
+    stmt.pending_carray_arrbytes = 0;
         stmt.pending_cenum = 0;
         Node::StructInit() as Word + (structdefs.sd_bytesize[structdefs.sc_name[structdefs.sc_sp]] * 1024 + structdefs.sc_count[structdefs.sc_sp]) * 64
     }
@@ -4857,6 +4932,8 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
             stmt.pending_cstruct = 0;
             stmt.pending_carray = 0;
             stmt.pending_carray_struct = 0;
+    stmt.pending_carray_arr = 0;
+    stmt.pending_carray_arrbytes = 0;
             stmt.pending_cenum = 0;
         }
         0
@@ -5060,11 +5137,20 @@ fn step_draining() -> Word {
                     stmt.let_array[stmt.let_count] = 0;
                     stmt.let_array_struct[stmt.let_count] = 0;
                     stmt.let_enum[stmt.let_count] = 0;
+                    stmt.let_array_arr[stmt.let_count] = 0;
+                    stmt.let_array_arrbytes[stmt.let_count] = 0;
                     if stmt.pending_carray_struct > 0 {
                         // An array-of-struct literal: record the element struct index and size so
                         // `a[i].field` arms the struct-array postfix (GetIndex(FlatNested{Struct})).
                         stmt.let_array_struct[stmt.let_count] = stmt.pending_carray_struct;
                         stmt.let_array_size[stmt.let_count] = stmt.pending_carray_size;
+                    } else {
+                    if stmt.pending_carray_arr > 0 {
+                        // An array-of-ARRAY literal: record the inner element kind and the inner
+                        // array's byte size, the two things `GetIndex(FlatNested{size, Array})`
+                        // needs, so `a[i][j]` can chain.
+                        stmt.let_array_arr[stmt.let_count] = stmt.pending_carray_arr;
+                        stmt.let_array_arrbytes[stmt.let_count] = stmt.pending_carray_arrbytes;
                     } else {
                     if stmt.pending_ctuple > 0 {
                         let li = tupledefs.tup_count;
@@ -5091,10 +5177,13 @@ fn step_draining() -> Word {
                         }
                     }
                     }
+                    }
                     stmt.pending_ctuple = 0;
                     stmt.pending_cstruct = 0;
                     stmt.pending_carray = 0;
                     stmt.pending_carray_struct = 0;
+    stmt.pending_carray_arr = 0;
+    stmt.pending_carray_arrbytes = 0;
                     stmt.pending_carray_size = 0;
                     stmt.pending_cenum = 0;
                     stmt.let_count = let_push(stmt.let_count);
