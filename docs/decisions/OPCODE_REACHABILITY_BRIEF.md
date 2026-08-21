@@ -108,3 +108,116 @@ Stop and record, naming the specific decision required and the evidence for it. 
 workaround that widens scope unattended is worse than a clean stop, because the
 operator loses the choice. Three items are already waiting on them; do not add a
 fourth by proceeding on a guess.
+
+---
+
+# CLOSED — AND THE CLOSURE CREATED AN ISA QUESTION (2026-08-21)
+
+`Op::IsStruct` was witnessed, qualified, and the defect that produced the witness was repaired.
+
+## The witness, and why seventeen attempts missed it
+
+A struct pattern on a parameter with **no type annotation**: `fn g(P { a, b }) -> Word { a + b }`.
+
+The guard is `named_type_name(ty) != Some(pattern_type)`. Every attempt across two lines tried to
+make the two DIFFER — and **the type checker forbids that outright**, refusing with "struct pattern
+`P` does not match scrutinee type". The inequality is satisfiable only when the scrutinee's type is
+ABSENT, and a match scrutinee always has one. **The route was never an expression whose inference
+fails; it was a declaration site with no type to lose.**
+
+## What the witness did, which was the real finding
+
+`verify()` accepted it, `module_wcmu` gave it a bound, it loaded, and it **trapped
+`InvalidBytecode`** at call time. That is the class `verify()` exists to exclude, so it was a hole
+in the load-time check rather than a bad program.
+
+Of the three "should never have been emitted" refusals the virtual machine carries — two for
+`Op::Len`, one for `Op::IsStruct` — **this was the only one a program that actually loaded could
+reach.** `Op::Len`'s witness is refused at LOAD by the strict iteration-bound check, which is the
+conservative-verification stance working as designed.
+
+I was one step from reporting that the class generalised. Running both witnesses instead of one
+caught it.
+
+## The repair, and why in the compiler
+
+Two sites were available. Rejecting in `verify.rs` would make a legal program fail EARLIER; folding
+the irrefutable test makes it **work**. The fold already existed and was conditional on the
+SCRUTINEE's type matching the pattern's — and an un-annotated parameter has no scrutinee type at
+all.
+
+**An absent type is not an unconfirmed one.** The type checker has already established the match, so
+when the scrutinee's type is merely absent the pattern's own type is the answer.
+
+The witness now returns `Int(3)`, **asserted as a value** rather than as the absence of a trap: a
+fold that changed the program's meaning would be worse than the trap it replaced.
+
+## RETRACTED — I CLAIMED THE OPCODE HAD NO PRODUCER, AND IT HAS FOUR
+
+For about an hour this document said repairing the defect removed the only producer, and that the
+opcode was a removal candidate for an ISA whose opcode count is a rad-hard constraint. **That was
+wrong.** The `v0.3.0` line disproved it and I reproduced their counterexamples independently before
+accepting them.
+
+| construct | emits | verifies | runs |
+|---|---|---|---|
+| generic struct destructured in a parameter | yes | yes | **traps `InvalidBytecode`** |
+| pattern `P` against annotation `Q` | yes | yes | **traps `InvalidBytecode`** |
+| tuple-typed annotation | yes | yes | traps `NoMatchingHead` |
+| array-typed annotation | yes | yes | traps `NoMatchingHead` |
+| unannotated parameter | no | yes | `Int(3)` |
+
+**The load-time hole is NARROWED, not closed.** The fold fixed exactly the construct it was tested
+against.
+
+## HOW THE OVERCLAIM HAPPENED, WHICH IS THE TRANSFERABLE PART
+
+I found the original witness by **reading the guard's match arms for what they omit** — the method
+that cracked `Op::Len` after fourteen guessed constructs failed across two sessions.
+
+Then I validated my own repair by **guessing three constructs**, observing none emitted, and
+generalising to "no producer found".
+
+The other line applied my method to my code: read the emission condition
+`ty.is_some() && named_type_name(ty) != Some(type_name)`, then enumerate which `TypeExpr` variants
+make `named_type_name` return `None` **while a struct pattern is still accepted**. Four
+counterexamples, inside an hour.
+
+**A method used to find a defect is not automatically applied to validating its repair**, and the
+repair is where the incentive to stop looking is strongest. That is the lesson, and it is mine
+rather than theirs.
+
+They also reported their own first attempt was eleven guessed constructs, six of which did not
+compile — so both lines guessed first and both were rescued by reading. The difference is that they
+were guessing about someone else's change.
+
+## THE JUSTIFICATION WAS FALSE, NOT MERELY INCOMPLETE
+
+The fold's comment claimed the type checker "refuses the mismatch outright". It does not.
+`fn g(P { a, b }: Q)` compiles with two distinct structs. The "known and different" state the
+condition treats as needing a runtime test is one the type checker admits today, and
+`src/compiler.rs` now records that.
+
+## WHAT IS ACTUALLY OPEN, AND IT IS A LANGUAGE QUESTION
+
+A struct pattern matched against an unrelated struct, a tuple, or an array is arguably **ill-typed
+at the source**. Closing it in the type checker would remove the emission rather than fold it, and
+would close two load-time holes at once. That is a language decision rather than a lowering fix.
+
+**No claim is made here about whether `Op::IsStruct` should exist.** It has producers; the removal
+question is not live on this evidence.
+
+## A SURVEY THAT CAME BACK CLEAN, RECORDED WITH WHAT WAS SEARCHED
+
+The `v0.3.0` line built a witness-integrity guard because **a witness that stops witnessing is
+invisible** when coverage is reported as a number — their census would have dropped from 66 to 65
+with nothing going red.
+
+Searched this tree for the same shape: coverage claims asserted as a bare count, and thresholds that
+tolerate silent loss. **None found.** The construct-support boundary asserts per-case verdicts and
+collects mismatches by label; the reachability tests assert per-construct; the four `>=` assertions
+are non-vacuity guards on corpus size, which is the correct use of a threshold rather than a
+coverage claim.
+
+A negative result is worth recording only alongside what was looked at, which is why the search is
+stated rather than just its outcome.
