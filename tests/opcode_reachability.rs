@@ -323,108 +323,149 @@ fn the_is_struct_witness_now_compiles_verifies_and_runs() {
     );
 }
 
-/// **`Op::IsStruct` STILL HAS PRODUCERS, AND TWO OF THEM STILL REACH THE LOAD-TIME HOLE.**
+/// **THE LOAD-TIME HOLE IS CLOSED, AND THIS TEST HAS BEEN WRONG ONCE ABOUT EXACTLY THAT.**
 ///
-/// This test asserted the opposite for about an hour. **I was wrong, and the way I got it wrong is
-/// the part worth keeping.**
+/// # Read the history before trusting the claim
 ///
-/// I found the original witness by reading the guard's match arms for what they OMIT — the method
-/// that cracked `Op::Len` after fourteen guessed constructs had failed. Then, validating my own
-/// repair, I reverted to guessing: three constructs, none emitted, and I generalised to "no
-/// producer found" and told the operator the opcode was a removal candidate.
+/// 1. `Op::IsStruct` was reached by a struct pattern on an un-annotated parameter. Its witness
+///    verified, took a memory bound, loaded, and trapped `InvalidBytecode` at call time.
+/// 2. A compile-time fold closed that construct. **This file then claimed the opcode had no
+///    producer**, from three guessed constructs. The `v0.3.0` line disproved it within the hour
+///    with four counterexamples, found by reading the emission condition rather than guessing.
+/// 3. Two root causes were then found, both SYMMETRY GAPS rather than novel defects, and each
+///    masking the other.
 ///
-/// The `v0.3.0` line disproved it within the hour, using my own method against my own code: read
-/// the emission condition, then enumerate which `TypeExpr` variants make `named_type_name` return
-/// `None` while a struct pattern is still ACCEPTED. Four constructs, reproduced here independently.
+/// # The two gaps
 ///
-/// | construct | emits | verifies | runs |
-/// |---|---|---|---|
-/// | generic struct destructured in a parameter | yes | yes | **traps `InvalidBytecode`** |
-/// | pattern `P` against annotation `Q` | yes | yes | **traps `InvalidBytecode`** |
-/// | tuple-typed annotation | yes | yes | traps `NoMatchingHead` |
-/// | array-typed annotation | yes | yes | traps `NoMatchingHead` |
+/// **`rewrite_pattern_enum_name` rewrites ENUM names in patterns on specialization; nothing did
+/// the same for structs.** Its `Pattern::Struct` arm recurses into a struct pattern's fields while
+/// ignoring the struct's own name. So `fn g(P { a, b }: P<Word>)` had its TYPE rewritten to
+/// `P__Word` and its PATTERN left naming `P`.
 ///
-/// # What the fold did and did not do
+/// **`check_pattern_against_type` holds the correct nominal rule and was called only for match
+/// arms.** Function parameters were `bind_pattern`-ed, never checked. So the disagreement above
+/// never failed type checking, and the lowering fell back to a runtime test.
 ///
-/// It closed the UNANNOTATED-parameter case, which the sibling test pins by asserting the witness
-/// now returns `Int(3)`. It **narrowed** the fallback rather than eliminating it.
+/// Each gap hid the other: without the missing check, the un-rewritten pattern was silent.
 ///
-/// # The deeper finding, which is not a lowering defect
+/// # What each repair does
 ///
-/// The first two rows disprove the justification the fold was originally given: that the type
-/// checker refuses every mismatch. It does not. `fn g(P { a, b }: Q)` compiles with two DISTINCT
-/// structs, and a struct pattern is admitted against a tuple- or array-typed annotation.
+/// | construct | before | after |
+/// |---|---|---|
+/// | generic struct destructured in a parameter | verified, loaded, **trapped** | **runs** |
+/// | pattern `P` against annotation `Q` | verified, loaded, **trapped** | **rejected at compile time** |
+/// | tuple-typed annotation | verified, loaded, trapped | **rejected at compile time** |
+/// | array-typed annotation | verified, loaded, trapped | **rejected at compile time** |
+/// | un-annotated parameter | trapped | runs |
 ///
-/// **Those look like type-checker admissions rather than lowering defects.** Closing them at the
-/// source would remove the emission rather than fold it, which is why they are recorded here rather
-/// than patched in the lowering.
+/// # WHAT THIS TEST DOES NOT CLAIM
+///
+/// **It does not claim the opcode has no producer.** That claim was made here once, from three
+/// constructs, and was false. Twelve shapes are now tried and none produces it — but sample size
+/// was never the problem. What falsified the earlier claim was reading the emission condition and
+/// enumerating which type shapes satisfy it, and a reader who can construct a survivor should
+/// treat this list as incomplete rather than as a boundary.
 #[test]
-fn op_is_struct_still_has_producers_and_two_still_trap() {
-    // The two that reach the load-time hole: verify, take a bound, load, then die.
-    let holes = [
+fn no_shape_tried_reaches_the_is_struct_trap() {
+    // The four that used to trap, and the shapes around them.
+    let shapes = [
         (
             "generic struct destructured in a parameter",
             "struct P<T> { a: T, b: T }\nfn g(P { a, b }: P<Word>) -> Word { a + b }\nfn main() -> Word { g(P { a: 1, b: 2 }) }",
         ),
         (
-            "pattern P against annotation Q",
-            "struct P { a: Word, b: Word }\nstruct Q { a: Word, b: Word }\nfn g(P { a, b }: Q) -> Word { a + b }\nfn main() -> Word { g(Q { a: 1, b: 2 }) }",
+            "un-annotated parameter",
+            "struct P { a: Word, b: Word }\nfn g(P { a, b }) -> Word { a + b }\nfn main() -> Word { g(P { a: 1, b: 2 }) }",
+        ),
+        (
+            "annotated matching struct",
+            "struct P { a: Word, b: Word }\nfn g(P { a, b }: P) -> Word { a + b }\nfn main() -> Word { g(P { a: 1, b: 2 }) }",
+        ),
+        (
+            "struct pattern inside a tuple parameter",
+            "struct P { a: Word, b: Word }\nfn g((P { a, b }, n): (P, Word)) -> Word { a + b + n }\nfn main() -> Word { g((P { a: 1, b: 2 }, 3)) }",
+        ),
+        (
+            "multihead, generic",
+            "struct P<T> { a: T, b: T }\nfn g(P { a, b }: P<Word>) -> Word { a + b }\nfn g(x) -> Word { 0 }\nfn main() -> Word { g(P { a: 1, b: 2 }) }",
+        ),
+        (
+            "match on a generic struct",
+            "struct P<T> { a: T, b: T }\nfn f(x: P<Word>) -> Word { match x { P { a, b } => a + b, _ => 0 } }",
+        ),
+        (
+            "match on an if-expression",
+            "struct P { a: Word, b: Word }\nfn f(c: bool, x: P, y: P) -> Word { match (if c { x } else { y }) { P { a, b } => a + b, _ => 0 } }",
+        ),
+        (
+            "struct in an enum payload",
+            "struct P { a: Word, b: Word }\nenum E { V(P), W }\nfn f(e: E) -> Word { match e { E::V(P { a, b }) => a + b, _ => 0 } }",
         ),
     ];
-    for (label, src) in holes {
-        let module = module_of(src);
+    for (label, src) in shapes {
         assert!(
-            module
-                .chunks
-                .iter()
-                .any(|c| c.ops.iter().any(|o| matches!(o, Op::IsStruct(_)))),
-            "{label}: no longer emits `Op::IsStruct`. If a repair closed it, this test's census is \
-             stale -- say which constructs remain"
-        );
-        keleusma::verify::verify(&module).expect("the structural verifier accepts it");
-        keleusma::verify::module_wcmu(&module, &[]).expect("it receives a memory bound");
-
-        let arena = keleusma::Arena::with_capacity(keleusma::vm::DEFAULT_ARENA_CAPACITY);
-        let mut vm = keleusma::vm::Vm::new(module, &arena)
-            .expect("it LOADS; that is what makes this a load-time hole rather than a refusal");
-        let mut shared = vec![0u8; vm.shared_data_bytes()];
-        let err = vm.call_with_shared(&mut shared, &[]).expect_err(
-            "it now RUNS. That is a repair: say which side closed it and update the census above",
-        );
-        assert!(
-            format!("{err:?}").contains("IsStruct"),
-            "{label}: fails for some other reason now ({err:?}), so this no longer measures the \
-             flat-struct type test"
+            !ops_of(src).iter().any(|o| matches!(o, Op::IsStruct(_))),
+            "{label} produces `Op::IsStruct`. Qualify it before recording the opcode as reachable: \
+             does it verify, take a bound, load, and RUN? If it loads and traps, the load-time \
+             hole is open again"
         );
     }
 
-    // Two more producers whose programs fail for a DIFFERENT reason. Kept separate because a test
-    // that lumped them with the holes above would report four load-time holes where there are two.
+    // **THE GENERIC CASE MUST ACTUALLY RUN**, not merely avoid the opcode. Asserting the VALUE
+    // because a repair that changed the program's meaning would be worse than the trap it replaced.
+    const GENERIC: &str = "struct P<T> { a: T, b: T }\n\
+                           fn g(P { a, b }: P<Word>) -> Word { a + b }\n\
+                           fn main() -> Word { g(P { a: 1, b: 2 }) }";
+    let arena = keleusma::Arena::with_capacity(keleusma::vm::DEFAULT_ARENA_CAPACITY);
+    let mut vm = keleusma::vm::Vm::new(module_of(GENERIC), &arena).expect("loads");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    assert!(
+        matches!(
+            vm.call_with_shared(&mut shared, &[])
+                .expect("must RUN, not trap"),
+            keleusma::vm::VmState::Finished(keleusma::bytecode::Value::Int(3))
+        ),
+        "the generic witness ran but did not compute 1 + 2"
+    );
+}
+
+/// **THE THREE ILL-TYPED PATTERNS ARE REJECTED AT COMPILE TIME, NAMING THE CAUSE.**
+///
+/// Separate from the census above because these are a NARROWING: each compiled before and now does
+/// not. That is the direction that needs pinning from both sides — the sibling test pins what still
+/// compiles, and this pins what no longer does.
+///
+/// All three were previously accepted, lowered to a runtime type test, and trapped. Rejecting them
+/// at the source removes the emission rather than folding it.
+#[test]
+fn a_struct_pattern_against_a_foreign_type_is_refused_by_the_type_checker() {
     for (label, src) in [
         (
-            "tuple-typed annotation",
+            "a different struct",
+            "struct P { a: Word, b: Word }\nstruct Q { a: Word, b: Word }\nfn g(P { a, b }: Q) -> Word { a + b }\nfn main() -> Word { g(Q { a: 1, b: 2 }) }",
+        ),
+        (
+            "a tuple",
             "struct P { a: Word, b: Word }\nfn g(P { a, b }: (Word, Word)) -> Word { a + b }\nfn main() -> Word { g((1, 2)) }",
         ),
         (
-            "array-typed annotation",
+            "an array",
             "struct P { a: Word, b: Word }\nfn g(P { a, b }: [Word; 2]) -> Word { a + b }\nfn main() -> Word { g([1, 2]) }",
         ),
     ] {
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+        let err = compile(&ast).expect_err(&format!(
+            "{label}: accepted again. If that is deliberate, it lowers to a \
+                                  runtime type test that the virtual machine refuses on a flat \
+                                  struct"
+        ));
         assert!(
-            ops_of(src).iter().any(|o| matches!(o, Op::IsStruct(_))),
-            "{label}: no longer emits `Op::IsStruct`"
+            err.message.contains("does not match scrutinee type"),
+            "{label}: refused for another reason ({}), so this no longer measures the nominal \
+             pattern rule",
+            err.message
         );
     }
-
-    // **THE CONTROL, WHICH IS WHAT THE FOLD ACTUALLY FIXED.** Without it this test would read as
-    // "the repair did nothing", and it did something specific.
-    const FIXED: &str = "struct P { a: Word, b: Word }\n\
-                         fn g(P { a, b }) -> Word { a + b }\n\
-                         fn main() -> Word { g(P { a: 1, b: 2 }) }";
-    assert!(
-        !ops_of(FIXED).iter().any(|o| matches!(o, Op::IsStruct(_))),
-        "the unannotated-parameter case emits `Op::IsStruct` again; the fold regressed"
-    );
 }
 
 /// **THE THREE "SHOULD NEVER HAVE BEEN EMITTED" REFUSALS, AND WHAT IS LEFT OF THEM.**
