@@ -13,6 +13,48 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE CHAINED-INDEX DEFECT IS NOT TRUNCATION, AND I STOPPED RATHER THAN BUILD A FEATURE
+(2026-08-20, evening).**
+
+The second half of the nested-array family. **My own first report of it was wrong about the
+mechanism**, which is why diagnosing before fixing mattered here.
+
+I recorded it as "the body is TRUNCATED -- no SetLocal, no GetLocal, neither GetIndex", implying
+codegen dropped ops. **It does not.** `parse.kel` emits records, and they are the WRONG records:
+
+```
+a[1]      ->  Local(0), Literal(1), Index                 -- correct
+a[0][1]   ->  Local(0), Literal(0), Index, Literal(1), ArrayLit
+```
+
+**The second `[1]` parses as an ARRAY LITERAL.** The truncated op stream is downstream fallout from a
+malformed node forest, not a codegen bug -- and I would have gone looking in codegen on the strength
+of my own note.
+
+**CHAINED INDEXING IS NOT SUPPORTED BY THE PARSER AT ALL.** `ps.aa_phase` is armed only after a
+let-bound array `Local` is emitted, and nothing re-arms it once an index completes, so the next `[`
+falls through to the array-literal branch. **`let b = a[0]; b[1]` diverges too**, which rules out the
+chain as the trigger: it is indexing a nested array at all. That case is now in the boundary table
+precisely because it discriminates.
+
+**WHY I STOPPED.** A fix needs three coordinated pieces: a binding record saying the element is an
+ARRAY of byte size N (`let_array` covers a scalar kind and `let_array_struct`/`let_array_size` a
+struct; there is nothing for an array), a nested-variant postfix phase, and re-arming after an index.
+**That is a FEATURE, not the defect fix its sibling was**, and my record on this exact file today is
+two wrong attempts on a strictly simpler change -- one of which returned a worse answer than the bug.
+
+The stopping rule written this morning said to stop if the work reached beyond the size computation
+and index lowering. It has not reached the arena or WCMU, so the letter of the rule permits
+continuing; **the spirit does not**, because "three coordinated pieces of parser state machinery" is
+the thing the rule exists to catch. Recording that distinction rather than quietly taking the
+permissive reading.
+
+**WHAT IS RECORDED IS A SPECIFICATION, NOT A SYMPTOM.** The next attempt starts from what the parser
+needs rather than from "the body is truncated", and the machinery for a nested variant already exists
+in `step_structarrayaccess` with `da.fa_index_variant`. That is worth more than a half-built feature.
+
+---
+
 **A NESTED ARRAY LITERAL NOW SIZES ITS OUTER COMPOSITE, AND MY FIRST FIX WAS WORSE THAN THE BUG
 (2026-08-20, evening).**
 
