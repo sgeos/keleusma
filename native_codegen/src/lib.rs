@@ -1148,6 +1148,64 @@ fn lower_module_with<'ctx>(
         )));
     }
 
+    // **A SIGNATURE IS NOT THE ONLY ROUTE A FLOAT TAKES, and the other routes
+    // used to be closed only by accident.**
+    //
+    // Measured: `fn p(w: Word) -> Word { let f = 1.5; ... }` has NO float in any
+    // signature and DOES carry `ConstValue::Float`. Before this, that module was
+    // refused only because `Op::Add` was unsupported -- a property of what is
+    // unimplemented, not a guard. The moment `Op::Add` lowers as an integer add
+    // (which is correct for `Byte` and `Fixed`), that program would SILENTLY
+    // MISCOMPILE.
+    //
+    // So the routes are enumerated and each is closed:
+    //   1. chunk signatures        -- above
+    //   2. chunk constants         -- here
+    //   3. native return shapes    -- here
+    //   4. data-segment slots      -- here
+    //
+    // **The list is a claim and `the_float_guard_closes_every_route_it_names`
+    // tests each one.** A guard that closes three of four while reading as total
+    // is the shape this line keeps finding.
+    for (i, c) in program.chunks.iter().enumerate() {
+        if let Some(k) = c
+            .constants
+            .iter()
+            .position(|k| matches!(k, ConstValue::Float(_)))
+        {
+            return Err(LowerError::UnsupportedOp(format!(
+                "chunk {i} carries a Float CONSTANT at index {k}. A float reaches this \
+                 module without appearing in any signature, and the integer \
+                 arithmetic lowering would silently miscompile it"
+            )));
+        }
+    }
+    if let Some(i) = program
+        .native_return_shapes
+        .iter()
+        .position(|sh| matches!(sh, keleusma::bytecode::WireShape::Scalar { kind } if *kind == SCALAR_FLOAT_TAG))
+    {
+        return Err(LowerError::UnsupportedOp(format!(
+            "native {i} declares a Float RETURN SHAPE; its result would reach the \
+             operand stack as a float this backend cannot represent"
+        )));
+    }
+    // Route 4, the data segment, is closed AT THE ACCESS rather than at the
+    // declaration, and deliberately not re-checked here. `slot_entry` admits
+    // only `SCALAR_INT`, `SCALAR_BYTE` and `SCALAR_BOOL`, refusing anything else
+    // as `UnsupportedDataSlot`.
+    //
+    // **Measured, because the obvious statement is wrong**: a module that
+    // DECLARES a float slot and never reads it LOWERS. That is safe by
+    // construction rather than by refusal -- an unread slot puts no float on the
+    // operand stack, so there is nothing for the integer arithmetic below to
+    // miscompile. Every ACCESS refuses, which is the point where a float would
+    // actually arrive.
+    //
+    // A second check here would be a parallel model of a guard that already
+    // exists and the two could drift. `float_guard_routes.rs` tests this route
+    // through the EXISTING refusal.
+
     // A delegated suspension affects exactly TWO chunks: the entry, whose tail
     // call becomes the return, and the callee, whose yields become returns.
     let delegated = if opts.delegated_suspension {
