@@ -5,7 +5,8 @@
 //! The `v0.3.0` line maintains an opcode census: for each of the 66 opcodes, a
 //! source program that emits it. Two resisted after eight construct attempts, and
 //! they framed the question better than "which construct" — **the question is
-//! whether one exists at all.**
+//! whether one exists at all.** Both now have witnesses; see below for why that is
+//! a weaker statement than it sounds.
 //!
 //! That distinction is the point. For an instruction set whose opcode count is a
 //! stated rad-hard design constraint, an opcode no program can produce is a more
@@ -13,18 +14,31 @@
 //! verdict for each, and is careful never to report "I could not find one" as
 //! "none exists".
 //!
-//! # "REACHABLE" NEEDS QUALIFYING ON THIS PROJECT, AND THE FIRST VERDICT HERE
-//! SHOWS WHY
+//! # BOTH ARE NOW WITNESSED, AND "REACHABLE" NEEDED QUALIFYING FOR EACH
 //!
-//! `Op::Len` is reachable in BYTECODE. The program that witnesses it cannot be
-//! given a memory bound: `verify()` accepts it and `module_wcmu` refuses it,
-//! because the same missing `Expr::If` case defeats both the static-length lookup
-//! and the loop-bound extractor.
+//! `Op::Len` is reachable via an `if` expression as a `for`-in source. `Op::IsStruct`
+//! is reachable via a struct pattern on a parameter with **no type annotation** —
+//! found after seventeen attempts across two sessions and two lines, every one of
+//! which tried to make a scrutinee's type DIFFER from the pattern's. The type
+//! checker forbids that, so the route was never an expression whose inference
+//! fails; it was a declaration site with no type to lose.
+//!
+//! **Neither witness is an ordinary working program, and they fail differently:**
+//!
+//! | witness | `verify()` | `module_wcmu` | load | run |
+//! |---|---|---|---|---|
+//! | `Op::Len` | accepts | refuses | **`Vm::new` REFUSES** | never runs |
+//! | `Op::IsStruct` | accepts | accepts | loads | **traps** |
+//!
+//! `Op::Len`'s witness is refused at LOAD, which is the conservative-verification
+//! stance working as designed. `Op::IsStruct`'s satisfies every load-time check and
+//! dies at call time on `InvalidBytecode` — the class `verify()` exists to exclude —
+//! so it is a load-time hole rather than another instance of the same pattern.
 //!
 //! On a language whose value proposition is definitive worst-case execution time
-//! and memory usage, an opcode reachable only in a program the resource analysis
-//! rejects is closer to unwitnessed than a bare "reachable" suggests. **Neither
-//! framing alone is honest**, so both are asserted.
+//! and memory usage, **an opcode reachable only in a program the resource analysis
+//! rejects, or only in one that cannot execute, is closer to unwitnessed than a bare
+//! "reachable" suggests.** Both framings are asserted for both opcodes.
 //!
 //! # The technique, which generalises
 //!
@@ -359,4 +373,76 @@ fn the_is_struct_witness_is_refused_by_the_virtual_machine() {
 
 fn alloc_msg(e: &keleusma::vm::VmError) -> String {
     format!("{e:?}")
+}
+
+/// **THE TWO UNWITNESSED OPCODES FAIL IN DIFFERENT PLACES, AND ONLY ONE IS A HOLE.**
+///
+/// The virtual machine carries exactly three refusals of the form "this op should
+/// never have been emitted", and between them they name only two opcodes:
+///
+/// ```text
+///   Op::Len      on a flat array;  length is a compile-time constant
+///   Op::Len      on a flat tuple;  arity  is a compile-time constant
+///   Op::IsStruct on a flat struct; the type test is a compile-time constant
+/// ```
+///
+/// Those are precisely the two the opcode census could not witness, which is not a
+/// coincidence: both are emitted only as a dynamic fallback when a static type is
+/// unknown, and both are refused when the value turns out to be statically known
+/// after all.
+///
+/// **The symmetry stops there, and the difference is the whole point.**
+///
+/// | witness | `verify()` | `module_wcmu` | load | run |
+/// |---|---|---|---|---|
+/// | `Op::Len` | accepts | **refuses** | **`Vm::new` REFUSES** | never runs |
+/// | `Op::IsStruct` | accepts | accepts | loads | **traps** |
+///
+/// `Op::Len`'s witness is caught at LOAD time by the strict iteration-bound check,
+/// which is the conservative-verification stance working exactly as designed: a
+/// program whose bound cannot be established is refused before it can execute.
+///
+/// `Op::IsStruct`'s witness satisfies every load-time check and dies at call time.
+/// **Of the three refusals above, it is the only one a program that actually
+/// loaded can reach.** That makes it a load-time hole rather than one instance of
+/// a general pattern — and the general-pattern reading was the one this file
+/// nearly recorded before both witnesses were run instead of one.
+#[test]
+fn the_two_fallback_opcodes_fail_at_different_stages() {
+    const LEN_WITNESS: &str = "fn f(c: bool) -> Word { let a = [1, 2]; let b = [3, 4]; \
+                               for x in if c { a } else { b } { let _d = x; } 0 }\n\
+                               fn main() -> Word { f(true) }";
+    const IS_WITNESS: &str = "struct P { a: Word, b: Word }\n\
+                              fn g(P { a, b }) -> Word { a + b }\n\
+                              fn main() -> Word { g(P { a: 1, b: 2 }) }";
+
+    // Both compile and both satisfy the structural verifier, so the divergence
+    // below is about the RESOURCE check and the run, not about well-formedness.
+    let len_mod = module_of(LEN_WITNESS);
+    let is_mod = module_of(IS_WITNESS);
+    keleusma::verify::verify(&len_mod).expect("the `Op::Len` witness must still verify");
+    keleusma::verify::verify(&is_mod).expect("the `Op::IsStruct` witness must still verify");
+
+    // The `Op::Len` witness is REFUSED AT LOAD. This is the sound direction and is
+    // stronger than the "module_wcmu refuses" this file recorded previously: the
+    // program cannot be executed at all, not merely left unbounded.
+    let arena = keleusma::Arena::with_capacity(keleusma::vm::DEFAULT_ARENA_CAPACITY);
+    let refused = keleusma::vm::Vm::new(len_mod, &arena);
+    assert!(
+        refused.is_err(),
+        "the `Op::Len` witness now LOADS. If it also runs, the load-time bound check \
+         stopped catching it and this opcode joins `Op::IsStruct` as a hole; if it \
+         loads and then traps, the refusal merely moved later, which is worse"
+    );
+
+    // The `Op::IsStruct` witness LOADS, and fails only when called.
+    let arena2 = keleusma::Arena::with_capacity(keleusma::vm::DEFAULT_ARENA_CAPACITY);
+    let mut vm = keleusma::vm::Vm::new(is_mod, &arena2)
+        .expect("the `Op::IsStruct` witness must still load; its refusal is at CALL time");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    assert!(
+        vm.call_with_shared(&mut shared, &[]).is_err(),
+        "the `Op::IsStruct` witness now RUNS, so the load-time hole is closed. Say which \
+         side closed it -- the compiler folding the test out, or the VM executing it"
+    );
 }
