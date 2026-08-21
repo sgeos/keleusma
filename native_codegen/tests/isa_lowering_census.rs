@@ -404,6 +404,64 @@ fn how_much_of_the_corpus_does_the_lowering_step_over() {
     );
 }
 
+/// **WHY `Reset` IS NEVER VISITED, MEASURED RATHER THAN READ OFF THE SOURCE.**
+///
+/// The corpus walk above reports `Reset` appearing only in stepped-over
+/// positions. That is a fact about the corpus. **The mechanism behind it is
+/// structural**, and this test pins the mechanism so the finding does not read
+/// as an accident of which programs happen to be in the tree.
+///
+/// `Op::Stream` and `Op::Reset` are REFUSED outright, deliberately: a divergent
+/// `loop fn` lowered natively would spin with no way for the host to stop it.
+/// The single exception is the degenerate-stream transform, where both lower to
+/// nothing. **But that transform is exactly what makes the `Reset` unreachable**
+/// — it turns the tail `Yield` into the return, so every op after it, the
+/// `Reset` included, is in code no edge reaches.
+///
+/// So the only configuration in which `Reset` HAS a lowering is the
+/// configuration in which it is never REACHED. Its half of that shared match arm
+/// is never taken. `Op::Stream`, which shares the arm, is the first op of the
+/// chunk and is visited normally — which is what keeps this from being a claim
+/// about the arm being dead.
+#[test]
+fn a_degenerate_stream_visits_its_stream_op_and_never_its_reset() {
+    let m = compiled(
+        "yield tick(resume: Word) -> Word { yield resume + 1 }\n\
+         loop main(resume: Word) -> Word { yield resume + 1 }\n",
+    )
+    .expect("the degenerate stream must compile");
+
+    let entry = m.entry_point.expect("a loop entry");
+    let ops = &m.chunks[entry].ops;
+    let ix = |name: &str| {
+        ops.iter()
+            .position(|o| format!("{o:?}").starts_with(name))
+            .unwrap_or_else(|| panic!("the entry emits no {name}; ops are {ops:?}"))
+    };
+    let (stream_ix, reset_ix) = (ix("Stream"), ix("Reset"));
+
+    let (refusals, visits) = module_lowered_op_indices(&m, LowerOptions::default());
+    let seen = visits[entry].as_ref().unwrap_or_else(|| {
+        panic!(
+            "the degenerate entry REFUSED, so this test is not exercising the \
+             transform it exists for: {refusals:?}"
+        )
+    });
+
+    assert!(
+        seen.contains(&stream_ix),
+        "the lowering never visited Op::Stream either, so `Reset` being unvisited \
+         says nothing specific -- the whole chunk would be unreachable"
+    );
+    assert!(
+        !seen.contains(&reset_ix),
+        "THE LOWERING VISITED Op::Reset. That is NEWS: the degenerate transform \
+         no longer makes the trailing Reset unreachable, so `Reset` may now be \
+         genuinely lowered and the census row saying otherwise needs re-measuring \
+         rather than deleting."
+    );
+}
+
 /// The census.
 ///
 /// **Reported, not pinned, except for the floors and the partition.** The
