@@ -77,6 +77,43 @@ against the reference and refuses on divergence, so none of this reached a user 
 The exposure was to direct callers of the `self_host_compile*` entry points.
 
 Brief, census and revert recipe: `docs/decisions/POOL_TAG_RESIDENCY_BRIEF.md`.
+**TWO STAGE COMMANDS WERE WRITTEN, DISPATCHED, ANNOUNCED, AND NEVER RUN (2026-08-20, night).**
+
+Found while scoping `CONSTS`, Order 1 item 1, and it is a finding about ESTIMATION rather than about
+the code.
+
+The tree's own analysis is encouraging: the flattener already emits a byte-identical `CONSTS`, the
+170-node walk cap is the only blocker, and batching is the route because a scalar forest carries no
+state between batches. Then `fl_stream_begin` and `fl_stream_step` turn out to already exist,
+dispatched as commands **176 and 177**, one node in and one record out -- the same shape that removed
+the 90-record chunk cap.
+
+**Read together, that says the remaining work is driver wiring. It is not.**
+
+**NOTHING HAS EVER CALLED THEM.** No driver, no test. Verified by searching the whole repository for
+both the command numbers and the function names; the only hits are the dispatch arms and the mailbox
+announcement to the other line that `highest_command` had moved 175 to 177. The control is
+`CMD_STEP = 175`, immediately below them, which `window_emit_chunks` does drive.
+
+So taking `CONSTS` means writing the driver AND validating stage code that has never executed. That
+is materially larger than the analysis suggests to a reader who does not check whether the path is
+reached -- and I was that reader for about thirty seconds.
+
+**THIRD INSTANCE OF ONE CLASS THIS WEEK, WHICH IS WHY IT IS WORTH NAMING.** The `v0.3.0` line found
+`Op::Reset` credited as lowered because a CHUNK containing it lowered, while the op sat in a region no
+edge reaches; a mutation crediting it moved their figure to 57 of 66 **with every test still green**.
+`Op::IsStruct` is emitted only on a fallback nothing has reached. And now two commands announced as
+delivered.
+
+**PRESENCE, DISPATCH, AND EVEN AN ANNOUNCEMENT ARE NOT EVIDENCE THAT CODE RUNS.** The cheap check is
+to search for callers before costing work that depends on it. I have been applying that to opcodes for
+two days and had not thought to apply it to the stage's own command surface.
+
+**NOT A DELETION.** They are the intended route for `CONSTS`. The test records them as unreached and
+fails when that changes, so whoever drives them updates the record rather than rediscovering the gap.
+The command set is DERIVED from the stage rather than listed, with a must-fire guard on the derivation
+finding more than a hundred commands, because a parse that found nothing would satisfy every
+assertion while measuring the empty set.
 
 ---
 

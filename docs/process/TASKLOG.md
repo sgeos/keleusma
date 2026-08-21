@@ -34,6 +34,22 @@ Current sprint source of truth.
 > would make the census unattributable.
 >
 > Stage sources untouched; no opcode and no `BYTECODE_VERSION` change.
+> **Currency note (2026-08-20, night).** **COMMANDS 176/177 ARE DISPATCHED AND DRIVEN BY NOTHING.**
+> `fl_stream_begin`/`fl_stream_step`, the constant-node streaming path, were written, dispatched, and
+> announced to the `v0.3.0` line — and no driver or test has ever called them. Control:
+> `CMD_STEP = 175` directly below them IS driven.
+>
+> **THIS CHANGES THE COST OF `CONSTS`.** The analysis reads as "the flattener already emits a
+> byte-identical region, batching is the route, and a streaming variant exists", which makes the
+> remaining work look like driver wiring. **The stage side has never executed**, so taking it means
+> writing the driver AND validating never-run code.
+>
+> **Third instance of one class this week**: `Op::Reset` credited from a chunk that lowered,
+> `Op::IsStruct` on an unreached fallback, and now these. **Presence, dispatch and announcement are
+> not evidence that code runs**; search for callers before costing work on it.
+>
+> Pinned by `tests/stage_command_reach.rs`, mutation-verified, with the command set DERIVED from the
+> stage. Not a deletion — they are the intended route.
 
 > **Currency note (2026-08-20, evening).** **NESTED ARRAY LITERALS FIXED; CHAINED INDEXING
 > DIAGNOSED AND DELIBERATELY NOT FIXED.**
