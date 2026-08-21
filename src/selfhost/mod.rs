@@ -226,10 +226,10 @@ const CATEGORY: usize = 1 + 1024 * 4 + 256 * 5 + 1;
 // gated on `compile + verify` like the harnesses that need it, rather than on the
 // narrower `self-host` feature this module carries.
 use crate::selfhost_host::{
-    BR_LEX_ICOUNT, BR_LEX_ILEN, BR_LEX_ISTART, BR_P_AT, BR_P_BASE, BR_P_BOOL_ID, BR_P_BYTE_ID,
-    BR_P_CHUNK_COUNT, BR_P_CHUNKS, BR_P_FALSE_ID, BR_P_LEN, BR_P_LIMIT_ID, BR_P_PACKED,
-    BR_P_REQUIRE_ID, BR_P_TRUE_ID, BR_P_WORD_ID, PARSE_CHUNK_CAP, PARSE_LET_NAME_TAG,
-    PARSE_TOKEN_CAP,
+    BR_LEX_ICOUNT, BR_LEX_ILEN, BR_LEX_ISTART, BR_P_AND_ID, BR_P_AT, BR_P_BASE, BR_P_BOOL_ID,
+    BR_P_BYTE_ID, BR_P_CHUNK_COUNT, BR_P_CHUNKS, BR_P_FALSE_ID, BR_P_LEN, BR_P_LIMIT_ID,
+    BR_P_OR_ID, BR_P_PACKED, BR_P_REQUIRE_ID, BR_P_TRUE_ID, BR_P_WORD_ID, PARSE_CHUNK_CAP,
+    PARSE_LET_NAME_TAG, PARSE_TOKEN_CAP,
 };
 
 fn br_shared_word(vm: &Vm<'_, '_>, buf: &[u8], slot: usize) -> i64 {
@@ -915,7 +915,21 @@ pub fn parse_cursor_trace(src: &str) -> Vec<i64> {
         .unwrap();
     vm.set_shared(&mut shared, BR_P_BYTE_ID, Value::Int(id_of("Byte")))
         .unwrap();
-    // THE BOOLEAN LITERALS, seeded like the eager `and`/`or` ids and for the same
+    // **THE EAGER BOOLEAN OPERATORS, WHICH THIS COMMENT USED TO CLAIM WERE ALREADY HERE.**
+    // The sentence below said the boolean literals are "seeded like the eager `and`/`or`
+    // ids" -- true of `tests/selfhost_codegen.rs`, which seeds all four, and false of this
+    // file, which seeded neither. The comment was copied along with the literals and
+    // described the sibling's state.
+    //
+    // `parse.kel` guards its `and`/`or` recognition on `and_id > 0` so an unseeded host
+    // keeps the old behaviour. The old behaviour is that the operator and its RIGHT OPERAND
+    // are dropped: `a and b` compiled to `[GetLocal(0), Return]`, which is `a`. A silent
+    // miscompile, and `true and false` returned `true`.
+    vm.set_shared(&mut shared, BR_P_AND_ID, Value::Int(id_of("and")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_OR_ID, Value::Int(id_of("or")))
+        .unwrap();
+    // THE BOOLEAN LITERALS, seeded like the eager `and`/`or` ids above and for the same
     // reason: the Tok space is full, so `true` and `false` arrive as identifiers.
     // Without these the stage resolved them as variable references and emitted
     // `GetLocal` where the reference emits `PushImmediate`.
@@ -1081,7 +1095,21 @@ fn parse_functions_impl(
         .unwrap();
     vm.set_shared(&mut shared, BR_P_BYTE_ID, Value::Int(id_of("Byte")))
         .unwrap();
-    // THE BOOLEAN LITERALS, seeded like the eager `and`/`or` ids and for the same
+    // **THE EAGER BOOLEAN OPERATORS, WHICH THIS COMMENT USED TO CLAIM WERE ALREADY HERE.**
+    // The sentence below said the boolean literals are "seeded like the eager `and`/`or`
+    // ids" -- true of `tests/selfhost_codegen.rs`, which seeds all four, and false of this
+    // file, which seeded neither. The comment was copied along with the literals and
+    // described the sibling's state.
+    //
+    // `parse.kel` guards its `and`/`or` recognition on `and_id > 0` so an unseeded host
+    // keeps the old behaviour. The old behaviour is that the operator and its RIGHT OPERAND
+    // are dropped: `a and b` compiled to `[GetLocal(0), Return]`, which is `a`. A silent
+    // miscompile, and `true and false` returned `true`.
+    vm.set_shared(&mut shared, BR_P_AND_ID, Value::Int(id_of("and")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_OR_ID, Value::Int(id_of("or")))
+        .unwrap();
+    // THE BOOLEAN LITERALS, seeded like the eager `and`/`or` ids above and for the same
     // reason: the Tok space is full, so `true` and `false` arrive as identifiers.
     // Without these the stage resolved them as variable references and emitted
     // `GetLocal` where the reference emits `PushImmediate`.
