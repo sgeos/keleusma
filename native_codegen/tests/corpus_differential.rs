@@ -214,6 +214,66 @@ fn record(idx: usize, all: [i64; 5]) -> i64 {
     stub_value(idx, args)
 }
 
+/// One external native's virtual-machine side, by table index.
+///
+/// **`register_external_native` takes a BARE `fn`, not a closure**, so it cannot
+/// capture the index the way `register_native_closure` does. The native side
+/// already solves exactly this with the `kel_stub_NN` family recovering identity
+/// from a thread-local table; this mirrors that rather than inventing a second
+/// mechanism, and reuses the same table.
+fn vm_external_record(idx: usize, args: &[Value]) -> Result<Value, keleusma::vm::VmError> {
+    let (name, argc, _) = TABLE.with(|t| {
+        t.borrow()
+            .get(idx)
+            .cloned()
+            .unwrap_or_else(|| (format!("<unmapped #{idx}>"), 0, None))
+    });
+    let vals: Vec<i64> = args
+        .iter()
+        .take(argc)
+        .enumerate()
+        .map(|(pos, v)| match v {
+            Value::Int(x) => *x,
+            Value::Byte(b) => i64::from(*b),
+            Value::Bool(b) => i64::from(*b),
+            _ => {
+                SAW_REF_ARG.with(|f| *f.borrow_mut() = true);
+                REF_POSITIONS.with(|r| {
+                    r.borrow_mut().insert((idx, pos));
+                });
+                0
+            }
+        })
+        .collect();
+    let parts: Vec<String> = vals.iter().map(|a| a.to_string()).collect();
+    LOG.with(|l| l.borrow_mut().push(format!("{name}({})", parts.join(", "))));
+    Ok(Value::Int(stub_value(idx, &vals)))
+}
+
+macro_rules! external_stubs {
+    ($($n:literal => $sym:ident),* $(,)?) => {
+        $(
+            fn $sym(args: &[Value]) -> Result<Value, keleusma::vm::VmError> {
+                vm_external_record($n, args)
+            }
+        )*
+        /// The bare `fn` for table index `i`, or `None` past the family's end.
+        ///
+        /// **A FIXED FAMILY WITH AN EXPLICIT END.** Returning `None` past it makes
+        /// the module fall back to a verified registration, which the virtual
+        /// machine then refuses at call-site dispatch with a message naming the
+        /// mismatch. Silently binding the wrong function would be worse.
+        fn external_stub_for(i: usize) -> Option<fn(&[Value]) -> Result<Value, keleusma::vm::VmError>> {
+            match i { $($n => Some($sym),)* _ => None }
+        }
+    };
+}
+
+external_stubs!(
+    0 => vm_ext_00, 1 => vm_ext_01, 2 => vm_ext_02, 3 => vm_ext_03,
+    4 => vm_ext_04, 5 => vm_ext_05, 6 => vm_ext_06, 7 => vm_ext_07,
+);
+
 macro_rules! stubs {
     ($($n:literal => $sym:ident),* $(,)?) => {
         $(
@@ -727,11 +787,58 @@ fn run_vm(
             ));
         }
     };
+    // **WHICH NATIVES DOES THE BYTECODE CALL EXTERNALLY?** Derived from the
+    // module's own ops, so this is a CONTRACT rather than a runtime inference --
+    // unlike the reference-argument mask, which rests on what the virtual
+    // machine happened to observe.
+    //
+    // A module declaring `use external host::f` emits `Op::CallExternalNative`,
+    // and the virtual machine REFUSES a verified registration against it at
+    // call-site dispatch. This harness registered everything as verified, so
+    // `external_native_witness.kel` could not be driven at all -- and
+    // `CallExternalNative` was the last opcode counted as LOWERED with nothing
+    // ever having executed it.
+    // **THE TABLE MUST BE POPULATED ON THIS SIDE TOO, and forgetting it produced
+    // a real disagreement rather than a crash.**
+    //
+    // The closure registrations CAPTURE their name and arity. A bare `fn` cannot,
+    // so `vm_external_record` recovers them from `TABLE` -- which until now was
+    // set only in `run_native`. The virtual machine therefore read an arity of
+    // ZERO, logged the call with no arguments, and returned `stub_value(0, [])`
+    // = 7 against the native side's `stub_value(0, [4])` = 221.
+    //
+    // It surfaced as a DISAGREEMENT, which is the differential doing its job on
+    // a defect in the harness rather than in the lowering.
+    TABLE.with(|t| *t.borrow_mut() = table.to_vec());
+
+    let external_indices: std::collections::BTreeSet<usize> = m
+        .chunks
+        .iter()
+        .flat_map(|c| c.ops.iter())
+        .filter_map(|o| match o {
+            Op::CallExternalNative(i, _) => Some(usize::from(*i)),
+            _ => None,
+        })
+        .collect();
+
     for (idx, (name, argc, shape)) in table.iter().enumerate() {
         if name.is_empty() {
             continue;
         }
         let (n, ac) = (name.clone(), *argc);
+
+        // An externally-called native must be registered externally, or the
+        // machine refuses the call. The attestation is the invocation-count
+        // bound; this harness drives bounded programs and states one.
+        if external_indices.contains(&idx) {
+            if let Some(f) = external_stub_for(idx) {
+                vm.register_external_native(&n, f, 64);
+                continue;
+            }
+            // Past the family's end. Fall through to the verified registration,
+            // which the machine will refuse by name -- visible rather than
+            // silently bound to the wrong function.
+        }
 
         // **A native whose RECORDED return shape is a composite is stubbed as
         // one.** `register_native_closure` cannot: it has no arena, so it can
