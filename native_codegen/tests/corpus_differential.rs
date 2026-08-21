@@ -63,6 +63,22 @@ thread_local! {
     /// Neither renders as the same integer, so the module is exempted rather
     /// than reported as a disagreement it is not.
     static SAW_REF_ARG: RefCell<bool> = const { RefCell::new(false) };
+    /// `(native index, argument position)` pairs the VIRTUAL MACHINE observed as
+    /// non-scalar on this run.
+    ///
+    /// **`run_vm` runs before `run_native` for every seed** -- verified in the
+    /// source, not assumed -- so the native stub can mask exactly the positions
+    /// the virtual machine already substituted a zero for. Without this the two
+    /// logs differ in one field (an arena handle against a pointer) and the
+    /// WHOLE MODULE was discarded over it, leaving the call sequence, every
+    /// scalar argument, the return value and the shared segment uncompared.
+    ///
+    /// **This is a RUNTIME mask, not a contract.** It rests on what the virtual
+    /// machine saw on a particular run rather than on anything the module
+    /// declares -- `Module` carries `native_names` and `native_return_shapes`
+    /// and no parameter types at all.
+    static REF_POSITIONS: RefCell<std::collections::BTreeSet<(usize, usize)>> =
+        RefCell::new(std::collections::BTreeSet::new());
 }
 
 fn take_log() -> Vec<String> {
@@ -150,7 +166,34 @@ fn record(idx: usize, all: [i64; 5]) -> i64 {
             .unwrap_or_else(|| (format!("<unmapped #{idx}>"), 0, None))
     });
     let args = &all[..argc.min(5)];
-    let parts: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+    // **MASK THE POSITIONS THE VIRTUAL MACHINE SAW AS NON-SCALAR.**
+    //
+    // A reference argument is an arena HANDLE to the virtual machine and a
+    // POINTER here, so the two never render as the same integer. The virtual
+    // machine already substitutes zero for it; without the same substitution
+    // here the logs differ in one field and the WHOLE MODULE was discarded --
+    // ten of the corpus's exemptions were exactly this, the largest single
+    // class, and the call sequence, every scalar argument, the return value and
+    // the shared segment went uncompared over it.
+    //
+    // **Nothing is dereferenced.** The pointer is replaced, not read. Decoding
+    // it would need the string application binary interface, which is ruled
+    // PROVISIONAL, and a wrong assumption here is a SEGFAULT rather than a
+    // failed assertion since the native side runs in-process through the JIT.
+    //
+    // **Only the observed positions are masked.** Masking a scalar would hide a
+    // real disagreement, so the key is the exact `(native, position)` pair.
+    let parts: Vec<String> = args
+        .iter()
+        .enumerate()
+        .map(|(pos, a)| {
+            if REF_POSITIONS.with(|r| r.borrow().contains(&(idx, pos))) {
+                "0".to_string()
+            } else {
+                a.to_string()
+            }
+        })
+        .collect();
     LOG.with(|l| l.borrow_mut().push(format!("{name}({})", parts.join(", "))));
 
     // **A COMPOSITE return is an ADDRESS natively.** Returning `stub_value`'s
@@ -668,6 +711,9 @@ fn run_vm(
 ) -> Result<Run, (String, ExemptClass)> {
     let _ = take_log();
     SAW_REF_ARG.with(|f| *f.borrow_mut() = false);
+    // Cleared per run so a position observed for one module cannot mask a
+    // scalar in the next.
+    REF_POSITIONS.with(|r| r.borrow_mut().clear());
     let arena = arena_for(m);
     // Fallible: a module may refuse to LOAD for reasons unrelated to lowering —
     // a signature requirement, for one. That is an exemption with a stated
@@ -703,12 +749,18 @@ fn run_vm(
                 let vals: Vec<i64> = args
                     .iter()
                     .take(ac)
-                    .map(|v| match v {
+                    .enumerate()
+                    .map(|(pos, v)| match v {
                         Value::Int(x) => *x,
                         Value::Byte(b) => i64::from(*b),
                         Value::Bool(b) => i64::from(*b),
                         _ => {
                             SAW_REF_ARG.with(|f| *f.borrow_mut() = true);
+                            // Record WHICH position, so the native side can mask
+                            // the same one instead of the module being discarded.
+                            REF_POSITIONS.with(|r| {
+                                r.borrow_mut().insert((idx, pos));
+                            });
                             0
                         }
                     })
@@ -745,15 +797,23 @@ fn run_vm(
         }
 
         vm.register_native_closure(name, move |args: &[Value]| {
+            // **THE SECOND OF TWO REGISTRATION PATHS, and patching only the
+            // other one is how the mask silently did nothing.** A native with a
+            // recorded composite return shape registers through the ctx closure
+            // above; everything else lands here. `host::song_name` is here.
             let vals: Vec<i64> = args
                 .iter()
                 .take(ac)
-                .map(|v| match v {
+                .enumerate()
+                .map(|(pos, v)| match v {
                     Value::Int(x) => *x,
                     Value::Byte(b) => i64::from(*b),
                     Value::Bool(b) => i64::from(*b),
                     _ => {
                         SAW_REF_ARG.with(|f| *f.borrow_mut() = true);
+                        REF_POSITIONS.with(|r| {
+                            r.borrow_mut().insert((idx, pos));
+                        });
                         0
                     }
                 })
@@ -828,19 +888,22 @@ fn run_vm(
             ret_bytes.push(flat_ret_bytes(&st, &arena));
         }
     }
-    if SAW_REF_ARG.with(|f| *f.borrow()) {
-        // **NOT A FAULT. The module ran fine; THIS HARNESS declined to compare
-        // it.** Classified as a harness limit for exactly that reason -- folding
-        // it in with the VM faults put 14 modules in the fault class when only
-        // four belong there, and the wrong total is what exposed it.
-        return Err((
-            "a native receives a REFERENCE argument (a string); it is an \
-                    arena handle on the VM side and a pointer natively, so the two \
-                    do not render as the same integer"
-                .into(),
-            ExemptClass::HarnessCapacity,
-        ));
-    }
+    // **THIS USED TO EXEMPT THE MODULE, AND NOW MASKS ONE FIELD INSTEAD.**
+    //
+    // A reference argument still cannot be compared: it is an arena handle here
+    // and a pointer natively. But that is ONE FIELD, and discarding the module
+    // over it left the call sequence, the native names, every scalar argument,
+    // the return value and the shared segment uncompared. Ten modules -- the
+    // largest exempt class -- were declined on that basis.
+    //
+    // **An exemption says nothing was compared; a masked comparison says
+    // everything except this was.** `REF_POSITIONS` carries the exact positions
+    // to both sides, so the strings are excluded and the rest is checked.
+    //
+    // The earlier decline was not wrong about its own subject -- it argued
+    // against DEREFERENCING the pointer to compare string CONTENT, which is
+    // still declined and still for three measured reasons. It simply never
+    // considered the cheap version.
     Ok(Run {
         results,
         wrote_shared: shared != initial_shared,
