@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-20 (session 49, Order 1 item 3 reaches let bindings)
+**Date**: 2026-08-20 (session 49, closing handoff)
 
 ## Where things stand
 
@@ -27,6 +27,53 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 | `parse.kel` failure modes named | **THIRTEEN**; eleven counters guarded |
 | **the type checker's INPUT** | **the DECLARED rows now come from the pipeline; the derived ones do not** |
 | branch | `feat/typecheck-bindings-from-pipeline`, cut from `v0.2.3` at `fe2af14f` |
+
+## CLOSING SUMMARY — WHAT THIS SESSION DID AND WHAT IS WAITING ON YOU
+
+Handoff refreshed against `f091a668` with every value re-measured and its check block executed.
+
+### Four items are with you, and two of them change what the tree MEANS
+
+**1. The `ParsedFn` accessor decision — THREE accessors, not the six I first told you.** The
+duplicate compiler it sustains has cost four measured things, the worst being that the
+construct-support table describes a compiler that has **measurably diverged** from the shipping one.
+On a string literal the reference and the copy agree; the library emits `Int(3)` where they emit
+`StaticStr("hi")`. So the table reports `Ok` for a construct that ships broken.
+
+**2. PR #201** — one clause in the `CHANGELOG.md` V0.2.0 entry that contradicts another statement in
+the same release section. Left unmerged deliberately: editing historical release text is a judgment
+call, not a repair.
+
+**3. PR #210** — pins that two dispatched stage commands are driven by nothing. **Its guard is
+textual**, which I argued against all session, and it passes vacuously if those functions are
+renamed. That is in the pull request, not buried.
+
+**4. The dead `native@1c1ffb1e` gate record** — stalled 227 hours, no process, worktree clean, the
+`v0.3.0` line confirms nothing waits on it. Untouched because it is theirs.
+
+### What was done
+
+Five silent miscompiles found; four fixed, one specified. `Op::Len` witnessed and qualified. The
+support table now distinguishes a refusal from a divergence, which reclassified three of four
+"known gaps" into the more serious category. Order 1 item 3 reaches `let` bindings.
+
+### What I got wrong, since it is the more useful half
+
+- I told you **six** accessors. It is three.
+- I shipped a regression by changing **both sides of a differential comparison** in one increment, so
+  the oracle agreed with itself and stayed green.
+- I wrote a completion condition specifying a **command that does not exist**, and withdrew it.
+- My first nested-array fix **returned a worse answer than the bug** — a flat flag leaking across
+  siblings gave 64 where 32 was right.
+- I described the chained-index defect as truncation. It is a parse-level mis-categorisation two
+  stages upstream, and my note would have sent the next reader to the wrong file.
+- Three claims to the other line were plausible rather than checked; all three were corrected.
+
+### What I would not do next
+
+**Do not resume by sweeping for more miscompiles.** Yield fell from two in twenty probes, to one in
+twenty-two, to zero. The remaining items are costed honestly in the handoff, and `CONSTS` is larger
+than its own analysis suggests because commands 176/177 have never executed.
 
 ## ORDER 1 ITEM 3 REACHES `let` BINDINGS
 
