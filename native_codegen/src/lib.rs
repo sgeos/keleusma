@@ -906,11 +906,39 @@ pub fn lower_module<'ctx>(
 /// A module's refusal SET is the union over its chunks. That is coarser than
 /// per-op and derived from the real lowering rather than restated beside it,
 /// which is the property that matters.
+/// The name reported for a refusal that rejects the WHOLE module rather than
+/// one chunk. Not a chunk name, and deliberately bracketed so it cannot collide
+/// with one.
+pub const MODULE_LEVEL_REFUSAL: &str = "<module>";
+
 pub fn module_refusals(program: &Module, opts: LowerOptions) -> Vec<(String, LowerError)> {
     let ctx = Context::create();
     let m = ctx.create_module("refusals");
     let mut sink = Vec::new();
-    let _ = lower_module_with(&ctx, &m, program, opts, Some(&mut sink));
+    let outcome = lower_module_with(&ctx, &m, program, opts, Some(&mut sink));
+    // **A MODULE-LEVEL REFUSAL USED TO BE INVISIBLE HERE, and callers read the
+    // emptiness of this vector as "the backend accepts it".**
+    //
+    // `lower_module_with` reports per-CHUNK refusals through the sink and
+    // rejects the whole module by RETURNING. The return value was discarded, so
+    // a module the backend cannot lower at all produced ZERO refusals — the
+    // same answer as a module it lowers perfectly. Measured: a float-signature
+    // module gave `0 entries` from here while `lower_module` gave `Err`.
+    //
+    // Two guards already had this shape before the float one: the native-symbol
+    // collision check and the word-width check. Both were equally unreportable.
+    //
+    // **`Diagnostic` IS A MODE SENTINEL, NOT A REFUSAL.** In diagnostic mode
+    // `lower_module_with` ALWAYS returns `Err(Diagnostic(sink.len()))`, even
+    // when the sink is empty and the module lowers cleanly, because the IR it
+    // built is incomplete wherever a chunk was abandoned. Pushing every `Err`
+    // therefore marked EVERY module refused -- measured: the support census went
+    // to 0 lowering, 15 refused, and its own control fired.
+    if let Err(e) = outcome
+        && !matches!(e, LowerError::Diagnostic(_))
+    {
+        sink.push((MODULE_LEVEL_REFUSAL.to_string(), e));
+    }
     sink
 }
 
@@ -1013,6 +1041,41 @@ fn lower_module_with<'ctx>(
             "natives {names:?} all mangle to the external symbol `{sym}`; the \
              lowering refuses rather than binding several declarations to one \
              host definition"
+        )));
+    }
+
+    // **A FLOAT IN ANY SIGNATURE REFUSES THE MODULE, so the absence of float
+    // miscompiles stops being incidental.**
+    //
+    // Measured before this existed: `fn p(a: Float) -> Float { a }` LOWERED with
+    // no refusal. Only float CONSTANTS were guarded, by `Op::Const`. Nothing
+    // stopped a float VALUE reaching the operand stack — what stopped a wrong
+    // answer was that no float OPERATION was supported, so the value was never
+    // operated on. That is a property of what is unimplemented, not a guard.
+    //
+    // **It is also a live ABI defect rather than only a hazard.** The lowered
+    // entry takes `i64`; a float-typed Keleusma function should receive a
+    // double. A host calling it under the real C ABI would read an FP register
+    // this code never wrote. The pass-through case happens to round-trip a bit
+    // pattern, which is correct by accident and only inside this harness.
+    //
+    // **The tag is compared numerically on purpose.** `ScalarKind::Float` is
+    // behind the `floats` feature, so naming the variant would make this guard
+    // vanish in a build without it — exactly when it is still needed, because
+    // the wire tag is stable regardless of which features the READER was built
+    // with.
+    const SCALAR_FLOAT_TAG: u8 = 5;
+    if let Some((idx, _)) = program.signatures.iter().enumerate().find(|(_, sg)| {
+        matches!(sg.ret, keleusma::bytecode::WireShape::Scalar { kind } if kind == SCALAR_FLOAT_TAG)
+            || sg.params.iter().any(|p| {
+                matches!(p, keleusma::bytecode::WireShape::Scalar { kind } if *kind == SCALAR_FLOAT_TAG)
+            })
+    }) {
+        return Err(LowerError::UnsupportedOp(format!(
+            "chunk {idx} has a Float in its signature and this backend has no float \
+             representation: no `f64_type`, no float opcode lowered, and an entry ABI \
+             of `i64` where a double belongs. Refusing the module is the guard; the \
+             absence of float arithmetic is not one"
         )));
     }
 

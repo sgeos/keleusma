@@ -156,8 +156,17 @@ fn which_opcodes_does_the_backend_refuse() {
             continue;
         }
         let refusals = module_refusals(&m, LowerOptions::default());
-        match refusals.iter().find(|(chunk, _)| chunk == func) {
-            Some((_, err)) => refused.push(format!("{opcode}  ({err:?})")),
+        // **A MODULE-LEVEL REFUSAL COUNTS.** Matching only the probe's chunk
+        // name missed refusals reported against `MODULE_LEVEL_REFUSAL`, and the
+        // miss produced a FALSE SUPPORTED verdict -- the flattering direction.
+        // Measured when the float signature guard landed: `IntToFloat` and
+        // `FloatToInt` moved from refused to "lowers" while the backend had
+        // gained no float support whatever.
+        let hit = refusals
+            .iter()
+            .find(|(chunk, _)| chunk == func || chunk == keleusma_native::MODULE_LEVEL_REFUSAL);
+        match hit {
+            Some((where_, err)) => refused.push(format!("{opcode}  ({where_}: {err:?})")),
             None => supported.push(opcode),
         }
     }
@@ -203,60 +212,67 @@ fn which_opcodes_does_the_backend_refuse() {
     );
 }
 
-/// **A FLOAT VALUE ALREADY REACHES THE LOWERING, AND THERE IS NO FLOAT
-/// REPRESENTATION TO HOLD IT IN.**
+/// **THE FLOAT HAZARD IS NOW A STRUCTURAL GUARD, and this test used to pin the
+/// hazard instead.**
 ///
-/// This is why the generic arithmetic cluster -- `Add`, `Sub`, `Mul`, `Neg` --
-/// must NOT be lowered as integer operations, and it is not visible from the
-/// refusal list.
+/// It previously asserted that a float-typed function LOWERS with no refusal,
+/// recording that the absence of float miscompiles rested on no float OPERATION
+/// being supported rather than on anything preventing a float VALUE. Its own
+/// message said to rewrite it rather than delete it when that changed. It has
+/// changed, so this is the rewrite.
 ///
-/// `Op::Add` is emitted for `Byte` **or** `Float` operands; `Word` takes the
-/// `Checked` forms. Lowering it as `build_int_add` would be right for `Byte` and
-/// would silently miscompile `Float`, adding two f64 bit patterns as integers.
-/// **Today such a program REFUSES, which is the correct answer.**
+/// `lower_module` now refuses any module with a `Float` in a chunk signature.
+/// That closes a live ABI defect and not merely a hazard: the lowered entry
+/// takes `i64`, while a float-typed Keleusma function should receive a double,
+/// so a host calling it under the real C ABI would read an FP register this
+/// backend never wrote.
 ///
-/// # The safety is incidental, not structural
-///
-/// Measured: a float-typed function LOWERS WITH NO REFUSAL. Only float
-/// CONSTANTS are guarded, by `Op::Const`. So nothing stops a float value sitting
-/// on the operand stack -- what prevents a miscompile is that no float
-/// OPERATION is supported, so the value is never operated on.
-///
-/// **Whoever adds the first float-capable arithmetic opcode inherits this.**
-/// Give the backend a float representation first, or refuse explicitly on
-/// float-typed operands. Do not assume floats are absent.
+/// **The tag is compared numerically in the guard on purpose** — `ScalarKind::Float`
+/// sits behind the `floats` feature, and naming the variant would delete the
+/// guard from a build without it, which is exactly when it still matters.
 #[test]
-fn a_float_value_reaches_the_lowering_with_no_float_representation() {
+fn a_float_signature_refuses_the_whole_module() {
     let identity = module_of("fn p(a: Float) -> Float { a }\nfn main() -> Word { 0 }")
         .expect("the float identity compiles");
-    let id_refusals: Vec<String> = module_refusals(&identity, LowerOptions::default())
-        .iter()
-        .filter(|(c, _)| c == "p")
-        .map(|(_, e)| format!("{e:?}"))
-        .collect();
-
-    let konst = module_of("fn p() -> Float { 1.5 }\nfn main() -> Word { 0 }")
-        .expect("the float constant compiles");
-    let const_refusals: Vec<String> = module_refusals(&konst, LowerOptions::default())
-        .iter()
-        .filter(|(c, _)| c == "p")
-        .map(|(_, e)| format!("{e:?}"))
-        .collect();
-
-    println!("\n  FLOAT REPRESENTATION HAZARD");
-    println!("    float identity refusals : {id_refusals:?}");
-    println!("    float constant refusals : {const_refusals:?}");
+    let refusals = module_refusals(&identity, LowerOptions::default());
+    println!("\n  FLOAT SIGNATURE REFUSAL: {refusals:?}");
 
     assert!(
-        !const_refusals.is_empty(),
-        "a float CONSTANT now lowers, so this test's description of the hazard is \
-         stale: it says only constants are guarded."
+        !refusals.is_empty(),
+        "a float-typed function lowers again. The backend either gained a float \
+         representation, in which case rewrite this to pin THAT, or the guard was \
+         removed, in which case a host calling such a function under the C ABI \
+         reads an FP register this code never writes."
     );
     assert!(
-        id_refusals.is_empty(),
-        "a float-typed function now REFUSES, so a float value may no longer reach \
-         the operand stack. If the backend gained a float representation or an \
-         explicit float refusal, this test has served its purpose -- rewrite it to \
-         pin whichever it is rather than deleting it. Refusals seen: {id_refusals:?}"
+        refusals
+            .iter()
+            .any(|(_, e)| format!("{e:?}").contains("Float in its signature")),
+        "the module refuses, but not for the float signature. Something else now \
+         rejects it first and this test no longer measures what it names: {refusals:?}"
+    );
+}
+
+/// **`module_refusals` REPORTS MODULE-LEVEL REFUSALS, and did not before.**
+///
+/// It collects per-CHUNK refusals through a sink and rejected the whole module
+/// by RETURNING; the return value was discarded. So a module the backend cannot
+/// lower at all produced an EMPTY vector — indistinguishable from a module it
+/// lowers perfectly. Callers, including the corpus differential's exemption
+/// classification, read that emptiness as acceptance.
+///
+/// Two guards had this shape before the float one: the native-symbol collision
+/// check and the word-width check.
+#[test]
+fn a_module_level_refusal_is_visible_to_module_refusals() {
+    let m = module_of("fn p(a: Float) -> Float { a }\nfn main() -> Word { 0 }").expect("compiles");
+    let reported = module_refusals(&m, LowerOptions::default());
+    assert!(
+        reported
+            .iter()
+            .any(|(chunk, _)| chunk == keleusma_native::MODULE_LEVEL_REFUSAL),
+        "a module-level refusal is not reported by `module_refusals`, so callers \
+         reading its emptiness will treat an unlowerable module as accepted: \
+         {reported:?}"
     );
 }
