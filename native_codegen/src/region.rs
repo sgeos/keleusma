@@ -351,6 +351,47 @@ pub fn region_total_bytes(
     total
 }
 
+/// **The arena bytes a host must ADD when running this module natively.**
+///
+/// # Why this exists, and what it closes
+///
+/// `keleusma::vm::auto_arena_capacity_for` is the documented way for a host to
+/// size an arena, and it returns the sum of exactly four terms: operand-stack
+/// bytes, call-frame bytes, the module's auxiliary arena bytes, and the
+/// verifier's `max_heap_bytes`. **None of them is this backend's composite
+/// region.** Measured over the corpus, eleven modules demand MORE than
+/// `max_heap_bytes` — the only term that could plausibly have covered composite
+/// bodies — so it does not bound this pool. The virtual machine puts composite
+/// bodies in the arena's TOP region; the backend takes its region from the
+/// BOTTOM section and gives every call site a DISJOINT block.
+///
+/// This function publishes the missing figure so a host can close the gap today,
+/// with no runtime change.
+///
+/// # THIS IS A WEAKER GUARANTEE THAN THE RUNTIME RETURNING IT
+///
+/// A figure the host must remember to ADD is not the same as one the sizing
+/// function includes. **A host that calls only `auto_arena_capacity_for` is
+/// still under-provisioned for native execution**, and nothing here changes
+/// that. Whether the runtime should absorb this term is an arena-accounting
+/// question that belongs to the operator; this crate publishing what it needs
+/// does not settle it.
+///
+/// # What the figure is rooted at
+///
+/// The module's ENTRY chunk, transitively through calls, because that is the
+/// call a host scopes a region for. A module with no entry point requires
+/// nothing here, since there is no call to scope.
+///
+/// Bytes, taken from the same planner the lowering itself uses. There is
+/// deliberately no second region model: a parallel one would measure the model.
+pub fn host_arena_supplement_bytes(module: &keleusma::bytecode::Module) -> u32 {
+    match module.entry_point {
+        Some(entry) => region_total_bytes(module, entry, 0),
+        None => 0,
+    }
+}
+
 /// Per-call-site region offsets for one chunk, in instruction order.
 ///
 /// The chunk's own flat sites occupy `[0, plan_chunk_region(chunk).bytes)`;

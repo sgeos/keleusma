@@ -361,3 +361,120 @@ fn the_operand_stack_ceiling_actually_refuses_something() {
     }
     println!("================\n");
 }
+
+/// **THE SOUNDNESS PROPERTY BEHIND THE HOST-FACING FIGURE.**
+///
+/// `host_arena_supplement_bytes` publishes what a host must add to the runtime's
+/// arena sizing. **A wrapper that only changes an argument list would be
+/// decoration**, and this line has a standing rule against work whose payoff is
+/// tidying. The content is this check, which nobody had made:
+///
+/// > The entry-rooted total must DOMINATE what is planned for every chunk
+/// > reachable from the entry.
+///
+/// If the recursion under-counts anywhere — a callee whose own plan exceeds what
+/// the walk attributed to it — a host sizing from the total would
+/// UNDER-PROVISION, and the backend writes at compile-time offsets into that
+/// memory. A failure here is a defect in THIS line's code, not a documentation
+/// gap, and must not be resolved by weakening the assertion.
+///
+/// **Scope, stated because the previous increment got this wrong.** The
+/// supplement is rooted at the ENTRY and folded transitively through calls.
+/// `plan_chunk_region(chunk).bytes` is ONE chunk's own sites, un-folded. The
+/// claim is that the transitive total at the root is at least any single
+/// contributor, which is well-formed precisely because the total is a sum of
+/// non-negative terms including that contributor.
+#[test]
+fn the_published_supplement_dominates_every_reachable_chunk() {
+    let corpus = all_compiling_modules();
+    let mut modules_with_demand = 0usize;
+    let mut chunk_comparisons = 0usize;
+    let mut shortfall: Vec<String> = Vec::new();
+
+    for (name, m) in &corpus {
+        let total = region::host_arena_supplement_bytes(m);
+        if total > 0 {
+            modules_with_demand += 1;
+        }
+        let Some(entry) = m.entry_point else { continue };
+        for idx in reachable_from(m, entry) {
+            let own = region::plan_chunk_region(&m.chunks[idx]).bytes;
+            chunk_comparisons += 1;
+            if own > total {
+                shortfall.push(format!(
+                    "{name}::{} plans {own} bytes, but the entry-rooted total is {total}",
+                    m.chunks[idx].name
+                ));
+            }
+        }
+    }
+
+    println!("\n================ IS THE PUBLISHED SUPPLEMENT SOUND?");
+    println!("  modules examined                : {}", corpus.len());
+    println!("  modules with a NON-ZERO demand  : {modules_with_demand}");
+    println!("  chunk comparisons performed     : {chunk_comparisons}");
+    println!(
+        "  chunks whose own plan EXCEEDS the entry total: {}",
+        shortfall.len()
+    );
+    for sf in &shortfall {
+        println!("     {sf}");
+    }
+    println!(
+        "\n  SCOPE: the supplement is rooted at the ENTRY and folded through\n  \
+         calls; `plan_chunk_region` is ONE chunk's own sites, un-folded. Both\n  \
+         are BYTES. No slot count appears here.\n  \
+         \n  \
+         WEAKER THAN THE RUNTIME RETURNING IT. A host that calls only\n  \
+         `auto_arena_capacity_for` is STILL under-provisioned for native\n  \
+         execution. Publishing the figure does not change that; it only makes\n  \
+         the gap closeable without a runtime change."
+    );
+    println!("================\n");
+
+    // Non-vacuity, both dimensions. A dominance check over modules that plan
+    // nothing is satisfied by 0 >= 0 and establishes nothing.
+    assert!(
+        modules_with_demand > 10,
+        "only {modules_with_demand} modules have a non-zero region demand, so this \
+         dominance check is mostly comparing zero against zero"
+    );
+    assert!(
+        chunk_comparisons > 100,
+        "only {chunk_comparisons} chunk comparisons were performed, so the walk is \
+         not reaching the corpus"
+    );
+
+    assert!(
+        shortfall.is_empty(),
+        "THE ENTRY-ROOTED TOTAL DOES NOT COVER A REACHABLE CHUNK'S OWN PLAN. A \
+         host sizing from the published figure would UNDER-PROVISION, and the \
+         backend writes at compile-time offsets into that memory. This is a \
+         defect in this crate's region recursion, NOT a documentation gap. Fix \
+         the recursion; do not weaken this.\n\n{}",
+        shortfall.join("\n")
+    );
+}
+
+/// Chunk indices reachable from `root` through `Op::Call`, including `root`.
+///
+/// Iterative with an explicit visited set rather than recursive: the language
+/// rejects recursion so the call graph is acyclic, but this walks bytecode that
+/// may not have come from the compiler, and a cycle here would hang the suite
+/// rather than fail it.
+fn reachable_from(m: &Module, root: usize) -> Vec<usize> {
+    use std::collections::BTreeSet;
+    let mut seen = BTreeSet::new();
+    let mut stack = vec![root];
+    while let Some(i) = stack.pop() {
+        if i >= m.chunks.len() || !seen.insert(i) {
+            continue;
+        }
+        for op in &m.chunks[i].ops {
+            if let keleusma::bytecode::Op::Call(idx, _) = op {
+                stack.push(usize::from(*idx));
+            }
+        }
+    }
+    seen.into_iter().collect()
+}
