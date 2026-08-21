@@ -5,15 +5,16 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-08-21 against `37a5bf9b`** (branch `test/selfhost-driver-parity`, the tip of a
-> five-deep stack), every pinned value re-measured and the check block executed.
+> **REFRESHED 2026-08-21 (midday) against `dab93a23`**, every pinned value re-measured and the
+> check block executed. **This supersedes the refresh made hours earlier at `37a5bf9b`, which was
+> written BEFORE two of the session's findings and therefore understated them.**
 >
-> **THE SESSION FOUND AND CLOSED FOUR SILENT MISCOMPILES IN THE SHIPPING SELF-HOSTED COMPILER, AND
-> THEY ALL HAD ONE CAUSE.** Read "FOUR DEFECTS, ONE CAUSE" below before planning anything.
+> **EIGHT PULL REQUESTS MERGED.** Five silent miscompiles in the shipping self-hosted compiler are
+> closed, and the shipping compiler now agrees with the construct-support boundary on all 95 cases.
+> Read "FIVE DEFECTS, ONE CAUSE" below before planning anything.
 >
-> **FIVE PULL REQUESTS ARE OPEN AND ALL FIVE NEED THE OPERATOR.** One of them moves a boundary
-> against a ruling that deferred the area; it is flagged, not slipped in, and carries a revert
-> recipe.
+> **NOTHING IS HELD BY THE OPERATOR EXCEPT TWO DECISIONS**, both about ownership rather than code.
+> The pull-request queue is empty on this line.
 
 ## Validity
 
@@ -25,7 +26,7 @@ always-current, so it must be able to report itself stale rather than mislead a 
 recorded parent is a claim that nothing else ever lands, and it has failed twice.
 
 ```sh
-git merge-base --is-ancestor 37a5bf9b HEAD    # must succeed
+git merge-base --is-ancestor dab93a23 HEAD    # must succeed
 
 # Content. If ANY of these differ, say so rather than acting on the state below.
 grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 16
@@ -34,14 +35,15 @@ grep -c '^\s*#\[test\]' tests/selfhost_parse.rs             # 89
 grep -c '^\s*#\[test\]' tests/selfhost_codegen.rs           # 140  (+1: the shipping-compiler guard)
 grep -c '^\s*#\[test\]' tests/selfhost_pool_tags.rs          # 8    (new 2026-08-21)
 grep -c '^\s*#\[test\]' tests/selfhost_driver_parity.rs      # 4    (new 2026-08-21)
+grep -c '^\s*#\[test\]' tests/selfhost_chained_index.rs      # 3    (new 2026-08-21)
+grep -c '^\s*#\[test\]' tests/stage_command_reach.rs         # 1    (#210 merged)
 grep -c '^\s*#\[test\]' tests/selfhost_declared_bounds.rs   # 5
-grep -c '^\s*#\[test\]' tests/opcode_reachability.rs        # 2   (new this session)
+grep -c '^\s*#\[test\]' tests/opcode_reachability.rs        # 5   (+3: the IsStruct witness)
 grep -c '^\s*#\[test\]' tests/block_form_statements.rs      # 11
 grep -c '^\s*#\[test\]' tests/consts_region_composition.rs  # 7
 grep -c '^\s*#\[test\]' tests/operand_stack_model.rs        # 6
 
-# `tests/stage_command_reach.rs` is NOT in this list on purpose: it lands with PR
-# #210, which is open at the time of writing. If it exists, #210 merged.
+# `tests/stage_command_reach.rs` IS in the list now: #210 merged 2026-08-21.
 
 # THE STAGE BOUNDS. `wire.kel` unchanged; `verify_depth.kel`'s cap is new and
 # REPLACED A SILENT DROP.
@@ -50,14 +52,14 @@ grep -oE 'fn (nm_max_names|mi_max_nodes|fl_max_nodes|ck_max|highest_command)\(\)
 grep -oE 'fn max_nesting\(\) -> Word \{ [0-9]+ \}' src/selfhost/kel/verify_depth.kel   # 32
 
 # THE MARGIN PINS. Moved twice this session, both times for a NAMED reason.
-grep -oE 'assert_eq!\(worst_(names|blob), [0-9]+' tests/selfhost_wire.rs   # 672, 35233
+grep -oE 'assert_eq!\(worst_(names|blob), [0-9]+' tests/selfhost_wire.rs   # 676, 35333
 
 # THE PARSER'S CAPS. Unchanged; the token cap now binds only the COLLECTING feed.
 grep -rhoE 'pub const PARSE_[A-Z_]+: usize = [0-9]+;' src/ | sort
 
 # THE CONSTRUCT-SUPPORT BOUNDARY. **THE ENUM HAS FOUR VARIANTS, NOT THREE**: `Gap`
 # split into `Refuses` and `Diverges` because it conflated an honest refusal with a
-# silent miscompile. Expect 88 SOk / 1 Refuses / 5 Diverges / 1 RefRejects.
+# silent miscompile. Expect 90 SOk / 1 Refuses / 3 Diverges / 1 RefRejects.
 # **THE TABLE MOVED INTO A FUNCTION** so a second test can measure the SHIPPING
 # compiler against it. The `use Support::{...}` line inside it contributes one of
 # each name and must be excluded, or every count reads one too high.
@@ -149,8 +151,9 @@ push cancelled run `31932202253` and `31932359730` replaced it.
 | **`parse.kel` failure modes named** | **THIRTEEN**, across **ELEVEN** guarded counters |
 | shared-slot layouts | **nine copies collapsed to two definitions**, in `selfhost_host` |
 | architecture | one binary, selectable phases -- see `../decisions/PIPELINE_THEN_MONOLITH.md` |
-| construct-support boundary | **88 SOk / 1 Refuses / 5 Diverges / 1 RefRejects**, 95 cases |
-| **the SHIPPING compiler against that table** | **88 identical / 5 differs / 1 faults / 1 ref-rejects — it AGREES with the boundary on all 95** |
+| construct-support boundary | **90 SOk / 1 Refuses / 3 Diverges / 1 RefRejects**, 95 cases |
+| **the SHIPPING compiler against that table** | **90 identical / 3 differs / 1 faults / 1 ref-rejects — it AGREES with the boundary on all 95** |
+| **chained array indexing** | **`a[0][1]` and its split form both byte-identical** |
 | operand-stack models | **agree on every one of the 66 opcodes**; the known list is EMPTY |
 
 **WHAT EACH EMITTED REGION OWES TO WHOM, because the distinction is the coverage claim.**
@@ -172,49 +175,71 @@ but not derived**. A region whose payload came from the harness or the reference
    constants. The **flattener out of `wire.fin`** refuses past **170**, `fin` being 1,024 words at six
    words a node. Only the second is derived from a word count.
 
-## FOUR DEFECTS, ONE CAUSE (2026-08-21) — READ THIS FIRST
+## FIVE DEFECTS, ONE CAUSE (2026-08-21) — READ THIS FIRST
 
 **The shipping self-hosted compiler and the copy of it in `tests/selfhost_codegen.rs` are two
-implementations of the same driver, and the construct-support boundary exercises only the copy.**
-Every divergence found on 2026-08-21 was a slot, a tag, a record or an arm the copy handled and
-the shipping driver did not.
+implementations of the same driver, and the construct-support boundary exercised only the copy.**
 
-| defect | symptom | where |
+| defect | symptom | PR |
 |---|---|---|
-| the constant-pool tag was discarded | a string constant became the integer of its intern id | #212 |
-| struct/trait/impl declarations had no skip state | the driver faulted on 29 boundary cases | #212 |
-| the eager `and`/`or` ids were never seeded | **`a and b` compiled to `a`** | #213 |
-| op tag 53 had no flat-nested arm | a struct-typed tuple element faulted in kind decoding | #214 |
+| the constant-pool tag was discarded | a string constant became the integer of its intern id | 212 |
+| struct/trait/impl declarations had no skip state | the driver faulted on 29 boundary cases | 212 |
+| the eager `and`/`or` ids were never seeded | **`a and b` compiled to `a`** | 213 |
+| op tag 53 had no flat-nested arm | a struct-typed tuple element faulted in kind decoding | 214 |
+| a nested array index parsed as an array LITERAL | **`a[0][1]` silently miscompiled** | 218 |
 
-**Census over the 95 boundary cases, baseline taken by STASHING each change rather than assumed:**
+The first four were each a slot, tag, record or arm the copy had and the driver did not. **The
+fifth was different**: a genuine parser gap, and the only one whose repair was a feature.
 
-| | baseline | +#212 | +#213 | +#214 |
-|---|---|---|---|---|
-| byte-identical | 43 | 76 | 82 | **88** |
-| differs | 21 | 11 | 5 | **5** |
-| faults | 30 | 7 | 7 | **1** |
+**Census over the 95 boundary cases, each baseline taken by STASHING the change:**
 
-**The shipping compiler now reaches the same verdict as the boundary on all 95 cases.** Every
-remaining non-identical case is one the table already labels `Diverges`, `Refuses` or
-`RefRejects`.
+| | baseline | +212 | +213 | +214 | +218 |
+|---|---|---|---|---|---|
+| byte-identical | 43 | 76 | 82 | 88 | **90** |
+| differs | 21 | 11 | 5 | 5 | **3** |
+| faults | 30 | 7 | 7 | 1 | **1** |
+
+**The shipping compiler reaches the same verdict as the boundary on all 95 cases**, and the three
+that differ are all already labelled `Diverges` — float arithmetic and two composite-equality gaps.
 
 **PROPORTIONALITY, AND STATE IT EVERY TIME.** `self_hosted_compile` cross-checks against the
-reference and refuses on divergence, so **none of this reached a user as a wrong module**. The
-exposure was to direct callers of the `self_host_compile*` entry points.
+reference and refuses on divergence, so **none of this reached a user as a wrong module**. Exposure
+was to direct callers of the `self_host_compile*` entry points.
 
-**TWO GUARDS NOW COVER THE CLASS, AND NEITHER IS SUFFICIENT ALONE.**
-- `the_shipping_compiler_matches_the_boundary_it_is_recorded_against` measures the SAME hoisted
-  case table through the shipping compiler and asserts **per-case verdict agreement**, not a
-  count. Bounded by the 95 cases.
-- `tests/selfhost_driver_parity.rs` compares the two drivers by STRUCTURE — decode arms, seeded
-  slots, declaration record codes — so it does not depend on corpus coverage. **It would have
-  caught three of the four, not all four**, and says so in a table; the pool tag is semantics
-  inside an arm rather than the presence of an arm.
+**THREE GUARDS NOW COVER THE CLASS, AND NONE IS SUFFICIENT ALONE.**
+- `the_shipping_compiler_matches_the_boundary_it_is_recorded_against` — per-case verdict agreement
+  through the SHIPPING compiler. Bounded by the 95 cases.
+- `tests/selfhost_driver_parity.rs` — compares the two drivers by STRUCTURE, so it does not depend
+  on corpus coverage. **Catches three of the four slot-class defects, not all four**, and says so.
+- `tests/selfhost_chained_index.rs` — the parser repair, with a leak probe, because the record it
+  adds fires on every nested index including one never bound.
 
-**THE PARITY GUARD FAILED ITS OWN FIRST MUTATION TEST**, and the reason generalises: it compared
-SETS of seeded slot names, and the library has TWO token feeds, so deleting one of two seedings
-left the name present via the other. Now counted, calibrated against `BR_P_WORD_ID`'s own count so
-a third feed cannot silently weaken it. **A guard that has not been made to fail is a guess.**
+**THE PARITY GUARD FAILED ITS OWN FIRST MUTATION TEST.** It compared SETS of seeded slot names, and
+the driver has TWO token feeds, so deleting one of two seedings left the name present via the
+other. Now counted and calibrated against `BR_P_WORD_ID`'s own count. **A guard that has not been
+made to fail is a guess.**
+
+## `Op::IsStruct` IS REACHABLE, AND ITS WITNESS IS A LOAD-TIME HOLE
+
+Missed by seventeen attempts across both lines. The witness is a struct pattern on a parameter with
+**no type annotation**: `fn g(P { a, b }) -> Word { a + b }`.
+
+Everyone, including me, tried to make a scrutinee's type DIFFER from the pattern's. **The type
+checker forbids that outright**, so the inequality is satisfiable only when the type is absent —
+and a match scrutinee always has one. **The route was never an expression whose inference fails; it
+was a declaration site with no type to lose.**
+
+| witness | `verify()` | `module_wcmu` | load | run |
+|---|---|---|---|---|
+| `Op::Len` | accepts | refuses | **`Vm::new` REFUSES** | never runs |
+| `Op::IsStruct` | accepts | accepts | loads | **traps `InvalidBytecode`** |
+
+`Op::Len`'s witness cannot be admitted at all, which is the conservative-verification stance
+working as designed. `Op::IsStruct`'s satisfies every load-time check and dies at call time.
+**`InvalidBytecode` is the class `verify()` exists to exclude**, and of the three "should never
+have been emitted" refusals the VM carries, this is the only one a loaded program can reach.
+
+**PINNED, NOT REPAIRED**, and both pins fire in the FAILING direction. See the operator queue.
 
 ## WHAT THE SWEEP FOUND, AND WHY IT COULD NOT HAVE BEEN FOUND BY READING
 
@@ -465,56 +490,65 @@ looked complete. **In every case the code was reachable and the evidence was not
 
 ## Open, held by the operator
 
-**FIVE PULL REQUESTS AND TWO DECISIONS.** Nothing is blocked on anything else.
+**THE PULL-REQUEST QUEUE IS EMPTY ON THIS LINE.** Eight merged 2026-08-21: #201, #210, #212, #213,
+#214, #215, #216, #218. Two DECISIONS remain, and both are about ownership rather than code.
 
-**THE PULL REQUESTS, ALL AGAINST `v0.2.3`, ALL DRAFT, IN STACK ORDER:**
+**1. WHO OWNS `src/verify.rs`? IT CURRENTLY HAS NO OWNER.**
 
-| # | what | note |
-|---|---|---|
-| **212** | constant-pool tag + struct/trait/impl declaration skip | **22/22 green.** Moves a boundary; see below |
-| **213** | eager `and`/`or` id seeding | needs #212; neither completes the construct alone |
-| **214** | flat-nested tuple field + the shipping-compiler guard | |
-| **215** | the structural driver-parity guard | contains 212–214 as ancestors |
-| **201** | one self-contradicting clause in the CHANGELOG V0.2.0 entry | **22/22 green**, held because editing published release text is a judgment call |
-| **210** | pins that stage commands 176/177 are dispatched and unreached | guard is TEXTUAL and passes vacuously on a rename; stated in the PR |
+Surfaced by the `v0.3.0` line and confirmed against both records. **This handoff lists the file as
+theirs and read-only here; their handoff lists it as ours and read-only there.** Each line has been
+declining to touch it out of deference to the other.
 
-**#212 MOVES A BOUNDARY AGAINST A RULING THAT DEFERRED THE AREA.** Programs the tree previously
-refused now compile. The ruling of 2026-08-19 was "Top-level struct support. Defer."
+Their framing of the risk is better than mine: the danger is not the unrepaired defect, it is that
+a surface nobody believes they own is one where **either line might edit believing itself
+entitled** — and from each side the mistake reads as the other's record being wrong. **A wrong
+owner is safer than no owner, because a wrong owner still gets caught.**
 
-The reading offered: this is not that work, because no struct LAYOUT is derived from the pipeline —
-a struct program compiles because its layout comes from the reference scaffold and its chunk ops now
-lower without faulting. **If the ruling is read more broadly, the skip should come out.**
-`docs/decisions/POOL_TAG_RESIDENCY_BRIEF.md` names the three hunks; the pool-tag half is independent.
+Neither line has edited it. Neither will until this is ruled.
 
-**THE `ParsedFn` ACCESSOR DECISION IS NOW FOUR FINDINGS BETTER EVIDENCED.** Three read-only
-accessors (`name`, `param_types`, `return_type`) would let the duplicate be deleted. The string
-literal that first evidenced it is repaired; in its place stand the four defects above, every one
-caused by the duplicate existing. **The two new guards make the drift visible; they do not make the
-duplicate safe.**
+**2. WHERE DOES THE `Op::IsStruct` REPAIR BELONG?**
 
-**THE DEAD `native@1c1ffb1e` GATE RECORD.** Unchanged: stalled 227+ hours, no process, worktree
+Two coherent answers, and it is a judgment about which side owns the invariant:
+- **Load time**, in `verify.rs` — `InvalidBytecode` is precisely what that pass exists to exclude.
+- **Compile time**, in `compiler.rs` — fold the type test out when the PATTERN's own type is known,
+  regardless of the scrutinee's. The fold already exists; it is conditional on a type an
+  un-annotated parameter does not have.
+
+**3. THE DEAD `native@1c1ffb1e` GATE RECORD.** Unchanged: stalled 227+ hours, no process, worktree
 clean, the `v0.3.0` line confirms nothing waits on it. Untouched because it is theirs.
 
-**THE RULINGS OF 2026-08-19 ARE ALL IMPLEMENTED OR RECORDED. Do not re-ask them.**
+**4. THE RULINGS OF 2026-08-19 ARE ALL IMPLEMENTED OR RECORDED. Do not re-ask them.** Note that
+#212 moved a boundary against the "Top-level struct support. Defer." ruling; the operator was
+told, and merged it. `docs/decisions/POOL_TAG_RESIDENCY_BRIEF.md` still carries the revert recipe.
 
 ## WHAT A RESUMING SESSION SHOULD DO FIRST
 
-**Clear the operator queue.** Five pull requests, and #212's boundary move is the one that changes
-what the tree means rather than what it does.
+**Nothing is blocked.** The pull-request queue is empty and the two open items are operator
+decisions that do not gate other work.
 
 **DO NOT RESUME BY SWEEPING THE DRIVER FOR MORE OF THE SAME CLASS.** It is worked out on all three
-structural surfaces — decode arms, seeded slots, declaration records — and
-`tests/selfhost_driver_parity.rs` now asserts that. The remaining yield is zero.
+structural surfaces — decode arms, seeded slots, declaration record codes — and
+`tests/selfhost_driver_parity.rs` asserts that. The remaining yield is zero.
 
-Then, the honestly-costed options, unchanged in substance:
+**DO NOT RESUME BY HUNTING SILENT MISCOMPILES EITHER.** Five were closed on 2026-08-21 and the
+shipping compiler now matches the boundary on all 95 cases. The three that still differ are
+labelled and understood.
 
-- **`CONSTS`, Order 1 item 1.** Commands 176/177 have never run: budget for validating them, and
-  drive them from a test first so the stage side is proven independently of the driver.
-- **Chained array indexing.** Specification is in the boundary table; a parser feature, not a fix.
-- **`Op::IsStruct` reachability.** Nine constructs tried and recorded; the trick that works for
-  `Op::Len` does NOT work here.
-- **The five remaining `Diverges` cases.** All already labelled as such: nested array index (the
-  parser feature above), float arithmetic, and two composite-equality gaps.
+The honestly-costed options, in the order I would take them:
+
+- **`CONSTS`, Order 1 item 1.** The largest remaining piece. Commands 176/177 have never run —
+  budget for validating them, and **drive them from a test first** so the stage side is proven
+  independently of the driver. `tests/stage_command_reach.rs` pins that they are unreached.
+- **The three remaining `Diverges` cases**: float arithmetic, and two composite-equality gaps
+  (`eq/struct_tuple_of_impure_struct`, `eq/struct_field_array_of_tuple`).
+- **`Op::cost()` against measurement.** `OPCODE_SPECS` covers 16 distinct opcodes of 66, so 50
+  carry estimates. Worst-case execution time is the headline claim, so this is the largest gap
+  between what is asserted and what is measured. Operator's ruling: after Order 1.
+
+**A COST-ESTIMATION LESSON WORTH CARRYING.** The chained-index specification said three coordinated
+pieces of parser machinery were needed. **Two already existed.** Check whether the code exists
+before costing work that depends on it — the same check that revealed hidden COST for commands
+176/177 revealed hidden PROGRESS here.
 
 ## A NOTE ON THE `/goal` MECHANISM, IF THE OPERATOR USES IT
 

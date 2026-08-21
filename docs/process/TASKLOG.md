@@ -10,6 +10,32 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-21, midday).** **FIVE SILENT MISCOMPILES CLOSED; `Op::IsStruct`
+> WITNESSED; EIGHT PULL REQUESTS MERGED.** This supersedes the note below it, which was written
+> before the last two findings.
+>
+> Boundary is now **90 SOk / 1 Refuses / 3 Diverges / 1 RefRejects**, and the SHIPPING compiler
+> reaches the same verdict as the boundary on all 95 cases. Census across the session:
+> byte-identical **43 -> 90**, differs 21 -> 3, faults 30 -> 1.
+>
+> **CHAINED ARRAY INDEXING WORKS.** `a[0][1]` had parsed its second `[1]` as an array LITERAL. The
+> recorded specification said three coordinated pieces of parser machinery were needed; **two
+> already existed** -- the `]` handler already emitted `GetIndex(FlatNested{size, Array})` and
+> already re-armed the postfix. Only the binding side was missing. Check whether the code exists
+> before costing work that depends on it.
+>
+> **`Op::IsStruct` HAS A WITNESS** -- a struct pattern on an un-annotated parameter -- after
+> seventeen attempts across two lines that all tried to make a scrutinee's type DIFFER from the
+> pattern's, which the type checker forbids. **Its witness verifies, receives a bound, loads, and
+> then TRAPS**, which is a load-time hole. Pinned, not repaired: see the operator queue.
+>
+> **Margin pins moved with their arithmetic recorded**: names 672 -> 676 (the four identifiers
+> added, the first move in ten to match its prediction), blob 35,233 -> 35,333 (72 characters plus
+> 7 bytes per name, confirmed against the ninth move).
+>
+> Stage sources untouched by four of the five fixes; the fifth changed `parse.kel` and it still
+> self-compiles byte-identically. No opcode and no `BYTECODE_VERSION` change.
+
 > **Currency note (2026-08-21, session 50).** **THE SHIPPING SELF-HOSTED COMPILER DISCARDED ITS
 > OWN STAGE'S CONSTANT-POOL TAGS, AND DROPPED EVERY STRUCT DECLARATION.**
 >
