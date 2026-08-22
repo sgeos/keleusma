@@ -361,3 +361,78 @@ fn the_skipped_region_kinds_are_the_ones_on_record() {
         skipped.len()
     );
 }
+
+/// **THE 81% IS NOT ALL ONE THING, AND SAYING SO IS THE POINT OF THIS TEST.**
+///
+/// "The self-hosted path produces 81% of the corpus's region bytes" is true and
+/// invites a stronger reading than it supports. The handoff's provenance table
+/// distinguishes three standings and they are not comparable:
+///
+/// | standing | regions | what Keleusma decides |
+/// |---|---|---|
+/// | **computed** | `NAMES`, `STRING_POOL`, `CONSTS` | the stage walks the module blob and derives every byte |
+/// | **mixed** | `CHUNKS` | the stage computes the name index and three range cursors; ten fields per record come from the host |
+/// | **encoded, not derived** | `HEADER` | the host reads the scalars off the `Module`; the stage decides offsets, widths and endianness |
+///
+/// `wire.kel` makes the same distinction about the record formatters it carries
+/// for the still-skipped kinds: *"COVERAGE IS WHAT THESE ARE, WHICH IS
+/// FORMATTING ... counting them beside `NAMES` would overstate what is
+/// self-hosted."* Wiring those kinds will raise the byte figure without raising
+/// the computed one, which is exactly why both are pinned here.
+///
+/// # What this test is for
+///
+/// So that the headline figure cannot drift away from its composition. If a
+/// future slice raises coverage to 97% by wiring formatters, the computed share
+/// stays put and this test says so, rather than leaving a reader to read 97% as
+/// meaning the compiler derives 97% of its own artifact.
+#[test]
+fn the_computed_share_is_smaller_than_the_produced_share() {
+    use keleusma::wire_schema::kind;
+
+    // The regions the stage DERIVES rather than formats. Listed rather than
+    // inferred, because provenance is not a property of the bytes and cannot be
+    // measured from them — it is a fact about which side computes the values,
+    // and the only honest way to carry it is to state it and pin the figures.
+    const COMPUTED: &[u16] = &[kind::NAMES, kind::STRING_POOL, kind::CONSTS];
+
+    let mut computed = 0usize;
+    let mut produced = 0usize;
+    let mut total = 0usize;
+
+    for (_name, regions) in census() {
+        for &(kind, len, outcome) in regions {
+            total += len;
+            if outcome != Outcome::Identical {
+                continue;
+            }
+            produced += len;
+            if COMPUTED.contains(&kind) {
+                computed += len;
+            }
+        }
+    }
+
+    assert!(total > 0, "the corpus emitted no regions at all");
+    let computed_share = (computed * 100) / total;
+    let produced_share = (produced * 100) / total;
+
+    assert!(
+        computed < produced,
+        "every produced byte is a computed byte ({computed} of {produced}). Either the \
+         formatted regions stopped being emitted, or `COMPUTED` has grown to cover them \
+         without anyone checking that the stage derives their values"
+    );
+    assert!(
+        computed_share >= 50,
+        "only {computed_share}% of the corpus's region bytes are DERIVED by the stage \
+         (against {produced_share}% produced). It was 57% when `CONSTS` landed; a fall \
+         means a computed region stopped being routed"
+    );
+    assert!(
+        computed_share < produced_share,
+        "the computed share ({computed_share}%) has caught the produced share \
+         ({produced_share}%). If every routed region is now derived, say so: update the \
+         provenance table in the handoff and replace this test with one asserting it"
+    );
+}

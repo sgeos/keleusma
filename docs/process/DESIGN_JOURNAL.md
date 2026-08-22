@@ -13,6 +13,62 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**FOUR MORE COMMANDS THAT HAD NEVER RUN, AND THE 81% SPLIT INTO WHAT IT ACTUALLY IS (2026-08-22).**
+
+Eight region kinds are still skipped by the windowed assembler. Before costing the wiring I looked
+up what the stage already has, which is the check that has paid off four increments running.
+
+**`emit_in_window` dispatches EIGHTEEN region kinds generically**, so the Keleusma side is not the
+gap for any of them. And commands **178 to 181** — `ds_stream_step`, `sh_stream_step`,
+`sg_stream_step`, `ev_stream_step` — are one-record-per-call formatters for exactly the three kinds
+that exceed a single `fin` batch (`SHAPES` at 341 records, `SIGNATURES` at 486, `DATA_SLOTS` at 388)
+plus `ENUM_VARIANTS`.
+
+**Nothing in Rust named any of the four numbers.** Fourth instance of this shape, after `Op::Reset`,
+`Op::IsStruct`, and commands 176/177. Reading "streaming commands already exist" alongside "the
+stage has an emitter for every kind" makes the remaining work look like wiring; it was wiring plus
+validating never-executed code, and only searching for callers surfaced that.
+
+All four now execute and each formats a record the reference agrees with, **mutation-verified in
+both directions** — swapping `ret` and `resume` in `sg_stream_step` and zeroing the run field in
+`ds_stream_step` each fail by their own region's name.
+
+**THE FIELD VALUES COME FROM THE REFERENCE, AND THAT IS CORRECT FOR THIS CLAIM.** `wire.kel` says
+in its own comment above these four: *"COVERAGE IS WHAT THESE ARE, WHICH IS FORMATTING ... counting
+them beside `NAMES` would overstate what is self-hosted."* The question under test is whether the
+stage lays a record out the way the format specifies, not whether Keleusma can derive the values. A
+test feeding values Keleusma computed would be testing something these commands do not do.
+
+**THE WIRING DEPENDENCY, MEASURED RATHER THAN ASSUMED.** `DATA_SLOTS` and `ENUM_VARIANTS` records
+carry a NAME INDEX, and the host does not hold the interner's numbering — the stage computes
+`NAMES` internally and returns bytes. The route exists (`wire.nmap`, exposed as `intern_index_of`,
+command 140) and it is **O(n²)**: it re-interns the whole name set per query, and nothing in Rust
+drives it either. `SHAPES` and `SIGNATURES` carry no name index but do carry the encoder's own index
+assignment — which `SHAPES` slot a return type took, which `PARAM_TYPES` range a parameter list
+occupies. Recorded rather than started, because that is a fifth uncosted dependency and the
+previous four all moved on contact.
+
+**THE 81% IS NOT ALL ONE THING.** "The self-hosted path produces 81% of the corpus's region bytes"
+invites a stronger reading than it supports, and wiring the formatters would raise it toward 97%
+without raising what the compiler DERIVES by a single byte. So the census now pins both:
+
+| standing | regions | share |
+|---|---|---|
+| **computed** — the stage derives every byte | `NAMES`, `STRING_POOL`, `CONSTS` | **57%** |
+| **mixed** — name index and range cursors computed, ten fields host-supplied | `CHUNKS` | |
+| **encoded, not derived** | `HEADER` | |
+| produced, all standings | | **81%** |
+
+The test asserts the computed share stays **strictly below** the produced share, so a future slice
+that raises coverage by formatting cannot quietly present it as derivation.
+
+**THE PREVIOUS ITERATION'S LESSON, APPLIED RATHER THAN RECORDED.** The reach guard for 176/177
+could not fire because it searched for the stage's function names while the driver addresses
+commands by number. The new guard for 178–181 searches for the numbers **and was made to fire** by
+adding a matching declaration to the driver before being trusted.
+
+---
+
 **THE COVERAGE CLAIM WAS A SENTENCE CHECKED BY A TEST THAT LISTED THE SAME SENTENCE (2026-08-22).**
 
 The self-hosted emit path's coverage lived in prose: a doc comment naming four region kinds, and a

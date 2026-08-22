@@ -12,6 +12,33 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 **Date**: 2026-08-22 (the `CONSTS` route decision, taken by reading the code)
 
+## SESSION 51 — THE 81% SPLIT INTO WHAT IT ACTUALLY IS, AND FOUR MORE UNRUN COMMANDS
+
+**"81% of the corpus's region bytes" invites a stronger reading than it supports.** The census now
+pins both figures: **57% of the corpus is COMPUTED** by the stage — `NAMES`, `STRING_POOL`, `CONSTS`,
+where it walks the module blob and derives every byte — against **81% PRODUCED**, which also counts
+`CHUNKS` (mixed per field) and `HEADER` (encoded, not derived). The test asserts the computed share
+stays strictly below the produced one, so a future slice that raises coverage by *formatting* cannot
+present it as derivation.
+
+That matters immediately: wiring the eight skipped kinds would take the produced figure toward 97%
+**without raising the computed figure by a single byte**, and `wire.kel` says so itself in the
+comment above those emitters.
+
+**Commands 178–181 had never executed** — the record formatters for `DATA_SLOTS`, `SHAPES`,
+`SIGNATURES`, `ENUM_VARIANTS`. Fourth instance of this shape. All four now run and each formats a
+record the reference agrees with, mutation-verified both ways.
+
+**The wiring dependency, measured rather than assumed**: those records carry a name index the host
+does not hold, and the encoder's own index assignment. The route exists (`intern_index_of`, command
+140, also undriven) and is O(n²). Recorded rather than started — that is a fifth uncosted dependency
+in this area, and the previous four all moved on contact.
+
+**Last iteration's lesson applied rather than filed.** The new reach guard searches for command
+NUMBERS, not stage function names, **and was made to fire** before being trusted.
+
+---
+
 ## SESSION 51 — 81% OF THE CORPUS, MEASURED RATHER THAN CLAIMED
 
 The self-hosted emit path's coverage had lived in prose: a doc comment naming four region kinds, and
