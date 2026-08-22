@@ -1,0 +1,35 @@
+COMPLETION CONDITION — handoff ordering and superseded headings
+
+Ordering is explicitly NOT a completion criterion. Any order satisfies this.
+
+All of the following must hold as observable properties of the tree.
+
+1. The resume document for this line states, without relying on a relative word
+   like "later", which end of the document is authoritative when two sections
+   disagree. A reader who knows only that rule can resolve a conflict correctly.
+
+2. Every section heading whose factual claim has been superseded says so in the
+   heading itself, and names or points to where the current statement lives. A
+   reader skimming only headings does not collect a superseded figure.
+
+3. The superseded sections are retained rather than deleted, because they record
+   how a wrong conclusion was reached.
+
+4. No section is renumbered or moved in a way that invalidates existing
+   references within the document.
+
+5. Every figure the document states as current matches a run, and its stated
+   test count matches the suite.
+
+6. The document does not claim to be short or easy to navigate. Any statement
+   about its size is accurate.
+
+7. The files recorded as owned by the other line are unmodified.
+
+8. The native code generator's suite passes with zero failures and its
+   formatting and lint checks pass, with the pass/fail judgement taken from
+   something other than a truncated or piped view of the output.
+
+9. Work that is finished is committed. Pushing may be deferred while a pull
+   request of this line is mid-verification, provided the deferral is stated and
+   the work is not left uncommitted.
