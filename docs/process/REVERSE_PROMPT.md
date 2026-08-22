@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-21 (session 50, autonomous loop, eight pull requests merged)
+**Date**: 2026-08-21 (session 50 close-out, fourteen pull requests merged)
 
 ## Where things stand
 
@@ -24,74 +24,75 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 | the type checker's INPUT | the DECLARED rows come from the pipeline; the derived ones do not |
 | branch | `fix/selfhost-pool-tags`, cut from `v0.2.3`, rebased onto `b729a2a9` |
 
-## SESSION 50 — FIVE SILENT MISCOMPILES CLOSED, AND TWO DECISIONS THAT NEED YOU
+## SESSION 50 — FOURTEEN MERGES, AN EMPTY QUEUE, AND TWO THINGS I TOLD YOU THAT WERE WRONG
 
-You asked for as much self-directed development as could be carried out without input, and left the
-machine running. Eight pull requests are merged; the queue on this line is empty.
+You asked for as much self-directed development as could be carried out without input, then left
+the machine running. **Nothing is waiting on you.**
 
-### What was wrong
+### What was fixed
 
 | defect | symptom | PR |
 |---|---|---|
-| the constant-pool tag was discarded | a string constant became the integer of its intern id | 212 |
+| constant-pool tag discarded | a string constant became the integer of its intern id | 212 |
 | struct/trait/impl declarations had no skip state | the driver faulted on 29 boundary cases | 212 |
-| the eager `and`/`or` ids were never seeded | **`a and b` compiled to `a`** | 213 |
+| eager `and`/`or` ids never seeded | **`a and b` compiled to `a`** | 213 |
 | op tag 53 had no flat-nested arm | a struct-typed tuple element faulted in kind decoding | 214 |
-| a nested array index parsed as an array LITERAL | **`a[0][1]` silently miscompiled** | 218 |
+| nested array index parsed as an array LITERAL | **`a[0][1]` silently miscompiled** | 218 |
+| **a legal program verified, took a bound, loaded, and TRAPPED** | two symmetry gaps hiding each other | 221 |
 
-The first four had **one cause**: the shipping driver and the copy of it in
-`tests/selfhost_codegen.rs` are two implementations of the same thing, and the construct-support
-boundary exercised only the copy. The fifth was a genuine parser gap.
+The first four shared one cause: the shipping driver and its copy in `tests/selfhost_codegen.rs`
+are two implementations of the same thing, and the construct-support boundary exercised only the
+copy.
 
 **Census over the 95 boundary cases, each baseline taken by stashing the change rather than
-assumed:** byte-identical **43 -> 90**, differs 21 -> 3, faults 30 -> 1. The shipping compiler now
-reaches the same verdict as the boundary on all 95, and the three that differ are already labelled.
+assumed:** byte-identical **43 → 90**, differs 21 → 3, faults 30 → 1. The shipping compiler now
+reaches the same verdict as the boundary on all 95.
 
-**Proportionality, which belongs beside every line of this.** `self_hosted_compile` cross-checks
-against the reference and refuses on divergence, so **none of it reached a user as a wrong
-module**. Exposure was to direct callers of the `self_host_compile*` entry points.
+**Proportionality, beside every line of this.** `self_hosted_compile` cross-checks against the
+reference and refuses on divergence, so **none of it reached a user as a wrong module**.
 
-### TWO DECISIONS, AND BOTH ARE ABOUT OWNERSHIP
+Also: the `CONSTS` streaming path executed for the first time — commands 176/177 had never run —
+and a 200-node forest the walk refuses with `-240` streams byte-identically to the reference
+encoder. The driver is deliberately unwired.
 
-**1. `src/verify.rs` has no owner.** My handoff records it as the `v0.3.0` line's and read-only
-here; theirs records it as mine and read-only there. Each of us has been declining to touch it out
-of deference to the other. Their framing is better than mine: the risk is not the unrepaired
-defect, it is that a surface nobody believes they own is one where **either line might edit
-believing itself entitled**, and from each side the mistake reads as the other's record being
-wrong. A wrong owner is safer than no owner, because a wrong owner still gets caught.
+### TWO THINGS I TOLD YOU THAT WERE WRONG
 
-**2. Where the `Op::IsStruct` repair belongs** — load time in `verify.rs`, or compile time by
-folding the type test out when the pattern's own type is known regardless of the scrutinee's.
+**1. "`src/verify.rs` has no owner."** It was always `v0.2.3`'s, and both handoffs said so. The
+phrasing was indexical — "they hold", "their surfaces" — and resolves against whoever holds the
+document, so each line read the other's sentence backwards. **I relayed a peer's reading of a text
+I could have read in a minute**, thirty lines below a sentence in my own handoff telling me to check
+exactly that. Ownership is now a table naming lines absolutely.
 
-`Op::IsStruct` is now witnessed: a struct pattern on an **un-annotated parameter**, missed by
-seventeen attempts across both lines because everyone tried to make a scrutinee's type DIFFER from
-the pattern's, which the type checker forbids. **Its witness verifies, receives a memory bound,
-loads, and then traps `InvalidBytecode`** — the class `verify()` exists to exclude. Of the three
-such refusals the VM carries, it is the only one a loaded program can reach.
+**2. "`Op::IsStruct` has no producer and is a removal candidate."** It had four, two of which still
+trapped. I found the original witness by reading the guard's match arms for what they OMIT, then
+validated my own repair by **guessing three constructs** and generalising. The `v0.3.0` line applied
+my method to my code and had four counterexamples within the hour.
 
-### What I did NOT do
+**A method used to find a defect is not automatically applied to validating its repair.**
 
-- **Did not touch `src/verify.rs`.** Pinned both ways instead, firing in the failing direction, so
-  whichever side repairs it gets a test naming the other.
+Both are retracted in the tree, not just here, with a handoff section telling a resuming session not
+to re-assert them. The current claim is "twelve shapes from each line, two trees, no producer" —
+explicitly **not** "unreachable".
+
+### What I deliberately did not do
+
+- **Did not wire the `CONSTS` driver.** The clean route is unblocked but is not a refactor:
+  `SchemaBuilder` needs a range back per contributor and cannot consume a flat list of roots. Four
+  cost estimates in that area have been checked and none survived contact — three high, one low.
+  Recorded as a sharpened decision rather than half-made.
 - **Did not merge the `v0.3.0` line's #217.** It is theirs.
-- **Did not add an opcode or change `BYTECODE_VERSION`.** Four of the five fixes are host-side; the
-  fifth changed `parse.kel`, which still self-compiles byte-identically.
+- **Did not add an opcode or change `BYTECODE_VERSION`.**
 
-### What I got wrong
+### One more of my own guards, found by reading about theirs
 
-- **The pipe ate an exit code — third instance in this project.** A backgrounded `cargo test | tail`
-  reported exit 0 while the suite had FAILED. Every gate since captures exit codes outside the pipe.
-- **My structural parity guard failed its own first mutation test**, because it compared sets of
-  names and the driver has two token feeds. Now counted.
-- **Two of my pull requests got no CI at all**, because `ci.yml` filters on the base branch and they
-  were stacked. "No checks reported" reads exactly like a slow start.
-- **I wrote `let mut` in a probe again.** Not in the language, recorded in the handoff, fourth time.
-- **I nearly reported that the two fallback opcodes fail the same way.** They do not — one is
-  refused at load, the other traps at run. Running both witnesses instead of one caught it.
+The parity guard looked for `set_shared` within sixty characters of a slot name — a guess about
+formatting. Mutation-tested: a call reformatted past the window reports the slot seeded **zero**
+times when it is seeded once. **Too-tight matching does not only cause silent passes; it causes
+confidently wrong failures.** Now paren-matched.
 
 ### Verification
 
-Every branch gated locally with exit codes captured outside the pipe, and every merge made on a
+Every branch gated locally with exit codes captured **outside** the pipe, and every merge made on a
 positive `SUCCESS=22` rather than on the absence of a failure. The refreshed handoff's check block
 was executed, not merely written.
 

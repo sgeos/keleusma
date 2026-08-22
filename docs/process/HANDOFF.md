@@ -5,16 +5,17 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-08-21 (midday) against `dab93a23`**, every pinned value re-measured and the
-> check block executed. **This supersedes the refresh made hours earlier at `37a5bf9b`, which was
-> written BEFORE two of the session's findings and therefore understated them.**
+> **REFRESHED 2026-08-21 (late) against `abc4bac2`**, every pinned value re-measured and the check
+> block executed. **THIS IS THE THIRD REFRESH TODAY AND THE FIRST TWO WENT STALE WITHIN HOURS.**
+> Trust the three channels over this file if the dates disagree.
 >
-> **EIGHT PULL REQUESTS MERGED.** Five silent miscompiles in the shipping self-hosted compiler are
-> closed, and the shipping compiler now agrees with the construct-support boundary on all 95 cases.
-> Read "FIVE DEFECTS, ONE CAUSE" below before planning anything.
+> **FOURTEEN PULL REQUESTS MERGED.** Five silent miscompiles closed, a load-time verifier hole
+> closed at both root causes, chained array indexing implemented, and the `CONSTS` streaming path
+> executed for the first time.
 >
-> **NOTHING IS HELD BY THE OPERATOR EXCEPT TWO DECISIONS**, both about ownership rather than code.
-> The pull-request queue is empty on this line.
+> **NOTHING IS QUEUED FOR THE OPERATOR.** Two questions were raised today and both are withdrawn:
+> an ownership dispute that needed no ruling, and an opcode-removal recommendation that was wrong.
+> Read "WHAT WAS RETRACTED" before re-raising either.
 
 ## Validity
 
@@ -26,11 +27,11 @@ always-current, so it must be able to report itself stale rather than mislead a 
 recorded parent is a claim that nothing else ever lands, and it has failed twice.
 
 ```sh
-git merge-base --is-ancestor dab93a23 HEAD    # must succeed
+git merge-base --is-ancestor abc4bac2 HEAD    # must succeed
 
 # Content. If ANY of these differ, say so rather than acting on the state below.
 grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 16
-grep -c '^\s*#\[test\]' tests/selfhost_wire.rs              # 173
+grep -c '^\s*#\[test\]' tests/selfhost_wire.rs              # 176  (+3: CONSTS streaming)
 grep -c '^\s*#\[test\]' tests/selfhost_parse.rs             # 89
 grep -c '^\s*#\[test\]' tests/selfhost_codegen.rs           # 140  (+1: the shipping-compiler guard)
 grep -c '^\s*#\[test\]' tests/selfhost_pool_tags.rs          # 8    (new 2026-08-21)
@@ -38,7 +39,7 @@ grep -c '^\s*#\[test\]' tests/selfhost_driver_parity.rs      # 4    (new 2026-08
 grep -c '^\s*#\[test\]' tests/selfhost_chained_index.rs      # 3    (new 2026-08-21)
 grep -c '^\s*#\[test\]' tests/stage_command_reach.rs         # 1    (#210 merged)
 grep -c '^\s*#\[test\]' tests/selfhost_declared_bounds.rs   # 5
-grep -c '^\s*#\[test\]' tests/opcode_reachability.rs        # 5   (+3: the IsStruct witness)
+grep -c '^\s*#\[test\]' tests/opcode_reachability.rs        # 6   (the IsStruct census)
 grep -c '^\s*#\[test\]' tests/block_form_statements.rs      # 11
 grep -c '^\s*#\[test\]' tests/consts_region_composition.rs  # 7
 grep -c '^\s*#\[test\]' tests/operand_stack_model.rs        # 6
@@ -174,6 +175,77 @@ but not derived**. A region whose payload came from the harness or the reference
    refuses past **1,024 nodes** (`nm_max_names`, error `-240`), which `wire.kel` hits at 1,148 chunk
    constants. The **flattener out of `wire.fin`** refuses past **170**, `fin` being 1,024 words at six
    words a node. Only the second is derived from a word count.
+
+## WHAT WAS RETRACTED, AND WHY A RESUMING SESSION MUST NOT RE-ASSERT IT
+
+**Two claims were made today and both were wrong. Both are recorded rather than deleted, because
+the escalations happened and the causes generalise.**
+
+**1. "`src/verify.rs` has no owner."** It always belonged to `v0.2.3`. Both handoffs said so — mine
+as "They hold ... read-only", theirs as "Their surfaces are read-only here". Same statement, twice.
+
+But **"they" and "their" are INDEXICAL**: they resolve against whoever holds the document, so a
+reader in the other line's handoff resolves them backwards and gets the exact inversion. The
+`v0.3.0` line misread their own record, escalated to their operator, **and I relayed it to mine
+without reading both texts** — thirty lines below the sentence in question, this file says to check
+a claim against the code before acting on it, especially when it says someone else must act.
+
+Ownership is now a TABLE naming lines absolutely. **Never write "their surfaces" in a document the
+other line reads.**
+
+**2. "`Op::IsStruct` has no producer and is a removal candidate."** It had four. The load-time hole
+was narrowed, not closed, and the fold's stated justification — that the type checker refuses every
+mismatch — was **false**: `fn g(P { a, b }: Q)` compiled with two distinct structs.
+
+**How the overclaim happened, which is the transferable part.** The original witness was found by
+reading the guard's match arms for what they OMIT — the method that cracked `Op::Len` after fourteen
+guessed constructs failed. Then the repair was validated by **guessing three constructs** and
+generalising. The other line applied that same method to this code and had four counterexamples
+inside an hour.
+
+**A method used to FIND a defect is not automatically applied to validating its REPAIR, and the
+repair is where the incentive to stop looking is strongest.**
+
+Both root causes were then found and closed — see below. **The current claim is "twelve shapes from
+each line, two trees, no producer", explicitly NOT "unreachable".** Both lines' tests say so in
+those words. Do not upgrade it without new evidence.
+
+## THE LOAD-TIME HOLE, CLOSED AT TWO SYMMETRY GAPS
+
+Neither was a novel defect. Both were a case handled for one construct and not its sibling, **and
+each masked the other**.
+
+- `rewrite_pattern_enum_name` has rewritten ENUM names in patterns since generics landed; its
+  `Pattern::Struct` arm ignores the struct's own name. So `fn g(P { a, b }: P<Word>)` had its TYPE
+  rewritten to `P__Word` and its PATTERN left naming `P`.
+- `check_pattern_against_type` holds the correct NOMINAL rule and was called only for match arms.
+  Parameters were `bind_pattern`-ed, never checked — so the disagreement never failed type checking
+  and fell through to a runtime `Op::IsStruct` the virtual machine refuses on a flat struct.
+
+Symptom: a legal program that **verified, took a memory bound, loaded, and trapped
+`InvalidBytecode`** — the class `verify()` exists to exclude.
+
+**The narrowing is pinned from both sides.** Three patterns that compiled before are now refused;
+all three previously TRAPPED at run time, so no working program lost capability. Verified against
+the other line's independent corpus: 70 of 70 files compile, 257 of 260 tests pass, and the three
+failures are their own guards asserting the very thing this corrects.
+
+## TOO LOOSE AND TOO TIGHT ARE TWO DIRECTIONS, AND GUARDING ONE HIDES THE OTHER
+
+Four instances in one day, two per line.
+
+| direction | instance |
+|---|---|
+| too loose | a must-fire guard fired on the comment explaining the fix it guarded |
+| too loose | a no-copies guard flagged itself |
+| too loose | the other line's witness extractor matched its own English header |
+| **too tight** | their grep for `mis-compilation` missed four sites saying `mis-compiled` — a class of three where there were seven, **in the very file where they had just written the too-loose rule** |
+| **too tight** | this tree's parity guard used a sixty-character window to find `set_shared` |
+
+**The window case does not fail silently.** Mutation-tested: a call reformatted past the window
+reports the slot seeded ZERO times when it is seeded once — a confidently wrong failure sending its
+reader to hunt a deletion that never happened. Now paren-matched. The op-tag and record-code
+extractions already matched by brace depth, so it was the outlier rather than the pattern.
 
 ## FIVE DEFECTS, ONE CAUSE (2026-08-21) — READ THIS FIRST
 
@@ -490,58 +562,23 @@ looked complete. **In every case the code was reachable and the evidence was not
 
 ## Open, held by the operator
 
-**THE PULL-REQUEST QUEUE IS EMPTY ON THIS LINE.** Eight merged 2026-08-21: #201, #210, #212, #213,
-#214, #215, #216, #218. Two DECISIONS remain, and both are about ownership rather than code.
+**NOTHING.** Fourteen pull requests merged 2026-08-21 and the queue is empty on this line.
 
-**1. WITHDRAWN — `src/verify.rs` WAS NEVER OWNERLESS.** Both records said it belongs to `v0.2.3`;
-the phrasing was indexical and both lines misread it from opposite sides. See the ownership table
-above. **Do not spend a ruling on this.** Recorded rather than deleted because the escalation
-happened and the convention that caused it is the finding.
+Two questions were raised today and **both are withdrawn**: the `src/verify.rs` ownership dispute
+(it needed no ruling — see "WHAT WAS RETRACTED") and the `Op::IsStruct` removal recommendation (it
+was wrong — the opcode had four producers). **Do not re-raise either without reading that section.**
 
-**2. THE `Op::IsStruct` REPAIR SITE — ANSWERED, NOT PENDING.** With ownership settled it was mine to
-decide, so it is decided: **folded at compile time**, not rejected at load. Rejecting in `verify.rs`
-would make a legal program fail EARLIER; folding makes it WORK, and the witness now returns the
-right answer rather than merely not trapping. Revertible if the operator disagrees.
+**THE ONE DECISION THAT IS GENUINELY OPEN IS NOT THE OPERATOR'S — IT IS THE NEXT SESSION'S.** The
+`CONSTS` driver route: duplicate the encoder's root-selection, lift the test's model into the
+library, or extract one definition the encoder itself consumes. The third is right in principle and
+is **not mechanical**, because `SchemaBuilder` needs a range back per contributor and cannot consume
+a flat list. `docs/decisions/CONSTS_STREAMING_BRIEF.md` carries the sharpened decision.
 
-**3. THE LOAD-TIME HOLE IS NARROWED, NOT CLOSED — AND MY EARLIER CLAIM THAT THE OPCODE HAD NO
-PRODUCER WAS WRONG.**
-
-**RETRACTED WITHIN THE HOUR, BY THE `v0.3.0` LINE, USING MY OWN METHOD.** Do not act on the removal
-framing that stood here briefly.
-
-| construct | emits | verifies | runs |
-|---|---|---|---|
-| generic struct destructured in a parameter | yes | yes | **traps `InvalidBytecode`** |
-| pattern `P` against annotation `Q` | yes | yes | **traps `InvalidBytecode`** |
-| tuple-typed annotation | yes | yes | traps `NoMatchingHead` |
-| array-typed annotation | yes | yes | traps `NoMatchingHead` |
-| **unannotated parameter** (what the fold fixed) | no | yes | **`Int(3)`** |
-
-Reproduced independently on this tree before accepting it.
-
-**THE FOLD'S ORIGINAL JUSTIFICATION WAS FALSE.** It claimed the type checker refuses every
-mismatch. It does not: `fn g(P { a, b }: Q)` compiles with two DISTINCT structs, and a struct
-pattern is admitted against a tuple- or array-typed annotation. The comment in `src/compiler.rs`
-now says so.
-
-**WHAT IS ACTUALLY OPEN, AND IT IS PROBABLY A TYPE-CHECKER QUESTION.** A struct pattern matched
-against an unrelated struct, a tuple, or an array is arguably ill-typed AT THE SOURCE. Closing it
-in the type checker would remove the emission rather than fold it, and would close two load-time
-holes at once. That is a language decision, not a lowering fix, which is why it is recorded rather
-than patched.
-
-**HOW I GOT IT WRONG, because the shape recurs.** I found the original witness by reading the
-guard's match arms for what they OMIT. Validating my own repair, I reverted to guessing three
-constructs and generalised from them. The other line applied MY method to MY code — read the
-emission condition, enumerate the `TypeExpr` variants that make `named_type_name` return `None`
-while a struct pattern is still accepted — and had four counterexamples in under an hour.
-
-**3. THE DEAD `native@1c1ffb1e` GATE RECORD.** Unchanged: stalled 227+ hours, no process, worktree
+**THE DEAD `native@1c1ffb1e` GATE RECORD.** Unchanged: stalled 227+ hours, no process, worktree
 clean, the `v0.3.0` line confirms nothing waits on it. Untouched because it is theirs.
 
-**4. THE RULINGS OF 2026-08-19 ARE ALL IMPLEMENTED OR RECORDED. Do not re-ask them.** Note that
-#212 moved a boundary against the "Top-level struct support. Defer." ruling; the operator was
-told, and merged it. `docs/decisions/POOL_TAG_RESIDENCY_BRIEF.md` still carries the revert recipe.
+**THE RULINGS OF 2026-08-19 ARE ALL IMPLEMENTED OR RECORDED. Do not re-ask them.** #212 moved a
+boundary against the "Top-level struct support. Defer." ruling; the operator was told and merged it.
 
 ## WHAT A RESUMING SESSION SHOULD DO FIRST
 

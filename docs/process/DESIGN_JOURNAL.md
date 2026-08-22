@@ -13,6 +13,56 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**BEING WRONG IN PUBLIC WAS THE MOST PRODUCTIVE THING THAT HAPPENED TODAY (2026-08-21, late).**
+
+Two claims, both mine, both wrong, both caught by someone reading rather than agreeing.
+
+**THE OWNERSHIP CLAIM.** I told the operator `src/verify.rs` had no owner, on the `v0.3.0` line's
+reading of their own handoff. It always belonged to `v0.2.3` and both documents said so. The
+phrasing was INDEXICAL -- "they hold", "their surfaces" -- and resolves against whoever holds the
+document, so each line read the other's sentence backwards.
+
+The failure is not the misreading, which the convention invites. It is that I RELAYED a claim about
+a text I could have read in a minute, thirty lines below a sentence in my own handoff telling me to
+check exactly that. The other line named their half more precisely than I did: a peer's in-flight
+MESSAGE and a peer's durable RECORD are not evidence of equal weight, and when they disagree the
+record wins.
+
+**THE OPCODE CLAIM.** I said `Op::IsStruct` had no producer and was a removal candidate on an ISA
+whose opcode count is a rad-hard constraint. It had four, two of which still trapped.
+
+**The mechanism is the part worth keeping.** I FOUND the original witness by reading the guard's
+match arms for what they OMIT -- the method that cracked `Op::Len` after fourteen guessed constructs
+failed across two sessions. Then I VALIDATED MY OWN REPAIR by guessing three constructs and
+generalising. The other line applied my method to my code and had four counterexamples in under an
+hour.
+
+**A method used to find a defect is not automatically applied to validating its repair.** The repair
+is where the incentive to stop looking is strongest, and where I stopped.
+
+**WHAT THE COUNTEREXAMPLES LED TO IS BETTER THAN WHAT THEY REPORTED.** Four symptoms, two causes,
+and each cause masked the other: enum pattern names are rewritten on specialization and struct names
+are not, and the nominal pattern rule runs only on match arms and never on parameters. Without the
+missing check, the un-rewritten pattern was silent. With the pattern rewritten, the missing check has
+nothing to catch there. Neither is a novel defect -- both are a case handled for one construct and
+not its sibling, which is now the fourth time that shape has appeared this session.
+
+**TOO LOOSE AND TOO TIGHT ARE TWO DIRECTIONS AND GUARDING ONE HIDES THE OTHER.** Four instances in
+one day. The other line wrote down the too-loose rule and shipped a too-tight grep in the same file
+one commit apart. Reading about theirs, I found mine: a sixty-character window looking for
+`set_shared`. Mutation-testing showed it does not fail silently -- it reports a slot seeded ZERO
+times when it is seeded once, a confidently wrong failure sending its reader to hunt a deletion that
+never happened.
+
+**AND THE THING I DID NOT DO.** The `CONSTS` driver route is unblocked and I stopped at the design
+question rather than through it. `SchemaBuilder` needs a range back per contributor and cannot
+consume a flat list of roots, so the clean route is not a refactor. Four cost estimates in that area
+have now been checked against the code and NONE survived contact -- three high, one low. That is not
+a bias to correct for; it is a reason to fix the shape before writing code, because a decision made
+mid-edit is a duplicate created by default rather than by choice.
+
+---
+
 **THE FIFTH SILENT MISCOMPILE, AND A COST ESTIMATE THAT WAS WRONG IN THE HELPFUL DIRECTION
 (2026-08-21, midday).**
 

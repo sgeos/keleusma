@@ -10,6 +10,30 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-21, late).** **FOURTEEN PULL REQUESTS MERGED; THE QUEUE IS EMPTY AND
+> TWO CLAIMS WERE RETRACTED.**
+>
+> Boundary **90 SOk / 1 Refuses / 3 Diverges / 1 RefRejects**; margin pins 676 and 35,333; the
+> shipping compiler matches the boundary on all 95 cases. Census across the session: byte-identical
+> **43 -> 90**, differs 21 -> 3, faults 30 -> 1.
+>
+> **THE LOAD-TIME HOLE IS CLOSED AT TWO SYMMETRY GAPS**, each masking the other: enum pattern names
+> were rewritten on specialization and struct names were not, and the nominal pattern rule ran only
+> on match arms, never on parameters. A legal program verified, took a bound, loaded, and trapped
+> `InvalidBytecode`.
+>
+> **TWO RETRACTIONS, BOTH RECORDED RATHER THAN DELETED.** `src/verify.rs` was never ownerless — both
+> handoffs agreed and the phrasing was indexical. And `Op::IsStruct` was NOT producerless: it had
+> four, and the fold's stated justification was false. The current claim is "twelve shapes from each
+> line, two trees, no producer", explicitly not "unreachable".
+>
+> **`CONSTS` streaming validated**: commands 176/177 executed for the first time, and a 200-node
+> forest the walk refuses with `-240` streams byte-identically to the reference encoder. The driver
+> is deliberately unwired; the route decision is sharpened in `docs/decisions/`.
+>
+> Also: chained array indexing works, and the parity guard's extraction is parsed rather than
+> windowed after a mutation showed the old form reports a wrong COUNT rather than failing silently.
+
 > **Currency note (2026-08-21, midday).** **FIVE SILENT MISCOMPILES CLOSED; `Op::IsStruct`
 > WITNESSED; EIGHT PULL REQUESTS MERGED.** This supersedes the note below it, which was written
 > before the last two findings.
