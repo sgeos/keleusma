@@ -2501,18 +2501,28 @@ fn the_declared_binding_rows_agree_between_the_pipeline_and_the_reference() {
         let ast = parse(&tokenize(src).expect("lex")).expect("parse");
         let (ref_names, ref_rows) = binding_rows(&ast);
 
-        // The reference rows carry ids; render them as names for comparison, and keep
-        // only the DECLARED ones (form 0), which is all the pipeline claims so far.
+        // The reference rows carry ids; render them as names for comparison.
         let ref_name_of = |id: i64| -> Option<String> {
             ref_names
                 .iter()
                 .find(|(_, v)| **v == id)
                 .map(|(k, _)| k.clone())
         };
-        let mut want: Vec<(String, i64, i64)> = ref_rows
+        // BOTH FORMS NOW. A form-0 row carries a tag and no target; a form-1 row
+        // carries the TARGET'S NAME, so the two extractions compare by name on
+        // both halves and neither side's id space enters the comparison.
+        let mut want: Vec<keleusma::selfhost::BindingRow> = ref_rows
             .iter()
-            .filter(|(_, _, form)| *form == 0)
-            .filter_map(|(n, t, f)| ref_name_of(*n).map(|s| (s, *t, *f)))
+            .filter_map(|(n, t, f)| {
+                let name = ref_name_of(*n)?;
+                if *f == 0 {
+                    Some((name, *t, 0, String::new()))
+                } else {
+                    // For an alias the reference stores the TARGET's id where a
+                    // form-0 row stores a tag, so the value renders as a name.
+                    Some((name, 0, 1, ref_name_of(*t)?))
+                }
+            })
             .collect();
 
         let (_, pipeline_rows) = keleusma::selfhost::binding_rows_from_pipeline(src);
@@ -2528,85 +2538,66 @@ fn the_declared_binding_rows_agree_between_the_pipeline_and_the_reference() {
         assert_eq!(
             got, want,
             "{src:?}: the pipeline extraction disagrees with the reference on the \
-             DECLARED bindings"
+             binding rows"
         );
     }
 }
 
-/// **THE BOUNDARY, RESTATED: the pipeline reaches LITERALS and not yet CALLS or
-/// OPERATOR EXPRESSIONS.**
+/// **THE BOUNDARY, RESTATED AGAIN: CALLS ARE REACHED; OPERATOR EXPRESSIONS ARE
+/// NOT.**
 ///
-/// The previous revision of this pin asserted the pipeline carried NO `let` row at
-/// all, and instructed the next increment to fold the case into the agreement test
-/// rather than delete the pin. That happened on 2026-08-20; a let-bound integer and
-/// a let-bound boolean are both compared against the reference there now.
+/// This pin has now moved twice, and each move is the increment its predecessor
+/// asked for. It first asserted the pipeline carried NO `let` row at all; then
+/// that it reached literals but not calls, with the instruction *"give the row
+/// shape a target STRING so it can be compared without comparing id spaces, then
+/// fold this case into the agreement test."* That is done, and the call case is
+/// now compared against the reference in
+/// [`the_declared_binding_rows_agree_between_the_pipeline_and_the_reference`].
 ///
-/// **The pin is restated rather than removed**, because what it guards has moved
-/// rather than gone. Two forms remain out of reach and they are out of reach for
-/// DIFFERENT reasons, which is the part worth writing down.
-///
-/// # A call is blocked by the ROW SHAPE, not by the pipeline
-///
-/// `let a = g()` is a form-1 alias whose row carries the target's NAME ID in the
-/// tag position. The two extractions do not share an id space — the reference
-/// numbers by insertion order as it walks, the pipeline uses the lexer's intern
-/// table — so a form-1 row cannot be compared by name string, which is the
-/// discipline that keeps this comparison honest.
-///
-/// The pipeline could produce the row today. Comparing it would mean either
-/// comparing id spaces, which compares the numbering rather than the content, or
-/// changing the row shape to carry a target string. **The second is the right
-/// answer and it is a slice of its own.**
+/// **Restated rather than removed**, because what it guards has moved rather than
+/// gone. One form remains out of reach.
 ///
 /// # An operator expression is blocked by the CHANNEL
 ///
 /// `let d = 1 + 2` needs the initialiser's NODE INDEX to reach the stage's bounded
-/// fixpoint, form 2. That index has to survive into the type channel, which is a
-/// further slice again.
+/// fixpoint, form 2. That index has to survive into the type channel, and nothing
+/// carries it there yet.
 ///
-/// Producing no row means the stage accepts, which is this project's documented
+/// Producing no row means the stage ACCEPTS, which is this project's documented
 /// conservative stance rather than an oversight.
 #[cfg(feature = "self-host")]
 #[test]
-fn the_pipeline_reaches_literals_but_not_calls_or_operator_expressions() {
-    // The REACHED case first. Without it, a pipeline that returned nothing at all
-    // would satisfy every assertion below while having regressed.
+fn the_pipeline_reaches_calls_but_not_operator_expressions() {
+    // THE REACHED CASES FIRST. Without them a pipeline that returned nothing would
+    // satisfy the assertion below while having regressed.
     let (_, reached) =
         keleusma::selfhost::binding_rows_from_pipeline("fn main() -> Word { let a = 7; a }");
     assert!(
         reached
             .iter()
-            .any(|(n, t, f)| n == "a" && *t == 1 && *f == 0),
+            .any(|(n, t, f, _)| n == "a" && *t == 1 && *f == 0),
         "the pipeline no longer carries a let-bound literal, which is a regression \
          rather than a boundary: {reached:?}"
     );
 
-    // A CALL. The reference produces a row; the pipeline deliberately does not.
     const CALL: &str = "fn g() -> Word { 1 }\nfn main() -> Word { let c = g(); c }";
-    let ast = parse(&tokenize(CALL).expect("lex")).expect("parse");
-    let (ref_names, ref_rows) = binding_rows(&ast);
-    let cid = *ref_names.get("c").expect("the reference binds `c`");
-    assert!(
-        ref_rows.iter().any(|(n, _, f)| *n == cid && *f == 1),
-        "the reference does not produce an ALIAS row for a let-bound call, so this \
-         half of the pin measures nothing"
-    );
     let (_, call_rows) = keleusma::selfhost::binding_rows_from_pipeline(CALL);
     assert!(
-        !call_rows.iter().any(|(n, _, _)| n == "c"),
-        "the pipeline now carries a let-bound CALL. Give the row shape a target \
-         STRING so it can be compared without comparing id spaces, then fold this \
-         case into the agreement test."
+        call_rows
+            .iter()
+            .any(|(n, _, f, target)| n == "c" && *f == 1 && target == "g"),
+        "the pipeline no longer carries a let-bound CALL as an alias naming `g`. That is \
+         a regression, not a boundary: {call_rows:?}"
     );
 
-    // AN OPERATOR EXPRESSION. Reached by the stage's fixpoint, not by this
-    // extraction, and only once the node index survives into the type channel.
+    // AN OPERATOR EXPRESSION. The reference registers the name; the pipeline
+    // deliberately produces no row.
     let (_, op_rows) =
         keleusma::selfhost::binding_rows_from_pipeline("fn main() -> Word { let d = 1 + 2; d }");
     assert!(
-        !op_rows.iter().any(|(n, _, _)| n == "d"),
-        "the pipeline now carries a let-bound OPERATOR EXPRESSION. Record which form \
-         it uses and fold the case into the agreement test."
+        !op_rows.iter().any(|(n, _, _, _)| n == "d"),
+        "the pipeline now carries a let-bound OPERATOR EXPRESSION. Record which form it \
+         uses and fold the case into the agreement test."
     );
 }
 
@@ -2697,8 +2688,8 @@ fn a_named_type_called_bool_is_not_the_boolean_primitive() {
         let pipeline_tag = |src: &str| -> i64 {
             let (_, rows) = keleusma::selfhost::binding_rows_from_pipeline(src);
             rows.iter()
-                .find(|(n, _, form)| n == "b" && *form == 0)
-                .map(|(_, t, _)| *t)
+                .find(|(n, _, form, _)| n == "b" && *form == 0)
+                .map(|(_, t, _, _)| *t)
                 .unwrap_or(0)
         };
         assert_eq!(
