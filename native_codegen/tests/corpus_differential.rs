@@ -1869,6 +1869,10 @@ fn every_lowering_module_executes_or_is_exempt() {
     let mut cap_never: Vec<String> = Vec::new();
     let mut obs_multi_result = 0usize;
     let mut obs_single_scalar_only = 0usize;
+    // **NAMED, so the overlap with the Order-1 stages is MEASURABLE.** Two
+    // counts that happen to be equal invite an inference about which
+    // modules they contain; only the names can settle it.
+    let mut obs_single_scalar_names: Vec<String> = Vec::new();
     let mut obs_single_and_undrivable = 0usize;
     let mut obs_visited = 0usize;
     let mut nothing_compared: Vec<String> = Vec::new();
@@ -1876,6 +1880,21 @@ fn every_lowering_module_executes_or_is_exempt() {
     let mut obs_wrote_shared = 0usize;
     let mut seed_pairs = 0usize;
     let mut seed_widened = 0usize;
+    // **How many argument vectors each module actually received.** Recorded
+    // per module because the Order-1 gate needs it for STAGES specifically,
+    // and the corpus-wide `seed_widened` cannot answer that: it is a count of
+    // modules, not a map, so a stage's own figure is not recoverable from it.
+    let mut vectors_per_module: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
+    // **The COMPARISON count, which is the figure that actually applies to a
+    // stream.** Pooled across every seed: for a stream this is one entry per
+    // TICK, so a module driven at one argument vector can still be compared at
+    // sixty points. Recorded separately from the vector count because conflating
+    // them is exactly the error this report made once.
+    let mut compares_per_module: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
+    let mut pin_reason: std::collections::BTreeMap<String, &'static str> =
+        std::collections::BTreeMap::new();
     let mut disagreed: Vec<String> = Vec::new();
     // Names found under `src/selfhost/kel`, for the Order-1 gate report below.
     let mut stage_files: Vec<String> = Vec::new();
@@ -1961,11 +1980,24 @@ fn every_lowering_module_executes_or_is_exempt() {
         // varies across 60 iterations, so seeding it would change what the run
         // MEANS rather than broaden it. Streams keep seed 0.
         let n_params = m.chunks[entry].param_count as usize;
-        let seeds = if m.chunks[entry].block_type == BlockType::Stream || n_params == 0 {
-            1
-        } else {
-            SEEDS
-        };
+        let is_stream = m.chunks[entry].block_type == BlockType::Stream;
+        let seeds = if is_stream || n_params == 0 { 1 } else { SEEDS };
+        // **WHY a module got one vector, not just THAT it did.** Two different
+        // reasons pin `seeds` to 1 and they support different conclusions. A
+        // ZERO-PARAMETER entry takes no input, so it genuinely cannot vary. A
+        // STREAM takes the tick, which the driver varies across its iterations
+        // -- so it is single-vector and still compared at many points. Reading
+        // the second as the first is how "single-vector" became "compared once".
+        pin_reason.insert(
+            name.clone(),
+            if is_stream {
+                "stream (tick varies across iterations)"
+            } else if n_params == 0 {
+                "zero-parameter entry (nothing to vary)"
+            } else {
+                "widened"
+            },
+        );
 
         // **A real stage input, from the driver's own accessor.** Computed once
         // and handed to BOTH sides, so the comparison is of two lowerings rather
@@ -2030,6 +2062,11 @@ fn every_lowering_module_executes_or_is_exempt() {
             continue;
         }
         seed_pairs += runs.len();
+        vectors_per_module.insert(name.clone(), runs.len());
+        compares_per_module.insert(
+            name.clone(),
+            runs.iter().map(|(_, v, _)| v.results.len()).sum(),
+        );
         if runs.len() > 1 {
             seed_widened += 1;
         }
@@ -2236,6 +2273,7 @@ fn every_lowering_module_executes_or_is_exempt() {
         }
         if !multi && !logged && !wrote && !composite {
             obs_single_scalar_only += 1;
+            obs_single_scalar_names.push(name.clone());
             // **CAN this module vary at all?** A module driven at ONE argument
             // vector cannot produce a second distinct result however good the
             // lowering is, so "one scalar only" says something about the harness
@@ -2335,6 +2373,119 @@ fn every_lowering_module_executes_or_is_exempt() {
         println!("\n================ ORDER-1 GATE (self-hosted stages)");
         println!("  stage sources found       : {}", stage_files.len());
         println!("  EXECUTE and AGREE         : {}", ex.len());
+
+        // **HOW STRONG IS THAT AGREEMENT? The vector count, for STAGES only.**
+        //
+        // Nothing measured this until now, and an adjacent report made it look
+        // as though something had. The corpus-wide observable breakdown ends
+        // with a line reading "of those, N were driven at ONE argument vector",
+        // and for a long time BOTH FIGURES WERE TEN -- that line's N, and this
+        // block's EXECUTE-and-AGREE count. They are unrelated populations: that
+        // one counts modules across the WHOLE corpus whose agreement rests on a
+        // single scalar, this one counts self-hosted stages. **A reader who
+        // took them together concluded the ten agreeing stages were all
+        // single-vector, which nothing had measured.** The orphaned line now
+        // names its own population; this block answers the question it looked
+        // like it was answering.
+        //
+        // **THE FIGURE IS REPORTED, NOT PINNED.** It moves with `SEEDS` and with
+        // the corpus. What is asserted is that it was derived from the runs
+        // actually performed over a non-empty set -- a distribution assertion
+        // would fail on ordinary growth and teach the next reader to delete it.
+        let stage_vectors: Vec<(&String, usize)> = ex
+            .iter()
+            .map(|n| (*n, vectors_per_module.get(*n).copied().unwrap_or(0)))
+            .collect();
+        let single = stage_vectors.iter().filter(|(_, v)| *v == 1).count();
+        let widened = stage_vectors.iter().filter(|(_, v)| *v > 1).count();
+        let unrecorded = stage_vectors.iter().filter(|(_, v)| *v == 0).count();
+        let max_v = stage_vectors.iter().map(|(_, v)| *v).max().unwrap_or(0);
+        println!(
+            "    of those {} agreeing stages: {single} driven at ONE argument \
+             vector, {widened} at more than one (max {max_v})",
+            ex.len()
+        );
+        // **AND THE VECTOR COUNT IS THE WRONG STRENGTH MEASURE HERE, WHICH TOOK
+        // A SECOND PASS TO SEE.** Every one of the twelve stage entries is a
+        // `Stream` taking ONE parameter -- the TICK. `seeds` is pinned to 1 for a
+        // stream deliberately: the driver already varies the tick across its
+        // iterations, so seeding it would change what the run MEANS rather than
+        // broaden it.
+        //
+        // So "single-vector" is TRUE and "compared once" is FALSE. The first
+        // reading of this figure said the gate was "ten stages each compared at
+        // exactly one input". **That was wrong, and it understated the gate.**
+        // It is recorded rather than quietly replaced, because the mistake is
+        // the same species as the one this block exists to fix: a number read
+        // against the wrong population.
+        //
+        // **The measure that applies to a stream is the number of TICKS
+        // compared**, below.
+        let stage_compares: Vec<(&String, usize)> = ex
+            .iter()
+            .map(|n| (*n, compares_per_module.get(*n).copied().unwrap_or(0)))
+            .collect();
+        let min_c = stage_compares.iter().map(|(_, c)| *c).min().unwrap_or(0);
+        let max_c = stage_compares.iter().map(|(_, c)| *c).max().unwrap_or(0);
+        let total_c: usize = stage_compares.iter().map(|(_, c)| *c).sum();
+        println!("    EVERY STAGE ENTRY IS A STREAM, so the vector count is NOT the strength");
+        println!(
+            "    measure. Result comparisons across ticks: {total_c} total, min {min_c}, max {max_c}"
+        );
+        println!("    per stage. A stage driven at ONE argument vector is still compared at");
+        println!("    every tick it runs.");
+        // **THE RESIDUAL, so this correction does not overclaim in the other
+        // direction.** Sixty ticks is a real comparison surface, but each stage
+        // still receives ONE input program and ONE seeded segment. The tick
+        // sequence varies the stage's POSITION WITHIN A RUN, not its INPUT. So
+        // the gate shows ten stages agreeing throughout one execution each --
+        // stronger than "compared once", weaker than "agrees on varied input".
+        println!("    RESIDUAL: one input program and one seeded segment per stage. The");
+        println!("    ticks vary POSITION WITHIN a run, not the INPUT to it.");
+        assert!(
+            min_c > 0,
+            "an agreeing stage was compared at ZERO points, so its agreement is \
+             vacuous and the gate counts it anyway"
+        );
+        assert_eq!(
+            unrecorded, 0,
+            "{unrecorded} agreeing stage(s) have no recorded vector count, so \
+             this figure describes a subset while looking complete"
+        );
+        assert!(
+            !stage_vectors.is_empty(),
+            "the stage-vector figure was derived from an empty set, so its \
+             numbers say nothing"
+        );
+
+        // **ARE THE TWO TENS THE SAME TEN? MEASURED AT ZERO OVERLAP.**
+        //
+        // They are DISJOINT. Three unrelated tens sat in one report: ten
+        // corpus-wide modules agreeing on a single scalar, ten of those driven
+        // at one vector, and ten agreeing stages -- with no stage in either of
+        // the first two sets.
+        //
+        // **AND THE INFERENCE A READER WOULD HAVE DRAWN IS TRUE ANYWAY.** Every
+        // agreeing stage IS single-vector, as the line above now measures. So
+        // the orphaned sentence led to a correct conclusion by a route that
+        // supported none of it.
+        //
+        // **THAT IS THE WORST CASE, NOT THE HARMLESS ONE.** A bad inference that
+        // yields a wrong answer gets caught by the next check. One that yields
+        // the RIGHT answer certifies the reasoning that produced it, and the
+        // next reader reuses the route. The fix is therefore not "the number was
+        // fine after all" -- it is that the figure now comes from a measurement
+        // over the population it names.
+        let overlap = ex
+            .iter()
+            .filter(|n| obs_single_scalar_names.contains(**n))
+            .count();
+        println!(
+            "    overlap with the corpus-wide ONE-SCALAR-ONLY set: {overlap} of \
+             {} stages (that set has {} members)",
+            ex.len(),
+            obs_single_scalar_names.len()
+        );
         println!("  agree but VACUOUS         : {}", vac.len());
         for n in &vac {
             println!("     {n}");
@@ -2387,10 +2538,34 @@ fn every_lowering_module_executes_or_is_exempt() {
              has fallen out of the accounting while the columns still look sane"
         );
     }
+    // **THIS LINE NAMES ITS POPULATION, AND THAT IS THE WHOLE FIX.** It
+    // continues the corpus-wide breakdown opened ~85 lines above, but the
+    // Order-1 gate block prints BETWEEN them and closes with its own
+    // `================` terminator. So this sentence used to arrive after a
+    // section rule belonging to a different report, saying "of those" and
+    // meaning a population the reader had lost sight of. **Both figures were
+    // TEN**, which made the misreading close to forced. Do not restore a
+    // relative reference here; proximity is not a citation.
     println!(
-        "         of those, {obs_single_and_undrivable} were driven at ONE argument vector and \
-         could not have varied"
+        "  of the {} modules agreeing on ONE SCALAR ONLY (whole corpus, NOT the \
+         Order-1 stages above), {obs_single_and_undrivable} were driven at ONE \
+         argument vector and could not have varied",
+        obs_single_scalar_only
     );
+    {
+        let zero_param = obs_single_scalar_names
+            .iter()
+            .filter(|n| pin_reason.get(*n).is_some_and(|r| r.starts_with("zero")))
+            .count();
+        let streamed = obs_single_scalar_names
+            .iter()
+            .filter(|n| pin_reason.get(*n).is_some_and(|r| r.starts_with("stream")))
+            .count();
+        println!(
+            "       of those, {zero_param} have a ZERO-PARAMETER entry (nothing to vary) and \
+             {streamed} are streams"
+        );
+    }
     // **NON-VACUITY ONLY.** The distribution above is REPORTED, never asserted:
     // pinning it would fail on ordinary corpus growth and teach the next reader
     // to delete the check. What must hold is that the breakdown looked at every
