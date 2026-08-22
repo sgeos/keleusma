@@ -254,3 +254,57 @@ correction factor.
 **Which of the two routes above** — duplicate or lift — before writing any driver code. It is a
 judgment about where the encoder's rules should live, and answering it while mid-edit is how a
 duplicate gets created by default rather than by choice.
+
+---
+
+# THE ROUTE DECISION, SHARPENED (2026-08-21, later)
+
+The earlier entry left "duplicate or lift" for a resuming session. **Both framings were incomplete,
+and one blocker turned out not to exist.**
+
+## The blocker that was not real
+
+I recorded the driver work as needing a model of which constants the encoder emits, and treated
+`src/wire_schema.rs` as out of reach. **It is not — it belongs to `v0.2.3`.** That was established
+by reading both lines' handoffs after an ownership escalation that needed no ruling; see the
+ownership table in `docs/process/HANDOFF.md`.
+
+So a third route exists that neither earlier framing considered.
+
+## The three routes, and why the obvious one is not a drop-in
+
+| route | what it is | cost |
+|---|---|---|
+| **a. duplicate** | reimplement root-selection in the driver | a second implementation of an encoder rule, exercised in one place — the class that produced four silent miscompiles this session |
+| **b. lift** | move the test's model into the library | changes what the differential oracle is made of; the test and the driver would share a model, so a wrong model is wrong on both sides |
+| **c. extract** | one definition the encoder ITSELF consumes | cannot drift, because the encoder depends on it |
+
+**Route (c) is right in principle and is not mechanical.** `SchemaBuilder` calls `add_constant_pool`
+**per contributor** and needs each returned `ConstRange` to build that contributor's record. It
+cannot consume a flat list of roots. So the shared thing cannot simply be
+`fn constant_roots(module) -> Vec<ConstValue>`; deciding what it IS — an iterator of contributors, a
+visitor, or a pair of functions with one asserted against the other — is the actual open question.
+
+## What is already known, so the next attempt does not re-derive it
+
+- **The emission order is**: every chunk's constants in chunk order, then the data layout's
+  `private_init` — **elided entirely when wholly default**, which on a real stage is most of the
+  segment.
+- **`WireAuxBody` is public**; `module_to_wire_bytes` builds one internally at
+  `src/wire_format.rs:1633`. Its `op_byte_offset`/`op_record_count` fields require encoding the
+  opcode stream first, but **those fields are irrelevant to constant roots**, so an extraction
+  scoped to constants does not inherit that dependency.
+- **`tests/selfhost_wire.rs::corpus_aux_of` hand-builds an approximation of that aux body.** It is a
+  second construction and could drift from the shipping one. Replacing it with the encoder's own is
+  a self-contained improvement that is worth doing whether or not the driver work proceeds.
+- The stage side is validated and the branch point exists; see the earlier entries.
+
+## WHY THIS IS RECORDED RATHER THAN STARTED
+
+Four cost estimates in this area have been checked against the code and **none survived contact**.
+Three ran high, one ran low. That is not a direction to correct for — it is a reason to decide the
+shape before writing code, because a decision made mid-edit is a duplicate created by default
+rather than by choice.
+
+**The next session should pick between (a), (b) and (c) before touching the driver**, and should
+know that (c) needs a design answer rather than a refactor.
