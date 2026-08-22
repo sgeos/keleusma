@@ -13,6 +13,86 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**A DERIVATION CHECKED AGAINST A CASE CHOSEN TO EXERCISE IT IS CHECKED AGAINST THE AUTHOR'S MODEL OF
+IT (2026-08-22).**
+
+Coverage work had reached diminishing returns, so this increment moved to the remaining Order 1
+item: the type checker's INPUT. The tree names its own next slice -- give the alias row a target
+STRING, so `let a = g()` can be compared without comparing id spaces -- and that needs a `Call`
+node's CHUNK INDEX turned back into a name.
+
+**THE NUMBERING WAS WRONG TWICE, AND IT IS ONLY KNOWN BECAUSE IT WAS CHECKED RATHER THAN SHIPPED.**
+
+First derivation: consecutive same-named heads in declaration order, reasoning from the grouping
+`self_host_compile_fused` flushes on. That grouping is real -- a multi-arm function is one chunk --
+and it is **not the numbering**. The real rule is **sorted by name**, confirmed by `entry_point:
+Some(14)` being `main`'s position in `lexer.kel`'s sorted table.
+
+**The failure mode is the interesting part.** The wrong derivation produced the right chunk COUNT and
+the right SET of names in the wrong ORDER. Every `Call` node would have resolved to some other
+function's name, and nothing about the count or the set would have looked wrong.
+
+**AND IT PASSED THE PROBE I WROTE FOR IT.** The multi-arm case -- two `fn f` heads plus `main` --
+was written specifically to exercise the grouping rule, and there grouping and sorting COINCIDE.
+Only the real corpus separated them.
+
+That is last increment's mutation lesson in a different costume. There, the mutation took the shape
+the guard expected. Here, the probe took the shape the derivation expected. **The general form: a
+check built from the same model as the thing it checks confirms the model.** The corpus caught both
+because the corpus was not written by that model.
+
+**THEN IT SURFACED SOMETHING NOT RESOLVED, AND THE INCREMENT STOPPED THERE.**
+
+With sorting fixed, `wire.kel` still diverges, in a specific and reproducible shape: the chunk COUNT
+agrees exactly at 486, `crc_end` and `parse_prologue` are absent from the pipeline, and `acc` and
+`dis` are present in it. **`acc` and `dis` are FIELDS of private data blocks**, at lines 157 and 163;
+`crc_end` is at 215 and `parse_prologue` at 403. Each missing function follows a data block whose
+field turns up in its place.
+
+That pairing is suggestive and it is **not a diagnosis**, so it is pinned rather than repaired, with
+its exact shape asserted so a CHANGE in the divergence is not mistaken for the divergence being
+unchanged.
+
+**AND THEN THE SENTENCE THAT FOLLOWED IT HERE WAS WRONG.** This entry first read *"the compile path
+is unaffected -- `wire.kel` self-compiles byte-identically -- so what diverges is the per-function
+METADATA, not the stream"*, and told the reader byte identity forbade any stronger conclusion.
+**I invented that.** Measured within the hour:
+
+* `self_host_compile(wire.kel)` **panics** with ``no chunk named `acc` ``. The mis-named declaration
+  has no chunk to attach to, so the defect reaches the COMPILER, not merely the metadata beside it.
+* **`wire.kel` is not in the byte-identity corpus.** `assert_stage_byte_identical` covers ten stages
+  -- `lexer`, `parse`, `reconstruct`, `codegen`, `analyze` and the five `verify_*`. `wire.kel`
+  appears in the wire-format tests only as a REFERENCE-compiled input, which never runs the
+  self-hosted compiler over it. Nothing was contradicting the claim because nothing was checking it.
+
+**The correction is a bigger finding than the original.** The largest stage in the corpus, 486
+chunks, has never been self-hosted, and the tree did not say so. *Any construct the corpus does not
+contain is unverified by construction* -- the lesson that produced the boolean-literal and
+`Byte`-cast miscompiles -- and here the uncovered thing is an entire stage.
+
+**Nothing regressed.** `wire.kel` was never self-compiled, so no capability was lost; what changed is
+that the tree now records it, in
+`the_self_hosted_compiler_cannot_yet_compile_wire_kel` with `lexer.kel` as the control that keeps it
+a statement about `wire.kel` rather than about the compiler.
+
+**AND THE TRIGGER IS NOW FOUR LINES**, reduced by delta-debugging: a `for` loop containing a
+data-field assignment, plus a trailing field read as the tail expression. Three hypotheses I held
+were each disproved by a variant -- the body's shape, the operator, the single-field data block. Both
+the loop and the trailing read are required; the `if` is irrelevant.
+
+**The delta-debug itself needed a precondition it did not start with.** The first reduction produced
+three lines of a MALFORMED program that "diverged" because the pipeline could not parse it at all. A
+predicate that does not require a well-formed input finds the nearest crash, not the defect under
+study. That is the same shape as the mutation and the probe before it: **a check built without the
+right precondition confirms something other than what it names.**
+
+**A VACUITY GUARD THAT ONLY THE EXCLUDED CASE SATISFIED.** Scoping `wire` out of the corpus test
+dropped it below a `total_chunks > 500` guard -- because `wire.kel`'s 486 chunks were carrying that
+guard almost single-handedly. A guard the one excluded stage satisfied on its own was guarding the
+wrong thing. Moved to 200 and the reason recorded, rather than quietly lowered.
+
+---
+
 **I MUTATION-TESTED A GUARD AND IT STILL COULD NOT FIRE (2026-08-22).**
 
 The most useful thing that happened this increment was catching myself.

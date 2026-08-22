@@ -10,6 +10,33 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-23). A CHUNK NUMBERING WRONG TWICE, AND AN UNRESOLVED `wire.kel`
+> DIVERGENCE.** Work moved to Order 1 item 3, the type checker's INPUT. Its next slice needs a
+> `Call` node's chunk index resolved to a name. The numbering is **sorted by name**, not declaration
+> order; the first derivation gave the right count and set in the wrong order, and **passed the probe
+> written for it** because grouping and sorting coincide on that probe. Only the corpus separated
+> them.
+>
+> **`chunk_names_from_pipeline` is validated for six stages and NOT for `wire.kel`**, where the count
+> agrees at 486 while `crc_end`/`parse_prologue` are absent and the private-data field names
+> `acc`/`dis` are present. Pinned with its exact shape by
+> `the_chunk_name_mapping_is_not_yet_established_for_wire`.
+>
+> **THE CLAIM THAT THE COMPILE PATH WAS UNAFFECTED WAS INVENTED AND IS FALSE.**
+> `self_host_compile(wire.kel)` **panics** with ``no chunk named `acc` ``, and **`wire.kel` is not in
+> the byte-identity corpus** — that oracle covers ten stages, and `wire.kel` appears in the
+> wire-format tests only as a reference-compiled input. So the largest stage in the corpus, 486
+> chunks, **has never been self-hosted and nothing recorded the gap**. Nothing regressed; the tree
+> now says so, pinned by `the_self_hosted_compiler_cannot_yet_compile_wire_kel` with `lexer.kel` as
+> the control.
+>
+> **The trigger is four lines**: a `for` loop containing a data-field assignment plus a trailing
+> field read as the tail expression. Pinned by
+> `the_minimal_shape_that_misnames_the_following_declaration`, with the no-loop control.
+>
+> Also: the corpus test's `total_chunks > 500` vacuity guard was satisfied almost entirely by the
+> stage excluded from it. Moved to 200 with the reason recorded.
+
 > **Currency note (2026-08-22, late). 93% PRODUCED, AND A GUARD THAT COULD NOT FIRE DESPITE BEING
 > MUTATION-TESTED.** `SHAPES` and `SIGNATURES` are emitted by Keleusma byte-identically for every
 > stage; produced coverage **81% → 93%**, computed **56% and unchanged** (both regions are encoded,
