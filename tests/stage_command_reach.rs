@@ -27,6 +27,19 @@
 //! runs.** The cheap check is to search for callers before costing work that
 //! depends on it.
 //!
+//! # UPDATE 2026-08-22: THE DRIVER REACHES THEM, AND THIS TEST HAD A HOLE
+//!
+//! `wire_consts_via_kel` emits every stage's `CONSTS` region through commands 176
+//! and 177, byte-identically to the reference encoder — see
+//! `tests/selfhost_consts_driver.rs`. So the fact this file pinned is no longer
+//! true, and the test is inverted rather than deleted.
+//!
+//! **The guard did not announce that, because it could not.** It searched the
+//! driver for the stage's function names, and the driver addresses the stage by
+//! command NUMBER. It would have kept passing however completely the route was
+//! wired. That is a second instance of this tree's "a guard that cannot fire is
+//! worse than none", and the reason the replacement derives from the numbers.
+//!
 //! # UPDATE 2026-08-21: THEY HAVE NOW BEEN EXECUTED, AND THIS TEST NARROWED
 //!
 //! `tests/selfhost_wire.rs` now drives both commands directly: a scalar node
@@ -71,19 +84,32 @@ fn dispatched_commands() -> Vec<u32> {
     out
 }
 
-/// **THE CONSTANT-NODE STREAMING COMMANDS ARE DISPATCHED AND THE DRIVER DOES NOT
-/// REACH THEM.**
+/// **THE DRIVER NOW REACHES THE CONSTANT-NODE STREAMING COMMANDS, AND THE GUARD
+/// THAT WAS SUPPOSED TO ANNOUNCE THAT COULD NOT HAVE FIRED.**
 ///
-/// Narrowed 2026-08-21 from "unreached" to "unreached BY THE DRIVER", because
-/// `tests/selfhost_wire.rs` now executes both. The stage side is validated; the
-/// wiring is not written.
+/// This test asserted that the driver did not name `fl_stream_begin` or
+/// `fl_stream_step`, and it was written "pinned in the firing direction: when the
+/// driver drives them, this fails". **It did not fire.** The driver addresses the
+/// stage by COMMAND NUMBER — `const CMD_BEGIN: i64 = 176` — and never writes the
+/// stage's function names at all, so the strings it searched for could not appear
+/// however thoroughly the path was wired.
 ///
-/// Pinned in the firing direction: when the driver drives them, this fails and its
-/// author records that the route is now wired.
+/// That is this tree's recorded "a guard that cannot fire is worse than none",
+/// and the second instance of it: the earlier one compared `directory.len()`
+/// against a stage buffer when that length is the shared array's size, false by
+/// construction. **Before adding a check, construct the input that makes it
+/// fire.** This one is now derived from the driver's command NUMBERS, which is
+/// the thing that changes when the path is wired, and it was verified to fail
+/// against the tree as it stood before `wire_consts_via_kel` existed.
+///
+/// # What it pins now
+///
+/// The route is wired, so the fact worth guarding has inverted: `CONSTS` no
+/// longer requires validating never-executed stage code, and a driver that stops
+/// reaching these commands has lost a region rather than gained simplicity.
 #[test]
-fn the_constant_streaming_commands_are_dispatched_but_the_driver_does_not_reach_them() {
+fn the_driver_reaches_the_constant_streaming_commands() {
     const DRIVER: &str = include_str!("../src/selfhost/mod.rs");
-    const STREAM_FNS: &[&str] = &["fl_stream_begin", "fl_stream_step"];
 
     let commands = dispatched_commands();
     // MUST-FIRE on the derivation working at all. A parse that found nothing would
@@ -97,26 +123,29 @@ fn the_constant_streaming_commands_are_dispatched_but_the_driver_does_not_reach_
     for cmd in [176u32, 177] {
         assert!(
             commands.contains(&cmd),
-            "command {cmd} is no longer dispatched by `wire.kel`, so this record is \
-             stale rather than the path being driven"
+            "command {cmd} is no longer dispatched by `wire.kel`, so the driver below \
+             is calling into nothing"
         );
     }
 
-    // The control: the chunk-streaming command directly below them IS driven, so a
-    // driver that stopped naming any command would fail here rather than look like
-    // a discovery.
+    // BY NUMBER, because that is how the driver addresses the stage. The previous
+    // form searched for the stage's function names, which the driver has never
+    // written and never will.
+    for decl in ["CMD_BEGIN: i64 = 176", "CMD_STEP: i64 = 177"] {
+        assert!(
+            DRIVER.contains(decl),
+            "the driver no longer declares `{decl}`. If the constant-streaming route \
+             was removed, say what emits `CONSTS` instead; if it was merely renamed, \
+             this test needs the new name rather than deletion"
+        );
+    }
+
+    // The control: the CHUNK-streaming command is driven too, so a driver that
+    // stopped naming any command at all would fail here rather than look like a
+    // discovery about constants specifically.
     assert!(
         DRIVER.contains("CMD_STEP: i64 = 175"),
         "the chunk-streaming command is no longer named in the driver, so the \
-         absence of 176/177 below says nothing about them specifically"
+         presence of 176/177 above says nothing about them specifically"
     );
-
-    for name in STREAM_FNS {
-        assert!(
-            !DRIVER.contains(name),
-            "the driver now names `{name}`. The constant-node streaming path is \
-             being driven: record that `CONSTS` no longer requires validating \
-             never-executed stage code, and replace this test rather than relaxing it"
-        );
-    }
 }
