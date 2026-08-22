@@ -1,0 +1,42 @@
+COMPLETION CONDITION — witness execution
+
+Ordering is explicitly NOT a completion criterion. Any order satisfies this.
+
+All of the following must hold as observable properties of the tree.
+
+1. The corpus program carrying the generic byte arithmetic is EXECUTED by the
+   differential harness and agrees with the virtual machine, rather than sitting
+   in the exempt set. The count of executed-and-agreeing modules is higher than
+   it was before this work, and the new figure is taken from a run.
+
+2. That program's arithmetic is driven by the entry argument, not by literals,
+   so different argument vectors produce different results. A comparison of one
+   constant against itself does not satisfy this point.
+
+3. Every instruction-set opcode still has a corpus witness. Splitting a program
+   must not cost any opcode its witness.
+
+4. Opcodes that were refused before this work are still refused. No refusal is
+   weakened, relaxed, or removed to make a module executable.
+
+5. Any assertion that becomes false because a program moved is UPDATED to state
+   what is now true, with the reason recorded. None is deleted to restore green.
+
+6. Every figure stated in the resume document for this line matches a run: the
+   executed, vacuous and exempt counts, the opcode-support partition, and the
+   test total.
+
+7. The resume document no longer claims the byte arithmetic is verified only by
+   hand-written cases, if that has ceased to be true; if it remains true, the
+   document says so plainly rather than implying corpus breadth.
+
+8. The files recorded as read-only for this line are unmodified: the virtual
+   machine, the bytecode verifier, the bytecode definitions, the self-hosted
+   compiler sources, and the continuous-integration workflows.
+
+9. The native code generator's suite passes with zero failures and its
+   formatting and lint checks pass, with the pass/fail judgement taken from
+   something other than a truncated or piped view of the output.
+
+10. Work that is finished is committed and pushed. Nothing required above is
+    left only in the working tree.

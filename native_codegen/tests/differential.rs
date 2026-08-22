@@ -62,6 +62,33 @@ fn native_result(src: &str, args: &[i64]) -> i64 {
     let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
     check_word_width(m.word_bits_log2).expect("word width");
 
+    // **THE PRECONDITION THIS HARNESS ALWAYS HAD AND NEVER CHECKED.**
+    //
+    // `vm_result` calls the module's ENTRY POINT. This function lowers
+    // `chunks[0]`. For a single-function program those are the same chunk, which
+    // is why every test here has been valid. **For a multi-function program they
+    // are DIFFERENT FUNCTIONS**, and `assert_agrees` then compares one function
+    // against another and reports agreement or disagreement about nothing.
+    //
+    // Measured, by writing one: a two-function fixed-point test compared
+    // `add_fx` natively against `main` in the virtual machine and PASSED --
+    // because scaling is linear, so `((a<<16) + (b<<16)) >> 16` equals `a + b`
+    // and the two happened to coincide. A false pass by mathematical accident is
+    // exactly the shape this line keeps finding, and it was self-inflicted.
+    //
+    // The precondition is now enforced rather than assumed. A multi-function
+    // program fails here with an explanation instead of producing a number.
+    assert_eq!(
+        m.entry_point,
+        Some(0),
+        "this harness lowers chunks[0] natively and calls the ENTRY POINT in the \
+         virtual machine. They coincide only for a single-function program. This \
+         source has its entry at {:?}, so the two sides would run DIFFERENT \
+         FUNCTIONS and any agreement would be about nothing. Use the corpus \
+         differential, which drives whole modules, for anything multi-function.",
+        m.entry_point
+    );
+
     let ctx = Context::create();
     let lm = ctx.create_module("kel");
     lower_chunk(
@@ -2564,4 +2591,103 @@ fn an_enum_match_agrees_with_the_vm() {
             );
         }
     }
+}
+
+/// **BYTE ARITHMETIC AGREES WITH THE VIRTUAL MACHINE, INCLUDING AT THE WRAP.**
+///
+/// `Op::Add`, `Op::Sub`, `Op::Mul` and `Op::Neg` were recorded for a long time
+/// as blocked on the operator's float representation. They were not: the opcode
+/// is emitted for `Byte`, `Fixed` AND `Float`, and only the last needs a
+/// representation this backend lacks. With the module-level float guard closing
+/// every route a float can take, a matched `Byte` pair is unambiguous.
+///
+/// **The corpus does NOT exercise this**, which is why these tests exist rather
+/// than a corpus figure. `opcode_witness.kel` still refuses on `FixedDiv`, `Len`
+/// and `IsStruct`, so the differential never drives its `byte_mix`. Four opcodes
+/// lowering with nothing executing them is precisely the shape this line keeps
+/// finding, so the check is hand-written and the boundary values are the point.
+///
+/// **The wrap is the whole content.** The virtual machine computes a `Byte` in
+/// `i64` and masks with `& 0xFF`; a lowering that omitted the mask agrees on
+/// every small case and diverges only past 255. `200 + 100` and `3 - 5` are the
+/// two cases that catch it.
+#[test]
+fn byte_addition_agrees_with_the_vm_including_the_wrap() {
+    let src = "fn main(a: Word, b: Word) -> Word {
+        let x = a as Byte;
+        let y = b as Byte;
+        (x + y) as Word
+    }";
+    // 200+100 = 300 -> 44 after the mask. Without the mask the sides differ.
+    for args in [[2, 3], [200, 100], [255, 1], [255, 255], [0, 0]] {
+        assert_agrees(src, &args);
+    }
+}
+
+/// Subtraction below zero, which wraps upward on a `u8`.
+#[test]
+fn byte_subtraction_agrees_with_the_vm_including_the_borrow() {
+    let src = "fn main(a: Word, b: Word) -> Word {
+        let x = a as Byte;
+        let y = b as Byte;
+        (x - y) as Word
+    }";
+    // 3-5 = -2 -> 254. An unmasked lowering yields -2 and disagrees.
+    for args in [[5, 3], [3, 5], [0, 1], [255, 255], [0, 255]] {
+        assert_agrees(src, &args);
+    }
+}
+
+/// Multiplication, where the product leaves eight bits almost immediately.
+#[test]
+fn byte_multiplication_agrees_with_the_vm_including_the_overflow() {
+    let src = "fn main(a: Word, b: Word) -> Word {
+        let x = a as Byte;
+        let y = b as Byte;
+        (x * y) as Word
+    }";
+    // 16*16 = 256 -> 0, the smallest product that vanishes under the mask.
+    for args in [[3, 4], [16, 16], [255, 255], [17, 15], [0, 200]] {
+        assert_agrees(src, &args);
+    }
+}
+
+/// Negation, which the virtual machine performs as `u8::wrapping_neg`.
+#[test]
+fn byte_negation_agrees_with_the_vm() {
+    let src = "fn main(a: Word) -> Word {
+        let x = a as Byte;
+        (-x) as Word
+    }";
+    // -0 is 0; -1 is 255. An unmasked lowering yields -1 and disagrees.
+    for args in [[0], [1], [128], [255], [100]] {
+        assert_agrees(src, &args);
+    }
+}
+
+/// **FIXED-POINT ARITHMETIC IS VERIFIED IN THE CORPUS, NOT HERE, AND THE REASON
+/// IS THIS HARNESS'S OWN LIMIT.**
+///
+/// A `Fixed` operand's width is trusted only where a signature states it and the
+/// chunk never writes the local — so exercising `Op::Add` on a `Fixed` pair
+/// needs a function TAKING `Fixed` parameters. The entry point cannot: this
+/// harness and the virtual machine both pass `Value::Int`. So any fixed-point
+/// probe here is necessarily MULTI-FUNCTION, which the precondition in
+/// `native_result` now refuses.
+///
+/// **Four tests lived here and one of them passed falsely** before that
+/// precondition existed, comparing `add_fx` natively against `main` in the
+/// virtual machine. See `examples/scripts/fixed_arithmetic.kel`, which the
+/// corpus differential drives as a whole module.
+#[test]
+fn fixed_arithmetic_is_covered_by_the_corpus_and_not_by_this_harness() {
+    let src = "fn add_fx(x: Fixed<16>, y: Fixed<16>) -> Fixed<16> { x + y }\n\
+               fn main(a: Word, b: Word) -> Word { add_fx(a as Fixed<16>, b as Fixed<16>) as Word }";
+    let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    assert_ne!(
+        m.entry_point,
+        Some(0),
+        "a fixed-point probe became SINGLE-FUNCTION, so this harness could drive \
+         it after all and the corpus program is no longer the only route"
+    );
 }

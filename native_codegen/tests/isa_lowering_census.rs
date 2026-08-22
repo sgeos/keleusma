@@ -211,25 +211,35 @@ fn evidence_from(
 #[test]
 fn the_query_reports_a_known_refusal() {
     let isa = declared_isa();
-    let m = compiled("fn p(a: Byte, b: Byte) -> Byte { a + b }\nfn main() -> Word { 0 }")
-        .expect("the probe must compile");
+    // **THIS SUBJECT CHANGED, AND THE CONTROL FAILING IS WHY IT WAS CAUGHT.**
+    // It used to be `Byte + Byte`, which refused. `Op::Add` now LOWERS for a
+    // matched Byte pair, so that probe stopped being a refusal and this control
+    // went red rather than quietly passing on a fact that had expired. Replaced
+    // with `FixedDiv`, which is refused for an unrelated and still-current
+    // reason: runtime-fault lowering is deferred to V0.4.0.
+    let m = compiled(
+        "fn p(a: Fixed<16>, b: Fixed<16>) -> Fixed<16> { a / b }\nfn main() -> Word { 0 }",
+    )
+    .expect("the probe must compile");
     assert!(
-        m.chunks
+        m.chunks.iter().any(|c| c
+            .ops
             .iter()
-            .any(|c| c.ops.iter().any(|o| format!("{o:?}").starts_with("Add"))),
-        "the probe does not emit Add, so it is a BROKEN PROBE and this control \
-         would pass without testing anything"
+            .any(|o| format!("{o:?}").starts_with("FixedDiv"))),
+        "the probe does not emit FixedDiv, so it is a BROKEN PROBE and this \
+         control would pass without testing anything"
     );
     let (lowered, named, _) = evidence_from(&m, &isa);
     assert!(
-        named.contains("Add"),
-        "no refusal named Add, so the NAMED REFUSED column built from this query \
-         means nothing. Named: {named:?}"
+        named.contains("FixedDiv"),
+        "no refusal named FixedDiv, so the NAMED REFUSED column built from this \
+         query means nothing. Named: {named:?}"
     );
     assert!(
-        !lowered.contains("Add"),
-        "Add was reported as LOWERED by a module whose only Add is the refused \
-         one, so the positive column is crediting ops the lowering never reached"
+        !lowered.contains("FixedDiv"),
+        "FixedDiv was reported as LOWERED by a module whose only FixedDiv is the \
+         refused one, so the positive column credits ops the lowering never \
+         reached"
     );
 }
 
@@ -267,8 +277,10 @@ fn the_query_reports_no_refusal_for_a_module_that_lowers() {
 /// positional, which needs no assumption about which opcode a source form emits.
 #[test]
 fn a_clean_chunk_still_counts_inside_a_module_that_has_a_refusing_chunk() {
+    // The refusing half was `Byte + Byte` until `Op::Add` began lowering for a
+    // matched Byte pair; `FixedDiv` is refused for a reason that still holds.
     let m = compiled(
-        "fn bad(a: Byte, b: Byte) -> Byte { a + b }\n\
+        "fn bad(a: Fixed<16>, b: Fixed<16>) -> Fixed<16> { a / b }\n\
          fn good(a: Word, b: Word) -> Word { a + b }\n\
          fn main() -> Word { 0 }",
     )

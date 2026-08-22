@@ -63,6 +63,22 @@ thread_local! {
     /// Neither renders as the same integer, so the module is exempted rather
     /// than reported as a disagreement it is not.
     static SAW_REF_ARG: RefCell<bool> = const { RefCell::new(false) };
+    /// `(native index, argument position)` pairs the VIRTUAL MACHINE observed as
+    /// non-scalar on this run.
+    ///
+    /// **`run_vm` runs before `run_native` for every seed** -- verified in the
+    /// source, not assumed -- so the native stub can mask exactly the positions
+    /// the virtual machine already substituted a zero for. Without this the two
+    /// logs differ in one field (an arena handle against a pointer) and the
+    /// WHOLE MODULE was discarded over it, leaving the call sequence, every
+    /// scalar argument, the return value and the shared segment uncompared.
+    ///
+    /// **This is a RUNTIME mask, not a contract.** It rests on what the virtual
+    /// machine saw on a particular run rather than on anything the module
+    /// declares -- `Module` carries `native_names` and `native_return_shapes`
+    /// and no parameter types at all.
+    static REF_POSITIONS: RefCell<std::collections::BTreeSet<(usize, usize)>> =
+        RefCell::new(std::collections::BTreeSet::new());
 }
 
 fn take_log() -> Vec<String> {
@@ -150,7 +166,34 @@ fn record(idx: usize, all: [i64; 5]) -> i64 {
             .unwrap_or_else(|| (format!("<unmapped #{idx}>"), 0, None))
     });
     let args = &all[..argc.min(5)];
-    let parts: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+    // **MASK THE POSITIONS THE VIRTUAL MACHINE SAW AS NON-SCALAR.**
+    //
+    // A reference argument is an arena HANDLE to the virtual machine and a
+    // POINTER here, so the two never render as the same integer. The virtual
+    // machine already substitutes zero for it; without the same substitution
+    // here the logs differ in one field and the WHOLE MODULE was discarded --
+    // ten of the corpus's exemptions were exactly this, the largest single
+    // class, and the call sequence, every scalar argument, the return value and
+    // the shared segment went uncompared over it.
+    //
+    // **Nothing is dereferenced.** The pointer is replaced, not read. Decoding
+    // it would need the string application binary interface, which is ruled
+    // PROVISIONAL, and a wrong assumption here is a SEGFAULT rather than a
+    // failed assertion since the native side runs in-process through the JIT.
+    //
+    // **Only the observed positions are masked.** Masking a scalar would hide a
+    // real disagreement, so the key is the exact `(native, position)` pair.
+    let parts: Vec<String> = args
+        .iter()
+        .enumerate()
+        .map(|(pos, a)| {
+            if REF_POSITIONS.with(|r| r.borrow().contains(&(idx, pos))) {
+                "0".to_string()
+            } else {
+                a.to_string()
+            }
+        })
+        .collect();
     LOG.with(|l| l.borrow_mut().push(format!("{name}({})", parts.join(", "))));
 
     // **A COMPOSITE return is an ADDRESS natively.** Returning `stub_value`'s
@@ -170,6 +213,66 @@ fn record(idx: usize, all: [i64; 5]) -> i64 {
     }
     stub_value(idx, args)
 }
+
+/// One external native's virtual-machine side, by table index.
+///
+/// **`register_external_native` takes a BARE `fn`, not a closure**, so it cannot
+/// capture the index the way `register_native_closure` does. The native side
+/// already solves exactly this with the `kel_stub_NN` family recovering identity
+/// from a thread-local table; this mirrors that rather than inventing a second
+/// mechanism, and reuses the same table.
+fn vm_external_record(idx: usize, args: &[Value]) -> Result<Value, keleusma::vm::VmError> {
+    let (name, argc, _) = TABLE.with(|t| {
+        t.borrow()
+            .get(idx)
+            .cloned()
+            .unwrap_or_else(|| (format!("<unmapped #{idx}>"), 0, None))
+    });
+    let vals: Vec<i64> = args
+        .iter()
+        .take(argc)
+        .enumerate()
+        .map(|(pos, v)| match v {
+            Value::Int(x) => *x,
+            Value::Byte(b) => i64::from(*b),
+            Value::Bool(b) => i64::from(*b),
+            _ => {
+                SAW_REF_ARG.with(|f| *f.borrow_mut() = true);
+                REF_POSITIONS.with(|r| {
+                    r.borrow_mut().insert((idx, pos));
+                });
+                0
+            }
+        })
+        .collect();
+    let parts: Vec<String> = vals.iter().map(|a| a.to_string()).collect();
+    LOG.with(|l| l.borrow_mut().push(format!("{name}({})", parts.join(", "))));
+    Ok(Value::Int(stub_value(idx, &vals)))
+}
+
+macro_rules! external_stubs {
+    ($($n:literal => $sym:ident),* $(,)?) => {
+        $(
+            fn $sym(args: &[Value]) -> Result<Value, keleusma::vm::VmError> {
+                vm_external_record($n, args)
+            }
+        )*
+        /// The bare `fn` for table index `i`, or `None` past the family's end.
+        ///
+        /// **A FIXED FAMILY WITH AN EXPLICIT END.** Returning `None` past it makes
+        /// the module fall back to a verified registration, which the virtual
+        /// machine then refuses at call-site dispatch with a message naming the
+        /// mismatch. Silently binding the wrong function would be worse.
+        fn external_stub_for(i: usize) -> Option<fn(&[Value]) -> Result<Value, keleusma::vm::VmError>> {
+            match i { $($n => Some($sym),)* _ => None }
+        }
+    };
+}
+
+external_stubs!(
+    0 => vm_ext_00, 1 => vm_ext_01, 2 => vm_ext_02, 3 => vm_ext_03,
+    4 => vm_ext_04, 5 => vm_ext_05, 6 => vm_ext_06, 7 => vm_ext_07,
+);
 
 macro_rules! stubs {
     ($($n:literal => $sym:ident),* $(,)?) => {
@@ -668,6 +771,9 @@ fn run_vm(
 ) -> Result<Run, (String, ExemptClass)> {
     let _ = take_log();
     SAW_REF_ARG.with(|f| *f.borrow_mut() = false);
+    // Cleared per run so a position observed for one module cannot mask a
+    // scalar in the next.
+    REF_POSITIONS.with(|r| r.borrow_mut().clear());
     let arena = arena_for(m);
     // Fallible: a module may refuse to LOAD for reasons unrelated to lowering —
     // a signature requirement, for one. That is an exemption with a stated
@@ -681,11 +787,58 @@ fn run_vm(
             ));
         }
     };
+    // **WHICH NATIVES DOES THE BYTECODE CALL EXTERNALLY?** Derived from the
+    // module's own ops, so this is a CONTRACT rather than a runtime inference --
+    // unlike the reference-argument mask, which rests on what the virtual
+    // machine happened to observe.
+    //
+    // A module declaring `use external host::f` emits `Op::CallExternalNative`,
+    // and the virtual machine REFUSES a verified registration against it at
+    // call-site dispatch. This harness registered everything as verified, so
+    // `external_native_witness.kel` could not be driven at all -- and
+    // `CallExternalNative` was the last opcode counted as LOWERED with nothing
+    // ever having executed it.
+    // **THE TABLE MUST BE POPULATED ON THIS SIDE TOO, and forgetting it produced
+    // a real disagreement rather than a crash.**
+    //
+    // The closure registrations CAPTURE their name and arity. A bare `fn` cannot,
+    // so `vm_external_record` recovers them from `TABLE` -- which until now was
+    // set only in `run_native`. The virtual machine therefore read an arity of
+    // ZERO, logged the call with no arguments, and returned `stub_value(0, [])`
+    // = 7 against the native side's `stub_value(0, [4])` = 221.
+    //
+    // It surfaced as a DISAGREEMENT, which is the differential doing its job on
+    // a defect in the harness rather than in the lowering.
+    TABLE.with(|t| *t.borrow_mut() = table.to_vec());
+
+    let external_indices: std::collections::BTreeSet<usize> = m
+        .chunks
+        .iter()
+        .flat_map(|c| c.ops.iter())
+        .filter_map(|o| match o {
+            Op::CallExternalNative(i, _) => Some(usize::from(*i)),
+            _ => None,
+        })
+        .collect();
+
     for (idx, (name, argc, shape)) in table.iter().enumerate() {
         if name.is_empty() {
             continue;
         }
         let (n, ac) = (name.clone(), *argc);
+
+        // An externally-called native must be registered externally, or the
+        // machine refuses the call. The attestation is the invocation-count
+        // bound; this harness drives bounded programs and states one.
+        if external_indices.contains(&idx) {
+            if let Some(f) = external_stub_for(idx) {
+                vm.register_external_native(&n, f, 64);
+                continue;
+            }
+            // Past the family's end. Fall through to the verified registration,
+            // which the machine will refuse by name -- visible rather than
+            // silently bound to the wrong function.
+        }
 
         // **A native whose RECORDED return shape is a composite is stubbed as
         // one.** `register_native_closure` cannot: it has no arena, so it can
@@ -703,12 +856,18 @@ fn run_vm(
                 let vals: Vec<i64> = args
                     .iter()
                     .take(ac)
-                    .map(|v| match v {
+                    .enumerate()
+                    .map(|(pos, v)| match v {
                         Value::Int(x) => *x,
                         Value::Byte(b) => i64::from(*b),
                         Value::Bool(b) => i64::from(*b),
                         _ => {
                             SAW_REF_ARG.with(|f| *f.borrow_mut() = true);
+                            // Record WHICH position, so the native side can mask
+                            // the same one instead of the module being discarded.
+                            REF_POSITIONS.with(|r| {
+                                r.borrow_mut().insert((idx, pos));
+                            });
                             0
                         }
                     })
@@ -745,15 +904,23 @@ fn run_vm(
         }
 
         vm.register_native_closure(name, move |args: &[Value]| {
+            // **THE SECOND OF TWO REGISTRATION PATHS, and patching only the
+            // other one is how the mask silently did nothing.** A native with a
+            // recorded composite return shape registers through the ctx closure
+            // above; everything else lands here. `host::song_name` is here.
             let vals: Vec<i64> = args
                 .iter()
                 .take(ac)
-                .map(|v| match v {
+                .enumerate()
+                .map(|(pos, v)| match v {
                     Value::Int(x) => *x,
                     Value::Byte(b) => i64::from(*b),
                     Value::Bool(b) => i64::from(*b),
                     _ => {
                         SAW_REF_ARG.with(|f| *f.borrow_mut() = true);
+                        REF_POSITIONS.with(|r| {
+                            r.borrow_mut().insert((idx, pos));
+                        });
                         0
                     }
                 })
@@ -828,19 +995,22 @@ fn run_vm(
             ret_bytes.push(flat_ret_bytes(&st, &arena));
         }
     }
-    if SAW_REF_ARG.with(|f| *f.borrow()) {
-        // **NOT A FAULT. The module ran fine; THIS HARNESS declined to compare
-        // it.** Classified as a harness limit for exactly that reason -- folding
-        // it in with the VM faults put 14 modules in the fault class when only
-        // four belong there, and the wrong total is what exposed it.
-        return Err((
-            "a native receives a REFERENCE argument (a string); it is an \
-                    arena handle on the VM side and a pointer natively, so the two \
-                    do not render as the same integer"
-                .into(),
-            ExemptClass::HarnessCapacity,
-        ));
-    }
+    // **THIS USED TO EXEMPT THE MODULE, AND NOW MASKS ONE FIELD INSTEAD.**
+    //
+    // A reference argument still cannot be compared: it is an arena handle here
+    // and a pointer natively. But that is ONE FIELD, and discarding the module
+    // over it left the call sequence, the native names, every scalar argument,
+    // the return value and the shared segment uncompared. Ten modules -- the
+    // largest exempt class -- were declined on that basis.
+    //
+    // **An exemption says nothing was compared; a masked comparison says
+    // everything except this was.** `REF_POSITIONS` carries the exact positions
+    // to both sides, so the strings are excluded and the rest is checked.
+    //
+    // The earlier decline was not wrong about its own subject -- it argued
+    // against DEREFERENCING the pointer to compare string CONTENT, which is
+    // still declined and still for three measured reasons. It simply never
+    // considered the cheap version.
     Ok(Run {
         results,
         wrote_shared: shared != initial_shared,
@@ -1704,6 +1874,8 @@ fn every_lowering_module_executes_or_is_exempt() {
     let mut seed_pairs = 0usize;
     let mut seed_widened = 0usize;
     let mut disagreed: Vec<String> = Vec::new();
+    // Names found under `src/selfhost/kel`, for the Order-1 gate report below.
+    let mut stage_files: Vec<String> = Vec::new();
 
     // **Single-module mode**, for the mutation sweep. `tools/mutation_sweep.py`
     // runs this binary once per module in its own PROCESS, so a mutation that
@@ -1714,6 +1886,13 @@ fn every_lowering_module_executes_or_is_exempt() {
 
     for p in sources() {
         let name = p.file_name().unwrap().to_str().unwrap().to_string();
+        // **Stage membership comes from the PATH, not from a list of names.** A
+        // hand-written roster of twelve is exactly the thing that goes stale
+        // silently when a stage is added or removed, which is the failure the
+        // instruction-set census exists to prevent.
+        if p.components().any(|c| c.as_os_str() == "selfhost") {
+            stage_files.push(name.clone());
+        }
         if let Some(want) = &only
             && &name != want
         {
@@ -2126,6 +2305,85 @@ fn every_lowering_module_executes_or_is_exempt() {
     println!("    {obs_composite:>3}  a COMPOSITE RETURN BODY compared byte for byte");
     println!("    {obs_wrote_shared:>3}  writing the shared segment");
     println!("    {obs_single_scalar_only:>3}  NONE of the three -- one scalar, no call, no write");
+
+    // ================= THE ROADMAP'S ORDER-1 GATE, AS A MEASURED FIGURE
+    //
+    // `V0_3_X_ROADMAP.md` states the gate in words -- "the self-hosted
+    // compiler's own bytecode runs correctly as native code, differential-tested
+    // against the VM" -- and NOTHING HAS EVER SAID WHETHER IT IS MET. This
+    // harness already drives every stage; it simply never separated them from
+    // the other fifty-odd modules. No second walker is introduced: these are the
+    // same results, partitioned by where the source lives.
+    //
+    // **THIS DELIBERATELY DOES NOT ASSERT THAT THE GATE IS MET.** "Eleven of
+    // twelve agree" is the shape of headline this file already inflated once,
+    // when `is_vacuous` asked whether a SEEDED segment was non-zero -- which it
+    // is before a module executes a single operation -- and three stages left
+    // the vacuous set for no reason at all. The figure is reported with the
+    // qualifications beside it and a reader draws the conclusion.
+    {
+        let in_stage = |n: &String| stage_files.contains(n);
+        let ex: Vec<&String> = executed.iter().filter(|n| in_stage(n)).collect();
+        let vac: Vec<&String> = vacuous.iter().filter(|n| in_stage(n)).collect();
+        let exm: Vec<&(String, String, ExemptClass)> =
+            exempt.iter().filter(|(n, _, _)| in_stage(n)).collect();
+        let dis: Vec<&String> = disagreed.iter().filter(|n| in_stage(n)).collect();
+
+        println!("\n================ ORDER-1 GATE (self-hosted stages)");
+        println!("  stage sources found       : {}", stage_files.len());
+        println!("  EXECUTE and AGREE         : {}", ex.len());
+        println!("  agree but VACUOUS         : {}", vac.len());
+        for n in &vac {
+            println!("     {n}");
+        }
+        println!("  EXEMPT                    : {}", exm.len());
+        for (n, why, _) in &exm {
+            println!("     {n:24} {why}");
+        }
+        println!("  DISAGREE                  : {}", dis.len());
+        for n in &dis {
+            println!("     {n}");
+        }
+        println!(
+            "\n  THREE STATES, KEPT APART. Exempt is not failed, and vacuous is not\n  \
+             agreeing about anything. A stage counted in one column is not in\n  \
+             another, and the four sum to the sources found.\n  \
+             \n  \
+             TWO QUALIFICATIONS BELONG BESIDE THIS FIGURE, NOT ELSEWHERE:\n  \
+             \n  \
+             `verify_datalayout.kel` NEVER RUNS, and is blocked BY DESIGN rather\n  \
+             than by a defect: its verdict accumulates across three\n  \
+             differently-encoded phases in the retained buffer. Do not invent a\n  \
+             batch-zero seed for it.\n  \
+             \n  \
+             `wire.kel` is EXEMPT AND IS NOT A DISAGREEMENT. Measured separately:\n  \
+             both sides fault at tick 19, the virtual machine naming\n  \
+             IndexOutOfBounds and the native side raising SIGTRAP. But SIGTRAP\n  \
+             proves A fault and not WHICH, so that is agreement in the FACT and\n  \
+             the POSITION of the fault, not in its identity. It must not be\n  \
+             rounded up to agreement.\n  \
+             \n  \
+             THE STAGES ARE SEEDED. Read the carrier breakdown above before\n  \
+             treating any stage's agreement as substantive."
+        );
+        println!("================");
+
+        // A report over an empty stage set must FAIL rather than look like a
+        // result. The rest is reported, not pinned: the distribution moves with
+        // the corpus and with the harness.
+        assert!(
+            stage_files.len() >= 10,
+            "only {} self-hosted stage sources were found, so this Order-1 report \
+             is reading the wrong tree and its zero says nothing",
+            stage_files.len()
+        );
+        assert_eq!(
+            ex.len() + vac.len() + exm.len() + dis.len(),
+            stage_files.len(),
+            "the Order-1 columns do not partition the stage sources, so a stage \
+             has fallen out of the accounting while the columns still look sane"
+        );
+    }
     println!(
         "         of those, {obs_single_and_undrivable} were driven at ONE argument vector and \
          could not have varied"

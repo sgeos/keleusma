@@ -134,7 +134,24 @@ fn alloc_vec_unknown(n: usize) -> Vec<Width> {
 fn width_of_tag(t: TypeTag) -> Width {
     match t {
         TypeTag::Byte | TypeTag::Bool => Width::Scalar(1),
+        // **`Fixed` IS EIGHT BYTES, AND THAT IS MEASURED RATHER THAN ASSUMED.**
+        // The reference packs `struct { a: Fixed<16>, b: Fixed<16> }` at
+        // `byte_size: 16`, identical to a pair of `Word`s. A Q-format value is
+        // an `i64` of fixed-point bits, so it occupies a full slot.
+        //
+        // It was `Unknown` until 2026-08-21, and NOT for a stated reason: it sat
+        // inside an assertion whose doc comment justified only `Composite`. This
+        // line declined to widen it on the ground that doing so "would newly
+        // admit composites carrying `Fixed` fields, a packing change with its
+        // own risk" -- a risk that was asserted and never measured. The risk of
+        // widening is the risk of GUESSING a width, and there is nothing here to
+        // guess.
+        TypeTag::Fixed => Width::Scalar(8),
         TypeTag::Word => Width::Scalar(8),
+        // `Composite` stays unknown because a body length is genuinely not
+        // carried on the tag. `Float` stays unknown because this backend has no
+        // float representation at all -- redundant with the module-level guard
+        // that refuses a float by every route, and kept as a second line.
         _ => Width::Unknown,
     }
 }
@@ -667,6 +684,20 @@ fn resolve_shared_scalar<'ctx>(
     }
 }
 
+/// Why a data slot of this kind is refused.
+///
+/// **A DATA SLOT IS NOT A COMPOSITE BODY FIELD, and the distinction is why
+/// `Fixed` is lowered in one and refused here.** A body field is INTERNAL: the
+/// compiler packs it, the same program reads it, and no one outside sees the
+/// layout, so the backend agreeing with the reference is a fact rather than a
+/// choice. A shared data slot is **HOST-VISIBLE**, and its layout is an
+/// application binary interface -- the same class of question as the string ABI
+/// (ruled provisional) and the float ABI (undecided, blocking two opcodes).
+///
+/// So the `Fixed` case here stays refused deliberately, not by omission, even
+/// though the identical-looking exclusion on `GetField` and `GetIndex` was
+/// lifted. Settling a host-visible layout by writing whichever version compiles
+/// is the trade this line refuses.
 fn alloc_format_kind(tag: u8) -> String {
     match tag {
         0 => String::from("Unit slot; the flat representation of Unit is unsettled"),
@@ -1148,6 +1179,64 @@ fn lower_module_with<'ctx>(
         )));
     }
 
+    // **A SIGNATURE IS NOT THE ONLY ROUTE A FLOAT TAKES, and the other routes
+    // used to be closed only by accident.**
+    //
+    // Measured: `fn p(w: Word) -> Word { let f = 1.5; ... }` has NO float in any
+    // signature and DOES carry `ConstValue::Float`. Before this, that module was
+    // refused only because `Op::Add` was unsupported -- a property of what is
+    // unimplemented, not a guard. The moment `Op::Add` lowers as an integer add
+    // (which is correct for `Byte` and `Fixed`), that program would SILENTLY
+    // MISCOMPILE.
+    //
+    // So the routes are enumerated and each is closed:
+    //   1. chunk signatures        -- above
+    //   2. chunk constants         -- here
+    //   3. native return shapes    -- here
+    //   4. data-segment slots      -- here
+    //
+    // **The list is a claim and `the_float_guard_closes_every_route_it_names`
+    // tests each one.** A guard that closes three of four while reading as total
+    // is the shape this line keeps finding.
+    for (i, c) in program.chunks.iter().enumerate() {
+        if let Some(k) = c
+            .constants
+            .iter()
+            .position(|k| matches!(k, ConstValue::Float(_)))
+        {
+            return Err(LowerError::UnsupportedOp(format!(
+                "chunk {i} carries a Float CONSTANT at index {k}. A float reaches this \
+                 module without appearing in any signature, and the integer \
+                 arithmetic lowering would silently miscompile it"
+            )));
+        }
+    }
+    if let Some(i) = program
+        .native_return_shapes
+        .iter()
+        .position(|sh| matches!(sh, keleusma::bytecode::WireShape::Scalar { kind } if *kind == SCALAR_FLOAT_TAG))
+    {
+        return Err(LowerError::UnsupportedOp(format!(
+            "native {i} declares a Float RETURN SHAPE; its result would reach the \
+             operand stack as a float this backend cannot represent"
+        )));
+    }
+    // Route 4, the data segment, is closed AT THE ACCESS rather than at the
+    // declaration, and deliberately not re-checked here. `slot_entry` admits
+    // only `SCALAR_INT`, `SCALAR_BYTE` and `SCALAR_BOOL`, refusing anything else
+    // as `UnsupportedDataSlot`.
+    //
+    // **Measured, because the obvious statement is wrong**: a module that
+    // DECLARES a float slot and never reads it LOWERS. That is safe by
+    // construction rather than by refusal -- an unread slot puts no float on the
+    // operand stack, so there is nothing for the integer arithmetic below to
+    // miscompile. Every ACCESS refuses, which is the point where a float would
+    // actually arrive.
+    //
+    // A second check here would be a parallel model of a guard that already
+    // exists and the two could drift. `float_guard_routes.rs` tests this route
+    // through the EXISTING refusal.
+
     // A delegated suspension affects exactly TWO chunks: the entry, whose tail
     // call becomes the return, and the callee, whose yields become returns.
     let delegated = if opts.delegated_suspension {
@@ -1384,6 +1473,46 @@ struct BodyCfg<'a> {
 /// symbol would silently bind both call sites to whichever the host defined,
 /// and the differential oracle would only catch it if the corpus happened to
 /// call both.
+/// Result width for the generic arithmetic surface, or `None` to refuse.
+///
+/// **Refusing is the default and the point.** A matched `Byte` pair yields a
+/// `Byte`; a matched eight-byte pair yields the same width, which after the
+/// module-level float guard can only be `Fixed`. Everything else -- an unknown
+/// width, a mismatched pair, a body operand -- is refused, because a guess here
+/// is a silent wrong answer rather than a fault.
+///
+/// `byte_only` refuses the eight-byte case, for `Op::Mul`, whose `Fixed` form
+/// the compiler emits as `Op::FixedMul` instead.
+fn arith_result_width(l: Width, r: Width, byte_only: bool) -> Option<Width> {
+    match (l, r) {
+        (Width::Scalar(1), Width::Scalar(1)) => Some(Width::Scalar(1)),
+        (Width::Scalar(8), Width::Scalar(8)) if !byte_only => Some(Width::Scalar(8)),
+        _ => None,
+    }
+}
+
+/// Truncate to eight bits when the result is a `Byte`, and leave it alone
+/// otherwise.
+///
+/// **The asymmetry is the whole content.** A `Byte` must be masked to hold the
+/// representation invariant that makes `ByteToWord` a no-op. A `Fixed` must NOT
+/// be, and masking one would truncate it to eight bits while every later field
+/// offset still looked correct -- a silent wrong answer of exactly the kind the
+/// `Width::Body` split exists to prevent.
+fn mask_if_byte<'ctx>(
+    b: &inkwell::builder::Builder<'ctx>,
+    i64t: inkwell::types::IntType<'ctx>,
+    v: inkwell::values::IntValue<'ctx>,
+    out: Width,
+) -> inkwell::values::IntValue<'ctx> {
+    if out == Width::Scalar(1) {
+        b.build_and(v, i64t.const_int(0xFF, false), "bmask")
+            .unwrap()
+    } else {
+        v
+    }
+}
+
 fn native_symbol(name: &str) -> String {
     let mut s = String::from("kel_native_");
     for c in name.chars() {
@@ -2708,6 +2837,71 @@ fn lower_chunk_body<'ctx>(
             // unsupported for an unrelated reason recorded in the inventory:
             // `Op::Add` cannot be lowered without knowing whether its operands
             // are `Byte` or `Fixed`, and the opcode does not say.
+            // **THE GENERIC ARITHMETIC SURFACE: `Byte` and `Fixed` only.**
+            //
+            // These were recorded for a long time as blocked on the operator's
+            // float representation. **They were not.** `Op::Add` is emitted for
+            // `Byte`, `Fixed` AND `Float` -- three types, where two separate
+            // records each named two and disagreed. `Fixed` arithmetic is a
+            // plain wrapping `i64` operation because the format is
+            // scale-independent; `Byte` is the same operation plus a mask to
+            // eight bits. **Only `Float` needs a representation this backend
+            // lacks**, and the module-level guard now excludes it by every route
+            // it can take, tested per route in `float_guard_routes.rs`.
+            //
+            // Semantics taken from the virtual machine, not assumed:
+            // `binary_arith` computes a `Byte` in `i64` and masks with `& 0xFF`;
+            // `Fixed` is `wrapping_add`/`wrapping_sub` on the underlying bits.
+            // LLVM's `add`/`sub`/`mul` wrap by default (no `nsw`), which is the
+            // matching behaviour.
+            //
+            // **WIDTH IS THE DISCRIMINATOR AND IT REFUSES WHEN UNSURE.** A
+            // `GetLocal` carries a signature-derived width only where the chunk
+            // never writes that local; anything written is `Unknown`. An unknown
+            // or mismatched pair is REFUSED rather than guessed, which costs
+            // coverage and cannot mispack -- the same trade the composite
+            // packing already makes.
+            Op::Add | Op::Sub | Op::Mul => {
+                let (wl, wr) = (st.width_at(1), st.width_at(0));
+                // `Op::Mul` on `Fixed` does not exist: the compiler emits
+                // `Op::FixedMul(n)` for it. Admitting an eight-byte operand here
+                // would add a lowering arm for a case that cannot occur, which
+                // is untested code that looks tested.
+                let byte_only = matches!(op, Op::Mul);
+                let out = arith_result_width(wl, wr, byte_only).ok_or_else(|| {
+                    LowerError::UnsupportedOp(format!(
+                        "{op:?} with operand widths {wl:?} and {wr:?}: this backend \
+                         lowers the generic arithmetic surface only for a matched \
+                         Byte pair (1 byte each) or, for Add and Sub, a matched \
+                         Fixed pair (8 bytes each). Refusing rather than guessing, \
+                         since a wrong choice here is a silent wrong answer"
+                    ))
+                })?;
+                let rhs = st.pop();
+                let lhs = st.pop();
+                let raw = match op {
+                    Op::Add => st.b.build_int_add(lhs, rhs, "gadd").unwrap(),
+                    Op::Sub => st.b.build_int_sub(lhs, rhs, "gsub").unwrap(),
+                    _ => st.b.build_int_mul(lhs, rhs, "gmul").unwrap(),
+                };
+                st.push_w(mask_if_byte(&st.b, i64t, raw, out), out);
+            }
+            // The unary half of the same surface. The virtual machine negates a
+            // `Byte` with `u8::wrapping_neg`, which is `(-a) & 0xFF`, and a
+            // `Fixed` with `i64::wrapping_neg`.
+            Op::Neg => {
+                let w = st.width_at(0);
+                let out = arith_result_width(w, w, false).ok_or_else(|| {
+                    LowerError::UnsupportedOp(format!(
+                        "Neg with operand width {w:?}: lowered only for a Byte (1 \
+                         byte) or a Fixed (8 bytes) operand, and refused rather \
+                         than guessed otherwise"
+                    ))
+                })?;
+                let v = st.pop();
+                let raw = st.b.build_int_neg(v, "gneg").unwrap();
+                st.push_w(mask_if_byte(&st.b, i64t, raw, out), out);
+            }
             Op::WordToByte => {
                 let v = st.pop();
                 let m =
@@ -3099,7 +3293,14 @@ fn lower_chunk_body<'ctx>(
             Op::GetIndex(keleusma::bytecode::ArrayElem::Flat { kind }) => {
                 use keleusma::value_layout::ScalarKind as SK;
                 let elem: u64 = match kind {
-                    SK::Int => 8,
+                    // **`Fixed` IS HANDLED EXACTLY LIKE `Int`, and that is
+                    // measured rather than assumed.** A Q-format value is an
+                    // `i64` of fixed-point bits occupying a full slot, and the
+                    // reference packs `struct { a: Fixed<16>, b: Fixed<16> }` at
+                    // sixteen bytes -- identical to a pair of `Word`s. THE BITS
+                    // ARE THE VALUE: no zero-extension, no mask, no rescale.
+                    // Scaling lives in the opcodes that consume them.
+                    SK::Int | SK::Fixed => 8,
                     SK::Byte | SK::Bool => 1,
                     other => {
                         return Err(LowerError::UnsupportedOp(format!(
@@ -3242,7 +3443,16 @@ fn lower_chunk_body<'ctx>(
                     .unwrap()
                 };
                 let (v, w) = match kind {
-                    SK::Int => {
+                    // **`Fixed` READS EXACTLY LIKE `Int`.** Eight raw bytes of
+                    // Q-format bits, unaligned like every other body access. The
+                    // bits ARE the value -- do not zero-extend, mask, or rescale
+                    // them; the consuming opcode knows the scale.
+                    //
+                    // It fell to the catch-all until 2026-08-21, one increment
+                    // after the operand WIDTH was widened. Packing a field and
+                    // reading it back are separate arms, and only packing
+                    // followed from the width.
+                    SK::Int | SK::Fixed => {
                         let iv =
                             st.b.build_load(i64t, addr, "cfint")
                                 .unwrap()

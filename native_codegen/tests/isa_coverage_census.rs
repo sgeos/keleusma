@@ -163,22 +163,33 @@ fn which_isa_opcodes_have_no_corpus_witness() {
         }
     }
     println!(
-        "\n  TWO REMAIN, and the open question is no longer WHICH CONSTRUCT but\n  \
-         WHETHER ONE EXISTS. Both fire only when a static type is UNKNOWN, so\n  \
-         reaching them needs inference to FAIL rather than an unusual syntax:\n  \
+        "\n  ZERO REMAIN, as of 2026-08-21. Both of the last two were answered by\n  \
+         the `v0.2.3` line, and NEITHER was found by guessing a construct --\n  \
+         between the lines, twenty-three guesses failed. Both fell to reading the\n  \
+         GUARD'S OWN MATCH ARMS for what they OMIT.\n  \
          \n  \
-         `Len`      (compiler.rs ~7647) fires only when the for-in source has no\n  \
-                    statically known length. Its own comment calls the fallback\n  \
-                    admissible at the bytecode level but possibly verifier-rejected\n  \
-                    in strict mode, which reads as a DEFENSIVE path.\n  \
-         `IsStruct` (compiler.rs ~11364) fires only for a struct pattern whose\n  \
-                    scrutinee is NOT statically that struct; a test asserts the\n  \
-                    fold-out in the ordinary case.\n  \
+         `Len`      an `if` EXPRESSION as the for-in source. `static_for_in_length`\n  \
+                    handles ArrayLiteral, Call, FieldAccess, Ident, ArrayIndex and\n  \
+                    Match, then falls through to `_ => None`. `Expr::If` is absent.\n  \
+         `IsStruct` an UNANNOTATED struct-parameter pattern, so the pattern's type\n  \
+                    is unknown at the test. Annotating it folds the test out.\n  \
          \n  \
-         IF THEY ARE DEFENSIVELY-RETAINED DEAD PATHS, THAT IS THE FINDING, and it\n  \
-         is worth more than two more witnessed opcodes: this project treats opcode\n  \
-         count as a first-order constraint. Neither reachable nor unreachable is\n  \
-         asserted here -- distinguishing them is exactly what this census is for."
+         **A WITNESS IS NOT AN ADMISSIBLE PROGRAM, AND THE TWO DIFFER.** Measured:\n  \
+         \n  \
+           witness      verify()  module_wcmu  arena     load   run\n  \
+           Len          accepts   REFUSES      REFUSED   n/a    never runs\n  \
+           IsStruct     accepts   accepts      OK        LOADS  TRAPS\n  \
+         \n  \
+         `Len`'s witness cannot be ADMITTED -- refused before load by the strict\n  \
+         iteration-bound check, the conservative-verification stance working as\n  \
+         designed. `IsStruct`'s satisfies every load-time check, loads, and dies at\n  \
+         call time on `InvalidBytecode` -- the class `verify()` exists to exclude AT\n  \
+         LOAD TIME. A legal program reaching it at RUN time is a load-time hole, and\n  \
+         `src/verify.rs` is read-only to BOTH lines. Recorded for the operator; see\n  \
+         `probe_len_reachability.rs` and the handoff.\n  \
+         \n  \
+         SO 66 OF 66 IS DEFENSIBLE ON REACHABILITY AND DESERVES ITS FOOTNOTE:\n  \
+         one witness cannot be LOADED, the other cannot be RUN."
     );
     println!("================\n");
 
