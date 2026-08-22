@@ -13,6 +13,83 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE ROUTE DECISION DISSOLVED ON READING THE CODE, AND THE FIGURES IT RESTED ON WERE WRONG BY
+TWENTY-SIX TIMES (2026-08-22).**
+
+Session 50 closed with one recorded open decision: which of three routes the `CONSTS` driver takes,
+with route (c) — one definition the encoder itself consumes — marked "right in principle and not
+mechanical" because `SchemaBuilder::add_constant_pool` is called per contributor and returns a
+`ConstRange` each time, so it cannot consume a flat list of roots.
+
+**That is true and it was never the obstacle.** `add_constant_pool` is a pure accumulator: it
+extends `const_roots` and returns `(first, len)`. Which roots reach the table is therefore entirely
+structural — chunk constants in chunk order, then `private_init` — **except one predicate**, the
+wholly-default elision. A predicate shares by ordinary dependency. A range-returning contributor
+call does not, and only the second was ever in the way. Route (c) is a `#[must_use] fn` and a
+`&DataLayout`.
+
+**I costed an interface from its shape rather than its body.** That is the fifth recorded obstacle
+in this area to dissolve on being looked up, and the second to dissolve in the direction of hidden
+PROGRESS: the driver already had `const_tag_and_name`, complete for all eleven tags, and
+`push_blob_node` already had the child, flag and discriminant extraction. The remaining driver work
+is assembling six words per node and looping.
+
+**THE FIGURES WERE WORSE THAN THE ROUTE.**
+
+| quantity | recorded | measured |
+|---|---|---|
+| `CONSTS` across the eleven stages | 645,312 bytes, 90.5% of the body | **37,152 bytes, 33.9% of a 109,552-byte body** |
+| `parse`'s constant forest | 17,391 nodes | **857** |
+| corpus auxiliary body | 103,544 | **109,552** |
+
+The first two share one cause: **every figure counted the wholly-default private-slot initialisers,
+which the encoder elides.** They describe a forest nothing emits. The doc comment carrying them also
+claimed "every figure in this section is derived by a test in
+`tests/consts_region_composition.rs`". No test asserted any of them. A file that names its own
+oracle and is not checked against it is worse than one that quotes a bare number, because the
+citation is what stops a reader from re-measuring.
+
+**THE CONCLUSIONS SURVIVE AND THE MAGNITUDES DO NOT, AND BOTH HALVES GET STATED.** `parse` at 857
+nodes still exceeds the 170-node walk cap, so the cap still excludes the stages — six calls rather
+than a hundred and two. The six-to-one widening argument still holds, because the ratio is the node
+width and does not depend on the forest size. A correction that reports only "the conclusion stands"
+teaches nobody why the number moved.
+
+**THE ORACLE MUST NOT DELEGATE, AND THAT LOOKS LIKE THE DUPLICATION IT IS NOT.**
+`the_all_default_initialiser_pool_is_elided_from_the_region` restates the elision rule and measures
+it at the bytes. A version calling the shared predicate would agree with a WRONG predicate. So the
+restatement stays, annotated as deliberate, and a separate test joins the two. **Demonstrated rather
+than argued**: inverting the predicate fails five tests including that oracle; each of the two
+`constant_roots` mutations fails exactly the one test written for it.
+
+**FOUR COPIES OF A SLOT MAP, AND THE COMMENT WARNING ABOUT COPIES SAT ON ONE OF THEM.**
+`1 + 65536 + 1 + 1024 * 4` was restated in `wire_names_from_input`, `wire_regions_from_input`,
+`wire_chunks_from_input`, and once at module scope under a comment saying — correctly — that two
+copies of a slot map is a drift this file's history already records. **The reasoning was right and
+the remedy was applied one scope too narrowly**, which is a more common failure than not knowing the
+rule. `wire.kel`'s block is addressed BY SLOT, so a constant disagreeing with its twin shifts every
+field after it and yields a WRONG artifact rather than a refused one.
+
+Now one `wire_slots` module, and `tests/wire_slot_layout.rs` **derives every offset by accumulating
+the field widths declared in `wire.kel` itself**, with a vacuity guard because a reader that stopped
+matching would compare zero against zero. Mutation-tested both ways: a field inserted mid-block
+fails it, and a narrowed per-region array fails both of its tests.
+
+**A TAG MAPPING THAT AGREED BY COINCIDENCE.** `const_tag_and_name` in the driver wrote the bare
+literals `1..12` where `flatten` names `wire_schema::tag::*`. The tag numbering is the wire contract,
+so renumbering it would have left the shipping driver emitting the old contract with nothing to
+notice — the 2026-08-21 shipping-driver-versus-copy shape, one layer down. **The claim "they agree
+today" was checked rather than asserted, and the checking is what found it.** Closed; the driver now
+names the encoder's constants.
+
+**WHAT WAS DELIBERATELY NOT DONE.** The driver still does not emit `CONSTS`, and
+`tests/stage_command_reach.rs` still pins that. Extracting a shared `ConstValue`-to-tag mapping was
+recorded rather than started: the interning arms compute `aux` from a name interner `flatten` owns,
+and a partial extraction covering only the scalar arms would be a fourth statement rather than a
+third.
+
+---
+
 **BEING WRONG IN PUBLIC WAS THE MOST PRODUCTIVE THING THAT HAPPENED TODAY (2026-08-21, late).**
 
 Two claims, both mine, both wrong, both caught by someone reading rather than agreeing.

@@ -2022,6 +2022,67 @@ pub struct DataInitRecord {
     pub count: u32,
 }
 
+/// Whether a data layout's private-slot initialisers are elided from the
+/// constant table.
+///
+/// # Why this is one predicate rather than the same condition written twice
+///
+/// [`SchemaBuilder::add_data_layout`] decides the elision and
+/// [`constant_roots`] has to predict it. Those two disagreeing is not a state
+/// anything would notice: a model that counts an elided pool over-counts the
+/// region by the whole data segment, which on a pipeline stage is most of the
+/// constants the module carries. Sharing the predicate makes the disagreement
+/// impossible instead of testable.
+///
+/// Only the WHOLLY default case is elided. An empty pool is deliberately not
+/// reported as elided: it contributes nothing either way, and folding it in
+/// would make the [`ABSENT`] sentinel stand for two different situations.
+#[must_use]
+pub fn private_init_is_elided(layout: &DataLayout) -> bool {
+    !layout.private_init.is_empty()
+        && layout
+            .private_init
+            .iter()
+            .all(|v| matches!(v, ConstValue::Int(0)))
+}
+
+/// The constant roots [`encode_aux_body`] contributes to the shared table, in
+/// the order it contributes them.
+///
+/// # What this is for
+///
+/// A consumer that wants to produce the `CONSTS` region by some other route --
+/// the self-hosted emit path streaming one record at a time, for instance --
+/// needs to know exactly which roots the reference encoder will emit and in
+/// what order, or its bytes cannot be compared against the reference at all.
+///
+/// # The order is part of the contract
+///
+/// Every chunk's constants in chunk order, then the data layout's private-slot
+/// initialisers. Roots occupy the shared table's prefix in contribution order
+/// (see [`SchemaBuilder::add_constant_pool`]), so this order is what indexes a
+/// record, not merely what fills the table.
+///
+/// # What it does NOT tell you
+///
+/// These are ROOTS. A composite root expands into further records during
+/// [`SchemaBuilder::finish`], so the emitted record count equals this length
+/// only for a forest of scalars. Callers that need the record count must
+/// flatten rather than take `len()`.
+#[must_use]
+pub fn constant_roots(aux: &crate::wire_format::WireAuxBody) -> Vec<ConstValue> {
+    let mut roots = Vec::new();
+    for c in &aux.chunks {
+        roots.extend_from_slice(&c.constants);
+    }
+    if let Some(dl) = &aux.data_layout
+        && !private_init_is_elided(dl)
+    {
+        roots.extend_from_slice(&dl.private_init);
+    }
+    roots
+}
+
 impl SchemaBuilder {
     /// Adds the data-segment layout.
     ///
@@ -2057,12 +2118,7 @@ impl SchemaBuilder {
         // has; a mostly-default layout with a few set values would want a sparse
         // encoding, and none exists to measure.
         let count = layout.private_init.len() as u32;
-        let all_default = !layout.private_init.is_empty()
-            && layout
-                .private_init
-                .iter()
-                .all(|v| matches!(v, ConstValue::Int(0)));
-        let (first, count) = if all_default {
+        let (first, count) = if private_init_is_elided(layout) {
             (ABSENT, count)
         } else {
             self.add_constant_pool(&layout.private_init)

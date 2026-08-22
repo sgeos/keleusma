@@ -3886,6 +3886,55 @@ impl core::fmt::Display for SelfHostError {
 
 impl std::error::Error for SelfHostError {}
 
+/// The shared-slot layout `wire.kel` declares, derived once from its `shared data
+/// wire` block.
+///
+/// # Why this is a module and not three sets of local constants
+///
+/// It was three. `wire_names_from_input`, `wire_regions_from_input` and
+/// `wire_chunks_from_input` each restated `1 + 65536 + 1 + 1024 * 4`, and they
+/// agreed -- which is the state a drifted copy starts in. This tree has already
+/// paid for the same shape twice: nine copies of `parse.kel`'s layout collapsed
+/// into `crate::selfhost_host`, and four silent miscompiles in one day from the
+/// shipping driver disagreeing with a copy of itself that the boundary measured
+/// instead.
+///
+/// # The derivation, field by field
+///
+/// A slot index is a WORD index for a `Word` field and a BYTE index inside a
+/// `[Byte; N]` field, because `set_shared` addresses the declared slots. Reading
+/// down the block:
+///
+/// | field | width | first slot |
+/// |---|---|---|
+/// | `len` | 1 | 0 |
+/// | `bytes` | 65,536 | 1 |
+/// | `nregions` | 1 | 65,537 |
+/// | `rkind`, `rflags`, `rlen`, `rcovers` | 1,024 each | 65,538 |
+/// | `warg` .. `warg5` | 5 | 69,634 |
+/// | `fin` | 1,024 | 69,639 |
+/// | `bin` | 49,152 | 70,663 |
+///
+/// **APPEND TO A SLOT-ADDRESSED BLOCK, NEVER INSERT.** Every constant here is an
+/// offset from the fields above it, so a field inserted rather than appended
+/// moves every slot after it and every one of these becomes wrong at once.
+pub mod wire_slots {
+    /// `wire.len`, the directory byte length.
+    pub const LEN: usize = 0;
+    /// First byte of `wire.bytes`, the artifact window.
+    pub const BYTES: usize = LEN + 1;
+    /// `wire.nregions`.
+    pub const NREGIONS: usize = BYTES + 65536;
+    /// First slot of the four per-region input arrays.
+    pub const REGION_INPUTS: usize = NREGIONS + 1;
+    /// `wire.warg`, first of the five general argument slots.
+    pub const WARG: usize = REGION_INPUTS + 1024 * 4;
+    /// First slot of `wire.fin`, the record-field batch buffer.
+    pub const FIN: usize = WARG + 5;
+    /// First slot of `wire.bin`, the byte-pool batch buffer.
+    pub const BIN: usize = FIN + 1024;
+}
+
 /// Emit a module's `NAMES` and `STRING_POOL` regions through `wire.kel`.
 ///
 /// **This is the first thing the DRIVER asks `wire.kel` to do**, and it is what
@@ -3910,19 +3959,27 @@ fn const_roots_of(module: &Module) -> Vec<ConstValue> {
 /// untestable, which is the same reason the blob carries a zero enum count
 /// rather than omitting the section.
 fn const_tag_and_name(c: &ConstValue) -> (u16, i64) {
+    use crate::wire_schema::tag;
     use ConstValue as K;
+    // THE TAGS ARE THE ENCODER'S OWN CONSTANTS, NOT NUMBERS THAT MATCH THEM.
+    // This arm list carried the literals 1..12 and they agreed with
+    // `wire_schema::tag` by coincidence rather than by construction: the tag
+    // numbering is the wire contract, so a renumbering there would leave this
+    // function silently emitting the old contract. That is the shipping-driver
+    // versus test-copy shape that produced four silent miscompiles on
+    // 2026-08-21, one layer down.
     match c {
-        K::Unit => (1, 0),
-        K::Bool(b) => (2, i64::from(*b)),
-        K::Int(v) => (3, *v),
-        K::Byte(v) => (4, i64::from(*v)),
-        K::Fixed(v) => (5, *v),
-        K::None => (12, 0),
-        K::StaticStr(_) => (7, 0),
-        K::Tuple(_) => (8, 0),
-        K::Array(_) => (9, 0),
-        K::Struct { .. } => (10, 0),
-        K::Enum { .. } => (11, 0),
+        K::Unit => (tag::UNIT, 0),
+        K::Bool(b) => (tag::BOOL, i64::from(*b)),
+        K::Int(v) => (tag::INT, *v),
+        K::Byte(v) => (tag::BYTE, i64::from(*v)),
+        K::Fixed(v) => (tag::FIXED, *v),
+        K::None => (tag::NONE, 0),
+        K::StaticStr(_) => (tag::STATIC_STR, 0),
+        K::Tuple(_) => (tag::TUPLE, 0),
+        K::Array(_) => (tag::ARRAY, 0),
+        K::Struct { .. } => (tag::STRUCT, 0),
+        K::Enum { .. } => (tag::ENUM, 0),
         other => panic!("const_tag_and_name has no tag for {other:?}"),
     }
 }
@@ -4197,8 +4254,7 @@ pub fn wire_names_from_input(
     // Slot layout mirrors `wire.kel`'s shared block: `len`, then `bytes`, then
     // the region inputs. The directory is seeded so `dir_find` can locate
     // NAMES and STRING_POOL; the blob rides `bin`.
-    const NREGIONS_SLOT: usize = 1 + 65536;
-    const BIN_SLOT: usize = 1 + 65536 + 1 + 1024 * 4 + 5 + 1024;
+    use wire_slots::{BIN as BIN_SLOT, NREGIONS as NREGIONS_SLOT};
     const CMD_JOIN: i64 = 167;
     vm.set_shared(&mut shared, 0, Value::Int(directory.len() as i64))
         .expect("len");
@@ -4279,14 +4335,29 @@ fn header_fields_of(module: &Module) -> [i64; 11] {
 /// module-driven; but only the first two are self-hosted end to end, and a
 /// reader should not read the third as more than it is.
 ///
-/// # Why `CONSTS` is not here, which is the largest region by an order of magnitude
+/// # Why `CONSTS` is not here, which is the largest region but no longer a dominant one
 ///
-/// `CONSTS` is 645,312 bytes across the eleven stages, which is 90.5% of the
-/// 712,936-byte corpus total, against 24,408 for `NAMES` and `STRING_POOL`
-/// together. It is the obvious next target and it is **not** a wiring job.
-/// Every figure in this section is derived by a test in
-/// `tests/consts_region_composition.rs`; an earlier revision quoted 663,120 and
-/// 34,960 here, from a measurement nothing re-ran.
+/// `CONSTS` is **37,152 bytes across the eleven stages, 33.9% of the
+/// 109,552-byte corpus auxiliary body**, against 25,752 for `NAMES` and
+/// `STRING_POOL` together. It is still the largest single region and still the
+/// obvious next target. **The share is of the BODY**, which is what the 90.5%
+/// it replaces was a share of; against the sum of region payloads alone the same
+/// corpus reads 37.5%, and quoting the two interchangeably is how a figure stops
+/// meaning anything.
+///
+/// **THIS PARAGRAPH SAID 645,312 BYTES AND 90.5% OF 712,936, AND CLAIMED EVERY
+/// FIGURE IN IT WAS DERIVED BY A TEST.** Neither was true. Those numbers predate
+/// the all-default elision, which removed the 38,087 wholly-default private-slot
+/// initialisers that made up the bulk of the region, and no test asserted them —
+/// so the correction was available to anyone who measured and to nobody who
+/// read. That is the seventh stale-figure incident on this line and the third in
+/// this doc comment specifically; an earlier revision quoted 663,120 and 34,960
+/// from a measurement nothing re-ran.
+///
+/// The share is now pinned by `the_recorded_region_magnitude_is_the_one_the_tree_produces`
+/// in `tests/consts_region_composition.rs`, as a band rather than an exact
+/// figure: an exact pin fails on every stage edit, which trains its reader to
+/// re-baseline it rather than to read it.
 ///
 /// Two obstacles were recorded. **Only the first is real for this corpus**, and
 /// the correction matters because the second is the one that looked like a
@@ -4318,28 +4389,39 @@ fn header_fields_of(module: &Module) -> [i64; 11] {
 ///
 /// * **The 170-node flattener cap.** `wire.fin` is 1,024 words and a node costs
 ///   six, so the flattener walks at most 170 nodes per call. `parse` needs
-///   17,391. **This is not the only node cap and the two are easy to conflate**:
-///   the MODULE-INPUT walk separately refuses past 1,024 NODES
-///   (`nm_max_names`, error `-240`), which is what `wire.kel` hits at 1,148
-///   chunk constants. Different walks, different bounds, and only this one is
-///   derived from a word count.
-/// * **The node model omits the larger source.** `const_roots_of` collects
-///   `Chunk::constants` and not `DataLayout::private_init`. Those are 2,245
-///   and 38,087 constants respectively across the corpus, so the tested path
-///   covers the smaller 6%. The `FLATTEN_CASES` sources use `const data`, which
-///   lands in chunk constants, so nothing there ever reached the other pool.
+///   **857**, so it needs six calls rather than one. **This figure was recorded
+///   as 17,391 and that was a forest nothing emits**: it counted the
+///   wholly-default initialisers the encoder elides, overstating the margin
+///   twenty-six-fold. The bound still excludes the stages and the magnitude was
+///   wrong, which is why both are stated.
+/// * **This is not the only node cap and the two are easy to conflate.** The
+///   MODULE-INPUT walk separately refuses past 1,024 NODES (`nm_max_names`,
+///   error `-240`), which is what `wire.kel` hits at 1,194 chunk constants.
+///   Different walks, different bounds, and only the first is derived from a
+///   word count.
+/// * **What the emitted set actually is.** `keleusma::wire_schema::constant_roots`
+///   is the one definition of it: every chunk's constants in chunk order, then
+///   `DataLayout::private_init` unless the encoder elides it. `const_roots_of`
+///   below is the narrower BLOB model and is not that set. For this corpus the
+///   two coincide, because every stage's private pool is wholly default and so
+///   contributes nothing — but they coincide by measurement rather than by
+///   construction, and a stage that gained one non-zero initialiser would part
+///   them silently.
 ///
 /// # Why enlarging `wire.fin` cannot be the answer
 ///
 /// A stage's private data array is itself initialised, one `Int(0)` per word, so
 /// widening `fin` to hold N nodes adds 6N records to `wire.kel`'s **own**
-/// `CONSTS` region. Walking `parse`'s 17,391 nodes needs `fin` at 104,346 words,
-/// which is 1,669,536 bytes of `CONSTS` in the walking stage — six times the
-/// 278,256-byte region it is trying to emit. The stage's capacity to describe a
-/// data segment is paid for out of a data segment described the same way, so the
-/// approach diverges rather than converging. Batching across calls is the route,
-/// and for a scalar-only forest it is sound with no carried state, because each
-/// record depends on nothing outside itself.
+/// `CONSTS` region. Walking `parse`'s 857 nodes needs `fin` at 5,142 words,
+/// which is 82,272 bytes of `CONSTS` in the walking stage — six times the
+/// 13,712-byte region it is trying to emit. **The ratio is the node width and is
+/// what makes this a non-answer**; it does not depend on the forest size, which
+/// is why the correction to that size leaves the conclusion standing. The
+/// stage's capacity to describe a data segment is paid for out of a data segment
+/// described the same way, so the approach diverges rather than converging.
+/// Batching across calls is the route, and for a scalar-only forest it is sound
+/// with no carried state, because each record depends on nothing outside
+/// itself.
 ///
 /// `STRUCT_AUX` and `ENUM_AUX` are deliberately not candidates either: measured
 /// across the eleven stages, both regions are EMPTY in all of them, so a byte
@@ -4389,9 +4471,7 @@ pub fn wire_regions_from_input(
     arena.resize_persistent(need).expect("resize");
     let mut vm = Vm::new(m, &arena).expect("verify wire.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
-    const NREGIONS_SLOT: usize = 1 + 65536;
-    const FIN_SLOT: usize = 1 + 65536 + 1 + 1024 * 4 + 5;
-    const BIN_SLOT: usize = FIN_SLOT + 1024;
+    use wire_slots::{BIN as BIN_SLOT, FIN as FIN_SLOT, NREGIONS as NREGIONS_SLOT};
     /// `mi_join_header`. Mirrored from `wire.kel`'s dispatch, where
     /// `highest_command` is a real guard: a command above it returns `0 - 99`.
     const CMD_JOIN_HEADER: i64 = 168;
@@ -4568,10 +4648,9 @@ pub fn wire_chunks_from_input(
     arena.resize_persistent(need).expect("resize");
     let mut vm = Vm::new(m, &arena).expect("verify wire.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
-    const NREGIONS_SLOT: usize = 1 + 65536;
-    const WARG_SLOT: usize = 1 + 65536 + 1 + 1024 * 4;
-    const FIN_SLOT: usize = WARG_SLOT + 5;
-    const BIN_SLOT: usize = FIN_SLOT + 1024;
+    use wire_slots::{
+        BIN as BIN_SLOT, FIN as FIN_SLOT, NREGIONS as NREGIONS_SLOT, WARG as WARG_SLOT,
+    };
     /// `mi_join_chunks`, mirrored from `wire.kel`'s dispatch where
     /// `highest_command` is a real guard.
     const CMD_JOIN_CHUNKS: i64 = 169;
@@ -4759,16 +4838,20 @@ fn window_emit(
     Ok(out)
 }
 
-// `wire.kel`'s shared-block slot map, shared by every windowed emitter here.
+// `wire.kel`'s shared-block slot map, for every windowed emitter here.
 //
-// Hoisted out of `window_emit`, where they were function-local, when a second
-// emitter needed them. Two copies of a slot map is the drift this file's history
-// already records once: the shared block is addressed BY SLOT, so a constant that
-// disagrees with its twin shifts every field after it and the artifact is wrong
-// rather than refused.
-const WARG_SLOT: usize = 1 + 65536 + 1 + 1024 * 4;
-const FIN_SLOT: usize = WARG_SLOT + 5;
-const BIN_SLOT: usize = FIN_SLOT + 1024;
+// **THIS COMMENT USED TO SIT ON A SECOND COPY OF THE ARITHMETIC.** It was hoisted
+// out of `window_emit` when a second emitter needed it, and it says, correctly,
+// that two copies of a slot map is a drift this file's history already records --
+// while being one of four. The three `wire_*_from_input` entry points each
+// restated it as well. The reasoning was right and the remedy was applied one
+// scope too narrowly, which is the more common failure than not knowing the rule.
+//
+// The definition is `wire_slots`. These are re-exports so the emitters below read
+// unchanged; the shared block is addressed BY SLOT, so a constant that disagrees
+// with its twin shifts every field after it and produces a WRONG artifact rather
+// than a refused one.
+use wire_slots::{BIN as BIN_SLOT, FIN as FIN_SLOT, WARG as WARG_SLOT};
 /// Where the eleven header scalars ride in `fin`, above the chunk-field area.
 const HEADER_FIELD_BASE: usize = 990;
 
