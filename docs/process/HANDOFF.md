@@ -5,21 +5,25 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **AMENDED 2026-08-22 against `948b0878`**: two count lines only, for the constant-root slice.
-> The body below is the 2026-08-21 refresh and is otherwise unchanged, so read the three channels
-> first. **`CONSTS` FIGURES IN THIS FILE ARE SUPERSEDED** -- see the `CONSTS` note below.
+> **REFRESHED 2026-08-23 against `6bc13e6c`**, every pinned value below re-measured and the check
+> block executed on that tree. **THIS FILE HAS GONE STALE WITHIN HOURS THREE TIMES.** If the dates here
+> disagree with the three channels, trust the channels.
 >
-> **REFRESHED 2026-08-21 (late) against `abc4bac2`**, every pinned value re-measured and the check
-> block executed. **THIS IS THE THIRD REFRESH TODAY AND THE FIRST TWO WENT STALE WITHIN HOURS.**
-> Trust the three channels over this file if the dates disagree.
+> **TWENTY-ONE PULL REQUESTS MERGED IN SESSIONS 50 AND 51** -- fourteen on 2026-08-21, seven on
+> 08-22/23. That is a SESSION count, not the branch's: `v0.2.3` carries **117** merges in total.
+> **Derive either figure rather than quoting this sentence.** A draft of it said twenty-one while
+> one of those was still an open pull request, and a second draft cited a command that returns the
+> branch total for a session figure. Both were wrong in the same direction: a number copied from
+> intent rather than read from the tree.
 >
-> **FOURTEEN PULL REQUESTS MERGED.** Five silent miscompiles closed, a load-time verifier hole
-> closed at both root causes, chained array indexing implemented, and the `CONSTS` streaming path
-> executed for the first time.
+> **`CONSTS` IS SELF-HOSTED — Order 1 item 1 is done.** Self-hosted region coverage is
+> **93% produced / 56% computed**, both derived by test, both pinned, and the second is the
+> honest one.
 >
-> **NOTHING IS QUEUED FOR THE OPERATOR.** Two questions were raised today and both are withdrawn:
-> an ownership dispute that needed no ruling, and an opcode-removal recommendation that was wrong.
-> Read "WHAT WAS RETRACTED" before re-raising either.
+> **TWO CLAIMS OF MINE WERE RETRACTED IN THE LAST FEW HOURS.** Read "WHAT WAS RETRACTED" before
+> re-asserting anything about `wire.kel` or the computed share.
+>
+> **NOTHING IS QUEUED FOR THE OPERATOR.**
 
 ## Validity
 
@@ -31,23 +35,26 @@ always-current, so it must be able to report itself stale rather than mislead a 
 recorded parent is a claim that nothing else ever lands, and it has failed twice.
 
 ```sh
-git merge-base --is-ancestor abc4bac2 HEAD    # must succeed
+git merge-base --is-ancestor 6bc13e6c HEAD    # must succeed
 
 # Content. If ANY of these differ, say so rather than acting on the state below.
 grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 16
-grep -c '^\s*#\[test\]' tests/selfhost_wire.rs              # 176  (+3: CONSTS streaming)
+grep -c '^\s*#\[test\]' tests/selfhost_wire.rs              # 178  (+2: the record formatters)
 grep -c '^\s*#\[test\]' tests/selfhost_parse.rs             # 89
-grep -c '^\s*#\[test\]' tests/selfhost_codegen.rs           # 140  (+1: the shipping-compiler guard)
-grep -c '^\s*#\[test\]' tests/selfhost_pool_tags.rs          # 8    (new 2026-08-21)
-grep -c '^\s*#\[test\]' tests/selfhost_driver_parity.rs      # 4    (new 2026-08-21)
-grep -c '^\s*#\[test\]' tests/selfhost_chained_index.rs      # 3    (new 2026-08-21)
-grep -c '^\s*#\[test\]' tests/stage_command_reach.rs         # 1    (#210 merged)
+grep -c '^\s*#\[test\]' tests/selfhost_codegen.rs           # 140
+grep -c '^\s*#\[test\]' tests/selfhost_pool_tags.rs          # 8
+grep -c '^\s*#\[test\]' tests/selfhost_driver_parity.rs      # 4
+grep -c '^\s*#\[test\]' tests/selfhost_chained_index.rs      # 3
+grep -c '^\s*#\[test\]' tests/stage_command_reach.rs         # 2
 grep -c '^\s*#\[test\]' tests/selfhost_declared_bounds.rs   # 5
-grep -c '^\s*#\[test\]' tests/opcode_reachability.rs        # 6   (the IsStruct census)
+grep -c '^\s*#\[test\]' tests/opcode_reachability.rs        # 6
 grep -c '^\s*#\[test\]' tests/block_form_statements.rs      # 11
-grep -c '^\s*#\[test\]' tests/consts_region_composition.rs  # 11  (+4: the shared constant-root definition)
-grep -c '^\s*#\[test\]' tests/wire_slot_layout.rs           # 2   (new 2026-08-22)
+grep -c '^\s*#\[test\]' tests/consts_region_composition.rs  # 11  (+4: the shared root definition)
 grep -c '^\s*#\[test\]' tests/operand_stack_model.rs        # 6
+grep -c '^\s*#\[test\]' tests/wire_slot_layout.rs           # 2   (new 2026-08-22)
+grep -c '^\s*#\[test\]' tests/selfhost_consts_driver.rs     # 6   (new 2026-08-22)
+grep -c '^\s*#\[test\]' tests/selfhost_region_coverage.rs   # 5   (new 2026-08-22)
+grep -c '^\s*#\[test\]' tests/selfhost_chunk_names.rs       # 5   (new 2026-08-23)
 
 # `tests/stage_command_reach.rs` IS in the list now: #210 merged 2026-08-21.
 
@@ -181,7 +188,84 @@ but not derived**. A region whose payload came from the harness or the reference
    constants. The **flattener out of `wire.fin`** refuses past **170**, `fin` being 1,024 words at six
    words a node. Only the second is derived from a word count.
 
+## WHERE ORDER 1 ACTUALLY STANDS (2026-08-23)
+
+| item | state |
+|---|---|
+| 1. `CONSTS` | **DONE.** Emitted by Keleusma, byte-identical for all twelve stage sources |
+| 2. the remaining region kinds | **93% produced / 56% computed**, both derived and pinned |
+| 3. the type checker's INPUT | rules complete, resolution in the stage, **extraction still Rust** |
+
+**THE TWO COVERAGE FIGURES ARE NOT INTERCHANGEABLE AND ONE FLATTERS.** *Produced* counts every
+region whose bytes the path emits; *computed* counts only those the stage DERIVES -- `NAMES`,
+`STRING_POOL`, `CONSTS`. `CHUNKS` is mixed per field and `HEADER`, `SHAPES` and `SIGNATURES` are
+**encoded but not derived**. Wiring the six kinds still skipped would take produced toward 97%
+**without moving computed by a byte**, and `wire.kel` says as much in its own comment above those
+emitters. `the_computed_share_is_smaller_than_the_produced_share` asserts the gap stays open.
+
+Four of the six skipped kinds are blocked on a **name index the host does not hold**. The route
+exists -- `intern_index_of`, command 140 -- is itself undriven, and is O(n^2).
+
+## `wire.kel` HAS NEVER BEEN SELF-HOSTED, AND NOTHING SAID SO
+
+`self_host_compile(wire.kel)` **panics** with ``no chunk named `acc` ``. **`wire.kel` is not in the
+byte-identity corpus**: `assert_stage_byte_identical` covers ten stages -- `lexer`, `parse`,
+`reconstruct`, `codegen`, `analyze` and the five `verify_*` -- and `wire.kel` appears in the
+wire-format tests only as a REFERENCE-compiled input, which never runs the self-hosted compiler over
+it.
+
+So the largest stage in the corpus, 486 chunks, is uncovered by the differential oracle. *Any
+construct the corpus does not contain is unverified by construction* -- here it is a whole stage.
+
+**Nothing regressed.** It was never self-compiled; what changed is that the tree records it.
+
+**THE TRIGGER IS FOUR LINES**: a `for` loop containing a data-field assignment, plus a trailing field
+read as the tail expression. The declaration that follows is then named after the field. Both the
+loop and the trailing read are required; the `if` is irrelevant; a bare field read does not do it.
+Pinned with a no-loop control by `the_minimal_shape_that_misnames_the_following_declaration`.
+
+**WHAT THE NEXT SESSION SHOULD KNOW BEFORE TOUCHING IT.** The mechanism is not established. The
+hypothesis is that a record inside the loop clears the driver's `in_body` early, so later body
+records reach the outer declaration dispatch and one of them opens a declaration named after the
+field. **That is a hypothesis.** Confirming it needs the raw `(code, val)` stream, and
+`thread_local!` is unavailable here (`no_std`), so tracing means threading a sink through
+`parse_functions_impl` rather than a quick hook. Budget for that before assuming the fix is small.
+
+## THE ONE LESSON THIS SESSION PAID FOR THREE TIMES
+
+**A check built from the same model as the thing it checks confirms the model.** Three instances in
+one night, each in a different costume:
+
+| instance | the check | why it confirmed nothing |
+|---|---|---|
+| the reach guard for 179/180 | searched for `i64 = 179` | the driver passes the number as a LITERAL ARGUMENT; the guard could not fire |
+| its mutation test | added a `const ... i64 = 178;` | **the exact form the guard already matched** |
+| the chunk-numbering probe | a multi-arm function | grouping and sorting COINCIDE there; only the corpus separated them |
+| the delta-debug predicate | pipeline-vs-source names | did not require a WELL-FORMED input, so it reduced to a broken program |
+
+The old rule -- *"before adding a check, construct the input that makes it fire"* -- is not enough,
+because it does not say WHICH input. The working form: **the input must be the one the real change
+would produce, not the one the checker expects.**
+
 ## WHAT WAS RETRACTED, AND WHY A RESUMING SESSION MUST NOT RE-ASSERT IT
+
+### 2026-08-23: "`wire.kel` self-compiles byte-identically." I INVENTED THAT.
+
+Written into a doc comment, a pull-request body and all three channels, in the same breath as a
+finding it was framing. It is false in both halves -- the compile panics, and `wire.kel` is not in
+the byte-identity corpus at all. **Nothing was contradicting it because nothing was checking it.**
+
+The correction turned out to be a bigger finding than the thing it was framing, which is the reason
+to check a supporting claim as hard as the claim it supports. **#239 was green at 22/22 and was
+deliberately NOT merged** while the false statement was in it; correcting on the branch cost a fresh
+CI run and kept a fabrication out of the tree.
+
+### 2026-08-22: the computed share is 56%, and 57% was published
+
+`94,120` of `165,208` is 56.97% and the test truncates to 56. An honest rounding, and not the number
+the tree asserts. Three documents and two pull-request bodies carried it. Both forms now live in the
+test so they cannot part again.
+
 
 **Two claims were made today and both were wrong. Both are recorded rather than deleted, because
 the escalations happened and the causes generalise.**
@@ -570,7 +654,8 @@ looked complete. **In every case the code was reachable and the evidence was not
 
 ## Open, held by the operator
 
-**NOTHING.** Fourteen pull requests merged 2026-08-21 and the queue is empty on this line.
+**NOTHING.** Twenty pull requests merged across sessions 50 and 51 and the queue is empty on this
+line. **Publication remains held**, and a prior "expedite" is not authorization for it.
 
 Two questions were raised today and **both are withdrawn**: the `src/verify.rs` ownership dispute
 (it needed no ruling — see "WHAT WAS RETRACTED") and the `Op::IsStruct` removal recommendation (it
@@ -590,8 +675,20 @@ boundary against the "Top-level struct support. Defer." ruling; the operator was
 
 ## WHAT A RESUMING SESSION SHOULD DO FIRST
 
-**Nothing is blocked.** The pull-request queue is empty and the two open items are operator
-decisions that do not gate other work.
+**Nothing is blocked.** The operator queue is empty.
+
+**THE HONESTLY-COSTED OPTIONS, 2026-08-23, in the order I would take them:**
+
+1. **The `wire.kel` mis-naming defect.** A four-line reproduction exists and the mechanism does NOT.
+   Closing it would let the largest stage self-compile for the first time. Read
+   "`wire.kel` HAS NEVER BEEN SELF-HOSTED" above for what tracing it costs.
+2. **Order 1 item 3, the type checker's input.** The next slice is named by the tree itself: give
+   the alias row a target STRING so a let-bound call compares without comparing id spaces. It needs
+   `chunk_names_from_pipeline`, which is validated for six stages and **not** for `wire.kel` -- so
+   item 1 gates the general case, though not a first slice over the six.
+3. **The remaining six region kinds.** Low value per byte and it moves PRODUCED without moving
+   COMPUTED. Four of the six need the name index first.
+4. **`Op::cost()` against measurement.** Operator's ruling: after Order 1.
 
 **DO NOT RESUME BY SWEEPING THE DRIVER FOR MORE OF THE SAME CLASS.** It is worked out on all three
 structural surfaces — decode arms, seeded slots, declaration record codes — and
