@@ -842,6 +842,24 @@ pub fn lex_token_count(src: &str) -> usize {
     first_pass(src).token_count
 }
 
+/// One binding row for the type channel: `(name, tag, form, target)`.
+///
+/// `form` matches the stage's `ty.bform`: **0** the value is a TAG, **1** it is
+/// another NAME the stage resolves through one alias hop. `target` is that name
+/// for form 1 and empty otherwise.
+///
+/// # Why the target is a string
+///
+/// The two extractions -- this one and the reference-AST walk -- do not share an
+/// id space: the reference numbers by insertion order as it walks, this one uses
+/// the lexer's intern table. A row carrying an id could only be compared by
+/// comparing the NUMBERINGS, which is not the content. A name removes the
+/// question rather than answering it.
+pub type BindingRow = (String, i64, i64, String);
+
+/// `Node::Call`, whose `arg` is the callee's index into the module's chunk table.
+const NODE_CALL: i64 = 7;
+
 /// `Node::LetIn`, the record whose payload carries the frame slot.
 const NODE_LET_IN: i64 = 5;
 
@@ -1702,7 +1720,7 @@ pub fn chunk_names_from_pipeline(src: &str) -> Vec<String> {
 /// SHAPE lives in the body record stream, and reading it means walking the forest
 /// rather than the header. That walk is the next slice; this one carries the
 /// declared bindings, which are the ones the source states outright.
-pub fn binding_rows_from_pipeline(src: &str) -> (Vec<String>, Vec<(String, i64, i64)>) {
+pub fn binding_rows_from_pipeline(src: &str) -> (Vec<String>, Vec<BindingRow>) {
     let (fns, names, ..) = parse_functions_fused(src);
     // A type NAME id to the stage's scalar tag. The ids come from the same intern
     // table the records index, so this is a lookup rather than a second convention.
@@ -1721,21 +1739,24 @@ pub fn binding_rows_from_pipeline(src: &str) -> (Vec<String>, Vec<(String, i64, 
     };
     let name_of = |id: i64| -> Option<String> { names.get(id as usize).cloned() };
 
-    let mut rows: Vec<(String, i64, i64)> = Vec::new();
+    // The chunk table, for turning a `Call` node's chunk index back into the
+    // callee's NAME. Computed once: it is a whole extra parse of the source.
+    let chunk_names = chunk_names_from_pipeline(src);
+    let mut rows: Vec<BindingRow> = Vec::new();
     for f in &fns {
         // The function's own name carries its declared return type, which is what a
         // `let a = g()` alias hop resolves through.
         if let Some(n) = name_of(f.name) {
             let t = tag_of(f.return_type);
             if t != 0 {
-                rows.push((n, t, 0));
+                rows.push((n, t, 0, String::new()));
             }
         }
         for (i, &pid) in f.param_names.iter().enumerate() {
             let Some(n) = name_of(pid) else { continue };
             let t = f.param_types.get(i).copied().map_or(0, tag_of);
             if t != 0 {
-                rows.push((n, t, 0));
+                rows.push((n, t, 0, String::new()));
             }
         }
 
@@ -1774,25 +1795,37 @@ pub fn binding_rows_from_pipeline(src: &str) -> (Vec<String>, Vec<(String, i64, 
                 // A literal. `push_literal` interns through `intern_int`, so a
                 // kind-1 node is always an integer; booleans are `Unit` carrying
                 // the `PushImmediate` operand.
-                NODE_LITERAL => rows.push((bound, 1, 0)),
-                NODE_UNIT if init.arg == 1 || init.arg == 2 => rows.push((bound, 2, 0)),
-                // **A CALL IS NOT EMITTED HERE, AND THE REASON IS THE ROW SHAPE
-                // RATHER THAN THE PIPELINE.** `let a = g()` is a form-1 alias whose
-                // row carries the TARGET'S NAME ID in the tag position. The two
-                // extractions do not share an id space — the reference numbers by
-                // insertion order as it walks, this one uses the lexer's intern
-                // table — so a form-1 row cannot be compared by name string, which
-                // is the discipline that keeps this honest.
+                NODE_LITERAL => rows.push((bound, 1, 0, String::new())),
+                NODE_UNIT if init.arg == 1 || init.arg == 2 => {
+                    rows.push((bound, 2, 0, String::new()))
+                }
+                // **A CALL IS A FORM-1 ALIAS, AND IT CARRIES THE TARGET'S NAME
+                // RATHER THAN AN ID.** `let a = g()` says `a` takes whatever `g`
+                // returns; joining that to `g`'s declared return type is the
+                // stage's alias hop, not this function's.
                 //
-                // Emitting one would mean either comparing id spaces (comparing the
-                // numbering rather than the content) or changing the row shape to
-                // carry a target string. The second is the right answer and it is a
-                // slice of its own.
+                // The row used to be withheld because a form-1 row carried the
+                // target's NAME ID in the tag position, and the two extractions do
+                // not share an id space -- the reference numbers by insertion order
+                // as it walks, this one uses the lexer's intern table. Comparing
+                // them would have compared the NUMBERING rather than the content.
+                // Carrying the name as a STRING removes the question instead of
+                // answering it.
                 //
-                // Everything else — an operator expression above all — needs the
-                // initialiser's NODE INDEX to reach the stage's bounded fixpoint
-                // (form 2), which is a further slice again. Leaving no row means the
-                // stage accepts, the documented conservative stance.
+                // The chunk index comes from `reconstruct.kel`'s `Call` node, whose
+                // `arg` is the callee's index into the module's chunk table. That
+                // table is `first_pass`'s `chunks`, which `chunk_names_from_pipeline`
+                // reads -- the same numbering `parse.kel` resolved the call against,
+                // not a second one derived here.
+                NODE_CALL => {
+                    if let Some(target) = chunk_names.get(init.arg as usize) {
+                        rows.push((bound, 0, 1, target.clone()));
+                    }
+                }
+                // An operator expression needs the initialiser's NODE INDEX to reach
+                // the stage's bounded fixpoint (form 2), which is a further slice.
+                // Leaving no row means the stage accepts, the documented
+                // conservative stance.
                 _ => {}
             }
         }
