@@ -587,6 +587,108 @@ const STAGE_SEEDED: &[&str] = &[
     "verify_structural.kel",
     // Listed so the harness PRINTS why it is blocked rather than omitting it.
     "reconstruct.kel",
+    // **Seeded WITHOUT an accessor**, via `seed_named_slots` against the module's
+    // own layout. `src/selfhost/mod.rs` exposes five accessors and is the OTHER
+    // LINE'S FILE, read-only here -- so the generic slot route is what made these
+    // two reachable at all.
+    //
+    // **BOTH ARE ALREADY COMPARED** by `stage_differential.rs`, each at ONE
+    // hardcoded source. What this adds is SUBJECTS and the gate's own
+    // accounting, NOT coverage from nothing.
+    "lexer.kel",
+    "parse.kel",
+];
+
+/// Resolve a SHARED slot's byte offset by name, from the module's own layout.
+///
+/// **This is the route that needs no accessor**, and it is why two more stages
+/// could be seeded without touching `src/selfhost/mod.rs` — which is the other
+/// line's file and read-only here. `stage_differential.rs` proved the technique;
+/// this is the same resolution against the same layout.
+fn shared_slot_offset(m: &Module, suffix: &str) -> Option<u32> {
+    let dl = m.data_layout.as_ref()?;
+    let scalar = format!(".{suffix}");
+    let element0 = format!(".{suffix}[0]");
+    let mut shared_ix = 0usize;
+    for sl in &dl.slots {
+        if sl.visibility != SlotVisibility::Shared {
+            continue;
+        }
+        if sl.name == suffix || sl.name.ends_with(&scalar) || sl.name.ends_with(&element0) {
+            return dl.shared_layout.get(shared_ix).map(|l| l.offset);
+        }
+        shared_ix += 1;
+    }
+    None
+}
+
+/// Write `body.len()` into the length slot and `body` into the array slot.
+///
+/// **Raw bytes, which is exactly why ONE function seeds both sides**: the virtual
+/// machine and the JIT receive the same buffer contents, so the comparison is of
+/// two lowerings rather than of two encodings.
+///
+/// Returns `Err` rather than panicking on a subject that does not fit, because a
+/// subject too large must be REPORTED and skipped, never silently truncated —
+/// a truncated program lexes differently and the comparison would then be of
+/// something other than what it claims.
+fn seed_named_slots(
+    m: &Module,
+    buf: &mut [u8],
+    len_slot: &str,
+    array_slot: &str,
+    body: &[i64],
+    word: usize,
+) -> Result<(), String> {
+    let len_off = shared_slot_offset(m, len_slot).ok_or("no len slot")? as usize;
+    let arr_off = shared_slot_offset(m, array_slot).ok_or("no array slot")? as usize;
+    if len_off + 8 > buf.len() || arr_off + body.len() * word > buf.len() {
+        return Err(format!(
+            "subject of {} elements does not fit the {}-byte shared segment",
+            body.len(),
+            buf.len()
+        ));
+    }
+    buf[len_off..len_off + 8].copy_from_slice(&(body.len() as u64).to_le_bytes());
+    for (i, v) in body.iter().enumerate() {
+        let at = arr_off + i * word;
+        match word {
+            1 => buf[at] = *v as u8,
+            8 => buf[at..at + 8].copy_from_slice(&v.to_le_bytes()),
+            other => return Err(format!("unsupported slot width {other}")),
+        }
+    }
+    Ok(())
+}
+
+/// Source subjects for `lexer.kel` and, through it, `parse.kel`.
+///
+/// **Held small on purpose.** The lexer's byte array and the parser's packed
+/// token array both live in the shared segment, and a subject that does not fit
+/// is reported rather than truncated. These are complete programs, not excerpts.
+const SOURCE_SUBJECTS: &[(&str, &str)] = &[
+    (
+        "add-with-branch",
+        "// a comment, which the scanner must skip\n\
+         fn add(a: Word, b: Word) -> Word {\n  \
+         let c = a + b;\n  \
+         if c >= 10 { c } else { c * 2 }\n\
+         }\n",
+    ),
+    (
+        "struct-and-field",
+        "struct P { a: Word, b: Word }\n\
+         fn g(p: P) -> Word { p.a + p.b }\n\
+         fn main() -> Word { g(P { a: 1, b: 2 }) }\n",
+    ),
+    (
+        "loop-and-compare",
+        "fn f(n: Word) -> Word {\n  \
+         let xs = [1, 2, 3];\n  \
+         for x in xs { let _d = x; }\n  \
+         if n < 0 { 0 } else { n }\n\
+         }\n",
+    ),
 ];
 
 /// The subjects the three `verify_*` stages are driven against.
@@ -625,10 +727,129 @@ fn stage_seeds(m: &Module, name: &str) -> Vec<(&'static str, Result<Vec<u8>, Str
             stage_seed_for(m, name, "06_multiheaded.kel"),
         )];
     }
+    if name == "lexer.kel" || name == "parse.kel" {
+        return SOURCE_SUBJECTS
+            .iter()
+            .map(|(label, src)| (*label, source_stage_seed(m, name, src)))
+            .collect();
+    }
     STAGE_SUBJECTS
         .iter()
         .map(|s| (*s, stage_seed_for(m, name, s)))
         .collect()
+}
+
+/// Seed `lexer.kel` from source bytes, or `parse.kel` from the LEXER'S OWN
+/// TOKEN OUTPUT for the same source.
+///
+/// **The parser's subject is DERIVED, not written here**, which is what keeps
+/// this a comparison of the stage rather than of a hand-rolled encoding. A
+/// source that lexes to too few tokens drives the parser on nearly nothing, so
+/// the token count carries a floor per subject rather than once overall.
+fn source_stage_seed(m: &Module, name: &str, src: &str) -> Result<Vec<u8>, String> {
+    let want = shared_data_bytes_for(m);
+    let mut buf = vec![0u8; want];
+    if name == "lexer.kel" {
+        let bytes: Vec<i64> = src.bytes().map(i64::from).collect();
+        seed_named_slots(m, &mut buf, "len", "bytes", &bytes, 1)?;
+        return Ok(buf);
+    }
+
+    // `parse.kel`: run the lexer on this source and hand its tokens over.
+    let lex_src = std::fs::read_to_string("../src/selfhost/kel/lexer.kel")
+        .map_err(|e| format!("read lexer.kel: {e}"))?;
+    let lex = tokenize(&lex_src)
+        .ok()
+        .and_then(|t| parse(&t).ok())
+        .and_then(|a| compile(&a).ok())
+        .ok_or("lexer.kel does not build")?;
+    let mut lex_buf = vec![0u8; shared_data_bytes_for(&lex)];
+    let bytes: Vec<i64> = src.bytes().map(i64::from).collect();
+    seed_named_slots(&lex, &mut lex_buf, "len", "bytes", &bytes, 1)?;
+
+    let toks = lexer_tokens(&lex, &lex_buf)?;
+    // **A FLOOR, not a non-empty check.** `stage_differential` uses more than
+    // fifteen tokens for the same reason: a short subject would raise a subject
+    // count while quietly weakening the parser comparison.
+    if toks.len() <= 15 {
+        return Err(format!(
+            "source lexed to only {} tokens; the parser would be driven on              nearly nothing and this subject would inflate a count",
+            toks.len()
+        ));
+    }
+    seed_named_slots(m, &mut buf, "len", "packed", &toks, 8)?;
+    Ok(buf)
+}
+
+/// Ticks for the LEXER DERIVATION run, which is not the differential's budget.
+///
+/// **`TICKS` is 60 here and 400 in `stage_differential`, and inheriting 60 for
+/// this run was a real defect caught by its own floor.** The lexer emits roughly
+/// one token every few ticks, so 60 ticks lexed `add-with-branch` to SIX tokens
+/// and the floor rejected the subject — which read as a property of the SOURCE
+/// and was a property of a CONSTANT.
+///
+/// **The two subjects that DID pass were worse**, because they passed: they
+/// cleared the floor of fifteen on a TRUNCATED token stream, so the parser was
+/// being driven on a prefix of a program while the report showed a seeded
+/// subject. A floor catches a stream that is too short; it cannot catch one that
+/// is long enough to look fine and still incomplete.
+///
+/// This run is a DERIVATION, not a comparison, so it is free to run as long as
+/// the source needs. Reaching the lexer's end marker is now REQUIRED.
+const LEX_DERIVE_TICKS: i64 = 4000;
+
+/// Drive the lexer stream and collect its emitted token words.
+///
+/// **Requires the end marker.** A derivation that stops early yields a prefix,
+/// and a prefix presented as a program is exactly the failure above.
+fn lexer_tokens(lex: &Module, seeded: &[u8]) -> Result<Vec<i64>, String> {
+    let arena = arena_for(lex);
+    let mut vm = Vm::new(lex.clone(), &arena).map_err(|e| format!("lexer vm: {e:?}"))?;
+    let mut shared = seeded.to_vec();
+    let mut out: Vec<i64> = Vec::new();
+    let mut ended = false;
+    let mut st = vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .map_err(|e| format!("lexer first call: {e:?}"))?;
+    for t in 1..LEX_DERIVE_TICKS {
+        if let Some(v) = stream_scalar(&st) {
+            let tok = v & 0xFF;
+            // 63 is the skip marker, 62 the end marker -- the same reading
+            // `stage_differential` uses, kept identical on purpose.
+            if tok == 62 {
+                ended = true;
+                break;
+            }
+            if tok != 63 {
+                out.push(v);
+            }
+        }
+        st = vm
+            .resume_with_shared(&mut shared, Value::Int(t))
+            .map_err(|e| format!("lexer resume: {e:?}"))?;
+        if matches!(st, VmState::Reset) {
+            st = vm
+                .resume_with_shared(&mut shared, Value::Int(t))
+                .map_err(|e| format!("lexer resume after reset: {e:?}"))?;
+        }
+    }
+    if !ended {
+        return Err(format!(
+            "the lexer did not reach its end marker in {LEX_DERIVE_TICKS} ticks \
+             ({} tokens so far), so this subject would drive the parser on a \
+             PREFIX of a program while reporting as seeded",
+            out.len()
+        ));
+    }
+    Ok(out)
+}
+
+fn stream_scalar(st: &VmState) -> Option<i64> {
+    match st {
+        VmState::Yielded(Value::Int(v)) | VmState::Finished(Value::Int(v)) => Some(*v),
+        _ => None,
+    }
 }
 
 fn stage_seed_for(m: &Module, name: &str, subject_file: &str) -> Result<Vec<u8>, String> {
@@ -2532,7 +2753,20 @@ fn every_lowering_module_executes_or_is_exempt() {
         println!("    RESIDUAL: `reconstruct.kel` still sees ONE subject, and the obstacle");
         println!("    is real -- its seed is a parsed multiheaded group and it asserts the");
         println!("    subject declares exactly four heads. The corpus has one such file.");
-        println!("    An UNSEEDED stage varies neither axis: one run, sixty ticks.");
+        // **NAME the unseeded stages, do not merely count them.** A count tells
+        // the next reader how much is left; a list tells them where to start.
+        let unseeded: Vec<&String> = ex
+            .iter()
+            .filter(|n| !STAGE_SEEDED.contains(&n.as_str()))
+            .copied()
+            .collect();
+        println!(
+            "    UNSEEDED and varying NEITHER axis ({}): {:?}",
+            unseeded.len(),
+            unseeded.iter().map(|n| n.as_str()).collect::<Vec<_>>()
+        );
+        println!("    Each is one run of sixty ticks with no input. This is now the");
+        println!("    weakest part of the gate.");
 
         // **A seeded stage that silently falls back to one subject is what this
         // guards.** `reconstruct.kel` is exempt BY NAME with its obstacle stated
