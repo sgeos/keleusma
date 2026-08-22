@@ -150,70 +150,113 @@ fn the_driver_reaches_the_constant_streaming_commands() {
     );
 }
 
-/// **COMMANDS 178 TO 181 ARE DRIVEN BY A TEST AND NOT BY THE DRIVER.**
+/// Every command number the DRIVER names, with comments stripped.
 ///
-/// `ds_stream_step`, `sh_stream_step`, `sg_stream_step` and `ev_stream_step` — the
-/// one-record-per-call formatters for `DATA_SLOTS`, `SHAPES`, `SIGNATURES` and
-/// `ENUM_VARIANTS`. **Until 2026-08-22 nothing in Rust named any of the four
-/// numbers.** Fourth instance of this shape on this line, after `Op::Reset`,
-/// `Op::IsStruct`, and commands 176/177.
+/// # THIS FUNCTION EXISTS BECAUSE THE PREVIOUS TWO GUARDS COULD NOT FIRE
 ///
-/// `tests/selfhost_wire.rs` now drives all four and each formats a record the
-/// reference agrees with, mutation-verified in both directions. So the stage side
-/// is validated; the wiring is not written.
+/// The 176/177 guard searched the driver for the STAGE's function names, which
+/// the driver never writes because it addresses the stage by number. Its
+/// replacement searched for the declaration form `i64 = 179` — and the driver
+/// went on to drive 179 and 180 by passing them as **literal arguments**, so that
+/// guard did not fire either.
 ///
-/// # Why the distinction is worth a test rather than a sentence
+/// **BOTH FAILURES ARE THE SAME MISTAKE**: matching a shape the checker imagined
+/// rather than the shape the code takes. Deriving every number the file mentions
+/// removes the guess entirely — a driver that names a command in any form is
+/// found, and one that stops naming it is found too.
 ///
-/// Eight region kinds are still skipped by the windowed assembler, and three of
-/// them — `SHAPES` at 341 records, `SIGNATURES` at 486, `DATA_SLOTS` at 388 —
-/// exceed a single 1,024-word `fin` batch. These four commands are the
-/// batching-free route to them. Reading "streaming commands already exist"
-/// alongside "the stage has an emitter for every kind" makes the remaining work
-/// look like wiring, and until this was measured it was wiring plus validating
-/// never-run code.
-///
-/// # THE SHAPE OF THE GUARD, WHICH THE PREVIOUS ONE GOT WRONG
-///
-/// The 176/177 version of this searched the driver for the STAGE's function names
-/// and could not have fired, because the driver addresses the stage by COMMAND
-/// NUMBER. This one searches for the numbers, and **was made to fire** by adding
-/// a matching declaration to the driver.
-#[test]
-fn the_driver_does_not_yet_reach_the_record_formatters() {
+/// Comments are stripped because a doc comment saying "commands 179 and 180"
+/// would otherwise count as driving them. That is the too-loose direction of the
+/// same error, and this line has four recorded instances of a guard firing on the
+/// prose that explains it.
+fn driver_command_numbers() -> Vec<u32> {
     const DRIVER: &str = include_str!("../src/selfhost/mod.rs");
+    let mut out: Vec<u32> = Vec::new();
+    for line in DRIVER.lines() {
+        let code = match line.find("//") {
+            Some(i) => &line[..i],
+            None => line,
+        };
+        let mut digits = String::new();
+        for ch in code.chars().chain(core::iter::once(' ')) {
+            if ch.is_ascii_digit() {
+                digits.push(ch);
+                continue;
+            }
+            if !digits.is_empty() {
+                if let Ok(n) = digits.parse::<u32>() {
+                    out.push(n);
+                }
+                digits.clear();
+            }
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
 
-    let commands = dispatched_commands();
+/// **THE DRIVER NOW REACHES 179 AND 180, AND THE GUARD THAT SHOULD HAVE SAID SO
+/// DID NOT FIRE.**
+///
+/// `sh_stream_step` (179) and `sg_stream_step` (180) emit the `SHAPES` and
+/// `SIGNATURES` regions from the driver. The previous revision of this test
+/// asserted the driver did **not** reach them and **kept passing**, because it
+/// searched for `i64 = 179` and the driver passes the number as a literal
+/// argument.
+///
+/// # The lesson is not "that guard was too narrow"
+///
+/// It was mutation-tested before being trusted, and the mutation passed. But the
+/// mutation added a `const ... i64 = 178;` declaration — **the exact form the
+/// guard already matched**. A mutation shaped like the checker's own assumption
+/// confirms the assumption instead of testing it, and that is a sharper rule than
+/// "construct the input that makes it fire": the input has to be the one the real
+/// change would produce, not the one the guard expects.
+///
+/// # What is pinned now
+///
+/// 179 and 180 are driven; **178 (`ds_stream_step`) and 181 (`ev_stream_step`)
+/// are not**, because `DATA_SLOTS` and `ENUM_VARIANTS` records carry a name index
+/// the host does not hold. Both directions are asserted, so this fails when
+/// either fact changes.
+#[test]
+fn the_driver_reaches_the_shape_and_signature_formatters_only() {
+    let dispatched = dispatched_commands();
     assert!(
-        commands.len() > 100,
-        "only {} dispatched commands were derived; the parse is broken",
-        commands.len()
+        dispatched.len() > 100,
+        "only {} dispatched commands were derived from `wire.kel`; the parse is broken",
+        dispatched.len()
     );
     for cmd in [178u32, 179, 180, 181] {
         assert!(
-            commands.contains(&cmd),
-            "command {cmd} is no longer dispatched by `wire.kel`, so this record is stale \
-             rather than the path being unwired"
+            dispatched.contains(&cmd),
+            "command {cmd} is no longer dispatched by `wire.kel`"
         );
     }
 
-    // BY NUMBER, in the form the driver writes when it drives a command. The
-    // control below proves the form is the one that would appear.
-    for n in [178u32, 179, 180, 181] {
+    let driven = driver_command_numbers();
+    // MUST-FIRE on the derivation. A reader that found no numbers would satisfy
+    // the "not driven" half perfectly and establish nothing.
+    assert!(
+        driven.contains(&176) && driven.contains(&177),
+        "the constant-stream commands 176/177 are not among the numbers this reader found, \
+         so the reader is broken and every absence below is meaningless"
+    );
+
+    for cmd in [179u32, 180] {
         assert!(
-            !DRIVER.contains(&format!("i64 = {n}")),
-            "the driver now declares command {n}. The record formatters are being driven: \
-             record the new region coverage and replace this test rather than relaxing it"
+            driven.contains(&cmd),
+            "the driver no longer names command {cmd}. If `SHAPES`/`SIGNATURES` stopped being \
+             emitted, say what emits them instead and update the coverage figure"
         );
     }
-
-    // The control: the constant-streaming commands ARE declared in that exact
-    // form, so the absence of 178..181 above is a fact about them rather than
-    // about the search.
-    for n in [176u32, 177] {
+    for cmd in [178u32, 181] {
         assert!(
-            DRIVER.contains(&format!("i64 = {n}")),
-            "command {n} is no longer declared in the driver in the form this test searches \
-             for, so the absence of 178..181 says nothing about them specifically"
+            !driven.contains(&cmd),
+            "the driver now names command {cmd}. `DATA_SLOTS` and `ENUM_VARIANTS` carry a name \
+             index the host does not hold, so reaching them means that dependency was solved: \
+             record how, and update the region coverage"
         );
     }
 }

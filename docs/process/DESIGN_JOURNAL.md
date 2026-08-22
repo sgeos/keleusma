@@ -13,6 +13,64 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**I MUTATION-TESTED A GUARD AND IT STILL COULD NOT FIRE (2026-08-22).**
+
+The most useful thing that happened this increment was catching myself.
+
+`SHAPES` and `SIGNATURES` are now emitted by Keleusma, byte-identical for every stage, taking the
+produced share of the corpus from **81% to 93%**. Both regions' fields are ENCODER DECISIONS -- which
+`SHAPES` index a return type took, which run a parameter list occupies -- so the host cannot derive
+them, and `signature_tables` is now one definition that `add_signatures` CONSUMES. Same route as
+`constant_roots`, and it applies more cleanly here because the whole assignment is a pure function
+of one input.
+
+**THEN THE GUARD DID NOT FIRE.** `the_driver_does_not_yet_reach_the_record_formatters` asserted the
+driver does not reach commands 179 and 180. The driver now drives both. **The test kept passing.**
+
+It searched for the declaration form `i64 = 179`; the driver passes the number as a literal
+argument, `window_emit_records(&fields, 4, 179, "SHAPES")`.
+
+**Third instance of "a guard that cannot fire is worse than none" on this line, and the second I
+have committed** -- one increment after writing that very rule into the tree, and after
+mutation-testing this guard before trusting it.
+
+**THE MUTATION IS WHERE THE REAL LESSON IS, AND IT IS NEW.** I did test it. I mutated by adding
+`const CMD_DS: i64 = 178;` to the driver, and the guard fired. But that is **the exact form the
+guard already matched**. I constructed the input my checker expected rather than the input the real
+change would produce, so the mutation confirmed my assumption instead of testing it.
+
+The rule I had was *"before adding a check, construct the input that makes it fire."* It is not
+enough, and the sharper form is: **the mutation must take the shape the real change would take, not
+the shape the guard expects.** A green mutation says nothing when the mutation was written by the
+same assumption as the guard.
+
+The replacement derives every number the driver names, with comments stripped, and all three
+directions were exercised: driving 178 as a literal argument fires it, ceasing to drive 180 fires
+it, and a comment mentioning 178 does NOT -- the too-loose direction, which this line has four
+recorded instances of.
+
+**A SECOND SELF-CORRECTION: THE COMPUTED SHARE IS 56%, AND I PUBLISHED 57%.** `94,120` of `165,208`
+is 56.97%; the test truncates and reports 56. Three process documents and two pull-request bodies
+said 57% -- an honest rounding of the same measurement, and not the number the tree asserts. A prose
+figure that disagrees with its own test is how every stale-figure incident here began, so both forms
+are now stated in the test itself.
+
+**Determined by measurement rather than arithmetic.** Two census tests should have failed on the new
+coverage and did not -- my bands absorbed the change, leaving stale figures in their messages. Rather
+than compute the new numbers from the region sizes I remembered, I set deliberately tight bounds and
+let one run either confirm them or print the truth. It printed the truth.
+
+**AND THE CENSUS COST IS FINALLY MEASURED: 140 SECONDS**, on a quiet machine. The earlier figures --
+108 s, 747 s, 925 s -- were all contended by the `v0.3.0` line's suite in a sibling worktree, and the
+tree said so rather than quoting one.
+
+**COVERAGE, WITH BOTH FIGURES, BECAUSE ONE OF THEM FLATTERS.** Produced **93%**; computed **56%**,
+unchanged. `SHAPES` and `SIGNATURES` are *encoded but not derived*: Keleusma decides every byte of
+the record layout and the host decides the values. Six kinds remain skipped, four of them blocked on
+a name index the host does not hold.
+
+---
+
 **FOUR MORE COMMANDS THAT HAD NEVER RUN, AND THE 81% SPLIT INTO WHAT IT ACTUALLY IS (2026-08-22).**
 
 Eight region kinds are still skipped by the windowed assembler. Before costing the wiring I looked

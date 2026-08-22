@@ -698,26 +698,23 @@ impl SchemaBuilder {
     ///
     /// Propagates a [`WireError`] from the container builder.
     pub fn add_signatures(&mut self, sigs: &[ChunkSignature]) -> Result<(), WireError> {
-        let mut records = Vec::with_capacity(sigs.len());
-
-        for sig in sigs {
-            // Parameters unshared, so the run stays contiguous.
-            let params_first = self.shapes.recs.len() as u32;
-            for p in &sig.params {
-                self.shapes.append(p);
-            }
-            // Singles may share. Safe to intern after the run: shapes reference
-            // nothing, so unlike the constant table there is no ordering rule.
-            let ret = self.shapes.intern(&sig.ret);
-            let resume = self.shapes.intern(&sig.resume);
-
-            records.push(SignatureRecord {
-                params_first,
-                params_count: sig.params.len() as u32,
-                ret,
-                resume,
-            });
-        }
+        // THROUGH THE SHARED DEFINITION, so a consumer that needs to predict
+        // these tables cannot drift from the encoder that writes them. See
+        // [`signature_tables`]; the self-hosted emit path is such a consumer,
+        // and the constant-root model this mirrors was a rule stated twice
+        // before it was one function.
+        //
+        // The shapes are APPENDED to whatever the builder already holds rather
+        // than replacing it, because `SHAPES` is one region shared with native
+        // return shapes. `add_natives` runs after this, so signature shapes
+        // occupy the table's prefix and the indices below are absolute.
+        let base = self.shapes.recs.len() as u32;
+        debug_assert_eq!(
+            base, 0,
+            "signature shapes are numbered from a non-empty table, so the indices              `signature_tables` computes are relative where the records need absolute"
+        );
+        let (shapes, records) = signature_tables(sigs);
+        self.shapes.recs.extend(shapes);
         self.wants_shapes = true;
 
         let sig_region = self.b.region(kind::SIGNATURES, 0)?;
@@ -1549,6 +1546,52 @@ impl Shapes {
         }
         self.append(s)
     }
+}
+
+/// The `SHAPES` and `SIGNATURES` tables [`SchemaBuilder::add_signatures`] builds,
+/// as a pure function of the signatures.
+///
+/// # Why this is extracted rather than described
+///
+/// A consumer producing `SIGNATURES` by another route -- the self-hosted emit
+/// path streaming one record per call -- must predict exactly which `SHAPES`
+/// index each return type took and which run each parameter list occupies, or
+/// its bytes cannot be compared against the reference at all. Those indices are
+/// an ENCODER DECISION, not a property of the module, so the only way to know
+/// them without guessing is to share the function that makes them.
+///
+/// `add_signatures` consumes this, so the two cannot disagree. That is the same
+/// route taken for [`constant_roots`], and it is taken here for the same reason:
+/// a rule stated twice is a rule that will eventually be stated differently.
+///
+/// # The two interning modes are both load-bearing
+///
+/// Parameters are **appended unshared**, so a signature's parameter run stays
+/// contiguous and `params_first + i` reaches parameter `i`. The return and resume
+/// shapes are **interned**, sharing an identical earlier entry. Collapsing either
+/// into the other changes the indices of everything after it.
+#[must_use]
+pub fn signature_tables(sigs: &[ChunkSignature]) -> (Vec<ShapeRecord>, Vec<SignatureRecord>) {
+    let mut shapes = Shapes::default();
+    let mut records = Vec::with_capacity(sigs.len());
+    for sig in sigs {
+        // Parameters unshared, so the run stays contiguous.
+        let params_first = shapes.recs.len() as u32;
+        for p in &sig.params {
+            shapes.append(p);
+        }
+        // Singles may share. Safe to intern after the run: shapes reference
+        // nothing, so unlike the constant table there is no ordering rule.
+        let ret = shapes.intern(&sig.ret);
+        let resume = shapes.intern(&sig.resume);
+        records.push(SignatureRecord {
+            params_first,
+            params_count: sig.params.len() as u32,
+            ret,
+            resume,
+        });
+    }
+    (shapes.recs, records)
 }
 
 /// Encodes per-chunk signatures into an artifact.

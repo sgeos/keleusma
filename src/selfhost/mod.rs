@@ -5151,6 +5151,123 @@ fn window_emit_consts(node_fields: &[i64]) -> Result<Vec<u8>, SelfHostError> {
     Ok(out)
 }
 
+/// Emit a module's `SHAPES` region by STREAMING, one record per call.
+///
+/// # What this region is, and the standing it has
+///
+/// `SHAPES` is the deduplicated table of operand shapes a signature's parameters,
+/// return and resume value refer to by index. The indices are an **encoder
+/// decision** rather than a property of the module, so the host cannot derive
+/// them and must take them from the one definition the encoder itself consumes,
+/// [`crate::wire_schema::signature_tables`].
+///
+/// That makes this region **encoded but not derived**, the standing the `HEADER`
+/// record has: Keleusma decides every byte of the record's layout and the host
+/// decides the values. `wire.kel` says the same thing about its own formatters,
+/// and counting them beside `NAMES` -- which the stage computes from the module
+/// blob -- would overstate what is self-hosted.
+///
+/// # Errors
+///
+/// [`SelfHostError::Unsupported`] when the stage refuses a record or faults.
+pub fn wire_shapes_via_kel(module: &Module) -> Result<Vec<u8>, SelfHostError> {
+    let (shapes, _) = crate::wire_schema::signature_tables(&module.signatures);
+    let mut fields = Vec::with_capacity(shapes.len() * 4);
+    for r in &shapes {
+        fields.push(i64::from(r.tag));
+        fields.push(i64::from(r.kind));
+        fields.push(i64::from(r.reserved));
+        fields.push(i64::from(r.size));
+    }
+    window_emit_records(&fields, 4, 179, "SHAPES")
+}
+
+/// Emit a module's `SIGNATURES` region by STREAMING, one record per call.
+///
+/// Same standing as [`wire_shapes_via_kel`]: the parameter run and the two shape
+/// indices come from the encoder's own numbering, so this is encoded rather than
+/// derived.
+///
+/// # Errors
+///
+/// [`SelfHostError::Unsupported`] when the stage refuses a record or faults.
+pub fn wire_signatures_via_kel(module: &Module) -> Result<Vec<u8>, SelfHostError> {
+    let (_, sigs) = crate::wire_schema::signature_tables(&module.signatures);
+    let mut fields = Vec::with_capacity(sigs.len() * 4);
+    for r in &sigs {
+        fields.push(i64::from(r.params_first));
+        fields.push(i64::from(r.params_count));
+        fields.push(i64::from(r.ret));
+        fields.push(i64::from(r.resume));
+    }
+    window_emit_records(&fields, 4, 180, "SIGNATURES")
+}
+
+/// Drive a stateless record formatter over a field stream, concatenating the
+/// records it returns.
+///
+/// # Why these need no `begin` and the chunk and constant streams do
+///
+/// `wire.kel` says it in its own comment: the chunk and constant streams carry
+/// state between records -- running range cursors, a node cursor -- and these
+/// depend on nothing outside themselves. A `begin` here would exist only to look
+/// symmetric with its neighbours, and a reader would have to open its body to
+/// learn it reset nothing.
+///
+/// The virtual machine is still built ONCE and resumed. Calling a suspended
+/// coroutine stacks another activation rather than replacing it, and `wire.kel`
+/// carries 486 signatures, which exhausts the arena that way.
+///
+/// # Errors
+///
+/// [`SelfHostError::Unsupported`] when the field stream is not a whole number of
+/// records, when the stage refuses one, or when the stage faults.
+fn window_emit_records(
+    fields: &[i64],
+    per_record: usize,
+    cmd: i64,
+    label: &str,
+) -> Result<Vec<u8>, SelfHostError> {
+    if !fields.len().is_multiple_of(per_record) {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!(
+                "the {label} field stream is {} words, not a multiple of {per_record}",
+                fields.len()
+            ),
+        });
+    }
+
+    let m = compile_src(&read_stage("kel/wire.kel"));
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify wire.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+
+    let mut out = Vec::new();
+    for (j, row) in fields.chunks(per_record).enumerate() {
+        for (f, &v) in row.iter().enumerate() {
+            vm.set_shared(&mut shared, FIN_SLOT + f, Value::Int(v))
+                .expect("record field");
+        }
+        let wrote = enter_wire(&mut vm, &mut shared, cmd)?;
+        if wrote <= 0 {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!("wire.kel refused {label} record {j} with {wrote}"),
+            });
+        }
+        for k in 0..wrote as usize {
+            out.push(
+                match vm.get_shared(&shared, wire_slots::BYTES + k).expect("read") {
+                    Value::Byte(b) => b,
+                    other => panic!("shared byte slot held {other:?}"),
+                },
+            );
+        }
+    }
+    Ok(out)
+}
+
 /// See [`WindowedArtifact`]. `regions` gives each region's `(kind, base, len)` in
 /// the artifact the caller is assembling.
 pub fn wire_windowed_via_kel(
@@ -5188,6 +5305,34 @@ pub fn wire_windowed_via_kel(
                     detail: alloc::format!(
                         "the self-hosted CONSTS region is {} bytes and the reference \
                          reserved {len}; the constant-root model and the encoder disagree",
+                        win.len()
+                    ),
+                });
+            }
+            out[base..base + len].copy_from_slice(&win);
+            continue;
+        }
+        // SHAPES AND SIGNATURES TAKE THE FORMATTER STREAMS, commands 179 and
+        // 180. Both exceed a single `fin` batch on `wire.kel` -- 341 and 486
+        // records against a 256-record batch -- so the one-record-per-call form
+        // is what makes them reachable at all rather than a stylistic choice.
+        //
+        // The length is CHECKED rather than truncated, on the same ground as
+        // CONSTS above: a mismatch means the host's model of the encoder's
+        // numbering has parted from the encoder, which is the interesting event.
+        if kind == crate::wire_schema::kind::SHAPES || kind == crate::wire_schema::kind::SIGNATURES
+        {
+            let win = if kind == crate::wire_schema::kind::SHAPES {
+                wire_shapes_via_kel(module)?
+            } else {
+                wire_signatures_via_kel(module)?
+            };
+            if win.len() != len {
+                return Err(SelfHostError::Unsupported {
+                    detail: alloc::format!(
+                        "the self-hosted region {kind:#06x} is {} bytes and the reference \
+                         reserved {len}; the host's model of the encoder's shape numbering \
+                         and the encoder disagree",
                         win.len()
                     ),
                 });
