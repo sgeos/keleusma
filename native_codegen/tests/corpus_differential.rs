@@ -597,6 +597,9 @@ const STAGE_SEEDED: &[&str] = &[
     // accounting, NOT coverage from nothing.
     "lexer.kel",
     "parse.kel",
+    // Synthetic input -- a table of (left tag, right tag) -- so no marshalled
+    // module structure and no accessor is needed. See `TYPE_PAIR_SUBJECTS`.
+    "verify_types.kel",
 ];
 
 /// Resolve a SHARED slot's byte offset by name, from the module's own layout.
@@ -659,6 +662,115 @@ fn seed_named_slots(
         }
     }
     Ok(())
+}
+
+/// Write one WORD-wide scalar into a shared slot, resolved BY NAME.
+///
+/// **By name, never by a computed index.** `verify_types.kel` records that
+/// inserting fields mid-block broke four tests, because the shared block is
+/// addressed by SLOT and everything after the insertion point silently shifted.
+fn write_scalar_slot(m: &Module, buf: &mut [u8], slot: &str, v: i64) -> Result<(), String> {
+    let off = shared_slot_offset(m, slot).ok_or_else(|| format!("no `{slot}` slot"))? as usize;
+    if off + 8 > buf.len() {
+        return Err(format!(
+            "`{slot}` does not fit the {}-byte segment",
+            buf.len()
+        ));
+    }
+    buf[off..off + 8].copy_from_slice(&v.to_le_bytes());
+    Ok(())
+}
+
+/// Write an array slot's elements, resolved BY NAME. No length slot is written.
+fn write_array_slot(m: &Module, buf: &mut [u8], slot: &str, body: &[i64]) -> Result<(), String> {
+    let off = shared_slot_offset(m, slot).ok_or_else(|| format!("no `{slot}` slot"))? as usize;
+    if off + body.len() * 8 > buf.len() {
+        return Err(format!(
+            "`{slot}` body does not fit the {}-byte segment",
+            buf.len()
+        ));
+    }
+    for (i, v) in body.iter().enumerate() {
+        buf[off + i * 8..off + i * 8 + 8].copy_from_slice(&v.to_le_bytes());
+    }
+    Ok(())
+}
+
+/// Operand-pair subjects for `verify_types.kel`, as `(label, lhs, rhs)`.
+///
+/// **EVERY SUBJECT MUST CONTAIN A DISAGREEING PAIR.** The verdict is written as
+/// reject and the buffer already holds accept, so a clean table changes nothing
+/// this harness can compare -- the measured reason the whole `verify_*` family
+/// sat vacuous before defects were injected. The accepting direction belongs in
+/// a control, not in the driven set.
+///
+/// **AND THEY ARE SMALL FOR A PUBLISHED REASON, not an arbitrary one.** The
+/// stage's own `ty_max_steps()` is 1801 -- one step per row across every table
+/// at its cap, one per phase boundary, one to report -- while this harness
+/// drives 60 ticks. With only phase 0 populated the other seven phases advance
+/// in a single step each, so a fold over `k` rows finishes in about `k + 9`.
+/// A row count near the cap would never reach its verdict here.
+///
+/// `ty_unknown()` is 0 and untouched rows are therefore "unknown", which never
+/// rejects -- so trailing zeros are inert rather than accidental agreement.
+const TYPE_PAIR_SUBJECTS: &[(&str, &[i64], &[i64])] = &[
+    ("one-disagreement", &[1, 2, 3, 4], &[1, 2, 3, 5]),
+    ("first-row-disagrees", &[7, 2, 2], &[8, 2, 2]),
+    ("several-disagree", &[1, 2, 3, 4, 5], &[9, 2, 8, 4, 6]),
+];
+
+/// Seed `verify_types.kel` with an operand-pair table, then PROVE the subject
+/// reaches and moves its verdict.
+///
+/// **Reaching is checked, not assumed.** A run that stops before the verdict
+/// compares a prefix while reporting as seeded -- the same failure shape as the
+/// truncated token stream this harness already hit once. The stage yields
+/// `tyc_pending()` (63) while folding and its verdict when finished.
+fn type_pairs_seed(m: &Module, lhs: &[i64], rhs: &[i64]) -> Result<Vec<u8>, String> {
+    if lhs.len() != rhs.len() {
+        return Err("subject rows are ragged".into());
+    }
+    let mut buf = vec![0u8; shared_data_bytes_for(m)];
+    write_scalar_slot(m, &mut buf, "n", lhs.len() as i64)?;
+    write_array_slot(m, &mut buf, "lhs", lhs)?;
+    write_array_slot(m, &mut buf, "rhs", rhs)?;
+
+    // Drive the stage and require a verdict of REJECT within the budget.
+    let arena = arena_for(m);
+    let mut vm = Vm::new(m.clone(), &arena).map_err(|e| format!("verify_types vm: {e:?}"))?;
+    let mut shared = buf.clone();
+    let mut st = vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .map_err(|e| format!("verify_types first call: {e:?}"))?;
+    let mut verdict: Option<i64> = None;
+    for t in 1..TICKS {
+        if let Some(v) = stream_scalar(&st)
+            && v != 63
+        {
+            verdict = Some(v);
+            break;
+        }
+        st = vm
+            .resume_with_shared(&mut shared, Value::Int(t))
+            .map_err(|e| format!("verify_types resume: {e:?}"))?;
+        if matches!(st, VmState::Reset) {
+            st = vm
+                .resume_with_shared(&mut shared, Value::Int(t))
+                .map_err(|e| format!("verify_types resume after reset: {e:?}"))?;
+        }
+    }
+    match verdict {
+        // `ty_reject()` is `0 - 1`.
+        Some(-1) => Ok(buf),
+        Some(other) => Err(format!(
+            "subject reached a verdict of {other}, not REJECT -- it would run \
+             without moving the segment and inflate a count"
+        )),
+        None => Err(format!(
+            "subject did not reach a verdict within {TICKS} ticks, so it would \
+             compare a PREFIX of a fold while reporting as seeded"
+        )),
+    }
 }
 
 /// Source subjects for `lexer.kel` and, through it, `parse.kel`.
@@ -726,6 +838,12 @@ fn stage_seeds(m: &Module, name: &str) -> Vec<(&'static str, Result<Vec<u8>, Str
             "06_multiheaded.kel",
             stage_seed_for(m, name, "06_multiheaded.kel"),
         )];
+    }
+    if name == "verify_types.kel" {
+        return TYPE_PAIR_SUBJECTS
+            .iter()
+            .map(|(label, l, r)| (*label, type_pairs_seed(m, l, r)))
+            .collect();
     }
     if name == "lexer.kel" || name == "parse.kel" {
         return SOURCE_SUBJECTS
