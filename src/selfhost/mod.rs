@@ -795,7 +795,7 @@ pub fn parse_functions(
 ) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>) {
     let mut fns = Vec::new();
     let (names, data_records, enum_records) =
-        parse_functions_impl(src, false, &mut |_, f| fns.push(f), &mut |_, _| {});
+        parse_functions_impl(src, false, &mut |_, f| fns.push(f), &mut |_, _, _| {});
     (fns, names, data_records, enum_records)
 }
 
@@ -826,7 +826,7 @@ pub fn parse_functions_fused(
 ) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>) {
     let mut fns = Vec::new();
     let (names, data_records, enum_records) =
-        parse_functions_impl(src, true, &mut |_, f| fns.push(f), &mut |_, _| {});
+        parse_functions_impl(src, true, &mut |_, f| fns.push(f), &mut |_, _, _| {});
     (fns, names, data_records, enum_records)
 }
 
@@ -1094,6 +1094,23 @@ pub fn lex_token_trace(src: &str) -> (Vec<String>, Vec<(i64, i64)>) {
     (names, tokens)
 }
 
+/// One traced record: `(code, value, cursor)`.
+///
+/// `cursor` is `toks.at` at the moment the record was produced -- the index of the
+/// token most recently READ, since the stage writes it before advancing. A record
+/// emitted by a phase handler rather than a token read carries the cursor of the
+/// last token read, which is the useful answer: it says which token the stage had
+/// reached.
+///
+/// # This is what makes the cursor pairable with a record at all
+///
+/// `parse_cursor_trace` samples once per virtual-machine step and this samples
+/// once per record -- 1,232 against 78 for the mis-naming reproduction -- so
+/// zipping the two by index correlates a record with an unrelated position, and
+/// the result LOOKS like data. Carrying the cursor IN the record removes the
+/// temptation rather than documenting it.
+pub type TracedRecord = (i64, i64, i64);
+
 /// Every `(code, value)` record `parse.kel` emits for `src`, in order, beside the
 /// interned name table.
 ///
@@ -1125,10 +1142,10 @@ pub fn lex_token_trace(src: &str) -> (Vec<String>, Vec<(i64, i64)>) {
 /// declaration, 9 opens a data block, 16 opens a body, 15 ends one. Resolve a
 /// name id through the returned table.
 #[must_use]
-pub fn parse_record_trace(src: &str) -> (Vec<String>, Vec<(i64, i64)>) {
+pub fn parse_record_trace(src: &str) -> (Vec<String>, Vec<TracedRecord>) {
     let mut records = Vec::new();
-    let (names, ..) = parse_functions_impl(src, false, &mut |_, _| {}, &mut |code, val| {
-        records.push((code, val))
+    let (names, ..) = parse_functions_impl(src, false, &mut |_, _| {}, &mut |code, val, at| {
+        records.push((code, val, at));
     });
     (names, records)
 }
@@ -1139,14 +1156,14 @@ fn parse_functions_impl_named(
     src: &str,
     on_function: &mut dyn FnMut(&[String], ParsedFn),
 ) -> ParseSideTables {
-    parse_functions_impl(src, false, on_function, &mut |_, _| {})
+    parse_functions_impl(src, false, on_function, &mut |_, _, _| {})
 }
 
 fn parse_functions_impl(
     src: &str,
     fused: bool,
     on_function: &mut dyn FnMut(&[String], ParsedFn),
-    on_record: &mut dyn FnMut(i64, i64),
+    on_record: &mut dyn FnMut(i64, i64, i64),
 ) -> ParseSideTables {
     // ONE IMPLEMENTATION, TWO FEEDS. The record handling below is long and
     // stateful, and a second copy of it in a fused driver is precisely the drift
@@ -1369,13 +1386,27 @@ fn parse_functions_impl(
     // moment it runs, so a window corrected afterwards is corrected too late.
     // One token behind the cursor is kept resident, because the parser pushes back
     // by one and that read must still land inside the window.
+    // THE CURSOR AT EACH RECORD, SHARED BETWEEN THE TWO CLOSURES.
+    //
+    // `drive_parse_records_with` takes the record sink and the resume hook
+    // separately, and only the hook is handed the virtual machine -- so the sink
+    // cannot read `BR_P_AT` itself. A cell carries it across.
+    //
+    // **READ BEFORE THE EARLY RETURN.** The window slider below returns
+    // immediately on the collecting feed, and an earlier arrangement read the
+    // cursor after that return, so the collecting feed captured nothing. The
+    // trace it produced would have paired every record with a cursor of zero and
+    // looked like a fact about the parser.
+    let cursor_at = alloc::rc::Rc::new(core::cell::Cell::new(0i64));
+    let cursor_writer = alloc::rc::Rc::clone(&cursor_at);
     let before_resume = |vm: &mut Vm<'_, '_>, shared: &mut [u8]| {
-        let Some((lex_vm, lex_shared)) = lex.as_mut() else {
-            return;
-        };
         let at = match vm.get_shared(shared, BR_P_AT).expect("at") {
             Value::Int(n) => n,
             other => panic!("expected Int at BR_P_AT, got {other:?}"),
+        };
+        cursor_writer.set(at);
+        let Some((lex_vm, lex_shared)) = lex.as_mut() else {
+            return;
         };
         while !eof && (base + win.len() as i64) < at + FUSED_WINDOW as i64 {
             match lex_next(lex_vm, lex_shared) {
@@ -1420,7 +1451,7 @@ fn parse_functions_impl(
         state,
         budget,
         |code, val| {
-            on_record(code, val);
+            on_record(code, val, cursor_at.get());
             if in_body {
                 match code {
                     0 => {}
