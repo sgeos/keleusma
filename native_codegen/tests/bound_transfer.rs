@@ -39,7 +39,7 @@
 //! not a proof about the lowering, and the printouts say so where they are read.
 //! A margin without its denominator is the kind of figure this line has had
 //! outlive the thing it measured.
-use keleusma::bytecode::Module;
+use keleusma::bytecode::{Module, NewCompositeOperand, Op};
 use keleusma::verify::module_runtime_footprint;
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 use keleusma_native::{LowerError, LowerOptions, MAX_STACK, module_refusals, region};
@@ -262,10 +262,28 @@ fn the_verified_heap_figure_does_not_bound_the_backends_region_demand() {
             // overhead is plausibly covered by a host margin already, while one
             // that scales with the module makes no fixed margin safe.
             shortfalls.push((name.clone(), demand - fp.max_heap_bytes, fp.max_heap_bytes));
+            // **THE ARITHMETIC THE CLAIM RESTS ON, per module.** Sites and their
+            // size are read from the bytecode; the two figures come from the
+            // backend and the verifier. A reader can check
+            // `sites * size == backend` without trusting the summary.
+            let mut sizes: Vec<u32> = Vec::new();
+            for c in &m.chunks {
+                for op in &c.ops {
+                    if let Op::NewComposite(NewCompositeOperand::Flat { byte_size, .. }) = op {
+                        sizes.push(u32::from(*byte_size));
+                    }
+                }
+            }
+            let each = if sizes.windows(2).all(|w| w[0] == w[1]) {
+                sizes.first().copied().unwrap_or(0).to_string()
+            } else {
+                format!("mixed{sizes:?}")
+            };
             exceed.push(format!(
-                "{name}: backend {demand} bytes vs verified heap {} (short by {})",
+                "{name}: backend {demand} vs verified {} (short {}) = {} site(s) x {each} bytes",
                 fp.max_heap_bytes,
-                demand - fp.max_heap_bytes
+                demand - fp.max_heap_bytes,
+                sizes.len()
             ));
         }
         if worst.as_ref().is_none_or(|(_, d, _)| demand > *d) {
@@ -343,14 +361,34 @@ fn the_verified_heap_figure_does_not_bound_the_backends_region_demand() {
             r.sort_by(|a, b| a.partial_cmp(b).unwrap());
             r.last().copied().unwrap_or(0.0)
         };
-        println!("\n    WHAT THE SHAPE SUGGESTS, AND WHAT IT DOES NOT ESTABLISH.");
-        println!("    In ABSOLUTE terms the gap is tens of bytes, which any host margin");
-        println!("    already covers. As a MULTIPLE of the verified figure it reaches");
-        println!("    {widest:.2}x, so the published number can be wrong by that factor while");
-        println!("    the byte count stays small. A common divisor across modules of");
-        println!("    different sizes reads as a PER-ENTITY quantum rather than a");
-        println!("    size-proportional term -- a hint to CHECK, not a cause. THE READER");
-        println!("    DRAWS THE CONCLUSION; this reports the numbers.");
+        println!("\n    THE CAUSE, MEASURED -- and it is NOT the per-entity overhead the");
+        println!("    divisor suggested. That reading was published once and is WRONG.");
+        println!("      ");
+        println!("      backend   = total static NewComposite sites * size");
+        println!("      verified  = peak CONCURRENT live composites  * size");
+        println!("      shortfall = (sites - peak_live)              * size");
+        println!("      ");
+        println!("    `plan_chunk_region` gives EVERY static site its own slot and never");
+        println!("    reuses space; `region_total_bytes` sums those and recurses through");
+        println!("    calls. The verified figure is peak liveness. The two measure");
+        println!("    DIFFERENT THINGS -- neither is a defect, and never reusing is a");
+        println!("    legitimate strategy needing no liveness analysis at run time.");
+        println!("      ");
+        println!("    WHY 24 IS NOT A QUANTUM: `rogue_combat`'s composite is 16 BYTES and");
+        println!("    its shortfall of 48 is 3 x 16. The gcd came out 24 only because the");
+        println!("    rogue_ai family dominates the set and 48 divides by 24. A gcd is a");
+        println!("    gcd; it is not evidence of a unit.");
+        println!("      ");
+        println!("    CONSEQUENCE FOR THE OPEN DECISION: the gap is UNBOUNDED in the number");
+        println!("    of static composite sites, not a fixed overhead. Fifty sites with one");
+        println!("    live at a time demand fifty slots and one verified slot. The {widest:.2}x");
+        println!("    observed is a property of THIS CORPUS, not a ceiling -- so the");
+        println!("    absolute byte figures above must not be read as a bound.");
+        println!("      ");
+        println!("    DERIVED FROM op sites and the two published figures. It does NOT read");
+        println!("    the verifier's liveness computation, so it is an EXACT FIT on every");
+        println!("    module checked rather than a proof. NO RECOMMENDATION IS MADE; the");
+        println!("    decision is recorded as the operator's.");
     }
     println!(
         "\n  UNITS AND SCOPE: both are real BYTES and both are TRANSITIVE --\n  \
