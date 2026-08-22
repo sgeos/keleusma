@@ -138,22 +138,34 @@ fn consecutive_same_named_heads_collapse_into_one_chunk() {
 /// missing function follows a data block whose field turns up in its place. That
 /// pairing is suggestive and it is not a diagnosis.
 ///
+/// # THIS DOC BLOCK ONCE SAID THE COMPILE PATH WAS UNAFFECTED. IT IS NOT.
+///
+/// The first revision asserted *"the COMPILE path is unaffected: `wire.kel`
+/// self-compiles byte-identically, so the record stream is right"*. **That was
+/// invented, not checked**, and it is false in both halves:
+///
+/// * `self_host_compile(wire.kel)` **panics** with ``no chunk named `acc` `` —
+///   the mis-named declaration has no chunk to attach to. Pinned by
+///   [`the_self_hosted_compiler_cannot_yet_compile_wire_kel`].
+/// * **`wire.kel` is not in the byte-identity corpus at all.** That oracle covers
+///   ten stages — `lexer`, `parse`, `reconstruct`, `codegen`, `analyze` and the
+///   five `verify_*` — and `wire.kel` is not one of them, so nothing was
+///   contradicting the claim either.
+///
+/// The correction matters more than the original finding. This is not a metadata
+/// blemish beside a working compile; it is a **real limitation of the
+/// self-hosted compiler**, on the one stage the differential oracle does not
+/// cover. *Any construct the corpus does not contain is unverified by
+/// construction* — here it is a whole stage.
+///
 /// # Why this is pinned rather than repaired
 ///
-/// The COMPILE path is unaffected: `wire.kel` self-compiles byte-identically, so
-/// the record stream `reconstruct.kel` consumes is right. What diverges is the
-/// per-function METADATA the driver exposes beside that stream. Repairing it means
-/// understanding `parse.kel`'s declaration state machine on this shape, and this
-/// line's own rule is to stop and record when the work widens rather than to guess
-/// at a cause.
-///
-/// # What a reader must not conclude
-///
-/// **Not that the pipeline drops two functions from the compiler.** It does not —
-/// byte identity forbids it. The claim is narrower and is the one asserted here:
-/// the derived chunk NAME LIST disagrees for this stage. Anything built on
-/// `chunk_names_from_pipeline` must treat `wire.kel` as unvalidated until this is
-/// closed.
+/// The trigger is reduced to four lines by
+/// [`the_minimal_shape_that_misnames_the_following_declaration`]: a `for` loop
+/// containing a data-field assignment, plus a trailing field read as the tail
+/// expression. Repairing it means understanding how `parse.kel`'s record stream
+/// nests, and this line's rule is to stop and record when the work widens rather
+/// than to guess at a cause.
 ///
 /// Pinned in the firing direction: when the divergence goes away, this fails and
 /// its author folds `wire` back into the corpus test above.
@@ -202,5 +214,130 @@ fn the_chunk_name_mapping_is_not_yet_established_for_wire() {
         extra.len(),
         2,
         "the recorded divergence was two names extra in the pipeline; it is now {extra:?}"
+    );
+}
+
+/// **THE SELF-HOSTED COMPILER CANNOT COMPILE `wire.kel`, AND NOTHING SAID SO.**
+///
+/// `self_host_compile(wire.kel)` panics with ``no chunk named `acc` ``: the
+/// declaration that should be `crc_end` is named after a private-data field, and
+/// no chunk carries that name.
+///
+/// # Why this was invisible
+///
+/// **`wire.kel` is not in the byte-identity corpus.** That oracle covers ten
+/// stages — `lexer`, `parse`, `reconstruct`, `codegen`, `analyze`, and the five
+/// `verify_*` — via `assert_stage_byte_identical` in
+/// `tests/selfhost_codegen.rs`. `wire.kel` appears in the wire-format tests only
+/// as a **reference-compiled input**, which never runs the self-hosted compiler
+/// over it.
+///
+/// So the largest stage in the corpus, at 486 chunks, has never been self-hosted
+/// and nothing recorded the gap. *Any construct the corpus does not contain is
+/// unverified by construction* — the lesson that produced the boolean-literal and
+/// `Byte`-cast miscompiles — and here the uncovered thing is an entire stage.
+///
+/// # This is a REPORT, not a regression
+///
+/// Nothing broke. `wire.kel` was never self-compiled, so no capability was lost;
+/// what changed is that the tree now says so. A reader must not read this as
+/// "self-hosting regressed".
+///
+/// Pinned in the firing direction, and the control is what makes it a statement
+/// about `wire.kel` rather than about the compiler.
+#[test]
+fn the_self_hosted_compiler_cannot_yet_compile_wire_kel() {
+    const WIRE: &str = include_str!("../src/selfhost/kel/wire.kel");
+    const LEXER: &str = include_str!("../src/selfhost/kel/lexer.kel");
+
+    // THE CONTROL FIRST. Without it a compiler that failed on everything would
+    // satisfy the assertion below and look like a fact about `wire.kel`.
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let control = std::panic::catch_unwind(|| keleusma::selfhost::self_host_compile(LEXER));
+    let subject = std::panic::catch_unwind(|| keleusma::selfhost::self_host_compile(WIRE));
+    std::panic::set_hook(prev);
+
+    assert!(
+        control.is_ok(),
+        "`lexer.kel` no longer self-compiles, so the failure on `wire.kel` below says \
+         nothing about `wire.kel` specifically"
+    );
+    assert!(
+        subject.is_err(),
+        "`wire.kel` now self-compiles. That closes a recorded gap and is worth saying \
+         plainly: add it to `assert_stage_byte_identical`'s corpus in \
+         `tests/selfhost_codegen.rs` and delete this pin rather than relaxing it"
+    );
+}
+
+/// **THE MINIMAL SHAPE, FOUR LINES, FOUND BY DELTA-DEBUGGING RATHER THAN BY
+/// READING.**
+///
+/// A `for` loop containing a data-field **assignment**, followed by a trailing
+/// field **read** as the function's tail expression. The declaration that follows
+/// is then named after the field.
+///
+/// # What was ruled out, because a hypothesis that survives by not being tested is
+/// not a finding
+///
+/// | variant | mis-names? |
+/// |---|---|
+/// | `for` + assignment + trailing read | **yes** |
+/// | `for` + `if`-valued assignment + trailing read | yes — the `if` is irrelevant |
+/// | assignment + trailing read, **no `for`** | no |
+/// | `for` + assignment, **no trailing read** | no |
+/// | a bare field read as the whole body | no |
+///
+/// Both the loop and the trailing read are required. The first three hypotheses I
+/// held — that the body's shape mattered, that the operator mattered, that a
+/// single-field data block mattered — were each disproved by a variant.
+///
+/// # The delta-debug needed a precondition it did not start with
+///
+/// The first reduction produced three lines of a **malformed** program that
+/// "diverged" because the pipeline could not parse it at all. A delta-debug whose
+/// predicate does not require a WELL-FORMED input finds the nearest crash, not the
+/// defect under study. The predicate now parses with the reference first.
+#[test]
+fn the_minimal_shape_that_misnames_the_following_declaration() {
+    const REPRO: &str = "private data d { a: Word }\n\
+                         fn y() -> Word { for j in 0..8 { d.a = 3; } d.a }\n\
+                         fn z() -> Word { 9 }\n\
+                         fn main() -> Word { y() + z() }\n";
+
+    // The reference accepts it, so this is a valid program and not a syntax probe.
+    let module = keleusma::compiler::compile(
+        &keleusma::parser::parse(&keleusma::lexer::tokenize(REPRO).expect("lex")).expect("parse"),
+    )
+    .expect("the reference must accept the reproduction");
+    assert!(
+        module.chunks.iter().any(|c| c.name == "z"),
+        "the reference lost `z`, so the divergence below is not the pipeline's"
+    );
+
+    let got = keleusma::selfhost::chunk_names_from_pipeline(REPRO);
+    assert!(
+        got.contains(&"a".to_string()),
+        "the pipeline no longer names a declaration after the field `a`. If the defect \
+         is fixed, delete this pin and re-check `wire.kel`: {got:?}"
+    );
+    assert!(
+        !got.contains(&"z".to_string()),
+        "the pipeline now carries `z` as well. The shape of the defect has changed and \
+         needs re-diagnosing rather than re-pinning: {got:?}"
+    );
+
+    // THE CONTROL: removing the `for` removes the mis-naming, so the loop is
+    // load-bearing rather than incidental.
+    const NO_LOOP: &str = "private data d { a: Word }\n\
+                           fn y() -> Word { d.a = 3; d.a }\n\
+                           fn z() -> Word { 9 }\n\
+                           fn main() -> Word { y() + z() }\n";
+    let clean = keleusma::selfhost::chunk_names_from_pipeline(NO_LOOP);
+    assert!(
+        clean.contains(&"z".to_string()) && !clean.contains(&"a".to_string()),
+        "the same program without the `for` loop also mis-names, so the loop is not the \
+         trigger and this reduction is wrong: {clean:?}"
     );
 }

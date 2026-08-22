@@ -51,10 +51,40 @@ field turns up in its place.
 
 That pairing is suggestive and it is **not a diagnosis**, so it is pinned rather than repaired, with
 its exact shape asserted so a CHANGE in the divergence is not mistaken for the divergence being
-unchanged. The compile path is unaffected -- `wire.kel` self-compiles byte-identically -- so what
-diverges is the per-function METADATA the driver exposes beside the record stream, not the stream.
-A reader must not conclude the pipeline drops two functions from the compiler; byte identity forbids
-it.
+unchanged.
+
+**AND THEN THE SENTENCE THAT FOLLOWED IT HERE WAS WRONG.** This entry first read *"the compile path
+is unaffected -- `wire.kel` self-compiles byte-identically -- so what diverges is the per-function
+METADATA, not the stream"*, and told the reader byte identity forbade any stronger conclusion.
+**I invented that.** Measured within the hour:
+
+* `self_host_compile(wire.kel)` **panics** with ``no chunk named `acc` ``. The mis-named declaration
+  has no chunk to attach to, so the defect reaches the COMPILER, not merely the metadata beside it.
+* **`wire.kel` is not in the byte-identity corpus.** `assert_stage_byte_identical` covers ten stages
+  -- `lexer`, `parse`, `reconstruct`, `codegen`, `analyze` and the five `verify_*`. `wire.kel`
+  appears in the wire-format tests only as a REFERENCE-compiled input, which never runs the
+  self-hosted compiler over it. Nothing was contradicting the claim because nothing was checking it.
+
+**The correction is a bigger finding than the original.** The largest stage in the corpus, 486
+chunks, has never been self-hosted, and the tree did not say so. *Any construct the corpus does not
+contain is unverified by construction* -- the lesson that produced the boolean-literal and
+`Byte`-cast miscompiles -- and here the uncovered thing is an entire stage.
+
+**Nothing regressed.** `wire.kel` was never self-compiled, so no capability was lost; what changed is
+that the tree now records it, in
+`the_self_hosted_compiler_cannot_yet_compile_wire_kel` with `lexer.kel` as the control that keeps it
+a statement about `wire.kel` rather than about the compiler.
+
+**AND THE TRIGGER IS NOW FOUR LINES**, reduced by delta-debugging: a `for` loop containing a
+data-field assignment, plus a trailing field read as the tail expression. Three hypotheses I held
+were each disproved by a variant -- the body's shape, the operator, the single-field data block. Both
+the loop and the trailing read are required; the `if` is irrelevant.
+
+**The delta-debug itself needed a precondition it did not start with.** The first reduction produced
+three lines of a MALFORMED program that "diverged" because the pipeline could not parse it at all. A
+predicate that does not require a well-formed input finds the nearest crash, not the defect under
+study. That is the same shape as the mutation and the probe before it: **a check built without the
+right precondition confirms something other than what it names.**
 
 **A VACUITY GUARD THAT ONLY THE EXCLUDED CASE SATISFIED.** Scoping `wire` out of the corpus test
 dropped it below a `total_chunks > 500` guard -- because `wire.kel`'s 486 chunks were carrying that

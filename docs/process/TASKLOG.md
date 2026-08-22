@@ -20,9 +20,19 @@ Current sprint source of truth.
 > **`chunk_names_from_pipeline` is validated for six stages and NOT for `wire.kel`**, where the count
 > agrees at 486 while `crc_end`/`parse_prologue` are absent and the private-data field names
 > `acc`/`dis` are present. Pinned with its exact shape by
-> `the_chunk_name_mapping_is_not_yet_established_for_wire`. The compile path is unaffected — byte
-> identity holds — so the divergence is in the per-function metadata, not the record stream.
-> **First thing to look at next session.**
+> `the_chunk_name_mapping_is_not_yet_established_for_wire`.
+>
+> **THE CLAIM THAT THE COMPILE PATH WAS UNAFFECTED WAS INVENTED AND IS FALSE.**
+> `self_host_compile(wire.kel)` **panics** with ``no chunk named `acc` ``, and **`wire.kel` is not in
+> the byte-identity corpus** — that oracle covers ten stages, and `wire.kel` appears in the
+> wire-format tests only as a reference-compiled input. So the largest stage in the corpus, 486
+> chunks, **has never been self-hosted and nothing recorded the gap**. Nothing regressed; the tree
+> now says so, pinned by `the_self_hosted_compiler_cannot_yet_compile_wire_kel` with `lexer.kel` as
+> the control.
+>
+> **The trigger is four lines**: a `for` loop containing a data-field assignment plus a trailing
+> field read as the tail expression. Pinned by
+> `the_minimal_shape_that_misnames_the_following_declaration`, with the no-loop control.
 >
 > Also: the corpus test's `total_chunks > 500` vacuity guard was satisfied almost entirely by the
 > stage excluded from it. Moved to 200 with the reason recorded.
