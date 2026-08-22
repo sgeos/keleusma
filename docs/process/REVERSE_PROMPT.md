@@ -12,6 +12,46 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 **Date**: 2026-08-22 (the `CONSTS` route decision, taken by reading the code)
 
+## SESSION 51 — 93% PRODUCED, AND A GUARD I MUTATION-TESTED THAT STILL COULD NOT FIRE
+
+`SHAPES` and `SIGNATURES` are now emitted by Keleusma, byte-identical for every stage. Produced
+coverage **81% → 93%**. Both regions' fields are encoder decisions, so `signature_tables` is one
+definition the encoder itself **consumes** — the `constant_roots` route again, and cleaner here
+because the assignment is a pure function of one input.
+
+### The thing worth your attention is that I caught myself
+
+The guard asserting the driver does not reach commands 179/180 **kept passing after the driver
+started driving both**. It searched for the declaration `i64 = 179`; the driver passes the number as
+a literal argument.
+
+Third instance of "a guard that cannot fire is worse than none" here, **second that I committed**,
+one increment after writing that rule into the tree — and I *had* mutation-tested it.
+
+**The mutation is the lesson.** I mutated by adding a `const ... i64 = 178;` declaration: the exact
+form my guard already matched. I constructed the input my checker expected rather than the input the
+real change would produce, so the mutation confirmed the assumption instead of testing it. The
+sharper rule, now recorded: **the mutation must take the shape the real change would take, not the
+shape the guard expects.**
+
+Replaced with a derivation over every number the driver names, comments stripped, and all three
+directions exercised — literal-argument use fires it, ceasing to drive fires it, a comment does not.
+
+### Two corrections to figures I gave you
+
+- **The computed share is 56%, not 57%.** `94,120` of `165,208` is 56.97%; the test truncates. Three
+  documents and two pull-request bodies said 57% — an honest rounding, and not the number the tree
+  asserts. Both forms now live in the test.
+- **The census costs 140 seconds**, measured on a quiet machine. The 108/747/925-second figures were
+  all contended by your `v0.3.0` session's suite in a sibling worktree.
+
+### Coverage, with both figures because one flatters
+
+**Produced 93%. Computed 56%, unchanged** — `SHAPES` and `SIGNATURES` are *encoded but not derived*.
+Six kinds remain skipped, four blocked on a name index the host does not hold.
+
+---
+
 ## SESSION 51 — THE 81% SPLIT INTO WHAT IT ACTUALLY IS, AND FOUR MORE UNRUN COMMANDS
 
 **"81% of the corpus's region bytes" invites a stronger reading than it supports.** The census now

@@ -10,6 +10,26 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-22, late). 93% PRODUCED, AND A GUARD THAT COULD NOT FIRE DESPITE BEING
+> MUTATION-TESTED.** `SHAPES` and `SIGNATURES` are emitted by Keleusma byte-identically for every
+> stage; produced coverage **81% → 93%**, computed **56% and unchanged** (both regions are encoded,
+> not derived). `signature_tables` is one definition `add_signatures` consumes.
+>
+> **The reach guard for commands 179/180 kept passing after the driver started driving them.** It
+> searched for `i64 = 179`; the driver passes the number as a literal argument. Third instance of
+> "a guard that cannot fire is worse than none", second committed by this line, one increment after
+> the rule was written down — **and it had been mutation-tested**, by adding a declaration, which is
+> the exact form the guard already matched. **The mutation must take the shape the real change would
+> take, not the shape the guard expects.** Replaced with a comment-stripped derivation over every
+> number the driver names, all three directions exercised.
+>
+> **The computed share is 56%, not the 57% recorded earlier**: 94,120 of 165,208 is 56.97% and the
+> test truncates. **The census costs 140 seconds** on a quiet machine; every earlier figure was
+> contended.
+>
+> Six kinds remain skipped: `ENUM_VARIANTS`, `ENUM_LAYOUTS`, `DATA_SLOTS`, `SHARED_LAYOUT`,
+> `DATA_INIT`, `PARAM_TYPES`. Four are blocked on a name index the host does not hold.
+
 > **Currency note (2026-08-22, evening). THE COVERAGE FIGURE HAS TWO NUMBERS, AND FOUR MORE
 > COMMANDS HAD NEVER RUN.** The census now pins **57% COMPUTED** (`NAMES`, `STRING_POOL`, `CONSTS`
 > — the stage derives every byte) against **81% PRODUCED** (also `CHUNKS`, mixed per field, and
