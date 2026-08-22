@@ -341,3 +341,97 @@ fn the_minimal_shape_that_misnames_the_following_declaration() {
          trigger and this reduction is wrong: {clean:?}"
     );
 }
+
+/// **THE MIS-NAME IS THE TRAILING FIELD'S NAME, AND THAT IS NOW MEASURED RATHER
+/// THAN INFERRED.**
+///
+/// The first record of this defect said only that a missing function "follows a
+/// data block whose field turns up in its place", and called the pairing
+/// *suggestive, not a diagnosis*. It is a diagnosis now, at the behavioural level,
+/// with a control that discriminates:
+///
+/// | body of the preceding function | the following declaration is named |
+/// |---|---|
+/// | `for … { d.a = 3; }` then `d.a` | `a` |
+/// | `for … { d.a = 3; }` then `d.b` | **`b`** |
+/// | `for … { d.b = 3; }` then `d.a` | **`a`** |
+/// | `for … { d.a = 3; }` then a literal | correct |
+/// | `for … { d.a = 3; }` then a local | correct |
+///
+/// **Row three is the one that rules out the alternative.** If the mis-name came
+/// from the ASSIGNED field it would read `b` there; it reads `a`. The name follows
+/// the **trailing field access**, not the assignment, not the block's first field,
+/// and not the block's name.
+///
+/// # What is still NOT established, and it is the part that matters for a fix
+///
+/// **Where in `parse.kel` this happens.** Two hypotheses have been eliminated:
+/// `ps.emit_arg` cannot be the carrier, because `step()` resets it to its `-1`
+/// sentinel at the start of every record; and the declaration COUNT matches the
+/// source, which rules out a spurious extra declaration and points at a wrong
+/// name PAYLOAD on the real header rather than a leaked body record.
+///
+/// Confirming the site needs the raw `(code, val)` stream, and `thread_local!` is
+/// unavailable here (`no_std`), so tracing means threading a sink through
+/// `parse_functions_impl` and its four call sites. **Budget for that rather than
+/// assuming the fix is small.**
+///
+/// # Why the `for` loop is required and this test says so
+///
+/// The same body without the loop does not mis-name — asserted below, because a
+/// reduction that keeps an irrelevant construct sends its next reader looking in
+/// the wrong place.
+#[test]
+fn the_misname_follows_the_trailing_field_access() {
+    let case = |body: &str| -> Vec<String> {
+        let src = format!(
+            "private data d {{ a: Word, b: Word }}\n\
+             fn y() -> Word {{ {body} }}\n\
+             fn z() -> Word {{ 9 }}\n\
+             fn main() -> Word {{ y() + z() }}\n"
+        );
+        // Every probe must be a program the REFERENCE accepts, or it measures a
+        // syntax error rather than this defect.
+        keleusma::compiler::compile(
+            &keleusma::parser::parse(&keleusma::lexer::tokenize(&src).expect("lex"))
+                .expect("parse"),
+        )
+        .expect("the reference must accept every probe");
+        keleusma::selfhost::chunk_names_from_pipeline(&src)
+    };
+
+    let trail_a = case("for j in 0..8 { d.a = 3; } d.a");
+    let trail_b = case("for j in 0..8 { d.a = 3; } d.b");
+    let assign_b_trail_a = case("for j in 0..8 { d.b = 3; } d.a");
+    let trail_literal = case("for j in 0..8 { d.a = 3; } 7");
+    let no_loop = case("d.a = 3; d.a");
+
+    assert!(
+        trail_a.contains(&"a".to_string()) && !trail_a.contains(&"z".to_string()),
+        "the trailing `d.a` case no longer mis-names; the defect has moved: {trail_a:?}"
+    );
+    assert!(
+        trail_b.contains(&"b".to_string()) && !trail_b.contains(&"a".to_string()),
+        "the mis-name did not follow the trailing field to `b`. It is not the trailing \
+         access that carries it, and this diagnosis is wrong: {trail_b:?}"
+    );
+    assert!(
+        assign_b_trail_a.contains(&"a".to_string()),
+        "assigning `d.b` and trailing `d.a` produced {assign_b_trail_a:?}. The mis-name \
+         follows the ASSIGNED field after all, which is the alternative this case exists \
+         to rule out"
+    );
+
+    // The two negative controls. Without them, "a trailing field read is required"
+    // and "the loop is required" would both be unsupported assertions.
+    assert!(
+        trail_literal.contains(&"z".to_string()),
+        "a trailing LITERAL now mis-names too, so the trailing field access is not the \
+         trigger: {trail_literal:?}"
+    );
+    assert!(
+        no_loop.contains(&"z".to_string()),
+        "the same body without the `for` loop now mis-names, so the loop is not required \
+         and the reduction recorded here is wrong: {no_loop:?}"
+    );
+}
