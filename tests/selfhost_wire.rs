@@ -7588,31 +7588,23 @@ fn const_roots_of(module: &keleusma::bytecode::Module) -> Vec<keleusma::bytecode
 }
 
 /// Every constant the reference encoder flattens, in the order it accumulates
-/// them: each chunk's pool in chunk order, then the data segment's initialisers.
+/// them: each chunk's pool in chunk order, then the data segment's initialisers
+/// unless the encoder elides them.
 ///
-/// **THE SECOND SOURCE IS THE LARGER ONE BY A FACTOR OF SEVENTEEN.** Measured
-/// across the eleven stage modules: 2,245 constants from chunks against 38,087
-/// from the data segment, pinned by `tests/consts_region_composition.rs`. Only
-/// a `private data` block contributes there; `const data` folds into chunk
-/// constants, and every `FLATTEN_CASES` source used `const data`, so the
-/// omission could not surface until the `data-*` cases were added.
+/// **THIS USED TO MIRROR THE ENCODER AND NOW DELEGATES TO IT.** The elision rule
+/// was stated here in prose and again in `add_data_layout`, which is a rule
+/// written twice: the two disagreeing is not a state anything would notice,
+/// because a model that counts an elided pool over-counts the region by the
+/// whole data segment rather than by something conspicuous. It is now
+/// [`keleusma::wire_schema::constant_roots`], one definition the encoder itself
+/// consumes for the elision half.
+///
+/// [`corpus_aux_of`] is faithful for this purpose specifically: the only fields
+/// the root list reads are each chunk's `constants` and the `data_layout`, and
+/// both are copied from the module verbatim. Its approximations are in the
+/// opcode-offset fields, which contribute no constants.
 fn encoder_const_roots(module: &keleusma::bytecode::Module) -> Vec<keleusma::bytecode::ConstValue> {
-    use keleusma::bytecode::ConstValue as K;
-    let mut roots = const_roots_of(module);
-    if let Some(dl) = &module.data_layout {
-        // THE ALL-DEFAULT POOL IS ELIDED BY THE ENCODER AND SO IS ABSENT HERE.
-        // `add_data_layout` writes `first = ABSENT` and stores no records when
-        // every private-slot initialiser is zero, because the decoder supplies
-        // them. The rule is mirrored rather than approximated: a model counting
-        // them would over-count the region by the whole data segment, which on a
-        // real stage is most of it.
-        let all_default =
-            !dl.private_init.is_empty() && dl.private_init.iter().all(|v| matches!(v, K::Int(0)));
-        if !all_default {
-            roots.extend(dl.private_init.iter().cloned());
-        }
-    }
-    roots
+    keleusma::wire_schema::constant_roots(&corpus_aux_of(module))
 }
 
 /// Serialize one node depth-first: tag, payload, child count, then the children.

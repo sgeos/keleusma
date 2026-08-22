@@ -10,7 +10,61 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-21 (session 50 close-out, fourteen pull requests merged)
+**Date**: 2026-08-22 (the `CONSTS` route decision, taken by reading the code)
+
+## SESSION 51 — THE OPEN DECISION IS CLOSED, AND IT WAS NOT A DECISION
+
+The one thing session 50 left open was which of three routes the `CONSTS` driver takes, with the
+principled route recorded as "not mechanical". **It is mechanical, and the record said otherwise
+because I costed an interface from its shape rather than its body.**
+
+`SchemaBuilder::add_constant_pool` returns a range per contributor and so cannot consume a flat list
+of roots — true, and never the obstacle. It is a pure accumulator, so which roots reach the table is
+structural in every respect **except one predicate**, the wholly-default elision. That shares by
+ordinary dependency. Route (c) is one function and one predicate.
+
+### The figures were wrong by more than the route was
+
+| quantity | recorded | measured |
+|---|---|---|
+| `CONSTS` across the eleven stages | 645,312 bytes, 90.5% of the body | **37,152 bytes, 33.9% of a 109,552-byte body** |
+| `parse`'s constant forest | 17,391 nodes | **857** |
+
+Both counted the wholly-default initialisers the encoder **elides**, so they described a forest
+nothing emits. The doc comment carrying them also claimed every figure in it was derived by a test.
+None was. **The conclusions survive and the magnitudes do not**: `parse` still exceeds the 170-node
+walk cap, at six calls rather than a hundred and two.
+
+### What is in the tree
+
+- **One definition** of the emitted constant set, `keleusma::wire_schema::constant_roots`, with the
+  elision predicate shared by dependency with the encoder. The test-local copy delegates to it.
+- **The oracle deliberately does not delegate**, and says so where a reader will meet it: a test
+  that called the shared predicate would agree with a wrong one.
+- **`wire.kel`'s slot map was in four places**, one of them under a comment correctly warning against
+  two. Now one module, with a test deriving every offset from the stage source's own field widths.
+- **A tag mapping that agreed by coincidence**: the driver wrote bare literals where the encoder
+  names `wire_schema::tag::*`. Checked rather than assumed, and that is what found it.
+- **Six mutations**, each demonstrating the guard written for it fails.
+
+### What I deliberately did not do
+
+- **Did not wire the `CONSTS` driver.** `tests/stage_command_reach.rs` still pins that it is
+  unreached. The machinery all exists — the driver already has the tag mapping and the child
+  extraction — so what remains is assembling six words per node and looping, and it is the next
+  slice rather than this one.
+- **Did not extract a shared `ConstValue`-to-tag mapping.** The interning arms compute `aux` from a
+  name interner `flatten` owns; covering only the scalar arms would be a fourth statement, not a
+  third.
+- **Did not re-derive the `DATA_SLOTS`, `SHARED_LAYOUT` and `STRING_POOL` rows** of the superseded
+  sizing table. Nothing has measured them since, and a guess is worse than a row that announces
+  itself stale. The table now announces itself.
+
+**Nothing is waiting on you.**
+
+---
+
+## Previous session
 
 ## Where things stand
 
@@ -18,7 +72,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 |---|---|
 | all twelve stages | `loop main(...)` coroutines |
 | emit path | 11 of 11 stages; every emit-side cap removed |
-| **the shipping compiler vs the 95-case boundary** | **byte-identical 43 -> 76, differs 21 -> 11, faults 30 -> 7** |
+| **the shipping compiler vs the 95-case boundary** | **byte-identical 43 -> 90, differs 21 -> 3, faults 30 -> 1** (this row read `-> 76 / 11 / 7`, the post-#212 census, after three further fixes had landed) |
 | **constant-pool tags** | **carried; all three (`Int`/`StaticStr`/`Bool`) witnessed** |
 | **struct/trait/impl declarations** | **skipped rather than faulting; 22 more cases byte-identical** |
 | the type checker's INPUT | the DECLARED rows come from the pipeline; the derived ones do not |

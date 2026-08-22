@@ -5,6 +5,10 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
+> **AMENDED 2026-08-22 against `948b0878`**: two count lines only, for the constant-root slice.
+> The body below is the 2026-08-21 refresh and is otherwise unchanged, so read the three channels
+> first. **`CONSTS` FIGURES IN THIS FILE ARE SUPERSEDED** -- see the `CONSTS` note below.
+>
 > **REFRESHED 2026-08-21 (late) against `abc4bac2`**, every pinned value re-measured and the check
 > block executed. **THIS IS THE THIRD REFRESH TODAY AND THE FIRST TWO WENT STALE WITHIN HOURS.**
 > Trust the three channels over this file if the dates disagree.
@@ -41,7 +45,8 @@ grep -c '^\s*#\[test\]' tests/stage_command_reach.rs         # 1    (#210 merged
 grep -c '^\s*#\[test\]' tests/selfhost_declared_bounds.rs   # 5
 grep -c '^\s*#\[test\]' tests/opcode_reachability.rs        # 6   (the IsStruct census)
 grep -c '^\s*#\[test\]' tests/block_form_statements.rs      # 11
-grep -c '^\s*#\[test\]' tests/consts_region_composition.rs  # 7
+grep -c '^\s*#\[test\]' tests/consts_region_composition.rs  # 11  (+4: the shared constant-root definition)
+grep -c '^\s*#\[test\]' tests/wire_slot_layout.rs           # 2   (new 2026-08-22)
 grep -c '^\s*#\[test\]' tests/operand_stack_model.rs        # 6
 
 # `tests/stage_command_reach.rs` IS in the list now: #210 merged 2026-08-21.
@@ -377,10 +382,13 @@ are asserted**.
 1. **`CONSTS`, and BOTH RECORDED OBSTACLES TO IT WERE WRONG.** The interning-order conflict is
    **unreachable** for this corpus: the flattener interns only for `StaticStr`, `Struct` and `Enum`,
    and every corpus constant is `Int`. Pinned by `the_flattener_interns_no_name_for_any_stage`. The
-   figures were wrong too — 645,312 measured against the 663,120 recorded, and all of it is now
-   historical, because eliding the all-default initialiser pool removed 85% of the body. **What
-   remains is the 170-node flattener cap**, needing about five batches for `parse` rather than a
-   hundred and three. Derive figures from `tests/consts_region_composition.rs`, never from prose.
+   figures were wrong too, and **the correction recorded here was itself wrong**: this line read
+   "645,312 measured against the 663,120 recorded". Re-measured 2026-08-22, `CONSTS` across the
+   eleven stages is **37,152 bytes, 33.9% of a 109,552-byte body**, and `parse`'s forest is **857
+   nodes, not 17,391** — both earlier figures counted the wholly-default initialisers the encoder
+   ELIDES, so they described a forest nothing emits. **What remains is the 170-node flattener cap**,
+   needing six batches for `parse`. Derive from `tests/consts_region_composition.rs`, which now
+   asserts the magnitude. Derive figures from `tests/consts_region_composition.rs`, never from prose.
 2. **The remaining region kinds**, which are the same shape as `CHUNKS`. Re-measure their sizes
    before sizing work from them: every figure recorded for them predates the elision. **`STRUCT_AUX`
    and `ENUM_AUX` are EMPTY in all eleven stages** — a byte identity for either passes while emitting

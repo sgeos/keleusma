@@ -361,6 +361,21 @@ intern their names, struct templates intern a type name and every field name at
 content of those two regions is not final until every other contributor has run, which makes them
 **accumulators held across the whole emission**, not buffers reused per region.
 
+> **SUPERSEDED FIGURES, 2026-08-22. DO NOT SIZE WORK FROM THE TWO TABLES BELOW.**
+>
+> Both predate the wholly-default private-slot initialiser elision, and every row that draws on the
+> data segment is therefore a measurement of records the encoder no longer emits. `CONSTS` for
+> `parse` reads 17,391 here and is **857**; the eleven-stage `CONSTS` total reads as the dominant
+> region and is **37,152 bytes, 33.9% of a 109,552-byte body**. The `NAMES` row's 395,804 is a
+> separately recorded error — a `CONSTS` record count read as a name count — and the measured worst
+> `NAMES` is 627 records.
+>
+> **Only the `CONSTS` row has been re-derived**; the `DATA_SLOTS`, `SHARED_LAYOUT` and
+> `STRING_POOL` rows are left as they stand because nothing has measured them since, and replacing
+> them with a guess would be worse than a row that announces itself as stale. Current figures come
+> from `tests/consts_region_composition.rs`, which asserts them, rather than from this file, which
+> does not.
+
 Per-region sizes across all ten stages, measured by encoding each stage's auxiliary body and
 enumerating the container's region directory. The six largest regions per stage, `lexer` in full:
 
@@ -545,12 +560,14 @@ The emitter receives a record's fields through `wire.fin`, a 1024-word batch buf
 must implement batching is therefore `records * fields_per_record` against 1024, per region. Worst
 case across all ten stages:
 
+**The `CONSTS` row is re-derived; the rest are not. See the banner above.**
+
 | Region | stride | fields | max records | worst stage | one batch? |
 |---|---|---|---|---|---|
 | `NAMES` | 8 | 2 | 395,804 | `lexer` | no, 774 batches |
 | `DATA_SLOTS` | 8 | 4 | 395,784 | `lexer` | no, 1547 batches |
 | `SHARED_LAYOUT` | 8 | 4 | 395,778 | `lexer` | no, 1547 batches |
-| `CONSTS` | 16 | 4 | 17,391 | `parse` | no, 68 batches |
+| `CONSTS` | 16 | 4 | **1,194** | **`wire`** | **no, 5 batches** (re-derived 2026-08-22; `parse` is 857) |
 | `CHUNKS` | 48 | 14 | 94 | `parse` | **no, 2 batches** |
 | `ENUM_VARIANTS` | 16 | 3 | 155 | `parse` | yes |
 | `SHAPES` | 8 | 4 | 102 | `parse` | yes |
