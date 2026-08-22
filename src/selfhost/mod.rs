@@ -795,7 +795,7 @@ pub fn parse_functions(
 ) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>) {
     let mut fns = Vec::new();
     let (names, data_records, enum_records) =
-        parse_functions_impl(src, false, &mut |_, f| fns.push(f));
+        parse_functions_impl(src, false, &mut |_, f| fns.push(f), &mut |_, _| {});
     (fns, names, data_records, enum_records)
 }
 
@@ -826,7 +826,7 @@ pub fn parse_functions_fused(
 ) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>) {
     let mut fns = Vec::new();
     let (names, data_records, enum_records) =
-        parse_functions_impl(src, true, &mut |_, f| fns.push(f));
+        parse_functions_impl(src, true, &mut |_, f| fns.push(f), &mut |_, _| {});
     (fns, names, data_records, enum_records)
 }
 
@@ -1037,11 +1037,67 @@ pub fn parse_cursor_trace(src: &str) -> Vec<i64> {
 // enum record streams; factoring each into a `type` alias would only scatter it, so
 // allow the complexity lint here as the root test file does file-wide.
 #[allow(clippy::type_complexity)]
+/// What the record walk returns beside the functions: the interned name table,
+/// the data-block records and the enum records.
+///
+/// Named because clippy asks at this depth and the ask is right -- three `Vec`s
+/// of pairs in a signature tell a reader less than the name does.
+type ParseSideTables = (Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>);
+
+/// Every `(code, value)` record `parse.kel` emits for `src`, in order, beside the
+/// interned name table.
+///
+/// # Why this exists as public surface
+///
+/// **A defect in this driver was diagnosed three times without it and stopped
+/// short of a cause each time.** The declaration-mis-naming bug pinned by
+/// `tests/selfhost_chunk_names.rs` was narrowed to a four-line reproduction and a
+/// confirmed behavioural rule, and the code site stayed unknown, because the
+/// record stream the driver consumes was not observable from outside it.
+///
+/// `thread_local!` is unavailable here (`no_std`), so a hook cannot be smuggled
+/// in from a test. The sink is threaded through `parse_functions_impl` instead,
+/// and this is its one public reader.
+///
+/// # What it is not
+///
+/// **Not part of the compile path**, and nothing in it should be. Every other
+/// caller passes a sink that discards, so the trace costs a branch on a closure
+/// that does nothing. It is a diagnostic instrument, and the reason it is public
+/// rather than `#[doc(hidden)]` is that a hidden instrument is one the next
+/// person does not know exists — which is how this defect survived three
+/// diagnoses.
+///
+/// # Reading the codes
+///
+/// A declaration header is 1..=3 (`fn`/`yield`/`loop`) and carries the name id;
+/// 4 is a parameter name, 6 a parameter type, 7 the return type, 5 closes a
+/// declaration, 9 opens a data block, 16 opens a body, 15 ends one. Resolve a
+/// name id through the returned table.
+#[must_use]
+pub fn parse_record_trace(src: &str) -> (Vec<String>, Vec<(i64, i64)>) {
+    let mut records = Vec::new();
+    let (names, ..) = parse_functions_impl(src, false, &mut |_, _| {}, &mut |code, val| {
+        records.push((code, val))
+    });
+    (names, records)
+}
+
+/// [`parse_functions_impl`] for the two callers that want the name table in their
+/// callback and no record trace.
+fn parse_functions_impl_named(
+    src: &str,
+    on_function: &mut dyn FnMut(&[String], ParsedFn),
+) -> ParseSideTables {
+    parse_functions_impl(src, false, on_function, &mut |_, _| {})
+}
+
 fn parse_functions_impl(
     src: &str,
     fused: bool,
     on_function: &mut dyn FnMut(&[String], ParsedFn),
-) -> (Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>) {
+    on_record: &mut dyn FnMut(i64, i64),
+) -> ParseSideTables {
     // ONE IMPLEMENTATION, TWO FEEDS. The record handling below is long and
     // stateful, and a second copy of it in a fused driver is precisely the drift
     // `selfhost_host` already records paying for once. Only the token FEED
@@ -1314,6 +1370,7 @@ fn parse_functions_impl(
         state,
         budget,
         |code, val| {
+            on_record(code, val);
             if in_body {
                 match code {
                     0 => {}
@@ -1778,7 +1835,7 @@ pub fn self_host_compile_fused(src: &str) -> Module {
         group.clear();
     };
 
-    let (names, ..) = parse_functions_impl(src, false, &mut |names, f| {
+    let (names, ..) = parse_functions_impl_named(src, &mut |names, f| {
         let name = names[f.name as usize].clone();
         if !group.is_empty() && name != group_name {
             flush(&mut group, &group_name, &mut module, names);
@@ -1801,7 +1858,7 @@ pub fn fused_compile_residency(src: &str) -> (usize, usize) {
     let mut group: Vec<ParsedFn> = Vec::new();
     let mut group_name = String::new();
     let (mut peak, mut total) = (0usize, 0usize);
-    parse_functions_impl(src, false, &mut |names, f| {
+    parse_functions_impl_named(src, &mut |names, f| {
         let name = names[f.name as usize].clone();
         if !group.is_empty() && name != group_name {
             group.clear();
