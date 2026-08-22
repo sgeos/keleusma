@@ -124,3 +124,126 @@ fn the_same_program_without_the_loop_names_every_declaration_correctly() {
         );
     }
 }
+
+/// Declaration-header names in the stream, with body spans skipped.
+///
+/// # Why this cannot just filter on the code
+///
+/// A body record shares codes 1..=3 — `Node::Literal` is kind 1 — so a filter that
+/// ignored nesting would report literals as declarations. Body spans run from code
+/// 16 to code 15, and a data block from 9 to 5.
+///
+/// **This mirrors part of the driver's state machine, which is a copy**, so it is
+/// checked rather than trusted: every caller asserts the extracted count against
+/// the source's own `fn` count. A copy that drifts fails there instead of quietly
+/// reporting the wrong headers.
+fn header_names(src: &str) -> Vec<String> {
+    let (names, records) = keleusma::selfhost::parse_record_trace(src);
+    let mut out = Vec::new();
+    let mut in_body = false;
+    let mut in_data = false;
+    for &(code, val) in &records {
+        if in_body {
+            if code == 15 {
+                in_body = false;
+            }
+            continue;
+        }
+        if in_data {
+            if code == 5 {
+                in_data = false;
+            }
+            continue;
+        }
+        match code {
+            16 => in_body = true,
+            9 => in_data = true,
+            1..=3 => out.push(names.get(val as usize).cloned().unwrap_or_default()),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// **THE MIS-NAME FOLLOWS THE TRAILING FIELD ACCESS — RE-PINNED AGAINST THE
+/// STREAM.**
+///
+/// This rule was first measured through `chunk_names_from_pipeline`, which at the
+/// time derived the chunk numbering by hand and so **inherited the defect**. That
+/// function now delegates to `first_pass`, which computes the table correctly, and
+/// the rule had to move to evidence that does not depend on a derivation of mine.
+///
+/// The record stream is that evidence: it is what `parse.kel` emits, independent
+/// of anything the driver or a helper does with it.
+///
+/// | preceding function's body | the following header names |
+/// |---|---|
+/// | `for … { d.a = 3; }` then `d.a` | `a` |
+/// | `for … { d.a = 3; }` then `d.b` | **`b`** |
+/// | `for … { d.b = 3; }` then `d.a` | **`a`** |
+/// | `for … { d.a = 3; }` then a literal | `z`, correct |
+/// | the same body **without the loop** | `z`, correct |
+///
+/// **Row three rules out the alternative**: if the mis-name came from the ASSIGNED
+/// field it would read `b`; it reads `a`.
+#[test]
+fn the_stream_misnames_after_a_loop_with_a_trailing_field_read() {
+    let headers = |body: &str| -> Vec<String> {
+        let src = format!(
+            "private data d {{ a: Word, b: Word }}\n\
+             fn y() -> Word {{ {body} }}\n\
+             fn z() -> Word {{ 9 }}\n\
+             fn main() -> Word {{ y() + z() }}\n"
+        );
+        // Every probe is a program the REFERENCE accepts, so a case that stopped
+        // parsing fails loudly rather than measuring a syntax error.
+        keleusma::compiler::compile(
+            &keleusma::parser::parse(&keleusma::lexer::tokenize(&src).expect("lex"))
+                .expect("parse"),
+        )
+        .expect("the reference must accept every probe");
+        let h = header_names(&src);
+        // The extraction mirrors the driver's nesting rule; this is what catches it
+        // drifting. Three `fn` heads in, three headers out.
+        assert_eq!(
+            h.len(),
+            3,
+            "the header extraction found {} declarations in a three-function program, so \
+             it has drifted from the driver's nesting rule and everything below is \
+             measuring the extractor: {h:?}",
+            h.len()
+        );
+        h
+    };
+
+    let trail_a = headers("for j in 0..8 { d.a = 3; } d.a");
+    let trail_b = headers("for j in 0..8 { d.a = 3; } d.b");
+    let assign_b_trail_a = headers("for j in 0..8 { d.b = 3; } d.a");
+    let trail_literal = headers("for j in 0..8 { d.a = 3; } 7");
+    let no_loop = headers("d.a = 3; d.a");
+
+    assert!(
+        trail_a.contains(&"a".to_string()) && !trail_a.contains(&"z".to_string()),
+        "the trailing `d.a` case no longer mis-names; the defect has moved: {trail_a:?}"
+    );
+    assert!(
+        trail_b.contains(&"b".to_string()) && !trail_b.contains(&"a".to_string()),
+        "the mis-name did not follow the trailing field to `b`, so it is not the trailing \
+         access that carries it and this diagnosis is wrong: {trail_b:?}"
+    );
+    assert!(
+        assign_b_trail_a.contains(&"a".to_string()),
+        "assigning `d.b` and trailing `d.a` gave {assign_b_trail_a:?}. The mis-name follows \
+         the ASSIGNED field after all, which is the alternative this case rules out"
+    );
+    assert!(
+        trail_literal.contains(&"z".to_string()),
+        "a trailing LITERAL now mis-names too, so the trailing field access is not the \
+         trigger: {trail_literal:?}"
+    );
+    assert!(
+        no_loop.contains(&"z".to_string()),
+        "the same body without the `for` loop now mis-names, so the loop is not required: \
+         {no_loop:?}"
+    );
+}
