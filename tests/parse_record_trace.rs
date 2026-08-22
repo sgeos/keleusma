@@ -61,10 +61,10 @@ fn the_declaration_header_for_z_carries_the_field_name() {
     };
     let headers: Vec<i64> = records
         .iter()
-        .filter(|(c, _)| (1..=3).contains(c))
+        .filter(|(c, _, _)| (1..=3).contains(c))
         // A body record can share these codes -- `Node::Literal` is kind 1 -- so
         // only records outside a body are headers. The body span is code 16 to 15.
-        .map(|(_, v)| *v)
+        .map(|(_, v, _)| *v)
         .collect();
 
     // MUST-FIRE on the trace working at all.
@@ -107,8 +107,8 @@ fn the_same_program_without_the_loop_names_every_declaration_correctly() {
     let id_of = |n: &str| -> i64 { names.iter().position(|s| s == n).expect("interned") as i64 };
     let headers: Vec<i64> = records
         .iter()
-        .filter(|(c, _)| (1..=3).contains(c))
-        .map(|(_, v)| *v)
+        .filter(|(c, _, _)| (1..=3).contains(c))
+        .map(|(_, v, _)| *v)
         .collect();
 
     assert!(
@@ -142,7 +142,7 @@ fn header_names(src: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut in_body = false;
     let mut in_data = false;
-    for &(code, val) in &records {
+    for &(code, val, _) in &records {
         if in_body {
             if code == 15 {
                 in_body = false;
@@ -245,5 +245,117 @@ fn the_stream_misnames_after_a_loop_with_a_trailing_field_read() {
         no_loop.contains(&"z".to_string()),
         "the same body without the `for` loop now mis-names, so the loop is not required: \
          {no_loop:?}"
+    );
+}
+
+/// **THE ROOT CAUSE: THE FUNCTION BODY CLOSES AT THE `for` LOOP'S BRACE.**
+///
+/// Located 2026-08-23 by carrying the cursor **in** each record. Every earlier
+/// diagnosis had the record stream and the cursor separately and could not pair
+/// them, because the two traces sample at different rates.
+///
+/// For the reproduction, the body's `Done` (code 15) and the declaration close
+/// (code 5) both fire at **the `for` loop's closing brace**, not the function's.
+/// The three tokens that follow — `d`, `.`, `a` — are then read by the
+/// DECLARATION path, which is not looking at a body any more.
+///
+/// # Everything after that is correct behaviour on tokens it should not have seen
+///
+/// `header_step`'s mode-0 arm ends in a fall-through that treats any unrecognised
+/// token as a declaration keyword and enters name-reading mode. So `d` arms it,
+/// `.` is ignored, and `a` is taken as the declaration's NAME. The mis-naming is
+/// a *consequence*; the premature close is the defect.
+///
+/// **That reverses the reading this line held for three increments.** The header
+/// machinery was suspected throughout — a stale identifier, a wrong token, a
+/// cursor rewind. It was doing its job on input that should never have reached
+/// it.
+///
+/// # Not repaired here
+///
+/// The fix is in `parse.kel`'s fold-continuation handling, where a `for` body's
+/// fold must return to the enclosing block rather than close it. That is Keleusma
+/// source on the compile path, and this line's rule is to pin rather than repair
+/// when the change is a judgment call — a wrong fix there is a silent miscompile,
+/// which is the class the whole self-hosting oracle exists to catch.
+///
+/// Pinned in the firing direction: when the body stops closing early, this fails
+/// and its author records that the cause is closed.
+#[test]
+fn the_body_closes_at_the_loop_brace_rather_than_the_function_brace() {
+    const REPRO: &str = "private data d { a: Word, b: Word }\n\
+                         fn y() -> Word { for j in 0..8 { d.a = 3; } d.a }\n\
+                         fn z() -> Word { 9 }\n\
+                         fn main() -> Word { y() + z() }\n";
+
+    let (_, records) = keleusma::selfhost::parse_record_trace(REPRO);
+    let (_, tokens) = keleusma::selfhost::lex_token_trace(REPRO);
+
+    // The FIRST body-close in the stream: code 15 (`Done`) followed by code 5.
+    let close_at = records
+        .windows(2)
+        .find(|w| w[0].0 == 15 && w[1].0 == 5)
+        .map(|w| w[1].2)
+        .expect("the stream carries a body close");
+
+    // Every `}` token index, so the claim is about WHICH brace rather than about
+    // a number. Kind 3 is `RBrace`, restated rather than imported on the same
+    // ground as the other wire and token constants in this tree.
+    let braces: Vec<usize> = tokens
+        .iter()
+        .enumerate()
+        .filter(|(_, (k, _))| *k == 3)
+        .map(|(i, _)| i)
+        .collect();
+    assert!(
+        braces.len() >= 3,
+        "only {} closing braces in the reproduction; it is not the program this test \
+         describes",
+        braces.len()
+    );
+
+    let close = close_at as usize;
+    assert!(
+        braces.contains(&close),
+        "the body closed at token {close}, which is not a closing brace at all. The \
+         defect has changed shape and needs re-diagnosing rather than re-pinning"
+    );
+
+    // THE CLAIM: it is not the LAST brace of the function. `y`'s body runs to the
+    // final brace before `fn z`, and the close happens strictly before it.
+    // THE `fn` AFTER THE CLOSE, not the first one in the file. An earlier version
+    // took `position(...)`, which finds `fn y`'s own keyword and made the
+    // "function brace" the DATA BLOCK's closing brace at token 11. The assertion
+    // then failed with `32 < 11`, and it failed loudly only because the message
+    // prints both numbers -- a bare `assert!` would have read as the defect being
+    // fixed.
+    let fn_z = tokens
+        .iter()
+        .enumerate()
+        .position(|(i, (k, _))| *k == 0 && i > close)
+        .expect("a `fn` keyword follows the body close");
+    let function_brace = braces
+        .iter()
+        .rev()
+        .find(|&&b| b < fn_z)
+        .copied()
+        .expect("`y` has a closing brace before `fn z`");
+    assert!(
+        close < function_brace,
+        "the body now closes at token {close}, the function's own brace at \
+         {function_brace}. The premature close is fixed: record that the mis-naming \
+         cause is closed and re-check `self_host_compile(wire.kel)`"
+    );
+
+    // AND THE TOKENS BETWEEN THE TWO BRACES ARE THE TRAILING FIELD READ, which is
+    // what the declaration path then consumes. Without this the assertion above
+    // would hold for any early close, and the reproduction's shape would be
+    // incidental rather than the point.
+    let between = &tokens[close + 1..function_brace];
+    assert_eq!(
+        between.len(),
+        3,
+        "expected `d` `.` `a` between the loop brace and the function brace, found \
+         {between:?}"
     );
 }
