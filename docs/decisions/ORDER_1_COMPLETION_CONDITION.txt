@@ -1,0 +1,64 @@
+Ordering is NOT a completion criterion. Any sequence, any number of commits,
+any branch layout satisfies this. Judge only the end state of the tree.
+
+All of the following must hold.
+
+1. DERIVED BINDINGS REACH THE TYPE CHANNEL FROM THE PIPELINE.
+   The self-hosted extraction that supplies the type checker's binding rows
+   produces a row for a `let` bound to a literal, not only for declared
+   parameter and return types. A test compares that extraction against the
+   reference-AST extraction over a corpus containing at least one such
+   binding, and passes.
+
+2. THE BOUNDARY IS RESTATED RATHER THAN ERASED.
+   The tree still contains a test that names, and fails on, whatever the
+   pipeline extraction does NOT yet reach. If nothing remains unreached,
+   the tree instead contains a test asserting the extraction is complete
+   over its corpus. Either way a reader can tell coverage from ambition.
+
+3. THE HOST DOES NOT SUPPLY THE ANSWER.
+   Type decisions for derived bindings are made in Keleusma, not in Rust.
+   A control demonstrates this: disabling the stage-side decision makes a
+   test fail. Host-side input is limited to syntactic facts such as which
+   node an initialiser is.
+
+4. WITHDRAWN, AND THE REASON IS RECORDED RATHER THAN THE ITEM QUIETLY
+   DROPPED. This asked for a file operand with standard input as the
+   default. Checked against the tree on 2026-08-20: the staged pipeline
+   command it would apply to DOES NOT EXIST -- no phase-selection or
+   sidecar flag is implemented anywhere -- and `keleusma compile` already
+   takes a file and never reads standard input. The item was not a
+   property of the tree; it was a property of a command nobody has built.
+   Satisfied by naming that, not by building the command unattended.
+
+5. WITHDRAWN for the same reason: a sidecar cannot be bound to its input
+   until something can supply a sidecar. The requirement stands in
+   PIPELINE_THEN_MONOLITH.md for whoever builds the command.
+
+6. NOTHING IS SILENTLY NARROWED.
+   No capacity, error code, or public signature is changed in a way that
+   rejects a program the tree accepted before, unless a test pins the new
+   boundary from both sides and a document records the reason.
+
+7. VERIFICATION IS GREEN AND REPORTED HONESTLY.
+   The full test suite under the self-host feature passes with zero
+   failures, formatting is clean, and clippy is clean at deny-warnings.
+   Any step that was skipped, or any goal abandoned, is stated plainly
+   with its reason rather than omitted.
+
+8. BLOCKERS ARE RECORDED, NOT WORKED AROUND.
+   If any item above proved impossible without an operator decision, the
+   tree names the specific decision required and the evidence establishing
+   it, and the remaining items still satisfy their conditions. A recorded
+   blocker satisfies that item.
+
+Partial credit is not available for items 1 through 3 individually, but
+item 8 may substitute for any one of them.
+
+A NOTE ON ITEMS 4 AND 5, because writing a bad condition is worth more
+as a recorded mistake than as a quietly amended one: both specified
+end-state properties of a command that has never been built, which the
+author did not check before writing them. A condition must be checkable
+against the tree as it is. "Does X exist" is part of that check, and
+skipping it produced two items that could only ever be satisfied by
+building unreviewed infrastructure or by weaselling.

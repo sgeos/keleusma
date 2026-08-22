@@ -142,10 +142,10 @@ fn the_full_invalid_bytecode_surface_and_the_miscompilation_reading() {
         }
         // The message may sit on this line or the next two.
         let window = src.lines().skip(i).take(3).collect::<Vec<_>>().join(" ");
-        if let Some(start) = window.find('"') {
-            if let Some(len) = window[start + 1..].find('"') {
-                messages.push(window[start + 1..start + 1 + len].to_string());
-            }
+        if let Some(start) = window.find('"')
+            && let Some(len) = window[start + 1..].find('"')
+        {
+            messages.push(window[start + 1..start + 1 + len].to_string());
         }
     }
     messages.sort();
@@ -198,43 +198,187 @@ fn the_full_invalid_bytecode_surface_and_the_miscompilation_reading() {
     );
 }
 
-/// **REACHABLE: `Op::IsStruct` on a flat struct.**
+/// **SUPERSEDED VERDICT — the site is NO LONGER REACHABLE by any construct
+/// known to this tree. The assertion is kept and INVERTED, never deleted.**
 ///
-/// A GENERIC struct destructured in a parameter — ordinary code — compiles,
-/// verifies, takes a bound, loads, and dies with `InvalidBytecode`. **The whole
-/// chain, not merely emission.**
+/// # What this test used to assert, and why it was right at the time
 ///
-/// The `v0.2.3` line repaired the un-annotated case in the compiler and recorded
-/// the opcode as having no producer. This is the counter-example: their repair
-/// covers exactly the case they tested, and the control below returns `Int(3)`.
+/// A GENERIC struct destructured in a parameter compiled, verified, took a
+/// bound, loaded, and died with `InvalidBytecode` — the whole chain, not merely
+/// emission. The `v0.2.3` line had repaired the UN-ANNOTATED case and recorded
+/// the opcode as producerless; this was the counter-example showing their repair
+/// covered exactly the case they tested.
+///
+/// # What changed
+///
+/// `6d217f0a` closed the hole at **both root causes** rather than at the
+/// symptom: `rewrite_pattern_enum_name` now rewrites a struct pattern's OWN name
+/// on specialization (it previously recursed into fields while ignoring the
+/// name), and `check_pattern_against_type` — which already held the correct
+/// nominal rule — is now called for FUNCTION PARAMETERS and not only match arms.
+/// Each defect had been masking the other.
+///
+/// # The bounded search, stated as a search and not as a proof
+///
+/// **No claim of unreachability is made here.** What is recorded is what was
+/// tried. The emission condition is
+/// `ty.is_some() && named_type_name(ty) != Some(type_name)`, and `ty` is
+/// supplied at exactly two roots — function parameters (`src/compiler.rs:5398`)
+/// and match arms (`src/compiler.rs:9273`) — with every other site recursing
+/// from one of those two. **Both roots now run the nominal check first**, which
+/// rejects precisely the mismatch that would satisfy the condition.
+///
+/// That argument from the emission condition is the load-bearing half. The
+/// probes below are the weaker half, and they are reported honestly: a probe
+/// that FAILS TO COMPILE is counted separately from one that compiles and does
+/// not reach the site, because only the latter is evidence about reachability.
+///
+/// **A reader who can construct a survivor should treat this as incomplete
+/// rather than as a boundary.** That is the `v0.2.3` line's own wording, adopted
+/// here because this line falsified their first producerless claim within the
+/// hour and has no standing to make a stronger one.
 #[test]
-fn the_is_struct_miscompilation_site_is_reachable() {
-    const GENERIC: &str = "struct P<T> { a: T, b: T }\n\
-                           fn g(P { a, b }: P<Word>) -> Word { a + b }\n\
-                           fn main() -> Word { g(P { a: 1, b: 2 }) }";
-    let m = built(GENERIC).expect("the generic witness must compile");
-    assert!(
-        m.chunks.iter().any(|c| c
-            .ops
-            .iter()
-            .any(|o| format!("{o:?}").starts_with("IsStruct"))),
-        "the generic construct no longer emits Op::IsStruct. If the fold was \
-         extended to cover generics, THAT IS NEWS and the reachability verdict \
-         in this file needs re-measuring -- do not delete this."
-    );
-    match chain(GENERIC) {
-        Reach::Ran(outcome) => assert!(
-            outcome.contains("InvalidBytecode"),
-            "the generic witness RAN without hitting the mis-compilation site: \
-             {outcome}. That would mean the load-time hole is closed, which is \
-             good news and needs the verdict rewritten rather than deleted"
+fn the_is_struct_miscompilation_site_is_no_longer_reachable() {
+    // `(label, source)`. Derived from the two roots above and from the shapes
+    // the type checker's `Type::Var(_) => Ok(())` escape could admit, NOT from
+    // guessing constructs — twenty-three guesses failed between the two lines
+    // before reading the guard's own arms worked.
+    const PROBES: &[(&str, &str)] = &[
+        (
+            "generic struct in a parameter",
+            "struct P<T> { a: T, b: T }\n\
+             fn g(P { a, b }: P<Word>) -> Word { a + b }\n\
+             fn main() -> Word { g(P { a: 1, b: 2 }) }",
         ),
-        other => panic!(
-            "the generic witness no longer reaches the virtual machine at all \
-             ({other:?}), so this file can no longer demonstrate the site is \
-             reachable. Establish WHY before concluding anything."
+        (
+            "un-annotated parameter",
+            "struct P { a: Word, b: Word }\n\
+             fn g(P { a, b }) -> Word { a + b }\n\
+             fn main() -> Word { g(P { a: 1, b: 2 }) }",
         ),
+        (
+            "generic type-parameter annotation",
+            "struct P { a: Word, b: Word }\n\
+             fn g<T>(P { a, b }: T) -> Word { a + b }\n\
+             fn main() -> Word { g(P { a: 1, b: 2 }) }",
+        ),
+        (
+            "struct pattern nested in a tuple parameter",
+            "struct P { a: Word, b: Word }\n\
+             fn g((P { a, b }, c): (P, Word)) -> Word { a + b + c }\n\
+             fn main() -> Word { g((P { a: 1, b: 2 }, 3)) }",
+        ),
+        (
+            "nested generic struct",
+            "struct I { u: Word }\n\
+             struct P<T> { a: T, b: T }\n\
+             fn g(P { a, b }: P<I>) -> Word { a.u + b.u }\n\
+             fn main() -> Word { g(P { a: I { u: 1 }, b: I { u: 2 } }) }",
+        ),
+        (
+            "two generic instantiations of one struct",
+            "struct P<T> { a: T, b: T }\n\
+             fn g(P { a, b }: P<Word>) -> Word { a + b }\n\
+             fn h(P { a, b }: P<Byte>) -> Word { 0 }\n\
+             fn main() -> Word { g(P { a: 1, b: 2 }) \
+             + h(P { a: 1 as Byte, b: 2 as Byte }) }",
+        ),
+        (
+            "struct pattern in a trait impl method",
+            "trait Z {\n  fn z(P { a, b }: P) -> Word;\n}\n\
+             struct P { a: Word, b: Word }\n\
+             impl Z for P {\n  fn z(P { a, b }: P) -> Word { a + b }\n}\n\
+             fn main() -> Word { P { a: 1, b: 2 }.z() }",
+        ),
+        (
+            "multi-clause function heads",
+            "struct P { a: Word, b: Word }\n\
+             fn g(P { a, b }: P) -> Word { a + b }\n\
+             fn g(_x: P) -> Word { 0 }\n\
+             fn main() -> Word { g(P { a: 1, b: 2 }) }",
+        ),
+        (
+            "nested struct pattern in a match arm",
+            "struct Q { u: Word }\n\
+             struct O { i: Q }\n\
+             fn f(o: O) -> Word { match o { O { i: Q { u } } => u, _ => 0 } }\n\
+             fn main() -> Word { f(O { i: Q { u: 5 } }) }",
+        ),
+        (
+            "pattern against a DIFFERENT struct",
+            "struct P { a: Word, b: Word }\n\
+             struct Q { a: Word, b: Word }\n\
+             fn g(P { a, b }: Q) -> Word { a + b }\n\
+             fn main() -> Word { g(Q { a: 1, b: 2 }) }",
+        ),
+        (
+            "pattern against a tuple annotation",
+            "struct P { a: Word, b: Word }\n\
+             fn g(P { a, b }: (Word, Word)) -> Word { a + b }\n\
+             fn main() -> Word { g((1, 2)) }",
+        ),
+        (
+            "pattern against an array annotation",
+            "struct P { a: Word, b: Word }\n\
+             fn g(P { a, b }: [Word; 2]) -> Word { a + b }\n\
+             fn main() -> Word { g([1, 2]) }",
+        ),
+        (
+            "generic parameter instantiated with a FOREIGN struct",
+            "struct P { a: Word, b: Word }\n\
+             struct Q { a: Word, b: Word }\n\
+             fn g<T>(P { a, b }: T) -> Word { a + b }\n\
+             fn main() -> Word { g(Q { a: 1, b: 2 }) }",
+        ),
+    ];
+
+    let mut compiled = 0usize;
+    let mut refused = 0usize;
+    let mut emitting: Vec<&str> = Vec::new();
+    println!("================ Op::IsStruct PRODUCER SEARCH");
+    for (label, src) in PROBES {
+        match built(src) {
+            Some(m) => {
+                compiled += 1;
+                let hit = m.chunks.iter().any(|c| {
+                    c.ops
+                        .iter()
+                        .any(|o| format!("{o:?}").starts_with("IsStruct"))
+                });
+                if hit {
+                    emitting.push(label);
+                }
+                println!("  {label:44} COMPILES  IsStruct={hit}");
+            }
+            None => {
+                refused += 1;
+                println!("  {label:44} REFUSED   (not evidence about reachability)");
+            }
+        }
     }
+    println!(
+        "\n  probes {} : {} compiled, {} refused before codegen, {} emitting\n\
+         \n  A REFUSED PROBE SAYS NOTHING ABOUT REACHABILITY. It is counted\n           separately for exactly that reason. Only the {} that COMPILED are\n           evidence, and the argument from the emission condition above carries\n           more weight than any of them.\n================\n",
+        PROBES.len(),
+        compiled,
+        refused,
+        emitting.len(),
+        compiled,
+    );
+
+    assert!(
+        compiled >= 5,
+        "only {compiled} of {} probes reached codegen, so this search is too \
+         thin to support any verdict. Fix the probes before reading the result",
+        PROBES.len()
+    );
+    assert!(
+        emitting.is_empty(),
+        "`Op::IsStruct` HAS A PRODUCER AGAIN: {emitting:?}. That is NEWS in the \
+         other direction -- the load-time hole is open again, or was never fully \
+         closed. Re-measure the whole chain (verify, bound, load, run) before \
+         changing any verdict, and report it to the line that owns the compiler."
+    );
 }
 
 /// **The control that makes the verdict above mean something.** The

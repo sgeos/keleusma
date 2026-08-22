@@ -5,15 +5,16 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **Refreshed 2026-08-19** against the merge at `3ffd5a4c`, with every pinned value re-measured.
-> **SEVEN increments landed since the previous refresh** and it had gone stale in nearly every
-> number. The session's whole subject was diagnostics: `parse.kel` named NONE of its failure modes
-> at the start and names THIRTEEN now, across ELEVEN guarded counters. The last cap that excluded a
-> real stage is gone -- **`wire.kel` parses at 486 functions** -- and `parse` is fused into
-> `reconstruct` at function granularity.
+> **REFRESHED 2026-08-21 (midday) against `dab93a23`**, every pinned value re-measured and the
+> check block executed. **This supersedes the refresh made hours earlier at `37a5bf9b`, which was
+> written BEFORE two of the session's findings and therefore understated them.**
 >
-> **Read "THE ONE DEFECT THIS SESSION KEPT FINDING" below before touching anything.** It is one
-> mistake made six times, it was always mine rather than the code's, and the fix is mechanical.
+> **EIGHT PULL REQUESTS MERGED.** Five silent miscompiles in the shipping self-hosted compiler are
+> closed, and the shipping compiler now agrees with the construct-support boundary on all 95 cases.
+> Read "FIVE DEFECTS, ONE CAUSE" below before planning anything.
+>
+> **NOTHING IS HELD BY THE OPERATOR EXCEPT TWO DECISIONS**, both about ownership rather than code.
+> The pull-request queue is empty on this line.
 
 ## Validity
 
@@ -25,32 +26,46 @@ always-current, so it must be able to report itself stale rather than mislead a 
 recorded parent is a claim that nothing else ever lands, and it has failed twice.
 
 ```sh
-git merge-base --is-ancestor 3ffd5a4c HEAD    # must succeed
+git merge-base --is-ancestor dab93a23 HEAD    # must succeed
 
 # Content. If ANY of these differ, say so rather than acting on the state below.
-grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 12
-grep -c '^\s*#\[test\]' tests/selfhost_wire.rs              # 172
-grep -c '^\s*#\[test\]' tests/selfhost_parse.rs             # 87
-grep -c '^\s*#\[test\]' tests/selfhost_codegen.rs           # 135
+grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 16
+grep -c '^\s*#\[test\]' tests/selfhost_wire.rs              # 173
+grep -c '^\s*#\[test\]' tests/selfhost_parse.rs             # 89
+grep -c '^\s*#\[test\]' tests/selfhost_codegen.rs           # 140  (+1: the shipping-compiler guard)
+grep -c '^\s*#\[test\]' tests/selfhost_pool_tags.rs          # 8    (new 2026-08-21)
+grep -c '^\s*#\[test\]' tests/selfhost_driver_parity.rs      # 4    (new 2026-08-21)
+grep -c '^\s*#\[test\]' tests/selfhost_chained_index.rs      # 3    (new 2026-08-21)
+grep -c '^\s*#\[test\]' tests/stage_command_reach.rs         # 1    (#210 merged)
+grep -c '^\s*#\[test\]' tests/selfhost_declared_bounds.rs   # 5
+grep -c '^\s*#\[test\]' tests/opcode_reachability.rs        # 5   (+3: the IsStruct witness)
 grep -c '^\s*#\[test\]' tests/block_form_statements.rs      # 11
 grep -c '^\s*#\[test\]' tests/consts_region_composition.rs  # 7
 grep -c '^\s*#\[test\]' tests/operand_stack_model.rs        # 6
-grep -oE 'fn highest_command\(\) -> Word \{ [0-9]+ \}' src/selfhost/kel/wire.kel   # 181
 
-# THE `wire.kel` BOUNDS. Unchanged this session; the PARSER's caps are what moved.
-grep -oE 'fn (nm_max_names|mi_max_nodes|fl_max_nodes|ck_max)\(\) -> Word \{ [0-9]+ \}' \
-    src/selfhost/kel/wire.kel        # 1024 names, 1365 nodes, 170 flattener, 90 chunk batch
+# `tests/stage_command_reach.rs` IS in the list now: #210 merged 2026-08-21.
 
-# THE PARSER'S CAPS, ALL NAMED AND ALL GUARDED. One source of truth, in the driver.
-grep -oE 'pub const PARSE_[A-Z_]+: usize = [0-9]+;' src/selfhost_host.rs
-#   OPSTACK 64, LOCALS 64, STMTS 256, PARAMS 32, IF_DEPTH 32, FOR_DEPTH 8,
-#   ARRAY_NEST 8, VARIANTS 256, CALL_DEPTH 8, FIELDS 512, TOKEN 40960, CHUNK 1024
-grep -n 'chunks: \[Word;' src/selfhost/kel/parse.kel   # [Word; 1024] -- `wire` is 486 and PARSES
+# THE STAGE BOUNDS. `wire.kel` unchanged; `verify_depth.kel`'s cap is new and
+# REPLACED A SILENT DROP.
+grep -oE 'fn (nm_max_names|mi_max_nodes|fl_max_nodes|ck_max|highest_command)\(\) -> Word \{ [0-9]+ \}' \
+    src/selfhost/kel/wire.kel     # 1024, 1365, 170, 90, and highest_command 181
+grep -oE 'fn max_nesting\(\) -> Word \{ [0-9]+ \}' src/selfhost/kel/verify_depth.kel   # 32
 
-awk '/let cases: &\[\(&str, Support, &str\)\] = &\[/{f=1;next} f&&/^    \];/{f=0} f' \
-    tests/selfhost_codegen.rs \
-  | sed 's://.*::' | grep -oE '\b(SOk|Gap|RefRejects)\b' | sort | uniq -c
-# expect: 4 Gap, 1 RefRejects, 79 SOk
+# THE MARGIN PINS. Moved twice this session, both times for a NAMED reason.
+grep -oE 'assert_eq!\(worst_(names|blob), [0-9]+' tests/selfhost_wire.rs   # 676, 35333
+
+# THE PARSER'S CAPS. Unchanged; the token cap now binds only the COLLECTING feed.
+grep -rhoE 'pub const PARSE_[A-Z_]+: usize = [0-9]+;' src/ | sort
+
+# THE CONSTRUCT-SUPPORT BOUNDARY. **THE ENUM HAS FOUR VARIANTS, NOT THREE**: `Gap`
+# split into `Refuses` and `Diverges` because it conflated an honest refusal with a
+# silent miscompile. Expect 90 SOk / 1 Refuses / 3 Diverges / 1 RefRejects.
+# **THE TABLE MOVED INTO A FUNCTION** so a second test can measure the SHIPPING
+# compiler against it. The `use Support::{...}` line inside it contributes one of
+# each name and must be excluded, or every count reads one too high.
+awk '/fn boundary_cases\(\)/,/^}/' tests/selfhost_codegen.rs \
+  | grep -v '^    use Support::' \
+  | sed 's://.*::' | grep -oE '\b(SOk|Refuses|Diverges|RefRejects)\b' | sort | uniq -c
 ```
 
 **A CHECK THAT PASSES IS NOT A CURRENT DOCUMENT.** IS NOT A CURRENT DOCUMENT.** The last one passed every check six merges after
@@ -90,6 +105,13 @@ verified strict superset and runs in ~48 minutes against ~2h30m.
 3. Verify locally as you go; the gate's invocations are in `.cargo-husky/hooks/pre-push`.
 4. Push, open a **draft PR to `v0.2.3`**, merge on green **at the commit CI ran**.
 
+**A CANCELLED CI RUN IS NOT A GREEN ONE, AND IT LOOKS LIKE ONE IN A SUMMARY.** The version-branch
+run for `52cbb6c4` completed as `cancelled`, with no failure and nothing pushed over it for eight
+hours; the cause is unknown and guessing at one would be worse than recording that. **The commit it
+merged was 22/22 green on its own branch**, and the next version-branch run covered the same content,
+so the gap closed -- but only because someone looked. Read the `conclusion` field, and treat anything
+that is not `success` as unverified.
+
 **VERIFY THE REF AFTER A PUSH, NOT THE HOOK OUTPUT.** `git ls-remote --heads origin <branch>`.
 **Never pipe a push through `tail`** — it truncates the hook log, which happened twice in one session.
 
@@ -97,6 +119,18 @@ verified strict superset and runs in ~48 minutes against ~2h30m.
 branch out from under a green result. It is not a ban on `git rebase`. If a sequential branch
 conflicts, rebasing BEFORE its first push is safe (CI runs once, on the final commit); leaving it
 conflicting produces **no CI run at all, silently**, which is the outcome the rule exists to prevent.
+
+**A PULL REQUEST BASED ON A FEATURE BRANCH GETS NO CI AT ALL, SILENTLY.** Measured 2026-08-21.
+`ci.yml` filters `pull_request` on the **base** branch (`main` or `v*`), so a stacked pull request
+whose base is another feature branch triggers **no workflow**: no failure, no queue, no run to
+read. `gh pr checks` reports "no checks reported", which is indistinguishable from a slow start and
+was left unnoticed through two pull requests.
+
+Re-targeting the base is not enough on its own -- a base change emits `edited`, which is not one of
+the default `pull_request` types -- so the run must be provoked, by closing and reopening the pull
+request (`reopened` IS a default type) or by pushing to it. **Prefer basing on the version branch
+from the start** and describing the stack in the body; the diff is noisier and the verification is
+real.
 
 **A default-feature run is not the gate.** `cargo test --workspace` and `--features compile` both miss
 `self-host`. The gate is a five-entry feature matrix.
@@ -117,7 +151,9 @@ push cancelled run `31932202253` and `31932359730` replaced it.
 | **`parse.kel` failure modes named** | **THIRTEEN**, across **ELEVEN** guarded counters |
 | shared-slot layouts | **nine copies collapsed to two definitions**, in `selfhost_host` |
 | architecture | one binary, selectable phases -- see `../decisions/PIPELINE_THEN_MONOLITH.md` |
-| construct-support boundary | **79 SOk / 4 Gap / 1 RefRejects**, 84 cases |
+| construct-support boundary | **90 SOk / 1 Refuses / 3 Diverges / 1 RefRejects**, 95 cases |
+| **the SHIPPING compiler against that table** | **90 identical / 3 differs / 1 faults / 1 ref-rejects — it AGREES with the boundary on all 95** |
+| **chained array indexing** | **`a[0][1]` and its split form both byte-identical** |
 | operand-stack models | **agree on every one of the 66 opcodes**; the known list is EMPTY |
 
 **WHAT EACH EMITTED REGION OWES TO WHOM, because the distinction is the coverage claim.**
@@ -139,7 +175,129 @@ but not derived**. A region whose payload came from the harness or the reference
    constants. The **flattener out of `wire.fin`** refuses past **170**, `fin` being 1,024 words at six
    words a node. Only the second is derived from a word count.
 
-## THE MACRO POSITION
+## FIVE DEFECTS, ONE CAUSE (2026-08-21) — READ THIS FIRST
+
+**The shipping self-hosted compiler and the copy of it in `tests/selfhost_codegen.rs` are two
+implementations of the same driver, and the construct-support boundary exercised only the copy.**
+
+| defect | symptom | PR |
+|---|---|---|
+| the constant-pool tag was discarded | a string constant became the integer of its intern id | 212 |
+| struct/trait/impl declarations had no skip state | the driver faulted on 29 boundary cases | 212 |
+| the eager `and`/`or` ids were never seeded | **`a and b` compiled to `a`** | 213 |
+| op tag 53 had no flat-nested arm | a struct-typed tuple element faulted in kind decoding | 214 |
+| a nested array index parsed as an array LITERAL | **`a[0][1]` silently miscompiled** | 218 |
+
+The first four were each a slot, tag, record or arm the copy had and the driver did not. **The
+fifth was different**: a genuine parser gap, and the only one whose repair was a feature.
+
+**Census over the 95 boundary cases, each baseline taken by STASHING the change:**
+
+| | baseline | +212 | +213 | +214 | +218 |
+|---|---|---|---|---|---|
+| byte-identical | 43 | 76 | 82 | 88 | **90** |
+| differs | 21 | 11 | 5 | 5 | **3** |
+| faults | 30 | 7 | 7 | 1 | **1** |
+
+**The shipping compiler reaches the same verdict as the boundary on all 95 cases**, and the three
+that differ are all already labelled `Diverges` — float arithmetic and two composite-equality gaps.
+
+**PROPORTIONALITY, AND STATE IT EVERY TIME.** `self_hosted_compile` cross-checks against the
+reference and refuses on divergence, so **none of this reached a user as a wrong module**. Exposure
+was to direct callers of the `self_host_compile*` entry points.
+
+**THREE GUARDS NOW COVER THE CLASS, AND NONE IS SUFFICIENT ALONE.**
+- `the_shipping_compiler_matches_the_boundary_it_is_recorded_against` — per-case verdict agreement
+  through the SHIPPING compiler. Bounded by the 95 cases.
+- `tests/selfhost_driver_parity.rs` — compares the two drivers by STRUCTURE, so it does not depend
+  on corpus coverage. **Catches three of the four slot-class defects, not all four**, and says so.
+- `tests/selfhost_chained_index.rs` — the parser repair, with a leak probe, because the record it
+  adds fires on every nested index including one never bound.
+
+**THE PARITY GUARD FAILED ITS OWN FIRST MUTATION TEST.** It compared SETS of seeded slot names, and
+the driver has TWO token feeds, so deleting one of two seedings left the name present via the
+other. Now counted and calibrated against `BR_P_WORD_ID`'s own count. **A guard that has not been
+made to fail is a guess.**
+
+## `Op::IsStruct` IS REACHABLE, AND ITS WITNESS IS A LOAD-TIME HOLE
+
+Missed by seventeen attempts across both lines. The witness is a struct pattern on a parameter with
+**no type annotation**: `fn g(P { a, b }) -> Word { a + b }`.
+
+Everyone, including me, tried to make a scrutinee's type DIFFER from the pattern's. **The type
+checker forbids that outright**, so the inequality is satisfiable only when the type is absent —
+and a match scrutinee always has one. **The route was never an expression whose inference fails; it
+was a declaration site with no type to lose.**
+
+| witness | `verify()` | `module_wcmu` | load | run |
+|---|---|---|---|---|
+| `Op::Len` | accepts | refuses | **`Vm::new` REFUSES** | never runs |
+| `Op::IsStruct` | accepts | accepts | loads | **traps `InvalidBytecode`** |
+
+`Op::Len`'s witness cannot be admitted at all, which is the conservative-verification stance
+working as designed. `Op::IsStruct`'s satisfies every load-time check and dies at call time.
+**`InvalidBytecode` is the class `verify()` exists to exclude**, and of the three "should never
+have been emitted" refusals the VM carries, this is the only one a loaded program can reach.
+
+**PINNED, NOT REPAIRED**, and both pins fire in the FAILING direction. See the operator queue.
+
+## WHAT THE SWEEP FOUND, AND WHY IT COULD NOT HAVE BEEN FOUND BY READING
+
+**FIVE SILENT MISCOMPILES.** Four fixed; one specified and deliberately not fixed.
+
+| construct | symptom | state |
+|---|---|---|
+| `true` / `false` | emitted `GetLocal(0)` where the reference emits `PushImmediate(1)` | **FIXED** |
+| `x as Byte` | emitted `ByteToWord`; the target type was discarded at parse time | **FIXED** |
+| `Named("Bool")` as a type | tagged as the boolean primitive; a false accept | **FIXED** |
+| nested array LITERAL | outer composite sized 16 where the reference computes 32 | **FIXED** |
+| nested array INDEX | `a[0][1]` — the second `[1]` parses as an **ArrayLit** | **SPECIFIED, NOT FIXED** |
+
+**THE METHOD IS THE DELIVERABLE.** Compile small programs through both compilers and compare
+**BYTES**, classifying THREE ways: identical, refuses loudly, DIFFERS. Only the third is dangerous; a
+loud refusal is an honest gap. An ops-only comparison calls the string-literal case clean, and it is
+not.
+
+**WHY THE ORACLE WAS BLIND.** Self-hosting is validated by compiling the twelve stage sources
+byte-identically. **Those sources use no boolean literal and no `Byte` cast**, so the oracle cannot
+see either. Any construct the corpus does not contain is unverified BY CONSTRUCTION.
+
+**PROPORTIONALITY, AND STATE IT EVERY TIME.** `self_hosted_compile` cross-checks ops, constant pool
+and local count against the reference and refuses on divergence. **Every defect above gave a user a
+loud error, never a wrong artifact.** The exposure is to direct callers of `self_host_compile`.
+Omitting that sentence overstates any of these badly.
+
+**THE INDEX DEFECT IS NOT TRUNCATION, contrary to this document's own earlier claim.** `parse.kel`
+emits records and they are WRONG records. Chained indexing is unsupported: `ps.aa_phase` arms only
+after a let-bound array `Local` and never re-arms. **`let b = a[0]; b[1]` diverges too**, so the chain
+is not the trigger. A fix needs a binding record for an array-typed element, a nested-variant postfix
+phase, and chain re-arming — a FEATURE, not a defect fix. The boundary carries the specification.
+
+## THE THREE UNREACHED-CODE FINDINGS, WHICH ARE ONE CLASS
+
+**PRESENCE, DISPATCH, AND EVEN AN ANNOUNCEMENT ARE NOT EVIDENCE THAT CODE RUNS.**
+
+1. The `v0.3.0` line found **`Op::Reset` never lowered anywhere**, credited only because a CHUNK
+   containing it lowered. A mutation crediting it moved their figure to 57 of 66 **with every test
+   still green**.
+2. **`Op::IsStruct` has no witness.** Emitted only when a scrutinee's type is unknown; nine
+   constructs tried, none reaches it. **Recorded as "not found", NOT as unreachable.**
+3. **Commands 176/177 (`fl_stream_begin`/`fl_stream_step`) are dispatched and driven by nothing** —
+   written, dispatched, and announced to the other line. This **changes the cost of `CONSTS`**: the
+   route is written but never executed, so taking it means writing the driver AND validating
+   never-run code.
+
+**The cheap check is to search for callers before costing work that depends on code.** That was
+learned three times before being written down.
+
+**`Op::Len` IS reachable** — an `if` expression as a `for`-in source — **and the witnessing program
+cannot be given a memory bound**. `verify()` accepts it; `module_wcmu` refuses it, and the same
+missing `Expr::If` case defeats both the static-length lookup and the bound extractor. Both arms at
+length two are still refused, so it is the SECOND category of conservative rejection. On a language
+whose value proposition is definitive WCET and WCMU, **"reachable" needed qualifying and both framings
+are asserted**.
+
+## THE MACRO POSITION## THE MACRO POSITION
 
 **V0.2.x completes when the five success criteria in
 [`../roadmap/V0_2_X_ROADMAP.md`](../roadmap/V0_2_X_ROADMAP.md) hold. None do.** Order 1 needs:
@@ -332,57 +490,87 @@ looked complete. **In every case the code was reachable and the evidence was not
 
 ## Open, held by the operator
 
-**FOUR OF THESE ARE NOW RULED ON. Do not re-ask them; the ruling is the answer.**
+**THE PULL-REQUEST QUEUE IS EMPTY ON THIS LINE.** Eight merged 2026-08-21: #201, #210, #212, #213,
+#214, #215, #216, #218. Two DECISIONS remain, and both are about ownership rather than code.
 
-- **Publication remains HELD.** Reaffirmed 2026-08-17.
-- **`CONSTS` representation** — *ruled: Option A, elide the zeros, and no `BYTECODE_VERSION` bump,
-  because no version-2 artifact has ever been published.* **DONE**, merged at `81ddd260`.
-- **`Op::cost()`** recalibration — *ruled: close it sometime after Order 1.*
-- **Derived operands in type rejection** — *ruled: before publishing V0.3.0.* Whether a V0.2.x version
-  ships before V0.3.0 is itself undecided.
-- **The Japanese FAQ entry** is stale and renders as English — *ruled: correct eventually.*
-- **The `for` trailing-semicolon asymmetry** — *ruled: accept it, shape A.* **DONE**, merged at
-  `1f0e5e19`. Both parsers implement the empty statement and agree byte-identically.
-- **A WINDOWED COMPILER, in the Turbo Pascal sense, is a stated goal.** Measured: ten of the twelve
-  stages are already `loop main(resume) -> Word` coroutines stepped one yield at a time, and bounded
-  working set is forced by the language rather than by discipline. `wire.kel` and `verify_types.kel`
-  are the two that are not. **I claimed a windowed verifier was blocked because a bound needs a whole
-  chunk's control-flow graph; the operator challenged it and was right.** The analysis is a fold over
-  a well-nested bracket structure with a stack of depth equal to the nesting level. What is not
-  forward-only is the IMPLEMENTATION: the walk jumps on `Loop(target)`, the `If` arm peeks at
-  `ops[target - 1]` for an `Else`, `trace_const_set_local` scans BACKWARD for a bound constant, and
-  `loop_body_advances_induction` scans FORWARD to the body tail. Each has a bounded-state streaming
-  equivalent — decide at `EndLoop` rather than at `Loop`, and carry a slot-to-last-constant map.
-  **BOTH FORMERLY-OPEN QUESTIONS ARE NOW ANSWERED** by the `v0.3.0` line, by measurement over 985
-  chunks in 64 modules, in their handoff rewrite (PR #159).
-  * **The break fold holds.** 0 of 386 loops carrying a break disagree on operand depth, guarded by a
-    must-fire control on a synthetic unbalanced loop. The assumption was safe.
-  * **Nesting depth still has NO static cap, and 19 is NOT one.** The deepest observed is 19, in
-    `parse.kel::body_step`. Their warning is the load-bearing part and is repeated here verbatim in
-    spirit: **that is what the corpus contains, not a bound on what the language admits, and it must
-    never be offered as one.** A verifier written in Keleusma needs a DECLARED cap with programs past
-    it rejected, not a number read off today's sources.
-  * They also warn against a second walker: one written independently for the break question invented
-    its own `If`/`EndIf` handling and reported 365 of 386 loops disagreeing. `EndIf` RESTORES the
-    depth saved at its `If` rather than restoring and then applying its own effect. **Do not compete
-    with a validated walker.**
-- **THREE DECISIONS ARE LIVE AND UNANSWERED**, and nothing else is blocked on the operator:
-  * **The input-re-readability fork** in `../decisions/PIPELINE_THEN_MONOLITH.md`. Both the pre-pass
-    and the main pipeline read the SOURCE, so a fused run from a pipe cannot re-read it. Buffer,
-    accept a file operand with standard input as the default, or always split. The V0.2.x line leans
-    to the file operand and said why. It decides whether the monolith is one command or two.
-  * **Whether to raise `parse.kel`'s token array.** It is at 80% -- the stage is 32,907 tokens
-    against 40,960 -- and is the bound the corpus is closest to. It was NAMED rather than widened,
-    because raising a capacity widens what the language admits and that is the operator's call.
-  * **Whether a top-level `struct` declaration should be SUPPORTED or explicitly REFUSED.**
-    `parse.kel` has no struct handling at all: its declaration record codes are 1..3, 9, 10 and 12,
-    with no struct code. The driver now names the situation instead of panicking on a bare
-    `unwrap()`, and deliberately does not decide it.
-- **`MAX_PARSE_DEPTH` does not do its stated job on a small stack.**
-- **`CHANGELOG.md:340`** states the checked-arithmetic push order wrongly in published text.
-- **`-255` is live and has no negative test.**
-- **`v0.2.3-prerebase-backup`**, local only. Do not delete without being asked.
-- **MSRV**: CI checks 1.85 for `keleusma-arena`, 1.88 for `keleusma`.
+**1. WITHDRAWN — `src/verify.rs` WAS NEVER OWNERLESS.** Both records said it belongs to `v0.2.3`;
+the phrasing was indexical and both lines misread it from opposite sides. See the ownership table
+above. **Do not spend a ruling on this.** Recorded rather than deleted because the escalation
+happened and the convention that caused it is the finding.
+
+**2. THE `Op::IsStruct` REPAIR SITE — ANSWERED, NOT PENDING.** With ownership settled it was mine to
+decide, so it is decided: **folded at compile time**, not rejected at load. Rejecting in `verify.rs`
+would make a legal program fail EARLIER; folding makes it WORK, and the witness now returns the
+right answer rather than merely not trapping. Revertible if the operator disagrees.
+
+**3. THE LOAD-TIME HOLE IS NARROWED, NOT CLOSED — AND MY EARLIER CLAIM THAT THE OPCODE HAD NO
+PRODUCER WAS WRONG.**
+
+**RETRACTED WITHIN THE HOUR, BY THE `v0.3.0` LINE, USING MY OWN METHOD.** Do not act on the removal
+framing that stood here briefly.
+
+| construct | emits | verifies | runs |
+|---|---|---|---|
+| generic struct destructured in a parameter | yes | yes | **traps `InvalidBytecode`** |
+| pattern `P` against annotation `Q` | yes | yes | **traps `InvalidBytecode`** |
+| tuple-typed annotation | yes | yes | traps `NoMatchingHead` |
+| array-typed annotation | yes | yes | traps `NoMatchingHead` |
+| **unannotated parameter** (what the fold fixed) | no | yes | **`Int(3)`** |
+
+Reproduced independently on this tree before accepting it.
+
+**THE FOLD'S ORIGINAL JUSTIFICATION WAS FALSE.** It claimed the type checker refuses every
+mismatch. It does not: `fn g(P { a, b }: Q)` compiles with two DISTINCT structs, and a struct
+pattern is admitted against a tuple- or array-typed annotation. The comment in `src/compiler.rs`
+now says so.
+
+**WHAT IS ACTUALLY OPEN, AND IT IS PROBABLY A TYPE-CHECKER QUESTION.** A struct pattern matched
+against an unrelated struct, a tuple, or an array is arguably ill-typed AT THE SOURCE. Closing it
+in the type checker would remove the emission rather than fold it, and would close two load-time
+holes at once. That is a language decision, not a lowering fix, which is why it is recorded rather
+than patched.
+
+**HOW I GOT IT WRONG, because the shape recurs.** I found the original witness by reading the
+guard's match arms for what they OMIT. Validating my own repair, I reverted to guessing three
+constructs and generalised from them. The other line applied MY method to MY code — read the
+emission condition, enumerate the `TypeExpr` variants that make `named_type_name` return `None`
+while a struct pattern is still accepted — and had four counterexamples in under an hour.
+
+**3. THE DEAD `native@1c1ffb1e` GATE RECORD.** Unchanged: stalled 227+ hours, no process, worktree
+clean, the `v0.3.0` line confirms nothing waits on it. Untouched because it is theirs.
+
+**4. THE RULINGS OF 2026-08-19 ARE ALL IMPLEMENTED OR RECORDED. Do not re-ask them.** Note that
+#212 moved a boundary against the "Top-level struct support. Defer." ruling; the operator was
+told, and merged it. `docs/decisions/POOL_TAG_RESIDENCY_BRIEF.md` still carries the revert recipe.
+
+## WHAT A RESUMING SESSION SHOULD DO FIRST
+
+**Nothing is blocked.** The pull-request queue is empty and the two open items are operator
+decisions that do not gate other work.
+
+**DO NOT RESUME BY SWEEPING THE DRIVER FOR MORE OF THE SAME CLASS.** It is worked out on all three
+structural surfaces — decode arms, seeded slots, declaration record codes — and
+`tests/selfhost_driver_parity.rs` asserts that. The remaining yield is zero.
+
+**DO NOT RESUME BY HUNTING SILENT MISCOMPILES EITHER.** Five were closed on 2026-08-21 and the
+shipping compiler now matches the boundary on all 95 cases. The three that still differ are
+labelled and understood.
+
+The honestly-costed options, in the order I would take them:
+
+- **`CONSTS`, Order 1 item 1.** The largest remaining piece. Commands 176/177 have never run —
+  budget for validating them, and **drive them from a test first** so the stage side is proven
+  independently of the driver. `tests/stage_command_reach.rs` pins that they are unreached.
+- **The three remaining `Diverges` cases**: float arithmetic, and two composite-equality gaps
+  (`eq/struct_tuple_of_impure_struct`, `eq/struct_field_array_of_tuple`).
+- **`Op::cost()` against measurement.** `OPCODE_SPECS` covers 16 distinct opcodes of 66, so 50
+  carry estimates. Worst-case execution time is the headline claim, so this is the largest gap
+  between what is asserted and what is measured. Operator's ruling: after Order 1.
+
+**A COST-ESTIMATION LESSON WORTH CARRYING.** The chained-index specification said three coordinated
+pieces of parser machinery were needed. **Two already existed.** Check whether the code exists
+before costing work that depends on it — the same check that revealed hidden COST for commands
+176/177 revealed hidden PROGRESS here.
 
 ## A NOTE ON THE `/goal` MECHANISM, IF THE OPERATOR USES IT
 
@@ -401,9 +589,37 @@ across a dozen iterations quoted prose, never a file. Consequences worth knowing
 
 `v0.3.0` carries native code generation. Their mailbox is
 `git show origin/v0.3.0:docs/process/handoffs/v0.3.0.md`; mine is
-[`handoffs/v0.2.3.md`](./handoffs/v0.2.3.md). Poll at increment boundaries. They hold
-`src/wire_schema.rs`, `src/bytecode.rs`, `src/vm.rs`, `src/verify.rs` and `.github/workflows/`
-read-only and announce before widening. **Extend the same courtesy.**
+[`handoffs/v0.2.3.md`](./handoffs/v0.2.3.md). Poll at increment boundaries.
+
+### OWNERSHIP, NAMED ABSOLUTELY — AND THE OLD WORDING COST AN OPERATOR ESCALATION
+
+| surface | owner |
+|---|---|
+| `src/wire_schema.rs` | **v0.2.3** |
+| `src/bytecode.rs` | **v0.2.3** |
+| `src/vm.rs` | **v0.2.3** |
+| `src/verify.rs` | **v0.2.3** |
+| `src/selfhost/` | **v0.2.3** |
+| `.github/workflows/` | **v0.2.3** |
+| native code generation (`compiler/` native backend and its corpus) | **v0.3.0** |
+
+The owner may edit; the other line holds it read-only and announces before widening. **Extend the
+same courtesy.**
+
+**THIS SENTENCE USED TO READ "They hold ... read-only", AND THE OTHER LINE'S READ "Their surfaces
+are read-only here".** Both said the same thing — these are v0.2.3's — but "they" and "their" are
+INDEXICAL: they resolve against whoever is holding the document, so a reader arriving in the other
+line's handoff resolves them backwards and gets the exact inversion.
+
+That is what happened on 2026-08-21. The `v0.3.0` line read their own record as saying `verify.rs`
+was mine to hold read-only, concluded the file had NO owner, and escalated an ownership question to
+their operator. **I accepted their reading and passed the same question to mine, without reading
+both texts** — thirty lines below the sentence in question, this file says *"neither of us is a
+reliable narrator about the other's code ... check the claim against the code before acting on it,
+especially when it says someone else must act."*
+
+Both lines now name owners absolutely. **Never write "their surfaces" in a document the other line
+reads.**
 
 **NEITHER OF US IS A RELIABLE NARRATOR ABOUT THE OTHER'S CODE, and we now have three instances.**
 They reported `reconstruct` blocked on a `pub` when `parse_functions` was already public; I reported

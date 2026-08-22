@@ -122,6 +122,20 @@ pub fn drive_parse_records_with<F, B>(
     );
 }
 
+/// The tag `parse.kel` emits a BINDING-NAME record under, restated from
+/// `tag_let_name()` in the stage.
+///
+/// Well above the `Node` codes, which reach 64. Lives HERE rather than in
+/// `crate::selfhost`, which is gated on the `self-host` feature: the harnesses that
+/// must skip this record are gated on `compile + verify` only, and publishing it
+/// from the narrower module broke two feature sets. That is the same correction this
+/// crate already made for the shared-slot layout.
+///
+/// `the_let_name_tag_matches_the_stage` checks the stage and this agree, because a
+/// driver that learned the tag by observing one would only learn it from a stream it
+/// had already mis-read.
+pub const PARSE_LET_NAME_TAG: i64 = 90;
+
 /// The tag at or below which a record from `parse.kel` is a diagnostic rather than a parse
 /// record. Record tags are non-negative, so no legitimate record can collide.
 ///
@@ -539,6 +553,18 @@ pub const BR_P_BASE: usize = BR_P_OR_ID + 1;
 /// The cursor, written back by the stage on every token read, so a host feeding a
 /// window knows where to slide it without the stage needing a protocol to ask.
 pub const BR_P_AT: usize = BR_P_BASE + 1;
+
+/// The interned id of `true`, so `parse.kel` can recognise the literal.
+///
+/// **The token space is full**, so `true` and `false` are lexed as ordinary
+/// identifiers, exactly like the eager `and`/`or`. Without these ids the stage
+/// resolved them as variable references and emitted `GetLocal` where the reference
+/// emits `PushImmediate` — a silent miscompile the self-compilation oracle could
+/// not see, because no stage source contains a boolean literal.
+pub const BR_P_TRUE_ID: usize = BR_P_AT + 1;
+
+/// The interned id of `false`. See [`BR_P_TRUE_ID`].
+pub const BR_P_FALSE_ID: usize = BR_P_TRUE_ID + 1;
 
 #[cfg(test)]
 mod shared_layout_tests {

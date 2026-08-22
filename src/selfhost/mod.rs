@@ -119,6 +119,20 @@ pub struct ParsedFn {
     return_type: i64,
     guard: Vec<(i64, i64)>,
     body: Vec<(i64, i64)>,
+    /// Each value parameter's interned name id, in declaration order.
+    ///
+    /// **The record already carried this and the driver threw it away**: the header
+    /// emits `4 + name * 64`, and the arm read the code and discarded the payload
+    /// because a count was all anything needed. Parameters are half the bindings a
+    /// type check has to resolve, so the name is kept now rather than recovered.
+    param_names: Vec<i64>,
+    /// Each `let` binding's `(frame slot, interned name id)`, in fold order.
+    ///
+    /// **Kept OUT of `body`.** The record stream `body` holds is what
+    /// `reconstruct.kel` consumes and what the parse tests pin against the
+    /// reference, so a new record kind inside it would change both. Diverting the
+    /// binding-name record here leaves the node stream byte-for-byte as it was.
+    let_names: Vec<(i64, i64)>,
 }
 
 impl ParsedFn {
@@ -212,9 +226,10 @@ const CATEGORY: usize = 1 + 1024 * 4 + 256 * 5 + 1;
 // gated on `compile + verify` like the harnesses that need it, rather than on the
 // narrower `self-host` feature this module carries.
 use crate::selfhost_host::{
-    BR_LEX_ICOUNT, BR_LEX_ILEN, BR_LEX_ISTART, BR_P_AT, BR_P_BASE, BR_P_BOOL_ID, BR_P_BYTE_ID,
-    BR_P_CHUNK_COUNT, BR_P_CHUNKS, BR_P_LEN, BR_P_LIMIT_ID, BR_P_PACKED, BR_P_REQUIRE_ID,
-    BR_P_WORD_ID, PARSE_CHUNK_CAP, PARSE_TOKEN_CAP,
+    BR_LEX_ICOUNT, BR_LEX_ILEN, BR_LEX_ISTART, BR_P_AND_ID, BR_P_AT, BR_P_BASE, BR_P_BOOL_ID,
+    BR_P_BYTE_ID, BR_P_CHUNK_COUNT, BR_P_CHUNKS, BR_P_FALSE_ID, BR_P_LEN, BR_P_LIMIT_ID,
+    BR_P_OR_ID, BR_P_PACKED, BR_P_REQUIRE_ID, BR_P_TRUE_ID, BR_P_WORD_ID, PARSE_CHUNK_CAP,
+    PARSE_LET_NAME_TAG, PARSE_TOKEN_CAP,
 };
 
 fn br_shared_word(vm: &Vm<'_, '_>, buf: &[u8], slot: usize) -> i64 {
@@ -421,6 +436,26 @@ fn decode_op(w: i64) -> Op {
             size: (operand % 65536) as u16,
             variant: composite_kind_from_tag(operand / 65536),
         }),
+        // **TAG 53 HAS TWO FORMS AND THIS DRIVER DECODED ONLY ONE.**
+        //
+        // A tuple field read. The FLAT-NESTED form -- a nested composite tuple element
+        // extracted and re-wrapped -- packs `offset + size*65536 + variant*2^32`; the FLAT
+        // form packs `offset + kind_tag*65536`, which is under 2^20. They are disambiguated
+        // by operand magnitude, exactly as `tests/selfhost_codegen.rs` has always done.
+        //
+        // Without the first arm a struct-typed tuple element fell into the second and its
+        // packed word was read as a scalar-kind tag: for `size = 8, variant = Struct(2)` the
+        // operand is 8,590,458,880, and `operand / 65536` is 131,080 -- the "bad scalar kind
+        // tag 131080" that six `Ok`-recorded boundary cases faulted with. A LOUD fault rather
+        // than a wrong op, but a fault on a construct the boundary reports as supported.
+        //
+        // The sibling arms for `GetField` (47/48) and `GetIndex` (49/56) use distinct op tags
+        // for the two forms, so only the tuple read needs the magnitude guard.
+        53 if operand >= 4294967296 => Op::GetTupleField(TupleField::FlatNested {
+            offset: (operand % 65536) as u16,
+            size: ((operand / 65536) % 65536) as u16,
+            variant: composite_kind_from_tag(operand / 4294967296),
+        }),
         // A flat tuple field read: operand packs offset + kind_tag*65536.
         53 => Op::GetTupleField(TupleField::Flat {
             offset: (operand % 65536) as u16,
@@ -449,7 +484,7 @@ fn decode_op(w: i64) -> Op {
 
 /// Drive the codegen; return its emitted ops, the constant pool it built, and the
 /// local-frame size (`local_count`) it computed.
-fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<i64>, i64) {
+fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<(i64, i64)>, i64) {
     let src = read_stage("kel/codegen.kel");
     let m = compile_src(&src);
     let need = required_persistent_capacity_for(&m);
@@ -530,15 +565,26 @@ fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<i64>, i64) {
     }
 
     // Phase 2: the pool the stage built. Size, then that many raw values, then that many raw
-    // tags (0 Int, 1 StaticStr). The stage sources are all-Int, so the tags are consumed and
-    // discarded here; the tagged protocol only matters for a program with a string literal.
+    // tags. **THE TAG IS PART OF THE VALUE AND MUST BE CARRIED OUT OF HERE.**
+    //
+    // `codegen.kel` interns three tags in three separate functions with tag-aware dedup:
+    // 0 `Int` (`intern_int`), 1 `StaticStr` (`intern_str`, the value being the LEXER INTERN
+    // ID rather than the bytes), and 2 `Bool` (`intern_bool`, reached from `push_struct_eq`).
+    //
+    // This loop used to read the tags into `let _tag` and drop them, on the stated grounds
+    // that "the stage sources are all-Int". That was a true statement about the CORPUS and a
+    // false one about the CONTRACT: the byte-identity oracle compiles the stage sources, none
+    // of which contains a string literal or a struct equality, so neither tag was ever
+    // observed. Every pool entry was then rebuilt as `ConstValue::Int`, turning a `StaticStr`
+    // into the integer of its intern id. See `docs/decisions/POOL_TAG_RESIDENCY_BRIEF.md`.
     let count = next_word(&mut vm, &mut shared);
-    let pool = (0..count)
+    let values: Vec<i64> = (0..count)
         .map(|_| next_word(&mut vm, &mut shared))
         .collect();
-    for _ in 0..count {
-        let _tag = next_word(&mut vm, &mut shared);
-    }
+    let pool = values
+        .into_iter()
+        .map(|v| (v, next_word(&mut vm, &mut shared)))
+        .collect();
     // Phase 3: the local-frame size the stage computed.
     let local_count = next_word(&mut vm, &mut shared);
     (ops, pool, local_count)
@@ -718,6 +764,31 @@ fn first_pass(src: &str) -> FirstPass {
 /// checked against.
 // The 4-tuple carries the parsed functions, name table, and the raw data and enum
 // record streams; factoring each into a `type` alias would only scatter it.
+/// **NO PRODUCTION PATH CALLS THIS ANY MORE. It is the fusion oracle.**
+///
+/// Every compile entry point — [`self_host_compile`], [`self_host_compile_full`],
+/// [`self_host_compile_scratch`] and [`binding_rows_from_pipeline`] — moved to
+/// [`parse_functions_fused`] on 2026-08-19, under the operator's direction to
+/// retire the token residency.
+///
+/// # Why it is retained rather than deleted
+///
+/// This feed is what proves the fused one correct.
+/// `the_fused_parse_agrees_with_the_collecting_one` and
+/// `the_fused_compile_agrees_with_the_collecting_one` compare the two, and a
+/// differential oracle with one side removed is not an oracle. Deleting it would
+/// leave fusion checked only against the Rust reference, which is a weaker claim
+/// about the FEED specifically: the reference agrees with a whole-program compile,
+/// not with a particular token-delivery order.
+///
+/// # What it costs, and what happens next
+///
+/// It is the reason `toks.packed` is still 40,960 words: this feed seeds the whole
+/// token stream, so the array cannot shrink while any caller does. **The next
+/// increment shrinks the array to a buffer sized for the equivalence corpus**, at
+/// which point this entry point keeps working for every source those two tests
+/// use and stops working for a large one — which is acceptable precisely because
+/// nothing but those tests calls it.
 #[allow(clippy::type_complexity)]
 pub fn parse_functions(
     src: &str,
@@ -770,6 +841,17 @@ pub fn parse_functions_fused(
 pub fn lex_token_count(src: &str) -> usize {
     first_pass(src).token_count
 }
+
+/// `Node::LetIn`, the record whose payload carries the frame slot.
+const NODE_LET_IN: i64 = 5;
+
+/// `Node::Literal`. Always an INTEGER: `codegen.kel`'s `push_literal` interns
+/// through `intern_int`, so no other scalar reaches this kind.
+const NODE_LITERAL: i64 = 1;
+
+/// `Node::Unit`, whose payload is the `PushImmediate` operand — `0` Unit, `1`
+/// true, `2` false. Boolean literals ride this kind rather than a new one.
+const NODE_UNIT: i64 = 20;
 
 /// The declaration a record belongs to, or a diagnostic naming what arrived instead.
 ///
@@ -852,6 +934,28 @@ pub fn parse_cursor_trace(src: &str) -> Vec<i64> {
     vm.set_shared(&mut shared, BR_P_WORD_ID, Value::Int(id_of("Word")))
         .unwrap();
     vm.set_shared(&mut shared, BR_P_BYTE_ID, Value::Int(id_of("Byte")))
+        .unwrap();
+    // **THE EAGER BOOLEAN OPERATORS, WHICH THIS COMMENT USED TO CLAIM WERE ALREADY HERE.**
+    // The sentence below said the boolean literals are "seeded like the eager `and`/`or`
+    // ids" -- true of `tests/selfhost_codegen.rs`, which seeds all four, and false of this
+    // file, which seeded neither. The comment was copied along with the literals and
+    // described the sibling's state.
+    //
+    // `parse.kel` guards its `and`/`or` recognition on `and_id > 0` so an unseeded host
+    // keeps the old behaviour. The old behaviour is that the operator and its RIGHT OPERAND
+    // are dropped: `a and b` compiled to `[GetLocal(0), Return]`, which is `a`. A silent
+    // miscompile, and `true and false` returned `true`.
+    vm.set_shared(&mut shared, BR_P_AND_ID, Value::Int(id_of("and")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_OR_ID, Value::Int(id_of("or")))
+        .unwrap();
+    // THE BOOLEAN LITERALS, seeded like the eager `and`/`or` ids above and for the same
+    // reason: the Tok space is full, so `true` and `false` arrive as identifiers.
+    // Without these the stage resolved them as variable references and emitted
+    // `GetLocal` where the reference emits `PushImmediate`.
+    vm.set_shared(&mut shared, BR_P_TRUE_ID, Value::Int(id_of("true")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_FALSE_ID, Value::Int(id_of("false")))
         .unwrap();
     vm.set_shared(&mut shared, BR_P_BOOL_ID, Value::Int(id_of("Bool")))
         .unwrap();
@@ -985,10 +1089,21 @@ fn parse_functions_impl(
     // Which one a caller sees depends on how far over they are, and neither names the token
     // array or a limit the caller controls. Refused here, before any seeding, with both
     // numbers. `parse.kel` itself is 32,907 tokens, 80% of this.
+    //
+    // **THE CAP BINDS THE COLLECTING FEED ONLY, AS OF 2026-08-19.** It was
+    // unconditional, which meant the FUSED feed carried a bound it does not need:
+    // fusion writes a window of `FUSED_WINDOW` slots and slides it, so the size of
+    // `packed` says nothing about how long an input it can accept. Every
+    // production entry point is fused, so this refusal no longer reaches any
+    // compile a user can start. It still guards the collecting feed, which really
+    // does seed the whole stream and really does overrun the array.
+    //
+    // Pinned by `the_token_cap_binds_only_the_collecting_feed`, which compiles a
+    // source past the cap through the fused feed and refuses it through the other.
     assert!(
-        token_count <= PARSE_TOKEN_CAP,
+        fused || token_count <= PARSE_TOKEN_CAP,
         "this program lexes to {token_count} tokens and `toks.packed` in parse.kel holds \
-         {PARSE_TOKEN_CAP}. Split the source."
+         {PARSE_TOKEN_CAP}. Split the source, or use the fused feed, which is windowed."
     );
     vm.set_shared(&mut shared, BR_P_LEN, Value::Int(token_count as i64))
         .unwrap();
@@ -999,6 +1114,28 @@ fn parse_functions_impl(
     vm.set_shared(&mut shared, BR_P_WORD_ID, Value::Int(id_of("Word")))
         .unwrap();
     vm.set_shared(&mut shared, BR_P_BYTE_ID, Value::Int(id_of("Byte")))
+        .unwrap();
+    // **THE EAGER BOOLEAN OPERATORS, WHICH THIS COMMENT USED TO CLAIM WERE ALREADY HERE.**
+    // The sentence below said the boolean literals are "seeded like the eager `and`/`or`
+    // ids" -- true of `tests/selfhost_codegen.rs`, which seeds all four, and false of this
+    // file, which seeded neither. The comment was copied along with the literals and
+    // described the sibling's state.
+    //
+    // `parse.kel` guards its `and`/`or` recognition on `and_id > 0` so an unseeded host
+    // keeps the old behaviour. The old behaviour is that the operator and its RIGHT OPERAND
+    // are dropped: `a and b` compiled to `[GetLocal(0), Return]`, which is `a`. A silent
+    // miscompile, and `true and false` returned `true`.
+    vm.set_shared(&mut shared, BR_P_AND_ID, Value::Int(id_of("and")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_OR_ID, Value::Int(id_of("or")))
+        .unwrap();
+    // THE BOOLEAN LITERALS, seeded like the eager `and`/`or` ids above and for the same
+    // reason: the Tok space is full, so `true` and `false` arrive as identifiers.
+    // Without these the stage resolved them as variable references and emitted
+    // `GetLocal` where the reference emits `PushImmediate`.
+    vm.set_shared(&mut shared, BR_P_TRUE_ID, Value::Int(id_of("true")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_FALSE_ID, Value::Int(id_of("false")))
         .unwrap();
     vm.set_shared(&mut shared, BR_P_BOOL_ID, Value::Int(id_of("Bool")))
         .unwrap();
@@ -1078,6 +1215,18 @@ fn parse_functions_impl(
     // Every enum's header records (ENUMSTART, then EVARIANT/EDISC per variant, then END),
     // for the driver's own enum-layout assembly.
     let mut enum_records: Vec<(i64, i64)> = Vec::new();
+    // **A STRUCT, TRAIT OR IMPL DECLARATION IS SKIPPED TO ITS `END`, NOT LEFT TO FALL
+    // THROUGH.** `parse.kel` emits STRUCTSTART 18, TRAITSTART 19 and IMPLSTART 20 followed
+    // by the declaration's own PARAM/PTYPE records. Without this state those records reach
+    // the `match` below with no function open and `open_decl` panics by name — which is what
+    // the shipping driver did for every program containing a `struct`, while
+    // `tests/selfhost_codegen.rs`'s copy of this loop carried the skip and compiled them.
+    // See `docs/decisions/POOL_TAG_RESIDENCY_BRIEF.md`.
+    //
+    // The declaration contributes no chunk and no scaffold record here: a struct's layout
+    // reaches codegen through the BODY record stream (the StructEqField/GetField families),
+    // not through its declaration.
+    let mut in_skip_decl = false;
     let (mut in_body, mut in_guard, mut in_data, mut in_enum, mut in_use) =
         (false, false, false, false, false);
     // PRIME THE WINDOW BEFORE THE INITIAL CALL, not just before resumes.
@@ -1169,7 +1318,28 @@ fn parse_functions_impl(
                 match code {
                     0 => {}
                     15 => in_body = false,
-                    _ => open_decl(&mut cur, code, val).body.push((code, val)),
+                    // THE BINDING-NAME RECORD IS DIVERTED, NOT APPENDED.
+                    //
+                    // `parse.kel` emits it immediately before the `LetIn` it belongs
+                    // to, so the slot is the next record's payload. Pairing them here
+                    // is what lets a type-check extraction join a forest of SLOTS to a
+                    // binding table of NAMES, which nothing in the stream could do
+                    // before: slots are reused across scopes and names are not.
+                    c if c == PARSE_LET_NAME_TAG => {
+                        let f = open_decl(&mut cur, code, val);
+                        f.let_names.push((-1, val));
+                    }
+                    _ => {
+                        let f = open_decl(&mut cur, code, val);
+                        // The slot arrives with the `LetIn` that follows the name.
+                        if code == NODE_LET_IN
+                            && let Some(last) = f.let_names.last_mut()
+                            && last.0 == -1
+                        {
+                            last.0 = val;
+                        }
+                        f.body.push((code, val));
+                    }
                 }
             } else if in_guard {
                 match code {
@@ -1193,6 +1363,8 @@ fn parse_functions_impl(
                 }
             } else if in_use {
                 in_use = code != 5;
+            } else if in_skip_decl {
+                in_skip_decl = code != 5;
             } else {
                 match code {
                     1..=3 => {
@@ -1204,9 +1376,15 @@ fn parse_functions_impl(
                             return_type: 0,
                             guard: Vec::new(),
                             body: Vec::new(),
+                            param_names: Vec::new(),
+                            let_names: Vec::new(),
                         })
                     }
-                    4 => open_decl(&mut cur, code, val).params += 1,
+                    4 => {
+                        let f = open_decl(&mut cur, code, val);
+                        f.params += 1;
+                        f.param_names.push(val);
+                    }
                     6 => open_decl(&mut cur, code, val).param_types.push(val),
                     7 => open_decl(&mut cur, code, val).return_type = val,
                     9 => {
@@ -1220,6 +1398,7 @@ fn parse_functions_impl(
                     }
                     16 => in_body = true,
                     17 => in_guard = true,
+                    18..=20 => in_skip_decl = true, // struct/trait/impl declaration
                     5 => {
                         open_decl(&mut cur, code, val);
                         on_function(&names, cur.take().unwrap())
@@ -1235,6 +1414,82 @@ fn parse_functions_impl(
     (names, data_records, enum_records)
 }
 
+/// Turn `codegen.kel`'s tagged constant pool into the reference compiler's `ConstValue`s.
+///
+/// **ONE DEFINITION, USED BY EVERY ENTRY POINT.** Three call sites each rebuilt the pool
+/// inline as `ConstValue::Int`, which is how the tag came to be dropped in three places at
+/// once; a fourth entry point added later would have copied the fourth. The nine-copies
+/// shared-layout defect this crate already paid for is the same shape.
+///
+/// # The tag protocol, which is the stage's and not this function's
+///
+/// | tag | `ConstValue` | what the value word holds |
+/// |---|---|---|
+/// | 0 | `Int` | the integer itself |
+/// | 1 | `StaticStr` | the **lexer intern id**, resolved here through `names` |
+/// | 2 | `Bool` | 0 or 1 |
+///
+/// A `StaticStr` is the only entry needing `names`, and it is why this cannot be a plain
+/// `From` impl on the pair.
+///
+/// # Failure modes
+///
+/// An intern id outside `names` and an unrecognised tag both panic by name rather than
+/// producing a silently wrong constant. Both are stage/host protocol violations: neither is
+/// reachable from a user program, and a wrong constant would be a silent miscompile, which is
+/// the class this function exists to close.
+fn pool_to_constants(pool: &[(i64, i64)], names: &[String]) -> Vec<ConstValue> {
+    pool.iter()
+        .map(|&(v, tag)| match tag {
+            0 => ConstValue::Int(v),
+            1 => {
+                let raw = names.get(v as usize).unwrap_or_else(|| {
+                    panic!(
+                        "codegen.kel interned StaticStr id {v}, which is outside the \
+                         {}-entry lexer name table",
+                        names.len()
+                    )
+                });
+                ConstValue::StaticStr(unescape_string(raw))
+            }
+            2 => ConstValue::Bool(v != 0),
+            other => panic!(
+                "codegen.kel emitted constant-pool tag {other}, which this host does not \
+                 know. A new tag needs a `ConstValue` mapping here, not a default"
+            ),
+        })
+        .collect()
+}
+
+/// Resolve the escape sequences the reference compiler bakes into a `StaticStr`.
+///
+/// The lexer's name table holds a string literal's content **as written**, so `\n` is a
+/// backslash followed by an `n`. The reference bakes the escaped byte, so comparing the two
+/// requires this. Handling the four the reference handles — newline, tab, quote, backslash —
+/// and passing anything else through unchanged, which matches the reference's own behaviour
+/// on an unknown escape.
+fn unescape_string(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' && i + 1 < bytes.len() {
+            out.push(match bytes[i + 1] {
+                b'n' => b'\n',
+                b't' => b'\t',
+                b'"' => b'"',
+                b'\\' => b'\\',
+                other => other,
+            });
+            i += 2;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).expect("a string literal's unescaped content is valid UTF-8")
+}
+
 /// Self-host-compile a whole program: drive the pipeline over every function, reconstruct
 /// each into its codegen Body (grouping same-named heads into one multihead), run
 /// codegen.kel, and splice the self-hosted ops, constant pool, and local_count into the
@@ -1242,7 +1497,7 @@ fn parse_functions_impl(
 /// reference's ops. The result is a runnable module whose every source-defined chunk was
 /// emitted by the self-hosted pipeline.
 pub fn self_host_compile(src: &str) -> Module {
-    let (fns, names, _data_records, _enum_records) = parse_functions(src);
+    let (fns, names, _data_records, _enum_records) = parse_functions_fused(src);
     let mut module = compile_src(src);
     let mut i = 0;
     while i < fns.len() {
@@ -1274,10 +1529,134 @@ pub fn self_host_compile(src: &str) -> Module {
             .position(|c| c.name == name)
             .unwrap_or_else(|| panic!("no chunk named `{name}`"));
         module.chunks[idx].ops = ops;
-        module.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        module.chunks[idx].constants = pool_to_constants(&pool, &names);
         module.chunks[idx].local_count = lc as u16;
     }
     module
+}
+
+/// The type checker's BINDING ROWS, derived from the self-hosted pipeline.
+///
+/// Returns `(name, tag, form)` triples with names as STRINGS rather than interned
+/// ids, so a caller can compare them against an extraction built over a different id
+/// space. `form` matches the stage's `ty.bform`: 0 the value is a tag, 1 it is
+/// another name the stage resolves through one alias hop.
+///
+/// # What this replaces, and why it could not be written until now
+///
+/// Order 1 records that this input should come from `parse.kel` plus
+/// `reconstruct.kel` because "structure is available" there. It was half true.
+/// Function names, declared return types and declared parameter types were all
+/// reachable; **the names of the things being bound were not**. A `Local` record
+/// carries a slot, and the type channel is keyed by names.
+///
+/// Two records closed that. The parameter's name was **already in the stream** —
+/// the header emits `4 + name * 64` and the driver discarded the payload. The
+/// `let` binding's name is the record added under the operator's ruling on that
+/// fork. Neither invents an encoding, which is what Order 1 asked for.
+///
+/// # What it does NOT yet cover
+///
+/// A `let` bound to a literal or a call still has no tag here: the initialiser's
+/// SHAPE lives in the body record stream, and reading it means walking the forest
+/// rather than the header. That walk is the next slice; this one carries the
+/// declared bindings, which are the ones the source states outright.
+pub fn binding_rows_from_pipeline(src: &str) -> (Vec<String>, Vec<(String, i64, i64)>) {
+    let (fns, names, ..) = parse_functions_fused(src);
+    // A type NAME id to the stage's scalar tag. The ids come from the same intern
+    // table the records index, so this is a lookup rather than a second convention.
+    let tag_of = |type_name_id: i64| -> i64 {
+        match names.get(type_name_id as usize).map(String::as_str) {
+            Some("Word") => 1,
+            // **LOWERCASE, AND IT IS THE ONLY PRIMITIVE THAT IS.** `Word`, `Byte`
+            // and `Float` are capitalised; `bool` is not. `Bool` with a capital
+            // letter is an ordinary NAMED type, which the reference refuses to add
+            // to a `Word`, and an earlier revision of this table mapped it here —
+            // telling the type channel that a value of some user type was a boolean.
+            Some("bool") => 2,
+            Some("Byte") => 3,
+            _ => 0,
+        }
+    };
+    let name_of = |id: i64| -> Option<String> { names.get(id as usize).cloned() };
+
+    let mut rows: Vec<(String, i64, i64)> = Vec::new();
+    for f in &fns {
+        // The function's own name carries its declared return type, which is what a
+        // `let a = g()` alias hop resolves through.
+        if let Some(n) = name_of(f.name) {
+            let t = tag_of(f.return_type);
+            if t != 0 {
+                rows.push((n, t, 0));
+            }
+        }
+        for (i, &pid) in f.param_names.iter().enumerate() {
+            let Some(n) = name_of(pid) else { continue };
+            let t = f.param_types.get(i).copied().map_or(0, tag_of);
+            if t != 0 {
+                rows.push((n, t, 0));
+            }
+        }
+
+        // --- `let` BINDINGS, VIA THE RECONSTRUCTED FOREST -----------------------
+        //
+        // **NOT BY LOOKING AT THE RECORD NEXT TO THE `LetIn`.** `LetIn` is BINARY
+        // and pops its right child then its left, so the postfix stream for
+        // `let a = 7; a` is `[Literal(7), Local(0), LetIn(0)]` and the record
+        // immediately before the `LetIn` is the CONTINUATION, not the initialiser.
+        // Reasoning from adjacency picks the wrong node every time.
+        //
+        // The forest gives the right answer directly: `lhs` is the initialiser and
+        // `rhs` the continuation. Built by `reconstruct_via_kel`, which is the
+        // validated walker — writing a second one here is the mistake the `v0.3.0`
+        // line recorded when an independently written walk reported 365 of 386
+        // loops disagreeing.
+        if f.let_names.is_empty() {
+            continue;
+        }
+        let body = reconstruct_via_kel(&f.body, f.cat, f.params);
+        for node in &body.nodes {
+            if node.kind != NODE_LET_IN {
+                continue;
+            }
+            // **JOINED BY SLOT, NOT BY POSITION.** `LetIn`'s payload is the frame
+            // slot and `let_names` carries `(slot, name)`. Pairing by fold order
+            // would be positional and would fail silently on a reordering.
+            let Some(&(_, nid)) = f.let_names.iter().find(|(slot, _)| *slot == node.arg) else {
+                continue;
+            };
+            let Some(bound) = name_of(nid) else { continue };
+            let Some(init) = body.nodes.get(node.lhs as usize) else {
+                continue;
+            };
+            match init.kind {
+                // A literal. `push_literal` interns through `intern_int`, so a
+                // kind-1 node is always an integer; booleans are `Unit` carrying
+                // the `PushImmediate` operand.
+                NODE_LITERAL => rows.push((bound, 1, 0)),
+                NODE_UNIT if init.arg == 1 || init.arg == 2 => rows.push((bound, 2, 0)),
+                // **A CALL IS NOT EMITTED HERE, AND THE REASON IS THE ROW SHAPE
+                // RATHER THAN THE PIPELINE.** `let a = g()` is a form-1 alias whose
+                // row carries the TARGET'S NAME ID in the tag position. The two
+                // extractions do not share an id space — the reference numbers by
+                // insertion order as it walks, this one uses the lexer's intern
+                // table — so a form-1 row cannot be compared by name string, which
+                // is the discipline that keeps this honest.
+                //
+                // Emitting one would mean either comparing id spaces (comparing the
+                // numbering rather than the content) or changing the row shape to
+                // carry a target string. The second is the right answer and it is a
+                // slice of its own.
+                //
+                // Everything else — an operator expression above all — needs the
+                // initialiser's NODE INDEX to reach the stage's bounded fixpoint
+                // (form 2), which is a further slice again. Leaving no row means the
+                // stage accepts, the documented conservative stance.
+                _ => {}
+            }
+        }
+    }
+    (names, rows)
 }
 
 /// Self-host-compile a whole program **without ever holding every function's records**.
@@ -1321,7 +1700,12 @@ pub fn self_host_compile_fused(src: &str) -> Module {
     let mut group: Vec<ParsedFn> = Vec::new();
     let mut group_name = String::new();
 
-    let flush = |group: &mut Vec<ParsedFn>, name: &str, module: &mut Module| {
+    // **THE NAME TABLE IS A PARAMETER, NOT A RE-DERIVATION.** A `StaticStr` pool entry
+    // carries the lexer's intern id, so resolving it needs the table, and this closure runs
+    // INSIDE the streaming callback where the table is what the feed has interned so far.
+    // Calling `parse_functions_fused` a second time here to obtain one would discard the
+    // bounded record residency this entry point exists to provide.
+    let flush = |group: &mut Vec<ParsedFn>, name: &str, module: &mut Module, names: &[String]| {
         if group.is_empty() {
             return;
         }
@@ -1340,20 +1724,22 @@ pub fn self_host_compile_fused(src: &str) -> Module {
             .position(|c| c.name == name)
             .unwrap_or_else(|| panic!("no chunk named `{name}`"));
         module.chunks[idx].ops = ops;
-        module.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        module.chunks[idx].constants = pool_to_constants(&pool, names);
         module.chunks[idx].local_count = lc as u16;
         group.clear();
     };
 
-    parse_functions_impl(src, false, &mut |names, f| {
+    let (names, ..) = parse_functions_impl(src, false, &mut |names, f| {
         let name = names[f.name as usize].clone();
         if !group.is_empty() && name != group_name {
-            flush(&mut group, &group_name, &mut module);
+            flush(&mut group, &group_name, &mut module, names);
         }
         group_name = name;
         group.push(f);
     });
-    flush(&mut group, &group_name, &mut module);
+    // The trailing group is flushed against the FINAL table, which is a superset of every
+    // intermediate one: the interner only grows, and an id it has issued keeps its meaning.
+    flush(&mut group, &group_name, &mut module, &names);
     module
 }
 
@@ -2169,6 +2555,14 @@ const DV_DREQ: usize = 1 + 1536 * 2;
 const DV_DNET: usize = 1 + 1536 * 3;
 const DV_IS_TERM: usize = 1 + 1536 * 4;
 const DV_OUT_REJECT: usize = 1 + 1536 * 5;
+/// Why `verify_depth.kel` returned the verdict it did.
+///
+/// 0 means the walk completed, so the verdict is a real analysis result. 1 means
+/// the chunk nests deeper than the stage's declared cap and the verdict is
+/// default-deny. **Only the cause distinguishes a proven defect from an
+/// unanalysed program**, and only the cause says whether raising the cap would
+/// change the answer.
+const DV_OUT_CAUSE: usize = 2 + 1536 * 5;
 
 /// The compiled `verify_depth.kel` stage module, cached after the first build.
 ///
@@ -2245,6 +2639,65 @@ pub fn depth_reject_chunk_via_kel(chunk: &crate::bytecode::Chunk) -> bool {
         Value::Int(n) => n != 0,
         o => panic!("expected Int at out_reject, got {o:?}"),
     }
+}
+
+/// Why `verify_depth.kel` rejected `chunk`, distinguishing a proven operand
+/// underflow from a refusal to analyse.
+///
+/// # Why this exists beside [`depth_reject_chunk_via_kel`]
+///
+/// The stage declares a nesting cap and refuses a chunk past it, default-deny, in
+/// line with this project's conservative-verification stance. That refusal and a
+/// proven underflow are the SAME verdict, so a caller reading only the verdict
+/// cannot tell a defective program from one the analysis declined. **A caller
+/// deciding whether to raise the cap needs this and the verdict does not carry
+/// it.**
+///
+/// Returns [`DepthVerdict::Accept`], [`DepthVerdict::Underflow`], or
+/// [`DepthVerdict::OverCap`].
+pub fn depth_verdict_chunk_via_kel(chunk: &crate::bytecode::Chunk) -> DepthVerdict {
+    let m = verify_depth_kel_module();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify verify_depth.kel");
+    let mut shared = seed_verify_depth_shared(&vm, chunk);
+    match vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call verify_depth.kel")
+    {
+        VmState::Yielded(Value::Int(_)) => {}
+        other => panic!("unexpected verify_depth.kel state: {other:?}"),
+    }
+    let reject = match vm.get_shared(&shared, DV_OUT_REJECT).unwrap() {
+        Value::Int(n) => n != 0,
+        o => panic!("expected Int at out_reject, got {o:?}"),
+    };
+    let cause = match vm.get_shared(&shared, DV_OUT_CAUSE).unwrap() {
+        Value::Int(n) => n,
+        o => panic!("expected Int at out_cause, got {o:?}"),
+    };
+    match (reject, cause) {
+        (false, _) => DepthVerdict::Accept,
+        (true, 1) => DepthVerdict::OverCap,
+        (true, _) => DepthVerdict::Underflow,
+    }
+}
+
+/// The outcome of the self-hosted operand-stack depth-balance pass.
+///
+/// `Underflow` and `OverCap` are both rejections, and keeping them distinct is the
+/// point: one is a proven property of the program and the other is a statement
+/// about the analysis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DepthVerdict {
+    /// The walk completed and found no operand-stack underflow.
+    Accept,
+    /// The walk completed and proved an op would underflow the operand stack.
+    Underflow,
+    /// The chunk nests deeper than the stage's declared cap, so it was refused
+    /// without being analysed. **Not evidence of a defect.**
+    OverCap,
 }
 
 /// Run the WHOLE self-hosted verifier over a module -- every check `verify()` performs, all
@@ -3166,7 +3619,7 @@ fn assemble_chunk_metadata(
 /// modifiers) and self-hosting them is a distinct increment.
 pub fn self_host_compile_full(src: &str) -> Module {
     let mut module = self_host_compile(src);
-    let (fns, names, data_records, enum_records) = parse_functions(src);
+    let (fns, names, data_records, enum_records) = parse_functions_fused(src);
     let dl = assemble_data_layout(&data_records, &names);
     module.schema_hash = crate::bytecode::compute_schema_hash(Some(&dl));
     module.data_layout = Some(dl);
@@ -3266,8 +3719,8 @@ fn shared_data_bytes_of(shared_layout: &[crate::bytecode::SharedSlotLayout]) -> 
 /// times `VALUE_SLOT_SIZE_BYTES`). The stages declare no natives, so `native_names` and
 /// `native_return_shapes` are empty.
 pub fn self_host_compile_scratch(src: &str) -> Module {
-    use crate::bytecode::{Chunk, ConstValue, SlotVisibility};
-    let (fns, names, data_records, enum_records) = parse_functions(src);
+    use crate::bytecode::{Chunk, SlotVisibility};
+    let (fns, names, data_records, enum_records) = parse_functions_fused(src);
 
     // Build each source chunk from the pipeline output. Group consecutive same-named heads
     // (a multiheaded function is one chunk), mirroring `self_host_compile`, but emit a fresh
@@ -3301,7 +3754,7 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
         chunks.push(Chunk {
             name,
             ops,
-            constants: pool.iter().map(|&v| ConstValue::Int(v)).collect(),
+            constants: pool_to_constants(&pool, &names),
             struct_templates: Vec::new(),
             local_count: lc as u16,
             param_count: *param_count,
@@ -4267,6 +4720,18 @@ fn window_emit(
         vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(b))
             .expect("blob");
     }
+    // **`names` IS ACCEPTED AND DELIBERATELY UNUSED, AND THAT IS NOT AN OVERSIGHT.**
+    //
+    // Investigated 2026-08-21 after a sweep for discarded stage inputs flagged it, because a
+    // parameter read into a discard is the exact shape of four defects repaired that day. This
+    // one is not: `wire.kel` derives the name count itself -- `name_count()` is a function of the
+    // blob it was given, returned by command 18 -- so a host-supplied count would be a SECOND
+    // answer to a question the stage already answers, which is the drift this file records
+    // paying for repeatedly. The only host-supplied argument in this block is `chunk_count`, at
+    // `WARG_SLOT`.
+    //
+    // Kept in the signature rather than removed so every windowed emitter takes the same
+    // arguments; removing it is a safe cleanup, not a repair.
     let _ = names;
     let st = match vm.call_with_shared(&mut shared, &[Value::Int(cmd)]) {
         Ok(st) => st,
@@ -4804,5 +5269,97 @@ mod classification_tables {
         assert_eq!(analyze_opk(&Op::GetLocal(3), &chunk).1, 3);
         assert_eq!(analyze_opk(&Op::SetLocal(4), &chunk).1, 4);
         assert_eq!(analyze_opk(&Op::PopN(2), &chunk).2, 2);
+    }
+}
+
+#[cfg(test)]
+mod typecheck_input_feasibility {
+    use super::*;
+
+    /// **IDENTITY NOW TRAVELS WITH THE STRUCTURE.**
+    ///
+    /// Order 1 records that the type checker's input should come from `parse.kel`
+    /// plus `reconstruct.kel` because "structure is available" there. Measured, that
+    /// was only half true: a `Local` record carries a **slot**, `codegen.kel` lowers
+    /// it straight to `GetLocal(slot)`, and no body record mentioned a name at all.
+    /// The type channel is keyed by interned NAME ids, so a forest of slots could
+    /// not be joined to a binding table of names.
+    ///
+    /// The operator ruled on the fork: a `let` record carries its name id, rather
+    /// than the type channel being keyed by slot for locals and by name for
+    /// everything else. `parse.kel` already held the name at the emitting site and
+    /// the Option E transport had a full word free.
+    ///
+    /// # Why the pairing is positional, and why that is safe here
+    ///
+    /// The name record is emitted immediately before the `LetIn` it belongs to, by
+    /// the same fold step, so the slot is the very next record's payload. That is a
+    /// positional coupling and normally a smell — it is sound here because one fold
+    /// step emits exactly the pair and nothing can be interleaved between them.
+    /// **This test is what keeps that true**: it checks the slot and name of every
+    /// binding, so a reordering that broke the pairing would show up as a wrong
+    /// slot rather than as silence.
+    #[test]
+    fn every_let_binding_carries_its_slot_and_name() {
+        // Padded so a name id cannot coincide with a slot or a literal, which would
+        // let a wrong pairing pass by arithmetic accident.
+        let mut src = String::new();
+        for i in 0..12 {
+            src.push_str(&alloc::format!("fn pad{i}() -> Word {{ 0 }}\n"));
+        }
+        src.push_str("fn main() -> Word { let aardvark = 1; let barnacle = 2; aardvark }");
+        let (fns, names, ..) = parse_functions(&src);
+
+        let id = |want: &str| {
+            names
+                .iter()
+                .position(|n| n == want)
+                .unwrap_or_else(|| panic!("`{want}` is not interned")) as i64
+        };
+        let main = fns.last().expect("a function");
+        let mut got: Vec<(i64, i64)> = main.let_names.clone();
+        got.sort();
+
+        // Two bindings, distinct slots, and the NAMES the source spelled. The fold
+        // emits statements last to first, so the pairs are sorted rather than
+        // compared in source order.
+        assert_eq!(got.len(), 2, "expected two bindings, got {got:?}");
+        let mut want = alloc::vec![(got[0].0, id("aardvark")), (got[1].0, id("barnacle"))];
+        want.sort();
+        assert_eq!(
+            got,
+            want,
+            "the binding names did not arrive with their slots. Slots {:?}, names \
+             aardvark={} barnacle={}",
+            got.iter().map(|(s, _)| *s).collect::<alloc::vec::Vec<_>>(),
+            id("aardvark"),
+            id("barnacle")
+        );
+        assert_ne!(got[0].0, got[1].0, "two bindings share a frame slot");
+        assert!(
+            got.iter().all(|(s, _)| *s >= 0),
+            "a binding was never paired with its `LetIn`, so its slot is still the \
+             unpaired sentinel: {got:?}"
+        );
+    }
+
+    /// The driver's tag is the stage's, checked rather than assumed.
+    #[test]
+    fn the_let_name_tag_matches_the_stage() {
+        const STAGE: &str = include_str!("kel/parse.kel");
+        let declared: i64 = STAGE
+            .lines()
+            .map(str::trim)
+            .find(|l| l.starts_with("fn tag_let_name() -> Word {"))
+            .and_then(|l| l.split('{').nth(1))
+            .and_then(|t| t.split('}').next())
+            .and_then(|n| n.trim().parse().ok())
+            .expect("parse.kel declares `fn tag_let_name()`");
+        assert_eq!(
+            declared, PARSE_LET_NAME_TAG,
+            "the stage emits binding names under {declared} and the driver diverts \
+             {PARSE_LET_NAME_TAG}. A mismatch puts the record into the node stream, \
+             where `reconstruct.kel` would meet a tag it has no arm for."
+        );
     }
 }

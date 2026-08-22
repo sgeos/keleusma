@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-18 (session 48)
+**Date**: 2026-08-21 (session 50, autonomous loop, eight pull requests merged)
 
 ## Where things stand
 
@@ -18,16 +18,581 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 |---|---|
 | all twelve stages | `loop main(...)` coroutines |
 | emit path | 11 of 11 stages; every emit-side cap removed |
-| `lexer` into `parse` | FUSED, one-token window, byte-identical on four stages |
-| architecture | one binary, selectable phases — documented, unbuilt |
-| **`parse.kel` capacity diagnostics** | **four causes now NAMED; the rest still trap raw** |
-| **the last cap** | **GONE. `wire.kel` PARSES, 486 functions** |
-| **`parse` into `reconstruct`** | **FUSED at function granularity, 3.4x to 41.1x** |
-| shared-slot layouts | **nine copies collapsed to two definitions** |
-| `parse.kel` failure modes named | **THIRTEEN**; eleven counters guarded |
-| branch | `feat/derived-operand-types`; #164-#171 merged, at `0ce53287` |
+| **the shipping compiler vs the 95-case boundary** | **byte-identical 43 -> 76, differs 21 -> 11, faults 30 -> 7** |
+| **constant-pool tags** | **carried; all three (`Int`/`StaticStr`/`Bool`) witnessed** |
+| **struct/trait/impl declarations** | **skipped rather than faulting; 22 more cases byte-identical** |
+| the type checker's INPUT | the DECLARED rows come from the pipeline; the derived ones do not |
+| branch | `fix/selfhost-pool-tags`, cut from `v0.2.3`, rebased onto `b729a2a9` |
 
-## WHAT THIS INCREMENT DID
+## SESSION 50 — FIVE SILENT MISCOMPILES CLOSED, AND TWO DECISIONS THAT NEED YOU
+
+You asked for as much self-directed development as could be carried out without input, and left the
+machine running. Eight pull requests are merged; the queue on this line is empty.
+
+### What was wrong
+
+| defect | symptom | PR |
+|---|---|---|
+| the constant-pool tag was discarded | a string constant became the integer of its intern id | 212 |
+| struct/trait/impl declarations had no skip state | the driver faulted on 29 boundary cases | 212 |
+| the eager `and`/`or` ids were never seeded | **`a and b` compiled to `a`** | 213 |
+| op tag 53 had no flat-nested arm | a struct-typed tuple element faulted in kind decoding | 214 |
+| a nested array index parsed as an array LITERAL | **`a[0][1]` silently miscompiled** | 218 |
+
+The first four had **one cause**: the shipping driver and the copy of it in
+`tests/selfhost_codegen.rs` are two implementations of the same thing, and the construct-support
+boundary exercised only the copy. The fifth was a genuine parser gap.
+
+**Census over the 95 boundary cases, each baseline taken by stashing the change rather than
+assumed:** byte-identical **43 -> 90**, differs 21 -> 3, faults 30 -> 1. The shipping compiler now
+reaches the same verdict as the boundary on all 95, and the three that differ are already labelled.
+
+**Proportionality, which belongs beside every line of this.** `self_hosted_compile` cross-checks
+against the reference and refuses on divergence, so **none of it reached a user as a wrong
+module**. Exposure was to direct callers of the `self_host_compile*` entry points.
+
+### TWO DECISIONS, AND BOTH ARE ABOUT OWNERSHIP
+
+**1. `src/verify.rs` has no owner.** My handoff records it as the `v0.3.0` line's and read-only
+here; theirs records it as mine and read-only there. Each of us has been declining to touch it out
+of deference to the other. Their framing is better than mine: the risk is not the unrepaired
+defect, it is that a surface nobody believes they own is one where **either line might edit
+believing itself entitled**, and from each side the mistake reads as the other's record being
+wrong. A wrong owner is safer than no owner, because a wrong owner still gets caught.
+
+**2. Where the `Op::IsStruct` repair belongs** — load time in `verify.rs`, or compile time by
+folding the type test out when the pattern's own type is known regardless of the scrutinee's.
+
+`Op::IsStruct` is now witnessed: a struct pattern on an **un-annotated parameter**, missed by
+seventeen attempts across both lines because everyone tried to make a scrutinee's type DIFFER from
+the pattern's, which the type checker forbids. **Its witness verifies, receives a memory bound,
+loads, and then traps `InvalidBytecode`** — the class `verify()` exists to exclude. Of the three
+such refusals the VM carries, it is the only one a loaded program can reach.
+
+### What I did NOT do
+
+- **Did not touch `src/verify.rs`.** Pinned both ways instead, firing in the failing direction, so
+  whichever side repairs it gets a test naming the other.
+- **Did not merge the `v0.3.0` line's #217.** It is theirs.
+- **Did not add an opcode or change `BYTECODE_VERSION`.** Four of the five fixes are host-side; the
+  fifth changed `parse.kel`, which still self-compiles byte-identically.
+
+### What I got wrong
+
+- **The pipe ate an exit code — third instance in this project.** A backgrounded `cargo test | tail`
+  reported exit 0 while the suite had FAILED. Every gate since captures exit codes outside the pipe.
+- **My structural parity guard failed its own first mutation test**, because it compared sets of
+  names and the driver has two token feeds. Now counted.
+- **Two of my pull requests got no CI at all**, because `ci.yml` filters on the base branch and they
+  were stacked. "No checks reported" reads exactly like a slow start.
+- **I wrote `let mut` in a probe again.** Not in the language, recorded in the handoff, fourth time.
+- **I nearly reported that the two fallback opcodes fail the same way.** They do not — one is
+  refused at load, the other traps at run. Running both witnesses instead of one caught it.
+
+### Verification
+
+Every branch gated locally with exit codes captured outside the pipe, and every merge made on a
+positive `SUCCESS=22` rather than on the absence of a failure. The refreshed handoff's check block
+was executed, not merely written.
+
+## CLOSING SUMMARY — WHAT THIS SESSION DID AND WHAT IS WAITING ON YOU
+
+Handoff refreshed against `f091a668` with every value re-measured and its check block executed.
+
+### Four items are with you, and two of them change what the tree MEANS
+
+**1. The `ParsedFn` accessor decision — THREE accessors, not the six I first told you.** The
+duplicate compiler it sustains has cost four measured things, the worst being that the
+construct-support table describes a compiler that has **measurably diverged** from the shipping one.
+On a string literal the reference and the copy agree; the library emits `Int(3)` where they emit
+`StaticStr("hi")`. So the table reports `Ok` for a construct that ships broken.
+
+**2. PR #201** — one clause in the `CHANGELOG.md` V0.2.0 entry that contradicts another statement in
+the same release section. Left unmerged deliberately: editing historical release text is a judgment
+call, not a repair.
+
+**3. PR #210** — pins that two dispatched stage commands are driven by nothing. **Its guard is
+textual**, which I argued against all session, and it passes vacuously if those functions are
+renamed. That is in the pull request, not buried.
+
+**4. The dead `native@1c1ffb1e` gate record** — stalled 227 hours, no process, worktree clean, the
+`v0.3.0` line confirms nothing waits on it. Untouched because it is theirs.
+
+### What was done
+
+Five silent miscompiles found; four fixed, one specified. `Op::Len` witnessed and qualified. The
+support table now distinguishes a refusal from a divergence, which reclassified three of four
+"known gaps" into the more serious category. Order 1 item 3 reaches `let` bindings.
+
+### What I got wrong, since it is the more useful half
+
+- I told you **six** accessors. It is three.
+- I shipped a regression by changing **both sides of a differential comparison** in one increment, so
+  the oracle agreed with itself and stayed green.
+- I wrote a completion condition specifying a **command that does not exist**, and withdrew it.
+- My first nested-array fix **returned a worse answer than the bug** — a flat flag leaking across
+  siblings gave 64 where 32 was right.
+- I described the chained-index defect as truncation. It is a parse-level mis-categorisation two
+  stages upstream, and my note would have sent the next reader to the wrong file.
+- Three claims to the other line were plausible rather than checked; all three were corrected.
+
+### What I would not do next
+
+**Do not resume by sweeping for more miscompiles.** Yield fell from two in twenty probes, to one in
+twenty-two, to zero. The remaining items are costed honestly in the handoff, and `CONSTS` is larger
+than its own analysis suggests because commands 176/177 have never executed.
+
+## ORDER 1 ITEM 3 REACHES `let` BINDINGS
+
+A `let` bound to an integer or a boolean literal now produces a pipeline row, compared against the
+reference by name string. `the_pipeline_rows_are_the_declared_subset` told the next increment to fold
+its case into the agreement test rather than delete the pin; that is exactly what happened.
+
+**The trap was adjacency.** `LetIn` is binary and pops its right child then its left, so for
+`let a = 7; a` the stream is `[Literal(7), Local(0), LetIn(0)]` and the record immediately before the
+`LetIn` is the **continuation**, not the initialiser. Classification goes through the reconstructed
+forest, whose `lhs` is the initialiser, built by `reconstruct_via_kel` rather than a second walk
+written here. Joined by **slot**, not by fold position, so a reordering fails loudly.
+
+**A boolean `let` works only because of the boolean-literal fix earlier tonight** — `let b = true`
+yields tag 2 through the `Unit` node carrying the `PushImmediate` operand. Before that repair it was a
+`Local` and produced nothing. The two increments compose, and could not have been done in the other
+order.
+
+### I drew a call arm and then deleted it
+
+`let a = g()` is a form-1 alias whose row carries the target's **name id** in the tag position. The
+two extractions do not share an id space — the reference numbers by insertion order as it walks, the
+pipeline uses the lexer's intern table — **so a form-1 row cannot be compared by name string**, which
+is the discipline that keeps this comparison honest.
+
+The pipeline could produce that row today. Comparing it would mean comparing the numbering rather than
+the content, which is precisely the failure mode of the `Bool`/`bool` regression. **The arm came out
+rather than shipping a comparison that would pass while measuring the wrong thing.** Giving the row
+shape a target string is the right answer and is a slice of its own.
+
+### The pin is restated, not removed
+
+Two forms remain unreached **for different reasons**: a call by the row shape, an operator expression
+by the type channel needing the initialiser's node index. The pin now says which is which, so the next
+increment knows which problem it is solving.
+
+## THREE OF THE FOUR "KNOWN GAPS" WERE SILENT MISCOMPILES, AND THE TABLE COULD NOT SAY SO
+
+`Support::Gap` meant two things — a construct the stage **refuses loudly**, and one it compiles to
+**different bytes**. Those are not the same thing. A refusal tells the caller it is unsupported; a
+divergence is a wrong module with only the reference cross-check standing between it and an artifact.
+
+Splitting it reclassified three of the four known gaps into the more serious category, measured
+rather than assumed:
+
+| case | was | is |
+|---|---|---|
+| `eq/struct_tuple_of_impure_struct` | Gap | **Diverges** |
+| `eq/struct_field_array_of_tuple` | Gap | **Diverges** |
+| `scope/float_arith` | Gap | **Diverges** |
+| `scope/generic_fn` | Gap | Refuses |
+
+The table said "gap", and any reader takes that as "does not support". For three of four the truth
+was "silently miscompiles". **The boundary is now 86 Ok / 1 Refuses / 5 Diverges / 1 RefRejects.**
+
+### My first version of the split was wrong, and only the written expectations caught it
+
+I classified by calling the library's `self_host_compile`, and a dozen constructs this table has
+always called `Ok` came back `Refuses` — struct construction, struct field reads, most of the struct
+equality family.
+
+**The library's compiler and `tests/selfhost_codegen.rs`'s copy are different compilers**, and the
+byte-identity check uses the copy. So **the support table describes the test-local compiler, not the
+shipping one.**
+
+That duplicate has now mattered three times in one night: it blocks the token-residency work, it
+needed the boolean-literal slots seeded separately, and it turns out to be the subject of the support
+table. **Widening `ParsedFn`'s accessors so it can be deleted is the central structural fix**, not the
+convenience I described it as when I first put it to you.
+
+Twelve `Ok` entries disagreeing at once is unmistakable. The same mistake in a table that merely
+reported observed verdicts would have looked like a discovery — which is the argument for expected
+verdicts over observed ones.
+
+### Nested arrays: recorded, not fixed
+
+The outer composite is sized 16 where the reference computes 32, and a chained index truncates the
+body entirely — no `SetLocal`, no `GetLocal`, neither `GetIndex`. A flat array is byte-identical, so
+this is specific to nesting. Two defects inside the composite-layout machinery that the flat-byte
+representation makes load-bearing for memory bounds. **Not a change to make unattended**, per the
+brief's own rule, so it is a `Diverges` case with the measured symptom recorded.
+
+## THE ORACLE'S BLIND SPOT IS SYSTEMATIC, AND I STOPPED GUESSING AT GOALS TO PROVE IT
+
+After the boolean-literal miscompile I tested a hypothesis rather than picking another goal: **that
+bug was not special.** The differential oracle validates the self-hosted compiler against its own
+sources, so any construct those sources do not use is unverified by construction.
+
+Twenty small programs, both compilers, compared as **bytes**. **Two more silent mis-lowerings in the
+first twenty cases.**
+
+### The cast direction was inverted
+
+`fn main() -> Byte { 7 as Byte }` emitted `ByteToWord` where the reference emits `WordToByte`.
+`push_cast` said why in its own comment — "a `Byte as Word` widening" — and it could not do better,
+because `parse.kel` emitted the `Cast` node at the `as` token and then **discarded the target type
+name**. Both directions lowered identically and one was always wrong. A `let b = 7 as Byte; b as Word`
+chain got the first cast wrong and the second right, in one chunk.
+
+**The fix moves which token produces the record**, from `as` to the target type name. Nothing is
+emitted between them, so its position in the stream is unchanged. `Cast` is unary with an unused
+payload — exactly as `Unit` was for the booleans — so no new node kind and nothing for the three
+record decoders to learn. Payload 0 keeps the widening, so existing programs are byte-identical.
+
+**`parse.kel` already had `byte_id` for this.** Third construct in two nights whose information was
+present and thrown away.
+
+### The finding that generalises is the table's shape
+
+| family | cases |
+|---|---|
+| `eq` | **41** |
+| `bool` 10, `op` 8, `comp` 8, `scalar` 6, `prec` 5, `ctrl` 4, `tuple` 1 | 42 |
+| `cast` | **none** |
+
+Forty-one of eighty-eight cases are equality lowering. **A table that thorough in one area and absent
+in another describes how well one feature was tested, not where support ends.** Both miscompiles found
+tonight sit in families it did not cover.
+
+**Widening it family by family is the work I recommend next**, ahead of the goals I started with.
+Recorded in `../decisions/SELFHOST_CORPUS_BLIND_SPOT.md`.
+
+### One divergence recorded and deliberately NOT claimed as a defect
+
+A string literal yields `Int(intern_id)` where the reference yields `StaticStr`; the ops are identical
+and only the constant pool differs. `Text` appears in `CLAUDE.md` among the divergence classes the CLI
+refuses, so this may be a known limitation. **Check before reporting it as new** — that discipline
+cost you a ruling when I misreported the ECC plane.
+
+### Proportionality, stated every time
+
+`self_hosted_compile` cross-checks ops, constant pool and local count against the reference and
+refuses on divergence. Every defect here gives a **loud error** on the shipping path and a wrong
+module only to a direct caller that skips the check.
+
+## THE SELF-HOSTED COMPILER SILENTLY MIS-LOWERED `true` AND `false`
+
+Found while probing the record stream for an unrelated goal. Measured against the reference:
+
+```
+fn main() -> bool { true }         reference: PushImmediate(1), Return
+                                 self-hosted: GetLocal(0), Return
+```
+
+**A miscompile, not a refusal.** `true` reached the record stream as node kind 2, `Local`, slot 0, and
+sat in the intern table as an ordinary identifier. The value read was whatever occupied that slot.
+
+**The cause was already documented for a different pair of keywords.** The token space is full, which
+`parse.kel` records for the eager `and`/`or` — lexed as identifiers, recognised by interned id.
+`true` and `false` fall through the identical hole and were never given the identical treatment.
+
+**Your shipping path was never exposed, and I checked rather than assumed.** `self_hosted_compile`
+cross-checks every chunk's ops, constant pool and local count against the reference and refuses on
+divergence, so `--compiler self-hosted` gave a loud error and never a wrong artifact. The exposure was
+to direct callers that skip that check.
+
+### Why the oracle could not see it
+
+**No stage source uses a boolean literal in code.** The self-hosting claim rests on compiling those
+sources byte-identically, so the oracle covers only what they contain. The construct-support table did
+cover booleans — every case taking a bool PARAMETER, not one a literal — so it overstated support by
+omission. Four cases added; **the boundary is now 83 SOk / 4 Gap / 1 RefRejects**.
+
+This is the seventh instance of a suite whose coverage is a property of its case list, and the most
+consequential, because here the case list is the corpus the whole self-hosting claim rests on.
+
+### The fix adds no node kind
+
+`PushImmediate` already encodes `0 = Unit`, `1 = true`, `2 = false`, and `Unit` is a leaf whose payload
+was unused and always zero. One kind carries all three, so none of the three record decoders learns
+anything new — the hazard that failed eight tests the last time a kind was added. Existing programs
+still emit `PushImmediate(0)` and stay byte-identical.
+
+### Three self-corrections, all caught by machinery rather than by care
+
+- **The harness copy bit again.** The boundary test returned `Gap` for all four new cases while a
+  direct probe showed byte identity, because `tests/selfhost_codegen.rs` carries its own copy of the
+  driver and seeds the parser block itself. The same duplicate that blocks the token-residency work.
+- **My own must-fire guard fired on its own documentation** — the word `true` inside the comment
+  explaining the fix, plus sixty-nine occurrences in `codegen.kel`'s prose. It strips comments now. A
+  guard that fires on its own explanation measures the wrong thing as surely as one that cannot fire.
+- **An earlier figure I reported to you was produced by a broken instrument.** I claimed "zero of
+  twelve stage sources" from a grep that returned zero while the words were plainly present in
+  comments. The conclusion held — zero in CODE, re-verified with comments stripped — but the
+  measurement did not. A figure that happens to be right is not a measurement.
+
+### The margin pin moved for a reason I could name in advance
+
+669 → 671 names and 35,154 → 35,213 blob bytes. The two names are `true_id` and `false_id` exactly.
+Eighth move, second one predicted, and the first to cost two names rather than the diagnostics
+programme's usual three per cause — because this was a missing feature, not a named refusal.
+
+## STAGE TWO IS BLOCKED, AND THE BLOCKER IS ONE SMALL DECISION OF YOURS
+
+I stopped rather than work around it. The decision is worth more than the workaround.
+
+### How I established it
+
+Not by reasoning about call sites. I set `toks.packed` to 4,096 and ran the whole suite. Twelve
+failures in exactly two causes, and **not one of them in production code** — stage one had already
+moved every production entry point to the fused feed.
+
+### One cause is fixed and is in this increment
+
+`wire_kel_parses_now_that_the_chunk_table_admits_it` and
+`the_chunk_table_cap_is_refused_by_the_driver_and_not_by_the_stage` both have the **chunk table** as
+their subject. Their token feed is incidental to what they measure, and driving the collecting feed
+pinned the array at 24,836 and 14,334 tokens for unrelated reasons. Both now use the fused feed.
+
+### The other is the blocker, and the file that causes it already documents it
+
+`tests/selfhost_codegen.rs` carries its own `parse_functions` and its own `ParsedFn`. Its own comment
+says why that matters — that the duplication is the reason one defect had to be fixed in three
+places, and that the harness copy of `self_host_compile` does not receive fixes made to the shipping
+one. The harness seeds a whole token stream, so it pins the array at the largest stage source it
+parses.
+
+**The copy is not laziness.** `ParsedFn` has **zero public fields and four public accessors** —
+`category`, `param_count`, `guard_records`, `body_records`. The harness needs the name, parameter
+names and types, the return type and the let bindings, none of which are reachable. The duplicate is
+the only thing the public surface permits.
+
+**So the decision is yours and it is small: widen `ParsedFn`'s accessors so the harness can delete its
+copy.** That closes a documented three-places-to-fix hazard and unblocks the residency work together,
+which is a better trade than either alone. If you would rather not widen the surface, say so and I
+will propose an alternative, but I did not want to pick between them on your behalf.
+
+### What I refused to do
+
+Shrinking to clear the true floor means sizing above `parse.kel`'s 33,445 tokens, so 40,960 becomes
+about 34,816 — **a 15% saving that cuts headroom from 18% to 4%**. Paying churn to make the corpus's
+tightest bound tighter leaves us worse off than today. A partial win that degrades a margin is not a
+partial win, so I did not take it.
+
+### A figure of yours had drifted
+
+`parse.kel` is **33,445** tokens; the handoff records 32,907. Found incidentally. Every stage source
+is now measured by an instrument in the tree rather than quoted from prose. Its first version read
+the sources by relative path at runtime, which depends on the working directory a runner chooses; it
+is `include_str!` now, so a wrong path is a build error rather than a test that measures nothing.
+
+## THE TOKEN BOUND IS OFF THE PRODUCTION PATH, AND THE TEST FOR IT FOUND SOMETHING BIGGER
+
+### `-255` is split, and `-235` was already spent
+
+`mi_join_header` and `mi_join_chunks` both call `mi_join` first, which returns `-255` from a pool
+overflow, and then each returned `-255` itself for a missing header region. One call path, two
+meanings, **opposite remedies** — the stage is too small, against the caller built its input wrongly.
+
+The header checks are `-229`. The natural next number in the `-233`/`-234` missing-region family was
+`-235`, already spent on an unrelated bounds check, so taking it would have recreated the ambiguity.
+The free set was derived by reading every negative code out of the file. The test now asserts `-229`
+**and** asserts the refusal does not carry `-255`, so a reverted split fails by name.
+
+### Stage one: four entry points moved, and nothing in production had been using fusion
+
+`self_host_compile`, `self_host_compile_full`, `self_host_compile_scratch` — the command-line backend
+— and `binding_rows_from_pipeline` now use the fused feed. The fused feed existed, was proven, and was
+unused.
+
+**The cap assertion sat above the branch**, so the fused feed carried a bound meaningless for it.
+Gating it took the 40,960-token limit off every compile a user can start without touching an array.
+
+**The collecting feed is retained on purpose.** It is the fusion oracle. Deleting it would leave
+fusion checked only against the Rust reference, which is a weaker claim about the feed specifically —
+the reference agrees with a whole-program compile, not with a token-delivery order.
+
+### The finding, which is worth more than the test I withdrew
+
+A source past the cap, accepted fused and refused collecting, is the obvious pin. **It ran for over
+ten minutes.** So I measured instead of waiting it out.
+
+```
+tokens=459   fused=1606ms   collecting=1969ms
+tokens=909   fused=2491ms   collecting=2850ms
+tokens=1809  fused=4455ms   collecting=4774ms
+tokens=3609  fused=15062ms  collecting=15315ms
+```
+
+Doubling 1,809 to 3,609 tokens multiplies the time by **3.4**. Superlinear, extrapolating to roughly
+half an hour at 41,000 tokens.
+
+**Both feeds show it, within a few percent of each other.** That localises the cost to the shared
+record handling and driver rather than to token delivery. Two consequences:
+
+- **Stage one is not a regression.** Fused is slightly faster at every size.
+- **Stage two removes the MEMORY bound, and the bound a large input meets first is now TIME.** That
+  is a separate defect in a shared code path, and it is yours to prioritise rather than mine to fix
+  inside this increment.
+
+### Two judgment calls I want on the record
+
+**I refused a timing assertion.** The instrument asserts only that the two feeds agree on the function
+count. A wall-clock threshold is a flake waiting for a loaded machine, and a flaky gate teaches people
+to re-run rather than to read.
+
+**I nearly shipped a guard I had already argued against.** My first instinct for keeping production
+fused was a test grepping `src/` for call sites — the textual-guard shape whose scope keeps turning
+out narrower than its class, exactly like the no-copies guard that walked two directories and missed a
+live fifth copy. The behavioural version was right and unaffordable, so what ships is the gating plus
+this record, with the gap named rather than papered over.
+
+## THREE RULED REFUSALS IMPLEMENTED, AND ONE OF THEM WAS WORSE THAN A MISSING NUMBER
+
+Batched on your approval. The trade is recorded rather than assumed: one gate cycle instead of three,
+against a bisect that now lands on all three at once and a revert that takes all three.
+
+### The nesting cap was not the finding. The silent drop was.
+
+`verify_depth.kel`'s `push_frame` read `if df.sp > 127 { df.sp = df.sp; }` — a no-op branch,
+documented as a deliberate drop. **In a verifier that is not defensible.** A dropped push means the
+nested region is never walked, the parent folds in whatever `child_*` the PREVIOUS delivery left
+behind, and `deliver` later decrements `sp` for a frame that was never pushed. The pass then
+publishes a verdict over a program it did not traverse, and that verdict can be wrong in **either**
+direction — it can miss a real underflow and it can invent one.
+
+**It is not a hole in anything shipped, and I checked before saying anything.** The stage is reached
+only through `depth_reject_chunk_via_kel` and its composition; it is not wired into
+`self_hosted_compile`, and the shipping verifier is still the Rust `src/verify.rs`. This is a latent
+defect in a stage being validated toward Order 2.
+
+**128 was never a declared cap.** It was an array size with a silent-drop guard, which is what the
+`v0.3.0` line warned against. Your 32 replaces a silent wrong answer with default-deny.
+
+**Frames are nesting plus one**, because `run` pushes a root frame before any nested construct. The
+arrays are sized 33 and the guard admits exactly 32 levels. Pinned from both sides and
+mutation-verified — lowering the cap to 31 fails the accepting half by name.
+
+**The verdict alone would have repeated the shared-message defect**, so `dv` gains `out_cause`
+(appended) and the driver gains `DepthVerdict` with `Accept`, `Underflow` and `OverCap`. Only the
+cause says whether raising the cap would change the answer.
+
+### `-255` is ambiguous, and the test is sound by the case rather than by the code
+
+It means two things in one call path. `mi_join_header` calls `mi_join`, which returns `-255` from a
+pool overflow, and then returns `-255` itself for a missing header region. The test reaches the second
+because the first cannot fire for its input, and a control proves the identical input joins cleanly
+with the region restored. The test says all of this in its own doc comment.
+
+**Its neighbours use `-233` and `-234` for exactly this reason**, and the comment above
+`emit_name_records_from_nout` states the principle outright. The header check is the odd one out.
+**Splitting it is one line and I held it for you**, because an error code is an observable.
+
+### The reservations are free, and the collision that nearly made them look done is not
+
+`CRYPTO_SIGNATURES`, `PROVENANCE` and `AUTH_TIER` at `0x0024..0x0026`, checked against every live kind
+and against the parity-plane convention, pinned as unemitted with a vacuity guard. `AUTH_TIER` is a
+region rather than a header field deliberately: a new header field changes every artifact's bytes and
+a region changes nothing until emitted.
+
+### Risks, stated because you asked for them in the pull request
+
+- **Batching.** A bisect lands on all three; a revert takes all three.
+- **The cap narrows the pass from 128 to 32.** That is the intent, not a side effect. The corpus is
+  unaffected, and a chunk nesting 33 to 128 that the pass previously walked is now refused.
+- **The frame arrays shrank from 128 to 33**, which changes `verify_depth.kel`'s private data size.
+- **`-255` remains ambiguous.** The test is sound; the code is not yet.
+
+### Two probe errors of my own, both caught by the compiler rather than by care
+
+I reached for `Op::PushBool` and `Op::PushInt`, which do not exist — the encoding is `PushImmediate`
+with a documented operand table. And my reserved-kind test parsed a framed module as a wire container
+and got `BadMagic`; the fix was `parse_wire_sections`, the public accessor, rather than rebuilding a
+`WireAuxBody` in the test, which would have been a second encoding free to drift from the one under
+test.
+
+## THE LIVE DECISION LIST IS EMPTY, AND I ASKED TWO OF THE QUESTIONS WRONG
+
+Thirteen rulings recorded. The three standing forks are answered and so are ten further items; the
+full record is in `HANDOFF.md` under "Open, held by the operator". This increment changes four
+documents and nothing executable.
+
+### Two of your rulings were taken against stale information I gave you
+
+**The ECC plane is already exercised end to end.** You ruled that it seemed easy to add a test. It
+exists. `SchemaBuilder::with_ecc` is at `src/wire_schema.rs:875`, `finish` calls `protect_all`, and
+eight tests drive it on real compiler output across `tests/secded_end_to_end.rs` and
+`tests/ecc_signature_ordering.rs`. Every corruption case is paired with the same corruption on an
+unprotected artifact, asserted undetected, so a caught flip cannot be credited to the CRC. I read the
+decision document's status field instead of the tree, and the document was stale. It is corrected in
+place.
+
+**Your token-array instinct was right, and better than my framing.** You said that ideally the tokens
+stream so no large buffer is needed. They already do. Every `parse.kel` cursor move is plus or minus
+one, `base` and `at` exist so a host slides the window with no protocol, and the fused driver slides
+it at `FUSED_WINDOW = 8` where three would suffice. **What is left is the declaration, not the feed**
+— `packed: [Word; 40960]` reserves the slots regardless. So shrinking the array is the lever, and it
+REMOVES the input bound rather than widening it. Your ruling to leave the number alone stands and is
+unaffected. Filed as its own increment.
+
+**The common cause is this line's recurring defect in its sharpest form.** I derived a status from a
+document rather than from the system. Previous instances cost a measurement. This one cost two of
+your rulings, which is the scarcer resource.
+
+### What was done here
+
+- `V0_5_0_KELEUSMA_HOST.md` line 16, the probe-controller example, scrubbed. It was the only
+  occurrence in any tracked document.
+- `CHANGELOG.md` push order corrected. **The handoff cited line 340; it is at 571.** Verified against
+  `src/vm.rs:6442`, which pushes low then high then flag — not against `GRAMMAR.md`, because
+  correcting published text on a second document's authority is how the wrong one wins.
+- `PIPELINE_THEN_MONOLITH.md` records the file-operand ruling and marks the sidecar fingerprint
+  mandatory rather than conditional.
+- `WIRE_FORMAT_V2_WORD_ORIENTED.md` item 5 corrected, with the staleness recorded rather than erased.
+
+### What is authorised and NOT yet implemented
+
+The file operand, a declared verifier nesting cap of **32**, the signature and provenance region
+reservations with `AUTH_TIER`, and the `-255` negative test. Each is a separate increment.
+
+**One trap recorded next to the reservation work**: `kind::SIGNATURES` at `0x0016` is per-chunk TYPE
+descriptors, not cryptography, and the cryptographic signature lives in the framing header. A reader
+checking whether a signature region is reserved will find that constant and wrongly stop.
+
+## WHAT THE PIPELINE-BINDINGS INCREMENT DID
+
+**Order 1 item 3, first slice.** The type checker's DECLARED binding rows -- a function's declared
+return type and each parameter's declared type -- now come from `parse_functions`, the self-hosted
+`lexer` into `parse` pipeline, through `binding_rows_from_pipeline`. They are compared against the
+reference-AST extraction by NAME STRING rather than by id, because the two live in different
+identifier spaces and comparing ids would compare the numbering rather than the content.
+
+**Nothing was encoded to make this work.** The parameter's name was ALREADY in the record stream --
+the header emits `4 + name * 64` and the driver discarded the payload because a count was all any
+consumer needed -- and the `let` name is the record added in the previous increment under your
+ruling.
+
+### THE COMPARISON FOUND A DEFECT, AND IT WAS IN MY REFERENCE-SIDE EXTRACTION
+
+**`Bool` does not parse as a `Prim`.** The reference parser yields `Named("Bool")`, so the harness's
+`TypeExpr::Prim` match dropped every `Bool` annotation. `fn f(b: Bool) -> Word { 1 + b }` was
+REJECTED by the reference compiler and ACCEPTED by the stage, because `b` had no binding row at all.
+The pipeline extraction keys on the type NAME and reached a binding the AST walk did not. A second
+extraction found a hole in the first, which is an argument for differential INPUTS and not only
+differential outputs.
+
+### What this slice does NOT establish
+
+**Only the declared bindings.** A `let` bound to a literal or a call still produces no pipeline row:
+the initialiser's shape is in the body record stream, so reading it means walking the forest rather
+than the header. `the_pipeline_rows_are_the_declared_subset` pins that boundary from both sides --
+it asserts the reference DOES produce the row, so it is non-vacuous -- and tells the next increment
+to fold the case in rather than delete the pin.
+
+### Recovered work, re-measured rather than trusted
+
+These edits predate a laptop crash and were never committed. Verified on the recovered tree: 15/15
+`selfhost_typecheck`, `fmt --check` 0, `clippy -D warnings` 0, and the four-entry feature-matrix
+`cargo check --tests` sweep 0 on each. **The first verification attempt reported `FMT_EXIT=0` from a
+`head` rather than from `cargo fmt`** -- the seventh constructed status this line has recorded.
+
+## WHAT THE PREVIOUS INCREMENT DID (session 48)
 
 `parse.kel` reported its capacity limits as raw virtual-machine traps. Measured by feeding the
 stage malformed and oversized sources, not by reading it:
@@ -225,6 +790,25 @@ into dependency order, so one pass proves the chain. The cap is insurance for ou
 
 **The new edge is pinned**: a `let` bound to a FIELD READ or an INDEX is still unreached, and the
 test says so as a measurement rather than an aspiration.
+
+## IDENTITY NOW TRAVELS WITH THE STRUCTURE (your fork, option 1)
+
+Order 1 said the type checker's input should come from `parse.kel` plus `reconstruct.kel` because
+"structure is available". **Measured, that was half true**: a `Local` record carries a SLOT and no
+body record mentioned a name, while the type channel is keyed by interned NAMES. You ruled that a
+`let` record should carry its name id.
+
+Built. The statement table emits in the PACKED form (kinds capped at 63), so the name goes out on the
+migrated path with tag 90 -- a full word, no packing, no radix. The driver pairs it with the
+following `LetIn` and diverts it, leaving the node stream unchanged.
+
+**I claimed the blast radius before measuring it and was wrong.** I said nothing else was touched,
+having run one suite; eight tests then failed because a THIRD decoder -- the Rust reconstruction that
+checks `reconstruct.kel` -- panicked on kind 90. Three decoders now consume the record stream, and
+only the TAG is shared, which is correct: their skip sets legitimately differ.
+
+**The margin pin moved a seventh time, and this is the first move predicted in advance**: 669 names,
+35,154 blob bytes.
 
 ## Next intended increment
 

@@ -108,9 +108,17 @@ Three ways out, and the choice decides whether the monolith is one command or ne
 | **Accept a file operand**, keeping standard input as the default | Fusion works by reopening; standard input remains for cut pipelines. Matches every compiler driver, so it surprises nobody |
 | **Always split** at the pre-pass | No re-read and no buffering. The monolith is two commands |
 
-**Unresolved.** The middle option looks best and costs least, but it is the operator's call. Note that
-`--chunk` can only be OPTIONAL -- supplied if present, derived if absent -- under the first two: with
-pure standard input there is nothing to derive it from a second time.
+**RESOLVED 2026-08-19: the middle option.** Operator ruling -- **accept a file operand, keeping
+standard input as the default.** The monolith is therefore ONE command, and `--chunk` is OPTIONAL:
+supplied if present, derived if absent. That derivation is available only because the ruling admits a
+reopenable input; under pure standard input there would be nothing to derive it from a second time.
+
+**The fingerprint below is now mandatory rather than conditional.** It was recorded as required
+whichever way the fork went, and the fork has gone the way that keeps a sidecar reachable, so it is
+part of implementing this ruling rather than a separate concern.
+
+**NOT YET IMPLEMENTED.** This records the decision, not the code. No driver takes a file operand
+today.
 
 ### REQUIRED WHICHEVER WAY THAT GOES: fingerprint the sidecar
 

@@ -864,10 +864,20 @@ fn push_andor(p: Word) -> Word {
     push_visit(ast.lhs[p])
 }
 
-// Cast (kind 26): a `Byte as Word` widening. Emit the operand ops then ByteToWord.
-// lhs = operand.
+// Cast (kind 26): `<operand> as <target>`. `args` is the target -- 1 for `Byte`,
+// 0 for the widening to `Word` -- and lhs is the operand.
+//
+// **THIS EMITTED `ByteToWord` UNCONDITIONALLY**, on the stated assumption that the
+// stages only ever cast `Byte as Word`. True of the stage corpus and false of the
+// language: `7 as Byte` lowered to a widening, which is a SILENT MISCOMPILE rather
+// than a refusal. The direction was not available here because `parse.kel`
+// discarded the target type name; it now carries it in the payload.
 fn push_cast(p: Word) -> Word {
-    push_emit(wire.bytetoword);
+    if ast.args[p] == 1 {
+        push_emit(wire.wordtobyte);
+    } else {
+        push_emit(wire.bytetoword);
+    }
     push_visit(ast.lhs[p])
 }
 
@@ -921,9 +931,14 @@ fn push_index_assign(p: Word) -> Word {
     push_visit(ast.lhs[p])
 }
 
-// Unit (kind 20): the value of a statement-only block, PushImmediate(0).
+// Unit (kind 20): `PushImmediate(args)`. The opcode's own encoding is `0 = Unit`,
+// `1 = true`, `2 = false`, so ONE node kind carries all three and the payload is the
+// operand verbatim.
+//
+// The payload was unused and always zero until boolean literals reached the stage,
+// so every existing program still emits `PushImmediate(0)` and is byte-identical.
 fn push_unit(p: Word) -> Word {
-    push_emit(wire.pushimm)
+    push_emit(wire.pushimm + ast.args[p] * wire.radix)
 }
 
 // ExprStmtIn (kind 21): `<expr>; <cont>`. Emit the expression ops, then PopN(1) to

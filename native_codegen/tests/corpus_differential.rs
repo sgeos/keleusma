@@ -78,7 +78,7 @@ thread_local! {
     /// declares -- `Module` carries `native_names` and `native_return_shapes`
     /// and no parameter types at all.
     static REF_POSITIONS: RefCell<std::collections::BTreeSet<(usize, usize)>> =
-        RefCell::new(std::collections::BTreeSet::new());
+        const { RefCell::new(std::collections::BTreeSet::new()) };
 }
 
 fn take_log() -> Vec<String> {
@@ -830,15 +830,18 @@ fn run_vm(
         // An externally-called native must be registered externally, or the
         // machine refuses the call. The attestation is the invocation-count
         // bound; this harness drives bounded programs and states one.
-        if external_indices.contains(&idx) {
-            if let Some(f) = external_stub_for(idx) {
-                vm.register_external_native(&n, f, 64);
-                continue;
-            }
-            // Past the family's end. Fall through to the verified registration,
-            // which the machine will refuse by name -- visible rather than
-            // silently bound to the wrong function.
+        if external_indices.contains(&idx)
+            && let Some(f) = external_stub_for(idx)
+        {
+            vm.register_external_native(&n, f, 64);
+            continue;
         }
+        // Reached when the native is NOT externally called, and also when it is
+        // but the index is past the stub family's end. The second case falls
+        // through to the verified registration, which the machine refuses BY
+        // NAME -- visible rather than silently bound to the wrong function.
+        // (These were two nested conditions until the collapse; the comment now
+        // has to cover both arrivals, because it sits on the shared path.)
 
         // **A native whose RECORDED return shape is a composite is stubbed as
         // one.** `register_native_closure` cannot: it has no arena, so it can

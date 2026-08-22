@@ -113,6 +113,59 @@ pub mod kind {
     /// with two shapes and no names caught it. Independent regions carry both
     /// lengths, which is what fidelity requires.
     pub const NATIVE_RETURNS: u16 = 0x0023;
+
+    // --- RESERVED, AND DELIBERATELY NOT EMITTED -------------------------------
+    //
+    // Operator ruling, 2026-08-19: reserve the authenticity regions and the
+    // assurance-tier field now. Reserving costs nothing and is awkward to
+    // retrofit, because a kind number that has been used for one thing cannot
+    // later mean another without a version break.
+    //
+    // **NOTHING WRITES THESE.** No encoder declares them and no reader resolves
+    // them, which `the_reserved_kinds_are_not_emitted_by_any_encoder` pins from
+    // the firing direction so the day that changes, the test says so.
+    //
+    // **THE NAME COLLISION THAT MAKES THIS EASY TO MIS-CLOSE.** [`SIGNATURES`]
+    // above, at `0x0016`, is PER-CHUNK TYPE DESCRIPTORS and has nothing to do
+    // with cryptography. The cryptographic signature an artifact carries today
+    // lives in the FRAMING HEADER, not in a region. A reader asking whether a
+    // signature region is reserved will find that constant and wrongly stop.
+
+    /// **Reserved, unemitted.** Cryptographic signatures over the artifact,
+    /// carrying an explicit algorithm identifier and room for several signatures
+    /// so a k-of-n policy across independent primitives is expressible.
+    ///
+    /// Algorithm diversity is the hedge against any single primitive being broken
+    /// later, which is the point of reserving room for more than one.
+    ///
+    /// **Distinct from [`SIGNATURES`]**, which is per-chunk type descriptors.
+    pub const CRYPTO_SIGNATURES: u16 = 0x0024;
+
+    /// **Reserved, unemitted.** A hash chain, so an artifact's consistency with a
+    /// known root can be checked LOCALLY, without contacting an external
+    /// authority.
+    ///
+    /// The locality is the requirement, not an optimisation: the format targets
+    /// carriers with no authority to consult and no retransmission.
+    pub const PROVENANCE: u16 = 0x0025;
+
+    /// **Reserved, unemitted.** The assurance level an artifact declares it
+    /// requires, so a consumer can refuse an under-authenticated change rather
+    /// than having to infer intent.
+    ///
+    /// Held as a region rather than as a header field deliberately. A new header
+    /// field changes the header record's encoding and every artifact's bytes; a
+    /// region is additive through the directory and changes nothing until it is
+    /// emitted.
+    pub const AUTH_TIER: u16 = 0x0026;
+
+    /// The reserved kinds, for tests that assert nothing emits them and that they
+    /// collide with neither a live kind nor the parity-plane convention.
+    ///
+    /// Derived from one place so a fourth reservation cannot be added without
+    /// appearing here, which is the failure this line has recorded against five
+    /// hand-written sets.
+    pub const RESERVED: [u16; 3] = [CRYPTO_SIGNATURES, PROVENANCE, AUTH_TIER];
 }
 
 /// Block-type tags. Numbered from one so a zeroed record is invalid.

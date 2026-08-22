@@ -2064,6 +2064,8 @@ const BR_P_BOOL_ID: usize = keleusma::selfhost_host::BR_P_BOOL_ID;
 // The eager `and`/`or` ids, appended after `bool_id` (see the `toks` block in parse.kel).
 const BR_P_AND_ID: usize = keleusma::selfhost_host::BR_P_AND_ID;
 const BR_P_OR_ID: usize = keleusma::selfhost_host::BR_P_OR_ID;
+const BR_P_TRUE_ID: usize = keleusma::selfhost_host::BR_P_TRUE_ID;
+const BR_P_FALSE_ID: usize = keleusma::selfhost_host::BR_P_FALSE_ID;
 
 fn br_shared_word(vm: &Vm<'_, '_>, buf: &[u8], slot: usize) -> i64 {
     match vm.get_shared(buf, slot).expect("get_shared") {
@@ -2175,6 +2177,14 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
     vm.set_shared(&mut shared, BR_P_BOOL_ID, Value::Int(id_of("Bool")))
         .unwrap();
     vm.set_shared(&mut shared, BR_P_AND_ID, Value::Int(id_of("and")))
+        .unwrap();
+    // THE BOOLEAN LITERAL IDS. This harness is a COPY of the shipping driver, so
+    // a slot added there is not added here, and the boundary test drives THIS one.
+    // Omitting them makes `true` resolve as a variable reference again — the exact
+    // miscompile the driver-side fix removes.
+    vm.set_shared(&mut shared, BR_P_TRUE_ID, Value::Int(id_of("true")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_FALSE_ID, Value::Int(id_of("false")))
         .unwrap();
     vm.set_shared(&mut shared, BR_P_OR_ID, Value::Int(id_of("or")))
         .unwrap();
@@ -2293,6 +2303,22 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
 /// yield kinds; a record of any other kind is rejected until a later increment adds
 /// it (the multiheaded dispatch and its head_parts remain).
 fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
+    // THE BINDING-NAME RECORD IS NOT A NODE, and this walker is the third consumer
+    // of the record stream that has to know it.
+    //
+    // `parse.kel` emits it before each `LetIn` so a type-check extraction can join a
+    // forest of SLOTS to a binding table of NAMES. The main driver diverts it into
+    // `ParsedFn::let_names`; the parse harness skips it; and this one, which
+    // reconstructs bodies in Rust to check `reconstruct.kel` against, must drop it
+    // before the walk. **Three decoders now share the protocol and only the tag
+    // itself is shared** -- the skip sets legitimately differ, since this walker
+    // CONSUMES kind 35 where the parse harness skips it.
+    let records: Vec<(i64, i64)> = records
+        .iter()
+        .copied()
+        .filter(|(k, _)| *k != keleusma::selfhost_host::PARSE_LET_NAME_TAG)
+        .collect();
+    let records: &[(i64, i64)] = &records;
     let mut nodes: Vec<Node> = Vec::new();
     let mut call_args: Vec<i64> = Vec::new();
     let mut limit_parts: Vec<i64> = Vec::new();
@@ -4045,6 +4071,14 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, V
     vm.set_shared(&mut shared, BR_P_BOOL_ID, Value::Int(id_of("Bool")))
         .unwrap();
     vm.set_shared(&mut shared, BR_P_AND_ID, Value::Int(id_of("and")))
+        .unwrap();
+    // THE BOOLEAN LITERAL IDS. This harness is a COPY of the shipping driver, so
+    // a slot added there is not added here, and the boundary test drives THIS one.
+    // Omitting them makes `true` resolve as a variable reference again — the exact
+    // miscompile the driver-side fix removes.
+    vm.set_shared(&mut shared, BR_P_TRUE_ID, Value::Int(id_of("true")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_FALSE_ID, Value::Int(id_of("false")))
         .unwrap();
     vm.set_shared(&mut shared, BR_P_OR_ID, Value::Int(id_of("or")))
         .unwrap();
@@ -7895,21 +7929,150 @@ fn self_host_compiles_eager_and_or() {
 // Keep this table in sync as the self-hosted subset grows toward full self-hosting.
 // ============================================================================
 
+/// How the self-hosted compiler handles a construct.
+///
+/// **`Gap` USED TO MEAN TWO THINGS AND THEY ARE NOT THE SAME THING.** A construct
+/// the stage REFUSES loudly is an honest gap: the caller learns it is unsupported.
+/// A construct the stage compiles to DIFFERENT BYTES is a silent miscompile, and
+/// only a cross-check stands between it and a wrong artifact.
+///
+/// Both were `Gap`, so the table could not tell them apart — the same
+/// shared-message defect this tree has recorded against four guards in the stage
+/// sources, here in the instrument that measures them. Three silent miscompiles
+/// were found by hand on 2026-08-20 precisely because the table could not report
+/// the distinction.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Support {
+    /// Byte-identical to the reference.
     Ok,
-    Gap,
+    /// The stage refuses to compile it, loudly. An honest gap.
+    Refuses,
+    /// The stage compiles it and produces DIFFERENT BYTES. A silent miscompile,
+    /// caught on the shipping path only by the reference cross-check.
+    Diverges,
+    /// The reference compiler itself rejects the source.
     RefRejects,
 }
 
+/// **THE SHIPPING COMPILER IS MEASURED AGAINST THE SAME TABLE, AND IT NOW AGREES.**
+///
+/// # Why this test exists
+///
+/// [`self_hosted_construct_support_boundary`] classifies THIS FILE's copy of the driver. The
+/// crate ships a different one, and for as long as only the copy was measured, four separate
+/// silent defects in the shipping compiler were invisible to the project's own record of what
+/// self-hosting supports:
+///
+/// | defect | symptom |
+/// |---|---|
+/// | the constant-pool tag was discarded | a string constant became the integer of its intern id |
+/// | struct/trait/impl declarations had no skip state | the driver faulted on 29 cases |
+/// | the eager `and`/`or` ids were never seeded | `a and b` compiled to `a` |
+/// | tag 53 had no flat-nested arm | a struct-typed tuple element faulted in kind decoding |
+///
+/// Every one was something the copy handled and the shipping driver did not. Measured over this
+/// table, the shipping compiler went from 43 byte-identical to 88 of 95.
+///
+/// # What it pins, which is stronger than a count
+///
+/// Not "N cases pass" but **the two compilers reach the same verdict on every case**. A count can
+/// be satisfied by one construct regressing while another is repaired; per-case agreement cannot.
+/// The day the driver and the copy drift again, this names the construct.
+///
+/// # This does not make the duplicate safe, it makes the drift visible
+///
+/// The copy is still a second implementation and this test is a smoke alarm, not a repair. The
+/// accessor decision that would let it be deleted is still open.
+#[cfg(feature = "self-host")]
 #[test]
-fn self_hosted_construct_support_boundary() {
-    use Support::{Gap, Ok as SOk, RefRejects};
+fn the_shipping_compiler_matches_the_boundary_it_is_recorded_against() {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
-    // (construct label, expected support, source). Labels are stable identifiers for the
-    // boundary; keep them descriptive. Grouped by category.
-    let cases: &[(&str, Support, &str)] = &[
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let mut mismatches: Vec<String> = Vec::new();
+    let mut reached = [0usize; 4];
+    for (label, expected, src) in boundary_cases() {
+        let actual = if catch_unwind(AssertUnwindSafe(|| compile_src(src))).is_err() {
+            Support::RefRejects
+        } else {
+            // The SHIPPING entry point, which is the whole point of this test.
+            match catch_unwind(AssertUnwindSafe(|| {
+                keleusma::selfhost::self_host_compile(src)
+            })) {
+                Err(_) => Support::Refuses,
+                Ok(lib) => {
+                    let reference = compile_src(src);
+                    // Ops, constant pool and local count -- the same three fields
+                    // `self_hosted_compile` cross-checks before it will emit a module.
+                    let same = lib.chunks.len() == reference.chunks.len()
+                        && lib
+                            .chunks
+                            .iter()
+                            .zip(reference.chunks.iter())
+                            .all(|(a, b)| {
+                                a.name == b.name
+                                    && a.ops == b.ops
+                                    && a.constants == b.constants
+                                    && a.local_count == b.local_count
+                            });
+                    if same { Support::Ok } else { Support::Diverges }
+                }
+            }
+        };
+        reached[match actual {
+            Support::Ok => 0,
+            Support::Refuses => 1,
+            Support::Diverges => 2,
+            Support::RefRejects => 3,
+        }] += 1;
+        if actual != *expected {
+            mismatches.push(format!(
+                "{label}: boundary records {expected:?}, shipping compiler gives {actual:?}"
+            ));
+        }
+    }
+    std::panic::set_hook(prev);
+
+    assert!(
+        mismatches.is_empty(),
+        "the SHIPPING compiler no longer matches the boundary this table records. Each line is a \
+         construct where the crate's own record of self-hosting support is wrong about what \
+         ships. If a case improved, update its verdict here; if it regressed, the driver and \
+         `tests/selfhost_codegen.rs`'s copy of it have drifted again:\n  {}",
+        mismatches.join("\n  ")
+    );
+
+    // Non-vacuity, in both directions. A table of one case, or one where every verdict were the
+    // same, would satisfy the loop above while establishing nothing.
+    assert!(
+        boundary_cases().len() >= 90,
+        "the case table shrank to {}; this test's reach is a property of the table",
+        boundary_cases().len()
+    );
+    assert!(
+        reached[0] >= 80,
+        "only {} cases are byte-identical through the shipping compiler; this test was written \
+         when 88 of 95 were",
+        reached[0]
+    );
+    assert!(
+        reached.iter().filter(|&&n| n > 0).count() >= 3,
+        "the shipping compiler reached fewer than three distinct verdicts, so the classifier is \
+         not discriminating"
+    );
+}
+
+/// The construct-support case table, hoisted so **two** compilers can be measured against it.
+///
+/// It lived inside [`self_hosted_construct_support_boundary`] and therefore described only the
+/// compiler that test classifies, which is THIS FILE's copy of the driver. Four silent
+/// miscompiles in the shipping compiler sat unreported behind that, because nothing ever ran the
+/// table against `keleusma::selfhost::self_host_compile`. Copying the table into a second file
+/// would have been the nine-copies defect again, so it is hoisted instead.
+fn boundary_cases() -> &'static [(&'static str, Support, &'static str)] {
+    use Support::{Diverges, Ok as SOk, RefRejects, Refuses};
+    &[
         // --- scalars -------------------------------------------------------------
         (
             "scalar/word_arith",
@@ -7959,6 +8122,133 @@ fn self_hosted_construct_support_boundary() {
         ("op/bnot_word", SOk, "fn f(a: Word) -> Word { bnot a }"),
         ("op/bnot_byte", SOk, "fn f(a: Byte) -> Byte { bnot a }"),
         // --- booleans ------------------------------------------------------------
+        // --- string literals, measured 2026-08-20 -------------------------------
+        //
+        // The ops match; the CONSTANT POOL does not. The reference emits
+        // `StaticStr("hi")` and the stage emits `Int(3)`, the lexer's intern id as
+        // a plain integer, because the string path reaches `intern_int` rather than
+        // `intern_str`.
+        //
+        // `CLAUDE.md` lists `Text` among the divergence classes the command-line
+        // path refuses, so this is plausibly a known exclusion rather than a new
+        // defect — but a `StaticStr` literal is ADJACENT to that class, not plainly
+        // the same thing, and the table had no string case either way. Recorded as
+        // measured rather than argued.
+        //
+        // **AN OPS-ONLY COMPARISON WOULD HAVE CALLED THIS CLEAN.** It is why the
+        // sweep that found it compares bytes.
+        // **`Ok` HERE MEANS THIS FILE'S COMPILER, AND THE LIBRARY'S DIVERGES.**
+        //
+        // Measured: the reference and this file's `self_host_compile` both emit
+        // `StaticStr("hi")`; `keleusma::selfhost::self_host_compile` emits
+        // `Int(3)`, the lexer's intern id as a plain integer. Identical ops, a
+        // different constant pool.
+        //
+        // The `Ok` is honest about what this table measures and MISLEADING about
+        // the shipping compiler, which is the whole problem with the table
+        // measuring a copy. Pinned separately and explicitly by
+        // `the_two_self_hosted_compilers_disagree_on_a_string_literal`.
+        (
+            "literal/string",
+            SOk,
+            "fn f() -> Word { let s = \"hi\"; 1 }",
+        ),
+        // --- nested composites, measured 2026-08-20 and NOT yet fixed ------------
+        //
+        // **TWO DEFECTS, AND ONLY ONE IS CLOSED.** The literal's outer composite used
+        // to be sized 16 where the reference computes 32 -- two 16-byte inner arrays
+        // -- because the element size was not propagated: the close handled a struct
+        // element and otherwise assumed `Word`, so an ARRAY element fell through to
+        // `count * 8`. Fixed 2026-08-20; the element size is now carried per NESTING
+        // LEVEL rather than per moment, which a flat flag got wrong by leaking across
+        // siblings.
+        //
+        // The chained INDEX is a separate defect and remains below.
+        (
+            "nested/array_of_array_literal",
+            SOk,
+            "fn f() -> Word { let a = [[1, 2], [3, 4]]; 1 }",
+        ),
+        // **DIAGNOSED 2026-08-20, AND IT IS NOT WHAT THE FIRST REPORT SAID.**
+        //
+        // The first record of this called it a truncated BODY, implying codegen
+        // dropped ops. It does not. `parse.kel` emits records, and they are the
+        // WRONG records:
+        //
+        //   a[1]      ->  Local(0), Literal(1), Index          -- correct
+        //   a[0][1]   ->  Local(0), Literal(0), Index,
+        //                 Literal(1), **ArrayLit**             -- the second
+        //                 `[1]` parses as an ARRAY LITERAL, not an index
+        //
+        // **CHAINED INDEXING IS NOT SUPPORTED BY THE PARSER AT ALL.** The postfix
+        // index phase (`ps.aa_phase`) is armed only after a let-bound array `Local`
+        // is emitted, and nothing re-arms it once an index completes, so the next
+        // `[` falls through to the array-literal branch. `let b = a[0]; b[1]`
+        // diverges too, which rules out the chain being the trigger: it is indexing
+        // a nested array at all.
+        //
+        // What a fix needs, so the next attempt starts from the specification
+        // rather than the symptom: a binding record saying the element is an ARRAY
+        // of byte size N (there is `let_array` for a scalar kind and
+        // `let_array_struct`/`let_array_size` for a struct, and nothing for an
+        // array); a nested-variant postfix phase, for which the machinery already
+        // exists as `step_structarrayaccess` with `da.fa_index_variant`; and
+        // re-arming after an index so a chain continues.
+        //
+        // Recorded rather than attempted: three coordinated pieces of parser state
+        // machinery is a FEATURE, not the defect fix its sibling was.
+        (
+            "nested/array_of_array_index",
+            SOk,
+            "fn f() -> Word { let a = [[1, 2], [3, 4]]; a[0][1] }",
+        ),
+        // The SPLIT form, which proves the chain is not the trigger.
+        (
+            "nested/array_of_array_split_index",
+            SOk,
+            "fn f() -> Word { let a = [[1, 2], [3, 4]]; let b = a[0]; b[1] }",
+        ),
+        // --- casts, a family this table had NO cases for at all ------------------
+        //
+        // `parse.kel` discarded the target type name and `codegen.kel` emitted
+        // `ByteToWord` unconditionally, on the stated assumption that the stages
+        // only cast `Byte as Word`. True of the corpus, false of the language:
+        // `7 as Byte` lowered to a WIDENING. A silent miscompile, and no case here
+        // could have caught it because the family was absent.
+        ("cast/word_to_byte", SOk, "fn f() -> Byte { 7 as Byte }"),
+        (
+            "cast/byte_to_word",
+            SOk,
+            "fn f(a: Byte) -> Word { a as Word }",
+        ),
+        (
+            "cast/round_trip",
+            SOk,
+            "fn f() -> Word { let b = 7 as Byte; b as Word }",
+        ),
+        // THE LITERALS, WHICH THIS TABLE DID NOT COVER UNTIL 2026-08-20.
+        //
+        // Every other boolean case here takes a bool PARAMETER. Not one supplied a
+        // literal, and the stage MIS-LOWERED both: `true` arrived as an ordinary
+        // identifier, resolved as a variable reference, and emitted `GetLocal(0)`
+        // where the reference emits `PushImmediate(1)`. A silent miscompile, and
+        // the table overstated support by omission.
+        //
+        // The self-compilation oracle could not see it: NONE of the twelve stage
+        // sources contains a `true` or `false` literal, so the corpus cannot reach
+        // the construct at all.
+        ("bool/true_literal", SOk, "fn f() -> bool { true }"),
+        ("bool/false_literal", SOk, "fn f() -> bool { false }"),
+        (
+            "bool/literal_bound",
+            SOk,
+            "fn f() -> bool { let b = true; b }",
+        ),
+        (
+            "bool/literal_condition",
+            SOk,
+            "fn f() -> Word { if true { 1 } else { 2 } }",
+        ),
         ("bool/not", SOk, "fn f(a: bool) -> bool { not a }"),
         (
             "bool/andalso",
@@ -8270,7 +8560,7 @@ fn self_hosted_construct_support_boundary() {
         // All three composite kinds now nest, so the impure case is an enum with a COMPOSITE payload.
         (
             "eq/struct_tuple_of_impure_struct__GAP",
-            Gap,
+            Diverges,
             "struct Q { z: Word }\nenum E { A(Q), B }\nstruct P { e: E }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
         ),
         // The flat array-equality family has no nested form, so an array whose ELEMENT contains a
@@ -8293,7 +8583,7 @@ fn self_hosted_construct_support_boundary() {
         ),
         (
             "eq/struct_field_array_of_tuple__GAP",
-            Gap,
+            Diverges,
             "struct P { x: Word }\nstruct S { g: [(P, Word); 2] }\nfn f(a: S, b: S) -> bool { a == b }",
         ),
         (
@@ -8319,12 +8609,12 @@ fn self_hosted_construct_support_boundary() {
         // --- out of scope for the self-hosted subset -----------------------------
         (
             "scope/float_arith__GAP",
-            Gap,
+            Diverges,
             "fn f(a: Float, b: Float) -> Float { a + b }",
         ),
         (
             "scope/generic_fn__GAP",
-            Gap,
+            Refuses,
             "fn id<T>(x: T) -> T { x }\nfn f() -> Word { id(1) }",
         ),
         // --- removed V0.1.x surface (reference rejects) --------------------------
@@ -8333,15 +8623,44 @@ fn self_hosted_construct_support_boundary() {
             RefRejects,
             "fn f() -> Word { let g = |x| x; g(1) }",
         ),
-    ];
+    ]
+}
+
+#[test]
+fn self_hosted_construct_support_boundary() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    // (construct label, expected support, source). Labels are stable identifiers for the
+    // boundary; keep them descriptive. Grouped by category.
+    let cases = boundary_cases();
 
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
     let mut mismatches: Vec<String> = Vec::new();
-    let (mut n_ok, mut n_gap, mut n_rej) = (0usize, 0usize, 0usize);
+    let (mut n_ok, mut n_refuse, mut n_diverge, mut n_rej) = (0usize, 0usize, 0usize, 0usize);
     for (label, expected, src) in cases {
+        // THREE OUTCOMES, NOT TWO. Refusing and diverging were one bucket, which
+        // is how three silent miscompiles sat here unreported: a construct that
+        // compiles to the wrong bytes looked exactly like one that says no.
         let actual = if catch_unwind(AssertUnwindSafe(|| compile_src(src))).is_err() {
             Support::RefRejects
+        } else if catch_unwind(AssertUnwindSafe(|| {
+            // THIS FILE'S OWN `self_host_compile`, deliberately, because
+            // `assert_self_host_byte_identical` below uses it too and the two must
+            // agree about which compiler is being classified.
+            //
+            // **THE LIBRARY'S `self_host_compile` IS A DIFFERENT COMPILER.** This
+            // file carries a copy of the driver, as its own comment records, and
+            // calling the library one here reported `Refuses` for a dozen
+            // constructs this table has always classified `Ok` — struct
+            // construction, struct field reads, and most of the struct equality
+            // family. Caught immediately, and only because the expectations were
+            // already written down.
+            self_host_compile(src);
+        }))
+        .is_err()
+        {
+            Support::Refuses
         } else if catch_unwind(AssertUnwindSafe(|| {
             assert_self_host_byte_identical(src);
         }))
@@ -8349,11 +8668,12 @@ fn self_hosted_construct_support_boundary() {
         {
             Support::Ok
         } else {
-            Support::Gap
+            Support::Diverges
         };
         match actual {
             Support::Ok => n_ok += 1,
-            Support::Gap => n_gap += 1,
+            Support::Refuses => n_refuse += 1,
+            Support::Diverges => n_diverge += 1,
             Support::RefRejects => n_rej += 1,
         }
         if actual != *expected {
@@ -8369,11 +8689,13 @@ fn self_hosted_construct_support_boundary() {
          Gap, a supported construct REGRESSED -- fix the code. Changes:\n  {}",
         mismatches.join("\n  ")
     );
-    // Sanity: the boundary keeps a non-trivial supported set and at least the known gaps.
+    // Sanity: the boundary keeps a non-trivial supported set and reaches every
+    // outcome. A classifier that never produces one of its four verdicts is not
+    // classifying, and each of these has been degenerate at some point.
     assert!(n_ok >= 40, "supported set shrank unexpectedly (ok={n_ok})");
     assert!(
-        n_gap >= 1 && n_rej >= 1,
-        "classifier degenerate (gap={n_gap}, rej={n_rej})"
+        n_refuse >= 1 && n_diverge >= 1 && n_rej >= 1,
+        "classifier degenerate (refuses={n_refuse}, diverges={n_diverge}, rejects={n_rej})"
     );
 }
 
@@ -8485,4 +8807,340 @@ fn the_fused_compile_holds_one_group_not_the_program() {
             got_total as f64 / got_peak as f64
         );
     }
+}
+
+/// **THE STAGE MIS-LOWERED BOOLEAN LITERALS, AND THE CORPUS COULD NOT SEE IT.**
+///
+/// Measured 2026-08-20, before the fix:
+///
+/// ```text
+///   fn main() -> bool { true }   reference: PushImmediate(1), Return
+///                                self-hosted: GetLocal(0), Return
+/// ```
+///
+/// A **silent miscompile**, not a refusal. The token space is full, so `true` and
+/// `false` are lexed as ordinary identifiers — the same hole the eager `and`/`or`
+/// fall through, which were given interned-id recognition and these were not. The
+/// stage resolved them as variable references and read whatever occupied the
+/// matching slot.
+///
+/// # Why nothing caught it, which is the part worth keeping
+///
+/// **NOT ONE of the twelve stage sources contains a `true` or `false` literal.** The
+/// self-hosted compiler's correctness claim rests on compiling its own sources
+/// byte-identically, so the oracle is silent on any construct those sources do not
+/// use. The construct-support table covered booleans — and every case took a bool
+/// PARAMETER, never a literal, so it overstated support by omission.
+///
+/// That is this line's recorded meta-defect in its most consequential form: a
+/// suite whose coverage is a property of its case list rather than of the thing
+/// under test, where the case list is the corpus the self-hosting claim rests on.
+///
+/// # What bounded the damage
+///
+/// `self_hosted_compile`, the shipping command-line path, cross-checks every chunk's
+/// ops, constant pool and local count against the reference and refuses on
+/// divergence. A user got a loud error, never a wrong artifact. The exposure was to
+/// direct callers that skip that check.
+///
+/// # The fix carries no new node kind
+///
+/// `PushImmediate` already encodes `0 = Unit`, `1 = true`, `2 = false`, and `Unit`
+/// is a leaf whose payload was unused and always zero. One kind expresses all three,
+/// so nothing had to be taught to the leaf table or to the three decoders of the
+/// parse record stream — the hazard that failed eight tests the last time a kind was
+/// added.
+#[cfg(feature = "self-host")]
+#[test]
+fn boolean_literals_lower_to_the_immediate_and_not_to_a_local_read() {
+    use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
+
+    // The control first, and it is the load-bearing one: `Unit` shares this node
+    // kind, so a change that broke the zero payload would break every
+    // statement-only block. If this regresses, the generalisation is wrong.
+    const CASES: &[&str] = &[
+        "fn main() -> bool { true }",
+        "fn main() -> bool { false }",
+        "fn main() -> bool { let b = true; b }",
+        "fn main() -> Word { if true { 1 } else { 2 } }",
+        // Unit, i.e. the payload-zero case the generalisation must leave alone.
+        "shared data d { n: Word }\nfn main() -> Word { d.n = 1; d.n }",
+    ];
+
+    let mut checked = 0;
+    for src in CASES {
+        let reference =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("reference");
+        let mine = keleusma::selfhost::self_host_compile(src);
+        let a = keleusma::wire_format::module_to_wire_bytes(&reference).expect("reference bytes");
+        let b = keleusma::wire_format::module_to_wire_bytes(&mine).expect("self-hosted bytes");
+        assert_eq!(
+            a, b,
+            "{src}\n  reference:   {:?}\n  self-hosted: {:?}",
+            reference.chunks[0].ops, mine.chunks[0].ops
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, CASES.len(), "not every case was compared");
+
+    // MUST-FIRE on the corpus fact that hid this. If a stage source ever gains a
+    // boolean literal in CODE, the self-compilation oracle starts covering this
+    // construct and the reasoning above stops being the explanation.
+    //
+    // **COMMENTS ARE STRIPPED, AND THE FIRST VERSION OF THIS GUARD DID NOT STRIP
+    // THEM.** It fired immediately — on the word `true` inside the very comment
+    // explaining the fix, and on sixty-nine occurrences in `codegen.kel`'s prose.
+    // A guard that fires on its own documentation measures the wrong thing just as
+    // surely as one that cannot fire at all.
+    const STAGES: &[(&str, &str)] = &[
+        ("parse.kel", include_str!("../src/selfhost/kel/parse.kel")),
+        (
+            "codegen.kel",
+            include_str!("../src/selfhost/kel/codegen.kel"),
+        ),
+        ("wire.kel", include_str!("../src/selfhost/kel/wire.kel")),
+        ("lexer.kel", include_str!("../src/selfhost/kel/lexer.kel")),
+        (
+            "reconstruct.kel",
+            include_str!("../src/selfhost/kel/reconstruct.kel"),
+        ),
+    ];
+    let offenders: Vec<&str> = STAGES
+        .iter()
+        .filter(|(_, body)| {
+            body.lines()
+                .map(|l| l.split("//").next().unwrap_or(""))
+                .flat_map(|code| code.split(|c: char| !c.is_alphanumeric() && c != '_'))
+                .any(|w| w == "true" || w == "false")
+        })
+        .map(|(name, _)| *name)
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "{offenders:?} now contain a boolean literal in code, so the \
+         self-compilation oracle covers this construct and the explanation \
+         recorded above is stale"
+    );
+    assert!(
+        STAGES.len() >= 5,
+        "the stage list shrank, so the check above walks too little to mean anything"
+    );
+}
+
+/// **THE CAST DIRECTION WAS INVERTED, AND THE TARGET TYPE NEVER REACHED CODEGEN.**
+///
+/// Measured 2026-08-20, before the fix:
+///
+/// ```text
+///   fn main() -> Byte { 7 as Byte }
+///     reference:   Const(0), WordToByte, Return
+///     self-hosted: Const(0), ByteToWord, Return
+/// ```
+///
+/// `push_cast` emitted `ByteToWord` unconditionally and said why in its own
+/// comment — "a `Byte as Word` widening" — which is true of the stage corpus and
+/// false of the language. It could not do better: `parse.kel` emitted the `Cast`
+/// node when the `as` token was seen and then **discarded the target type name**,
+/// so the direction never reached the node. Every cast lowered identically and one
+/// direction was always wrong.
+///
+/// # How it was found, which generalises
+///
+/// Not by reading the code. By compiling twenty small programs through both
+/// compilers and comparing BYTES — the same sweep that had just found the boolean
+/// literals. Two silent mis-lowerings in the first twenty cases.
+///
+/// **The construct-support table had no cast family at all.** Forty-one of its
+/// eighty-eight cases were equality lowering. A table that thorough in one area and
+/// absent in another describes how well one feature was tested, not where support
+/// ends.
+///
+/// # Why the fix cannot regress existing programs
+///
+/// The payload is the target: 1 for `Byte`, 0 for anything else — and 0 selects the
+/// widening this always emitted. A program that compiled before compiles to the same
+/// bytes. Only the record's producing TOKEN moved, from `as` to the type name; its
+/// position in the stream is unchanged because nothing is emitted between them.
+#[cfg(feature = "self-host")]
+#[test]
+fn a_cast_lowers_in_the_direction_it_was_written() {
+    use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
+
+    const CASES: &[&str] = &[
+        // The narrowing, which was the broken direction.
+        "fn main() -> Byte { 7 as Byte }",
+        // The widening, which always worked — and is the control. If this breaks,
+        // the payload defaulting is wrong rather than the new branch.
+        "fn f(a: Byte) -> Word { a as Word }\nfn main() -> Word { 1 }",
+        // Both directions in one body, which is what exposed the asymmetry: the
+        // first cast was wrong and the second right, in the same chunk.
+        "fn main() -> Word { let b = 7 as Byte; b as Word }",
+    ];
+
+    let mut checked = 0;
+    for src in CASES {
+        let reference =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("reference");
+        let mine = keleusma::selfhost::self_host_compile(src);
+        assert_eq!(
+            keleusma::wire_format::module_to_wire_bytes(&reference).expect("reference bytes"),
+            keleusma::wire_format::module_to_wire_bytes(&mine).expect("self-hosted bytes"),
+            "{src}\n  reference:   {:?}\n  self-hosted: {:?}",
+            reference.chunks[0].ops,
+            mine.chunks[0].ops
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, CASES.len(), "not every case was compared");
+
+    // MUST-FIRE on the two directions actually differing. If `WordToByte` and
+    // `ByteToWord` ever lowered the same way, every assertion above would pass
+    // while measuring nothing at all — which is precisely the state this test was
+    // written to end.
+    let narrow = keleusma::selfhost::self_host_compile("fn main() -> Byte { 7 as Byte }");
+    let widen = keleusma::selfhost::self_host_compile(
+        "fn f(a: Byte) -> Word { a as Word }\nfn main() -> Word { 1 }",
+    );
+    assert_ne!(
+        narrow.chunks[0].ops, widen.chunks[0].ops,
+        "both cast directions emit the same ops, so the direction is being ignored \
+         again and the cases above prove nothing"
+    );
+}
+
+/// **THE TWO SELF-HOSTED COMPILERS AGREED, THEN DIVERGED, AND NOW AGREE AGAIN.**
+///
+/// This test asserted the DISAGREEMENT when it was written on 2026-08-20. It is inverted
+/// rather than deleted, because the fact it recorded is worth keeping: for a period the
+/// construct-support boundary below reported `Ok` for a construct the SHIPPING compiler got
+/// wrong, and a deleted test loses both halves of that.
+///
+/// Measured 2026-08-20, before the repair:
+///
+/// ```text
+///   reference:      constants [StaticStr("hi"), Int(1)]
+///   this file's:    constants [StaticStr("hi"), Int(1)]   — agreed
+///   the library's:  constants [Int(3),          Int(1)]   — the intern id, as an Int
+/// ```
+///
+/// The ops were identical in all three. Only the constant pool differed, which is why an
+/// ops-only comparison called it clean.
+///
+/// # The cause, and why it is not a stage defect
+///
+/// `codegen.kel` emits the pool as values then TAGS, and the shipping driver read the tags
+/// into a discard binding on the stated grounds that the stage sources are all-`Int`. True of
+/// the corpus, false of the contract. Repaired host-side in `src/selfhost/mod.rs`; the stage
+/// was not touched. See `tests/selfhost_pool_tags.rs` and
+/// `docs/decisions/POOL_TAG_RESIDENCY_BRIEF.md`.
+///
+/// # What this does NOT settle
+///
+/// **The boundary below still measures THIS file's compiler, not the shipping one**, and the
+/// census in `tests/selfhost_pool_tags.rs` records eleven cases where they still differ and
+/// seven where the shipping compiler faults. The duplicate remains the reason those go
+/// unreported here. This test now checks three-way agreement so the next drift is caught
+/// rather than assumed absent.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_two_self_hosted_compilers_agree_on_a_string_literal() {
+    use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
+
+    const SRC: &str = "fn f() -> Word { let s = \"hi\"; 1 }";
+    let reference =
+        compile(&parse(&tokenize(SRC).expect("lex")).expect("parse")).expect("reference");
+
+    // Non-vacuity: the construct must actually produce a StaticStr, or three empty pools
+    // would satisfy every assertion below.
+    assert!(
+        reference.chunks[0]
+            .constants
+            .iter()
+            .any(|c| matches!(c, keleusma::bytecode::ConstValue::StaticStr(_))),
+        "the reference no longer bakes a StaticStr here, so this test measures nothing"
+    );
+
+    let local = self_host_compile(SRC);
+    assert_eq!(
+        local.chunks[0].constants, reference.chunks[0].constants,
+        "this file's compiler diverged from the reference"
+    );
+
+    let library = keleusma::selfhost::self_host_compile(SRC);
+    assert_eq!(
+        library.chunks[0].constants, reference.chunks[0].constants,
+        "the SHIPPING compiler diverged from the reference on a string literal again. The \
+         previous cause was the constant-pool tag being discarded in the driver"
+    );
+    assert_eq!(
+        library.chunks[0].ops, reference.chunks[0].ops,
+        "ops diverged, which is a wider divergence than the pool"
+    );
+}
+
+/// **A NESTED ARRAY LITERAL SIZES ITS OUTER COMPOSITE BY ITS ELEMENTS.**
+///
+/// The close handled two element kinds — a struct, whose byte size it looked up,
+/// and everything else, which it assumed was a `Word` at eight bytes. **An array
+/// element is neither**, so `[[1, 2], [3, 4]]` sized its outer composite as 16
+/// where the reference computes 32. A silent miscompile, not a refusal.
+///
+/// # The wrong fix, recorded because it is the instructive one
+///
+/// My first attempt carried "the byte size of the most recently closed array" in a
+/// single flag. **It leaks across SIBLINGS.** In `[[1, 2], [3, 4]]` the second
+/// inner array read the first one's size and doubled to 32, then the outer doubled
+/// again to 64 — a worse answer than the bug it replaced.
+///
+/// The size belongs to a **nesting level**, not to a moment in time. It is now
+/// carried in a per-level array parallel to the element counter, written by a
+/// closing inner array into its parent's slot.
+///
+/// The second attempt then faulted immediately with an index of -1, because the
+/// nesting pointer is decremented before the slot is read. **An off-by-one that
+/// faults on its first run is the good outcome**; the flat flag's version returned
+/// a plausible wrong number instead.
+///
+/// # What this does NOT close
+///
+/// The chained index `a[0][1]` still truncates the body and stays recorded as
+/// `Diverges` in the support table. Two defects, and this is one of them.
+#[cfg(feature = "self-host")]
+#[test]
+fn a_nested_array_literal_sizes_its_outer_composite_by_its_elements() {
+    use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
+
+    // Depth two, depth three, and a non-square inner length, so a fix that merely
+    // squared the count would fail here.
+    const NESTED: &[&str] = &[
+        "fn main() -> Word { let a = [[1, 2], [3, 4]]; 1 }",
+        "fn main() -> Word { let a = [[1, 2, 3], [4, 5, 6]]; 1 }",
+        "fn main() -> Word { let a = [[[1, 2]], [[3, 4]]]; 1 }",
+    ];
+    // THE CONTROL. A flat array was always byte-identical, so if this regresses the
+    // change broke the ordinary path rather than fixing the nested one.
+    const FLAT: &str = "fn main() -> Word { let a = [1, 2]; 1 }";
+
+    let identical = |src: &str| -> bool {
+        let reference =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("reference");
+        let mine = keleusma::selfhost::self_host_compile(src);
+        keleusma::wire_format::module_to_wire_bytes(&reference).expect("a")
+            == keleusma::wire_format::module_to_wire_bytes(&mine).expect("b")
+    };
+
+    assert!(identical(FLAT), "a FLAT array literal regressed");
+    let mut checked = 0;
+    for src in NESTED {
+        assert!(
+            identical(src),
+            "{src}: the nested literal is not byte-identical"
+        );
+        checked += 1;
+    }
+    assert_eq!(
+        checked,
+        NESTED.len(),
+        "not every nesting depth was compared"
+    );
 }
