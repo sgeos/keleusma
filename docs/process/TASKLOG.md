@@ -10,6 +10,24 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-23, later). ORDER 1 ITEM 3 MOVED, AND ONE OF MY FINDINGS IS RETIRED.**
+>
+> **Retired**: the `wire.kel` chunk-name divergence. It was `chunk_names_from_pipeline` deriving the
+> numbering by hand and inheriting a defect; `first_pass` already computes that table, documented in
+> three places. Delegating makes it agree on every stage, and `wire` is back in its corpus test.
+> Sixth instance this session of building what already existed, and the first to reach the tree.
+>
+> **Survives, four hypotheses deep**: `self_host_compile(wire.kel)` panics and `wire.kel` is absent
+> from the byte-identity corpus. Eliminated by measurement -- the Rust driver, a stale name
+> variable, a cursor rewind, the lexer. Three public instruments now exist: `parse_cursor_trace`,
+> `parse_record_trace`, `lex_token_trace`. **Do not zip the first two** -- they sample at different
+> rates and the pairing looks like data.
+>
+> **Order 1 item 3**: `let a = g()` reaches the type channel as an alias row carrying the callee's
+> NAME, compared against the reference on both row forms. What remains is an operator expression,
+> needing a pipeline analogue of `expression_nodes_resolvable` -- one of five Rust extractions still
+> walking the reference AST. A slice, not a tweak; not started rather than started badly.
+
 > **Currency note (2026-08-23). A CHUNK NUMBERING WRONG TWICE, AND AN UNRESOLVED `wire.kel`
 > DIVERGENCE.** Work moved to Order 1 item 3, the type checker's INPUT. Its next slice needs a
 > `Call` node's chunk index resolved to a name. The numbering is **sorted by name**, not declaration

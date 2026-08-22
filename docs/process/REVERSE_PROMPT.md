@@ -10,9 +10,39 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-22 (the `CONSTS` route decision, taken by reading the code)
+**Date**: 2026-08-23 (Order 1 item 3 moved; one of my findings retired)
 
-## SESSION 51 — A NUMBERING I GOT WRONG TWICE, AND A DIVERGENCE I DID NOT RESOLVE
+## SESSION 51 — THE DIVERGENCE I COULD NOT EXPLAIN WAS MINE
+
+**Retiring a finding I gave you.** I reported an unexplained `wire.kel` chunk-name divergence and
+excluded that stage from its corpus test. **It was my own hand-rolled derivation inheriting a
+defect** — `first_pass` already computes that table, documented in three places, and `parse.kel` is
+seeded from it. Delegating makes the function agree on every stage. `wire` is back in the corpus
+test and the finding is gone.
+
+I had got the hand derivation wrong twice before that. Sixth instance this session of building what
+already existed, and **the first to reach the tree**.
+
+### What survives, and it is four hypotheses deep
+
+`self_host_compile(wire.kel)` still panics, and `wire.kel` is still absent from the byte-identity
+corpus. Eliminated, each by measurement: the Rust driver, a stale name variable, a cursor rewind,
+and the lexer. Three instruments exist and are public.
+
+**Do not zip the cursor and record traces** — they sample at different rates, 1,232 against 78, and
+the pairing produces a table that looks like data. I tried it and it attributed `y`'s header to the
+token `{`.
+
+### Order 1 item 3 moved for the first time this session
+
+`let a = g()` reaches the type channel as an alias row carrying the callee's **name**. What remains
+is an operator expression, and that needs a pipeline analogue of `expression_nodes_resolvable` — one
+of five Rust extractions still walking the reference AST. **A slice, not a tweak**, and not started
+rather than started badly.
+
+---
+
+## SESSION 51 — A NUMBERING I GOT WRONG TWICE, AND A DIVERGENCE I DID NOT RESOLVE (superseded above)
 
 Moved to the remaining Order 1 item, the type checker's **input**. The tree names its own next slice:
 give the alias row a target string so `let a = g()` compares without comparing id spaces. That needs
