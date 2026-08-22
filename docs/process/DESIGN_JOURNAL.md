@@ -13,6 +13,58 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE DIVERGENCE I COULD NOT EXPLAIN WAS MINE, AND FOUR HYPOTHESES DIED PROPERLY (2026-08-23).**
+
+Four increments, one thread. Recorded together because the last one retires the first one's finding
+and the sequence is the point.
+
+**1. THE TRACE INSTRUMENT.** The mis-naming defect had been diagnosed three times and stopped short
+of a cause each time, because **the record stream the driver consumes was not observable from
+outside it**. `thread_local!` is unavailable under `no_std`, so a sink is threaded through
+`parse_functions_impl` instead. It showed the wrong name is in `parse.kel`'s OWN stream: the Rust
+driver is faithful, and `ps.mode == 1` emits the token's own value, so nothing is remembered between
+declarations either. Two hypotheses dead.
+
+**2. THE DELEGATION, AND THE RETRACTION.** `chunk_names_from_pipeline` derived the chunk numbering by
+hand. **`first_pass` already computes it** -- documented in three places, and `parse.kel` is seeded
+from that very table.
+
+I got the hand derivation wrong twice: declaration order (wrong), then sorted (right rule, still
+wrong answer). And the `wire.kel` disagreement I had recorded as *"an unexplained divergence"* and
+excluded from the corpus test **was the hand derivation inheriting the defect**, not a property of
+the numbering. Delegating makes it agree on every stage.
+
+**Sixth instance in one session of building what already existed, and the first to reach the tree.**
+The mis-naming evidence moved to `parse.kel`'s record stream, which does not depend on a derivation
+of mine.
+
+**3. THE TOKEN INSTRUMENT.** The cursor is monotonic; the tokens are correct -- every declaration
+keyword is followed by its own name token, `z` included. Two more hypotheses dead, and dead **by
+measurement rather than by exhaustion**: "it must be the tokens" would have been a conclusion from
+having ruled out everything else.
+
+**AND I TRIED TO ZIP TWO TRACES THAT SAMPLE AT DIFFERENT RATES.** 1,232 cursor samples against 78
+records. The pairing is meaningless and **it produced a tidy table** attributing `y`'s header to the
+token `{`. A wrong answer in the shape of a right one is worse than no answer, so the mismatch is
+pinned rather than left as a trap. That is the fifth instance of one lesson this session: **a check
+built from the same model as the thing it checks confirms the model.**
+
+**4. ORDER 1 ITEM 3 MOVED.** `let a = g()` reaches the type channel as a form-1 alias row carrying
+the callee's NAME. The blocker was never the pipeline -- a form-1 row carried the target's ID, and
+the two extractions do not share an id space, so comparing them would have compared the NUMBERING.
+Carrying a string removes the question rather than answering it.
+
+**The slice was small because increments 1 to 3 established the chunk table is `first_pass`'s**, not
+a second numbering. The detour paid for itself, which is not the same as the detour having been
+necessary: had I checked for an existing table first, increments 1 and 3 would still have been
+needed and increment 2 would not.
+
+**WHAT REMAINS, SIZED HONESTLY.** An operator expression needs a pipeline analogue of
+`expression_nodes_resolvable` -- one of FIVE Rust extractions still walking the reference AST. That
+is a slice, not a tweak, and it is not started rather than started badly.
+
+---
+
 **A DERIVATION CHECKED AGAINST A CASE CHOSEN TO EXERCISE IT IS CHECKED AGAINST THE AUTHOR'S MODEL OF
 IT (2026-08-22).**
 
