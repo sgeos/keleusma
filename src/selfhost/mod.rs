@@ -5172,10 +5172,40 @@ pub fn wire_windowed_via_kel(
             out[base..base + len].copy_from_slice(&win[..len]);
             continue;
         }
+        // CONSTS TAKES THE STREAMING PATH TOO, for the same reason CHUNKS does:
+        // it emits at window offset zero, one record per call, so the host
+        // places the bytes and no cap decides which stages are reachable.
+        //
+        // **THE LENGTH IS CHECKED RATHER THAN TRUNCATED.** The branches around
+        // this one write `&win[..len]`, which silently discards a disagreement
+        // between what the stage produced and what the reference reserved. Here
+        // a mismatch is the interesting event -- it means the root model and the
+        // encoder have parted -- so it is reported rather than trimmed away.
+        if kind == crate::wire_schema::kind::CONSTS {
+            let win = wire_consts_via_kel(module)?;
+            if win.len() != len {
+                return Err(SelfHostError::Unsupported {
+                    detail: alloc::format!(
+                        "the self-hosted CONSTS region is {} bytes and the reference \
+                         reserved {len}; the constant-root model and the encoder disagree",
+                        win.len()
+                    ),
+                });
+            }
+            out[base..base + len].copy_from_slice(&win);
+            continue;
+        }
         let cmd = match kind {
             k if k == crate::wire_schema::kind::NAMES => 170,
             k if k == crate::wire_schema::kind::STRING_POOL => 171,
             k if k == crate::wire_schema::kind::HEADER => 172,
+            // EVERY OTHER KIND IS LEFT AS ZEROS, and this is the honest name for
+            // what the windowed path does NOT cover. The stage has an emitter for
+            // all of them -- `emit_in_window` dispatches eighteen kinds -- so what
+            // is missing is the DRIVER supplying their fields, not the Keleusma
+            // side. `tests/selfhost_region_coverage.rs` measures which kinds land
+            // and which are skipped, so the coverage claim is a figure rather
+            // than a sentence.
             _ => continue,
         };
         if len > WINDOW {

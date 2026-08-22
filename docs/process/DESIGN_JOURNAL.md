@@ -13,6 +13,54 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE COVERAGE CLAIM WAS A SENTENCE CHECKED BY A TEST THAT LISTED THE SAME SENTENCE (2026-08-22).**
+
+The self-hosted emit path's coverage lived in prose: a doc comment naming four region kinds, and a
+test comparing exactly those four. **A claim of the form "the path reaches N regions", verified by
+comparing those N regions, cannot fail for the reason a reader cares about** — that the set stopped
+growing, or quietly shrank. That is the sixth instance on this line of a suite whose coverage is a
+property of its case list mistaken for a property of the thing under test.
+
+`tests/selfhost_region_coverage.rs` derives the region set **from each artifact's own directory**
+and classifies every non-empty region three ways. The three-way split is the load-bearing part:
+
+| outcome | meaning |
+|---|---|
+| `Identical` | Keleusma produced these bytes and they match the reference |
+| `Skipped` | the driver never routed the kind; the bytes are zeros |
+| `Differs` | the driver routed it and produced the wrong bytes |
+
+**Collapsing `Skipped` and `Differs` into "not identical" would destroy the only distinction that
+matters here**: a gap the tree states honestly against a mis-emission. That is the same correction
+the construct-support boundary needed when `Gap` was split into `Refuses` and `Diverges`.
+
+**Demonstrated rather than argued.** Un-routing `CONSTS` fails three tests and leaves
+`no_region_the_driver_routes_disagrees_with_the_reference` GREEN, because an un-routed region is
+`Skipped`. Flipping one byte of a routed region fails that test by name. Two mutations, two
+different outcomes, which is what proves the classification discriminates rather than merely
+existing.
+
+**A REGION EMITTED CORRECTLY BY ITS OWN ENTRY POINT AND LOST BY THE ASSEMBLER.**
+`wire_consts_via_kel` had been producing byte-identical `CONSTS` regions since the previous
+increment, and `wire_windowed_via_kel` — the function that assembles a whole artifact — ended its
+kind match in `_ => continue`. So a caller assembling a body got **zeros where the largest region
+should be**, and every test of the assembled artifact passed, because they compared the four kinds
+the assembler routed.
+
+Two claims that read as one: *the region is emitted correctly* and *the region reaches the
+artifact*. The second was false for the whole time the first was true. Now routed, with the length
+**checked rather than truncated** — the neighbouring branches write `&win[..len]`, which discards a
+disagreement between what the stage produced and what the reference reserved, and a length mismatch
+is precisely the interesting event.
+
+**THE FIGURE: 81% of the corpus's region bytes**, 134,776 of 165,208 across the twelve stages,
+measured in BYTES rather than region count because a count weights `ENUM_LAYOUTS` at 48 bytes the
+same as `CONSTS` at 56,256 and flatters a path reaching many small regions and no large ones. Eight
+kinds remain skipped, and the test names them in its failure message so the next slice's target is
+readable off a test run rather than off a document that may be stale.
+
+---
+
 **`CONSTS` IS EMITTED BY KELEUSMA FOR EVERY STAGE, AND THE GUARD THAT SHOULD HAVE ANNOUNCED IT
 COULD NOT HAVE FIRED (2026-08-22).**
 
