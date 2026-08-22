@@ -1,0 +1,52 @@
+COMPLETION CONDITION — seeding the lexer and parser stages
+
+Ordering is explicitly NOT a completion criterion. Any order satisfies this.
+
+All of the following must hold as observable properties of the tree.
+
+1. The lexer and parser self-hosted stages are each driven from real
+   corpus input at more than one subject, or the tree records why a
+   given one cannot be and names the obstacle.
+
+2. Each seeded run is shown to be non-vacuous by a floor that would
+   fail if the seed did not arrive. A non-empty result alone does not
+   satisfy this.
+
+3. The parser's subject is derived from the lexer's own output, and
+   each subject is checked to produce enough tokens to drive the parser
+   substantively rather than merely to run it.
+
+4. The tree states plainly that these stages were already compared by
+   another harness, so the gain is presented as additional subjects and
+   gate accounting rather than as new coverage.
+
+5. The report states how many stages are seeded and how many remain
+   unseeded, and names the remaining unseeded stages rather than only
+   counting them.
+
+6. Files owned by the other line are unmodified. If seeding a stage
+   would require changing them, that stage is reported as blocked
+   instead.
+
+7. A subject that does not fit the shared segment, or that fails to
+   seed, is reported rather than silently skipped or truncated.
+
+8. Any stage that disagrees on a newly added subject is reported as a
+   finding and investigated, not exempted or masked.
+
+9. The tree does not claim the Order-1 gate is met, and does not imply
+   the unseeded set is closed.
+
+10. Any claim that a figure changed is supported by a recorded
+    measurement of both the before and after values.
+
+11. If the subject count is bounded for runtime, the bound and its
+    reason are stated rather than applied silently.
+
+12. The native code generator's suite passes with zero failures and its
+    formatting and lint checks pass, with the pass/fail judgement taken
+    from something other than a truncated or piped view of the output.
+
+13. Work that is finished is committed. Pushing may be deferred while a
+    pull request of this line is mid-verification, provided the
+    deferral is stated and the work is not left uncommitted.
