@@ -149,3 +149,71 @@ fn the_driver_reaches_the_constant_streaming_commands() {
          presence of 176/177 above says nothing about them specifically"
     );
 }
+
+/// **COMMANDS 178 TO 181 ARE DRIVEN BY A TEST AND NOT BY THE DRIVER.**
+///
+/// `ds_stream_step`, `sh_stream_step`, `sg_stream_step` and `ev_stream_step` — the
+/// one-record-per-call formatters for `DATA_SLOTS`, `SHAPES`, `SIGNATURES` and
+/// `ENUM_VARIANTS`. **Until 2026-08-22 nothing in Rust named any of the four
+/// numbers.** Fourth instance of this shape on this line, after `Op::Reset`,
+/// `Op::IsStruct`, and commands 176/177.
+///
+/// `tests/selfhost_wire.rs` now drives all four and each formats a record the
+/// reference agrees with, mutation-verified in both directions. So the stage side
+/// is validated; the wiring is not written.
+///
+/// # Why the distinction is worth a test rather than a sentence
+///
+/// Eight region kinds are still skipped by the windowed assembler, and three of
+/// them — `SHAPES` at 341 records, `SIGNATURES` at 486, `DATA_SLOTS` at 388 —
+/// exceed a single 1,024-word `fin` batch. These four commands are the
+/// batching-free route to them. Reading "streaming commands already exist"
+/// alongside "the stage has an emitter for every kind" makes the remaining work
+/// look like wiring, and until this was measured it was wiring plus validating
+/// never-run code.
+///
+/// # THE SHAPE OF THE GUARD, WHICH THE PREVIOUS ONE GOT WRONG
+///
+/// The 176/177 version of this searched the driver for the STAGE's function names
+/// and could not have fired, because the driver addresses the stage by COMMAND
+/// NUMBER. This one searches for the numbers, and **was made to fire** by adding
+/// a matching declaration to the driver.
+#[test]
+fn the_driver_does_not_yet_reach_the_record_formatters() {
+    const DRIVER: &str = include_str!("../src/selfhost/mod.rs");
+
+    let commands = dispatched_commands();
+    assert!(
+        commands.len() > 100,
+        "only {} dispatched commands were derived; the parse is broken",
+        commands.len()
+    );
+    for cmd in [178u32, 179, 180, 181] {
+        assert!(
+            commands.contains(&cmd),
+            "command {cmd} is no longer dispatched by `wire.kel`, so this record is stale \
+             rather than the path being unwired"
+        );
+    }
+
+    // BY NUMBER, in the form the driver writes when it drives a command. The
+    // control below proves the form is the one that would appear.
+    for n in [178u32, 179, 180, 181] {
+        assert!(
+            !DRIVER.contains(&format!("i64 = {n}")),
+            "the driver now declares command {n}. The record formatters are being driven: \
+             record the new region coverage and replace this test rather than relaxing it"
+        );
+    }
+
+    // The control: the constant-streaming commands ARE declared in that exact
+    // form, so the absence of 178..181 above is a fact about them rather than
+    // about the search.
+    for n in [176u32, 177] {
+        assert!(
+            DRIVER.contains(&format!("i64 = {n}")),
+            "command {n} is no longer declared in the driver in the form this test searches \
+             for, so the absence of 178..181 says nothing about them specifically"
+        );
+    }
+}

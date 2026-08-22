@@ -10,6 +10,29 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-22, evening). THE COVERAGE FIGURE HAS TWO NUMBERS, AND FOUR MORE
+> COMMANDS HAD NEVER RUN.** The census now pins **57% COMPUTED** (`NAMES`, `STRING_POOL`, `CONSTS`
+> — the stage derives every byte) against **81% PRODUCED** (also `CHUNKS`, mixed per field, and
+> `HEADER`, encoded not derived), and asserts the first stays strictly below the second. Wiring the
+> eight skipped kinds would take the produced figure toward 97% **without raising the computed
+> figure at all**; `wire.kel` says as much in its own comment above those emitters.
+>
+> **Commands 178–181 executed for the first time** — the record formatters for `DATA_SLOTS`,
+> `SHAPES`, `SIGNATURES`, `ENUM_VARIANTS`. Fourth instance of written-dispatched-never-run. Each
+> formats a record the reference agrees with, mutation-verified both ways.
+>
+> **The wiring dependency is measured, not assumed**: those records carry a name index the host does
+> not hold and the encoder's own index assignment. `intern_index_of` (command 140) is the route,
+> is also undriven, and is O(n²). Recorded rather than started.
+>
+> `tests/selfhost_region_coverage.rs` is the slowest file in the suite, because
+> `wire_windowed_via_kel` compiles `wire.kel` once per routed region -- twelve stages by five
+> routed kinds. **NO CLEAN TIMING EXISTS**: it was measured at 108 s, 747 s and 925 s under load
+> averages of roughly 9, 13 and 18, and the `v0.3.0` line runs its own suite in a sibling worktree
+> on the same machine, so every one of those figures is contended. Do not quote any of them as the
+> file's cost. Caching the stage compile is a real improvement, is not started, and should be
+> justified by a measurement taken when nothing else is running.
+
 > **Currency note (2026-08-22, latest). THE COVERAGE FIGURE IS 81%, AND IT IS DERIVED.**
 > `tests/selfhost_region_coverage.rs` walks each artifact's own region directory and classifies
 > every non-empty region `Identical` / `Skipped` / `Differs`. **134,776 of 165,208 region bytes**
