@@ -11358,7 +11358,42 @@ fn compile_pattern_test(
             // carries no type name, away from `Op::IsStruct`). Fall back to
             // the runtime test only when the type is not statically known,
             // where the boxed body answers it.
-            if named_type_name(ty) != Some(type_name.as_str()) {
+            //
+            // **AN ABSENT TYPE IS NOT AN UNCONFIRMED ONE, AND CONFLATING THEM
+            // PRODUCED A PROGRAM THAT VERIFIED AND THEN TRAPPED.** `ty` is
+            // `None` for a parameter written without an annotation, so
+            // `fn g(P { a, b }) -> Word { a + b }` took the fallback, emitted
+            // `Op::IsStruct` against a FLAT struct, and the virtual machine
+            // refused it at run time -- "the type test is a compile-time
+            // constant" -- after `verify()` had accepted the module and
+            // `module_wcmu` had given it a bound. `InvalidBytecode` is the
+            // class `verify()` exists to exclude, so that was a load-time hole
+            // rather than a bad program.
+            //
+            // For an UNANNOTATED parameter the pattern's own type is the only
+            // type there is, so the test is irrefutable and folding it is sound.
+            //
+            // **THIS COMMENT PREVIOUSLY JUSTIFIED THE FOLD BY CLAIMING THE TYPE
+            // CHECKER REFUSES EVERY MISMATCH. THAT IS FALSE, AND THE `v0.3.0`
+            // LINE DISPROVED IT WITHIN THE HOUR.** `fn g(P { a, b }: Q)` compiles
+            // with two DISTINCT structs, and so does a struct pattern against a
+            // tuple- or array-typed annotation. The "known and different" state
+            // this condition treats as needing a runtime test is one the type
+            // checker admits today.
+            //
+            // So the fold NARROWS the fallback; it does not eliminate it, and
+            // `Op::IsStruct` still has producers. Four are pinned in
+            // `tests/opcode_reachability.rs`, TWO OF WHICH STILL REACH THE
+            // LOAD-TIME HOLE: a generic struct destructured in a parameter, and a
+            // pattern annotated with a different struct. Both verify, receive a
+            // memory bound, load, and then trap `InvalidBytecode`.
+            //
+            // The remaining holes are RECORDED rather than repaired here because
+            // they look like TYPE-CHECKER admissions rather than lowering
+            // defects: a struct pattern matched against an unrelated struct, a
+            // tuple, or an array is arguably ill-typed at the source, and closing
+            // it there would remove the emission rather than fold it.
+            if ty.is_some() && named_type_name(ty) != Some(type_name.as_str()) {
                 fc.emit(Op::GetLocal(value_slot));
                 let t_const = fc.add_string_constant(type_name);
                 fc.emit(Op::IsStruct(t_const));

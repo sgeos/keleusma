@@ -13,6 +13,892 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE FIFTH SILENT MISCOMPILE, AND A COST ESTIMATE THAT WAS WRONG IN THE HELPFUL DIRECTION
+(2026-08-21, midday).**
+
+`a[0][1]` parsed its second `[1]` as an array LITERAL. A `let` recorded its value as an array of
+`Word` whatever the elements were, so the first index emitted a scalar read and nothing armed a
+second one.
+
+**THE RECORDED SPECIFICATION SAID THREE COORDINATED PIECES AND THE PREVIOUS SESSION STOPPED ON
+THAT BASIS. TWO ALREADY EXISTED.** The `]` handler already emits `GetIndex(FlatNested{size,
+Array})` and already re-arms the scalar index postfix; `step_structarrayaccess` is already generic
+over the variant. Only the binding side was missing -- a record for an element that is itself an
+array, beside the existing scalar-element and struct-element cases.
+
+This is the unreached-stage-commands lesson run in the other direction. There, checking for callers
+revealed hidden COST and changed `CONSTS` from "batching is the route" to "the route is written but
+never executed". Here the same check revealed hidden PROGRESS. **The rule is symmetric and neither
+direction is the safe assumption.**
+
+**THE HAZARD I CHECKED BEFORE EDITING.** `stmt`, `ps` and `da` are `private data`; only `toks` is
+`shared data`. The append-never-insert rule that this line paid for governs the host-addressed
+block, and it did not bind here -- but I would not have known that by guessing, and inserting a
+field into a slot-addressed block shifts every field after it.
+
+**THE STATE RECORD I ADDED FIRES ON EVERY NESTED INDEX, INCLUDING ONE NEVER BOUND.** A record set
+broadly and consumed narrowly is exactly the shape that leaks into an unrelated later binding, so
+five shapes are MEASURED rather than argued from the clear-sites -- including a nested index used
+inline with no binding, and two in sequence. All identical.
+
+**THE MARGIN PINS MOVED AND BOTH DELTAS DECOMPOSE.** Names 672 -> 676, and the four are the four
+identifiers added: **the first move in ten whose count matched what its author predicted before
+measuring**, which the pin's own header notes is unusual. Blob 35,233 -> 35,333: 72 characters of
+names plus 7 bytes each of encoding overhead, and the NINTH move independently confirms that
+figure at 13 characters for a 20-byte delta. Two moves, different counts, one constant. A delta
+nobody can decompose is indistinguishable from a delta nobody looked at.
+
+**AN ORDERING TRAP I AVOIDED BY NOTICING RATHER THAN BY RULE.** I cut the handoff-refresh branch
+from a tip that did not yet contain the chained-index merge, and its boundary read 88 SOk against
+the 90 that was about to be true. Writing the refresh there would have baked in numbers I already
+knew were stale, and a handoff whose check block fails on the next tip is worse than no refresh.
+Same discipline as merging on a positive count: **do not record a measurement you know is about to
+be superseded.**
+
+---
+
+**THE HOST DISCARDED A FIELD ITS OWN STAGE COMPUTED, AND THE SWEEP FOUND SOMETHING BIGGER
+(2026-08-21, session 50).**
+
+`codegen.kel` streams its constant pool as a count, the values, then the TAGS -- 0 `Int`,
+1 `StaticStr` (the value being the lexer intern id, which the host must resolve), 2 `Bool`. The
+shipping driver read the tags into `let _tag` and dropped them, rebuilding every entry as
+`ConstValue::Int`.
+
+**The comment on the discard is the defect confessing.** It said the stage sources are all-`Int`,
+so the tags do not matter. That is a true statement about the CORPUS and a false one about the
+CONTRACT, and it is the seventh instance of the meta-defect this line keeps recording: a property
+of the case list mistaken for a property of the thing under test. The byte-identity oracle
+compiles the twelve stage sources; none contains a string literal or an equality comparison, so
+neither tag was ever observed.
+
+**Both compilers read the SAME stage source.** `tests/common/mod.rs::stage_path` rewrites a
+`compiler/kel/` request to `src/selfhost/kel/`, and `compiler/kel/` holds only `prelude.kel`. So
+the divergence was entirely host-side, which is what made the attribution clean: one returned
+`Vec<i64>` and the other `Vec<(i64, i64)>`.
+
+**THE SWEEP FOUND THE LARGER ONE.** Looking for other reads-then-drops: `parse.kel` emits
+STRUCTSTART 18, TRAITSTART 19 and IMPLSTART 20, and the driver had no state for them, so those
+records reached the function dispatch with nothing open and it panicked by name.
+`tests/selfhost_codegen.rs`'s copy of the same loop carried the skip all along -- in two places.
+
+Measured over the 95 boundary cases, baseline taken by STASHING the change rather than assumed:
+
+| | before | after |
+|---|---|---|
+| byte-identical | 43 | **76** |
+| differs | 21 | 11 |
+| faults | 30 | 7 |
+
+29 cases declare a struct; the shipping compiler faulted on all 29, and **27 of them are recorded
+`SOk`**. The boundary did not merely drift on one construct.
+
+**TWO THINGS I EXPECTED AND GOT WRONG, both in the cheap direction.** I planned a struct-equality
+witness for the `Bool` tag because `intern_bool` is documented as serving `push_struct_eq` -- and
+tuple, array and enum equality all reach it with no `struct` at all. *The construct that reaches a
+branch is not always the construct the branch is named after.* Second, an all-unit enum equality
+bakes all three tags in one pool, which is a stronger single witness than three separate ones
+because it also pins the intern ORDER.
+
+**THE PIPE ATE AN EXIT CODE AGAIN, THIRD RECORDED INSTANCE.** I backgrounded
+`cargo test | tail -60`; the harness reported exit 0 and the suite had FAILED. Found by reading
+the output, not the status. The failure was real and mine: a test pinned the old boundary, that a
+`struct` declaration must be REFUSED with a named message. Inverted rather than deleted, and it
+now records all three states the behaviour has had.
+
+**A CONSEQUENCE WORTH THE OPERATOR'S ATTENTION.** With 18..20 skipped, no construct tried reaches
+`open_decl`'s named panic -- plain `struct`, `trait`, `impl` and a const-generic `struct` all
+parse. Recorded as **not found**, not as unreachable, matching the `Op::IsStruct` distinction.
+
+**LEFT UNREPAIRED DELIBERATELY.** Six eager-boolean constructs the boundary calls `Ok` that the
+shipping compiler miscompiles. The fix is in operator lowering; repairing it in the same change
+would make the census above unattributable, which is exactly how a `bool`/`Bool` regression
+shipped last session by changing both sides of a differential comparison at once. Pinned in the
+failing direction so the repair reports itself.
+
+**Proportionality, which belongs beside every claim here.** `self_hosted_compile` cross-checks
+against the reference and refuses on divergence, so none of this reached a user as a wrong module.
+The exposure was to direct callers of the `self_host_compile*` entry points.
+
+Brief, census and revert recipe: `docs/decisions/POOL_TAG_RESIDENCY_BRIEF.md`.
+**TWO STAGE COMMANDS WERE WRITTEN, DISPATCHED, ANNOUNCED, AND NEVER RUN (2026-08-20, night).**
+
+Found while scoping `CONSTS`, Order 1 item 1, and it is a finding about ESTIMATION rather than about
+the code.
+
+The tree's own analysis is encouraging: the flattener already emits a byte-identical `CONSTS`, the
+170-node walk cap is the only blocker, and batching is the route because a scalar forest carries no
+state between batches. Then `fl_stream_begin` and `fl_stream_step` turn out to already exist,
+dispatched as commands **176 and 177**, one node in and one record out -- the same shape that removed
+the 90-record chunk cap.
+
+**Read together, that says the remaining work is driver wiring. It is not.**
+
+**NOTHING HAS EVER CALLED THEM.** No driver, no test. Verified by searching the whole repository for
+both the command numbers and the function names; the only hits are the dispatch arms and the mailbox
+announcement to the other line that `highest_command` had moved 175 to 177. The control is
+`CMD_STEP = 175`, immediately below them, which `window_emit_chunks` does drive.
+
+So taking `CONSTS` means writing the driver AND validating stage code that has never executed. That
+is materially larger than the analysis suggests to a reader who does not check whether the path is
+reached -- and I was that reader for about thirty seconds.
+
+**THIRD INSTANCE OF ONE CLASS THIS WEEK, WHICH IS WHY IT IS WORTH NAMING.** The `v0.3.0` line found
+`Op::Reset` credited as lowered because a CHUNK containing it lowered, while the op sat in a region no
+edge reaches; a mutation crediting it moved their figure to 57 of 66 **with every test still green**.
+`Op::IsStruct` is emitted only on a fallback nothing has reached. And now two commands announced as
+delivered.
+
+**PRESENCE, DISPATCH, AND EVEN AN ANNOUNCEMENT ARE NOT EVIDENCE THAT CODE RUNS.** The cheap check is
+to search for callers before costing work that depends on it. I have been applying that to opcodes for
+two days and had not thought to apply it to the stage's own command surface.
+
+**NOT A DELETION.** They are the intended route for `CONSTS`. The test records them as unreached and
+fails when that changes, so whoever drives them updates the record rather than rediscovering the gap.
+The command set is DERIVED from the stage rather than listed, with a must-fire guard on the derivation
+finding more than a hundred commands, because a parse that found nothing would satisfy every
+assertion while measuring the empty set.
+
+---
+
+**THE CHAINED-INDEX DEFECT IS NOT TRUNCATION, AND I STOPPED RATHER THAN BUILD A FEATURE
+(2026-08-20, evening).**
+
+The second half of the nested-array family. **My own first report of it was wrong about the
+mechanism**, which is why diagnosing before fixing mattered here.
+
+I recorded it as "the body is TRUNCATED -- no SetLocal, no GetLocal, neither GetIndex", implying
+codegen dropped ops. **It does not.** `parse.kel` emits records, and they are the WRONG records:
+
+```
+a[1]      ->  Local(0), Literal(1), Index                 -- correct
+a[0][1]   ->  Local(0), Literal(0), Index, Literal(1), ArrayLit
+```
+
+**The second `[1]` parses as an ARRAY LITERAL.** The truncated op stream is downstream fallout from a
+malformed node forest, not a codegen bug -- and I would have gone looking in codegen on the strength
+of my own note.
+
+**CHAINED INDEXING IS NOT SUPPORTED BY THE PARSER AT ALL.** `ps.aa_phase` is armed only after a
+let-bound array `Local` is emitted, and nothing re-arms it once an index completes, so the next `[`
+falls through to the array-literal branch. **`let b = a[0]; b[1]` diverges too**, which rules out the
+chain as the trigger: it is indexing a nested array at all. That case is now in the boundary table
+precisely because it discriminates.
+
+**WHY I STOPPED.** A fix needs three coordinated pieces: a binding record saying the element is an
+ARRAY of byte size N (`let_array` covers a scalar kind and `let_array_struct`/`let_array_size` a
+struct; there is nothing for an array), a nested-variant postfix phase, and re-arming after an index.
+**That is a FEATURE, not the defect fix its sibling was**, and my record on this exact file today is
+two wrong attempts on a strictly simpler change -- one of which returned a worse answer than the bug.
+
+The stopping rule written this morning said to stop if the work reached beyond the size computation
+and index lowering. It has not reached the arena or WCMU, so the letter of the rule permits
+continuing; **the spirit does not**, because "three coordinated pieces of parser state machinery" is
+the thing the rule exists to catch. Recording that distinction rather than quietly taking the
+permissive reading.
+
+**WHAT IS RECORDED IS A SPECIFICATION, NOT A SYMPTOM.** The next attempt starts from what the parser
+needs rather than from "the body is truncated", and the machinery for a nested variant already exists
+in `step_structarrayaccess` with `da.fa_index_variant`. That is worth more than a half-built feature.
+
+---
+
+**A NESTED ARRAY LITERAL NOW SIZES ITS OUTER COMPOSITE, AND MY FIRST FIX WAS WORSE THAN THE BUG
+(2026-08-20, evening).**
+
+Recorded as `Diverges` overnight and deliberately left; taken now with the stopping rule written in
+advance. **One of two defects is closed.**
+
+The array-literal close handled exactly two element kinds: a STRUCT, whose byte size it looked up,
+and everything else, assumed to be a `Word` at eight bytes. **An ARRAY element is neither**, so
+`[[1, 2], [3, 4]]` fell through to `count * 8` and sized its outer composite as 16 where the reference
+computes 32. Depth two, depth three and a non-square inner length are all byte-identical now.
+
+**MY FIRST FIX RETURNED A WORSE WRONG ANSWER THAN THE BUG, AND THAT IS THE PART WORTH KEEPING.** I
+carried "the byte size of the most recently closed array" in a single flat field on `stmt`. **It leaks
+across SIBLINGS.** In `[[1, 2], [3, 4]]` the second inner array read the FIRST one's size and doubled
+to 32; the outer then doubled again to 64. The bug produced 16 where 32 was right; my fix produced 64.
+
+**The size belongs to a NESTING LEVEL, not to a moment in time.** It is now a per-level array parallel
+to the element counter, written by a closing inner array into its PARENT's slot and cleared from its
+own, so a later sibling starts from no assumption.
+
+**THE SECOND ATTEMPT FAULTED IMMEDIATELY WITH INDEX -1**, because the nesting pointer is decremented
+before the slot is read. **An off-by-one that faults on its first run is the good outcome.** The flat
+flag's version did not fault -- it returned a plausible number that was wrong, which is the failure
+mode this whole session has been about.
+
+**A PROBE OF MINE PANICKED AND I NEARLY REPORTED A REGRESSION I HAD NOT CAUSED.** The struct-array
+control failed with "a `struct` declaration is NOT among them" -- the documented top-level `struct`
+gap, which `parse.kel` has never handled. Confirmed by running the boundary on the STASHED tree before
+concluding anything. **Check whether the failure predates the change before calling it a regression.**
+
+**THE CHAINED INDEX `a[0][1]` IS UNTOUCHED AND STAYS `Diverges`.** Two defects; one closed. The family
+is not claimed.
+
+**THE MARGIN PIN MOVED A NINTH TIME, 671 -> 672 names**, the one name being `al_elem_bytes`. Worth
+noting that the WRONG fix would have cost one name too, so the count is not a proxy for correctness --
+which is exactly why the pin is a pin and not a computed value.
+
+---
+
+**`Op::Len` IS REACHABLE; `Op::IsStruct` RESISTED, AND FALSIFYING MY OWN HYPOTHESIS IS THE RESULT
+(2026-08-20, afternoon).**
+
+The `v0.3.0` line's opcode census stood at 64 of 66 with two unwitnessed after eight construct
+attempts. **They reframed it correctly and that reframing is what solved it**: the question is not
+"which construct" but "whether one exists", and both opcodes are emitted only as a FALLBACK when a
+static type is unknown. **The target is making INFERENCE FAIL, not finding an unusual shape.**
+
+**`Op::Len`: FOUND.** `static_for_in_length` matches `ArrayLiteral`, `Call`, `FieldAccess`, `Ident`,
+`ArrayIndex` and `Match`, then falls through to `_ => None`. **`Expr::If` is not among them.** So
+`for x in if c { a } else { b }` takes the fallback and emits `Op::Len`. Confirmed with a constant
+and a runtime condition, and pinned with six controls -- one per handled source kind -- so a
+regression that made the guard return `None` for everything fails rather than looks like a win.
+
+**THE METHOD IS THE TRANSFERABLE PART.** Six of my probes varied the SHAPE of the source. The one
+that worked came from reading the guard's own match arms for what they OMIT. Eight failed attempts on
+the other line plus six of mine, all guessing; one reading of the arm list, immediate answer.
+
+**`Op::IsStruct`: NOT FOUND IN NINE ATTEMPTS, AND MY HYPOTHESIS WAS WRONG.** The guard is
+`named_type_name(ty) != Some(type_name)`, `ty` coming from `infer_expr_type`, which has **no
+`Expr::If` arm either** -- so the same trick should work. **It does not**, with a constant or a
+runtime condition. Making inference fail is NECESSARY BUT NOT SUFFICIENT; something further along the
+struct-pattern path suppresses the test, and what that is has not been established.
+
+**Recording a falsified hypothesis is worth more here than another guess.** The test states what was
+tried -- plain local, `if` expression both ways, call result, array index, nested match, struct field
+-- and says explicitly that "not found" is NOT "unreachable". If a later attempt reaches it, the test
+fails and instructs its author to pin the construct rather than relax the assertion.
+
+**IF NOTHING CAN REACH IT, THAT IS THE FINDING**, and a larger one than a witnessed opcode: an
+instruction set whose count is a stated rad-hard constraint carrying an opcode with no producer.
+
+**I MADE THE SAME PROBE-SYNTAX MISTAKE MY OWN BRIEF WARNS ABOUT, ONE HOUR AFTER WRITING IT.** The
+first `for`-in probe used a `limit` clause, which the reference rejects with "a `limit` clause
+requires a range `for` loop". The brief says to generate probes from corpus sources rather than from
+memory of the grammar; I generated from memory. Third probe-syntax error in three sweeps. **Knowing
+the rule is not the same as having the habit.**
+
+---
+
+**THE TWO SELF-HOSTED COMPILERS HAVE MEASURABLY DIVERGED, AND THE SUPPORT TABLE MEASURES THE WRONG ONE
+(2026-08-20, morning).**
+
+`tests/selfhost_codegen.rs` carries its own `self_host_compile`, and its own comment has warned that
+"a fix to one is not a fix to the other". **That was a hazard. It is now an observed fact.**
+
+```
+fn f() -> Word { let s = "hi"; 1 }
+  reference:     constants [StaticStr("hi"), Int(1)]
+  this file's:   constants [StaticStr("hi"), Int(1)]   -- agrees
+  the library's: constants [Int(3),          Int(1)]   -- the intern id, as an Int
+```
+
+Ops identical in all three; only the pool differs, which is why an ops-only comparison calls it clean.
+
+**I FOUND THIS BY BEING WRONG IN THE USEFUL DIRECTION.** I added a string case expecting `Diverges`,
+because my sweep -- which used the LIBRARY compiler -- had measured a divergence. The boundary test
+came back `Ok`. The table measures the copy, and the copy is the one that is CORRECT. So the table
+records `Ok` for a construct the shipping compiler gets wrong.
+
+**That is not a hypothetical cost of duplication. It is the duplication producing a wrong answer in
+the project's own record of what self-hosting supports.** Third night-time instance and by far the
+most consequential: the duplicate blocks the token residency, needed the boolean-literal slots seeded
+separately, is the subject of the support table, and now demonstrably disagrees with the shipping
+compiler on an observable.
+
+Pinned by `the_two_self_hosted_compilers_disagree_on_a_string_literal`, which asserts the local copy
+AGREES with the reference as its control, so the divergence is attributed to the library rather than
+to the source, and which fails when the two converge -- with the instruction to fold the case in and
+delete the test rather than relax it.
+
+**AND I WITHDREW TWO ITEMS FROM MY OWN COMPLETION CONDITION, WHICH IS THE OTHER FINDING.** Items 4 and
+5 asked for a file operand and a sidecar fingerprint. Checked against the tree: **the staged pipeline
+command they apply to does not exist** -- no phase-selection or sidecar flag anywhere -- and
+`keleusma compile` already takes a file and never reads standard input.
+
+They were not properties of the tree. They were properties of a command nobody has built, and I wrote
+them without checking. **A completion condition must be checkable against the tree as it is, and "does
+this exist" is part of that check.** Skipping it produced two items satisfiable only by building
+unreviewed infrastructure unattended or by weaselling. The withdrawal is recorded in the condition
+itself rather than the items quietly deleted, because a badly written condition is worth more as a
+recorded mistake than as a silent amendment.
+
+---
+
+**ORDER 1 ITEM 3 REACHES `let` BINDINGS, AND ONE FORM WAS BLOCKED BY THE ROW SHAPE RATHER THAN BY THE
+PIPELINE (2026-08-20, morning).**
+
+The declared bindings landed days ago; a `let` bound to a literal produced no pipeline row. It does
+now, and `the_pipeline_rows_are_the_declared_subset` -- which told the next increment to fold its case
+into the agreement test rather than delete the pin -- has been honoured exactly.
+
+**THE TRAP WAS ADJACENCY, AND THE DESIGN NOTE FROM TWO NIGHTS AGO PAID FOR ITSELF.** `LetIn` is BINARY
+and pops its right child then its left, so the stream for `let a = 7; a` is
+`[Literal(7), Local(0), LetIn(0)]` and the record immediately before the `LetIn` is the CONTINUATION.
+Reasoning from adjacency picks the wrong node every time. The forest gives it directly -- `lhs` is the
+initialiser -- and it comes from `reconstruct_via_kel`, the validated walker, rather than a second
+walk written here.
+
+**JOINED BY SLOT, NOT BY POSITION.** `LetIn`'s payload is the frame slot and `let_names` carries
+`(slot, name)`. Fold-order pairing would be positional and would fail silently on a reordering.
+
+**A BOOLEAN `let` WORKS ONLY BECAUSE OF LAST NIGHT'S FIX.** `let b = true` yields tag 2 through the
+`Unit` node carrying the `PushImmediate` operand. Before the boolean-literal repair it would have been
+a `Local` and produced nothing -- so the two increments compose, and the second could not have been
+written first.
+
+**I DREW A CALL ARM AND THEN DELETED IT, WHICH IS THE DECISION WORTH RECORDING.** `let a = g()` is a
+form-1 alias whose row carries the TARGET'S NAME ID in the tag position. The two extractions do not
+share an id space -- the reference numbers by insertion order as it walks, the pipeline uses the
+lexer's intern table -- **so a form-1 row cannot be compared by name string**, which is the discipline
+that keeps this comparison honest.
+
+The pipeline could produce that row today. Comparing it would mean either comparing id spaces, which
+compares the numbering rather than the content, or changing the row shape to carry a target string.
+**The second is right and it is a slice of its own**, so the arm came out rather than shipping a
+comparison that would have passed while measuring the wrong thing. That is the same failure mode as
+the `Bool`/`bool` regression, avoided rather than repeated.
+
+**THE PIN IS RESTATED, NOT REMOVED**, because what it guards moved rather than went. Two forms remain
+unreached FOR DIFFERENT REASONS -- a call by the row shape, an operator expression by the type channel
+needing the node index -- and the pin now says which is which, so the next increment knows which
+problem it is solving.
+
+Mutation-verified: dropping the literal arm fails both the agreement test and the pin.
+
+---
+
+**THREE OF THE FOUR "KNOWN GAPS" WERE SILENT MISCOMPILES, AND THE TABLE COULD NOT SAY SO
+(2026-08-20, night).**
+
+`Support::Gap` meant two things: a construct the stage REFUSES loudly, and a construct it compiles to
+DIFFERENT BYTES. **Those are not the same thing.** A refusal tells the caller it is unsupported; a
+divergence is a wrong module with only the reference cross-check between it and an artifact. This is
+the shared-message defect this line has recorded against four guards in the stage sources -- found
+here in the INSTRUMENT that measures them.
+
+**SPLITTING IT RECLASSIFIED 75% OF THE KNOWN GAPS INTO A MORE SERIOUS CATEGORY**, measured rather
+than assumed. `eq/struct_tuple_of_impure_struct`, `eq/struct_field_array_of_tuple` and
+`scope/float_arith` all **Diverge**. Only `scope/generic_fn` genuinely **Refuses**. The table said
+"gap" and any reader would take that as "does not support"; for three of four the truth was "silently
+miscompiles".
+
+**MY FIRST VERSION OF THE SPLIT WAS WRONG AND THE EXPECTATIONS CAUGHT IT INSTANTLY.** I classified by
+calling `keleusma::selfhost::self_host_compile`, and a dozen constructs this table has always called
+`Ok` came back `Refuses` -- struct construction, struct field reads, most of the struct equality
+family. **The library's compiler and this file's compiler are DIFFERENT COMPILERS.** The file carries
+its own copy of the driver, as its own comment records, and `assert_self_host_byte_identical` uses the
+copy. Classifying with one and comparing with the other measured two different things.
+
+**SO THE BOUNDARY TABLE DESCRIBES THE TEST-LOCAL COMPILER, NOT THE SHIPPING ONE.** That is the third
+time in one night this duplicate has mattered: it blocks the token-residency work, it needed the
+boolean-literal slots seeded separately, and now it turns out to be the subject of the support table.
+**Widening `ParsedFn`'s accessors so the copy can be deleted is looking less like a convenience and
+more like the central structural fix.**
+
+**THE INSTRUMENT ONLY CAUGHT MY ERROR BECAUSE THE EXPECTATIONS WERE ALREADY WRITTEN DOWN.** Twelve
+`Ok` entries disagreeing at once is unmistakable; the same mistake in a table without expectations
+would have looked like a discovery. That is the argument for a table of expected verdicts over a
+report of observed ones.
+
+**Nested array literals are recorded as `Diverges` and NOT fixed.** The outer composite is sized 16
+where the reference computes 32, and a chained index truncates the body entirely. Two defects in the
+composite-layout machinery that the flat-byte representation makes load-bearing for memory bounds --
+not a change to make unattended, per the brief's own rule.
+
+---
+
+**THE CAST DIRECTION WAS INVERTED, AND THE SWEEP THAT FOUND IT IS THE REAL DELIVERABLE
+(2026-08-20).**
+
+After the boolean-literal miscompile I stopped guessing at goals and tested a hypothesis: **the bool
+bug was not special.** The differential oracle validates the self-hosted compiler against its own
+sources, so any construct those sources do not use is unverified by construction. Twenty small
+programs through both compilers, compared as BYTES.
+
+**Two more silent mis-lowerings in the first twenty cases.**
+
+**THE CAST.** `fn main() -> Byte { 7 as Byte }` emitted `ByteToWord` where the reference emits
+`WordToByte`. `push_cast` said why in its own comment -- "a `Byte as Word` widening" -- and it could
+not do better, because `parse.kel` emitted the `Cast` node at the `as` TOKEN and then **discarded the
+target type name**. The direction never reached the node, so both directions lowered identically and
+one was always wrong. A `let b = 7 as Byte; b as Word` chain got the first cast wrong and the second
+right, in one chunk.
+
+**THE FIX MOVES WHICH TOKEN PRODUCES THE RECORD, NOT WHERE IT LANDS.** The `Cast` node is now emitted
+at the target type name rather than at `as`. Nothing is emitted between those two tokens, so the
+record's POSITION in the stream is unchanged -- only its producer. `Cast` is unary and its payload was
+unused, exactly as `Unit`'s was for the booleans, so no new node kind and nothing for the three record
+decoders to learn. Payload 0 selects the widening it always emitted, so every program that compiled
+before is byte-identical.
+
+**`parse.kel` ALREADY HAD `byte_id` FOR THIS.** The `word_id`/`byte_id`/`bool_id` shared slots exist
+to recognise type names by interned id; the cast site simply never consulted them. Third construct in
+two nights whose information was present and thrown away -- after the parameter name the driver
+discarded and the `let` name that needed a record.
+
+**THE FINDING THAT GENERALISES IS THE TABLE'S SHAPE.** Labels by family: `eq` **41**, `bool` 10, `op`
+8, `comp` 8, `scalar` 6, `prec` 5, `ctrl` 4, `tuple` 1. **Forty-one of eighty-eight cases are equality
+lowering, and there was no cast family at all.** A table that thorough in one area and absent in
+another describes how well one feature was tested, not where support ends. Both silent miscompiles
+found tonight sit in families it did not cover.
+
+**A SECOND DIVERGENCE IS RECORDED AND NOT YET CLAIMED AS A DEFECT.** A string literal yields
+`Int(3)` -- the raw intern id -- where the reference yields `StaticStr("hi")`; the ops are identical
+and only the constant pool differs. `Text` appears in `CLAUDE.md` among the divergence classes the CLI
+refuses, so this may be a known limitation. **Check before reporting it as new**, which is the
+discipline the ECC misreport cost an operator ruling to learn.
+
+**AND THE SWEEP'S OWN METHOD NOTES ARE WORTH MORE THAN EITHER FIX.** Compare BYTES, not ops -- the
+string case has identical ops and a different module. Classify three ways, not two: identical,
+self-refuses loudly, and DIFFERS; only the third is dangerous and a loud refusal is an honest gap. And
+a `PARSE-FAIL` in a probe is usually the probe's fault: mine used `let mut`, which this language does
+not have.
+
+Recorded in `../decisions/SELFHOST_CORPUS_BLIND_SPOT.md`.
+
+---
+
+**THE SELF-HOSTED COMPILER SILENTLY MIS-LOWERED `true` AND `false`, AND THE ORACLE COULD NOT SEE IT
+BY CONSTRUCTION (2026-08-20).**
+
+Found while probing the record stream for an unrelated goal. Measured against the reference:
+
+```
+fn main() -> bool { true }          reference: PushImmediate(1), Return
+                                  self-hosted: GetLocal(0), Return
+fn main() -> Word { if true {..} }   reference: PushImmediate(1), If(4), ...
+                                  self-hosted: GetLocal(0), If(4), ...
+```
+
+**A SILENT MISCOMPILE, NOT A REFUSAL.** `true` reached the record stream as `(2, 0)` -- node kind 2,
+`Local`, slot 0 -- and `"true"` sat in the intern table as an ordinary identifier. The value read was
+whatever occupied the matching slot.
+
+**THE CAUSE WAS ALREADY DOCUMENTED FOR A DIFFERENT PAIR OF KEYWORDS.** The Tok space is full, which
+`parse.kel` records for the eager `and`/`or`: they are lexed as identifiers and recognised by interned
+id. `true` and `false` fall through the identical hole and were never given the identical treatment.
+The fix follows that precedent exactly, in OPERAND position rather than operator position.
+
+**NO NEW NODE KIND, AND THAT WAS THE DESIGN DECISION WORTH MAKING.** `PushImmediate` already encodes
+`0 = Unit`, `1 = true`, `2 = false`, and `Unit` is a leaf whose payload was unused and always zero.
+One kind expresses all three. A new kind would have had to be taught to the leaf table and to all
+THREE decoders of the parse record stream -- the hazard that failed eight tests the last time a kind
+was added here. Existing programs emit `PushImmediate(0)` exactly as before, so byte identity holds.
+
+**WHY THE DIFFERENTIAL ORACLE WAS SILENT.** No stage source uses a boolean literal in code. The
+self-hosted compiler's correctness claim rests on compiling its own sources byte-identically, so the
+oracle covers only constructs those sources contain. **Seventh instance of the meta-defect**, and the
+most consequential: the case list here IS the corpus the whole self-hosting claim rests on. The
+construct-support table did cover booleans -- every case taking a bool PARAMETER, not one a literal --
+so it overstated support by omission. Four cases added, the boundary is now 83 SOk.
+
+**WHAT BOUNDED THE DAMAGE, CHECKED RATHER THAN ASSUMED.** `self_hosted_compile` cross-checks every
+chunk's ops, constant pool and local count against the reference and refuses on divergence, so the
+shipping command-line path gave a loud error and never a wrong artifact. The exposure was to direct
+callers that skip the check.
+
+**THE HARNESS-COPY HAZARD FIRED ON SCHEDULE.** The boundary test came back `Gap` for all four new
+cases while a direct probe showed byte identity. `tests/selfhost_codegen.rs` carries its own copy of
+the driver and seeds the parser's shared block itself, so a slot appended in the driver does not
+reach it. This is the same duplicate that blocks the token-residency work, earning its keep as a
+hazard twice in one night.
+
+**MY OWN MUST-FIRE GUARD FIRED, AND IT WAS RIGHT TO.** I wrote a check asserting no stage source
+contains a boolean literal, and it failed instantly -- on the word `true` inside the very comment
+explaining the fix, and on sixty-nine occurrences in `codegen.kel`'s prose. **A guard that fires on
+its own documentation measures the wrong thing as surely as one that cannot fire at all.** It strips
+comments now.
+
+**AND THE EARLIER MEASUREMENT I REPORTED WAS SIMPLY WRONG.** I had claimed "zero of twelve stage
+sources" from a `grep -cE` that returned zero for every file while the words were plainly present in
+comments. The conclusion survived -- zero in CODE, verified with comments stripped -- but the
+instrument that produced it did not. **A figure that happens to be right is not a measurement.**
+
+---
+
+**I BROKE BOTH SIDES OF A DIFFERENTIAL ORACLE IN ONE INCREMENT, AND IT WENT GREEN (2026-08-20).**
+
+`bool` is the boolean primitive. `Bool` is an ordinary named type. In `d1148e76`, merged in PR #175,
+I added `named_type_tag` mapping `Named("Bool")` to the stage's boolean tag, writing in the commit
+message that a match on `Prim` alone "silently drops every `Bool` annotation". **The observation was
+true and the conclusion was backwards.** Those annotations are dropped because they are NOT booleans.
+I turned correct behaviour into a defect and documented my reasoning confidently while doing it.
+
+**MEASURED, NOT INFERRED**, by parsing each spelling and printing the `TypeExpr` constructor:
+
+```
+Word => Prim      bool => Prim      Byte => Prim      Float => Prim
+word => PARSE FAIL   Bool => Named   byte => PARSE FAIL  float => PARSE FAIL
+```
+
+`bool` is the only lowercase primitive. The reference rejects `fn f(b: Bool) -> Word { 1 + b }` with
+**"cannot add Word and Bool"** -- a named type it will not add, not a boolean. The `Word`, `Byte` and
+`Float` arms of the function I added were dead code besides, since all three arrive as `Prim`.
+
+**WHY NOTHING CAUGHT IT IS THE ACTUAL FINDING.** I made the same wrong change on BOTH SIDES of a
+differential comparison. The reference-AST extraction learned to call `Named("Bool")` a boolean, and
+`binding_rows_from_pipeline`'s `tag_of` keys on the type NAME STRING and mapped `"Bool"` to the same
+tag. **Two wrongs agreeing is a green test.** A differential oracle detects a defect introduced on ONE
+side; here the common cause was the author, in one increment, touching both. Add that to the
+meta-defect list: it is a seventh instance of a suite whose coverage is a property of something other
+than the thing under test.
+
+**THE CONSEQUENCE WAS REAL AND I VERIFIED IT BEFORE CLAIMING IT.** A first test asserted the stage
+rejects a `Bool`-typed value used as an `if` condition. It failed before the fix -- the stage ACCEPTED
+it, a false accept, because it believed the value was boolean.
+
+**THEN THE TEST TURNED OUT NOT TO DISCRIMINATE, AND I REWROTE IT RATHER THAN KEEP A FLATTERING ONE.**
+After the fix the tag is unknown, and the stage defers on unknown, so it accepts again. Same verdict,
+opposite reasons -- a verdict test cannot tell those apart. **The tag was what was wrong, so the tag is
+what is asserted.** The test now checks the extraction directly, with a `bool` control that must carry
+tag 2 so a `tag_for` returning zero for everything cannot pass.
+
+**AND IT COMPARES EACH EXTRACTION TO THE REFERENCE COMPILER RATHER THAN TO THE OTHER**, which is the
+only discipline that would have caught the original. Comparing the two to each other is precisely what
+failed.
+
+**A SMALLER CORRECTION INSIDE THE FIX.** For the `Bool` case the name `b` is absent from the intern
+table entirely, because a binding with no tag is never interned. My helper called `.expect("the
+corpus binds `b`")` and panicked. **Absence IS the correct answer** -- no row and no tag are the same
+statement -- so the helper treats a missing name as tag 0, and says so.
+
+Mutation-verified in both halves: restoring `"Bool"` in the pipeline table fails the test by name.
+
+---
+
+**STAGE TWO IS BLOCKED ON A DOCUMENTED DUPLICATE, AND THE BLOCKER IS A PUBLIC-API DECISION RATHER
+THAN A DEFECT (2026-08-20).**
+
+Shrinking `toks.packed` is not a one-line change, and the probe that established that is the
+increment. Rather than reason about which callers still seed the whole stream, I set the array to
+4,096 and ran the whole suite. Two causes, twelve failing tests, and **not one of them in production
+code** -- stage one had already moved every production entry point to the fused feed.
+
+| cause | tests |
+|---|---|
+| `tests/selfhost_codegen.rs:4079`, the harness's own token feed | 11 |
+| `the_chunk_table_cap_is_refused_by_the_driver_and_not_by_the_stage`, 14,334 tokens | 1 |
+
+**THE SECOND WAS TRIVIALLY FIXABLE AND IS FIXED.** Both it and `wire_kel_parses_now_that_the_chunk
+_table_admits_it` have the CHUNK table as their subject; the token feed is incidental to what they
+measure, and driving the collecting feed pinned the array at 14,334 and 24,836 tokens for reasons
+unrelated to either test. Both now use the fused feed.
+
+**THE FIRST IS THE REAL BLOCKER AND IT IS ALREADY DOCUMENTED IN THE FILE THAT CAUSES IT.**
+`tests/selfhost_codegen.rs` carries its own `fn parse_functions` and its own `ParsedFn`, and its own
+comment says why that matters: *"That duplication is the reason the same defect had to be fixed in
+three places... `self_host_compile` below is a copy of the shipping driver, so a fix to one is not a
+fix to the other."* The harness seeds a whole token stream, so it pins the array at the largest stage
+source it parses.
+
+**WHY THE COPY EXISTS, MEASURED RATHER THAN ASSUMED.** `ParsedFn` has **zero public fields and four
+public accessors** -- `category`, `param_count`, `guard_records`, `body_records`. The harness needs
+the name, the parameter names and types, the return type and the let bindings, none of which are
+reachable. **The duplicate is not laziness; it is the only thing the public surface permits.**
+
+**SO THE DECISION IS THE OPERATOR'S AND IT IS SMALL**: widen `ParsedFn`'s accessors so the harness can
+delete its copy. That removes a documented three-places-to-fix hazard AND unblocks the residency work,
+which is a better trade than either alone.
+
+**WHAT I REFUSED TO DO, AND WHY.** Shrinking to clear the true floor means sizing above `parse.kel`'s
+33,445 tokens, so 40,960 becomes about 34,816 -- a **15% saving that cuts headroom from 18% to 4%**.
+Paying churn to make the tightest bound in the corpus tighter is a worse position than today's, so it
+was not taken. **A partial win that degrades a margin is not a partial win.**
+
+**THE HANDOFF'S TOKEN FIGURE HAD DRIFTED**, found incidentally: `parse.kel` is **33,445** tokens, not
+the recorded 32,907. Every stage is now measured by an instrument in the tree rather than quoted from
+prose, which is the fifth figure this line has had to re-derive after finding it stale.
+
+**A SMALL SELF-CORRECTION.** My first version of that instrument read the stage sources by relative
+path at runtime, which depends on the working directory a runner chooses. It is `include_str!` now --
+compile-time, and wrong-path becomes a build error rather than a test that measures nothing.
+
+---
+
+**THE TOKEN BOUND IS OFF THE PRODUCTION PATH, AND THE TEST THAT WOULD HAVE PROVED IT FOUND A BIGGER
+PROBLEM (2026-08-19).**
+
+Two rulings. The `-255` split, and stage one of the token-residency work.
+
+**THE `-255` SPLIT WAS AN OVERSIGHT AND THE FILE SAYS SO IN ITS OWN VOICE.** `mi_join_header` and
+`mi_join_chunks` both call `mi_join` first, which returns `-255` from a pool overflow, and then each
+returned `-255` itself for a missing HEADER region. One call path, two meanings, and the two call for
+OPPOSITE responses -- the stage is too small, against the caller built its input wrongly. The comment
+above `emit_name_records_from_nout` had already chosen `-256` over `-202` on exactly this reasoning.
+The header check was the one place the convention was not applied.
+
+**`-235` WAS THE OBVIOUS CODE AND IT WAS ALREADY SPENT.** The missing-region family is `-233`, `-234`
+and `-261`; the natural third member was taken by an unrelated `nmap` bounds check. Taking it anyway
+would have recreated the ambiguity being removed. The free set was DERIVED by reading every negative
+code out of the file, and `-229` sits below its family with the reason recorded at the site.
+
+**STAGE ONE MOVED FOUR ENTRY POINTS, AND THE INTERESTING PART IS WHAT IT DID NOT MOVE.** Nothing in
+production used the fused feed: it existed, was proven, and was unused, while
+`self_host_compile_scratch` -- the command-line backend -- went through the collecting one. The cap
+assertion sat ABOVE the branch, so the fused feed carried a bound that is meaningless for it. Gating
+it on `!fused` took the 40,960-token bound off every compile a user can start, without touching a
+single array.
+
+**THE COLLECTING FEED IS RETAINED DELIBERATELY AND IS NOW THE ORACLE.** Two tests compare the feeds,
+and a differential oracle with one side deleted is not an oracle. Deleting it would leave fusion
+checked only against the Rust reference, which is a weaker claim about the FEED specifically: the
+reference agrees with a whole-program compile, not with a particular token-delivery order.
+
+**THE BEHAVIOURAL PIN RAN FOR TEN MINUTES AND WAS WITHDRAWN. THAT IS THE FINDING.** A source past the
+cap, accepted fused and refused collecting, is the obvious test. Measured instead of waited out:
+
+```
+tokens=459   fused=1606ms   collecting=1969ms
+tokens=909   fused=2491ms   collecting=2850ms
+tokens=1809  fused=4455ms   collecting=4774ms
+tokens=3609  fused=15062ms  collecting=15315ms
+```
+
+Doubling 1,809 to 3,609 multiplies the time by about **3.4**. Superlinear, extrapolating to roughly
+half an hour at 41,000 tokens.
+
+**BOTH FEEDS SHOW IT AND THEY ARE WITHIN A FEW PERCENT OF EACH OTHER**, which localises the cost to
+the SHARED record handling and driver rather than to token delivery. Two things follow. First, moving
+production to fused is not a regression -- fused is slightly faster at every size. Second, **stage
+two removes the MEMORY bound and the bound a large input meets first is now TIME.** Saying that now
+is the difference between a known limit and a surprise.
+
+**A TIMING ASSERTION WAS CONSIDERED AND REFUSED.** The instrument asserts only that the two feeds
+agree on the function count. A wall-clock threshold in a test is a flake waiting for a loaded machine,
+and a flaky gate teaches people to re-run rather than to read.
+
+**I ALMOST SHIPPED A GUARD I HAD ALREADY ARGUED AGAINST.** My first instinct for keeping production on
+the fused feed was a test grepping `src/` for call sites. That is the textual-guard shape whose scope
+keeps turning out narrower than its class -- the same defect as the no-copies guard that walked two
+directories and missed a live fifth copy. The behavioural version was right and was unaffordable, so
+what ships is the gating plus this record, and the gap is named rather than papered over.
+
+---
+
+**THREE RULED REFUSALS, BATCHED FOR CONTINUOUS INTEGRATION, AND THE MIDDLE ONE WAS A SILENT WRONG
+ANSWER RATHER THAN A MISSING NUMBER (2026-08-19).**
+
+Three operator rulings implemented together on the operator's approval to batch. Batching is a real
+trade and it is recorded rather than assumed: a bisect now lands on all three at once and a revert
+takes all three, against three saved gate cycles of roughly forty-eight minutes each.
+
+**THE NESTING CAP WAS NOT THE INTERESTING PART. THE SILENT DROP WAS.** `verify_depth.kel`'s
+`push_frame` read `if df.sp > 127 { df.sp = df.sp; }` -- a no-op branch, documented as a deliberate
+drop. In a VERIFIER that is not defensible. A dropped push means the nested region is never walked,
+the parent folds in whatever `child_*` the PREVIOUS delivery left behind, and `deliver` later
+decrements `sp` for a frame that was never pushed. The pass then publishes a verdict over a program
+it did not traverse, and **that verdict can be wrong in either direction**: it can miss a real
+underflow and it can invent one.
+
+**THE SEVERITY DEPENDS ENTIRELY ON TWO FACTS I CHECKED BEFORE CLAIMING ANYTHING.** `verify_depth.kel`
+is reached only through `depth_reject_chunk_via_kel` and its composition in
+`structural_reject_module_via_kel`; it is NOT wired into `self_hosted_compile`, and the shipping
+verifier is still the Rust `src/verify.rs`. So this is a latent defect in a stage being validated
+toward Order 2, **not** a hole in a released artifact. Saying so is the difference between a report
+and an alarm.
+
+**128 WAS NEVER A DECLARED CAP.** It was an array size with a silent-drop guard, which is exactly
+what the `v0.3.0` line warned against when they said a Keleusma verifier needs a declared cap with
+programs past it rejected rather than a number read off today's sources. The ruling of 32 replaces a
+silent wrong answer with default-deny, which is this project's stated conservative-verification
+stance applied where it had not been.
+
+**FRAMES ARE NESTING PLUS ONE, AND GETTING THAT BACKWARD WOULD HAVE NARROWED THE LANGUAGE SILENTLY.**
+`run` pushes a root frame for the whole chunk before any nested construct, so depth `d` occupies
+`d + 1` frames. The arrays are sized `max_nesting() + 1 = 33` and the guard admits exactly 32 levels.
+The boundary is pinned from both sides and **mutation-verified**: lowering the cap to 31 fails the
+accepting half by name, `left: OverCap, right: Accept`.
+
+**THE VERDICT ALONE WOULD HAVE REPEATED THE SHARED-MESSAGE DEFECT.** An over-cap refusal and a proven
+underflow are the same `out_reject`. A caller reading only that cannot tell a defective program from
+one the analysis declined, and cannot tell whether raising the cap would change the answer. `dv` gains
+`out_cause`, APPENDED, and the driver gains `DepthVerdict` with three cases.
+
+**THE `-255` TEST IS SOUND BY THE CASE, NOT BY THE CODE, AND THAT IS SAID IN THE TEST.** `-255` has
+TWO meanings inside one call path: `mi_join_header` calls `mi_join`, which returns `-255` from a pool
+overflow in `emit_pool_bytes_from_bout`, and then returns `-255` itself for a missing header region.
+The test reaches the second because the first cannot fire for an input whose name bytes are far below
+the 16,384-byte buffer, and the control proves the identical input joins cleanly with the region
+restored. **The neighbouring guards use `-233` and `-234` for exactly this reason** and the comment
+above `emit_name_records_from_nout` states the principle. The header check is the odd one out.
+**Splitting it is one line and it is HELD for the operator, because an error code is an observable.**
+
+**THE RESERVATIONS ARE FREE AND THE COLLISION THAT NEARLY MADE THEM LOOK DONE IS NOT.**
+`kind::SIGNATURES` at `0x0016` is per-chunk TYPE descriptors; the cryptographic signature lives in the
+framing header. A reader checking whether a signature region is reserved finds that constant and
+stops. `CRYPTO_SIGNATURES`, `PROVENANCE` and `AUTH_TIER` take `0x0024..0x0026`, are checked against
+every live kind AND against the parity-plane convention that derives a plane as `k | ECC_KIND_BIT`,
+and are pinned as unemitted in the firing direction with a vacuity guard.
+
+**TWO PROBE ERRORS OF MY OWN, BOTH CAUGHT BY THE COMPILER RATHER THAN BY CARE.** I reached for
+`Op::PushBool` and `Op::PushInt`, which do not exist -- the encoding is `PushImmediate` with a
+documented operand table. And my reserved-kind test parsed a FRAMED module as a wire container and
+got `BadMagic`; the fix was `parse_wire_sections`, the public accessor, rather than rebuilding a
+`WireAuxBody` in the test, which would have been a second encoding free to drift from the one under
+test.
+
+**A SOURCE-LEVEL PROBE COULD NOT HAVE MEASURED THIS.** The reference parser's `MAX_PARSE_DEPTH` is 24
+and is shared between chain position and arm-body nesting, so a source with 33 nested `if`s is refused
+by the PARSER and never reaches the pass. The chunks are assembled from ops for that reason, and the
+reason is written in the file.
+
+---
+
+**THIRTEEN OPERATOR RULINGS RECORDED, AND TWO OF THEM WERE ANSWERS TO QUESTIONS I ASKED WRONG
+(2026-08-19).**
+
+The live decision list is empty for the first time in this programme. The three standing forks are
+ruled -- a file operand with standard input as the default, leave the token array alone, defer
+top-level `struct` -- along with ten further items.
+
+**THE FINDING IS NOT THE RULINGS. IT IS THAT I PUT TWO STALE QUESTIONS TO THE OPERATOR.**
+
+**The ECC plane was already exercised end to end.** I reported it open because item 5 of
+`WIRE_FORMAT_V2_WORD_ORIENTED.md` says open. It has been closed for some time:
+`SchemaBuilder::with_ecc` sets the flag, `finish` calls `protect_all`, and EIGHT tests drive it on
+real compiler output across `secded_end_to_end.rs` and `ecc_signature_ordering.rs`. That suite is
+better than what I would have written -- every corruption case is paired with the SAME corruption on
+an unprotected artifact, asserted undetected, so a caught flip cannot be credited to the CRC or a
+length check. The operator ruled "seems fairly easy to add something". The correct answer was that
+it exists.
+
+**The token-array question was framed as capacity when the streaming it presupposed was already
+built.** The operator's reply was "unless I am misunderstanding, ideally we just want to stream
+tokens so we do not need a big token buffer". They were not misunderstanding. `parse.kel` lines
+57-80 already say every cursor move is plus or minus one, `base` and `at` already exist so a host
+slides the window with no protocol, and the fused driver already slides it at `FUSED_WINDOW = 8`
+with a comment recording that three would suffice. **What is left is the DECLARATION, not the feed**:
+`packed: [Word; 40960]` reserves the slots regardless, and `PARSE_TOKEN_CAP` chains every later slot
+offset off that number. So the right lever is shrinking the array, which REMOVES the input bound
+instead of widening it, and the ruling to leave the number alone is unaffected.
+
+**THE COMMON CAUSE IS THE ONE THIS LINE HAS NOW RECORDED SEVEN TIMES**, in its sharpest form yet: I
+derived a status from a document's status field rather than from the system. Every previous instance
+cost me a wasted measurement. This one cost an operator ruling, which is a scarcer resource than my
+time. **Read the tree before putting a question up**, and prefer a question that cites a file and a
+line over one that cites a status.
+
+**A SMALLER INSTANCE IN THE SAME SESSION, CAUGHT RATHER THAN SHIPPED.** The handoff cited the
+checked-arithmetic push-order error at `CHANGELOG.md:340`; it is at **571**, and the line at 340 is
+about something else entirely. I verified the correction against `src/vm.rs:6442`, which pushes low
+then high then flag, rather than against `GRAMMAR.md`, which also says `(low, high, flag)`.
+Correcting published text on the authority of a second document is how the wrong document wins, and
+here there were three candidate authorities and only one that executes.
+
+**A NAME COLLISION THAT WOULD HAVE CLOSED A RULING FALSELY.** `kind::SIGNATURES` at `0x0016` is
+per-chunk TYPE descriptors, not cryptography. The cryptographic signature lives in the framing
+header. A reader checking whether a signature region is reserved will find that constant and stop.
+Recorded next to the ruling so the next session does not.
+
+**WHAT THIS INCREMENT ACTUALLY CHANGES** is four documents and nothing executable: the ruling record,
+the corrected ECC status, the scrubbed probe-controller example, and the changelog push order. The
+implementations the rulings authorise -- the file operand, the declared nesting cap of 32, the
+region reservations, and the `-255` negative test -- are separate increments and are named as not
+implemented so a reader cannot mistake the record for the work.
+
+---
+
+**THE DECLARED BINDING ROWS NOW COME FROM THE PIPELINE, AND THE COMPARISON FOUND A DEFECT IN THE
+REFERENCE EXTRACTION RATHER THAN IN THE STAGE (2026-08-19).**
+
+Order 1 item 3 asks for the type checker's INPUT to stop being Rust walking the reference parser's
+abstract syntax tree. This is the first slice: the bindings a source states outright, which are a
+function's declared return type and each parameter's declared type, are now derived from
+`parse_functions` -- the self-hosted `lexer` into `parse` pipeline -- by
+`binding_rows_from_pipeline`.
+
+**THE PARAMETER'S NAME WAS ALREADY IN THE RECORD STREAM AND THE DRIVER THREW IT AWAY.** The header
+emits `4 + name * 64`; the arm read the code and discarded the payload because a COUNT was all any
+existing consumer needed. `ParsedFn` now carries `param_names`. Nothing was encoded to make this
+work, which is what Order 1 asked for: the parameter name came from an existing record and the
+`let` name came from the record added in the preceding increment under the operator's ruling.
+
+**THE COMPARISON IS BY NAME STRING, NOT BY ID, AND THAT IS NOT A CONVENIENCE.** The two extractions
+live in different identifier spaces -- the reference assigns ids by insertion order as it walks,
+the pipeline uses the lexer's intern table -- so comparing ids would compare the NUMBERING and not
+the content. Names are the thing both claim to describe.
+
+**THE DEFECT THE COMPARISON FOUND WAS MINE, IN THE REFERENCE-SIDE EXTRACTION.** `Bool` DOES NOT
+PARSE AS A `Prim`. The reference parser yields `Named("Bool")` for it, so the harness's
+`TypeExpr::Prim` match silently dropped every `Bool` annotation: `fn f(b: Bool) -> Word { 1 + b }`
+was REJECTED by the reference compiler and ACCEPTED by the stage, because `b` had no binding row at
+all. The pipeline extraction keys on the type NAME and therefore reached a binding the AST walk did
+not. **A second extraction found a hole in the first**, which is the argument for differential
+inputs and not only differential outputs. `named_type_tag` is one function because the parameter
+walk and the return-type walk both need it, and a second copy is how one of them comes to reach a
+type the other misses.
+
+**THE BOUNDARY IS PINNED SO THE SLICE CANNOT BE READ AS COMPLETION.** A `let` bound to a literal or
+a call still produces NO row on the pipeline side: the initialiser's shape lives in the body record
+stream, so reading it means walking the forest rather than the header.
+`the_pipeline_rows_are_the_declared_subset` asserts the reference DOES produce that row -- so the
+pin is non-vacuous -- and that the pipeline does not, and it instructs the next increment to fold
+the case into the agreement test rather than delete the pin.
+
+**RECOVERED FROM AN INTERRUPTED SESSION.** The edits were made before a laptop crash and were never
+committed. Every figure above was re-measured on the recovered tree rather than trusted: 15 of 15
+`selfhost_typecheck` tests pass, `cargo fmt --all --check` and
+`cargo clippy --tests --features signatures,shell,self-host -- -D warnings` both exit zero with the
+code captured OUTSIDE the pipe, and the four-entry feature-matrix `cargo check --tests` sweep
+(`--no-default-features`, `--features signatures`, `--features self-host`,
+`--features signatures,shell`) exits zero on each. The first attempt at that verification reported
+`FMT_EXIT=0` from a `head` rather than from `cargo fmt`, which is the seventh constructed status
+this line has recorded and the reason the rule exists.
+
+---
+
+**IDENTITY NOW TRAVELS WITH THE STRUCTURE, AND I ASSERTED THE BLAST RADIUS BEFORE MEASURING IT
+(2026-08-19).**
+
+Order 1 records that the type checker's input should come from `parse.kel` plus `reconstruct.kel`
+because "structure is available" there. **Measured, that was only half true.** A `Local` record
+carries a SLOT -- `codegen.kel` lowers it straight to `GetLocal(slot)` -- and no body record
+mentioned a name at all. The type channel is keyed by interned NAME ids, so a forest of slots could
+not be joined to a binding table of names. **Structure was available; identity was not.**
+
+The operator ruled on the fork: a `let` record carries its name id, rather than keying the type
+channel by slot for locals and by name for everything else. `parse.kel` already held the name at the
+emitting site and the Option E transport had a full word free.
+
+**THE STATEMENT TABLE EMITS IN THE PACKED FORM** (`kind + arg * 64`), which caps kinds at 63, so the
+name record goes out on the MIGRATED path with tag 90 -- a full word, no packing against the slot,
+no radix for a reader to get wrong. The driver pairs it with the following `LetIn` and diverts it, so
+the node stream is unchanged.
+
+**THE PAIRING IS POSITIONAL, WHICH IS NORMALLY A SMELL.** It is sound because one fold step emits
+exactly the pair with nothing interleaved, and `every_let_binding_carries_its_slot_and_name` is what
+keeps that true: it checks slot AND name, so a reordering shows up as a wrong slot rather than as
+silence. Mutation-verified.
+
+**I CLAIMED THE BLAST RADIUS BEFORE MEASURING IT, AND WAS WRONG.** I wrote that the node stream was
+"byte-for-byte unchanged" and that neither `reconstruct.kel` nor `codegen.kel` was touched, having
+run `selfhost_parse` and generalised. Eight tests then failed: a THIRD record decoder, the Rust
+reconstruction that checks `reconstruct.kel`, panicked on `unsupported node kind 90`. The suite that
+disproved the claim was still running when I made it.
+
+**THREE DECODERS NOW CONSUME THE PARSE RECORD STREAM** -- the driver, the parse harness, and the
+codegen harness -- and each must know this record is not a node. **Only the TAG is shared, and that
+is correct rather than lazy**: the skip sets legitimately differ, because the codegen walker CONSUMES
+kind 35 where the parse harness skips it. Recorded with the count rather than implied to be clean.
+
+**TWO MISTAKES CAUGHT BY MACHINERY RATHER THAN ATTENTION.** A brace splice landed in the wrong
+function; I restored `parse.kel` from `HEAD` and redid all three edits against exact anchors rather
+than stacking a repair -- the second time today that call was right. And I published the tag from
+`crate::selfhost`, gated on `self-host`, while its readers are gated on `compile + verify`: the
+identical mistake as earlier today, except **the feature-matrix check I encoded after the first one
+caught it locally instead of CI**.
+
+**THE MARGIN PIN MOVED A SEVENTH TIME, AND THIS IS THE FIRST MOVE PREDICTED IN ADVANCE.** 666 -> 669
+names and 35,045 -> 35,154 blob bytes; three names is `stmt_name`, `name_pending` and `tag_let_name`
+exactly. Six of the seven moves were changes whose author was thinking about something else -- which
+is why a pin that has to teach you what it measures, six times, does something a computed value
+could not.
+
+---
+
 **DERIVED OPERANDS IN TYPE REJECTION, AND THE CAP I ALMOST DOCUMENTED WAS NOT THE BOUND
 (2026-08-19).**
 

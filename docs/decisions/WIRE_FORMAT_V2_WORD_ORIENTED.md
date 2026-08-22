@@ -335,10 +335,28 @@ Honest accounting, because fixed-size records are not free:
    sharing is retained. Implemented in `keleusma-wire`. Option (b), a trailing directory with
    per-unit segments, is demonstrated in the prototype and remains reachable without touching any
    record layout, should genuinely single-pass emission ever be required.
-5. **OPEN, deferred deliberately: the ECC plane is unexercised end to end.** The codec is validated in
-   isolation and the parallel-plane rationale is argued, but no prototype artifact carries an ECC
-   region, so "parity beside the data preserves in-place aliasing" is reasoning rather than
-   demonstration. Additive through the directory, so it can land later without a format change.
+5. ~~**OPEN, deferred deliberately: the ECC plane is unexercised end to end.**~~ **CLOSED, and this
+   entry was STALE.** It read as open on 2026-08-19 while the work had already landed, and an operator
+   ruling was taken against it on that basis. Recorded as a correction rather than silently rewritten,
+   because a status field that outlives the thing it describes is the failure mode this whole document
+   set exists to prevent.
+
+   The shipping encoder now emits planes on request. `SchemaBuilder::with_ecc` sets the flag and
+   `finish` calls `protect_all`; `encode_aux_body_with_ecc` and `module_to_signed_wire_bytes_with_ecc`
+   are the public entry points. **Off by default deliberately**, because planes change an artifact's
+   bytes and byte identity against this encoder is the oracle the self-hosted compiler is verified
+   with.
+
+   **Eight tests drive it on REAL compiler output**, not on bytes written to exercise it.
+   `tests/secded_end_to_end.rs` covers decoding through the ordinary path, a single flipped bit
+   corrected, two bits in one word detected as uncorrectable, and the same corruption invisible
+   without a plane. `tests/ecc_signature_ordering.rs` covers a signed artifact with planes verifying,
+   a single fault refused by the signature and recovered by a scrub, a mis-repaired artifact still
+   refused, and the host-facing repair-and-reauthenticate pair.
+
+   **The control is the load-bearing part**: every corruption case is paired with the SAME corruption
+   on an artifact built WITHOUT planes, asserted to go undetected, so a caught flip cannot be
+   attributed to the CRC or a length check instead of the parity plane.
 
 ## Authenticity provisions
 

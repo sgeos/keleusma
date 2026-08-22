@@ -312,6 +312,18 @@ fn type_tag(t: &keleusma::ast::TypeExpr) -> i64 {
         T::Prim(PrimType::Bool, _) => 2,
         T::Prim(PrimType::Byte, _) => 3,
         T::Prim(PrimType::Float, _) => 4,
+        // **A `Named` TYPE IS NEVER A PRIMITIVE, AND AN EARLIER REVISION HERE GOT
+        // THAT BACKWARDS.** It mapped `Named("Bool")` to the boolean tag, reasoning
+        // that matching `Prim` alone "silently drops every `Bool` annotation". True,
+        // and the wrong conclusion: those annotations are dropped because they are
+        // NOT booleans. Measured — `Word`, `Byte` and `Float` are `Prim` and
+        // capitalised, `bool` is `Prim` and LOWERCASE, and `Bool` is an ordinary
+        // named type the reference refuses to add to a `Word`.
+        //
+        // The `Word`/`Byte`/`Float` arms of that mapping were dead besides: all
+        // three parse as `Prim` and never arrive here.
+        //
+        // Pinned by `a_named_type_called_bool_is_not_the_boolean_primitive`.
         _ => 0,
     }
 }
@@ -614,7 +626,7 @@ fn operand_form(
 /// one row for two meanings. The subset's stage sources do not do this and the
 /// corpus does not exercise it; a shadowing case would need the table split.
 fn binding_rows(ast: &keleusma::ast::Program) -> BindingRows {
-    use keleusma::ast::{Expr, Pattern, Stmt, TypeExpr};
+    use keleusma::ast::{Expr, Pattern, Stmt};
     use keleusma::visitor::Visitor;
     use std::collections::BTreeMap;
 
@@ -629,18 +641,16 @@ fn binding_rows(ast: &keleusma::ast::Program) -> BindingRows {
     for f in &ast.functions {
         // A declared return type, keyed by the function's own name.
         let fid = id_of(&mut names, &f.name);
-        if let TypeExpr::Prim(p, _) = &f.return_type {
-            let t = prim_tag(p);
-            if t != 0 {
-                rows.push((fid, t, 0));
-            }
+        let t = type_tag(&f.return_type);
+        if t != 0 {
+            rows.push((fid, t, 0));
         }
         // Declared parameter types.
         for prm in &f.params {
-            if let (Pattern::Variable(n, _), Some(TypeExpr::Prim(p, _))) =
-                (&prm.pattern, &prm.type_expr)
-            {
-                let t = prim_tag(p);
+            // Through `type_tag` rather than `prim_tag`, so a `Bool` annotation --
+            // which the parser yields as `Named("Bool")` -- is not silently dropped.
+            if let (Pattern::Variable(n, _), Some(ty)) = (&prm.pattern, &prm.type_expr) {
+                let t = type_tag(ty);
                 if t != 0 {
                     let id = id_of(&mut names, n);
                     rows.push((id, t, 0));
@@ -2446,4 +2456,260 @@ fn the_fold_advances_one_row_per_resume() {
          the conversion claims; anything else means the stage is batching internally.",
         many_steps - few_steps
     );
+}
+
+/// **THE DECLARED BINDING ROWS NOW COME FROM THE PIPELINE, AND AGREE WITH THE
+/// REFERENCE EXTRACTION.**
+///
+/// Order 1 asks for the type checker's input to come from `parse.kel` plus
+/// `reconstruct.kel` rather than from Rust walking the reference AST. This is the
+/// first slice of that: the bindings the source states outright — a function's
+/// declared return type and each parameter's declared type.
+///
+/// # Why the comparison is by NAME STRING and not by id
+///
+/// The two extractions live in different id spaces. The reference one assigns ids by
+/// insertion order as it walks; the pipeline uses the lexer's intern table. Comparing
+/// ids would compare the numbering, not the content. **Names are the thing both
+/// claim to describe**, so the rows are compared as `(name, tag, form)` with the name
+/// spelled out.
+///
+/// # What this does NOT establish
+///
+/// Only the DECLARED bindings. A `let` bound to a literal or a call is still absent
+/// from the pipeline side: its initialiser's shape lives in the body record stream,
+/// and reading it means walking the forest rather than the header. That is the next
+/// slice, and `the_pipeline_rows_are_the_declared_subset` below pins the boundary so
+/// it cannot be mistaken for completeness.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_declared_binding_rows_agree_between_the_pipeline_and_the_reference() {
+    const SOURCES: &[&str] = &[
+        "fn g(alpha: Word, beta: bool) -> Word { 1 }\nfn main() -> Word { g(1, true) }",
+        "fn f(a: Word) -> bool { true }\nfn main() -> Word { 1 }",
+        "fn one() -> Word { 1 }\nfn two(x: Byte) -> Byte { x }\nfn main() -> Word { one() }",
+        "fn main(p: Word, q: Word) -> Word { p + q }",
+        // LET-BOUND LITERALS, folded in on 2026-08-20 when the pipeline reached
+        // them. `the_pipeline_rows_are_the_declared_subset` told this test to do
+        // exactly that rather than delete its pin.
+        "fn main() -> Word { let a = 7; a }",
+        "fn main() -> bool { let b = true; b }",
+        "fn main() -> Word { let a = 7; let c = 8; a + c }",
+    ];
+
+    for src in SOURCES {
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+        let (ref_names, ref_rows) = binding_rows(&ast);
+
+        // The reference rows carry ids; render them as names for comparison, and keep
+        // only the DECLARED ones (form 0), which is all the pipeline claims so far.
+        let ref_name_of = |id: i64| -> Option<String> {
+            ref_names
+                .iter()
+                .find(|(_, v)| **v == id)
+                .map(|(k, _)| k.clone())
+        };
+        let mut want: Vec<(String, i64, i64)> = ref_rows
+            .iter()
+            .filter(|(_, _, form)| *form == 0)
+            .filter_map(|(n, t, f)| ref_name_of(*n).map(|s| (s, *t, *f)))
+            .collect();
+
+        let (_, pipeline_rows) = keleusma::selfhost::binding_rows_from_pipeline(src);
+        let mut got = pipeline_rows.clone();
+
+        want.sort();
+        got.sort();
+        assert!(
+            !want.is_empty(),
+            "{src:?}: the reference produced no declared rows, so this case measures \
+             nothing"
+        );
+        assert_eq!(
+            got, want,
+            "{src:?}: the pipeline extraction disagrees with the reference on the \
+             DECLARED bindings"
+        );
+    }
+}
+
+/// **THE BOUNDARY, RESTATED: the pipeline reaches LITERALS and not yet CALLS or
+/// OPERATOR EXPRESSIONS.**
+///
+/// The previous revision of this pin asserted the pipeline carried NO `let` row at
+/// all, and instructed the next increment to fold the case into the agreement test
+/// rather than delete the pin. That happened on 2026-08-20; a let-bound integer and
+/// a let-bound boolean are both compared against the reference there now.
+///
+/// **The pin is restated rather than removed**, because what it guards has moved
+/// rather than gone. Two forms remain out of reach and they are out of reach for
+/// DIFFERENT reasons, which is the part worth writing down.
+///
+/// # A call is blocked by the ROW SHAPE, not by the pipeline
+///
+/// `let a = g()` is a form-1 alias whose row carries the target's NAME ID in the
+/// tag position. The two extractions do not share an id space — the reference
+/// numbers by insertion order as it walks, the pipeline uses the lexer's intern
+/// table — so a form-1 row cannot be compared by name string, which is the
+/// discipline that keeps this comparison honest.
+///
+/// The pipeline could produce the row today. Comparing it would mean either
+/// comparing id spaces, which compares the numbering rather than the content, or
+/// changing the row shape to carry a target string. **The second is the right
+/// answer and it is a slice of its own.**
+///
+/// # An operator expression is blocked by the CHANNEL
+///
+/// `let d = 1 + 2` needs the initialiser's NODE INDEX to reach the stage's bounded
+/// fixpoint, form 2. That index has to survive into the type channel, which is a
+/// further slice again.
+///
+/// Producing no row means the stage accepts, which is this project's documented
+/// conservative stance rather than an oversight.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_pipeline_reaches_literals_but_not_calls_or_operator_expressions() {
+    // The REACHED case first. Without it, a pipeline that returned nothing at all
+    // would satisfy every assertion below while having regressed.
+    let (_, reached) =
+        keleusma::selfhost::binding_rows_from_pipeline("fn main() -> Word { let a = 7; a }");
+    assert!(
+        reached
+            .iter()
+            .any(|(n, t, f)| n == "a" && *t == 1 && *f == 0),
+        "the pipeline no longer carries a let-bound literal, which is a regression \
+         rather than a boundary: {reached:?}"
+    );
+
+    // A CALL. The reference produces a row; the pipeline deliberately does not.
+    const CALL: &str = "fn g() -> Word { 1 }\nfn main() -> Word { let c = g(); c }";
+    let ast = parse(&tokenize(CALL).expect("lex")).expect("parse");
+    let (ref_names, ref_rows) = binding_rows(&ast);
+    let cid = *ref_names.get("c").expect("the reference binds `c`");
+    assert!(
+        ref_rows.iter().any(|(n, _, f)| *n == cid && *f == 1),
+        "the reference does not produce an ALIAS row for a let-bound call, so this \
+         half of the pin measures nothing"
+    );
+    let (_, call_rows) = keleusma::selfhost::binding_rows_from_pipeline(CALL);
+    assert!(
+        !call_rows.iter().any(|(n, _, _)| n == "c"),
+        "the pipeline now carries a let-bound CALL. Give the row shape a target \
+         STRING so it can be compared without comparing id spaces, then fold this \
+         case into the agreement test."
+    );
+
+    // AN OPERATOR EXPRESSION. Reached by the stage's fixpoint, not by this
+    // extraction, and only once the node index survives into the type channel.
+    let (_, op_rows) =
+        keleusma::selfhost::binding_rows_from_pipeline("fn main() -> Word { let d = 1 + 2; d }");
+    assert!(
+        !op_rows.iter().any(|(n, _, _)| n == "d"),
+        "the pipeline now carries a let-bound OPERATOR EXPRESSION. Record which form \
+         it uses and fold the case into the agreement test."
+    );
+}
+
+/// **`bool` IS THE BOOLEAN PRIMITIVE. `Bool` IS AN ORDINARY NAMED TYPE.**
+///
+/// Measured 2026-08-20 by parsing each spelling and reading the `TypeExpr`
+/// constructor: `Word`, `Byte` and `Float` are `Prim` and capitalised; **`bool` is
+/// `Prim` and lowercase, the only one**; `Bool` is `Named`. The reference rejects
+/// `fn f(b: Bool) -> Word { 1 + b }` with "cannot add Word and Bool" — a named type
+/// it cannot add, not a boolean.
+///
+/// # The defect this exists to prevent returning
+///
+/// An earlier increment added a `Named` arm mapping `Bool` to the stage's boolean
+/// tag, on the reasoning that a match on `Prim` alone "silently drops every `Bool`
+/// annotation". The observation was true and the conclusion was backwards: those
+/// annotations are dropped because they are NOT booleans.
+///
+/// **The suite could not catch it, and that is the lesson.** The same wrong change
+/// was made on BOTH sides of a differential comparison — the reference-AST
+/// extraction and the pipeline extraction, which keys on the type name string. Two
+/// wrongs agreeing is a green test. A differential oracle only detects a defect
+/// introduced on ONE side, and the common cause was the author.
+///
+/// # Why this asserts on the EXTRACTION and not on the verdict
+///
+/// The obvious test — that the stage rejects a `Bool`-typed value used as an `if`
+/// condition — does not discriminate. **Measured before the fix, the stage accepted
+/// it** because it believed the value was a boolean; after the fix it accepts it
+/// again because the tag is unknown and the stage defers on unknown, which is this
+/// project's documented conservative stance. Same verdict, opposite reasons.
+///
+/// The tag itself is the thing that was wrong, so the tag is what is asserted.
+#[test]
+fn a_named_type_called_bool_is_not_the_boolean_primitive() {
+    // THE REFERENCE IS THE AUTHORITY, and it is checked first so that a change in
+    // its behaviour surfaces here rather than silently redefining the expectation.
+    assert!(
+        !reference_accepts("fn f(b: Bool) -> Word { 1 + b }\nfn main() -> Word { 1 }"),
+        "the reference now adds `Word` and `Bool`, so `Bool` has become the boolean \
+         primitive and this test is obsolete"
+    );
+    assert!(
+        reference_accepts(
+            "fn f(b: bool) -> Word { if b { 1 } else { 2 } }\nfn main() -> Word { 1 }"
+        ),
+        "the reference rejects a genuine `bool` condition, so the control is broken"
+    );
+
+    // NO ROW AND NO TAG ARE THE SAME ANSWER. A binding whose type yields no tag is
+    // never interned, so the name is absent from the table rather than present with
+    // a zero — and that absence IS the correct outcome for a type the stage has no
+    // scalar for. Treating a missing name as anything but 0 would make the assertion
+    // below unreachable.
+    let tag_for = |src: &str| -> i64 {
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+        let (names, rows) = binding_rows(&ast);
+        let Some(&id) = names.get("b") else { return 0 };
+        rows.iter()
+            .find(|(n, _, form)| *n == id && *form == 0)
+            .map(|(_, t, _)| *t)
+            .unwrap_or(0)
+    };
+
+    const REAL: &str = "fn f(b: bool) -> Word { 1 }\nfn main() -> Word { 1 }";
+    const NAMED: &str = "fn f(b: Bool) -> Word { 1 }\nfn main() -> Word { 1 }";
+
+    // The control first. Without it, a `tag_for` that returned 0 for everything
+    // would satisfy the real assertion while measuring nothing.
+    assert_eq!(
+        tag_for(REAL),
+        2,
+        "a `bool` annotation must carry the boolean tag, or the case below is vacuous"
+    );
+    assert_eq!(
+        tag_for(NAMED),
+        0,
+        "a `Bool` annotation carries the BOOLEAN tag. `Bool` is an ordinary named \
+         type and the reference cannot add it to a `Word`; calling it a boolean tells \
+         the type channel something false"
+    );
+
+    // AND THE PIPELINE EXTRACTION MUST AGREE WITH THE REFERENCE COMPILER, not with
+    // the extraction above. Both were wrong together once; comparing them to each
+    // other is what failed to notice.
+    #[cfg(feature = "self-host")]
+    {
+        let pipeline_tag = |src: &str| -> i64 {
+            let (_, rows) = keleusma::selfhost::binding_rows_from_pipeline(src);
+            rows.iter()
+                .find(|(n, _, form)| n == "b" && *form == 0)
+                .map(|(_, t, _)| *t)
+                .unwrap_or(0)
+        };
+        assert_eq!(
+            pipeline_tag(REAL),
+            2,
+            "the pipeline drops a genuine `bool` annotation"
+        );
+        assert_eq!(
+            pipeline_tag(NAMED),
+            0,
+            "the pipeline calls the named type `Bool` a boolean"
+        );
+    }
 }

@@ -13,7 +13,7 @@ The migration target is the `keleusma` command-line driver. Two driver shapes ar
 | Driver shape | Termination | Productivity | Use case |
 |---|---|---|---|
 | `impure fn main` | Terminates per invocation | Each impure call returns | CLI utilities. The compiler driver is the canonical example. |
-| `impure loop main` | Productive divergent, productivity delegated to sub-coroutines | Sub-coroutine yield is the productivity witness | Long-running drivers. Servers, RTOS tasks, game loops, autonomous-probe controllers. |
+| `impure loop main` | Productive divergent, productivity delegated to sub-coroutines | Sub-coroutine yield is the productivity witness | Long-running drivers. Servers, RTOS tasks, game loops. |
 
 The compiler driver is the first shape: it runs once per invocation against an input source file, compiles, writes the output, and exits. Long-running daemons and embedded controllers select the second shape. The two coexist; a deployment may host either or both.
 

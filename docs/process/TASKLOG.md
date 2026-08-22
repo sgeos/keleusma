@@ -10,6 +10,347 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-21, midday).** **FIVE SILENT MISCOMPILES CLOSED; `Op::IsStruct`
+> WITNESSED; EIGHT PULL REQUESTS MERGED.** This supersedes the note below it, which was written
+> before the last two findings.
+>
+> Boundary is now **90 SOk / 1 Refuses / 3 Diverges / 1 RefRejects**, and the SHIPPING compiler
+> reaches the same verdict as the boundary on all 95 cases. Census across the session:
+> byte-identical **43 -> 90**, differs 21 -> 3, faults 30 -> 1.
+>
+> **CHAINED ARRAY INDEXING WORKS.** `a[0][1]` had parsed its second `[1]` as an array LITERAL. The
+> recorded specification said three coordinated pieces of parser machinery were needed; **two
+> already existed** -- the `]` handler already emitted `GetIndex(FlatNested{size, Array})` and
+> already re-armed the postfix. Only the binding side was missing. Check whether the code exists
+> before costing work that depends on it.
+>
+> **`Op::IsStruct` HAS A WITNESS** -- a struct pattern on an un-annotated parameter -- after
+> seventeen attempts across two lines that all tried to make a scrutinee's type DIFFER from the
+> pattern's, which the type checker forbids. **Its witness verifies, receives a bound, loads, and
+> then TRAPS**, which is a load-time hole. Pinned, not repaired: see the operator queue.
+>
+> **Margin pins moved with their arithmetic recorded**: names 672 -> 676 (the four identifiers
+> added, the first move in ten to match its prediction), blob 35,233 -> 35,333 (72 characters plus
+> 7 bytes per name, confirmed against the ninth move).
+>
+> Stage sources untouched by four of the five fixes; the fifth changed `parse.kel` and it still
+> self-compiles byte-identically. No opcode and no `BYTECODE_VERSION` change.
+
+> **Currency note (2026-08-21, session 50).** **THE SHIPPING SELF-HOSTED COMPILER DISCARDED ITS
+> OWN STAGE'S CONSTANT-POOL TAGS, AND DROPPED EVERY STRUCT DECLARATION.**
+>
+> `codegen.kel` emits the pool as values then TAGS (0 Int, 1 StaticStr carrying the intern id,
+> 2 Bool); the driver read them into a discard and rebuilt everything as `Int`. Sweeping for other
+> discards found `parse.kel`'s STRUCTSTART/TRAITSTART/IMPLSTART records reaching the function
+> dispatch with nothing open, where the driver panicked -- while `tests/selfhost_codegen.rs`'s copy
+> of the same loop carried the skip all along.
+>
+> Measured over the 95 boundary cases, baseline taken by stashing the change: byte-identical
+> **43 -> 76**, differs 21 -> 11, faults 30 -> 7. No case got worse. **29 cases declare a struct and
+> the shipping compiler faulted on all 29; 27 are recorded `SOk`.**
+>
+> **A BOUNDARY MOVED AND IT TOUCHES A DEFERRED RULING.** Programs the tree refused now compile.
+> The 2026-08-19 ruling deferred "top-level struct support"; this derives no struct layout, so my
+> reading is that it is not that work -- but it is flagged, and
+> `docs/decisions/POOL_TAG_RESIDENCY_BRIEF.md` carries a three-hunk revert recipe if the operator
+> reads the ruling more broadly.
+>
+> **Left unrepaired deliberately**: six eager-boolean constructs the boundary calls `Ok` that the
+> shipping compiler miscompiles, pinned in the failing direction. Repairing them in the same change
+> would make the census unattributable.
+>
+> Stage sources untouched; no opcode and no `BYTECODE_VERSION` change.
+> **Currency note (2026-08-20, night).** **COMMANDS 176/177 ARE DISPATCHED AND DRIVEN BY NOTHING.**
+> `fl_stream_begin`/`fl_stream_step`, the constant-node streaming path, were written, dispatched, and
+> announced to the `v0.3.0` line — and no driver or test has ever called them. Control:
+> `CMD_STEP = 175` directly below them IS driven.
+>
+> **THIS CHANGES THE COST OF `CONSTS`.** The analysis reads as "the flattener already emits a
+> byte-identical region, batching is the route, and a streaming variant exists", which makes the
+> remaining work look like driver wiring. **The stage side has never executed**, so taking it means
+> writing the driver AND validating never-run code.
+>
+> **Third instance of one class this week**: `Op::Reset` credited from a chunk that lowered,
+> `Op::IsStruct` on an unreached fallback, and now these. **Presence, dispatch and announcement are
+> not evidence that code runs**; search for callers before costing work on it.
+>
+> Pinned by `tests/stage_command_reach.rs`, mutation-verified, with the command set DERIVED from the
+> stage. Not a deletion — they are the intended route.
+
+> **Currency note (2026-08-20, evening).** **NESTED ARRAY LITERALS FIXED; CHAINED INDEXING
+> DIAGNOSED AND DELIBERATELY NOT FIXED.**
+>
+> The literal's outer composite was sized `count * 8` because the close handled a struct element and
+> otherwise assumed `Word`. Fixed with a PER-NESTING-LEVEL element size; a flat "last array closed"
+> flag leaks across siblings and gave 64 where 32 was right -- **worse than the bug**. Boundary moves
+> `nested/array_of_array_literal` to `Ok`.
+>
+> **THE INDEX HALF IS NOT TRUNCATION, contrary to my own first report.** `parse.kel` emits records
+> and they are wrong: in `a[0][1]` the second `[1]` parses as an **ArrayLit**. Chained indexing is
+> unsupported -- `ps.aa_phase` arms only after a let-bound array Local and never re-arms.
+> `let b = a[0]; b[1]` diverges too, so the chain is not the trigger; that case is now in the table
+> because it discriminates.
+>
+> **Stopped deliberately**: a fix needs a binding record for an array element, a nested-variant
+> postfix phase, and chain re-arming. That is a feature, not a defect fix. The boundary carries the
+> specification rather than the symptom.
+
+> **Currency note (2026-08-20, afternoon).** **`Op::Len` IS REACHABLE; `Op::IsStruct` RESISTED NINE
+> ATTEMPTS.** Raised by the `v0.3.0` line's opcode census, stuck at 64 of 66.
+>
+> **The reframing solved it**: both are emitted only as a FALLBACK when a static type is unknown, so
+> the target is making INFERENCE FAIL rather than finding an unusual shape. `static_for_in_length`
+> has no `Expr::If` arm, so `for x in if c { a } else { b }` takes `_ => None` and emits `Op::Len`.
+> Pinned with six controls, one per handled source kind.
+>
+> **THE METHOD IS THE TRANSFERABLE PART**: read the guard's match arms for what they OMIT. Fourteen
+> guessed constructs across two lines failed; one reading of the arm list answered it.
+>
+> **`Op::IsStruct` falsified my hypothesis.** `infer_expr_type` has no `Expr::If` arm either, so the
+> same trick should work and does not. Making inference fail is necessary but NOT SUFFICIENT.
+> Recorded as "not found, here is what was tried", explicitly NOT as "unreachable" — if nothing can
+> reach it, that is the larger finding for an ISA whose opcode count is a rad-hard constraint.
+>
+> Brief and completion condition at `docs/decisions/OPCODE_REACHABILITY_*`.
+
+> **Currency note (2026-08-20, mid-morning).** **THE TWO SELF-HOSTED COMPILERS HAVE MEASURABLY
+> DIVERGED.** On a string literal the reference and `tests/selfhost_codegen.rs`'s copy both emit
+> `StaticStr("hi")`; `keleusma::selfhost::self_host_compile` emits `Int(3)`, the intern id as an Int.
+> Ops identical, pool different.
+>
+> **THE SUPPORT TABLE MEASURES THE COPY**, so it records `Ok` for a construct the SHIPPING compiler
+> gets wrong. Found by expecting `Diverges` and getting `Ok`. Pinned by
+> `the_two_self_hosted_compilers_disagree_on_a_string_literal`, with the local copy's agreement as
+> the control.
+>
+> **Widening `ParsedFn`'s accessors so the copy can be deleted is now evidenced, not argued.**
+>
+> **TWO ITEMS WERE WITHDRAWN FROM THE AUTONOMOUS COMPLETION CONDITION.** The file operand and sidecar
+> fingerprint describe a staged pipeline command that DOES NOT EXIST -- no phase or sidecar flag is
+> implemented -- and `keleusma compile` already takes a file and never reads standard input. The
+> condition's author did not check before writing them. Recorded in the condition rather than
+> silently amended.
+
+> **Currency note (2026-08-20, morning).** **ORDER 1 ITEM 3 REACHES `let` BINDINGS.** A `let` bound
+> to an integer or a boolean literal now produces a pipeline row, compared against the reference by
+> name string. The pin that told the next increment to fold its case in has been honoured.
+>
+> **The trap was adjacency**: `LetIn` is binary and pops right then left, so the record before it is
+> the CONTINUATION, not the initialiser. Classification goes through the reconstructed forest, whose
+> `lhs` is the initialiser, using `reconstruct_via_kel` rather than a second walk. Joined by SLOT, not
+> by fold position.
+>
+> **A boolean `let` works only because of the boolean-literal fix earlier tonight**, so the two
+> increments compose and could not have been done in the other order.
+>
+> **A CALL ARM WAS DRAWN AND DELETED.** A form-1 alias row carries the target's NAME ID, and the two
+> extractions do not share an id space, so it cannot be compared by name string. Emitting it would
+> have meant comparing the numbering rather than the content -- the same failure mode as the
+> `Bool`/`bool` regression, avoided rather than repeated. **Giving the row shape a target string is
+> the next slice.**
+>
+> The pin is RESTATED rather than removed: a call is blocked by the ROW SHAPE, an operator expression
+> by the type channel needing the node index. Different problems, and it now says which is which.
+
+> **Currency note (2026-08-20, late night).** **THREE OF THE FOUR "KNOWN GAPS" WERE SILENT
+> MISCOMPILES.** `Support::Gap` conflated "refuses loudly" with "compiles to different bytes", so the
+> table could not say which. Split into `Refuses` and `Diverges`, and measured:
+> `eq/struct_tuple_of_impure_struct`, `eq/struct_field_array_of_tuple` and `scope/float_arith` all
+> **Diverge**; only `scope/generic_fn` genuinely refuses.
+>
+> **THE BOUNDARY IS NOW 86 Ok / 1 Refuses / 5 Diverges / 1 RefRejects**, including two new
+> nested-array cases recorded as `Diverges` and deliberately NOT fixed -- the outer composite is
+> sized 16 where the reference computes 32, and a chained index truncates the body. Two defects in
+> composite-layout machinery, not a change to make unattended.
+>
+> **MY FIRST SPLIT WAS WRONG AND THE EXPECTATIONS CAUGHT IT.** Classifying via
+> `keleusma::selfhost::self_host_compile` reported `Refuses` for a dozen constructs the table calls
+> `Ok`. **The library's compiler and `tests/selfhost_codegen.rs`'s copy are different compilers**, and
+> the byte-identity check uses the copy. **So the support table describes the TEST-LOCAL compiler.**
+>
+> That duplicate has now mattered three times in one night: it blocks the token residency, it needed
+> the boolean-literal slots seeded separately, and it is the subject of the support table. **Widening
+> `ParsedFn`'s accessors so it can be deleted is the central structural fix**, not a convenience.
+
+> **Currency note (2026-08-20, closing).** **HANDOFF REFRESHED against `f091a668`**, every value
+> re-measured and the check block executed. Nine commits since the previous refresh, which was the
+> same day.
+>
+> **THE OPERATOR QUEUE IS FOUR ITEMS**: the `ParsedFn` accessor decision (THREE accessors, and the
+> duplicate it sustains has measurably diverged from the shipping compiler), PR #201, PR #210, and
+> the dead `native@1c1ffb1e` gate record.
+>
+> **SESSION TOTAL: five silent miscompiles found, four fixed, one specified.** Plus `Op::Len`
+> witnessed and qualified, the support table split into `Refuses`/`Diverges` — which reclassified
+> three of four known gaps — and Order 1 item 3 reaching `let` bindings.
+>
+> **DO NOT RESUME BY SWEEPING.** Yield fell two-in-twenty, one-in-twenty-two, then zero.
+
+> **Currency note (2026-08-20, night).** **THE CAST DIRECTION WAS INVERTED**, and the sweep that
+> found it matters more than the fix. `7 as Byte` emitted `ByteToWord` where the reference emits
+> `WordToByte`: `parse.kel` emitted the `Cast` node at the `as` token and DISCARDED the target type
+> name, so both directions lowered identically and one was always wrong.
+>
+> **Fixed by moving which token produces the record**, from `as` to the target type name. Nothing is
+> emitted between them, so the record's position is unchanged. `Cast` is unary with an unused
+> payload, like `Unit` was for the booleans, so no new node kind. Payload 0 keeps the old widening,
+> so existing programs stay byte-identical. **`byte_id` already existed for this** and the cast site
+> never consulted it.
+>
+> **THE HYPOTHESIS THAT PRODUCED IT**: the bool bug was not special -- the oracle validates the
+> compiler against its own sources, so any construct they do not use is unverified. Twenty programs
+> compared as BYTES found two silent mis-lowerings.
+>
+> **THE BOUNDARY TABLE IS A CENSUS OF ONE FEATURE.** `eq` 41, `bool` 10, `op` 8, `comp` 8, `scalar`
+> 6, `prec` 5, `ctrl` 4, `tuple` 1 -- and no `cast` family at all. Widening it family by family is
+> now the recommended work. See `docs/decisions/SELFHOST_CORPUS_BLIND_SPOT.md`.
+>
+> **One divergence recorded and NOT claimed as a defect**: a string literal yields `Int(intern_id)`
+> where the reference yields `StaticStr`. `Text` is listed in `CLAUDE.md` among the classes the CLI
+> refuses, so check before reporting it as new.
+
+> **Currency note (2026-08-20, later still).** **THE SELF-HOSTED COMPILER SILENTLY MIS-LOWERED
+> `true` AND `false`.** `fn main() -> bool { true }` emitted `GetLocal(0)` where the reference emits
+> `PushImmediate(1)` -- a miscompile, not a refusal, because the Tok space is full and both literals
+> arrived as ordinary identifiers. Same hole the eager `and`/`or` fall through; the fix follows that
+> precedent in operand position.
+>
+> **NO NEW NODE KIND.** `PushImmediate` already encodes `0 = Unit`, `1 = true`, `2 = false`, and
+> `Unit`'s payload was unused, so one kind carries all three and the three record decoders learn
+> nothing new. Existing programs stay byte-identical.
+>
+> **THE ORACLE WAS SILENT BY CONSTRUCTION**: no stage source uses a boolean literal in code, and the
+> self-hosting claim rests on compiling those sources. The construct-support table covered booleans
+> only as PARAMETERS, so it overstated support by omission. **The boundary is now 83 SOk / 4 Gap /
+> 1 RefRejects.**
+>
+> **The shipping CLI was never exposed** -- `self_hosted_compile` cross-checks ops, pool and local
+> count against the reference and refuses on divergence.
+>
+> Two self-corrections: the harness copy in `tests/selfhost_codegen.rs` needed the new slots
+> separately, and my own must-fire guard fired on the word `true` inside its own explanatory comment
+> until it stripped comments. An earlier "zero of twelve" figure came from a grep that was wrong; the
+> conclusion held, the instrument did not.
+
+> **Currency note (2026-08-20, later).** **A REGRESSION FROM PR #175 IS FIXED, AND THE REASON IT
+> SHIPPED MATTERS MORE THAN THE BUG.** `bool` is the boolean primitive and `Bool` is an ordinary
+> named type; `d1148e76` taught the type channel to treat the latter as the former, on reasoning that
+> was confidently backwards.
+>
+> **I broke BOTH SIDES of a differential oracle in one increment.** The reference-AST extraction and
+> the pipeline extraction were changed the same wrong way, so they agreed and the suite went green.
+> A differential oracle only detects a defect introduced on ONE side.
+>
+> **The consequence was a false accept**, verified before it was claimed: the stage accepted a
+> `Bool`-typed value as an `if` condition, which the reference rejects. The test that showed this was
+> then REWRITTEN, because after the fix the stage accepts again for a different reason -- deferral on
+> unknown. A verdict test could not discriminate, so the test asserts the TAG, with a `bool` control.
+>
+> The brief and completion condition governing the remaining autonomous work are in
+> `docs/decisions/ORDER_1_REMAINING_BRIEF.md` and `ORDER_1_COMPLETION_CONDITION.txt`.
+
+> **Currency note (2026-08-20).** **STAGE TWO OF THE TOKEN RESIDENCY IS BLOCKED, ON A PUBLIC-API
+> DECISION RATHER THAN A DEFECT.** Established by probe: `toks.packed` set to 4,096, whole suite run,
+> twelve failures in two causes and **none in production code** -- stage one had already fused every
+> production entry point.
+>
+> **One cause is fixed**: the chunk-cap test and the `wire.kel` test both have the CHUNK table as
+> their subject, so their token feed was incidental; both moved to the fused feed, removing pins at
+> 14,334 and 24,836 tokens.
+>
+> **The other is `tests/selfhost_codegen.rs`'s own `parse_functions` and `ParsedFn`**, a duplicate the
+> file's own comment already names as the reason one defect needed fixing in three places. It exists
+> because `ParsedFn` has **zero public fields and four public accessors**, and the harness needs six
+> more. **The operator's call: widen the accessors so the harness can delete its copy.** That closes
+> the duplication hazard and unblocks the residency together.
+>
+> **NOT TAKEN: a partial shrink.** Clearing `parse.kel`'s 33,445 tokens means 40,960 -> ~34,816, a 15%
+> saving that cuts headroom from 18% to 4%. A partial win that degrades a margin is not a win.
+>
+> **`parse.kel` is 33,445 tokens, not the recorded 32,907.** Every stage source is now measured by an
+> instrument rather than quoted from prose.
+
+> **Currency note (2026-08-19, final+6).** **THE 40,960-TOKEN BOUND IS OFF EVERY PRODUCTION PATH**,
+> and `-255` means one thing again.
+>
+> `-229` is the missing-HEADER-region code. `-255` used to mean both that and a pool overflow inside
+> one call path, with opposite remedies. **`-235` was the natural next number and was already spent**,
+> so the new code sits below its `-233`/`-234` family, derived from the file rather than guessed.
+>
+> **Stage one of the token residency**: `self_host_compile`, `self_host_compile_full`,
+> `self_host_compile_scratch` and `binding_rows_from_pipeline` moved to the fused feed, and
+> `PARSE_TOKEN_CAP` is gated on the collecting one. Nothing in production had used fusion. The
+> collecting feed is RETAINED as the fusion oracle; deleting it would leave fusion checked only
+> against the reference, a weaker claim about the feed.
+>
+> **THE BEHAVIOURAL PIN RAN TEN MINUTES AND WAS WITHDRAWN, WHICH IS THE FINDING.** Cost is
+> **superlinear** in input size -- doubling 1,809 to 3,609 tokens multiplies time by 3.4 -- and
+> **both feeds show it within a few percent**, so it is the shared record handling, not the feed.
+> Fused is slightly faster at every size, so stage one is not a regression. **Stage two removes the
+> MEMORY bound; the bound a large input meets first is now TIME.** Raised for the operator.
+
+> **Currency note (2026-08-19, final+5).** **THREE RULED REFUSALS IMPLEMENTED, BATCHED ON THE
+> OPERATOR'S APPROVAL.** A declared nesting cap of **32** in `verify_depth.kel`, the `-255` negative
+> test in `wire.kel`, and the reserved authenticity region kinds.
+>
+> **THE CAP WAS NOT THE FINDING. THE SILENT DROP WAS.** `push_frame` discarded a push past 128
+> frames, so the nested region went unwalked, the parent folded in the PREVIOUS delivery's
+> `child_*`, and the pass published a verdict over a program it had not traversed -- wrong in either
+> direction. **Not a hole in anything shipped**: the stage is reached only through
+> `depth_reject_chunk_via_kel` and is not wired into `self_hosted_compile`. Now default-deny, with
+> `out_cause` separating an unanalysed program from a proven underflow. Mutation-verified.
+>
+> **`-255` IS AMBIGUOUS AND THE TEST SAYS SO.** It means both a pool overflow inside `mi_join` and a
+> missing header region in `mi_join_header`, in one call path. The test is sound because the pool
+> cause cannot fire for its input, proven by a control. **Splitting the code is one line and is HELD
+> for the operator**, since an error code is an observable.
+>
+> **Batching risk, recorded rather than assumed**: a bisect lands on all three and a revert takes all
+> three.
+
+> **Currency note (2026-08-19, final+4).** **THE LIVE DECISION LIST IS EMPTY.** Thirteen operator
+> rulings recorded. The three standing forks are ruled -- a **file operand with standard input as the
+> default**, **leave the token array at 40,960**, and **defer top-level `struct`** -- plus ten more.
+> The full record with each ruling is in `HANDOFF.md` under "Open, held by the operator".
+>
+> **TWO RULINGS WERE TAKEN AGAINST STALE INFORMATION I SUPPLIED, and both errors were mine.** The
+> **ECC plane is already exercised end to end** -- `SchemaBuilder::with_ecc` plus eight tests on real
+> compiler output, each corruption paired with an unprotected control -- and I reported it open
+> because the decision document's status field said so. And the **token-array question was framed as
+> capacity when the streaming it presupposed was already built**: `FUSED_WINDOW` is 8 and three would
+> suffice, so the remaining residency is the `[Word; 40960]` DECLARATION, not the feed.
+>
+> **Read the tree before putting a question to the operator.** A wrong question costs a ruling.
+>
+> This increment changes four documents and nothing executable. The authorised implementations -- the
+> file operand, a declared nesting cap of **32**, the signature/provenance/`AUTH_TIER` reservations,
+> and the `-255` negative test -- are separate increments and are marked NOT IMPLEMENTED.
+
+> **Currency note (2026-08-19, final+3).** **THE TYPE CHECKER'S DECLARED INPUT NOW COMES FROM THE
+> PIPELINE.** Order 1 item 3, first slice: a function's declared return type and each parameter's
+> declared type are derived from `parse_functions` by `binding_rows_from_pipeline`, and agree with
+> the reference-AST extraction compared by NAME STRING rather than by id. **Nothing new was
+> encoded** -- the parameter name was already in the record stream and the driver discarded it.
+>
+> **The comparison found a defect in the REFERENCE-side extraction, not in the stage**: `Bool`
+> parses as `Named("Bool")` and not as a `Prim`, so every `Bool` annotation was silently dropped and
+> `fn f(b: Bool) -> Word { 1 + b }` was accepted by the stage while the reference rejected it.
+>
+> **Derived bindings are still absent** -- a `let` bound to a literal or a call has no pipeline row,
+> because the initialiser's shape is in the body record stream. Pinned, non-vacuously, by
+> `the_pipeline_rows_are_the_declared_subset`.
+
+> **Currency note (2026-08-19, final+2).** **IDENTITY NOW TRAVELS WITH THE STRUCTURE.** Order 1's
+> claim that the type checker's input is available from `parse.kel` plus `reconstruct.kel` was half
+> true: a `Local` record carries a SLOT and no body record mentioned a NAME, while the type channel
+> is keyed by interned names. **The operator ruled** that a `let` record should carry its name id;
+> it now does, on the migrated full-word path with tag 90, and the driver diverts it so the node
+> stream is unchanged.
+>
+> **I claimed the blast radius before measuring it and was wrong** -- a third record decoder failed
+> eight tests. Three decoders now consume the stream and only the TAG is shared, which is correct
+> since their skip sets legitimately differ.
+
 > **Currency note (2026-08-19, final+1).** **DERIVED OPERANDS IN TYPE REJECTION ARE CLOSED**, an
 > item the operator had already ruled on ("before publishing V0.3.0"). `verify_types.kel` gains a
 > BOUNDED FIXPOINT: a binding may take form 2, "takes whatever expression node N yields", and the

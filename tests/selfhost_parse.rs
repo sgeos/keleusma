@@ -356,6 +356,13 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                     15 => in_body = false, // the body's Done ends body mode
                     35 => {}               // FieldPos: a construction reorder marker, consumed by
                     // reconstruct; not part of the parse-level node stream.
+                    // The binding-name record, skipped for the same reason: it carries
+                    // IDENTITY for the type channel and is not a node. The driver
+                    // diverts it into `ParsedFn::let_names`; this decoder has no use
+                    // for it and must not let it into a sequence pinned against the
+                    // reference. The tag comes from the driver so there is one source
+                    // of truth for the number.
+                    c if c == keleusma::selfhost_host::PARSE_LET_NAME_TAG => {}
                     _ => cur
                         .as_mut()
                         .expect("body node before START")
@@ -367,6 +374,7 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                     0 => {}                 // PENDING
                     15 => in_guard = false, // the guard's Done ends guard mode
                     35 => {}                // FieldPos: reorder marker, skipped (see above)
+                    c if c == keleusma::selfhost_host::PARSE_LET_NAME_TAG => {}
                     _ => cur
                         .as_mut()
                         .expect("guard node before START")
@@ -2443,8 +2451,13 @@ fn the_chunk_table_cap_is_refused_by_the_driver_and_not_by_the_stage() {
     );
 
     // AT the cap: accepted. `n` functions plus `main` is `n + 1` chunks.
+    //
+    // THROUGH THE FUSED FEED, like the `wire.kel` case above. This test's subject
+    // is the CHUNK table; a program with 1,024 functions also lexes to 14,334
+    // tokens, and driving the collecting feed here would pin `toks.packed` at that
+    // figure for a reason unrelated to what is being measured.
     let at_cap = src_with(declared - 1);
-    let (fns, ..) = keleusma::selfhost::parse_functions(&at_cap);
+    let (fns, ..) = keleusma::selfhost::parse_functions_fused(&at_cap);
     assert_eq!(
         fns.len(),
         declared,
@@ -2454,7 +2467,7 @@ fn the_chunk_table_cap_is_refused_by_the_driver_and_not_by_the_stage() {
     // ONE PAST the cap: refused by the DRIVER, naming the table, not
     // `LoopLimitExceeded` from inside the stage.
     let past = src_with(declared);
-    let err = std::panic::catch_unwind(|| keleusma::selfhost::parse_functions(&past))
+    let err = std::panic::catch_unwind(|| keleusma::selfhost::parse_functions_fused(&past))
         .err()
         .expect("a program past the cap must be refused");
     let msg = err
@@ -2952,7 +2965,11 @@ fn no_other_file_restates_the_shared_layout() {
 #[test]
 fn wire_kel_parses_now_that_the_chunk_table_admits_it() {
     const WIRE: &str = include_str!("../src/selfhost/kel/wire.kel");
-    let (fns, ..) = keleusma::selfhost::parse_functions(WIRE);
+    // THROUGH THE FUSED FEED. This test's subject is the CHUNK table, and the
+    // token feed is incidental to it. Driving the collecting feed here would pin
+    // `toks.packed` at `wire.kel`'s 24,836 tokens for a reason that has nothing to
+    // do with what the test measures.
+    let (fns, ..) = keleusma::selfhost::parse_functions_fused(WIRE);
     assert_eq!(
         fns.len(),
         486,
@@ -3228,29 +3245,57 @@ fn the_token_cap_is_named_and_its_boundary_holds() {
     );
 }
 
-/// **A `struct` DECLARATION PANICKED THE DRIVER WITH A BARE `unwrap()`.**
+/// **A `struct` DECLARATION PANICKED THE DRIVER, THEN WAS NAMED, AND IS NOW SKIPPED.**
 ///
-/// `parse.kel` has no struct handling at all: its declaration record codes are 1..3
-/// (`fn`/`yield`/`loop`), 9 (`data`), 10 (`use`) and 12 (`enum`), with no struct code. Its
-/// tokens are parsed as something else and the records arrive with no declaration open,
-/// where six bare `unwrap()`s used to sit.
+/// Three states, and the middle one is why this test is inverted rather than deleted.
 ///
-/// The old failure was `called Option::unwrap() on a None value` — a Rust panic naming
-/// neither the record nor the form. **This test does not assert that `struct` should be
-/// rejected**, only that the failure says what happened; whether the form is supported is a
-/// language decision and not this test's business.
+/// 1. Six bare `unwrap()`s gave `called Option::unwrap() on a None value`, naming neither the
+///    record nor the form.
+/// 2. Replaced by a message naming both. This test asserted that refusal, and said in its own
+///    doc that it took no position on whether `struct` should be SUPPORTED.
+/// 3. The driver now skips a `struct`, `trait` or `impl` declaration to its `END`, as
+///    `tests/selfhost_codegen.rs`'s copy of the same loop always did, and the program compiles.
+///
+/// # What changed and what did not
+///
+/// `parse.kel` was NOT modified. It already emitted STRUCTSTART 18, TRAITSTART 19 and
+/// IMPLSTART 20; the shipping driver had no state for them and the records fell through to the
+/// function dispatch. The doc on this test used to say the stage "has no struct handling at
+/// all", which the record codes falsify.
+///
+/// **This is not the deferred top-level-struct work.** No struct LAYOUT is derived from the
+/// pipeline; a struct-using program compiles because its layout comes from the scaffold and
+/// its chunk ops now lower without faulting. Deriving the layout remains deferred.
+///
+/// # The named refusal has lost its witness, which is recorded rather than celebrated
+///
+/// With 18..20 skipped, no construct tried reaches `open_decl`'s named panic: plain `struct`,
+/// `trait`, `impl`, and a const-generic `struct` all parse. It is recorded as **not found**,
+/// NOT as unreachable — the same distinction this line drew for `Op::IsStruct`. The message
+/// is retained because a future record code arriving with nothing open is exactly what it is
+/// for, and an unreachable-today guard is not the same as a useless one.
 #[cfg(feature = "self-host")]
 #[test]
-fn an_unrecognised_declaration_is_named_rather_than_unwrapped() {
-    let msg = refusal("struct S { a: Word }\nfn f() -> Word { 1 }\n")
-        .expect("a struct declaration must be refused rather than accepted silently");
+fn a_struct_trait_or_impl_declaration_is_skipped_rather_than_faulting() {
+    for src in [
+        "struct S { a: Word }\nfn f() -> Word { 1 }\n",
+        "trait T { fn g(self) -> Word; }\nfn f() -> Word { 1 }\n",
+        "struct S { a: Word }\nimpl S { fn g(self) -> Word { self.a } }\nfn f() -> Word { 1 }\n",
+        "struct S<const N: Word> { a: Word }\nfn f() -> Word { 1 }\n",
+    ] {
+        assert!(
+            refusal(src).is_none(),
+            "{src:?} was refused. If a declaration form must be refused again, say which and \
+             why here rather than relaxing this loop"
+        );
+    }
+
+    // Non-vacuity. If `refusal` returned `None` for everything -- a harness fault rather than a
+    // parse success -- the loop above would pass while establishing nothing.
     assert!(
-        msg.contains("no declaration open") && msg.contains("struct"),
-        "the refusal was {msg:?}, which does not name what arrived or the likely cause"
-    );
-    assert!(
-        !msg.contains("Option::unwrap"),
-        "the refusal is still a bare unwrap panic: {msg:?}"
+        refusal(&src_lets(10_000)).is_some(),
+        "the refusal harness reports no failure for a source that must exceed a stage bound, \
+         so the assertions above measure nothing"
     );
 }
 
@@ -3380,4 +3425,140 @@ fn the_data_field_bound_counts_the_whole_program() {
         "the refusal was {msg:?}; a reader who sees only a per-block count will split the \
          wrong thing"
     );
+}
+
+/// **BOTH FEEDS' COST BY INPUT SIZE, MEASURED RATHER THAN ASSUMED.**
+///
+/// An instrument, not a verdict, and `#[ignore]`d because it costs a minute.
+/// Prints both feeds at several sizes so a reader sees the SHAPE of the curve
+/// rather than trusting an extrapolation from one point.
+///
+/// # WHY THIS EXISTS: A BEHAVIOURAL TEST WAS WRITTEN HERE AND WITHDRAWN
+///
+/// Stage one of the token-residency work moved every production entry point to
+/// the fused feed and gated `PARSE_TOKEN_CAP` on the collecting feed, so no
+/// compile a user can start carries the 40,960-token bound any more. The obvious
+/// pin was a source past the cap, compiled through the fused feed and refused
+/// through the other.
+///
+/// **It ran for over ten minutes and was withdrawn.** The reason is recorded here
+/// because it is worth more than the test would have been.
+///
+/// # THE COST IS SUPERLINEAR, AND IT IS NOT THE FEED
+///
+/// Measured on 2026-08-19, debug build:
+///
+/// ```text
+///   tokens=459   fused=1606ms   collecting=1969ms
+///   tokens=909   fused=2491ms   collecting=2850ms
+///   tokens=1809  fused=4455ms   collecting=4774ms
+///   tokens=3609  fused=15062ms  collecting=15315ms
+/// ```
+///
+/// Doubling the input from 1,809 to 3,609 tokens multiplies the time by about
+/// 3.4, so the curve is superlinear and extrapolates to roughly half an hour at
+/// 41,000 tokens. **Both feeds show it and their times are within a few percent**,
+/// which localises the cost to the shared record handling and driver rather than
+/// to token delivery. The fused feed is slightly FASTER at every size, so stage
+/// one is not a performance regression.
+///
+/// **What this means for the residency work.** The MEMORY bound is what stage two
+/// removes and it is real. The bound a large input now meets first is TIME, and
+/// that is a separate defect in a shared code path, raised for the operator rather
+/// than fixed here.
+///
+/// The assertion that the two feeds agree on the function count is the part that
+/// can fail; the timings are printed, never asserted, because a wall-clock
+/// threshold in a test is a flake waiting for a loaded machine.
+#[cfg(feature = "self-host")]
+#[test]
+#[ignore = "instrument: costs about a minute; run explicitly with --ignored"]
+fn both_feeds_cost_by_input_size() {
+    for pads in [50usize, 100, 200, 400] {
+        let mut src = String::new();
+        for i in 0..pads {
+            src.push_str(&format!("fn pad{i}() -> Word {{ 0 }}\n"));
+        }
+        src.push_str("fn main() -> Word { 0 }");
+        let count = keleusma::selfhost::lex_token_count(&src);
+        let t = std::time::Instant::now();
+        let (fns, ..) = keleusma::selfhost::parse_functions_fused(&src);
+        let fused_ms = t.elapsed().as_millis();
+        let t = std::time::Instant::now();
+        let (fns2, ..) = keleusma::selfhost::parse_functions(&src);
+        let collecting_ms = t.elapsed().as_millis();
+        assert_eq!(
+            fns.len(),
+            fns2.len(),
+            "the two feeds disagree on function count"
+        );
+        println!(
+            "tokens={count} fns={} fused_ms={fused_ms} collecting_ms={collecting_ms}",
+            fns.len()
+        );
+    }
+}
+
+#[cfg(feature = "self-host")]
+/// **EVERY STAGE SOURCE'S TOKEN COUNT, WHICH IS WHAT SIZES THE COLLECTING FEED.**
+///
+/// An instrument. Measured 2026-08-20:
+///
+/// ```text
+///   lexer 2,785      parse 33,445     reconstruct 6,897   codegen 16,448
+///   analyze 3,964    wire 24,836      verify_structural 1,639
+///   verify_depth 1,820   verify_yield 1,630   verify_typed 3,381
+///   verify_types 2,065   verify_datalayout 388
+/// ```
+///
+/// **`parse.kel` is 33,445 and the handoff recorded 32,907**, which had drifted.
+/// Derive the number here rather than quoting prose.
+#[test]
+#[ignore = "instrument"]
+fn stage_source_token_counts() {
+    // Embedded at compile time rather than read by a relative path, which depends
+    // on the working directory a runner happens to choose.
+    for (f, src) in [
+        ("lexer.kel", include_str!("../src/selfhost/kel/lexer.kel")),
+        ("parse.kel", include_str!("../src/selfhost/kel/parse.kel")),
+        (
+            "reconstruct.kel",
+            include_str!("../src/selfhost/kel/reconstruct.kel"),
+        ),
+        (
+            "codegen.kel",
+            include_str!("../src/selfhost/kel/codegen.kel"),
+        ),
+        (
+            "analyze.kel",
+            include_str!("../src/selfhost/kel/analyze.kel"),
+        ),
+        ("wire.kel", include_str!("../src/selfhost/kel/wire.kel")),
+        (
+            "verify_structural.kel",
+            include_str!("../src/selfhost/kel/verify_structural.kel"),
+        ),
+        (
+            "verify_depth.kel",
+            include_str!("../src/selfhost/kel/verify_depth.kel"),
+        ),
+        (
+            "verify_yield.kel",
+            include_str!("../src/selfhost/kel/verify_yield.kel"),
+        ),
+        (
+            "verify_typed.kel",
+            include_str!("../src/selfhost/kel/verify_typed.kel"),
+        ),
+        (
+            "verify_types.kel",
+            include_str!("../src/selfhost/kel/verify_types.kel"),
+        ),
+        (
+            "verify_datalayout.kel",
+            include_str!("../src/selfhost/kel/verify_datalayout.kel"),
+        ),
+    ] {
+        println!("{f} tokens={}", keleusma::selfhost::lex_token_count(src));
+    }
 }
