@@ -1044,6 +1044,38 @@ pub fn parse_cursor_trace(src: &str) -> Vec<i64> {
 /// of pairs in a signature tell a reader less than the name does.
 type ParseSideTables = (Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>);
 
+/// Every `(kind, value)` token `lexer.kel` produces for `src`, beside the interned
+/// name table.
+///
+/// # The third instrument, and why the set was incomplete
+///
+/// `parse_cursor_trace` shows WHERE the stage is reading and `parse_record_trace`
+/// shows WHAT it emits. Neither shows what it is reading, so a record carrying a
+/// wrong value could be a parser fault or a token fault and the two were not
+/// separable from outside.
+///
+/// That gap is not hypothetical: the declaration-mis-naming defect was narrowed
+/// to "the header record carries the field's name", then to "the cursor never
+/// goes backwards", and stalled there — because the remaining question was what
+/// token sits at that cursor position, and nothing could answer it.
+///
+/// # This is the STAGE's stream, not the reference's
+///
+/// `keleusma::lexer::tokenize` is a different tokenizer with a different stream;
+/// see [`lex_token_count`], which exists because sizing a cap against the
+/// reference's count measures the wrong quantity. Compare these tokens against
+/// each other, never across the two lexers, unless the difference is the point.
+///
+/// # Not part of the compile path
+///
+/// A diagnostic instrument, public for the same reason the other two are: a
+/// hidden instrument is one the next person does not know exists.
+#[must_use]
+pub fn lex_token_trace(src: &str) -> (Vec<String>, Vec<(i64, i64)>) {
+    let (tokens, names) = br_lex(src);
+    (names, tokens)
+}
+
 /// Every `(code, value)` record `parse.kel` emits for `src`, in order, beside the
 /// interned name table.
 ///
