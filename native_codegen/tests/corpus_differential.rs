@@ -589,7 +589,49 @@ const STAGE_SEEDED: &[&str] = &[
     "reconstruct.kel",
 ];
 
-fn stage_seed(m: &Module, name: &str) -> Result<Vec<u8>, String> {
+/// The subjects the three `verify_*` stages are driven against.
+///
+/// **`02_struct_field.kel` was the ONLY subject until 2026-08-21**, so each
+/// seeded stage saw one chunk of one program while agreeing at sixty ticks. A
+/// stage mis-handling a construct absent from that file agreed at all sixty and
+/// the gate reported it as agreeing. **That is the same shape as the hole seed 0
+/// left for `Op::CmpLt`**, where `SLE` stood in for `SLT` across 126 sites and
+/// the whole differential passed because no vector made two comparands equal.
+///
+/// Kept first so its behaviour is unchanged and any movement is attributable.
+const STAGE_SUBJECTS: &[&str] = &[
+    "02_struct_field.kel",
+    "01_arithmetic.kel",
+    "03_enum_match.kel",
+    "04_for_in.kel",
+    "05_pipeline.kel",
+];
+
+/// Every seeded stage paired with every subject it can be driven against.
+///
+/// **`reconstruct.kel` DOES NOT WIDEN, and the obstacle is real rather than
+/// effort.** Its seed is not "a chunk with a defect" — it is a parsed multiheaded
+/// function group, and it asserts its subject declares exactly four heads. A
+/// different subject does not merely change the input; it fails the shape check,
+/// which is the assertion doing its job. Widening it needs more corpus files
+/// containing a multiheaded group, and the corpus has one.
+fn stage_seeds(m: &Module, name: &str) -> Vec<(&'static str, Result<Vec<u8>, String>)> {
+    if !STAGE_SEEDED.contains(&name) {
+        return vec![("-", Err("no arm for this stage".into()))];
+    }
+    if name == "reconstruct.kel" {
+        return vec![(
+            "06_multiheaded.kel",
+            stage_seed_for(m, name, "06_multiheaded.kel"),
+        )];
+    }
+    STAGE_SUBJECTS
+        .iter()
+        .map(|s| (*s, stage_seed_for(m, name, s)))
+        .collect()
+}
+
+fn stage_seed_for(m: &Module, name: &str, subject_file: &str) -> Result<Vec<u8>, String> {
     if !STAGE_SEEDED.contains(&name) {
         return Err("no arm for this stage".into());
     }
@@ -601,12 +643,14 @@ fn stage_seed(m: &Module, name: &str) -> Result<Vec<u8>, String> {
     // declined rather than returning `None`.
     let subject = sources()
         .into_iter()
-        .filter(|p| p.file_name().unwrap_or_default().to_string_lossy() == "02_struct_field.kel")
+        .filter(|p| p.file_name().unwrap_or_default().to_string_lossy() == subject_file)
         .find_map(|p| {
             let src = std::fs::read_to_string(&p).ok()?;
             compile(&parse(&tokenize(&src).ok()?).ok()?).ok()
         })
-        .ok_or("no subject module in the corpus")?;
+        .ok_or_else(|| {
+            format!("subject {subject_file} is not in the corpus or does not compile")
+        })?;
     let cix = (0..subject.chunks.len())
         .max_by_key(|&i| subject.chunks[i].ops.len())
         .ok_or("subject has no chunk")?;
@@ -1895,6 +1939,14 @@ fn every_lowering_module_executes_or_is_exempt() {
         std::collections::BTreeMap::new();
     let mut pin_reason: std::collections::BTreeMap<String, &'static str> =
         std::collections::BTreeMap::new();
+    // Per seeded stage: how many SUBJECTS produced a seed, and how many
+    // declined. Declined is tracked separately because a subject that never
+    // built and a subject that built and compared identically produce the same
+    // downstream total, and only the first is an instrument fault.
+    let mut subjects_built: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
+    let mut subjects_declined: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
     let mut disagreed: Vec<String> = Vec::new();
     // Names found under `src/selfhost/kel`, for the Order-1 gate report below.
     let mut stage_files: Vec<String> = Vec::new();
@@ -2000,36 +2052,64 @@ fn every_lowering_module_executes_or_is_exempt() {
         );
 
         // **A real stage input, from the driver's own accessor.** Computed once
-        // and handed to BOTH sides, so the comparison is of two lowerings rather
-        // than of two encodings.
-        let stage = stage_seed(&m, &name);
+        // per SUBJECT and handed to BOTH sides, so the comparison is of two
+        // lowerings rather than of two encodings.
+        //
+        // **SUBJECT IS A DIFFERENT AXIS FROM ARGUMENT VECTOR, and conflating them
+        // is what this harness got wrong once already.** `seeds` stays 1 for a
+        // stream -- correct, and deliberate. What varies here is WHAT THE STAGE
+        // IS LOOKING AT, which sixty ticks never varied.
+        let subject_seeds = stage_seeds(&m, &name);
         // **Say whether a seed was APPLIED, not just whether one exists.** A seed
         // the accessor declined to build and a seed the stage silently rejects
         // produce the same downstream number -- "still vacuous" -- and only the
         // first is an instrument fault. Printed for every stage that has an arm.
         if STAGE_SEEDED.contains(&name.as_str()) {
-            println!(
-                "  stage seed for {name}: {}",
-                match &stage {
-                    Ok(b) => format!(
-                        "APPLIED, {} bytes, {} non-zero",
-                        b.len(),
-                        b.iter().filter(|x| **x != 0).count()
-                    ),
-                    Err(why) => format!("NOT BUILT -- {why}"),
-                }
-            );
+            for (subj, r) in &subject_seeds {
+                println!(
+                    "  stage seed for {name} [{subj}]: {}",
+                    match r {
+                        Ok(b) => format!(
+                            "APPLIED, {} bytes, {} non-zero",
+                            b.len(),
+                            b.iter().filter(|x| **x != 0).count()
+                        ),
+                        Err(why) => format!("NOT BUILT -- {why}"),
+                    }
+                );
+            }
+            let built = subject_seeds.iter().filter(|(_, r)| r.is_ok()).count();
+            let declined = subject_seeds.len() - built;
+            subjects_built.insert(name.clone(), built);
+            subjects_declined.insert(name.clone(), declined);
         }
+        // The variants this module is driven at: (argument-vector seed, stage
+        // seed). A non-stage contributes one variant per SEED; a seeded stage
+        // contributes one per SUBJECT. **A declined subject is dropped here and
+        // counted above** -- it must stay visible rather than vanishing into a
+        // smaller total.
+        let ok_seeds: Vec<&Vec<u8>> = subject_seeds
+            .iter()
+            .filter_map(|(_, r)| r.as_ref().ok())
+            .collect();
+        let variants: Vec<(usize, Option<&[u8]>)> = if ok_seeds.is_empty() {
+            (0..seeds).map(|sd| (sd, None)).collect()
+        } else {
+            ok_seeds
+                .iter()
+                .flat_map(|b| (0..seeds).map(move |sd| (sd, Some(b.as_slice()))))
+                .collect()
+        };
 
         let mut runs: Vec<(usize, Run, Run)> = Vec::new();
         let mut bail: Option<(String, ExemptClass)> = None;
-        for seed in 0..seeds {
+        for (seed, stage_bytes) in variants.iter().copied() {
             // **The virtual machine runs FIRST, and that ordering is load-bearing.**
             // A module that traps reports an error here; natively the same trap is
             // `llvm.trap`, which kills the process with SIGTRAP and takes the whole
             // harness with it. Asking the tolerant side first turns a fatal signal
             // into a named exemption.
-            let v = match run_vm(&m, &table, seed, stage.as_deref().ok()) {
+            let v = match run_vm(&m, &table, seed, stage_bytes) {
                 Ok(v) => v,
                 Err((why, class)) => {
                     // A LATER seed that traps is not an exemption for the module:
@@ -2046,7 +2126,7 @@ fn every_lowering_module_executes_or_is_exempt() {
                     break;
                 }
             };
-            let Some(n) = run_native(&m, &table, seed, stage.as_deref().ok()) else {
+            let Some(n) = run_native(&m, &table, seed, stage_bytes) else {
                 if seed == 0 {
                     bail = Some((
                         "entry signature shape the harness does not drive".into(),
@@ -2062,7 +2142,13 @@ fn every_lowering_module_executes_or_is_exempt() {
             continue;
         }
         seed_pairs += runs.len();
-        vectors_per_module.insert(name.clone(), runs.len());
+        // **`seeds`, NOT `runs.len()`.** Subject widening made a stage's run
+        // count `subjects * seeds`, so `runs.len()` silently became a VARIANT
+        // count and this line started reporting streams as "driven at more than
+        // one argument vector" -- which is false, and is precisely the axis
+        // conflation this whole section exists to prevent. Caught by reading the
+        // report after the widening landed, not by the compiler.
+        vectors_per_module.insert(name.clone(), seeds);
         compares_per_module.insert(
             name.clone(),
             runs.iter().map(|(_, v, _)| v.results.len()).sum(),
@@ -2434,14 +2520,36 @@ fn every_lowering_module_executes_or_is_exempt() {
         );
         println!("    per stage. A stage driven at ONE argument vector is still compared at");
         println!("    every tick it runs.");
-        // **THE RESIDUAL, so this correction does not overclaim in the other
-        // direction.** Sixty ticks is a real comparison surface, but each stage
-        // still receives ONE input program and ONE seeded segment. The tick
-        // sequence varies the stage's POSITION WITHIN A RUN, not its INPUT. So
-        // the gate shows ten stages agreeing throughout one execution each --
-        // stronger than "compared once", weaker than "agrees on varied input".
-        println!("    RESIDUAL: one input program and one seeded segment per stage. The");
-        println!("    ticks vary POSITION WITHIN a run, not the INPUT to it.");
+        // **THE RESIDUAL, RESTATED AT ITS NEW POSITION.** Sixty ticks vary a
+        // stage's POSITION WITHIN A RUN, never what it is LOOKING AT. That second
+        // axis is the subject, and it was one hardcoded file until 2026-08-21.
+        println!("    SUBJECTS per seeded stage (the axis ticks do NOT vary):");
+        for st in STAGE_SEEDED {
+            let b = subjects_built.get(*st).copied().unwrap_or(0);
+            let d = subjects_declined.get(*st).copied().unwrap_or(0);
+            println!("      {st:26} {b} subject(s) seeded, {d} declined");
+        }
+        println!("    RESIDUAL: `reconstruct.kel` still sees ONE subject, and the obstacle");
+        println!("    is real -- its seed is a parsed multiheaded group and it asserts the");
+        println!("    subject declares exactly four heads. The corpus has one such file.");
+        println!("    An UNSEEDED stage varies neither axis: one run, sixty ticks.");
+
+        // **A seeded stage that silently falls back to one subject is what this
+        // guards.** `reconstruct.kel` is exempt BY NAME with its obstacle stated
+        // above, not by a threshold that would also hide a real fallback. The
+        // count is NOT pinned -- it moves with `STAGE_SUBJECTS`.
+        for st in STAGE_SEEDED {
+            if *st == "reconstruct.kel" {
+                continue;
+            }
+            let b = subjects_built.get(*st).copied().unwrap_or(0);
+            assert!(
+                b >= 2,
+                "seeded stage {st} was driven at {b} subject(s). Widening has \
+                 regressed to the single-subject case, or every added subject \
+                 declined -- check the NOT BUILT lines"
+            );
+        }
         assert!(
             min_c > 0,
             "an agreeing stage was compared at ZERO points, so its agreement is \
