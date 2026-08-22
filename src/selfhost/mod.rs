@@ -1600,45 +1600,48 @@ pub fn self_host_compile(src: &str) -> Module {
 /// packs `chunk + count * 256` into the node's `arg`. The type channel is keyed by
 /// NAMES, so an alias row for `let a = g()` needs the index turned back into `g`.
 ///
-/// [`ParsedFn`] has no chunk index, so the numbering has to be derived. **It is
-/// the distinct function names in SORTED order**, not declaration order: measured
-/// against `Module::chunks` for `lexer.kel`, whose table runs `compound_code`,
-/// `ident_token`, `intern_id`, `is_alpha`, ... and whose `entry_point` is 14,
-/// `main`'s position in that sorted list.
+/// **IT DELEGATES, BECAUSE THE TABLE ALREADY EXISTED.** `first_pass` computes
+/// `chunks` -- the deduplicated, lexicographically sorted set of function name ids,
+/// in the module's chunk order -- and `parse.kel` is seeded from it. This is a
+/// name lookup over that table and nothing more.
 ///
-/// # THE FIRST VERSION OF THIS WAS WRONG, AND THE CHECK IS WHY THAT IS KNOWN
+/// # I DERIVED IT BY HAND FIRST, GOT IT WRONG TWICE, AND IT WAS ALREADY WRITTEN DOWN
 ///
-/// It grouped **consecutive same-named heads** in declaration order, reasoning
-/// from the grouping [`self_host_compile_fused`] flushes on. That grouping is real
-/// -- a multi-arm function is one chunk -- and it is not the numbering. The first
-/// derivation produced the right chunk COUNT and the right SET of names in the
-/// wrong ORDER, so every `Call` node would have resolved to some other function's
-/// name, and nothing about the count or the set would have looked wrong.
+/// The first version grouped **consecutive same-named heads in declaration
+/// order**, reasoning from the grouping [`self_host_compile_fused`] flushes on.
+/// That grouping is real -- a multi-arm function is one chunk -- and it is not the
+/// numbering. It produced the right chunk COUNT and the right SET of names in the
+/// wrong ORDER, so every `Call` node would have resolved to another function, with
+/// nothing about the count or the set looking wrong.
 ///
 /// It also **passed the small multi-arm probe**, because there the two rules
-/// coincide. Only the real corpus separated them. A derivation checked against a
-/// case chosen to exercise it is checked against the author's model of it.
+/// coincide. Only the real corpus separated them.
 ///
-/// # This mapping is checked, not assumed
+/// The second version sorted, and then disagreed on `wire.kel` -- which was
+/// recorded as an unexplained divergence and excluded from the corpus test.
+/// **That divergence was the hand-rolled derivation inheriting a defect**, not a
+/// property of the numbering: this version agrees with the reference on every
+/// stage, `wire.kel` included.
+///
+/// **The rule was documented in three places before any of that**, including on
+/// `chunk_table_from_tokens` and beside the seeding in `parse_functions_impl`.
+/// Checking for it would have cost one search and saved two wrong derivations and
+/// a spurious open finding. That is the sixth instance of this pattern in one
+/// session and the first that reached the tree.
+///
+/// # Still checked, not assumed
 ///
 /// `the_derived_chunk_names_match_the_reference_compiler` compares this against
-/// `Module::chunks`' own names over the stage corpus, with a guard that the
-/// comparison is non-vacuous. A derivation nothing checks is a guess with line
-/// numbers.
+/// `Module::chunks`' own names over the whole stage corpus, with a non-vacuity
+/// guard. Delegation is a reason to expect agreement, not evidence of it.
 #[must_use]
 pub fn chunk_names_from_pipeline(src: &str) -> Vec<String> {
-    let (fns, names, ..) = parse_functions_fused(src);
-    let mut out: Vec<String> = Vec::new();
-    for f in &fns {
-        let Some(n) = names.get(f.name as usize) else {
-            continue;
-        };
-        if !out.iter().any(|s| s == n) {
-            out.push(n.clone());
-        }
-    }
-    out.sort();
-    out
+    let first = first_pass(src);
+    first
+        .chunks
+        .iter()
+        .map(|&id| first.names.get(id as usize).cloned().unwrap_or_default())
+        .collect()
 }
 
 /// The type checker's BINDING ROWS, derived from the self-hosted pipeline.
