@@ -1,0 +1,40 @@
+COMPLETION CONDITION — absorption 4
+
+Ordering is explicitly NOT a completion criterion. Any order satisfies this.
+
+All of the following must hold as observable properties of the tree.
+
+1. The other line's work is absorbed into this line at the commit the
+   tree records, and the tree names which commit that is.
+
+2. Files owned by the other line are byte-identical to that absorbed
+   commit. The comparison is made against the absorbed commit, not
+   against a branch tip that continues to move.
+
+3. Every assertion that failed during absorption is rewritten to state
+   the new truth. None is deleted or weakened to make the tree green,
+   and what each previously asserted remains recorded.
+
+4. Every figure the resume document states about the self-hosted stage
+   gate is produced by a run on the absorbed tree. Figures are not
+   carried forward from before the absorption.
+
+5. Whether the stage-gate figures moved is stated as a measurement.
+   A passing suite alone is not offered as evidence that they did not.
+
+6. Any stage seed that stops building, or any subject that stops
+   reaching its verdict, is reported with its cause named rather than
+   absorbed into a smaller count.
+
+7. The record of which commit ownership is checked against is updated
+   to the new absorption point wherever it is stated.
+
+8. The tree does not claim the stage gate is met.
+
+9. The native code generator's suite passes with zero failures and its
+   formatting and lint checks pass, with the pass/fail judgement taken
+   from something other than a truncated or piped view of the output.
+
+10. Work that is finished is committed. Pushing may be deferred while a
+    pull request of this line is mid-verification, provided the
+    deferral is stated and the work is not left uncommitted.
