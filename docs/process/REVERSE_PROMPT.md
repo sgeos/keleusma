@@ -12,6 +12,31 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 **Date**: 2026-08-22 (the `CONSTS` route decision, taken by reading the code)
 
+## SESSION 51 — 81% OF THE CORPUS, MEASURED RATHER THAN CLAIMED
+
+The self-hosted emit path's coverage had lived in prose: a doc comment naming four region kinds, and
+a test comparing exactly those four. **A claim verified by listing the same claim cannot fail for the
+reason a reader cares about.** It is now derived from each artifact's own region directory, and the
+figure is **81% of the corpus's region bytes** — 134,776 of 165,208 across the twelve stages, in
+BYTES rather than region count, because a count weights a 48-byte region the same as a 56,256-byte
+one.
+
+**A region emitted correctly and lost anyway.** `wire_consts_via_kel` produced byte-identical
+`CONSTS` regions, and `wire_windowed_via_kel` — which assembles a whole artifact — ended its kind
+match in `_ => continue`. A caller assembling a body got **zeros where the largest region should
+be**, and every test passed, because they compared the four kinds the assembler routed. *The region
+is emitted correctly* and *the region reaches the artifact* read as one claim and are two; the second
+was false for the whole time the first was true.
+
+**The three-way classification is the point**, not decoration. `Skipped` is a gap stated honestly;
+`Differs` is a mis-emission. Un-routing `CONSTS` fails three tests and leaves the disagreement test
+GREEN; flipping one byte fails that test by name. Two mutations, two different outcomes.
+
+Eight region kinds remain skipped, and the test names them in its failure message so the next
+target is readable off a test run rather than off a document that may be stale.
+
+---
+
 ## SESSION 51 — `CONSTS` IS SELF-HOSTED, AND A GUARD THAT COULD NOT FIRE
 
 **Order 1 item 1 is done.** `wire_consts_via_kel` emits every stage's `CONSTS` region through the

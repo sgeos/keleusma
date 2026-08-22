@@ -10,6 +10,21 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-22, latest). THE COVERAGE FIGURE IS 81%, AND IT IS DERIVED.**
+> `tests/selfhost_region_coverage.rs` walks each artifact's own region directory and classifies
+> every non-empty region `Identical` / `Skipped` / `Differs`. **134,776 of 165,208 region bytes**
+> across the twelve stages, measured in bytes rather than region count. Eight kinds remain skipped
+> and the test names them.
+>
+> **`CONSTS` was emitted correctly and lost by the assembler.** `wire_windowed_via_kel` ended its
+> kind match in `_ => continue`, so a caller assembling a whole body got zeros where the largest
+> region should be, while every test passed by comparing the four kinds it did route. Now routed,
+> with the length checked rather than truncated.
+>
+> The `Skipped`/`Differs` split is load-bearing: un-routing a region fails the coverage tests and
+> leaves the disagreement test green; a wrong byte fails the disagreement test by name. Both
+> demonstrated.
+
 > **Currency note (2026-08-22, later). `CONSTS` IS SELF-HOSTED — ORDER 1 ITEM 1 IS DONE.**
 > `wire_consts_via_kel` emits every stage's `CONSTS` region through the Keleusma streaming path,
 > **byte-identical to the reference encoder for all twelve stage sources**, including the two the
