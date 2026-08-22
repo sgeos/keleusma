@@ -3886,6 +3886,55 @@ impl core::fmt::Display for SelfHostError {
 
 impl std::error::Error for SelfHostError {}
 
+/// The shared-slot layout `wire.kel` declares, derived once from its `shared data
+/// wire` block.
+///
+/// # Why this is a module and not three sets of local constants
+///
+/// It was three. `wire_names_from_input`, `wire_regions_from_input` and
+/// `wire_chunks_from_input` each restated `1 + 65536 + 1 + 1024 * 4`, and they
+/// agreed -- which is the state a drifted copy starts in. This tree has already
+/// paid for the same shape twice: nine copies of `parse.kel`'s layout collapsed
+/// into `crate::selfhost_host`, and four silent miscompiles in one day from the
+/// shipping driver disagreeing with a copy of itself that the boundary measured
+/// instead.
+///
+/// # The derivation, field by field
+///
+/// A slot index is a WORD index for a `Word` field and a BYTE index inside a
+/// `[Byte; N]` field, because `set_shared` addresses the declared slots. Reading
+/// down the block:
+///
+/// | field | width | first slot |
+/// |---|---|---|
+/// | `len` | 1 | 0 |
+/// | `bytes` | 65,536 | 1 |
+/// | `nregions` | 1 | 65,537 |
+/// | `rkind`, `rflags`, `rlen`, `rcovers` | 1,024 each | 65,538 |
+/// | `warg` .. `warg5` | 5 | 69,634 |
+/// | `fin` | 1,024 | 69,639 |
+/// | `bin` | 49,152 | 70,663 |
+///
+/// **APPEND TO A SLOT-ADDRESSED BLOCK, NEVER INSERT.** Every constant here is an
+/// offset from the fields above it, so a field inserted rather than appended
+/// moves every slot after it and every one of these becomes wrong at once.
+pub mod wire_slots {
+    /// `wire.len`, the directory byte length.
+    pub const LEN: usize = 0;
+    /// First byte of `wire.bytes`, the artifact window.
+    pub const BYTES: usize = LEN + 1;
+    /// `wire.nregions`.
+    pub const NREGIONS: usize = BYTES + 65536;
+    /// First slot of the four per-region input arrays.
+    pub const REGION_INPUTS: usize = NREGIONS + 1;
+    /// `wire.warg`, first of the five general argument slots.
+    pub const WARG: usize = REGION_INPUTS + 1024 * 4;
+    /// First slot of `wire.fin`, the record-field batch buffer.
+    pub const FIN: usize = WARG + 5;
+    /// First slot of `wire.bin`, the byte-pool batch buffer.
+    pub const BIN: usize = FIN + 1024;
+}
+
 /// Emit a module's `NAMES` and `STRING_POOL` regions through `wire.kel`.
 ///
 /// **This is the first thing the DRIVER asks `wire.kel` to do**, and it is what
@@ -3909,20 +3958,61 @@ fn const_roots_of(module: &Module) -> Vec<ConstValue> {
 /// stage. A host that quietly dropped them would make the stage's guard
 /// untestable, which is the same reason the blob carries a zero enum count
 /// rather than omitting the section.
-fn const_tag_and_name(c: &ConstValue) -> (u16, i64) {
+/// A constant's child nodes, in the order the wire format numbers them.
+///
+/// Extracted from `push_blob_node`, which is no longer its only caller: the
+/// `CONSTS` streaming emitter walks the same structure into a different encoding.
+/// Two walks of one shape is how a composite comes to be counted one way and
+/// emitted another.
+fn const_children(c: &ConstValue) -> Vec<&ConstValue> {
     use ConstValue as K;
     match c {
-        K::Unit => (1, 0),
-        K::Bool(b) => (2, i64::from(*b)),
-        K::Int(v) => (3, *v),
-        K::Byte(v) => (4, i64::from(*v)),
-        K::Fixed(v) => (5, *v),
-        K::None => (12, 0),
-        K::StaticStr(_) => (7, 0),
-        K::Tuple(_) => (8, 0),
-        K::Array(_) => (9, 0),
-        K::Struct { .. } => (10, 0),
-        K::Enum { .. } => (11, 0),
+        K::Tuple(v) | K::Array(v) => v.iter().collect(),
+        K::Struct { fields, .. } => fields.iter().map(|(_, v)| v).collect(),
+        K::Enum { fields, .. } => fields.iter().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// A constant's `(flags, discriminant)` pair.
+///
+/// Only a resolved enum discriminant sets a flag, and the bit is
+/// [`crate::wire_schema::FLAG_HAS_DISCRIMINANT`] rather than a literal `1`, for
+/// the same reason the tags below are named: the flag layout is the wire
+/// contract, not a number that happens to match it.
+fn const_flags_and_discriminant(c: &ConstValue) -> (i64, i64) {
+    use ConstValue as K;
+    match c {
+        K::Enum {
+            discriminant: Some(d),
+            ..
+        } => (i64::from(crate::wire_schema::FLAG_HAS_DISCRIMINANT), *d),
+        _ => (0, 0),
+    }
+}
+
+fn const_tag_and_name(c: &ConstValue) -> (u16, i64) {
+    use crate::wire_schema::tag;
+    use ConstValue as K;
+    // THE TAGS ARE THE ENCODER'S OWN CONSTANTS, NOT NUMBERS THAT MATCH THEM.
+    // This arm list carried the literals 1..12 and they agreed with
+    // `wire_schema::tag` by coincidence rather than by construction: the tag
+    // numbering is the wire contract, so a renumbering there would leave this
+    // function silently emitting the old contract. That is the shipping-driver
+    // versus test-copy shape that produced four silent miscompiles on
+    // 2026-08-21, one layer down.
+    match c {
+        K::Unit => (tag::UNIT, 0),
+        K::Bool(b) => (tag::BOOL, i64::from(*b)),
+        K::Int(v) => (tag::INT, *v),
+        K::Byte(v) => (tag::BYTE, i64::from(*v)),
+        K::Fixed(v) => (tag::FIXED, *v),
+        K::None => (tag::NONE, 0),
+        K::StaticStr(_) => (tag::STATIC_STR, 0),
+        K::Tuple(_) => (tag::TUPLE, 0),
+        K::Array(_) => (tag::ARRAY, 0),
+        K::Struct { .. } => (tag::STRUCT, 0),
+        K::Enum { .. } => (tag::ENUM, 0),
         other => panic!("const_tag_and_name has no tag for {other:?}"),
     }
 }
@@ -3967,22 +4057,10 @@ fn blob_node_names(c: &ConstValue) -> Vec<&str> {
 /// name sequence are depth-first preorder. Writing the blob in that order is
 /// what lets the stage reproduce both with a linear scan.
 fn push_blob_node(c: &ConstValue, out: &mut Vec<u8>, names: &mut usize) {
-    use ConstValue as K;
     let node_names = blob_node_names(c);
-    let children: Vec<&ConstValue> = match c {
-        K::Tuple(v) | K::Array(v) => v.iter().collect(),
-        K::Struct { fields, .. } => fields.iter().map(|(_, v)| v).collect(),
-        K::Enum { fields, .. } => fields.iter().collect(),
-        _ => Vec::new(),
-    };
+    let children = const_children(c);
     let (tag, payload) = const_tag_and_name(c);
-    let (flags, disc): (i64, i64) = match c {
-        K::Enum {
-            discriminant: Some(d),
-            ..
-        } => (1, *d),
-        _ => (0, 0),
-    };
+    let (flags, disc) = const_flags_and_discriminant(c);
     out.extend_from_slice(&tag.to_le_bytes());
     out.extend_from_slice(&payload.to_le_bytes());
     out.extend_from_slice(
@@ -4197,8 +4275,7 @@ pub fn wire_names_from_input(
     // Slot layout mirrors `wire.kel`'s shared block: `len`, then `bytes`, then
     // the region inputs. The directory is seeded so `dir_find` can locate
     // NAMES and STRING_POOL; the blob rides `bin`.
-    const NREGIONS_SLOT: usize = 1 + 65536;
-    const BIN_SLOT: usize = 1 + 65536 + 1 + 1024 * 4 + 5 + 1024;
+    use wire_slots::{BIN as BIN_SLOT, NREGIONS as NREGIONS_SLOT};
     const CMD_JOIN: i64 = 167;
     vm.set_shared(&mut shared, 0, Value::Int(directory.len() as i64))
         .expect("len");
@@ -4279,14 +4356,29 @@ fn header_fields_of(module: &Module) -> [i64; 11] {
 /// module-driven; but only the first two are self-hosted end to end, and a
 /// reader should not read the third as more than it is.
 ///
-/// # Why `CONSTS` is not here, which is the largest region by an order of magnitude
+/// # Why `CONSTS` is not here, which is the largest region but no longer a dominant one
 ///
-/// `CONSTS` is 645,312 bytes across the eleven stages, which is 90.5% of the
-/// 712,936-byte corpus total, against 24,408 for `NAMES` and `STRING_POOL`
-/// together. It is the obvious next target and it is **not** a wiring job.
-/// Every figure in this section is derived by a test in
-/// `tests/consts_region_composition.rs`; an earlier revision quoted 663,120 and
-/// 34,960 here, from a measurement nothing re-ran.
+/// `CONSTS` is **37,152 bytes across the eleven stages, 33.9% of the
+/// 109,552-byte corpus auxiliary body**, against 25,752 for `NAMES` and
+/// `STRING_POOL` together. It is still the largest single region and still the
+/// obvious next target. **The share is of the BODY**, which is what the 90.5%
+/// it replaces was a share of; against the sum of region payloads alone the same
+/// corpus reads 37.5%, and quoting the two interchangeably is how a figure stops
+/// meaning anything.
+///
+/// **THIS PARAGRAPH SAID 645,312 BYTES AND 90.5% OF 712,936, AND CLAIMED EVERY
+/// FIGURE IN IT WAS DERIVED BY A TEST.** Neither was true. Those numbers predate
+/// the all-default elision, which removed the 38,087 wholly-default private-slot
+/// initialisers that made up the bulk of the region, and no test asserted them —
+/// so the correction was available to anyone who measured and to nobody who
+/// read. That is the seventh stale-figure incident on this line and the third in
+/// this doc comment specifically; an earlier revision quoted 663,120 and 34,960
+/// from a measurement nothing re-ran.
+///
+/// The share is now pinned by `the_recorded_region_magnitude_is_the_one_the_tree_produces`
+/// in `tests/consts_region_composition.rs`, as a band rather than an exact
+/// figure: an exact pin fails on every stage edit, which trains its reader to
+/// re-baseline it rather than to read it.
 ///
 /// Two obstacles were recorded. **Only the first is real for this corpus**, and
 /// the correction matters because the second is the one that looked like a
@@ -4318,28 +4410,39 @@ fn header_fields_of(module: &Module) -> [i64; 11] {
 ///
 /// * **The 170-node flattener cap.** `wire.fin` is 1,024 words and a node costs
 ///   six, so the flattener walks at most 170 nodes per call. `parse` needs
-///   17,391. **This is not the only node cap and the two are easy to conflate**:
-///   the MODULE-INPUT walk separately refuses past 1,024 NODES
-///   (`nm_max_names`, error `-240`), which is what `wire.kel` hits at 1,148
-///   chunk constants. Different walks, different bounds, and only this one is
-///   derived from a word count.
-/// * **The node model omits the larger source.** `const_roots_of` collects
-///   `Chunk::constants` and not `DataLayout::private_init`. Those are 2,245
-///   and 38,087 constants respectively across the corpus, so the tested path
-///   covers the smaller 6%. The `FLATTEN_CASES` sources use `const data`, which
-///   lands in chunk constants, so nothing there ever reached the other pool.
+///   **857**, so it needs six calls rather than one. **This figure was recorded
+///   as 17,391 and that was a forest nothing emits**: it counted the
+///   wholly-default initialisers the encoder elides, overstating the margin
+///   twenty-six-fold. The bound still excludes the stages and the magnitude was
+///   wrong, which is why both are stated.
+/// * **This is not the only node cap and the two are easy to conflate.** The
+///   MODULE-INPUT walk separately refuses past 1,024 NODES (`nm_max_names`,
+///   error `-240`), which is what `wire.kel` hits at 1,194 chunk constants.
+///   Different walks, different bounds, and only the first is derived from a
+///   word count.
+/// * **What the emitted set actually is.** `keleusma::wire_schema::constant_roots`
+///   is the one definition of it: every chunk's constants in chunk order, then
+///   `DataLayout::private_init` unless the encoder elides it. `const_roots_of`
+///   below is the narrower BLOB model and is not that set. For this corpus the
+///   two coincide, because every stage's private pool is wholly default and so
+///   contributes nothing — but they coincide by measurement rather than by
+///   construction, and a stage that gained one non-zero initialiser would part
+///   them silently.
 ///
 /// # Why enlarging `wire.fin` cannot be the answer
 ///
 /// A stage's private data array is itself initialised, one `Int(0)` per word, so
 /// widening `fin` to hold N nodes adds 6N records to `wire.kel`'s **own**
-/// `CONSTS` region. Walking `parse`'s 17,391 nodes needs `fin` at 104,346 words,
-/// which is 1,669,536 bytes of `CONSTS` in the walking stage — six times the
-/// 278,256-byte region it is trying to emit. The stage's capacity to describe a
-/// data segment is paid for out of a data segment described the same way, so the
-/// approach diverges rather than converging. Batching across calls is the route,
-/// and for a scalar-only forest it is sound with no carried state, because each
-/// record depends on nothing outside itself.
+/// `CONSTS` region. Walking `parse`'s 857 nodes needs `fin` at 5,142 words,
+/// which is 82,272 bytes of `CONSTS` in the walking stage — six times the
+/// 13,712-byte region it is trying to emit. **The ratio is the node width and is
+/// what makes this a non-answer**; it does not depend on the forest size, which
+/// is why the correction to that size leaves the conclusion standing. The
+/// stage's capacity to describe a data segment is paid for out of a data segment
+/// described the same way, so the approach diverges rather than converging.
+/// Batching across calls is the route, and for a scalar-only forest it is sound
+/// with no carried state, because each record depends on nothing outside
+/// itself.
 ///
 /// `STRUCT_AUX` and `ENUM_AUX` are deliberately not candidates either: measured
 /// across the eleven stages, both regions are EMPTY in all of them, so a byte
@@ -4389,9 +4492,7 @@ pub fn wire_regions_from_input(
     arena.resize_persistent(need).expect("resize");
     let mut vm = Vm::new(m, &arena).expect("verify wire.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
-    const NREGIONS_SLOT: usize = 1 + 65536;
-    const FIN_SLOT: usize = 1 + 65536 + 1 + 1024 * 4 + 5;
-    const BIN_SLOT: usize = FIN_SLOT + 1024;
+    use wire_slots::{BIN as BIN_SLOT, FIN as FIN_SLOT, NREGIONS as NREGIONS_SLOT};
     /// `mi_join_header`. Mirrored from `wire.kel`'s dispatch, where
     /// `highest_command` is a real guard: a command above it returns `0 - 99`.
     const CMD_JOIN_HEADER: i64 = 168;
@@ -4568,10 +4669,9 @@ pub fn wire_chunks_from_input(
     arena.resize_persistent(need).expect("resize");
     let mut vm = Vm::new(m, &arena).expect("verify wire.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
-    const NREGIONS_SLOT: usize = 1 + 65536;
-    const WARG_SLOT: usize = 1 + 65536 + 1 + 1024 * 4;
-    const FIN_SLOT: usize = WARG_SLOT + 5;
-    const BIN_SLOT: usize = FIN_SLOT + 1024;
+    use wire_slots::{
+        BIN as BIN_SLOT, FIN as FIN_SLOT, NREGIONS as NREGIONS_SLOT, WARG as WARG_SLOT,
+    };
     /// `mi_join_chunks`, mirrored from `wire.kel`'s dispatch where
     /// `highest_command` is a real guard.
     const CMD_JOIN_CHUNKS: i64 = 169;
@@ -4759,18 +4859,75 @@ fn window_emit(
     Ok(out)
 }
 
-// `wire.kel`'s shared-block slot map, shared by every windowed emitter here.
+// `wire.kel`'s shared-block slot map, for every windowed emitter here.
 //
-// Hoisted out of `window_emit`, where they were function-local, when a second
-// emitter needed them. Two copies of a slot map is the drift this file's history
-// already records once: the shared block is addressed BY SLOT, so a constant that
-// disagrees with its twin shifts every field after it and the artifact is wrong
-// rather than refused.
-const WARG_SLOT: usize = 1 + 65536 + 1 + 1024 * 4;
-const FIN_SLOT: usize = WARG_SLOT + 5;
-const BIN_SLOT: usize = FIN_SLOT + 1024;
+// **THIS COMMENT USED TO SIT ON A SECOND COPY OF THE ARITHMETIC.** It was hoisted
+// out of `window_emit` when a second emitter needed it, and it says, correctly,
+// that two copies of a slot map is a drift this file's history already records --
+// while being one of four. The three `wire_*_from_input` entry points each
+// restated it as well. The reasoning was right and the remedy was applied one
+// scope too narrowly, which is the more common failure than not knowing the rule.
+//
+// The definition is `wire_slots`. These are re-exports so the emitters below read
+// unchanged; the shared block is addressed BY SLOT, so a constant that disagrees
+// with its twin shifts every field after it and produces a WRONG artifact rather
+// than a refused one.
+use wire_slots::{BIN as BIN_SLOT, FIN as FIN_SLOT, WARG as WARG_SLOT};
 /// Where the eleven header scalars ride in `fin`, above the chunk-field area.
 const HEADER_FIELD_BASE: usize = 990;
+
+/// Send one command to a suspended `wire.kel` and return the word it yields.
+///
+/// # Why the RESET skip is bounded rather than a loop
+///
+/// The stage's `loop main(...)` reports its RESET between iterations, so a
+/// yielded value is not always the next state. Skipping resets without a bound
+/// would let a stage that only ever resets hang the driver instead of reporting
+/// it; four is well past the one reset a well-formed stage produces.
+///
+/// # Why `NotSuspended` falls back to a call
+///
+/// The first command on a fresh virtual machine has nothing to resume. Every
+/// later one must resume, because CALLING a suspended coroutine stacks another
+/// activation rather than replacing it — a several-hundred-record region
+/// exhausts the arena that way, and the failure surfaces as an operand-stack
+/// error naming neither the call pattern nor the record count.
+///
+/// # Errors
+///
+/// [`SelfHostError::Unsupported`] when the stage faults, returns a non-integer
+/// state, or resets without ever yielding.
+fn enter_wire(vm: &mut Vm<'_, '_>, shared: &mut [u8], cmd: i64) -> Result<i64, SelfHostError> {
+    let mut st = match vm.resume_with_shared(shared, Value::Int(cmd)) {
+        Err(crate::vm::VmError::NotSuspended) => vm
+            .call_with_shared(shared, &[Value::Int(cmd)])
+            .map_err(|e| SelfHostError::Unsupported {
+                detail: alloc::format!("wire.kel faulted on command {cmd}: {e:?}"),
+            })?,
+        other => other.map_err(|e| SelfHostError::Unsupported {
+            detail: alloc::format!("wire.kel faulted on command {cmd}: {e:?}"),
+        })?,
+    };
+    for _ in 0..4 {
+        match st {
+            crate::vm::VmState::Yielded(Value::Int(v)) => return Ok(v),
+            crate::vm::VmState::Reset => {}
+            other => {
+                return Err(SelfHostError::Unsupported {
+                    detail: alloc::format!("wire.kel returned {other:?} for command {cmd}"),
+                });
+            }
+        }
+        st = vm
+            .resume_with_shared(shared, Value::Int(cmd))
+            .map_err(|e| SelfHostError::Unsupported {
+                detail: alloc::format!("wire.kel faulted resuming command {cmd}: {e:?}"),
+            })?;
+    }
+    Err(SelfHostError::Unsupported {
+        detail: alloc::format!("wire.kel reset repeatedly without yielding for {cmd}"),
+    })
+}
 
 /// Emit the whole `CHUNKS` region by STREAMING, one record per call.
 ///
@@ -4819,41 +4976,7 @@ fn window_emit_chunks(
             .expect("blob");
     }
 
-    let enter = |vm: &mut Vm<'_, '_>, shared: &mut [u8], cmd: i64| -> Result<i64, SelfHostError> {
-        // The loop block reports its RESET between iterations; skip it, bounded,
-        // so a stage that only ever reset cannot hang the driver.
-        let mut st = match vm.resume_with_shared(shared, Value::Int(cmd)) {
-            Err(crate::vm::VmError::NotSuspended) => vm
-                .call_with_shared(shared, &[Value::Int(cmd)])
-                .map_err(|e| SelfHostError::Unsupported {
-                    detail: alloc::format!("wire.kel faulted on command {cmd}: {e:?}"),
-                })?,
-            other => other.map_err(|e| SelfHostError::Unsupported {
-                detail: alloc::format!("wire.kel faulted on command {cmd}: {e:?}"),
-            })?,
-        };
-        for _ in 0..4 {
-            match st {
-                crate::vm::VmState::Yielded(Value::Int(v)) => return Ok(v),
-                crate::vm::VmState::Reset => {}
-                other => {
-                    return Err(SelfHostError::Unsupported {
-                        detail: alloc::format!("wire.kel returned {other:?} for command {cmd}"),
-                    });
-                }
-            }
-            st = vm
-                .resume_with_shared(shared, Value::Int(cmd))
-                .map_err(|e| SelfHostError::Unsupported {
-                    detail: alloc::format!("wire.kel faulted resuming command {cmd}: {e:?}"),
-                })?;
-        }
-        Err(SelfHostError::Unsupported {
-            detail: alloc::format!("wire.kel reset repeatedly without yielding for {cmd}"),
-        })
-    };
-
-    let began = enter(&mut vm, &mut shared, CMD_BEGIN)?;
+    let began = enter_wire(&mut vm, &mut shared, CMD_BEGIN)?;
     if began < 0 {
         return Err(SelfHostError::Unsupported {
             detail: alloc::format!("wire.kel refused the chunk stream with {began}"),
@@ -4872,7 +4995,7 @@ fn window_emit_chunks(
             vm.set_shared(&mut shared, FIN_SLOT + f, Value::Int(v))
                 .expect("chunk field");
         }
-        let wrote = enter(&mut vm, &mut shared, CMD_STEP)?;
+        let wrote = enter_wire(&mut vm, &mut shared, CMD_STEP)?;
         if wrote <= 0 {
             return Err(SelfHostError::Unsupported {
                 detail: alloc::format!("wire.kel refused chunk record {j} with {wrote}"),
@@ -4893,6 +5016,136 @@ fn window_emit_chunks(
                 Value::Byte(b) => b,
                 other => panic!("shared byte slot held {other:?}"),
             };
+        }
+    }
+    Ok(out)
+}
+
+/// Emit a module's `CONSTS` region by STREAMING, one constant record per call.
+///
+/// # Why this path exists at all, when `fl_walk` already emits a byte-identical region
+///
+/// `fl_walk` is the breadth-first flattener and it is capped at 170 nodes,
+/// because the whole forest must sit in `wire.fin` — 1,024 words at six words a
+/// node. It needs a QUEUE: a composite's record carries `(first, count)` into
+/// children numbered after every node at its own depth, so it cannot write a
+/// record until it knows how many nodes precede its children.
+///
+/// **A forest of scalars has no children.** The queue never grows past the roots,
+/// the walk degenerates to a linear scan, and it becomes one node in, one record
+/// out with no state but a cursor. That is commands 176 and 177, and it is not
+/// bounded by the cap because the stage holds ONE node rather than the forest.
+/// Measured 2026-08-22, every constant across all eleven stages is an `Int` and
+/// the largest forest is `parse` at 857 nodes — five times the walk's cap and
+/// unbounded for this path.
+///
+/// # The refusal is the point, not a limitation
+///
+/// The stage refuses a node with children (`-264`), an interning tag (`-265`) and
+/// a range-carrying tag (`-266`). A composite reaching this path would be emitted
+/// with a zero range and a zero `aux`: structurally valid, silently wrong, and
+/// indistinguishable downstream from a correct record. **The refusal is what keeps
+/// the gap visible instead of encoding it in the bytes**, so this function relays
+/// the code rather than falling back to `fl_walk`.
+///
+/// # Errors
+///
+/// [`SelfHostError::Unsupported`] when the stage refuses a node, naming the node
+/// index and the refusal code, or when the stage faults.
+pub fn wire_consts_via_kel(module: &Module) -> Result<Vec<u8>, SelfHostError> {
+    let roots = crate::wire_schema::constant_roots_of_module(module);
+    let mut fields = Vec::new();
+    for r in &roots {
+        push_const_preorder(r, &mut fields);
+    }
+    window_emit_consts(&fields)
+}
+
+/// One constant subtree in depth-first preorder, six words a node.
+///
+/// The six words are `(tag, payload, child count, names_first, flags,
+/// discriminant)`, matching what `wire.kel` reads out of `fin`. **Every word is
+/// written even when it is zero**: the stride is what locates the NEXT node, so a
+/// short record silently shifts the whole forest rather than failing.
+///
+/// `names_first` is zero because this path admits no interning tag; the stage
+/// refuses `StaticStr`, `Struct` and `Enum` rather than reading it.
+fn push_const_preorder(c: &ConstValue, out: &mut Vec<i64>) {
+    let (tag, payload) = const_tag_and_name(c);
+    let children = const_children(c);
+    let (flags, disc) = const_flags_and_discriminant(c);
+    out.push(i64::from(tag));
+    out.push(payload);
+    out.push(children.len() as i64);
+    out.push(0);
+    out.push(flags);
+    out.push(disc);
+    for ch in children {
+        push_const_preorder(ch, out);
+    }
+}
+
+/// Drive commands 176 and 177 over a preorder node stream, concatenating the
+/// records.
+///
+/// The same coroutine discipline as [`window_emit_chunks`]: the virtual machine
+/// is built ONCE and resumed. Calling a suspended coroutine stacks another
+/// activation rather than replacing it, and a stage with several hundred
+/// constants exhausts the arena that way, reporting an operand-stack error that
+/// names neither the call pattern nor the constant count.
+fn window_emit_consts(node_fields: &[i64]) -> Result<Vec<u8>, SelfHostError> {
+    const CMD_BEGIN: i64 = 176;
+    const CMD_STEP: i64 = 177;
+    /// `(tag, payload, children, names_first, flags, discriminant)`.
+    const FIELDS: usize = 6;
+
+    if !node_fields.len().is_multiple_of(FIELDS) {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!(
+                "the preorder stream is {} words, not a multiple of {FIELDS}",
+                node_fields.len()
+            ),
+        });
+    }
+
+    let m = compile_src(&read_stage("kel/wire.kel"));
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify wire.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+
+    let began = enter_wire(&mut vm, &mut shared, CMD_BEGIN)?;
+    if began < 0 {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!("wire.kel refused the constant stream with {began}"),
+        });
+    }
+
+    let mut out = Vec::with_capacity(node_fields.len() / FIELDS * 16);
+    for (j, row) in node_fields.as_chunks::<FIELDS>().0.iter().enumerate() {
+        for (f, &v) in row.iter().enumerate() {
+            vm.set_shared(&mut shared, FIN_SLOT + f, Value::Int(v))
+                .expect("node field");
+        }
+        let wrote = enter_wire(&mut vm, &mut shared, CMD_STEP)?;
+        if wrote <= 0 {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!(
+                    "wire.kel refused constant node {j} with {wrote}; -264 is a node with \
+                     children, -265 an interning tag, -266 a range-carrying tag, and each \
+                     means this forest is outside the streaming path rather than that the \
+                     path is broken"
+                ),
+            });
+        }
+        for k in 0..wrote as usize {
+            out.push(
+                match vm.get_shared(&shared, wire_slots::BYTES + k).expect("read") {
+                    Value::Byte(b) => b,
+                    other => panic!("shared byte slot held {other:?}"),
+                },
+            );
         }
     }
     Ok(out)
@@ -4919,10 +5172,40 @@ pub fn wire_windowed_via_kel(
             out[base..base + len].copy_from_slice(&win[..len]);
             continue;
         }
+        // CONSTS TAKES THE STREAMING PATH TOO, for the same reason CHUNKS does:
+        // it emits at window offset zero, one record per call, so the host
+        // places the bytes and no cap decides which stages are reachable.
+        //
+        // **THE LENGTH IS CHECKED RATHER THAN TRUNCATED.** The branches around
+        // this one write `&win[..len]`, which silently discards a disagreement
+        // between what the stage produced and what the reference reserved. Here
+        // a mismatch is the interesting event -- it means the root model and the
+        // encoder have parted -- so it is reported rather than trimmed away.
+        if kind == crate::wire_schema::kind::CONSTS {
+            let win = wire_consts_via_kel(module)?;
+            if win.len() != len {
+                return Err(SelfHostError::Unsupported {
+                    detail: alloc::format!(
+                        "the self-hosted CONSTS region is {} bytes and the reference \
+                         reserved {len}; the constant-root model and the encoder disagree",
+                        win.len()
+                    ),
+                });
+            }
+            out[base..base + len].copy_from_slice(&win);
+            continue;
+        }
         let cmd = match kind {
             k if k == crate::wire_schema::kind::NAMES => 170,
             k if k == crate::wire_schema::kind::STRING_POOL => 171,
             k if k == crate::wire_schema::kind::HEADER => 172,
+            // EVERY OTHER KIND IS LEFT AS ZEROS, and this is the honest name for
+            // what the windowed path does NOT cover. The stage has an emitter for
+            // all of them -- `emit_in_window` dispatches eighteen kinds -- so what
+            // is missing is the DRIVER supplying their fields, not the Keleusma
+            // side. `tests/selfhost_region_coverage.rs` measures which kinds land
+            // and which are skipped, so the coverage claim is a figure rather
+            // than a sentence.
             _ => continue,
         };
         if len > WINDOW {

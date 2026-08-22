@@ -308,3 +308,182 @@ rather than by choice.
 
 **The next session should pick between (a), (b) and (c) before touching the driver**, and should
 know that (c) needs a design answer rather than a refactor.
+
+---
+
+# BRIEF — THE ROUTE IS (c), AND THE DESIGN QUESTION DISSOLVED ON READING THE CODE (2026-08-22)
+
+The previous entry left three routes and said (c) "needs a design answer rather than a refactor".
+**That was wrong, and it was wrong for the fifth time in this area**: an obstacle recorded from the
+shape of an interface rather than from its body.
+
+## What the route decision actually turned on
+
+Route (c) was costed as hard because `SchemaBuilder::add_constant_pool` is called **per contributor**
+and returns a `ConstRange` each time, so it cannot consume a flat list of roots. That is true and it
+is not the obstacle, because **the flat list was never what had to be shared**.
+
+`add_constant_pool` is a pure accumulator: it extends `const_roots` and returns `(first, len)`.
+Everything about which roots reach the table is therefore structural — chunk constants in chunk
+order, then `private_init` — **except one predicate**, the wholly-default elision. A predicate is
+shareable by ordinary dependency. A range-returning contributor call is not, and only the second
+was ever in the way.
+
+So (c) is: the encoder and the model share the **elision predicate**, and the order is stated once
+beside it.
+
+## The figures were wrong by more than the route was
+
+Measured on 2026-08-22 and pinned by tests:
+
+| quantity | recorded | measured |
+|---|---|---|
+| `CONSTS` across the eleven stages | 645,312 bytes, 90.5% of the body | **37,152 bytes, 33.9% of a 109,552-byte body** |
+| `parse`'s forest | 17,391 nodes | **857** |
+| corpus auxiliary body | 103,544 | **109,552** |
+
+The first two come from the same cause: **every figure counted the wholly-default private-slot
+initialisers, which the encoder elides.** They describe a forest nothing emits. The doc comment
+carrying them also claimed "every figure in this section is derived by a test", and no test asserted
+any of them.
+
+**The conclusions survive and the magnitudes do not.** `parse` at 857 nodes still exceeds the
+170-node walk cap, so the cap still excludes the stages — six calls rather than a hundred and two.
+The six-to-one widening argument still holds, because the ratio is the node width and does not
+depend on the forest size. Stating both halves is the point: a correction that only reports "the
+conclusion stands" teaches nobody why the number moved.
+
+## The wrong turns, named for the next increment
+
+1. **DO NOT MEASURE THE FOREST THE MODULE CARRIES.** `all_constants` in
+   `tests/consts_region_composition.rs` includes the elided pool and is right only for an interning
+   census. `keleusma::wire_schema::constant_roots` is the emitted set. Using the first for a size or
+   a capacity is exactly how the 17,391 figure entered the tree.
+
+2. **DO NOT MAKE THE ORACLE DELEGATE.** `the_all_default_initialiser_pool_is_elided_from_the_region`
+   restates the elision rule and measures it at the bytes. It must keep restating it: a version that
+   called the shared predicate would agree with a WRONG predicate. The agreement between the two
+   statements is a separate test. This looks like duplication and is not.
+
+3. **DO NOT PIN A REGION SIZE EXACTLY.** An exact record count fails on every stage edit, which
+   trains its reader to re-baseline rather than to read. The bands here are wide enough for ordinary
+   growth and far too narrow for a return to the pre-elision magnitude.
+
+4. **THE COINCIDENCE IS MEASURED, NOT STRUCTURAL.** For this corpus the blob model
+   (`const_roots_of`) and the emitted set are equal, because every stage's private pool is wholly
+   default. A stage that gained one non-zero initialiser would part them silently. Anything built on
+   the equality must consume `constant_roots`, not `const_roots_of`.
+
+5. **THE SHARE IS OF THE BODY.** 33.9% of the auxiliary body and 37.5% of the summed region payloads
+   are the same measurement of two different denominators. Quoting them interchangeably is how a
+   percentage stops meaning anything.
+
+## What is done and what is not
+
+**Done**: the shared predicate, the one `constant_roots` definition, the test-local copy delegating
+to it, the corrected figures pinned by tests, and three mutations demonstrating each new guard fails
+when the thing it guards is broken.
+
+**Not done**: the driver still does not emit `CONSTS`. That remains the Order 1 deliverable and it is
+now a smaller job than the record said — a stage's forest is hundreds of scalar roots, not tens of
+thousands — but it is still a job, and the streaming commands it needs were validated separately and
+have never been driven from `src/selfhost/mod.rs`.
+
+## WHAT THE NEXT SLICE NEEDS, CHECKED AGAINST THE CODE RATHER THAN COSTED
+
+The driver still does not emit `CONSTS`. Before costing that, three things were looked up:
+
+| piece | expected | found |
+|---|---|---|
+| a `ConstValue` to wire-tag mapping in the driver | absent, and adding one would be a new copy | **already there** — `const_tag_and_name` in `src/selfhost/mod.rs`, complete for all eleven tags |
+| the child / flags / discriminant extraction | absent | **already there**, inside `push_blob_node` |
+| the emitted root set | absent from the library | **now `keleusma::wire_schema::constant_roots`** |
+
+**So the remaining driver work is assembling six words per node and looping, not building machinery.**
+That is the fourth time in this area that a recorded obstacle dissolved on being looked up, and the
+second time the dissolution was in the direction of hidden PROGRESS rather than hidden cost.
+
+**A SEPARATE FINDING, HALF CLOSED.** The `ConstValue` to tag mapping exists in three Rust
+statements — `flatten` in `src/wire_schema.rs`, `const_tag_and_name` in the driver, and
+`push_preorder` in `tests/selfhost_wire.rs` — plus the stage's own `fl_tag_*` predicates.
+
+**The claim "they agree today" was checked rather than asserted, and the check found the interesting
+part.** `flatten` names `wire_schema::tag::*`. The driver wrote the bare literals `1..12`, so the
+two agreed by coincidence: the tag numbering is the wire contract, and renumbering it would have
+left the shipping driver emitting the old contract with nothing to notice. **That is now closed** —
+the driver names the encoder's constants.
+
+What remains open is the arm LIST rather than the numbering, and it is not mechanical: extracting a
+shared mapping would have to cover `StaticStr`, `Struct` and `Enum`, whose records carry an `aux`
+that `flatten` computes from a name interner it owns. A partial extraction covering only the scalar
+arms would be a fourth statement rather than a third, so it is recorded rather than started. The
+test-local `push_preorder` is deliberately left restating the numbers, on the same ground as
+`KIND_CONSTS`: a test of a wire contract that imports the contract cannot catch the contract
+changing.
+
+---
+
+# RESULT — THE DRIVER EMITS `CONSTS` FOR EVERY STAGE, BYTE-IDENTICALLY (2026-08-22)
+
+`keleusma::selfhost::wire_consts_via_kel` drives commands 176 and 177 over a module's constant
+forest and reproduces the reference encoder's `CONSTS` region **byte for byte for all twelve stage
+sources**, including the two the breadth-first walk cannot process at all.
+
+This is Order 1 item 1. `CONSTS` is the largest single region of a stage's auxiliary body — 37,152
+bytes across the eleven stages, 33.9% of the corpus body — and until now its payload came from the
+host, which means it was **not covered** by the self-hosting claim in any degree.
+
+## Why it turned out to be a small change
+
+Everything it needed already existed and the record said otherwise, for the fifth time in this area:
+
+- `const_tag_and_name` in the driver, complete for all eleven tags.
+- `push_blob_node`'s child, flag and discriminant extraction, now shared as `const_children` and
+  `const_flags_and_discriminant`.
+- `window_emit_chunks`'s coroutine discipline, now shared as `enter_wire` — build the virtual
+  machine ONCE and resume, because calling a suspended coroutine stacks an activation and a
+  several-hundred-record region exhausts the arena that way.
+- `constant_roots_of_module`, added so a caller holding a `Module` need not build a second
+  approximation of the encoder's input to ask which roots it emits.
+
+## THE GUARD THAT WAS SUPPOSED TO ANNOUNCE THIS COULD NOT HAVE FIRED
+
+`tests/stage_command_reach.rs` pinned that the driver did not reach 176/177, and was written
+"pinned in the firing direction: when the driver drives them, this fails". **It did not fail.** It
+searched the driver source for the STAGE's function names, `fl_stream_begin` and `fl_stream_step`,
+and the driver addresses the stage by COMMAND NUMBER and never writes those names at all.
+
+**Second instance of "a guard that cannot fire is worse than none"** on this line; the first
+compared `directory.len()` against a stage buffer when that length is the shared array's size, false
+by construction. The replacement derives from the command numbers and **was made to fail** against a
+driver with those constants renamed.
+
+## WHAT A GREEN RUN DOES NOT ESTABLISH, FOUND BY MUTATION
+
+**Swapping the `flags` and `discriminant` words in the driver's six-word node passes every test.**
+Every constant in the corpus is an `Int`, so both words are zero on every record compared, and
+swapping two zeros changes nothing.
+
+The first draft of the test recording this asserted a stronger thing — that a non-zero flag is
+UNREACHABLE, since only an enum sets one and the path refuses enum tags. **The witness could not be
+constructed.** Two shapes were tried and both fold to a discriminant `Int` at compile time:
+`const data k { e: E = E::B }` gives `Int(0)`, `let e = E::B` gives `Int(1)`. Neither produces a
+`ConstValue::Enum`.
+
+So the recorded position is: no source reaching this path was found that produces a flag-bearing
+constant, and **two attempts is not a search**. Asserting unreachability from two probes would have
+been the seventh instance of deriving a set from the part of the system one is thinking about.
+
+Two of the three refusals ARE exercised through the driver, each asserted by its own code: `-264` a
+node with children, `-265` an interning tag. `-266`, a range-carrying tag, is not, and the test says
+so rather than leaving a reader to infer that all three are covered because two are.
+
+## What is still not done
+
+- **Placement and the directory.** This emits at window offset zero and the host concatenates, which
+  is what makes it streamable and therefore what it does not test. Assembling a whole artifact from
+  the self-hosted regions is a separate question.
+- **The remaining region kinds**, Order 1 item 2. `STRUCT_AUX` and `ENUM_AUX` remain empty in every
+  stage, so a byte identity for either would pass while emitting nothing.
+- **A shared `ConstValue`-to-tag mapping.** The interning arms compute `aux` from a name interner
+  `flatten` owns; covering only the scalar arms would be a fourth statement rather than a third.

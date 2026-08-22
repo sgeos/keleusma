@@ -13,6 +13,229 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE COVERAGE CLAIM WAS A SENTENCE CHECKED BY A TEST THAT LISTED THE SAME SENTENCE (2026-08-22).**
+
+The self-hosted emit path's coverage lived in prose: a doc comment naming four region kinds, and a
+test comparing exactly those four. **A claim of the form "the path reaches N regions", verified by
+comparing those N regions, cannot fail for the reason a reader cares about** — that the set stopped
+growing, or quietly shrank. That is the sixth instance on this line of a suite whose coverage is a
+property of its case list mistaken for a property of the thing under test.
+
+`tests/selfhost_region_coverage.rs` derives the region set **from each artifact's own directory**
+and classifies every non-empty region three ways. The three-way split is the load-bearing part:
+
+| outcome | meaning |
+|---|---|
+| `Identical` | Keleusma produced these bytes and they match the reference |
+| `Skipped` | the driver never routed the kind; the bytes are zeros |
+| `Differs` | the driver routed it and produced the wrong bytes |
+
+**Collapsing `Skipped` and `Differs` into "not identical" would destroy the only distinction that
+matters here**: a gap the tree states honestly against a mis-emission. That is the same correction
+the construct-support boundary needed when `Gap` was split into `Refuses` and `Diverges`.
+
+**Demonstrated rather than argued.** Un-routing `CONSTS` fails three tests and leaves
+`no_region_the_driver_routes_disagrees_with_the_reference` GREEN, because an un-routed region is
+`Skipped`. Flipping one byte of a routed region fails that test by name. Two mutations, two
+different outcomes, which is what proves the classification discriminates rather than merely
+existing.
+
+**A REGION EMITTED CORRECTLY BY ITS OWN ENTRY POINT AND LOST BY THE ASSEMBLER.**
+`wire_consts_via_kel` had been producing byte-identical `CONSTS` regions since the previous
+increment, and `wire_windowed_via_kel` — the function that assembles a whole artifact — ended its
+kind match in `_ => continue`. So a caller assembling a body got **zeros where the largest region
+should be**, and every test of the assembled artifact passed, because they compared the four kinds
+the assembler routed.
+
+Two claims that read as one: *the region is emitted correctly* and *the region reaches the
+artifact*. The second was false for the whole time the first was true. Now routed, with the length
+**checked rather than truncated** — the neighbouring branches write `&win[..len]`, which discards a
+disagreement between what the stage produced and what the reference reserved, and a length mismatch
+is precisely the interesting event.
+
+**THE FIGURE: 81% of the corpus's region bytes**, 134,776 of 165,208 across the twelve stages,
+measured in BYTES rather than region count because a count weights `ENUM_LAYOUTS` at 48 bytes the
+same as `CONSTS` at 56,256 and flatters a path reaching many small regions and no large ones. Eight
+kinds remain skipped, and the test names them in its failure message so the next slice's target is
+readable off a test run rather than off a document that may be stale.
+
+---
+
+**`CONSTS` IS EMITTED BY KELEUSMA FOR EVERY STAGE, AND THE GUARD THAT SHOULD HAVE ANNOUNCED IT
+COULD NOT HAVE FIRED (2026-08-22).**
+
+`wire_consts_via_kel` drives the streaming commands over a module's constant forest and reproduces
+the reference encoder's `CONSTS` region **byte for byte for all twelve stage sources**, including
+the two the breadth-first walk refuses outright. That is Order 1 item 1: the largest single region
+of a stage's auxiliary body, previously host-supplied and therefore **not covered** by the
+self-hosting claim in any degree.
+
+**It was a small change because everything it needed already existed**, which the record denied for
+the fifth time in this area. The tag mapping, the child and flag extraction, and the coroutine
+discipline were all present; three of them are now shared rather than copied (`const_children`,
+`const_flags_and_discriminant`, `enter_wire`). What was genuinely missing was a way for a caller
+holding a `Module` to ask which roots the encoder emits without building a second approximation of
+the encoder's input, and that is `constant_roots_of_module`.
+
+**THE GUARD THAT COULD NOT FIRE.** `tests/stage_command_reach.rs` pinned that the driver did not
+reach commands 176 and 177, and said of itself: *"pinned in the firing direction: when the driver
+drives them, this fails and its author records that the route is now wired."* **It did not fail.**
+It searched the driver source for the STAGE's function names, `fl_stream_begin` and
+`fl_stream_step`, and the driver addresses the stage by COMMAND NUMBER — it has never written those
+names and never would.
+
+Second instance of this line's own rule, *a guard that cannot fire is worse than none*. The first
+compared `directory.len()` against a stage buffer when that length is the shared array's size, false
+by construction. The rule was already written down; **knowing it did not prevent the second
+instance, and only running the mutation did.** The replacement derives from the command numbers and
+was made to fail against a driver with those constants renamed.
+
+**WHAT A GREEN RUN DID NOT ESTABLISH, AND HOW THE FIRST ATTEMPT TO SAY SO WAS ITSELF TOO STRONG.**
+Mutation found that swapping the `flags` and `discriminant` words in the driver's six-word node
+passes every test: every corpus constant is an `Int`, so both words are zero on every record
+compared, and swapping two zeros changes nothing.
+
+I first wrote that gap up as *unreachable* — only an enum sets a flag, and the path refuses enum
+tags. **The witness could not be constructed.** `const data k { e: E = E::B }` folds to `Int(0)` and
+`let e = E::B` folds to `Int(1)`; neither yields a `ConstValue::Enum`. So the tree records that no
+source reaching this path was found that produces a flag-bearing constant, and that **two attempts
+is not a search**. Six instances of deriving a set from the part of the system I was thinking about
+are already on this line's record; this would have been the seventh, and it was caught by trying to
+write the assertion rather than by thinking harder about it.
+
+**Two of the three refusals ARE exercised through the driver**, each asserted by its own code —
+`-264` a node with children, `-265` an interning tag. `-266` is not, and the test says so, because a
+reader who sees two covered will otherwise infer three.
+
+---
+
+**THE ROUTE DECISION DISSOLVED ON READING THE CODE, AND THE FIGURES IT RESTED ON WERE WRONG BY
+TWENTY-SIX TIMES (2026-08-22).**
+
+Session 50 closed with one recorded open decision: which of three routes the `CONSTS` driver takes,
+with route (c) — one definition the encoder itself consumes — marked "right in principle and not
+mechanical" because `SchemaBuilder::add_constant_pool` is called per contributor and returns a
+`ConstRange` each time, so it cannot consume a flat list of roots.
+
+**That is true and it was never the obstacle.** `add_constant_pool` is a pure accumulator: it
+extends `const_roots` and returns `(first, len)`. Which roots reach the table is therefore entirely
+structural — chunk constants in chunk order, then `private_init` — **except one predicate**, the
+wholly-default elision. A predicate shares by ordinary dependency. A range-returning contributor
+call does not, and only the second was ever in the way. Route (c) is a `#[must_use] fn` and a
+`&DataLayout`.
+
+**I costed an interface from its shape rather than its body.** That is the fifth recorded obstacle
+in this area to dissolve on being looked up, and the second to dissolve in the direction of hidden
+PROGRESS: the driver already had `const_tag_and_name`, complete for all eleven tags, and
+`push_blob_node` already had the child, flag and discriminant extraction. The remaining driver work
+is assembling six words per node and looping.
+
+**THE FIGURES WERE WORSE THAN THE ROUTE.**
+
+| quantity | recorded | measured |
+|---|---|---|
+| `CONSTS` across the eleven stages | 645,312 bytes, 90.5% of the body | **37,152 bytes, 33.9% of a 109,552-byte body** |
+| `parse`'s constant forest | 17,391 nodes | **857** |
+| corpus auxiliary body | 103,544 | **109,552** |
+
+The first two share one cause: **every figure counted the wholly-default private-slot initialisers,
+which the encoder elides.** They describe a forest nothing emits. The doc comment carrying them also
+claimed "every figure in this section is derived by a test in
+`tests/consts_region_composition.rs`". No test asserted any of them. A file that names its own
+oracle and is not checked against it is worse than one that quotes a bare number, because the
+citation is what stops a reader from re-measuring.
+
+**THE CONCLUSIONS SURVIVE AND THE MAGNITUDES DO NOT, AND BOTH HALVES GET STATED.** `parse` at 857
+nodes still exceeds the 170-node walk cap, so the cap still excludes the stages — six calls rather
+than a hundred and two. The six-to-one widening argument still holds, because the ratio is the node
+width and does not depend on the forest size. A correction that reports only "the conclusion stands"
+teaches nobody why the number moved.
+
+**THE ORACLE MUST NOT DELEGATE, AND THAT LOOKS LIKE THE DUPLICATION IT IS NOT.**
+`the_all_default_initialiser_pool_is_elided_from_the_region` restates the elision rule and measures
+it at the bytes. A version calling the shared predicate would agree with a WRONG predicate. So the
+restatement stays, annotated as deliberate, and a separate test joins the two. **Demonstrated rather
+than argued**: inverting the predicate fails five tests including that oracle; each of the two
+`constant_roots` mutations fails exactly the one test written for it.
+
+**FOUR COPIES OF A SLOT MAP, AND THE COMMENT WARNING ABOUT COPIES SAT ON ONE OF THEM.**
+`1 + 65536 + 1 + 1024 * 4` was restated in `wire_names_from_input`, `wire_regions_from_input`,
+`wire_chunks_from_input`, and once at module scope under a comment saying — correctly — that two
+copies of a slot map is a drift this file's history already records. **The reasoning was right and
+the remedy was applied one scope too narrowly**, which is a more common failure than not knowing the
+rule. `wire.kel`'s block is addressed BY SLOT, so a constant disagreeing with its twin shifts every
+field after it and yields a WRONG artifact rather than a refused one.
+
+Now one `wire_slots` module, and `tests/wire_slot_layout.rs` **derives every offset by accumulating
+the field widths declared in `wire.kel` itself**, with a vacuity guard because a reader that stopped
+matching would compare zero against zero. Mutation-tested both ways: a field inserted mid-block
+fails it, and a narrowed per-region array fails both of its tests.
+
+**A TAG MAPPING THAT AGREED BY COINCIDENCE.** `const_tag_and_name` in the driver wrote the bare
+literals `1..12` where `flatten` names `wire_schema::tag::*`. The tag numbering is the wire contract,
+so renumbering it would have left the shipping driver emitting the old contract with nothing to
+notice — the 2026-08-21 shipping-driver-versus-copy shape, one layer down. **The claim "they agree
+today" was checked rather than asserted, and the checking is what found it.** Closed; the driver now
+names the encoder's constants.
+
+**WHAT WAS DELIBERATELY NOT DONE.** The driver still does not emit `CONSTS`, and
+`tests/stage_command_reach.rs` still pins that. Extracting a shared `ConstValue`-to-tag mapping was
+recorded rather than started: the interning arms compute `aux` from a name interner `flatten` owns,
+and a partial extraction covering only the scalar arms would be a fourth statement rather than a
+third.
+
+---
+
+**BEING WRONG IN PUBLIC WAS THE MOST PRODUCTIVE THING THAT HAPPENED TODAY (2026-08-21, late).**
+
+Two claims, both mine, both wrong, both caught by someone reading rather than agreeing.
+
+**THE OWNERSHIP CLAIM.** I told the operator `src/verify.rs` had no owner, on the `v0.3.0` line's
+reading of their own handoff. It always belonged to `v0.2.3` and both documents said so. The
+phrasing was INDEXICAL -- "they hold", "their surfaces" -- and resolves against whoever holds the
+document, so each line read the other's sentence backwards.
+
+The failure is not the misreading, which the convention invites. It is that I RELAYED a claim about
+a text I could have read in a minute, thirty lines below a sentence in my own handoff telling me to
+check exactly that. The other line named their half more precisely than I did: a peer's in-flight
+MESSAGE and a peer's durable RECORD are not evidence of equal weight, and when they disagree the
+record wins.
+
+**THE OPCODE CLAIM.** I said `Op::IsStruct` had no producer and was a removal candidate on an ISA
+whose opcode count is a rad-hard constraint. It had four, two of which still trapped.
+
+**The mechanism is the part worth keeping.** I FOUND the original witness by reading the guard's
+match arms for what they OMIT -- the method that cracked `Op::Len` after fourteen guessed constructs
+failed across two sessions. Then I VALIDATED MY OWN REPAIR by guessing three constructs and
+generalising. The other line applied my method to my code and had four counterexamples in under an
+hour.
+
+**A method used to find a defect is not automatically applied to validating its repair.** The repair
+is where the incentive to stop looking is strongest, and where I stopped.
+
+**WHAT THE COUNTEREXAMPLES LED TO IS BETTER THAN WHAT THEY REPORTED.** Four symptoms, two causes,
+and each cause masked the other: enum pattern names are rewritten on specialization and struct names
+are not, and the nominal pattern rule runs only on match arms and never on parameters. Without the
+missing check, the un-rewritten pattern was silent. With the pattern rewritten, the missing check has
+nothing to catch there. Neither is a novel defect -- both are a case handled for one construct and
+not its sibling, which is now the fourth time that shape has appeared this session.
+
+**TOO LOOSE AND TOO TIGHT ARE TWO DIRECTIONS AND GUARDING ONE HIDES THE OTHER.** Four instances in
+one day. The other line wrote down the too-loose rule and shipped a too-tight grep in the same file
+one commit apart. Reading about theirs, I found mine: a sixty-character window looking for
+`set_shared`. Mutation-testing showed it does not fail silently -- it reports a slot seeded ZERO
+times when it is seeded once, a confidently wrong failure sending its reader to hunt a deletion that
+never happened.
+
+**AND THE THING I DID NOT DO.** The `CONSTS` driver route is unblocked and I stopped at the design
+question rather than through it. `SchemaBuilder` needs a range back per contributor and cannot
+consume a flat list of roots, so the clean route is not a refactor. Four cost estimates in that area
+have now been checked against the code and NONE survived contact -- three high, one low. That is not
+a bias to correct for; it is a reason to fix the shape before writing code, because a decision made
+mid-edit is a duplicate created by default rather than by choice.
+
+---
+
 **THE FIFTH SILENT MISCOMPILE, AND A COST ESTIMATE THAT WAS WRONG IN THE HELPFUL DIRECTION
 (2026-08-21, midday).**
 

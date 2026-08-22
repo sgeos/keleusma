@@ -10,6 +10,82 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-22, latest). THE COVERAGE FIGURE IS 81%, AND IT IS DERIVED.**
+> `tests/selfhost_region_coverage.rs` walks each artifact's own region directory and classifies
+> every non-empty region `Identical` / `Skipped` / `Differs`. **134,776 of 165,208 region bytes**
+> across the twelve stages, measured in bytes rather than region count. Eight kinds remain skipped
+> and the test names them.
+>
+> **`CONSTS` was emitted correctly and lost by the assembler.** `wire_windowed_via_kel` ended its
+> kind match in `_ => continue`, so a caller assembling a whole body got zeros where the largest
+> region should be, while every test passed by comparing the four kinds it did route. Now routed,
+> with the length checked rather than truncated.
+>
+> The `Skipped`/`Differs` split is load-bearing: un-routing a region fails the coverage tests and
+> leaves the disagreement test green; a wrong byte fails the disagreement test by name. Both
+> demonstrated.
+
+> **Currency note (2026-08-22, later). `CONSTS` IS SELF-HOSTED — ORDER 1 ITEM 1 IS DONE.**
+> `wire_consts_via_kel` emits every stage's `CONSTS` region through the Keleusma streaming path,
+> **byte-identical to the reference encoder for all twelve stage sources**, including the two the
+> breadth-first walk refuses. It is the largest single region of a stage's auxiliary body and its
+> payload was host-supplied until now, so it counted as **not covered** at all.
+>
+> **The guard that was supposed to announce this could not have fired.** `stage_command_reach.rs`
+> searched the driver for the STAGE's function names; the driver addresses the stage by COMMAND
+> NUMBER. Second instance of "a guard that cannot fire is worse than none", and the rule was already
+> written down. Replaced, and made to fail.
+>
+> **Coverage boundary, found by mutation and stated rather than papered over**: swapping the `flags`
+> and `discriminant` words passes every test, because every corpus constant is an `Int` and both
+> words are zero. An attempt to record that as UNREACHABLE failed to construct a witness — `E::B`
+> folds to an `Int` — so the tree records "not found in two attempts", not a negative. Two of the
+> three refusals are exercised through the driver by their own codes (`-264`, `-265`); `-266` is not,
+> and the test says so.
+>
+> Still open on this region: placement and the directory (this emits at window offset zero and the
+> host concatenates), and Order 1 item 2, the remaining region kinds.
+
+> **Currency note (2026-08-22).** **THE `CONSTS` ROUTE DECISION IS CLOSED AND THE FIGURES IT
+> RESTED ON WERE WRONG.** Route (c) — one definition the encoder consumes — was recorded as "not
+> mechanical" and is: `add_constant_pool` is a pure accumulator, so only the wholly-default elision
+> predicate had to be shared, and a predicate shares by dependency.
+>
+> **Re-measured**: `CONSTS` is **37,152 bytes across the eleven stages, 33.9% of a 109,552-byte
+> body**, not 645,312 and 90.5%; `parse`'s forest is **857 nodes**, not 17,391. Both recorded
+> figures counted the wholly-default initialisers the encoder elides. The conclusions survive — the
+> 170-node cap still excludes the stages — and the magnitudes do not.
+>
+> Landed: `keleusma::wire_schema::constant_roots` as the one definition, the elision predicate
+> shared with `add_data_layout`, the test-local model delegating to it, `wire.kel`'s slot map
+> collapsed from four copies to one with `tests/wire_slot_layout.rs` deriving every offset from the
+> stage source, and the driver's tag literals bound to `wire_schema::tag`. Six mutations pin the new
+> guards. **The `CONSTS` driver is still unwired and `tests/stage_command_reach.rs` still says so.**
+
+> **Currency note (2026-08-21, late).** **FOURTEEN PULL REQUESTS MERGED; THE QUEUE IS EMPTY AND
+> TWO CLAIMS WERE RETRACTED.**
+>
+> Boundary **90 SOk / 1 Refuses / 3 Diverges / 1 RefRejects**; margin pins 676 and 35,333; the
+> shipping compiler matches the boundary on all 95 cases. Census across the session: byte-identical
+> **43 -> 90**, differs 21 -> 3, faults 30 -> 1.
+>
+> **THE LOAD-TIME HOLE IS CLOSED AT TWO SYMMETRY GAPS**, each masking the other: enum pattern names
+> were rewritten on specialization and struct names were not, and the nominal pattern rule ran only
+> on match arms, never on parameters. A legal program verified, took a bound, loaded, and trapped
+> `InvalidBytecode`.
+>
+> **TWO RETRACTIONS, BOTH RECORDED RATHER THAN DELETED.** `src/verify.rs` was never ownerless — both
+> handoffs agreed and the phrasing was indexical. And `Op::IsStruct` was NOT producerless: it had
+> four, and the fold's stated justification was false. The current claim is "twelve shapes from each
+> line, two trees, no producer", explicitly not "unreachable".
+>
+> **`CONSTS` streaming validated**: commands 176/177 executed for the first time, and a 200-node
+> forest the walk refuses with `-240` streams byte-identically to the reference encoder. The driver
+> is deliberately unwired; the route decision is sharpened in `docs/decisions/`.
+>
+> Also: chained array indexing works, and the parity guard's extraction is parsed rather than
+> windowed after a mutation showed the old form reports a wrong COUNT rather than failing silently.
+
 > **Currency note (2026-08-21, midday).** **FIVE SILENT MISCOMPILES CLOSED; `Op::IsStruct`
 > WITNESSED; EIGHT PULL REQUESTS MERGED.** This supersedes the note below it, which was written
 > before the last two findings.

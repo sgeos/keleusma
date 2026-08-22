@@ -228,7 +228,9 @@ that produced this document when they pull in different directions.
 - **`parse.kel` already emits a record stream**, so its output is a stream in the literal sense.
 - **Bounded working set is forced by the language**, not achieved by discipline.
 - **The largest artifact is 39,216 bytes**, under the 65,536-byte stage window, after the all-default
-  initialiser elision took the corpus body from 712,936 to 103,544. A final phase can therefore buffer
+  initialiser elision took the corpus body from 712,936 to **109,552** (re-measured 2026-08-22; the
+  103,544 previously recorded predates growth in the stage sources, and the margin the conclusion
+  rests on is unaffected either way). A final phase can therefore buffer
   an entire artifact, so the container's LEADING directory survives and
   [`WIRE_FORMAT_V2_WORD_ORIENTED.md`](./WIRE_FORMAT_V2_WORD_ORIENTED.md)'s choice does not need
   reopening. Its trailing-directory alternative was implemented and works, and stays available as a
