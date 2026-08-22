@@ -267,67 +267,85 @@ fn the_witness_module_cannot_be_given_an_arena() {
     );
 }
 
-/// **`Op::IsStruct` IS THE OTHER CASE, AND IT IS THE SHARPER ONE.**
+/// **SUPERSEDED VERDICT — THE LOAD-TIME HOLE IS CLOSED. The assertion is kept
+/// and INVERTED, never deleted.**
 ///
-/// Measured on this tree rather than taken from the `v0.2.3` line's report:
+/// # What this test used to assert
+///
+/// `Op::IsStruct` was the sharper of the two cases, and the table read:
 ///
 /// | witness | `verify()` | `module_wcmu` | arena | load | run |
 /// |---|---|---|---|---|---|
 /// | `Op::Len` | accepts | REFUSES | REFUSED | n/a | never runs |
-/// | `Op::IsStruct` | accepts | accepts | OK | **LOADS** | **TRAPS** |
+/// | `Op::IsStruct` | accepts | accepts | OK | **LOADS** | **TRAPPED** |
 ///
 /// `Op::Len`'s witness cannot be ADMITTED — refused before it can load, which is
 /// the conservative-verification stance working as designed and therefore not a
-/// hole. **`Op::IsStruct`'s witness satisfies EVERY load-time check**, receives a
-/// memory bound, loads, and then dies at call time with `InvalidBytecode`.
+/// hole. `Op::IsStruct`'s witness satisfied EVERY load-time check, received a
+/// memory bound, loaded, and then died at call time with `InvalidBytecode` — the
+/// class `verify()` exists to exclude AT LOAD TIME. A legal program reaching it
+/// at RUN time was a load-time hole rather than a bad program.
 ///
-/// **That is not the same kind of fact.** `InvalidBytecode` is the class
-/// `verify()` exists to exclude AT LOAD TIME, so a legal program reaching it at
-/// RUN time is a load-time hole rather than a bad program. **`src/verify.rs` is
-/// read-only to BOTH lines** — the `v0.2.3` line believed it was this line's and
-/// this line's handoff records it as theirs, so NEITHER has repaired it. It is
-/// recorded for the operator, with the ownership question named as its own item.
+/// # What changed, and what it means for the ownership question
 ///
-/// **This test fires in the FAILING direction on a repair.** If the trap stops
-/// happening, that is the hole being closed and the census row wants rewriting,
-/// not this assertion deleting.
+/// `6d217f0a` closed it **in the compiler, at both root causes**, so the program
+/// that used to trap now runs and returns `Int(3)`. **`src/verify.rs` was never
+/// touched, and did not need to be.**
+///
+/// That retires the item this line had escalated. The hole was recorded here as
+/// blocked on an ownership question about `src/verify.rs` — read-only to both
+/// lines, so neither could repair it. **The premise was wrong**: the defect was
+/// upstream of the verifier, in monomorphization and type checking, and closing
+/// it there removed the emission rather than teaching the verifier to reject it.
+/// A bad program stopped being generated, which is strictly better than a bad
+/// program being caught.
+///
+/// **The general lesson, and this line has now hit it twice.** An item parked on
+/// "this needs the operator to rule on ownership" was resolved by someone fixing
+/// the actual cause somewhere else entirely. Test the premise of an escalation
+/// before escalating it.
+///
+/// # The direction this fires in
+///
+/// It asserts the repair HOLDS. If the trap returns, or the value changes, that
+/// is a regression and this fires naming which. The value is asserted, not
+/// merely the absence of a trap: a repair that changed the program's meaning
+/// would be worse than the trap it replaced.
 #[test]
-fn the_is_struct_witness_loads_and_then_traps() {
+fn the_is_struct_witness_runs_and_the_load_time_hole_is_closed() {
     let m = build(IS_STRUCT_SOURCE);
     assert!(
-        m.chunks.iter().any(|c| c
+        !m.chunks.iter().any(|c| c
             .ops
             .iter()
             .any(|o| format!("{o:?}").starts_with("IsStruct"))),
-        "the witness no longer emits Op::IsStruct. If the compiler now folds the \
-         test out for an unannotated parameter, that is a REPAIR: say so and \
-         re-measure the coverage census, which counts this opcode witnessed"
+        "`Op::IsStruct` is emitted again for an un-annotated parameter, so the \
+         fold regressed. Re-measure the whole chain before rewriting anything"
     );
     assert!(
         keleusma::verify::verify(&m).is_ok(),
-        "the structural verifier rejects it, which would make this a DIFFERENT \
-         finding -- the hole recorded here is that it does NOT"
+        "the structural verifier now rejects a program that RUNS, which is a \
+         different and worse finding than the one this test used to record"
     );
 
-    let cap = auto_arena_capacity_for(&m, &[]).expect(
-        "the IsStruct witness was refused a bound. That makes it the same case as \
-         Op::Len rather than the contrasting one, and the table in this file's \
-         docs is then wrong rather than merely stale",
-    );
+    let cap = auto_arena_capacity_for(&m, &[])
+        .expect("the witness must still be given a bound; it was before the fold");
     let need = required_persistent_capacity_for(&m);
     let mut arena = keleusma_arena::Arena::with_capacity(cap + need + (4 << 20));
     arena.resize_persistent(need).expect("persistent fits");
-    let mut vm = keleusma::vm::Vm::new(m, &arena)
-        .expect("the witness must LOAD -- that it does is half the finding");
+    let mut vm = keleusma::vm::Vm::new(m, &arena).expect("the witness must LOAD");
 
     let mut shared: Vec<u8> = Vec::new();
-    let err = vm
-        .call_with_shared(&mut shared, &[])
-        .expect_err("THE WITNESS RAN CLEANLY. The load-time hole is closed: a program that reaches Op::IsStruct no longer traps. Rewrite the row, do not delete this.");
-    let text = format!("{err:?}");
-    assert!(
-        text.contains("InvalidBytecode"),
-        "the witness failed for a DIFFERENT reason than InvalidBytecode, so this \
-         test no longer measures the load-time hole it names: {text}"
+    let got = vm.call_with_shared(&mut shared, &[]).expect(
+        "THE WITNESS TRAPS AGAIN. The load-time hole is open: a legal program \
+         reaches `InvalidBytecode` at run time. Rewrite the verdict, do not \
+         delete this, and report it to the line that owns the compiler.",
+    );
+    assert_eq!(
+        format!("{got:?}"),
+        "Finished(Int(3))",
+        "the witness runs but no longer means what it meant. A repair that \
+         changes a program's VALUE is worse than the trap it replaced -- that is \
+         why this is asserted by value and not by absence of a fault"
     );
 }

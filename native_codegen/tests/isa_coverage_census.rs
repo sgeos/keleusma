@@ -163,33 +163,42 @@ fn which_isa_opcodes_have_no_corpus_witness() {
         }
     }
     println!(
-        "\n  ZERO REMAIN, as of 2026-08-21. Both of the last two were answered by\n  \
-         the `v0.2.3` line, and NEITHER was found by guessing a construct --\n  \
-         between the lines, twenty-three guesses failed. Both fell to reading the\n  \
-         GUARD'S OWN MATCH ARMS for what they OMIT.\n  \
+        "\n  ONE REMAINS, as of 2026-08-21, and it went from witnessed to\n  \
+         UNWITNESSED BY A REPAIR rather than by the corpus losing coverage.\n  \
          \n  \
-         `Len`      an `if` EXPRESSION as the for-in source. `static_for_in_length`\n  \
-                    handles ArrayLiteral, Call, FieldAccess, Ident, ArrayIndex and\n  \
-                    Match, then falls through to `_ => None`. `Expr::If` is absent.\n  \
-         `IsStruct` an UNANNOTATED struct-parameter pattern, so the pattern's type\n  \
-                    is unknown at the test. Annotating it folds the test out.\n  \
+         `IsStruct` had a witness on this tree until the `v0.2.3` line closed the\n  \
+                    load-time hole behind it at both root causes. A struct\n  \
+                    pattern's own name is now rewritten on specialization, and a\n  \
+                    function parameter is CHECKED against its annotation rather\n  \
+                    than merely bound. Both constructs that reached the opcode --\n  \
+                    an un-annotated parameter, then the generic instantiation\n  \
+                    this corpus moved to when the first was folded away -- now\n  \
+                    compile to no type test at all.\n  \
          \n  \
-         **A WITNESS IS NOT AN ADMISSIBLE PROGRAM, AND THE TWO DIFFER.** Measured:\n  \
+         **NOT RECORDED AS UNREACHABLE.** Thirteen shapes are tried in\n  \
+         `miscompilation_reach.rs`; nine reach code generation and none emits it.\n  \
+         The verdict rests on the emission condition rather than on the sample:\n  \
+         it needs a pattern type that is KNOWN and DIFFERENT, and both call sites\n  \
+         that supply one now run the nominal check first. This line claimed the\n  \
+         opcode producerless once before and was falsified within the hour.\n  \
+         \n  \
+         `Len` IS STILL WITNESSED and is the other kind of fact entirely:\n  \
          \n  \
            witness      verify()  module_wcmu  arena     load   run\n  \
            Len          accepts   REFUSES      REFUSED   n/a    never runs\n  \
-           IsStruct     accepts   accepts      OK        LOADS  TRAPS\n  \
+           IsStruct     -- no known producer --\n  \
          \n  \
          `Len`'s witness cannot be ADMITTED -- refused before load by the strict\n  \
          iteration-bound check, the conservative-verification stance working as\n  \
-         designed. `IsStruct`'s satisfies every load-time check, loads, and dies at\n  \
-         call time on `InvalidBytecode` -- the class `verify()` exists to exclude AT\n  \
-         LOAD TIME. A legal program reaching it at RUN time is a load-time hole, and\n  \
-         `src/verify.rs` is read-only to BOTH lines. Recorded for the operator; see\n  \
-         `probe_len_reachability.rs` and the handoff.\n  \
+         designed rather than a hole. It is reachable in BYTECODE and not in an\n  \
+         ADMISSIBLE PROGRAM, so 65 of 66 is the honest figure and the last one is\n  \
+         not obtainable by writing a better test.\n  \
          \n  \
-         SO 66 OF 66 IS DEFENSIBLE ON REACHABILITY AND DESERVES ITS FOOTNOTE:\n  \
-         one witness cannot be LOADED, the other cannot be RUN."
+         THE ESCALATION THIS ROW CARRIED IS RETIRED. `IsStruct`'s trap was\n  \
+         recorded here as blocked on an ownership question about `src/verify.rs`,\n  \
+         read-only to both lines. The premise was wrong: the defect was upstream\n  \
+         of the verifier, and closing it there removed the emission instead of\n  \
+         teaching the verifier to reject it. `src/verify.rs` was never touched."
     );
     println!("================\n");
 
