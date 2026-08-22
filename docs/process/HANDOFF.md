@@ -5,23 +5,24 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-08-23 against `6bc13e6c`**, every pinned value below re-measured and the check
-> block executed on that tree. **THIS FILE HAS GONE STALE WITHIN HOURS THREE TIMES.** If the dates here
-> disagree with the three channels, trust the channels.
+> **REFRESHED 2026-08-23 (later) against `5c3ba628`**, every pinned value below re-measured and
+> the check block executed on that tree. **THIS FILE HAS GONE STALE WITHIN HOURS FOUR TIMES.** If
+> the dates here disagree with the three channels, trust the channels.
 >
-> **TWENTY-ONE PULL REQUESTS MERGED IN SESSIONS 50 AND 51** -- fourteen on 2026-08-21, seven on
-> 08-22/23. That is a SESSION count, not the branch's: `v0.2.3` carries **117** merges in total.
-> **Derive either figure rather than quoting this sentence.** A draft of it said twenty-one while
-> one of those was still an open pull request, and a second draft cited a command that returns the
-> branch total for a session figure. Both were wrong in the same direction: a number copied from
-> intent rather than read from the tree.
+> **AS OF `5c3ba628`: 123 merges on `v0.2.3`, of which 27 are sessions 50 and 51.** Stated as a
+> MEASUREMENT AT A NAMED COMMIT rather than as a running total, because three drafts of this one
+> sentence were wrong in three different ways -- a pull request counted before it merged, a command
+> that returns the branch total quoted for a session figure, and a figure that went stale between
+> being written and being committed. A number that changes every merge does not belong in prose
+> unless it is anchored. Derive it:
+> `git log --oneline v0.2.3 | grep -c 'Merge pull request'`.
 >
-> **`CONSTS` IS SELF-HOSTED — Order 1 item 1 is done.** Self-hosted region coverage is
-> **93% produced / 56% computed**, both derived by test, both pinned, and the second is the
-> honest one.
+> **ORDER 1 ITEM 1 IS DONE** (`CONSTS` self-hosted). Item 2 is at **93% produced / 56% computed**.
+> **ITEM 3 MOVED FOR THE FIRST TIME THIS SESSION**: the type channel now reaches let-bound CALLS
+> from the pipeline.
 >
-> **TWO CLAIMS OF MINE WERE RETRACTED IN THE LAST FEW HOURS.** Read "WHAT WAS RETRACTED" before
-> re-asserting anything about `wire.kel` or the computed share.
+> **ONE FINDING OF MINE WAS RETIRED AND ONE SURVIVES.** Read "WHAT WAS RETRACTED" before
+> re-asserting anything about `wire.kel`.
 >
 > **NOTHING IS QUEUED FOR THE OPERATOR.**
 
@@ -35,11 +36,11 @@ always-current, so it must be able to report itself stale rather than mislead a 
 recorded parent is a claim that nothing else ever lands, and it has failed twice.
 
 ```sh
-git merge-base --is-ancestor 6bc13e6c HEAD    # must succeed
+git merge-base --is-ancestor 5c3ba628 HEAD    # must succeed
 
 # Content. If ANY of these differ, say so rather than acting on the state below.
 grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 16
-grep -c '^\s*#\[test\]' tests/selfhost_wire.rs              # 178  (+2: the record formatters)
+grep -c '^\s*#\[test\]' tests/selfhost_wire.rs              # 178
 grep -c '^\s*#\[test\]' tests/selfhost_parse.rs             # 89
 grep -c '^\s*#\[test\]' tests/selfhost_codegen.rs           # 140
 grep -c '^\s*#\[test\]' tests/selfhost_pool_tags.rs          # 8
@@ -49,12 +50,14 @@ grep -c '^\s*#\[test\]' tests/stage_command_reach.rs         # 2
 grep -c '^\s*#\[test\]' tests/selfhost_declared_bounds.rs   # 5
 grep -c '^\s*#\[test\]' tests/opcode_reachability.rs        # 6
 grep -c '^\s*#\[test\]' tests/block_form_statements.rs      # 11
-grep -c '^\s*#\[test\]' tests/consts_region_composition.rs  # 11  (+4: the shared root definition)
+grep -c '^\s*#\[test\]' tests/consts_region_composition.rs  # 11
 grep -c '^\s*#\[test\]' tests/operand_stack_model.rs        # 6
-grep -c '^\s*#\[test\]' tests/wire_slot_layout.rs           # 2   (new 2026-08-22)
-grep -c '^\s*#\[test\]' tests/selfhost_consts_driver.rs     # 6   (new 2026-08-22)
-grep -c '^\s*#\[test\]' tests/selfhost_region_coverage.rs   # 5   (new 2026-08-22)
-grep -c '^\s*#\[test\]' tests/selfhost_chunk_names.rs       # 5   (new 2026-08-23)
+grep -c '^\s*#\[test\]' tests/wire_slot_layout.rs           # 2
+grep -c '^\s*#\[test\]' tests/selfhost_consts_driver.rs     # 6
+grep -c '^\s*#\[test\]' tests/selfhost_region_coverage.rs   # 5
+grep -c '^\s*#\[test\]' tests/selfhost_chunk_names.rs       # 3
+grep -c '^\s*#\[test\]' tests/parse_record_trace.rs         # 3   (new 2026-08-23)
+grep -c '^\s*#\[test\]' tests/lex_token_trace.rs            # 2   (new 2026-08-23)
 
 # `tests/stage_command_reach.rs` IS in the list now: #210 merged 2026-08-21.
 
@@ -206,32 +209,69 @@ emitters. `the_computed_share_is_smaller_than_the_produced_share` asserts the ga
 Four of the six skipped kinds are blocked on a **name index the host does not hold**. The route
 exists -- `intern_index_of`, command 140 -- is itself undriven, and is O(n^2).
 
-## `wire.kel` HAS NEVER BEEN SELF-HOSTED, AND NOTHING SAID SO
+## `wire.kel` HAS NEVER BEEN SELF-HOSTED, AND THE DIAGNOSIS IS FOUR HYPOTHESES DEEP
 
-`self_host_compile(wire.kel)` **panics** with ``no chunk named `acc` ``. **`wire.kel` is not in the
-byte-identity corpus**: `assert_stage_byte_identical` covers ten stages -- `lexer`, `parse`,
-`reconstruct`, `codegen`, `analyze` and the five `verify_*` -- and `wire.kel` appears in the
-wire-format tests only as a REFERENCE-compiled input, which never runs the self-hosted compiler over
-it.
-
-So the largest stage in the corpus, 486 chunks, is uncovered by the differential oracle. *Any
-construct the corpus does not contain is unverified by construction* -- here it is a whole stage.
-
-**Nothing regressed.** It was never self-compiled; what changed is that the tree records it.
+`self_host_compile(wire.kel)` **panics** with ``no chunk named `acc` ``, and **`wire.kel` is not in
+the byte-identity corpus**: `assert_stage_byte_identical` covers ten stages and `wire.kel` appears
+in the wire-format tests only as a REFERENCE-compiled input. So the largest stage in the corpus, 486
+chunks, is uncovered by the differential oracle. **Nothing regressed** -- it was never self-compiled;
+what changed is that the tree records it.
 
 **THE TRIGGER IS FOUR LINES**: a `for` loop containing a data-field assignment, plus a trailing field
-read as the tail expression. The declaration that follows is then named after the field. Both the
-loop and the trailing read are required; the `if` is irrelevant; a bare field read does not do it.
-Pinned with a no-loop control by `the_minimal_shape_that_misnames_the_following_declaration`.
+read as the tail expression. The following declaration is then named after the **trailing** field --
+not the assigned one, which is the case that discriminates. Both the loop and the trailing read are
+required; the `if` is irrelevant.
 
-**WHAT THE NEXT SESSION SHOULD KNOW BEFORE TOUCHING IT.** The mechanism is not established. The
-hypothesis is that a record inside the loop clears the driver's `in_body` early, so later body
-records reach the outer declaration dispatch and one of them opens a declaration named after the
-field. **That is a hypothesis.** Confirming it needs the raw `(code, val)` stream, and
-`thread_local!` is unavailable here (`no_std`), so tracing means threading a sink through
-`parse_functions_impl` rather than a quick hook. Budget for that before assuming the fix is small.
+**FOUR HYPOTHESES ELIMINATED, EACH BY MEASUREMENT RATHER THAN BY EXHAUSTION:**
 
-## THE ONE LESSON THIS SESSION PAID FOR THREE TIMES
+| eliminated | how |
+|---|---|
+| the Rust driver (`in_body`, leaked record, spurious declaration) | the wrong name is in `parse.kel`'s own record stream |
+| a stale name variable in the stage | `ps.mode == 1` emits **the token's own value**; nothing is remembered between declarations |
+| a cursor rewind | `parse_cursor_trace` is monotonic for both the failing and the control case |
+| the lexer | `lex_token_trace` shows every declaration keyword followed by its own name token, `z` included |
+
+**THREE INSTRUMENTS NOW EXIST AND ARE PUBLIC**: `parse_cursor_trace` (where it reads),
+`parse_record_trace` (what it emits), `lex_token_trace` (what it reads). Public rather than hidden
+deliberately -- a hidden instrument is one the next person does not know exists, which is how this
+defect survived three diagnoses.
+
+**DO NOT ZIP THE CURSOR AND RECORD TRACES.** They sample at different rates -- 1,232 against 78 for
+the reproduction -- so pairing them by index correlates a record with an unrelated position. It
+produces a table that LOOKS like data; it attributed `y`'s header to the token `{`. Pinned by
+`the_two_traces_sample_at_different_rates_and_must_not_be_paired`. Correlating them properly needs
+the cursor sampled PER RECORD, which the record sink does not carry. **That is the named next step.**
+
+## WHAT WAS RETIRED: THE `wire.kel` CHUNK-NAME DIVERGENCE WAS MINE
+
+A separate finding, recorded as "the derived chunk names disagree for `wire.kel`, and the divergence
+is not understood", with `wire` excluded from the corpus test on the strength of it.
+
+**It was `chunk_names_from_pipeline` deriving the numbering by hand and inheriting the defect.**
+`first_pass` already computes that table -- documented in three places -- and delegating to it makes
+the function agree with the reference on **every stage, `wire.kel` included**. The exclusion and the
+finding are both gone; `wire` is back in the corpus test.
+
+I got the hand derivation wrong twice before that: declaration order (wrong), then sorted (right,
+but still inheriting the defect). **Sixth instance in one session of building what already existed,
+and the first to reach the tree.**
+
+## ORDER 1 ITEM 3 MOVED, AND THE PIN NAMES THE NEXT SLICE
+
+`let a = g()` now reaches the type channel from the pipeline as a form-1 alias row **carrying the
+callee's name as a string**. The agreement test compares both row forms against the reference.
+
+The blocker was never the pipeline: a form-1 row carried the target's NAME ID and the two
+extractions do not share an id space, so comparing them would have compared the numbering.
+**Carrying a string removes the question rather than answering it.**
+
+**WHAT REMAINS IS AN OPERATOR EXPRESSION**, and it is bigger than it looks. `let d = 1 + 2` needs the
+initialiser's NODE INDEX to reach the stage's bounded fixpoint (form 2), and the reference does not
+produce that row from `binding_rows` either -- it comes from `expression_nodes_resolvable`, one of
+**five** Rust extractions still walking the reference AST. A pipeline analogue of that extraction is
+the slice, not a tweak to the binding rows.
+
+## THE ONE LESSON THIS SESSION PAID FOR FIVE TIMES
 
 **A check built from the same model as the thing it checks confirms the model.** Three instances in
 one night, each in a different costume:
@@ -242,6 +282,7 @@ one night, each in a different costume:
 | its mutation test | added a `const ... i64 = 178;` | **the exact form the guard already matched** |
 | the chunk-numbering probe | a multi-arm function | grouping and sorting COINCIDE there; only the corpus separated them |
 | the delta-debug predicate | pipeline-vs-source names | did not require a WELL-FORMED input, so it reduced to a broken program |
+| zipping two traces | record index against cursor index | they SAMPLE AT DIFFERENT RATES, so the pairing was meaningless -- and looked like data |
 
 The old rule -- *"before adding a check, construct the input that makes it fire"* -- is not enough,
 because it does not say WHICH input. The working form: **the input must be the one the real change
