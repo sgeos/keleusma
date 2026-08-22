@@ -2071,11 +2071,45 @@ pub fn private_init_is_elided(layout: &DataLayout) -> bool {
 /// flatten rather than take `len()`.
 #[must_use]
 pub fn constant_roots(aux: &crate::wire_format::WireAuxBody) -> Vec<ConstValue> {
+    constant_roots_from(
+        aux.chunks.iter().map(|c| c.constants.as_slice()),
+        aux.data_layout.as_ref(),
+    )
+}
+
+/// [`constant_roots`], for a caller holding a [`Module`](crate::bytecode::Module)
+/// rather than an auxiliary body.
+///
+/// # Why both, rather than one and a conversion
+///
+/// A caller with a `Module` would otherwise build a `WireAuxBody` to ask this
+/// question, and that build is a SECOND CONSTRUCTION of the encoder's input —
+/// sixteen fields, of which two matter here. This tree already carries one such
+/// approximation in its tests and has recorded it as worth removing. Both entry
+/// points share one body, so the ORDER and the elision are stated once however
+/// the caller arrives.
+///
+/// `constant_roots_of_module(m)` and `constant_roots(&aux_of(m))` agree by
+/// construction, and a test asserts it anyway, because "by construction" has been
+/// wrong here before.
+#[must_use]
+pub fn constant_roots_of_module(module: &crate::bytecode::Module) -> Vec<ConstValue> {
+    constant_roots_from(
+        module.chunks.iter().map(|c| c.constants.as_slice()),
+        module.data_layout.as_ref(),
+    )
+}
+
+/// The shared body of the two entry points above.
+fn constant_roots_from<'a>(
+    chunk_pools: impl Iterator<Item = &'a [ConstValue]>,
+    layout: Option<&DataLayout>,
+) -> Vec<ConstValue> {
     let mut roots = Vec::new();
-    for c in &aux.chunks {
-        roots.extend_from_slice(&c.constants);
+    for pool in chunk_pools {
+        roots.extend_from_slice(pool);
     }
-    if let Some(dl) = &aux.data_layout
+    if let Some(dl) = layout
         && !private_init_is_elided(dl)
     {
         roots.extend_from_slice(&dl.private_init);

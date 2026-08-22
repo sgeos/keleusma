@@ -12,6 +12,37 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 **Date**: 2026-08-22 (the `CONSTS` route decision, taken by reading the code)
 
+## SESSION 51 — `CONSTS` IS SELF-HOSTED, AND A GUARD THAT COULD NOT FIRE
+
+**Order 1 item 1 is done.** `wire_consts_via_kel` emits every stage's `CONSTS` region through the
+Keleusma streaming path, **byte-identical to the reference encoder for all twelve stage sources** —
+including the two the breadth-first walk refuses outright. It is the largest single region of a
+stage's auxiliary body and its payload came from the host until now, which meant it was **not
+covered** by the self-hosting claim in any degree.
+
+It was a small change because the machinery all existed, which the record denied. What was missing
+was one way to ask which roots the encoder emits; the rest was sharing three helpers that had been
+copied.
+
+### The guard that was supposed to announce this could not have fired
+
+`tests/stage_command_reach.rs` pinned that the driver did not reach the streaming commands, and said
+of itself that it was pinned in the firing direction. **It did not fire.** It searched the driver for
+the STAGE's function names; the driver addresses the stage by COMMAND NUMBER and has never written
+those names. Second instance of this line's own *a guard that cannot fire is worse than none* —
+**the rule was already written down, and knowing it did not prevent the repeat. Running the mutation
+did.** The replacement derives from the numbers and was made to fail.
+
+### What a green run does not establish, and how my first statement of that was also too strong
+
+Swapping the `flags` and `discriminant` words in the driver's node passes every test: every corpus
+constant is an `Int`, so both are zero and swapping two zeros changes nothing. I first wrote that up
+as *unreachable* — and **could not construct the witness**: `E::B` folds to an `Int` in both shapes I
+tried. The tree now records that no such source was found and that two attempts is not a search,
+rather than claiming a negative from two probes.
+
+---
+
 ## SESSION 51 — THE OPEN DECISION IS CLOSED, AND IT WAS NOT A DECISION
 
 The one thing session 50 left open was which of three routes the `CONSTS` driver takes, with the

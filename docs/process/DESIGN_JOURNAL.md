@@ -13,6 +13,54 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**`CONSTS` IS EMITTED BY KELEUSMA FOR EVERY STAGE, AND THE GUARD THAT SHOULD HAVE ANNOUNCED IT
+COULD NOT HAVE FIRED (2026-08-22).**
+
+`wire_consts_via_kel` drives the streaming commands over a module's constant forest and reproduces
+the reference encoder's `CONSTS` region **byte for byte for all twelve stage sources**, including
+the two the breadth-first walk refuses outright. That is Order 1 item 1: the largest single region
+of a stage's auxiliary body, previously host-supplied and therefore **not covered** by the
+self-hosting claim in any degree.
+
+**It was a small change because everything it needed already existed**, which the record denied for
+the fifth time in this area. The tag mapping, the child and flag extraction, and the coroutine
+discipline were all present; three of them are now shared rather than copied (`const_children`,
+`const_flags_and_discriminant`, `enter_wire`). What was genuinely missing was a way for a caller
+holding a `Module` to ask which roots the encoder emits without building a second approximation of
+the encoder's input, and that is `constant_roots_of_module`.
+
+**THE GUARD THAT COULD NOT FIRE.** `tests/stage_command_reach.rs` pinned that the driver did not
+reach commands 176 and 177, and said of itself: *"pinned in the firing direction: when the driver
+drives them, this fails and its author records that the route is now wired."* **It did not fail.**
+It searched the driver source for the STAGE's function names, `fl_stream_begin` and
+`fl_stream_step`, and the driver addresses the stage by COMMAND NUMBER — it has never written those
+names and never would.
+
+Second instance of this line's own rule, *a guard that cannot fire is worse than none*. The first
+compared `directory.len()` against a stage buffer when that length is the shared array's size, false
+by construction. The rule was already written down; **knowing it did not prevent the second
+instance, and only running the mutation did.** The replacement derives from the command numbers and
+was made to fail against a driver with those constants renamed.
+
+**WHAT A GREEN RUN DID NOT ESTABLISH, AND HOW THE FIRST ATTEMPT TO SAY SO WAS ITSELF TOO STRONG.**
+Mutation found that swapping the `flags` and `discriminant` words in the driver's six-word node
+passes every test: every corpus constant is an `Int`, so both words are zero on every record
+compared, and swapping two zeros changes nothing.
+
+I first wrote that gap up as *unreachable* — only an enum sets a flag, and the path refuses enum
+tags. **The witness could not be constructed.** `const data k { e: E = E::B }` folds to `Int(0)` and
+`let e = E::B` folds to `Int(1)`; neither yields a `ConstValue::Enum`. So the tree records that no
+source reaching this path was found that produces a flag-bearing constant, and that **two attempts
+is not a search**. Six instances of deriving a set from the part of the system I was thinking about
+are already on this line's record; this would have been the seventh, and it was caught by trying to
+write the assertion rather than by thinking harder about it.
+
+**Two of the three refusals ARE exercised through the driver**, each asserted by its own code —
+`-264` a node with children, `-265` an interning tag. `-266` is not, and the test says so, because a
+reader who sees two covered will otherwise infer three.
+
+---
+
 **THE ROUTE DECISION DISSOLVED ON READING THE CODE, AND THE FIGURES IT RESTED ON WERE WRONG BY
 TWENTY-SIX TIMES (2026-08-22).**
 

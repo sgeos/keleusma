@@ -10,6 +10,27 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-22, later). `CONSTS` IS SELF-HOSTED — ORDER 1 ITEM 1 IS DONE.**
+> `wire_consts_via_kel` emits every stage's `CONSTS` region through the Keleusma streaming path,
+> **byte-identical to the reference encoder for all twelve stage sources**, including the two the
+> breadth-first walk refuses. It is the largest single region of a stage's auxiliary body and its
+> payload was host-supplied until now, so it counted as **not covered** at all.
+>
+> **The guard that was supposed to announce this could not have fired.** `stage_command_reach.rs`
+> searched the driver for the STAGE's function names; the driver addresses the stage by COMMAND
+> NUMBER. Second instance of "a guard that cannot fire is worse than none", and the rule was already
+> written down. Replaced, and made to fail.
+>
+> **Coverage boundary, found by mutation and stated rather than papered over**: swapping the `flags`
+> and `discriminant` words passes every test, because every corpus constant is an `Int` and both
+> words are zero. An attempt to record that as UNREACHABLE failed to construct a witness — `E::B`
+> folds to an `Int` — so the tree records "not found in two attempts", not a negative. Two of the
+> three refusals are exercised through the driver by their own codes (`-264`, `-265`); `-266` is not,
+> and the test says so.
+>
+> Still open on this region: placement and the directory (this emits at window offset zero and the
+> host concatenates), and Order 1 item 2, the remaining region kinds.
+
 > **Currency note (2026-08-22).** **THE `CONSTS` ROUTE DECISION IS CLOSED AND THE FIGURES IT
 > RESTED ON WERE WRONG.** Route (c) — one definition the encoder consumes — was recorded as "not
 > mechanical" and is: `add_constant_pool` is a pure accumulator, so only the wholly-default elision

@@ -420,3 +420,70 @@ arms would be a fourth statement rather than a third, so it is recorded rather t
 test-local `push_preorder` is deliberately left restating the numbers, on the same ground as
 `KIND_CONSTS`: a test of a wire contract that imports the contract cannot catch the contract
 changing.
+
+---
+
+# RESULT — THE DRIVER EMITS `CONSTS` FOR EVERY STAGE, BYTE-IDENTICALLY (2026-08-22)
+
+`keleusma::selfhost::wire_consts_via_kel` drives commands 176 and 177 over a module's constant
+forest and reproduces the reference encoder's `CONSTS` region **byte for byte for all twelve stage
+sources**, including the two the breadth-first walk cannot process at all.
+
+This is Order 1 item 1. `CONSTS` is the largest single region of a stage's auxiliary body — 37,152
+bytes across the eleven stages, 33.9% of the corpus body — and until now its payload came from the
+host, which means it was **not covered** by the self-hosting claim in any degree.
+
+## Why it turned out to be a small change
+
+Everything it needed already existed and the record said otherwise, for the fifth time in this area:
+
+- `const_tag_and_name` in the driver, complete for all eleven tags.
+- `push_blob_node`'s child, flag and discriminant extraction, now shared as `const_children` and
+  `const_flags_and_discriminant`.
+- `window_emit_chunks`'s coroutine discipline, now shared as `enter_wire` — build the virtual
+  machine ONCE and resume, because calling a suspended coroutine stacks an activation and a
+  several-hundred-record region exhausts the arena that way.
+- `constant_roots_of_module`, added so a caller holding a `Module` need not build a second
+  approximation of the encoder's input to ask which roots it emits.
+
+## THE GUARD THAT WAS SUPPOSED TO ANNOUNCE THIS COULD NOT HAVE FIRED
+
+`tests/stage_command_reach.rs` pinned that the driver did not reach 176/177, and was written
+"pinned in the firing direction: when the driver drives them, this fails". **It did not fail.** It
+searched the driver source for the STAGE's function names, `fl_stream_begin` and `fl_stream_step`,
+and the driver addresses the stage by COMMAND NUMBER and never writes those names at all.
+
+**Second instance of "a guard that cannot fire is worse than none"** on this line; the first
+compared `directory.len()` against a stage buffer when that length is the shared array's size, false
+by construction. The replacement derives from the command numbers and **was made to fail** against a
+driver with those constants renamed.
+
+## WHAT A GREEN RUN DOES NOT ESTABLISH, FOUND BY MUTATION
+
+**Swapping the `flags` and `discriminant` words in the driver's six-word node passes every test.**
+Every constant in the corpus is an `Int`, so both words are zero on every record compared, and
+swapping two zeros changes nothing.
+
+The first draft of the test recording this asserted a stronger thing — that a non-zero flag is
+UNREACHABLE, since only an enum sets one and the path refuses enum tags. **The witness could not be
+constructed.** Two shapes were tried and both fold to a discriminant `Int` at compile time:
+`const data k { e: E = E::B }` gives `Int(0)`, `let e = E::B` gives `Int(1)`. Neither produces a
+`ConstValue::Enum`.
+
+So the recorded position is: no source reaching this path was found that produces a flag-bearing
+constant, and **two attempts is not a search**. Asserting unreachability from two probes would have
+been the seventh instance of deriving a set from the part of the system one is thinking about.
+
+Two of the three refusals ARE exercised through the driver, each asserted by its own code: `-264` a
+node with children, `-265` an interning tag. `-266`, a range-carrying tag, is not, and the test says
+so rather than leaving a reader to infer that all three are covered because two are.
+
+## What is still not done
+
+- **Placement and the directory.** This emits at window offset zero and the host concatenates, which
+  is what makes it streamable and therefore what it does not test. Assembling a whole artifact from
+  the self-hosted regions is a separate question.
+- **The remaining region kinds**, Order 1 item 2. `STRUCT_AUX` and `ENUM_AUX` remain empty in every
+  stage, so a byte identity for either would pass while emitting nothing.
+- **A shared `ConstValue`-to-tag mapping.** The interning arms compute `aux` from a name interner
+  `flatten` owns; covering only the scalar arms would be a fourth statement rather than a third.
