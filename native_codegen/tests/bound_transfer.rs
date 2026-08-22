@@ -237,6 +237,8 @@ fn the_verified_heap_figure_does_not_bound_the_backends_region_demand() {
     let mut compared = 0usize;
     let mut nonzero_demand = 0usize;
     let mut exceed: Vec<String> = Vec::new();
+    // `(module, shortfall bytes, verified figure)` for each exceeding module.
+    let mut shortfalls: Vec<(String, u32, u32)> = Vec::new();
     let mut worst: Option<(String, u32, u32)> = None;
 
     for (name, m) in &corpus {
@@ -254,9 +256,16 @@ fn the_verified_heap_figure_does_not_bound_the_backends_region_demand() {
             nonzero_demand += 1;
         }
         if demand > fp.max_heap_bytes {
+            // **THE SHORTFALL, not just the fact of exceeding.** A count cannot
+            // tell an operator whether the missing term is tens of bytes or tens
+            // of megabytes, and those argue for opposite answers: a small fixed
+            // overhead is plausibly covered by a host margin already, while one
+            // that scales with the module makes no fixed margin safe.
+            shortfalls.push((name.clone(), demand - fp.max_heap_bytes, fp.max_heap_bytes));
             exceed.push(format!(
-                "{name}: backend {demand} bytes vs verified heap {}",
-                fp.max_heap_bytes
+                "{name}: backend {demand} bytes vs verified heap {} (short by {})",
+                fp.max_heap_bytes,
+                demand - fp.max_heap_bytes
             ));
         }
         if worst.as_ref().is_none_or(|(_, d, _)| demand > *d) {
@@ -273,6 +282,75 @@ fn the_verified_heap_figure_does_not_bound_the_backends_region_demand() {
     println!("  modules EXCEEDING the verified figure: {}", exceed.len());
     for e in &exceed {
         println!("     {e}");
+    }
+    // **THE MAGNITUDE, WHICH A COUNT CANNOT SUPPLY.** Every figure below names
+    // the population it is taken over: these are statistics over the EXCEEDING
+    // modules, NOT over the {compared} compared. Conflating those two is a defect
+    // this line has already shipped once.
+    if !shortfalls.is_empty() {
+        let mut sorted: Vec<u32> = shortfalls.iter().map(|(_, s, _)| *s).collect();
+        sorted.sort_unstable();
+        let total: u64 = sorted.iter().map(|v| *v as u64).sum();
+        let smallest = sorted[0];
+        let largest = sorted[sorted.len() - 1];
+        // **A RATIO NEEDS ITS DENOMINATOR CHECKED.** A verified figure of zero
+        // makes `demand / verified` meaningless rather than infinite, so those
+        // are EXCLUDED and counted rather than silently dropped.
+        let ratioed: Vec<(f64, &str)> = shortfalls
+            .iter()
+            .filter(|(_, _, v)| *v > 0)
+            .map(|(n, s, v)| (*s as f64 / *v as f64, n.as_str()))
+            .collect();
+        let zero_denom = shortfalls.len() - ratioed.len();
+        println!(
+            "\n  SHORTFALL, over the {} EXCEEDING modules (not the {compared} compared):",
+            shortfalls.len()
+        );
+        println!("    smallest {smallest} bytes, largest {largest} bytes, total {total} bytes");
+        if ratioed.is_empty() {
+            println!(
+                "    no ratio is reportable: all {zero_denom} exceeding modules have a \
+                 verified figure of ZERO, so the shortfall is the whole demand"
+            );
+        } else {
+            let mut r: Vec<f64> = ratioed.iter().map(|(x, _)| *x).collect();
+            r.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            println!(
+                "    shortfall as a multiple of the verified figure: {:.2}x to {:.2}x \
+                 ({} module(s) excluded for a ZERO verified figure)",
+                r[0],
+                r[r.len() - 1],
+                zero_denom
+            );
+        }
+        // **IS THERE A COMMON UNIT? COMPUTED, NOT EYEBALLED.** The greatest
+        // common divisor of the shortfalls says whether they are multiples of one
+        // quantum. That is a strong hint about the SHAPE of the missing term --
+        // per-entity rather than per-byte -- but it is a HINT: this test reads the
+        // two published figures and does NOT read the backend's region planner,
+        // so the cause is not established here.
+        fn gcd(a: u32, b: u32) -> u32 {
+            if b == 0 { a } else { gcd(b, a % b) }
+        }
+        let unit = sorted.iter().copied().fold(0u32, gcd);
+        let all_multiples = unit > 0 && sorted.iter().all(|v| v % unit == 0);
+        println!(
+            "    common divisor across the exceeding modules: {unit} bytes \
+             (every shortfall a multiple: {all_multiples})"
+        );
+        let widest = {
+            let mut r: Vec<f64> = ratioed.iter().map(|(x, _)| *x).collect();
+            r.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            r.last().copied().unwrap_or(0.0)
+        };
+        println!("\n    WHAT THE SHAPE SUGGESTS, AND WHAT IT DOES NOT ESTABLISH.");
+        println!("    In ABSOLUTE terms the gap is tens of bytes, which any host margin");
+        println!("    already covers. As a MULTIPLE of the verified figure it reaches");
+        println!("    {widest:.2}x, so the published number can be wrong by that factor while");
+        println!("    the byte count stays small. A common divisor across modules of");
+        println!("    different sizes reads as a PER-ENTITY quantum rather than a");
+        println!("    size-proportional term -- a hint to CHECK, not a cause. THE READER");
+        println!("    DRAWS THE CONCLUSION; this reports the numbers.");
     }
     println!(
         "\n  UNITS AND SCOPE: both are real BYTES and both are TRANSITIVE --\n  \

@@ -10,7 +10,117 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-21 (session 50, autonomous loop, eight pull requests merged)
+**Date**: 2026-08-22 (the `CONSTS` route decision, taken by reading the code)
+
+## SESSION 51 — 81% OF THE CORPUS, MEASURED RATHER THAN CLAIMED
+
+The self-hosted emit path's coverage had lived in prose: a doc comment naming four region kinds, and
+a test comparing exactly those four. **A claim verified by listing the same claim cannot fail for the
+reason a reader cares about.** It is now derived from each artifact's own region directory, and the
+figure is **81% of the corpus's region bytes** — 134,776 of 165,208 across the twelve stages, in
+BYTES rather than region count, because a count weights a 48-byte region the same as a 56,256-byte
+one.
+
+**A region emitted correctly and lost anyway.** `wire_consts_via_kel` produced byte-identical
+`CONSTS` regions, and `wire_windowed_via_kel` — which assembles a whole artifact — ended its kind
+match in `_ => continue`. A caller assembling a body got **zeros where the largest region should
+be**, and every test passed, because they compared the four kinds the assembler routed. *The region
+is emitted correctly* and *the region reaches the artifact* read as one claim and are two; the second
+was false for the whole time the first was true.
+
+**The three-way classification is the point**, not decoration. `Skipped` is a gap stated honestly;
+`Differs` is a mis-emission. Un-routing `CONSTS` fails three tests and leaves the disagreement test
+GREEN; flipping one byte fails that test by name. Two mutations, two different outcomes.
+
+Eight region kinds remain skipped, and the test names them in its failure message so the next
+target is readable off a test run rather than off a document that may be stale.
+
+---
+
+## SESSION 51 — `CONSTS` IS SELF-HOSTED, AND A GUARD THAT COULD NOT FIRE
+
+**Order 1 item 1 is done.** `wire_consts_via_kel` emits every stage's `CONSTS` region through the
+Keleusma streaming path, **byte-identical to the reference encoder for all twelve stage sources** —
+including the two the breadth-first walk refuses outright. It is the largest single region of a
+stage's auxiliary body and its payload came from the host until now, which meant it was **not
+covered** by the self-hosting claim in any degree.
+
+It was a small change because the machinery all existed, which the record denied. What was missing
+was one way to ask which roots the encoder emits; the rest was sharing three helpers that had been
+copied.
+
+### The guard that was supposed to announce this could not have fired
+
+`tests/stage_command_reach.rs` pinned that the driver did not reach the streaming commands, and said
+of itself that it was pinned in the firing direction. **It did not fire.** It searched the driver for
+the STAGE's function names; the driver addresses the stage by COMMAND NUMBER and has never written
+those names. Second instance of this line's own *a guard that cannot fire is worse than none* —
+**the rule was already written down, and knowing it did not prevent the repeat. Running the mutation
+did.** The replacement derives from the numbers and was made to fail.
+
+### What a green run does not establish, and how my first statement of that was also too strong
+
+Swapping the `flags` and `discriminant` words in the driver's node passes every test: every corpus
+constant is an `Int`, so both are zero and swapping two zeros changes nothing. I first wrote that up
+as *unreachable* — and **could not construct the witness**: `E::B` folds to an `Int` in both shapes I
+tried. The tree now records that no such source was found and that two attempts is not a search,
+rather than claiming a negative from two probes.
+
+---
+
+## SESSION 51 — THE OPEN DECISION IS CLOSED, AND IT WAS NOT A DECISION
+
+The one thing session 50 left open was which of three routes the `CONSTS` driver takes, with the
+principled route recorded as "not mechanical". **It is mechanical, and the record said otherwise
+because I costed an interface from its shape rather than its body.**
+
+`SchemaBuilder::add_constant_pool` returns a range per contributor and so cannot consume a flat list
+of roots — true, and never the obstacle. It is a pure accumulator, so which roots reach the table is
+structural in every respect **except one predicate**, the wholly-default elision. That shares by
+ordinary dependency. Route (c) is one function and one predicate.
+
+### The figures were wrong by more than the route was
+
+| quantity | recorded | measured |
+|---|---|---|
+| `CONSTS` across the eleven stages | 645,312 bytes, 90.5% of the body | **37,152 bytes, 33.9% of a 109,552-byte body** |
+| `parse`'s constant forest | 17,391 nodes | **857** |
+
+Both counted the wholly-default initialisers the encoder **elides**, so they described a forest
+nothing emits. The doc comment carrying them also claimed every figure in it was derived by a test.
+None was. **The conclusions survive and the magnitudes do not**: `parse` still exceeds the 170-node
+walk cap, at six calls rather than a hundred and two.
+
+### What is in the tree
+
+- **One definition** of the emitted constant set, `keleusma::wire_schema::constant_roots`, with the
+  elision predicate shared by dependency with the encoder. The test-local copy delegates to it.
+- **The oracle deliberately does not delegate**, and says so where a reader will meet it: a test
+  that called the shared predicate would agree with a wrong one.
+- **`wire.kel`'s slot map was in four places**, one of them under a comment correctly warning against
+  two. Now one module, with a test deriving every offset from the stage source's own field widths.
+- **A tag mapping that agreed by coincidence**: the driver wrote bare literals where the encoder
+  names `wire_schema::tag::*`. Checked rather than assumed, and that is what found it.
+- **Six mutations**, each demonstrating the guard written for it fails.
+
+### What I deliberately did not do
+
+- **Did not wire the `CONSTS` driver.** `tests/stage_command_reach.rs` still pins that it is
+  unreached. The machinery all exists — the driver already has the tag mapping and the child
+  extraction — so what remains is assembling six words per node and looping, and it is the next
+  slice rather than this one.
+- **Did not extract a shared `ConstValue`-to-tag mapping.** The interning arms compute `aux` from a
+  name interner `flatten` owns; covering only the scalar arms would be a fourth statement, not a
+  third.
+- **Did not re-derive the `DATA_SLOTS`, `SHARED_LAYOUT` and `STRING_POOL` rows** of the superseded
+  sizing table. Nothing has measured them since, and a guess is worse than a row that announces
+  itself stale. The table now announces itself.
+
+**Nothing is waiting on you.**
+
+---
+
+## Previous session
 
 ## Where things stand
 
@@ -18,80 +128,81 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 |---|---|
 | all twelve stages | `loop main(...)` coroutines |
 | emit path | 11 of 11 stages; every emit-side cap removed |
-| **the shipping compiler vs the 95-case boundary** | **byte-identical 43 -> 76, differs 21 -> 11, faults 30 -> 7** |
+| **the shipping compiler vs the 95-case boundary** | **byte-identical 43 -> 90, differs 21 -> 3, faults 30 -> 1** (this row read `-> 76 / 11 / 7`, the post-#212 census, after three further fixes had landed) |
 | **constant-pool tags** | **carried; all three (`Int`/`StaticStr`/`Bool`) witnessed** |
 | **struct/trait/impl declarations** | **skipped rather than faulting; 22 more cases byte-identical** |
 | the type checker's INPUT | the DECLARED rows come from the pipeline; the derived ones do not |
 | branch | `fix/selfhost-pool-tags`, cut from `v0.2.3`, rebased onto `b729a2a9` |
 
-## SESSION 50 — FIVE SILENT MISCOMPILES CLOSED, AND TWO DECISIONS THAT NEED YOU
+## SESSION 50 — FOURTEEN MERGES, AN EMPTY QUEUE, AND TWO THINGS I TOLD YOU THAT WERE WRONG
 
-You asked for as much self-directed development as could be carried out without input, and left the
-machine running. Eight pull requests are merged; the queue on this line is empty.
+You asked for as much self-directed development as could be carried out without input, then left
+the machine running. **Nothing is waiting on you.**
 
-### What was wrong
+### What was fixed
 
 | defect | symptom | PR |
 |---|---|---|
-| the constant-pool tag was discarded | a string constant became the integer of its intern id | 212 |
+| constant-pool tag discarded | a string constant became the integer of its intern id | 212 |
 | struct/trait/impl declarations had no skip state | the driver faulted on 29 boundary cases | 212 |
-| the eager `and`/`or` ids were never seeded | **`a and b` compiled to `a`** | 213 |
+| eager `and`/`or` ids never seeded | **`a and b` compiled to `a`** | 213 |
 | op tag 53 had no flat-nested arm | a struct-typed tuple element faulted in kind decoding | 214 |
-| a nested array index parsed as an array LITERAL | **`a[0][1]` silently miscompiled** | 218 |
+| nested array index parsed as an array LITERAL | **`a[0][1]` silently miscompiled** | 218 |
+| **a legal program verified, took a bound, loaded, and TRAPPED** | two symmetry gaps hiding each other | 221 |
 
-The first four had **one cause**: the shipping driver and the copy of it in
-`tests/selfhost_codegen.rs` are two implementations of the same thing, and the construct-support
-boundary exercised only the copy. The fifth was a genuine parser gap.
+The first four shared one cause: the shipping driver and its copy in `tests/selfhost_codegen.rs`
+are two implementations of the same thing, and the construct-support boundary exercised only the
+copy.
 
 **Census over the 95 boundary cases, each baseline taken by stashing the change rather than
-assumed:** byte-identical **43 -> 90**, differs 21 -> 3, faults 30 -> 1. The shipping compiler now
-reaches the same verdict as the boundary on all 95, and the three that differ are already labelled.
+assumed:** byte-identical **43 → 90**, differs 21 → 3, faults 30 → 1. The shipping compiler now
+reaches the same verdict as the boundary on all 95.
 
-**Proportionality, which belongs beside every line of this.** `self_hosted_compile` cross-checks
-against the reference and refuses on divergence, so **none of it reached a user as a wrong
-module**. Exposure was to direct callers of the `self_host_compile*` entry points.
+**Proportionality, beside every line of this.** `self_hosted_compile` cross-checks against the
+reference and refuses on divergence, so **none of it reached a user as a wrong module**.
 
-### TWO DECISIONS, AND BOTH ARE ABOUT OWNERSHIP
+Also: the `CONSTS` streaming path executed for the first time — commands 176/177 had never run —
+and a 200-node forest the walk refuses with `-240` streams byte-identically to the reference
+encoder. The driver is deliberately unwired.
 
-**1. `src/verify.rs` has no owner.** My handoff records it as the `v0.3.0` line's and read-only
-here; theirs records it as mine and read-only there. Each of us has been declining to touch it out
-of deference to the other. Their framing is better than mine: the risk is not the unrepaired
-defect, it is that a surface nobody believes they own is one where **either line might edit
-believing itself entitled**, and from each side the mistake reads as the other's record being
-wrong. A wrong owner is safer than no owner, because a wrong owner still gets caught.
+### TWO THINGS I TOLD YOU THAT WERE WRONG
 
-**2. Where the `Op::IsStruct` repair belongs** — load time in `verify.rs`, or compile time by
-folding the type test out when the pattern's own type is known regardless of the scrutinee's.
+**1. "`src/verify.rs` has no owner."** It was always `v0.2.3`'s, and both handoffs said so. The
+phrasing was indexical — "they hold", "their surfaces" — and resolves against whoever holds the
+document, so each line read the other's sentence backwards. **I relayed a peer's reading of a text
+I could have read in a minute**, thirty lines below a sentence in my own handoff telling me to check
+exactly that. Ownership is now a table naming lines absolutely.
 
-`Op::IsStruct` is now witnessed: a struct pattern on an **un-annotated parameter**, missed by
-seventeen attempts across both lines because everyone tried to make a scrutinee's type DIFFER from
-the pattern's, which the type checker forbids. **Its witness verifies, receives a memory bound,
-loads, and then traps `InvalidBytecode`** — the class `verify()` exists to exclude. Of the three
-such refusals the VM carries, it is the only one a loaded program can reach.
+**2. "`Op::IsStruct` has no producer and is a removal candidate."** It had four, two of which still
+trapped. I found the original witness by reading the guard's match arms for what they OMIT, then
+validated my own repair by **guessing three constructs** and generalising. The `v0.3.0` line applied
+my method to my code and had four counterexamples within the hour.
 
-### What I did NOT do
+**A method used to find a defect is not automatically applied to validating its repair.**
 
-- **Did not touch `src/verify.rs`.** Pinned both ways instead, firing in the failing direction, so
-  whichever side repairs it gets a test naming the other.
+Both are retracted in the tree, not just here, with a handoff section telling a resuming session not
+to re-assert them. The current claim is "twelve shapes from each line, two trees, no producer" —
+explicitly **not** "unreachable".
+
+### What I deliberately did not do
+
+- **Did not wire the `CONSTS` driver.** The clean route is unblocked but is not a refactor:
+  `SchemaBuilder` needs a range back per contributor and cannot consume a flat list of roots. Four
+  cost estimates in that area have been checked and none survived contact — three high, one low.
+  Recorded as a sharpened decision rather than half-made.
 - **Did not merge the `v0.3.0` line's #217.** It is theirs.
-- **Did not add an opcode or change `BYTECODE_VERSION`.** Four of the five fixes are host-side; the
-  fifth changed `parse.kel`, which still self-compiles byte-identically.
+- **Did not add an opcode or change `BYTECODE_VERSION`.**
 
-### What I got wrong
+### One more of my own guards, found by reading about theirs
 
-- **The pipe ate an exit code — third instance in this project.** A backgrounded `cargo test | tail`
-  reported exit 0 while the suite had FAILED. Every gate since captures exit codes outside the pipe.
-- **My structural parity guard failed its own first mutation test**, because it compared sets of
-  names and the driver has two token feeds. Now counted.
-- **Two of my pull requests got no CI at all**, because `ci.yml` filters on the base branch and they
-  were stacked. "No checks reported" reads exactly like a slow start.
-- **I wrote `let mut` in a probe again.** Not in the language, recorded in the handoff, fourth time.
-- **I nearly reported that the two fallback opcodes fail the same way.** They do not — one is
-  refused at load, the other traps at run. Running both witnesses instead of one caught it.
+The parity guard looked for `set_shared` within sixty characters of a slot name — a guess about
+formatting. Mutation-tested: a call reformatted past the window reports the slot seeded **zero**
+times when it is seeded once. **Too-tight matching does not only cause silent passes; it causes
+confidently wrong failures.** Now paren-matched.
 
 ### Verification
 
-Every branch gated locally with exit codes captured outside the pipe, and every merge made on a
+Every branch gated locally with exit codes captured **outside** the pipe, and every merge made on a
 positive `SUCCESS=22` rather than on the absence of a failure. The refreshed handoff's check block
 was executed, not merely written.
 

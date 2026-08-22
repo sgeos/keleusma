@@ -1,0 +1,50 @@
+COMPLETION CONDITION — arena shortfall magnitude
+
+Ordering is explicitly NOT a completion criterion. Any order satisfies this.
+
+All of the following must hold as observable properties of the tree.
+
+1. The bound-transfer report states the size of the shortfall between
+   the backend's region demand and the verified heap figure, not only
+   how many modules exceed it. At minimum the smallest, the largest,
+   and the total across the exceeding modules are stated, each derived
+   from a run.
+
+2. Every stated figure names the population it was taken over, so a
+   statistic over the exceeding modules cannot be read as one over all
+   modules compared.
+
+3. A reader can determine from the report whether the shortfall looks
+   like a fixed overhead or one that scales with the module.
+
+4. Any ratio is reported only where its denominator is non-zero, and
+   the number of cases excluded for a zero denominator is stated.
+
+5. The existing conclusion that the verified figure does not bound the
+   backend's demand is retained and not weakened.
+
+6. The existing guard that fires when no module exceeds is retained
+   with its instruction intact, including that such a result is news to
+   be investigated rather than a test to delete.
+
+7. No figure in the report is pinned to a constant that ordinary corpus
+   growth would falsify.
+
+8. The tree makes no recommendation about whether the runtime should
+   adopt the term, and continues to record that decision as the
+   operator's.
+
+9. The tree does not describe the gap as a safety defect, and continues
+   to state that what is missing is the guarantee.
+
+10. Files owned by the other line are unmodified, checked against the
+    commit this line last absorbed rather than against a moving branch
+    tip.
+
+11. The native code generator's suite passes with zero failures and its
+    formatting and lint checks pass, with the pass/fail judgement taken
+    from something other than a truncated or piped view of the output.
+
+12. Work that is finished is committed. Pushing may be deferred while a
+    pull request of this line is mid-verification, provided the
+    deferral is stated and the work is not left uncommitted.

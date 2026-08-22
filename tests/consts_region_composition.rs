@@ -177,6 +177,13 @@ fn name_bearing_nodes(v: &ConstValue) -> usize {
 ///
 /// The second source is the one the first probe missed, and it is the larger of
 /// the two by a factor of seventeen.
+///
+/// **THIS IS NOT THE SET THE ENCODER EMITS**, and using it for a size or a
+/// capacity is how "a hundred and two calls" got recorded for a stage that needs
+/// six. The wholly-default private-slot initialisers are elided from the
+/// artifact; `keleusma::wire_schema::constant_roots` is the emitted set. What
+/// this function is right for is an interning census, where a composite
+/// anywhere in the module matters whether or not it reaches an artifact.
 fn all_constants(m: &Module) -> Vec<ConstValue> {
     let mut out: Vec<ConstValue> = Vec::new();
     for c in &m.chunks {
@@ -267,6 +274,13 @@ fn the_all_default_initialiser_pool_is_elided_from_the_region() {
         let m = compile_stage(src);
         let from_chunks: usize = m.chunks.iter().map(|c| c.constants.len()).sum();
         let from_data = m.data_layout.as_ref().map_or(0, |d| d.private_init.len());
+        // RESTATED ON PURPOSE, AND IT MUST NOT DELEGATE.
+        // `keleusma::wire_schema::private_init_is_elided` is the encoder's own
+        // predicate, and this test is the oracle for it. A version of this line
+        // that called the library would agree with a WRONG predicate, which is
+        // exactly the failure the test exists to catch. The agreement between
+        // the two statements is asserted separately, by
+        // `the_shared_predicate_agrees_with_the_artifact`.
         let all_default = from_data > 0
             && m.data_layout.as_ref().is_some_and(|d| {
                 d.private_init
@@ -453,8 +467,20 @@ fn declared_node_cap() -> usize {
 /// that their forests do not fit in one call.
 ///
 /// This test reports the margin rather than merely asserting a failure, because
-/// the interesting quantity is HOW FAR over the cap the corpus sits. At the time
-/// of writing two stages fit and `parse` needs a hundred and two calls.
+/// the interesting quantity is HOW FAR over the cap the corpus sits.
+///
+/// # THE FOREST MEASURED HERE IS THE ONE THE ENCODER EMITS, WHICH IS NOT THE ONE
+/// THE MODULE CARRIES
+///
+/// This used to count [`all_constants`], which includes the wholly-default
+/// private-slot initialisers. **The encoder elides those**, so that figure was a
+/// forest nothing emits: `parse` measured 22,499 nodes where the artifact holds
+/// 857, and the recorded margin of "a hundred and two calls" was twenty-six
+/// times the real one.
+///
+/// The conclusion survives the correction and the magnitude does not, which is
+/// the reason to state both. `parse` at 857 nodes still needs six calls at a
+/// 170-node cap, so the bound still excludes the stages.
 #[test]
 fn the_node_walk_cap_is_what_excludes_the_stages() {
     let cap = declared_node_cap();
@@ -463,7 +489,7 @@ fn the_node_walk_cap_is_what_excludes_the_stages() {
     let mut fitting = 0usize;
     let mut worst = (0usize, "");
     for (name, src) in CORPUS_STAGES {
-        let n = all_constants(&compile_stage(src)).len();
+        let n = keleusma::wire_schema::constant_roots(&corpus_aux_of(&compile_stage(src))).len();
         if n <= cap {
             fitting += 1;
         }
@@ -496,9 +522,17 @@ fn the_node_walk_cap_is_what_excludes_the_stages() {
 #[test]
 fn widening_the_walk_costs_more_than_the_region_it_would_emit() {
     const NODE_WORDS: usize = 6;
+    // The emitted forest, not the one the module carries: the wholly-default
+    // initialisers are elided and a walk sized for them would be sized for
+    // records that never reach an artifact.
     let worst = CORPUS_STAGES
         .iter()
-        .map(|(n, src)| (all_constants(&compile_stage(src)).len(), *n))
+        .map(|(n, src)| {
+            (
+                keleusma::wire_schema::constant_roots(&corpus_aux_of(&compile_stage(src))).len(),
+                *n,
+            )
+        })
         .max()
         .expect("a corpus");
 
@@ -521,4 +555,253 @@ fn widening_the_walk_costs_more_than_the_region_it_would_emit() {
         NODE_WORDS,
         "the ratio is the node width, and it stopped being so"
     );
+}
+
+// ---------------------------------------------------------------------------
+// THE SHARED CONSTANT-ROOT DEFINITION, AND THE FIGURES IT MADE STALE
+// ---------------------------------------------------------------------------
+
+/// **THE ENCODER'S PREDICATE AGREES WITH THE ARTIFACT.**
+///
+/// [`the_all_default_initialiser_pool_is_elided_from_the_region`] restates the
+/// elision rule and measures it at the bytes; that restatement is the oracle and
+/// must not delegate. This test is the join between the oracle and the shared
+/// predicate `keleusma::wire_schema::private_init_is_elided`, which
+/// [`SchemaBuilder::add_data_layout`] and
+/// [`keleusma::wire_schema::constant_roots`] both consume.
+///
+/// # Why the predicate needs its own test rather than being trusted
+///
+/// A wrong predicate is silent in the only direction that matters. Reporting an
+/// elided pool as stored over-counts the region by the whole data segment, which
+/// on a stage is 21,642 records for `parse` against 857 real ones — a model
+/// twenty-six times too large, which nothing downstream would flag as absurd.
+///
+/// Both directions are exercised: the corpus supplies the elided case and the
+/// source below supplies the stored one, so a predicate stuck at either constant
+/// fails.
+#[test]
+fn the_shared_predicate_agrees_with_the_artifact() {
+    let mut elided = 0usize;
+    let mut stored = 0usize;
+
+    for (name, src) in CORPUS_STAGES {
+        let m = compile_stage(src);
+        let Some(dl) = m.data_layout.as_ref() else {
+            continue;
+        };
+        let from_chunks: usize = m.chunks.iter().map(|c| c.constants.len()).sum();
+        let records =
+            region_bytes(&encode(&corpus_aux_of(&m)), KIND_CONSTS).len() / CONST_RECORD_BYTES;
+
+        if keleusma::wire_schema::private_init_is_elided(dl) {
+            assert_eq!(
+                records, from_chunks,
+                "{name}: the predicate says the pool is elided and the artifact carries \
+                 {records} records against {from_chunks} chunk constants"
+            );
+            elided += 1;
+        } else {
+            assert_eq!(
+                records,
+                from_chunks + dl.private_init.len(),
+                "{name}: the predicate says the pool is stored and the artifact disagrees"
+            );
+            stored += 1;
+        }
+    }
+
+    // The stored direction, which the corpus cannot supply: every stage's data
+    // segment is entirely zero.
+    let m = compile_stage(
+        "private data d { xs: [Word; 4], flag: Word = 7 }\n\
+         fn main() -> Word { d.xs[0] = 1; d.flag }",
+    );
+    let dl = m.data_layout.as_ref().expect("data layout");
+    assert!(
+        !keleusma::wire_schema::private_init_is_elided(dl),
+        "a pool with a non-default initialiser must not be reported as elided"
+    );
+    stored += 1;
+
+    assert!(
+        elided >= 8,
+        "only {elided} stages exercised the elided direction, so the corpus no longer \
+         covers the case the predicate exists for"
+    );
+    assert!(
+        stored >= 1,
+        "the stored direction was never exercised, so a predicate returning `true` \
+         unconditionally would pass"
+    );
+}
+
+/// **`constant_roots` IS THE LIST THE ARTIFACT HOLDS, NOT A DESCRIPTION OF IT.**
+///
+/// The self-hosted emit path has to know exactly which roots the reference
+/// encoder will emit and in what order, or its bytes cannot be compared against
+/// the reference at all. This pins that the library's answer is the artifact's.
+///
+/// # Why length, and why that is sufficient HERE and not in general
+///
+/// A composite root expands into further records at flatten time, so root count
+/// and record count coincide only for a forest of scalars.
+/// [`the_flattener_interns_no_name_for_any_stage`] pins that every constant in
+/// this corpus is an `Int`, so the equality is exact here. The assertion below
+/// re-establishes the scalar precondition per stage rather than relying on that
+/// test having run, because a corpus change would otherwise turn this test into
+/// one that silently measures something weaker.
+#[test]
+fn constant_roots_matches_the_emitted_region_for_every_stage() {
+    let mut checked = 0usize;
+    for (name, src) in CORPUS_STAGES {
+        let m = compile_stage(src);
+        let aux = corpus_aux_of(&m);
+        let roots = keleusma::wire_schema::constant_roots(&aux);
+
+        assert!(
+            roots.iter().all(|v| name_bearing_nodes(v) == 0),
+            "{name}: a composite constant entered the corpus, so root count and record \
+             count no longer coincide and this test measures the wrong quantity"
+        );
+
+        let records = region_bytes(&encode(&aux), KIND_CONSTS).len() / CONST_RECORD_BYTES;
+        assert_eq!(
+            roots.len(),
+            records,
+            "{name}: `constant_roots` reports {} roots and the artifact carries {records} \
+             records",
+            roots.len()
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, CORPUS_STAGES.len(), "not every stage was checked");
+}
+
+/// **THE ORDER IS PART OF THE CONTRACT, AND A REVERSED MODEL PASSES EVERY
+/// SINGLE-SOURCE CASE.**
+///
+/// Chunk constants first, then the data segment's initialisers. A module drawing
+/// from only one source cannot tell the two orders apart, and every stage in the
+/// corpus is such a module because its data pool is elided. The source here
+/// draws from both.
+#[test]
+fn constant_roots_puts_the_chunk_pools_before_the_data_segment() {
+    let m = compile_stage(
+        "const data k { a: Word = 11 }\n\
+         private data d { flag: Word = 22 }\n\
+         fn main() -> Word { d.flag = k.a; d.flag }",
+    );
+    let roots = keleusma::wire_schema::constant_roots(&corpus_aux_of(&m));
+
+    let pos_11 = roots.iter().position(|v| matches!(v, ConstValue::Int(11)));
+    let pos_22 = roots.iter().position(|v| matches!(v, ConstValue::Int(22)));
+    let (a, b) = (
+        pos_11.expect("the chunk constant 11 is in the root list"),
+        pos_22.expect("the data initialiser 22 is in the root list"),
+    );
+    assert!(
+        a < b,
+        "the data segment's initialiser landed at {b}, before the chunk constant at {a}; \
+         the encoder accumulates chunk pools first and a record's index is its position \
+         in this list"
+    );
+}
+
+/// **THE REGION IS NOT 90% OF THE BODY ANY MORE, AND THE RECORDED FIGURES SAID
+/// IT WAS.**
+///
+/// Doc comments and decision documents on this line quoted `CONSTS` at 645,312
+/// bytes across the eleven stages, 90.5% of a 712,936-byte corpus, with `parse`
+/// needing a 17,391-node walk. **Every one of those numbers predates the
+/// all-default elision**, which removed the 38,087 wholly-default initialisers
+/// that made up the bulk. This is the seventh stale-figure incident on this line
+/// and the sixth was in a document no test read.
+///
+/// # Why a band rather than an exact pin
+///
+/// An exact record count would fail on every edit to a stage source, which is a
+/// test that trains its reader to re-baseline it. The band is wide enough to
+/// survive ordinary stage growth and far too narrow to survive a return to the
+/// pre-elision magnitude, which is the thing worth catching. Both ends are
+/// asserted: the lower bound is what stops the test passing on an empty corpus.
+#[test]
+fn the_recorded_region_magnitude_is_the_one_the_tree_produces() {
+    let mut total = 0usize;
+    let mut largest = (0usize, "");
+    for (name, src) in CORPUS_STAGES {
+        let m = compile_stage(src);
+        let bytes = region_bytes(&encode(&corpus_aux_of(&m)), KIND_CONSTS).len();
+        total += bytes;
+        if bytes > largest.0 {
+            largest = (bytes, name);
+        }
+    }
+
+    assert!(
+        total > 10_000,
+        "the corpus emitted only {total} bytes of `CONSTS`, so this test is measuring \
+         an empty or broken corpus rather than the region"
+    );
+    assert!(
+        total < 120_000,
+        "the corpus emitted {total} bytes of `CONSTS`. The pre-elision figure was \
+         645,312 and a return to that magnitude means the wholly-default initialiser \
+         pool is reaching the artifact again"
+    );
+    assert!(
+        largest.0 < 40_000,
+        "the largest single stage is {} at {} bytes; a streaming emit path holds one \
+         record at a time, but a stage past this size is a change in kind rather than \
+         degree and the plan for it should be re-derived",
+        largest.1,
+        largest.0
+    );
+
+    // The SHARE, which is the figure the plan actually rested on. `CONSTS` was
+    // recorded at 90.5% of the body; measured after the elision it is a bit over
+    // a third, and still the largest single region. Both halves matter: the
+    // first says the region no longer dominates, the second says it is still
+    // the right next target.
+    //
+    // `whole` is the AUXILIARY BODY length, not the sum of region payloads. The
+    // 90.5% being corrected was a share of the body, and comparing against the
+    // payload sum instead would quietly change what the percentage means: the
+    // same corpus reads 33.9% of the body and 37.5% of the payloads.
+    let mut whole = 0usize;
+    let mut largest_kind = (0usize, 0u16);
+    let mut per_kind = alloc_map();
+    for (_name, src) in CORPUS_STAGES {
+        let artifact = encode(&corpus_aux_of(&compile_stage(src)));
+        whole += artifact.len();
+        let view = keleusma_wire::WireView::parse(&artifact).expect("artifact parses");
+        for i in 0..view.region_count() {
+            let r = view.region_at(i).expect("region in range");
+            let bytes = (r.word_length as usize) * 8;
+            let e = per_kind.entry(r.kind).or_insert(0usize);
+            *e += bytes;
+            if *e > largest_kind.0 {
+                largest_kind = (*e, r.kind);
+            }
+        }
+    }
+    assert_eq!(
+        largest_kind.1, KIND_CONSTS,
+        "`CONSTS` is no longer the largest region ({:#06x} is), so it is no longer the \
+         obvious next target and the plan should say what is",
+        largest_kind.1
+    );
+    let share = (total * 100) / whole;
+    assert!(
+        (20..=60).contains(&share),
+        "`CONSTS` is {share}% of a {whole}-byte corpus. It was recorded at 90.5% of \
+         712,936 bytes, from a measurement that predated the all-default elision; a \
+         return to that share means the elision has stopped applying"
+    );
+}
+
+/// A `BTreeMap`, named so the assertion above reads without a `use` line that
+/// would sit far from its only user.
+fn alloc_map() -> std::collections::BTreeMap<u16, usize> {
+    std::collections::BTreeMap::new()
 }

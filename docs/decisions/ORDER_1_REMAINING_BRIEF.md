@@ -119,7 +119,9 @@ rewrote the header.
 
 **DERIVE EVERY FIGURE FROM `tests/consts_region_composition.rs`, NEVER FROM PROSE.**
 Every recorded size predates the all-default elision, which took the eleven-stage body
-from 712,936 bytes to 103,544.
+from 712,936 bytes to **109,552** (re-measured 2026-08-22; the 103,544 recorded for that
+figure was itself measured before the stage sources grew, and `CONSTS` within it is
+37,152 bytes, 33.9%, not the 90.5% the earlier records carry).
 
 ## Method rules that are not optional here
 
