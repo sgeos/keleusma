@@ -1535,6 +1535,55 @@ pub fn self_host_compile(src: &str) -> Module {
     module
 }
 
+/// The chunk NAME for each chunk index, derived from the parsed function stream.
+///
+/// # Why this has to be derived rather than read off a record
+///
+/// A `Call` node carries the callee's CHUNK INDEX, not its name -- `reconstruct.kel`
+/// packs `chunk + count * 256` into the node's `arg`. The type channel is keyed by
+/// NAMES, so an alias row for `let a = g()` needs the index turned back into `g`.
+///
+/// [`ParsedFn`] has no chunk index, so the numbering has to be derived. **It is
+/// the distinct function names in SORTED order**, not declaration order: measured
+/// against `Module::chunks` for `lexer.kel`, whose table runs `compound_code`,
+/// `ident_token`, `intern_id`, `is_alpha`, ... and whose `entry_point` is 14,
+/// `main`'s position in that sorted list.
+///
+/// # THE FIRST VERSION OF THIS WAS WRONG, AND THE CHECK IS WHY THAT IS KNOWN
+///
+/// It grouped **consecutive same-named heads** in declaration order, reasoning
+/// from the grouping [`self_host_compile_fused`] flushes on. That grouping is real
+/// -- a multi-arm function is one chunk -- and it is not the numbering. The first
+/// derivation produced the right chunk COUNT and the right SET of names in the
+/// wrong ORDER, so every `Call` node would have resolved to some other function's
+/// name, and nothing about the count or the set would have looked wrong.
+///
+/// It also **passed the small multi-arm probe**, because there the two rules
+/// coincide. Only the real corpus separated them. A derivation checked against a
+/// case chosen to exercise it is checked against the author's model of it.
+///
+/// # This mapping is checked, not assumed
+///
+/// `the_derived_chunk_names_match_the_reference_compiler` compares this against
+/// `Module::chunks`' own names over the stage corpus, with a guard that the
+/// comparison is non-vacuous. A derivation nothing checks is a guess with line
+/// numbers.
+#[must_use]
+pub fn chunk_names_from_pipeline(src: &str) -> Vec<String> {
+    let (fns, names, ..) = parse_functions_fused(src);
+    let mut out: Vec<String> = Vec::new();
+    for f in &fns {
+        let Some(n) = names.get(f.name as usize) else {
+            continue;
+        };
+        if !out.iter().any(|s| s == n) {
+            out.push(n.clone());
+        }
+    }
+    out.sort();
+    out
+}
+
 /// The type checker's BINDING ROWS, derived from the self-hosted pipeline.
 ///
 /// Returns `(name, tag, form)` triples with names as STRINGS rather than interned

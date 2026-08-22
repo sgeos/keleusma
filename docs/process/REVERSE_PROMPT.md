@@ -12,6 +12,38 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 **Date**: 2026-08-22 (the `CONSTS` route decision, taken by reading the code)
 
+## SESSION 51 — A NUMBERING I GOT WRONG TWICE, AND A DIVERGENCE I DID NOT RESOLVE
+
+Moved to the remaining Order 1 item, the type checker's **input**. The tree names its own next slice:
+give the alias row a target string so `let a = g()` compares without comparing id spaces. That needs
+a `Call` node's chunk index turned back into a name.
+
+**The numbering was wrong twice, and it is only known because I checked it instead of shipping it.**
+I derived "consecutive same-named heads, declaration order"; the real rule is **sorted by name**. The
+wrong version produced the right chunk count and the right set in the wrong order — every `Call`
+would have resolved to another function, with nothing about the count or set looking wrong.
+
+**It passed the probe I wrote for it.** My multi-arm case was written to exercise the grouping rule,
+and there grouping and sorting coincide. Only the real corpus separated them. That is last
+increment's mutation lesson in another costume: **a check built from the same model as the thing it
+checks confirms the model.**
+
+### What I did not resolve
+
+With sorting fixed, `wire.kel` still diverges: count agrees at 486, `crc_end` and `parse_prologue`
+absent from the pipeline, `acc` and `dis` present — and those two are **private-data field names**.
+Each missing function follows a data block whose field appears in its place.
+
+Suggestive, not a diagnosis, so it is **pinned with its exact shape** rather than repaired. The
+compile path is unaffected — `wire.kel` self-compiles byte-identically — so what diverges is the
+per-function metadata beside the record stream. Anything built on the mapping must treat `wire.kel`
+as unvalidated until this is closed. **This is the one thing I would look at first next session.**
+
+Also caught while scoping: the corpus test's `> 500` vacuity guard was satisfied almost entirely by
+the stage I had just excluded. Moved to 200, reason recorded.
+
+---
+
 ## SESSION 51 — 93% PRODUCED, AND A GUARD I MUTATION-TESTED THAT STILL COULD NOT FIRE
 
 `SHAPES` and `SIGNATURES` are now emitted by Keleusma, byte-identical for every stage. Produced

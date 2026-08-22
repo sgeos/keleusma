@@ -13,6 +13,56 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**A DERIVATION CHECKED AGAINST A CASE CHOSEN TO EXERCISE IT IS CHECKED AGAINST THE AUTHOR'S MODEL OF
+IT (2026-08-22).**
+
+Coverage work had reached diminishing returns, so this increment moved to the remaining Order 1
+item: the type checker's INPUT. The tree names its own next slice -- give the alias row a target
+STRING, so `let a = g()` can be compared without comparing id spaces -- and that needs a `Call`
+node's CHUNK INDEX turned back into a name.
+
+**THE NUMBERING WAS WRONG TWICE, AND IT IS ONLY KNOWN BECAUSE IT WAS CHECKED RATHER THAN SHIPPED.**
+
+First derivation: consecutive same-named heads in declaration order, reasoning from the grouping
+`self_host_compile_fused` flushes on. That grouping is real -- a multi-arm function is one chunk --
+and it is **not the numbering**. The real rule is **sorted by name**, confirmed by `entry_point:
+Some(14)` being `main`'s position in `lexer.kel`'s sorted table.
+
+**The failure mode is the interesting part.** The wrong derivation produced the right chunk COUNT and
+the right SET of names in the wrong ORDER. Every `Call` node would have resolved to some other
+function's name, and nothing about the count or the set would have looked wrong.
+
+**AND IT PASSED THE PROBE I WROTE FOR IT.** The multi-arm case -- two `fn f` heads plus `main` --
+was written specifically to exercise the grouping rule, and there grouping and sorting COINCIDE.
+Only the real corpus separated them.
+
+That is last increment's mutation lesson in a different costume. There, the mutation took the shape
+the guard expected. Here, the probe took the shape the derivation expected. **The general form: a
+check built from the same model as the thing it checks confirms the model.** The corpus caught both
+because the corpus was not written by that model.
+
+**THEN IT SURFACED SOMETHING NOT RESOLVED, AND THE INCREMENT STOPPED THERE.**
+
+With sorting fixed, `wire.kel` still diverges, in a specific and reproducible shape: the chunk COUNT
+agrees exactly at 486, `crc_end` and `parse_prologue` are absent from the pipeline, and `acc` and
+`dis` are present in it. **`acc` and `dis` are FIELDS of private data blocks**, at lines 157 and 163;
+`crc_end` is at 215 and `parse_prologue` at 403. Each missing function follows a data block whose
+field turns up in its place.
+
+That pairing is suggestive and it is **not a diagnosis**, so it is pinned rather than repaired, with
+its exact shape asserted so a CHANGE in the divergence is not mistaken for the divergence being
+unchanged. The compile path is unaffected -- `wire.kel` self-compiles byte-identically -- so what
+diverges is the per-function METADATA the driver exposes beside the record stream, not the stream.
+A reader must not conclude the pipeline drops two functions from the compiler; byte identity forbids
+it.
+
+**A VACUITY GUARD THAT ONLY THE EXCLUDED CASE SATISFIED.** Scoping `wire` out of the corpus test
+dropped it below a `total_chunks > 500` guard -- because `wire.kel`'s 486 chunks were carrying that
+guard almost single-handedly. A guard the one excluded stage satisfied on its own was guarding the
+wrong thing. Moved to 200 and the reason recorded, rather than quietly lowered.
+
+---
+
 **I MUTATION-TESTED A GUARD AND IT STILL COULD NOT FIRE (2026-08-22).**
 
 The most useful thing that happened this increment was catching myself.
