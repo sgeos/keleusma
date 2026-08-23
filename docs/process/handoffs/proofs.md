@@ -32,8 +32,11 @@ measured standing recorded per row, and two axioms rest on reference-compiler em
 invariants that `verify()` does not enforce, so the reuse theorems apply to reference-compiled
 modules and not to arbitrary verified bytecode. B2 is additionally a proved specification rather
 than a description, since no escape route copies in Keleusma today, and its six adoption
-obligations are named in the proof's Appendix C. One instantiation row is open: M1's immutability
-clause, read from dispatch, confirmation pending with the V0.2.X session.
+obligations are named in the proof's Appendix C. M1's immutability clause is confirmed by the
+V0.2.X session on four independent grounds, one pinned from the `Op` enum, with the clause
+scoped to the ephemeral region deliberately since the persistent region is mutated in place. No
+instantiation row is open. The pin's landing commit follows the same channel as the earlier
+ones.
 
 ## Owed by this line
 
