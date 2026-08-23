@@ -1628,6 +1628,93 @@ fn unescape_string(raw: &str) -> String {
     String::from_utf8(out).expect("a string literal's unescaped content is valid UTF-8")
 }
 
+/// A construct `parse.kel` does not support, if one is present, as a sentence a
+/// user can act on.
+///
+/// # Why this exists, and what it cost not to have it
+///
+/// `self_host_compile(wire.kel)` fails with ``no chunk named `acc` ``. That names
+/// neither the construct nor the file, and tracing it to a cause took SEVEN
+/// increments: through the record stream, the cursor, the token stream, the fold
+/// continuation, and finally the loop header. The cause is a bare `for` -- a loop
+/// written without `limit`, which `parse.kel`'s header machine does not accept,
+/// though `codegen.kel` handles it perfectly well.
+///
+/// This project's parser names thirteen failure modes with their own causes for
+/// exactly this reason. A message that says which construct is unsupported turns
+/// seven increments into one reading.
+///
+/// # It reports only what it can see
+///
+/// A bare `for` is detectable from the token stream: the `for` keyword's header
+/// runs to its opening brace, and the supported form carries `limit` inside it.
+/// Any OTHER unsupported construct returns `None` and the caller falls back to
+/// the generic diagnosis -- **a guess dressed as a specific cause would be worse
+/// than the bare message it replaces.**
+fn unsupported_construct(src: &str) -> Option<&'static str> {
+    /// `Tok::For` in `parse.kel`'s vocabulary.
+    const TOK_FOR: i64 = 45;
+    /// `Tok::Ident`.
+    const TOK_IDENT: i64 = 1;
+    /// `Tok::LBrace`.
+    const TOK_LBRACE: i64 = 2;
+
+    let (names, tokens) = lex_token_trace(src);
+    let limit_id = names.iter().position(|n| n == "limit").map(|i| i as i64);
+    let mut i = 0usize;
+    while i < tokens.len() {
+        if tokens[i].0 != TOK_FOR {
+            i += 1;
+            continue;
+        }
+        // The header runs from the keyword to its opening brace. `limit` is an
+        // IDENT with a known interned id, not a keyword of its own.
+        let mut j = i + 1;
+        let mut has_limit = false;
+        while j < tokens.len() && tokens[j].0 != TOK_LBRACE {
+            if tokens[j].0 == TOK_IDENT && Some(tokens[j].1) == limit_id {
+                has_limit = true;
+            }
+            j += 1;
+        }
+        if !has_limit {
+            return Some(
+                "a `for` loop written without `limit`. The self-hosted parser accepts \
+                 `for v in lo..hi limit CAP { .. }` and not the bare form; \
+                 `codegen.kel` handles both, so this is a parse-stage gap rather than \
+                 an unsupported language feature. Compile with the reference compiler, \
+                 or add a `limit` clause.",
+            );
+        }
+        i = j.max(i + 1);
+    }
+    None
+}
+
+/// The diagnosis for a declaration whose name matches no chunk.
+///
+/// **THE NAME MISMATCH IS ALWAYS A SYMPTOM.** The pipeline produced a declaration
+/// the reference did not, which means a declaration boundary was mis-parsed. The
+/// name reported is whatever token the parser took for a name, and it is
+/// characteristically NOT the function's -- for `wire.kel` it is a private-data
+/// field.
+fn chunk_lookup_failure(src: &str, name: &str) -> ! {
+    match unsupported_construct(src) {
+        Some(cause) => panic!(
+            "the self-hosted pipeline mis-parsed a declaration boundary and produced a \
+             chunk named `{name}`, which the reference compiler did not emit. The source \
+             contains {cause}"
+        ),
+        None => panic!(
+            "no chunk named `{name}`. The pipeline produced a declaration the reference \
+             did not, so a declaration boundary was mis-parsed and `{name}` is whatever \
+             token was taken for a name. No known unsupported construct was detected, so \
+             this is a NEW case: `keleusma::selfhost::parse_record_trace` and \
+             `lex_token_trace` are the instruments for narrowing it"
+        ),
+    }
+}
+
 /// Self-host-compile a whole program: drive the pipeline over every function, reconstruct
 /// each into its codegen Body (grouping same-named heads into one multihead), run
 /// codegen.kel, and splice the self-hosted ops, constant pool, and local_count into the
@@ -1665,7 +1752,7 @@ pub fn self_host_compile(src: &str) -> Module {
             .chunks
             .iter()
             .position(|c| c.name == name)
-            .unwrap_or_else(|| panic!("no chunk named `{name}`"));
+            .unwrap_or_else(|| chunk_lookup_failure(src, &name));
         module.chunks[idx].ops = ops;
         module.chunks[idx].constants = pool_to_constants(&pool, &names);
         module.chunks[idx].local_count = lc as u16;
@@ -1927,7 +2014,7 @@ pub fn self_host_compile_fused(src: &str) -> Module {
             .chunks
             .iter()
             .position(|c| c.name == name)
-            .unwrap_or_else(|| panic!("no chunk named `{name}`"));
+            .unwrap_or_else(|| chunk_lookup_failure(src, name));
         module.chunks[idx].ops = ops;
         module.chunks[idx].constants = pool_to_constants(&pool, names);
         module.chunks[idx].local_count = lc as u16;
