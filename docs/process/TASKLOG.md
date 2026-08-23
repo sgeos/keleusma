@@ -10,6 +10,30 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-23, session 51 close). `wire.kel` EXPLAINED; THREE COSTINGS CORRECTED.**
+>
+> **32 merges across sessions 50 and 51** (128 on the branch as of `cfcff555`; #251 open). Order 1:
+> item 1 DONE, item 2 at **93% produced / 56% computed**, item 3 MOVED (let-bound calls reach the
+> type channel as alias rows carrying the callee's name).
+>
+> **`wire.kel` is not self-hosted because it uses a BARE `for`**, which `parse.kel` does not support.
+> The premature body close, the field-named declaration and the `no chunk named X` panic are all
+> mechanism. The failure now names its cause.
+>
+> **THE OBVIOUS FIX IS WRONG.** "Let phase 5 skip the missing cap" — measured, the bare form is
+> **24 ops** (plain `Loop`) against the `limit` form's **68** (counters, cap, overflow check). Two
+> lowerings. Pinned by `the_bare_and_limit_forms_have_different_lowerings`.
+>
+> **A construct can be covered by the WRONG corpus.** Four bare-`for` cases exist — in the corpus
+> driving the reference parser then `codegen.kel`, bypassing the failing stage. The full-pipeline
+> table has none.
+>
+> Three public instruments now exist: `parse_cursor_trace`, `parse_record_trace` (carrying the
+> cursor per record), `lex_token_trace`. **Do not zip the first two** — different sampling rates.
+>
+> Also: the stage is compiled once per artifact rather than once per region;
+> `selfhost_region_coverage` runs 60.6 s at load 27 against 108 s at load 9 before.
+
 > **Currency note (2026-08-23, later). ORDER 1 ITEM 3 MOVED, AND ONE OF MY FINDINGS IS RETIRED.**
 >
 > **Retired**: the `wire.kel` chunk-name divergence. It was `chunk_names_from_pipeline` deriving the
