@@ -10,6 +10,54 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-23, late). P6(d) IS A REAL GAP, AND A TEST OF MINE BROKE THEIR ABSORPTION.**
+>
+> **`verify()` ACCEPTS a loop body that consumes below its entry height** and pushes a same-shape
+> replacement. `interp_region` floors at the FRAME, not at the loop entry, and the two differ:
+> **122 of 245** compiled loops carry a non-empty entry stack. Pinned in `tests/loop_entry_floor.rs`
+> as a GAP, with a control.
+>
+> **No compiled code does it** -- 0 breaches over 588 loop instances -- but measured with TEMPORARY
+> instrumentation of the typed pass, now reverted. **A measurement at a commit, not a standing
+> guarantee**, and reported as such. A linear scan gives the same zero and is exact for only 4 of 245.
+>
+> **`examples/scripts/` is grown by `v0.3.0` and asserted over here.** My size pin at eleven broke
+> their absorption 5; the corpus is NAMED now, verified by reproducing their tree at seventeen.
+> Swept the other four directory-walking tests: one more asserts a property over their files.
+
+> **Currency note (2026-08-23, night). THE PROOF SESSION'S THREE QUESTIONS, ANSWERED BY MEASUREMENT.**
+>
+> **P5 was true for the wrong reason.** `Op::Reset` clears only the CURRENT frame, and
+> `category_can_call` permits `Loop -> Loop`, so a caller's frame CAN sit beneath the resetting one
+> holding stale handles -- that arrangement compiles, verifies and runs. **What closes it is that a
+> `loop` chunk emits no `Return`**, a DYNAMIC property nothing enforced. Now pinned over five shapes
+> in `tests/stream_never_returns.rs`, with the nested case pinned as constructible.
+>
+> **P7 is enforced more strongly than asked** -- `LoopNotNeutral` compares the whole abstract stack,
+> height and per-slot shape; `join_stacks` covers `Break`. **But neutrality is on SHAPES, NOT
+> IDENTITIES**, so "the stack contents are identical across iterations" would be a false premise.
+>
+> **A stale local read is an ERROR** (`InvalidBytecode`, "read after arena reset"), not a wrong
+> value -- with the reachability caveat that no route to one was found.
+>
+> All three added to `COMPOSITE_REGION_EVIDENCE.md` with provenance split stated per row.
+
+> **Currency note (2026-08-23, evening). AN EVIDENCE INDEX FOR THE THIRD SESSION.**
+>
+> **132 merges on `origin/v0.2.3`** (#257 landed at `639f970f`).
+>
+> A third session is drafting the composite-region-reuse proof. `docs/decisions/
+> COMPOSITE_REGION_EVIDENCE.md` collects what this line established for it, **separating EXECUTED
+> claims from READ ones per row**, naming the test and command behind each, stating ownership
+> absolutely, naming the exact `src/verify.rs` line a theorem would change, and listing four things
+> this line has NOT established.
+>
+> `tests/proof_evidence_index.rs` pins it: every named test must exist, every `src/verify.rs:N`
+> citation must still contain what it claims, and the sentences marking its limits must survive.
+> **A stale citation would turn the document into a confident-sounding dead end** for a reader on
+> another branch who cannot notice. The guard fired on its first run, on the document's own
+> formatting.
+
 > **Currency note (2026-08-23, later). THE PROOF'S §6.3 OBLIGATION IS DISCHARGED FROM THIS SIDE.**
 >
 > **131 merges on `origin/v0.2.3`** (#255 landed 22 of 22 at `b94fcfe7`).

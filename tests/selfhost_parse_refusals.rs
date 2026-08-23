@@ -42,16 +42,56 @@ const REFUSED: &[(&str, &str)] = &[
     ("10_multbyte.kel", "IndexOutOfBounds(-1, 65)"),
 ];
 
+/// The eleven scripts this claim is about, NAMED.
+///
+/// # Why named rather than "whatever is in the directory"
+///
+/// **`examples/scripts/` is a directory the `v0.3.0` line GROWS and this line's
+/// tests assert over.** They add opcode-witness scripts there — that route took
+/// their instruction-set census from 64 to 66 witnessed opcodes — and every one
+/// of them broke a size-pinned assertion here the moment they absorbed. The
+/// failure appeared only on their tree, where their corpus meets this test, and
+/// was invisible from here.
+///
+/// Pinning the COUNT coupled a claim about ELEVEN SPECIFIC SCRIPTS to another
+/// line's unrelated work. The claim was never about the directory's size; it was
+/// about which shipped examples the self-hosted front end refuses, correcting a
+/// figure that had been quoted as four when it was two. Naming them says that,
+/// and additions are simply outside the set rather than a breakage.
+///
+/// **This does not weaken the test.** Every name below must still be PRESENT and
+/// must still be classified, so a removal or rename fails here rather than
+/// silently shrinking what is checked.
+const CORPUS: &[&str] = &[
+    "01_arithmetic.kel",
+    "02_struct_field.kel",
+    "03_enum_match.kel",
+    "04_for_in.kel",
+    "05_pipeline.kel",
+    "06_multiheaded.kel",
+    "07_refinement.kel",
+    "08_method_dispatch.kel",
+    "09_big_numbers.kel",
+    "10_multbyte.kel",
+    "11_signed.kel",
+];
+
 fn scripts() -> Vec<PathBuf> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/scripts");
-    let mut paths: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .expect("examples/scripts is readable")
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "kel"))
-        .collect();
-    paths.sort();
-    paths
+    CORPUS
+        .iter()
+        .map(|name| {
+            let p = dir.join(name);
+            assert!(
+                p.is_file(),
+                "{name} is named in this test's corpus and is not present. If it \
+                 was renamed or removed, update CORPUS deliberately -- silently \
+                 checking ten scripts while claiming eleven is the failure this \
+                 assertion exists to prevent."
+            );
+            p
+        })
+        .collect()
 }
 
 #[test]
@@ -59,9 +99,8 @@ fn every_shipped_example_is_parsed_or_refused_by_name() {
     let paths = scripts();
     assert_eq!(
         paths.len(),
-        11,
-        "the example corpus changed size; this test's expectations are stated \
-         against the eleven scripts that were there when it was written"
+        CORPUS.len(),
+        "the named corpus and the resolved paths disagree"
     );
 
     let mut refused: Vec<(String, String)> = Vec::new();

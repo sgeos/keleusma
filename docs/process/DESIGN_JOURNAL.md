@@ -13,6 +13,209 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**M1: SEVEN READ ACCESSORS INTO A COMPOSITE, ZERO WRITE ACCESSORS (2026-08-23).**
+
+The proof session asked for a refutation rather than a confirmation: is there ANY opcode, host entry
+point, or native-visible path that writes into a live ephemeral composite region after
+`NewComposite` finishes? Both its reuse theorems rest on there being none.
+
+**None found, on four independent grounds** -- and the cleanest is a count derived from the
+instruction set itself. `GetField`, `GetIndex`, `GetTupleField`, `GetEnumField` project OUT of a
+composite; **not one has a `Set` counterpart.** The only stores are `SetLocal`, which rebinds a frame
+slot, and `SetData`/`SetDataIndexed`, which write the persistent region. The other three grounds:
+`FlatComposite` exposes `resolve -> &[u8]` and no mutable accessor; all four raw pointer writes in
+the virtual machine derive from `arena.persistent_ptr()`; and natives take
+`&[GenericValue]` with a `&Arena`, with no public API returning `&mut [u8]` into the arena.
+
+**THE PRECISION IS THE PART WORTH SENDING.** Their wording said "ephemeral" and is correct as
+written, but **M1 stated over "a region" unqualified is FALSE here**: `SetData` writes IN PLACE into
+an existing persistent composite, repeatedly, across resets. An abstraction pass is exactly where
+that qualifier gets dropped, and **the two interact** -- the persistent region is where the
+`CopiesOut` routes land, so the copy SOURCE is immutable and the copy DESTINATION is not. If their
+copy-equivalence argument assumes both ends immutable it needs restating; if it needs only the
+source, it stands. I asked rather than assumed which they meant.
+
+**PINNED, WITH A FAILURE MESSAGE THAT REFUSES THE OBVIOUS FIX.** A single `SetField` opcode would
+refute both theorems and **would look like an ordinary instruction-set addition to whoever added
+it**. The guard's message says so and tells the reader to contact the proof's owner rather than
+update the test.
+
+**AND THE FIRST MUTATION OF IT WAS INVALID.** Adding a real `SetField` variant to the `Op` enum broke
+every exhaustive match in the crate, so the test never ran and the grep found nothing -- a mutation
+that fails to compile proves nothing about the guard. Injecting the name into the derived list
+instead fired both assertions. **A mutation must leave the program buildable or it is not a
+mutation**, which is a distinct trap from the ones already recorded.
+
+**A SHARED CHECKOUT DOES NOT ONLY ENDANGER COMMITS. IT SILENTLY CHANGES WHAT A LONG-RUNNING COMMAND
+IS MEASURING (2026-08-23).**
+
+A third session drafting the proof was operating in **the same working directory as this one**. Two
+consequences, and the second is the one no process document had.
+
+**THE KNOWN ONE.** Its `git add -A` swept in seven uncommitted files of mine and pushed them on its
+branch; its `git checkout -b` moved my HEAD from `docs/proof-evidence-index` to its branch, so my next
+commit would have landed there. It disclosed this before I noticed, named the commit and the window,
+and had already rewritten it with **force-with-lease** rather than plain force. Verified
+independently here: `git log e9a40e32..origin/proof/composite-region-reuse` shows two commits, both
+theirs, and the transient one is unreachable from any remote branch. `PARALLEL_DEVELOPMENT.md`
+prescribes worktree isolation for exactly this and neither of us was using one.
+
+**THE ONE WORTH WRITING DOWN.** A full workspace suite was RUNNING in that directory at the time. It
+was executing against a tree whose HEAD had become another line's branch. **I killed it rather than
+read its result**, because a green number from a tree I did not intend to test is worse than no
+number -- I would have quoted it, and nothing in the output would have said which base it ran on.
+
+**NO AMOUNT OF INSPECTING GIT STATE AFTERWARDS WOULD HAVE REVEALED IT.** The working tree looked
+correct, the diff looked correct, and the suite would have printed a plausible pass count. The only
+signal was knowing that the branch had moved DURING the run.
+
+The recovery order is the transferable part: **back up the working tree to a patch and file copies
+BEFORE touching git**, then stash, checkout, pop, and **diff against the backup**. The tracked diff
+came back byte-identical and both new files matched. Waiting for the other session to move first
+would have left the work in the fragile state longer for no gain, so this line took the directory and
+said so.
+
+**COST: one gate re-run.** Cheap, and only because the branch was checked before the result was read.
+
+**P6(d): THE ANSWER IS THE UNFAVOURABLE ONE, AND MY FIRST INSTRUMENT WOULD HAVE HIDDEN IT
+(2026-08-23).**
+
+The proof session asked whether a loop body can consume an operand from BELOW its loop's entry height
+and push a same-shape replacement -- a value that survives the back edge through pure stack
+operations, touching none of the five escaping opcodes.
+
+**`verify()` ACCEPTS that shape.** Built it, ran it, pinned it. `interp_region`'s pops guard against
+an EMPTY abstract stack -- the frame floor -- not the enclosing loop's entry height.
+
+**I expected to close it with "below entry equals frame underflow, which is caught". That is FALSE**:
+**122 of 245** compiled `Loop` instructions in the shipped corpus carry a non-empty operand stack at
+entry, so for about half of them the frame floor sits strictly below the loop floor. The easy
+argument was available, plausible, and wrong.
+
+**THE INSTRUMENT I REACHED FOR FIRST WOULD HAVE PUBLISHED A FLATTERING ZERO.** A linear depth scan
+over each body says zero breaches. **It is exact for 4 of 245 loops** -- the rest have branches, and
+linear accumulation is not path depth. Only splitting exact from approximate revealed that, and the
+split was worth more than the number.
+
+**THE SOUND MEASUREMENT reused the typed pass's own abstract interpretation** -- a floor saved and
+restored around each loop body's fixpoint, checked in `apply_op` -- giving **0 breaches over 588 loop
+instances in 23 modules**, with the instrument PROVEN TO FIRE (2 on the constructed shape, 0 on its
+control). **That instrumentation is reverted and is not in the tree**, so the figure is a measurement
+at a commit rather than a standing guarantee, and it was reported to them in those words. Handing a
+proof author a number without its standing is how a premise gets over-cited.
+
+**WHAT WAS PINNED IS THE GAP, NOT THE ABSENCE.** `tests/loop_entry_floor.rs` asserts that `verify()`
+accepts the shape, with a control, and asserts the non-empty-entry fact that makes it reachable. If
+someone later floors the verifier at loop entry, the test fails and its message says a proof premise
+moved rather than reading as a routine fix. **Closing it structurally would reject none of the 588 --
+but it narrows what loads, which is an operator decision rather than an agent's**, and I declined to
+take it on a peer's request.
+
+**AND THE FIRST PROBE WAS MALFORMED, CAUGHT BY ITS CONTROL.** `EndLoop` targeting the `Loop` rather
+than the body start made both arms reject for an unrelated reason. Fourth instance this session of a
+probe measuring something other than what was intended, and the second where only the control
+separated them.
+
+---
+
+**A TEST OF MINE BROKE ANOTHER LINE'S ABSORPTION, AND THE COUPLING WAS MINE (2026-08-23).**
+
+`examples/scripts/` is a directory the `v0.3.0` line GROWS and this line's tests assert over. Their
+opcode-witness scripts took their census from 64 to 66 witnessed opcodes; each one broke
+`every_shipped_example_is_parsed_or_refused_by_name`, which pinned the directory's SIZE at eleven.
+**The failure appears only on their tree, where their corpus meets my test, and is invisible from
+here.**
+
+**The claim was never about the directory's size.** It was about which shipped examples the
+self-hosted front end refuses -- correcting a count quoted as four when it was two. Pinning the count
+said something I did not mean and coupled it to their unrelated work. The corpus is NAMED now, with
+each name asserted PRESENT so a rename or deletion still fails rather than silently shrinking what is
+checked. **Verified by reproducing their tree at seventeen scripts, not by reading their report.**
+
+**THEN I SWEPT FOR OTHERS, HAVING TOLD THEM IT WAS WORTH DOING.** Five tests walk directories. One
+more genuinely reaches their files: `no_substantial_chunk_reports_a_zero_body_peak` tolerates growth
+(a lower bound, not an equality) but asserts a PROPERTY over every script that compiles, so a witness
+script of theirs could fail it. Two others reach their tree BY DESIGN and should --
+`no_other_file_restates_the_shared_layout` and the push-order guard, the latter having already found
+four backwards sites in their files.
+
+**THE PROOF SESSION ASKED THREE QUESTIONS AND ONE OF ITS PREMISES WAS RIGHT FOR THE WRONG REASON
+(2026-08-23).**
+
+A third session, drafting the proof, asked whether anything internal survives `Op::Reset` holding an
+ephemeral handle (P5), whether a loop body can leave an operand-stack entry behind (P7), and whether
+a stale local read is an error or a wrong value.
+
+**P5 IS TRUE AND THE STATED REASON WOULD HAVE MADE IT FALSE.** `Op::Reset` clears the CURRENT
+frame's locals and truncates the stack -- but only the current frame. And `category_can_call` answers
+TRUE for `Loop -> Loop`, so a caller's frame can sit beneath the resetting one holding handles into
+the region just reclaimed. **I built that arrangement and it compiles, verifies, loads and runs.**
+
+**What actually closes it is that a `loop` chunk never returns.** Its ops end `PopN(1) Reset` and
+contain no `Return`; its only exits are `Reset`, which restarts it in place with the frame retained,
+and `Trap`. So the caller beneath is never resumed.
+
+**THAT IS A DYNAMIC PROPERTY AND NOTHING ENFORCED IT.** `verify()` does not forbid a `Return` in a
+stream chunk; the code generator simply never emits one. A returning stream would reopen the hole and
+no test would have failed. Now `tests/stream_never_returns.rs` does, over five shapes, with the
+nested arrangement pinned as CONSTRUCTIBLE so the premise cannot become vacuous. Mutation-tested by
+widening the chunk filter until a plain `fn`'s `Return` came into scope.
+
+**P7 IS ENFORCED MORE STRONGLY THAN ASKED, AND THE NUANCE IS WHERE THE DANGER IS.**
+`TypedError::LoopNotNeutral` compares the ENTIRE abstract stack, height and per-slot shape, not depth
+alone; `join_stacks` covers the `Break` edges. But **neutrality is on SHAPES, NOT IDENTITIES** -- a
+body popping a composite of shape X and pushing a different one of shape X passes. Their claim
+survives that, because iteration `n`'s entry was popped. **A premise phrased as "the stack contents
+are identical across iterations" would not**, and that is the phrasing a careful writer would reach
+for. Sent as a correction to the wording rather than to the claim.
+
+**THE GENERAL SHAPE, AND IT IS THE SESSION'S RECURRING ONE.** Both answers were "yes, but the
+supporting reason you gave is not the one that holds". A premise that is TRUE for a reason its author
+has wrong survives every test and fails the first time the wrong reason stops applying. **Confirming
+the conclusion would have been worse than useless here**, because it would have licensed the wrong
+statement of it.
+
+**AND THE EVIDENCE INDEX'S OWN GUARD FIRED AGAIN**, this time correctly and in the direction that
+matters: the document cited the new test's COMMAND but not its NAMES, so the two-way pin refused. A
+citation index that names a command and not the test it runs is one rename away from useless.
+
+**WRITING FOR A READER WHO CANNOT CHECK ME (2026-08-23).**
+
+A third session is drafting the composite-region-reuse proof. It will not have been in any of the
+exchanges that produced the evidence, will be on another branch, and **will have no way to notice
+that something I wrote has gone stale.** That changes what the document has to do.
+
+**THE THING THAT MATTERS MOST IS PROVENANCE PER CLAIM, NOT THE CLAIMS.** Two of the proof's premises
+reached the other line from here as PROSE IN A MESSAGE, and one of them had not been measured when
+it was written. It was correct and it was still unsupported by anything a reader could run. So every
+row of `docs/decisions/COMPOSITE_REGION_EVIDENCE.md` says whether it was EXECUTED or READ FROM
+DISPATCH, names the test, and gives the command. **A reader must be able to tell the two apart
+without asking me**, because asking me is exactly what they cannot do.
+
+**AND THE DOCUMENT IS GUARDED, WHICH IS THE PART I WOULD HAVE SKIPPED A MONTH AGO.**
+`tests/proof_evidence_index.rs` asserts that every test it names exists, that every `src/verify.rs:N`
+citation still contains what it claims, and that the sentences marking its LIMITS survive an edit.
+**A renamed test turns the document from evidence into a confident-sounding dead end** -- strictly
+worse than never having written it, because it would be trusted.
+
+**THE GUARD FIRED ON ITS FIRST RUN, ON MY OWN FORMATTING.** The document cited the second verifier
+line as a bare `:1087` rather than `src/verify.rs:1087`, so the citation check could not find it.
+That is the third time this session a check caught something in the thing it was written to protect
+rather than in the code, and the reason is always the same: the check was made to FAIL before it was
+believed.
+
+**THE THIRD SECTION IS THE ONE A PROOF AUTHOR ACTUALLY NEEDS AND WOULD NOT THINK TO ASK FOR.** Not
+the evidence -- the LIMITS. Four things this line has not established, including that the per-opcode
+classification is analysis rather than proof, and that nothing here says anything about the native
+backend. A document that lists only what it proves reads as stronger than it is, and the reader most
+at risk from that is the one who cannot cross-examine it.
+
+Also carried, because a fresh session cannot know it: ownership stated absolutely (`src/verify.rs` is
+this line's, so a theorem implying a change there is a REQUEST and an OPERATOR decision, since it
+LOWERS a published bound); the exact line a theorem would change; and the traps -- `data` with no
+modifier is not `private data`, `Op::Reset` ends a stream cycle rather than an iteration, and a
+`Value` carries a handle rather than bytes.
+
 **AN ENUMERATION THAT CANNOT MISS A ROUTE, BECAUSE IT STARTS FROM THE INSTRUCTION SET (2026-08-23).**
 
 The other line's proof asks whether `yield` is the only way a composite escapes the iteration that
