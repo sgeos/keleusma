@@ -35,8 +35,9 @@ than a description, since no escape route copies in Keleusma today, and its six 
 obligations are named in the proof's Appendix C. M1's immutability clause is confirmed by the
 V0.2.X session on four independent grounds, one pinned from the `Op` enum, with the clause
 scoped to the ephemeral region deliberately since the persistent region is mutated in place. No
-instantiation row is open. The pin's landing commit follows the same channel as the earlier
-ones.
+instantiation row is open. The write-accessor pin landed in their `a288ae26`, recorded in the
+proof's Appendix E against ground one only, since grounds two through four are read from
+dispatch and in no test.
 
 ## Owed by this line
 
