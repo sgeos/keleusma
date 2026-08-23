@@ -2,13 +2,15 @@
 
 > **Navigation**: [Documentation Root](../README.md)
 
-> **STATUS: DRAFT. Theorem A1 is proved from confirmed premises. Theorems A2, A3, B1, and
-> Corollary C are proved conditionally on premises P5 and P6. On 2026-08-23 the V0.2.X line
-> confirmed P5, in a corrected two-part form recorded in its row, and confirmed P6 clauses (a)
-> through (c). P6 clause (d), that a loop body never pops operand-stack entries below its entry
-> height, remains open, asserted from the code generator's emission discipline and not
-> structurally enforced. The conditional markings stand until (d) is settled and the P5 pin's
-> commit is recorded.**
+> **STATUS: every premise now has measured standing, and the load-bearing distinction is this.
+> Theorem A1 is unconditional. Theorems A2, A3, B1, and Corollary C rest on two invariants that
+> are true of what the reference compiler emits and are NOT enforced by `verify()`. Streams never
+> return, and loop bodies never pop operand-stack entries below their entry height, which is
+> P6(d). The V0.2.X line has executed a bytecode shape that violates P6(d) and passes `verify()`,
+> pinned in their `tests/loop_entry_floor.rs`. Consequently the conditional theorems apply to
+> modules produced by the reference compiler and do NOT apply to arbitrary bytecode that merely
+> verifies. Hand-written or foreign bytecode can defeat them. The commits pinning the two
+> invariant measurements are to be recorded in Section 11 when they land.**
 
 This document discharges part of the obligation stated in `docs/proofs/COMPOSITE_REGION_REUSE.md`,
 which lives on the `v0.3.0` line and is cited here at commit `a49555bb`. The obligation document
@@ -116,7 +118,7 @@ Each premise names its provenance. The mechanical guards live on this branch and
 | P3 | The 66 opcodes partition into `NoRegion`, `WithinIteration`, `CopiesOut`, `Escapes`, and the escaping set is exactly `Yield`, `SetLocal`, `Return`, `CallVerifiedNative`, `CallExternalNative`. `CopiesOut` opcodes write bytes rather than references. Opcodes not classified `Escapes` do not place a reference into any location that outlives the current iteration. | Totality is mechanical, `tests/composite_escape_routes.rs`. Per-row verdicts are analysis. Two `CopiesOut` rows and the `Yield` row are executed. The rest are read from dispatch. |
 | P4 | `Op::Reset` executes once per stream cycle, at the end of the `loop main` body, and not per loop iteration. | Executed. `reset_is_once_per_stream_cycle_not_once_per_loop_iteration`. |
 | P5 | No machine-internal location **that is ever subsequently read** survives `Op::Reset` holding a reference into the ephemeral region. After a reset, a pre-reset region is reachable only through host-held handles, which fail `Stale`, or through persistent-region copies. Every ephemeral composite-body read is epoch-checked at resolve time, so even a hypothetical stale internal handle would fault rather than return a wrong value. | **Confirmed by the V0.2.X line, 2026-08-23, and the basis is two facts, not one.** First, `Op::Reset` clears the current frame's locals and truncates its operand stack, `src/vm.rs:5304`, read from dispatch. Second, a caller frame beneath a nested stream can hold stale references and is never resumed, because stream chunks emit no `Return`. The second fact is a **code-generation invariant, not a structural one**, executed over five shapes in their `tests/stream_never_returns.rs`, commit to be recorded here when it lands. Stating the first fact alone would make the nested-stream arrangement a counterexample to the premise. The epoch-check clause is read from dispatch, `FlatComposite::resolve` and `ArenaHandle::get`, with `nested_view` bounds-checked as a real fault. |
-| P6 | Within a cycle, (a) each iteration of a loop restores the exact entry operand stack at the back edge, height and per-slot shape, so no entry created in the iteration survives above the entry height, (b) `Break` edges are joined with the same discipline, (c) a callee frame's stack and locals are unreachable after its `Return`, and every call made within an iteration returns within it, which follows from totality, and (d) a loop body never pops operand-stack entries below its entry height. | (a) **Confirmed**, `TypedError::LoopNotNeutral` in the `Op::Loop` arm of `src/verify_typed.rs`, read from dispatch. Neutrality compares **shapes, not identities**, so the correct reading is that no new entry survives the back edge and the stack's shape is invariant, never that the entries are identical across iterations. (b) **Confirmed**, `join_stacks`, read from dispatch. (c) Read from dispatch. (d) **OPEN.** Asserted from the code generator's emission discipline and not structurally enforced by the verifier. A body that popped a below-entry entry and pushed a same-shape replacement built in the iteration would pass neutrality and carry a reference across the back edge. Question pending with the V0.2.X line. |
+| P6 | Within a cycle, (a) each iteration of a loop restores the exact entry operand stack at the back edge, height and per-slot shape, so no entry created in the iteration survives above the entry height, (b) `Break` edges are joined with the same discipline, (c) a callee frame's stack and locals are unreachable after its `Return`, and every call made within an iteration returns within it, which follows from totality, and (d) a loop body never pops operand-stack entries below its entry height. | (a) **Confirmed**, `TypedError::LoopNotNeutral` in the `Op::Loop` arm of `src/verify_typed.rs`, read from dispatch. Neutrality compares **shapes, not identities**, so the correct reading is that no new entry survives the back edge and the stack's shape is invariant, never that the entries are identical across iterations. (b) **Confirmed**, `join_stacks`, read from dispatch. (c) Read from dispatch. (d) **SETTLED 2026-08-23, in the unfavorable direction: a code-generation invariant only, and the verifier gap is executed, not conjectured.** `verify()` accepts a shape that pops a below-entry entry inside a loop and pushes a same-shape replacement, pinned in the V0.2.X line's `tests/loop_entry_floor.rs`. The typed pass floors pops at the frame, not at the loop entry, read from dispatch, and the frame floor does not incidentally cover the loop floor, because 122 of 245 `Loop` instances in the shipped corpus carry a non-empty operand stack at entry, executed and pinned. The emission side was measured exactly, by a per-path floor check inside the typed pass's own abstract interpretation, proven to fire on the breaching shape: **zero breaches over 588 loop instances across 23 shipped modules.** That instrumentation is reverted and the zero is **a measurement at a commit, not a standing guarantee**, and this document cites it as exactly that. A linear depth scan also reported zero and was discarded as exact for only 4 of the 245 loops, which is recorded because the flattering number came from a broken instrument first. |
 
 The proof relies on P3 only through totality and the category semantics stated in its row. If any
 single per-opcode verdict is disputed, the classification table in
@@ -184,9 +186,10 @@ excludes exactly that. Both location classes of the invariant are therefore empt
 
 The dependence on P6(d) is real and is why it is listed. Without it, a value could cross the back
 edge through pure stack operations, touching no escaping opcode, and confinement would not see
-it. P6(d) is currently a code-generation invariant rather than a verifier guarantee, the same
-epistemic standing as the stream-never-returns half of P5, and it is marked open until the V0.2.X
-line answers whether it is enforced or only emitted.
+it. The V0.2.X line has answered the question this dependence raised. P6(d) is a code-generation
+invariant only, the same epistemic species as the stream-never-returns half of P5, and the
+verifier's acceptance of a breaching shape is executed and pinned. The lemma therefore holds for
+reference-compiled modules and can be defeated by bytecode that merely verifies.
 
 ## 5. The branch theorems
 
@@ -301,13 +304,16 @@ iteration, which it does not today.
    rows execution-backed and the rest read from dispatch. A wrong `CopiesOut` row would make
    Lemma 2, and everything above it, unsound. Disagreements go to the table in
    `tests/composite_escape_routes.rs`.
-2. **P6(d), and the code-generation halves of P5 and P6.** P5 and P6 clauses (a) through (c) are
-   confirmed by the V0.2.X line, but two load-bearing facts are invariants of what the code
-   generator emits rather than of what the verifier refuses. Streams never return, which closes
-   P5's nested-stream hole and is pinned on their line, and loop bodies never pop below their
-   entry height, which is P6(d) and is not yet pinned or enforced. A future returning stream or
-   hand-written bytecode reopens the first silently, and Theorems A2, A3, B1, and Corollary C
-   remain conditional until (d) is settled. Theorem A1 depends on neither.
+2. **The conditional theorems hold for the compiler, not for the verifier's acceptance surface.**
+   Two load-bearing facts are invariants of what the reference compiler emits rather than of what
+   `verify()` refuses. Streams never return, which closes P5's nested-stream hole and re-runs as
+   a pin on every build of the V0.2.X line, and loop bodies never pop below their entry height,
+   which is P6(d), whose verifier-level gap is executed and pinned while its emission-side zero
+   is a measurement at a commit only. A future returning stream, a code-generator change, or
+   hand-written bytecode defeats Theorems A2, A3, B1, and Corollary C without failing
+   verification. Theorem A1 depends on neither fact. Closing P6(d) structurally, by flooring the
+   typed pass's pops at loop entry, would convert the compiler property into a verifier
+   guarantee, and Section 10 records whose decision that is.
 3. **A stale internal handle is an error, not a wrong value, and no route to one was found.**
    `Op::GetField` resolves through the epoch check and faults `InvalidBytecode` on staleness. The
    V0.2.X line found no live route to a stale local and does not claim unreachability. This
@@ -352,7 +358,8 @@ addition, which is the intended forcing function.
 | loop accounting stops multiplying confined sites | `src/verify.rs:1079` | V0.2.X line | **operator**, it lowers a published worst-case-memory-usage figure |
 | branch maximum | `src/verify.rs:992` | V0.2.X line | already implemented, Theorem A1 justifies it |
 | backend stops reusing slots of unconfined sites | native backend planner | V0.3.X line | required for soundness independent of this proof, per the obligation document's Section 4.1.1 |
-| backend may overlap exclusive arms | native backend planner | V0.3.X line | licensed by Theorems A2 and A3 once P5 and P6 are confirmed |
+| backend may overlap exclusive arms | native backend planner | V0.3.X line | licensed by Theorems A2 and A3, within the compiler-emitted scope Section 8 states |
+| verifier floors operand-stack pops at loop entry, converting P6(d) from an emitted invariant into an enforced one | `src/verify_typed.rs` | V0.2.X line | **operator**, it narrows the acceptance surface of `verify()`. The measured cost is zero, no loop instance among the 588 in the shipped corpus would be rejected, and the V0.2.X line has raised the item on its own channel |
 
 This document's conclusions authorize none of these changes. Each is a request to its owning line,
 and the first is an operator decision because it weakens the crate's headline guarantee in a
@@ -365,8 +372,11 @@ this branch at `docs/decisions/COMPOSITE_REGION_EVIDENCE.md` and `tests/proof_ev
 The premise confirmations were requested from the V0.2.X line and answered by measurement on
 2026-08-23. P5 was confirmed in the corrected two-part form its row records, P6 clauses (a)
 through (c) were confirmed with the shape-not-identity reading, and P6(d) was identified in the
-same exchange and remains open. The commit carrying their `tests/stream_never_returns.rs` pin is
-to be recorded here when it lands, and rows marked read from dispatch are not to be promoted to
-executed without running them. The operator rulings relied on are the memory model, the branch
+same exchange and settled the same day as a code-generation invariant only, with the verifier's
+acceptance of a breaching shape executed, the frame-floor-is-not-the-loop-floor fact executed,
+and the zero-breach emission measurement executed at a commit with its instrumentation reverted.
+The commits carrying their `tests/stream_never_returns.rs` and `tests/loop_entry_floor.rs` pins
+are to be recorded here when they land, and rows marked read from dispatch are not to be promoted
+to executed without running them. The operator rulings relied on are the memory model, the branch
 topology, and the scope, all of 2026-08-23, and the standing rule that instruction-set
 modification requires strong justification.

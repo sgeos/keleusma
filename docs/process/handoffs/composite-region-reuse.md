@@ -33,9 +33,13 @@ Nothing in it authorizes an implementation change on either line.
 corrected two-part form, frame clearing at `Op::Reset` plus the stream-never-returns invariant,
 the latter a code-generation property pinned in their `tests/stream_never_returns.rs`. P6 clauses
 (a) through (c) confirmed, back-edge neutrality on shapes, `Break` join coverage, and callee
-unreachability. **P6(d) is open**, that a loop body never pops operand-stack entries below its
-entry height, which shape-only neutrality does not enforce. Theorems A2, A3, B1, and Corollary C
-stay marked conditional until (d) is settled and the pin commit for P5 is recorded.
+unreachability. **P6(d) settled the same day, unfavorably.** `verify()` accepts a below-entry pop
+with a same-shape replacement, pinned in their `tests/loop_entry_floor.rs`, and the emission-side
+zero over 588 shipped loop instances is a measurement at a commit with the instrumentation
+reverted, not a standing guarantee. The conditional theorems therefore hold for reference-compiled
+modules and not for arbitrary verified bytecode, and the proof's status header says so. A
+structural close, flooring the typed pass at loop entry, is recorded in the proof's Section 10 as
+an operator decision on the V0.2.X line, raised on their channel.
 
 ## Owed by this line
 
@@ -44,11 +48,8 @@ the proof was written.
 
 ## Owed to this line
 
-- **P6(d)** from the V0.2.X runtime session. Is below-entry popping inside a loop body excluded
-  by `verify()`, or only never emitted by the code generator. If the latter, a pin analogous to
-  `tests/stream_never_returns.rs` would let the proof cite it at the same standing.
-- **The commit** carrying `tests/stream_never_returns.rs`, to be recorded in the proof's
-  Section 11.
+- **The commits** carrying `tests/stream_never_returns.rs` and `tests/loop_entry_floor.rs`, to be
+  recorded in the proof's Section 11 once their gate is green. Promised by the V0.2.X session.
 
 ## Process note
 
