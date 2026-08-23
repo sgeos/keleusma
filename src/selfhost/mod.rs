@@ -5075,7 +5075,15 @@ pub struct WindowedArtifact {
 }
 
 /// Emit one region into the window and return the bytes written.
+// EIGHT ARGUMENTS, ONE OVER CLIPPY'S LIMIT, AND ALLOWED RATHER THAN GROUPED.
+// The eighth is the compiled stage, hoisted out of this function so one
+// artifact compiles `wire.kel` once instead of once per region. Grouping the
+// seven that were already here into a struct is a reasonable change and it is
+// not this one; `wire_chunks_from_input` carries the same allow for the same
+// shape of input list.
+#[allow(clippy::too_many_arguments)]
 fn window_emit(
+    stage: &Module,
     blob: &[u8],
     names: usize,
     header: &[i64; 11],
@@ -5084,7 +5092,7 @@ fn window_emit(
     cmd: i64,
     want: usize,
 ) -> Result<Vec<u8>, SelfHostError> {
-    let m = compile_src(&read_stage("kel/wire.kel"));
+    let m = stage.clone();
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
@@ -5240,6 +5248,7 @@ fn enter_wire(vm: &mut Vm<'_, '_>, shared: &mut [u8], cmd: i64) -> Result<i64, S
 /// arrives as an operand-stack error naming neither the call pattern nor the
 /// chunk count.
 fn window_emit_chunks(
+    stage: &Module,
     blob: &[u8],
     header: &[i64; 11],
     chunk_fields: &[i64],
@@ -5249,7 +5258,7 @@ fn window_emit_chunks(
     const CMD_STEP: i64 = 175;
     const FIELDS: usize = 11;
 
-    let m = compile_src(&read_stage("kel/wire.kel"));
+    let m = stage.clone();
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
@@ -5345,12 +5354,24 @@ fn window_emit_chunks(
 /// [`SelfHostError::Unsupported`] when the stage refuses a node, naming the node
 /// index and the refusal code, or when the stage faults.
 pub fn wire_consts_via_kel(module: &Module) -> Result<Vec<u8>, SelfHostError> {
+    window_emit_consts(
+        &compile_src(&read_stage("kel/wire.kel")),
+        &const_node_fields(module),
+    )
+}
+
+/// The constant forest as six words a node, in the encoder's own root order.
+///
+/// Extracted so the standalone entry point and the artifact assembler build the
+/// input the same way. Two constructions of a stage's input is the defect class
+/// this file already records against nine copies of a shared layout.
+fn const_node_fields(module: &Module) -> Vec<i64> {
     let roots = crate::wire_schema::constant_roots_of_module(module);
     let mut fields = Vec::new();
     for r in &roots {
         push_const_preorder(r, &mut fields);
     }
-    window_emit_consts(&fields)
+    fields
 }
 
 /// One constant subtree in depth-first preorder, six words a node.
@@ -5385,7 +5406,7 @@ fn push_const_preorder(c: &ConstValue, out: &mut Vec<i64>) {
 /// activation rather than replacing it, and a stage with several hundred
 /// constants exhausts the arena that way, reporting an operand-stack error that
 /// names neither the call pattern nor the constant count.
-fn window_emit_consts(node_fields: &[i64]) -> Result<Vec<u8>, SelfHostError> {
+fn window_emit_consts(stage: &Module, node_fields: &[i64]) -> Result<Vec<u8>, SelfHostError> {
     const CMD_BEGIN: i64 = 176;
     const CMD_STEP: i64 = 177;
     /// `(tag, payload, children, names_first, flags, discriminant)`.
@@ -5400,7 +5421,7 @@ fn window_emit_consts(node_fields: &[i64]) -> Result<Vec<u8>, SelfHostError> {
         });
     }
 
-    let m = compile_src(&read_stage("kel/wire.kel"));
+    let m = stage.clone();
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
@@ -5463,6 +5484,17 @@ fn window_emit_consts(node_fields: &[i64]) -> Result<Vec<u8>, SelfHostError> {
 ///
 /// [`SelfHostError::Unsupported`] when the stage refuses a record or faults.
 pub fn wire_shapes_via_kel(module: &Module) -> Result<Vec<u8>, SelfHostError> {
+    window_emit_records(
+        &compile_src(&read_stage("kel/wire.kel")),
+        &shape_fields(module),
+        4,
+        179,
+        "SHAPES",
+    )
+}
+
+/// The `SHAPES` records as four words each, from the encoder's own table.
+fn shape_fields(module: &Module) -> Vec<i64> {
     let (shapes, _) = crate::wire_schema::signature_tables(&module.signatures);
     let mut fields = Vec::with_capacity(shapes.len() * 4);
     for r in &shapes {
@@ -5471,7 +5503,7 @@ pub fn wire_shapes_via_kel(module: &Module) -> Result<Vec<u8>, SelfHostError> {
         fields.push(i64::from(r.reserved));
         fields.push(i64::from(r.size));
     }
-    window_emit_records(&fields, 4, 179, "SHAPES")
+    fields
 }
 
 /// Emit a module's `SIGNATURES` region by STREAMING, one record per call.
@@ -5484,6 +5516,17 @@ pub fn wire_shapes_via_kel(module: &Module) -> Result<Vec<u8>, SelfHostError> {
 ///
 /// [`SelfHostError::Unsupported`] when the stage refuses a record or faults.
 pub fn wire_signatures_via_kel(module: &Module) -> Result<Vec<u8>, SelfHostError> {
+    window_emit_records(
+        &compile_src(&read_stage("kel/wire.kel")),
+        &signature_fields(module),
+        4,
+        180,
+        "SIGNATURES",
+    )
+}
+
+/// The `SIGNATURES` records as four words each, from the encoder's own table.
+fn signature_fields(module: &Module) -> Vec<i64> {
     let (_, sigs) = crate::wire_schema::signature_tables(&module.signatures);
     let mut fields = Vec::with_capacity(sigs.len() * 4);
     for r in &sigs {
@@ -5492,7 +5535,7 @@ pub fn wire_signatures_via_kel(module: &Module) -> Result<Vec<u8>, SelfHostError
         fields.push(i64::from(r.ret));
         fields.push(i64::from(r.resume));
     }
-    window_emit_records(&fields, 4, 180, "SIGNATURES")
+    fields
 }
 
 /// Drive a stateless record formatter over a field stream, concatenating the
@@ -5515,6 +5558,7 @@ pub fn wire_signatures_via_kel(module: &Module) -> Result<Vec<u8>, SelfHostError
 /// [`SelfHostError::Unsupported`] when the field stream is not a whole number of
 /// records, when the stage refuses one, or when the stage faults.
 fn window_emit_records(
+    stage: &Module,
     fields: &[i64],
     per_record: usize,
     cmd: i64,
@@ -5529,7 +5573,7 @@ fn window_emit_records(
         });
     }
 
-    let m = compile_src(&read_stage("kel/wire.kel"));
+    let m = stage.clone();
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
@@ -5571,13 +5615,26 @@ pub fn wire_windowed_via_kel(
     let (blob, names) = module_input(module);
     let header = header_fields_of(module);
     let fields = chunk_fields_of(module);
+    // COMPILED ONCE FOR THE WHOLE ARTIFACT, NOT ONCE PER REGION.
+    //
+    // Each `window_emit*` used to compile `wire.kel` itself, so assembling one
+    // stage's artifact compiled a 486-function source five times -- sixty times
+    // across the corpus. `Module` is `Clone`, and cloning one is far cheaper than
+    // compiling it, so the stage is built here and cloned per virtual machine.
+    //
+    // **A GLOBAL CACHE IS NOT AVAILABLE AND THAT IS WHY THIS IS LOCAL.** The crate
+    // is `no_std + alloc`: `std::sync::OnceLock` is out of reach and
+    // `core::cell::OnceCell` is not `Sync`, so a `static` holding the compiled
+    // stage cannot be written here. Hoisting to the caller needs no static and
+    // captures the repetition that actually mattered.
+    let stage = compile_src(&read_stage("kel/wire.kel"));
     let mut out = vec![0u8; artifact_len];
     for &(kind, base, len) in regions {
         // CHUNKS TAKES THE STREAMING PATH, so the 90-record batch no longer
         // decides whether a stage is reachable. `parse` (94) and `wire` (475)
         // were the two it excluded and both emit now.
         if kind == crate::wire_schema::kind::CHUNKS {
-            let win = window_emit_chunks(&blob, &header, &fields, len)?;
+            let win = window_emit_chunks(&stage, &blob, &header, &fields, len)?;
             out[base..base + len].copy_from_slice(&win[..len]);
             continue;
         }
@@ -5591,7 +5648,7 @@ pub fn wire_windowed_via_kel(
         // a mismatch is the interesting event -- it means the root model and the
         // encoder have parted -- so it is reported rather than trimmed away.
         if kind == crate::wire_schema::kind::CONSTS {
-            let win = wire_consts_via_kel(module)?;
+            let win = window_emit_consts(&stage, &const_node_fields(module))?;
             if win.len() != len {
                 return Err(SelfHostError::Unsupported {
                     detail: alloc::format!(
@@ -5615,9 +5672,9 @@ pub fn wire_windowed_via_kel(
         if kind == crate::wire_schema::kind::SHAPES || kind == crate::wire_schema::kind::SIGNATURES
         {
             let win = if kind == crate::wire_schema::kind::SHAPES {
-                wire_shapes_via_kel(module)?
+                window_emit_records(&stage, &shape_fields(module), 4, 179, "SHAPES")?
             } else {
-                wire_signatures_via_kel(module)?
+                window_emit_records(&stage, &signature_fields(module), 4, 180, "SIGNATURES")?
             };
             if win.len() != len {
                 return Err(SelfHostError::Unsupported {
@@ -5653,6 +5710,7 @@ pub fn wire_windowed_via_kel(
             });
         }
         let win = window_emit(
+            &stage,
             &blob,
             names,
             &header,
