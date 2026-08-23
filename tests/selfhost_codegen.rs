@@ -4366,7 +4366,7 @@ fn self_host_compile(src: &str) -> Module {
         let body = if is_multihead_group(&group) {
             reconstruct_via_kel_multihead(&group, pc)
         } else {
-            let category = if group[0].cat == 3 { 2 } else { 0 };
+            let category = reconstruct_category_copy(group[0].cat);
             reconstruct_via_kel(&group[0].body, category, pc)
         };
         let (ops, pool, lc) = run_codegen(&body, pc);
@@ -9142,5 +9142,58 @@ fn a_nested_array_literal_sizes_its_outer_composite_by_its_elements() {
         checked,
         NESTED.len(),
         "not every nesting depth was compared"
+    );
+}
+
+/// This driver's OWN parse-to-reconstruct category mapping.
+///
+/// **A DELIBERATE SECOND IMPLEMENTATION, NOT AN OVERSIGHT.** This file is the
+/// copy of the driver that `tests/selfhost_driver_parity.rs` compares the
+/// shipping one against, and the five-defects-one-cause finding of 2026-08-21
+/// was entirely "the copy had a slot, tag or arm the driver did not". Calling
+/// `keleusma::selfhost::reconstruct_category` here would remove the drift and
+/// the check together.
+///
+/// It was an inline expression until 2026-08-23, which made it uncheckable from
+/// anywhere. `the_test_drivers_category_mapping_agrees_with_the_library` now
+/// pins it against the library's over the whole category domain, so the two stay
+/// independent and any divergence still fails.
+fn reconstruct_category_copy(cat: i64) -> i64 {
+    if cat == 3 { 2 } else { 0 }
+}
+
+/// The two implementations must agree everywhere, not merely on the categories
+/// the corpus happens to contain.
+///
+/// The domain is small and total, so it is swept rather than sampled: a mapping
+/// checked only at the values a corpus produces is a property of the corpus.
+///
+/// # Why this one test carries its own feature gate
+///
+/// This file is NOT gated on `self-host` — it is the standalone copy of the
+/// driver and reaches none of the library's self-hosting surface. Only this
+/// check does, because the whole point is to compare against the library's
+/// definition. Continuous integration runs a `self-host` job, so it does run
+/// there; under a feature set without it, the copy is still compiled and used
+/// and only the agreement goes unchecked.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_test_drivers_category_mapping_agrees_with_the_library() {
+    for cat in -2..=6 {
+        assert_eq!(
+            reconstruct_category_copy(cat),
+            keleusma::selfhost::reconstruct_category(cat),
+            "the driver copy and the library disagree at parse category {cat}. \
+             The copy is intentionally independent; it is not intentionally \
+             different."
+        );
+    }
+    // Non-vacuity: the mapping must actually DO something, or two constant
+    // functions would agree perfectly and prove nothing.
+    assert_ne!(
+        keleusma::selfhost::reconstruct_category(3),
+        keleusma::selfhost::reconstruct_category(1),
+        "`loop` and `fn` must not map to the same reconstruct category, or this \
+         agreement is between two constant functions"
     );
 }

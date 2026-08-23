@@ -83,6 +83,7 @@ an error.
 | `CheckedMul`'s `u8` is the Q-format fraction count | already documented; nothing to do |
 | a public API aborts the process on ordinary source | `try_parse_functions` returns the refusal; the `panic = "abort"` limit is stated, not hidden |
 | their `wcmu_region` correction | confirmed against the code; nothing of mine ever carried the wrong characterisation |
+| a `reconstruct_category()` accessor they offered | **built** — and the offer had gone unanswered, which is the one concern I had genuinely missed |
 
 **Also fixed, and I first reported its cause wrongly**: `clippy::err_expect` fails `-D warnings` on
 `tests/selfhost_parse.rs`. I told the other line it was pre-existing on the shared tree, because
@@ -119,9 +120,27 @@ Local `fmt`, `clippy` across `signatures,shell,self-host`, and all four continuo
 feature checks are clean; the full workspace suite under `self-host` is the gate and continuous
 integration is binding. Nothing is published, and publication remains held.
 
+## On the proof: my side of its premise is now measured, and one thing is NOT clear to go
+
+The `v0.3.0` line has `docs/proofs/COMPOSITE_REGION_REUSE.md` open, with the proof itself delegated.
+Two of its sections cite this line, and **one of them cited a sentence I had not measured** — that a
+host can hold a yielded composite across a resume. It is measured now and pinned, and the bound is
+tighter than I gave them: `Op::Reset` fires **once per stream cycle**, not per loop iteration, so the
+escape window spans arbitrarily many iterations and closes at the cycle boundary.
+
+**But the proof's own §6.3 is not something I have discharged.** It asks whether there are escape
+routes besides `yield`, and warns that one survivor makes the restriction *unsound* rather than
+incomplete. I have settled `yield` as a member. I have **not** enumerated the rest, and I named two
+unverified candidates to them rather than let silence read as clearance.
+
+**So: their side is ready to draft, and mine has one open obligation.** Drafting can start — the
+counterexample, the memory model and the two planners' figures are all measured — but a completed
+B1 needs that enumeration, and it is on my surface rather than theirs.
+
 ## Next intended step
 
-**Nothing without your direction.** The four options from the last handoff are unchanged and
+**Nothing without your direction**, other than the enumeration above if you want the proof unblocked.
+Otherwise: the four options from the last handoff are unchanged and
 correctly costed — bare-`for` support in `parse.kel`, Order 1 item 3's operator-expression rows, the
 six remaining region kinds, and `Op::cost()` against measurement. The floating-point ruling above
 would displace all of them if it is real.

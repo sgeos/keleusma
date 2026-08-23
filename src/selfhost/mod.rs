@@ -142,8 +142,21 @@ pub struct ParsedFn {
 }
 
 impl ParsedFn {
-    /// The declaration category (`fn`, `yield`, and so on) as `reconstruct.kel`
-    /// consumes it.
+    /// The declaration category **as `parse.kel` emits it**: `1` for `fn`, `2`
+    /// for `yield`, `3` for `loop`.
+    ///
+    /// # This is NOT the number `reconstruct.kel` consumes
+    ///
+    /// **This doc comment said "as `reconstruct.kel` consumes it" until
+    /// 2026-08-23, and that was false.** The two stages use different encodings
+    /// and the value must be mapped between them; see [`reconstruct_category`],
+    /// which is what a caller seeding the stage wants.
+    ///
+    /// The `v0.3.0` line found the discrepancy by measurement — handing this
+    /// value to the stage raw "seeds a different program" — and worked around it
+    /// with a mirrored copy of the mapping. **The documentation told them the
+    /// opposite of the truth**, which is how a correct observation still costs
+    /// someone an afternoon.
     pub fn category(&self) -> i64 {
         self.cat
     }
@@ -151,6 +164,16 @@ impl ParsedFn {
     /// The number of value parameters this head declares.
     pub fn param_count(&self) -> usize {
         self.params
+    }
+
+    /// This head's category **in `reconstruct.kel`'s encoding**, which is not
+    /// the one [`category`](Self::category) returns.
+    ///
+    /// Equivalent to [`reconstruct_category`] applied to this head; provided so
+    /// a caller holding a `ParsedFn` does not have to reach for a free function.
+    #[must_use]
+    pub fn reconstruct_category(&self) -> i64 {
+        reconstruct_category(self.cat)
     }
 
     /// The head's `when` guard as a record stream, empty when it has none.
@@ -803,6 +826,53 @@ pub fn parse_functions(
     let (names, data_records, enum_records) =
         parse_functions_impl(src, false, &mut |_, f| fns.push(f), &mut |_, _, _| {});
     (fns, names, data_records, enum_records)
+}
+
+/// Map a `parse.kel` declaration category onto the one `reconstruct.kel` and
+/// `codegen.kel` consume.
+///
+/// # There are two encodings and they do not agree
+///
+/// | declaration | `parse.kel` ([`ParsedFn::category`]) | `reconstruct.kel` / `codegen.kel` |
+/// |---|---|---|
+/// | `fn` | 1 | 0 |
+/// | `yield` | 2 | 0 |
+/// | `loop` | 3 | **2** |
+/// | multiheaded dispatch | not a single head | 3 |
+///
+/// The second column's `1` is a single-head `yield`, which this mapping does not
+/// produce, and `3` is assigned by the multihead path rather than by any single
+/// declaration. **The mapping is deliberately lossy**: `codegen.kel` closes
+/// categories 0 and 1 identically, with `Return`, so collapsing `yield` onto `0`
+/// changes no emitted op. It would stop being safe the moment those two
+/// categories diverge, which is why the loss is stated here rather than left to
+/// be rediscovered.
+///
+/// # Why this is public
+///
+/// The `v0.3.0` line needs it to seed `reconstruct.kel` on real input, and was
+/// carrying a mirrored copy having established by measurement that the raw
+/// parser category "seeds a different program". **A duplicate with a structural
+/// cause returns unless the cause is removed**, and the cause was that the
+/// consumer could not reach the original.
+///
+/// **IT WAS FIVE COPIES, NOT ONE.** Three in this file, one in
+/// `tests/selfhost_codegen.rs`, and theirs. The three here now call this
+/// function. The test's copy is left independent ON PURPOSE — it is the second
+/// implementation the driver-parity oracle compares against, and folding it in
+/// would remove the drift and the check together — so
+/// `the_test_drivers_category_mapping_agrees_with_the_library` pins the two
+/// against each other instead.
+///
+/// **THEIR DESCRIPTION OF THE MAPPING WAS "2 for a `yield` declaration and 0
+/// otherwise", AND THAT IS NOT WHAT IT DOES.** It is 2 for a `loop`. Anyone
+/// mirroring the prose rather than the code seeds `loop` as `fn` and `yield` as
+/// `loop`. That is the argument for exporting the function rather than
+/// documenting the rule.
+#[must_use]
+pub fn reconstruct_category(parse_category: i64) -> i64 {
+    // 3 is `loop` on the parse side; 2 is `loop` on the reconstruct side.
+    if parse_category == 3 { 2 } else { 0 }
 }
 
 /// What the parse pipeline refused, as a value rather than as a process abort.
@@ -1856,7 +1926,7 @@ pub fn self_host_compile(src: &str) -> Module {
         let body = if is_multihead_group(&group) {
             reconstruct_via_kel_multihead(&group, pc)
         } else {
-            let category = if group[0].cat == 3 { 2 } else { 0 };
+            let category = reconstruct_category(group[0].cat);
             reconstruct_via_kel(&group[0].body, category, pc)
         };
         let (ops, pool, lc) = run_codegen(&body, pc);
@@ -2118,7 +2188,7 @@ pub fn self_host_compile_fused(src: &str) -> Module {
         let body = if is_multihead_group(&refs) {
             reconstruct_via_kel_multihead(&refs, pc)
         } else {
-            let category = if group[0].cat == 3 { 2 } else { 0 };
+            let category = reconstruct_category(group[0].cat);
             reconstruct_via_kel(&group[0].body, category, pc)
         };
         let (ops, pool, lc) = run_codegen(&body, pc);
@@ -4145,7 +4215,7 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
         let body = if is_multihead_group(&group) {
             reconstruct_via_kel_multihead(&group, pc)
         } else {
-            let category = if group[0].cat == 3 { 2 } else { 0 };
+            let category = reconstruct_category(group[0].cat);
             reconstruct_via_kel(&group[0].body, category, pc)
         };
         let (ops, pool, lc) = run_codegen(&body, pc);

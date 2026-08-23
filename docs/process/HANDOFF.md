@@ -43,7 +43,7 @@ git merge-base --is-ancestor 5c3ba628 HEAD    # must succeed
 grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 16
 grep -c '^\s*#\[test\]' tests/selfhost_wire.rs              # 178
 grep -c '^\s*#\[test\]' tests/selfhost_parse.rs             # 89
-grep -c '^\s*#\[test\]' tests/selfhost_codegen.rs           # 140
+grep -c '^\s*#\[test\]' tests/selfhost_codegen.rs           # 141
 grep -c '^\s*#\[test\]' tests/selfhost_pool_tags.rs          # 8
 grep -c '^\s*#\[test\]' tests/selfhost_driver_parity.rs      # 4
 grep -c '^\s*#\[test\]' tests/selfhost_chained_index.rs      # 3
@@ -65,6 +65,7 @@ grep -c '^\s*#\[test\]' tests/selfhost_bare_for.rs          # 4   -- #251 IS MER
 # how a check starts failing for a reason that is not the tree.
 grep -c '^\s*#\[test\]' tests/push_order_claims.rs         # 2
 grep -c '^\s*#\[test\]' tests/selfhost_parse_refusals.rs   # 2
+grep -c '^\s*#\[test\]' tests/composite_escape_window.rs   # 3
 
 # `tests/stage_command_reach.rs` IS in the list now: #210 merged 2026-08-21.
 
