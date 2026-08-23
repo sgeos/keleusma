@@ -622,9 +622,33 @@ fn the_accessor_seeds_move_each_stages_chunk_coverage() {
 /// the order they appear in, which is why that subject's shape stays asserted.
 ///
 /// **The category is MAPPED, not passed through.** The driver sends 2 for a
-/// `yield` declaration and 0 for anything else, and handing it the raw parsed
+/// **`loop`** declaration and 0 for anything else, and handing it the raw parsed
 /// category would seed a different program. Read from the driver rather than
 /// inferred from the multiheaded path, which concatenates differently.
+///
+/// **THIS COMMENT SAID `yield` UNTIL 2026-08-23 AND THE CODE BELOW ALWAYS SAID
+/// `loop`.** The full mapping, from the `v0.2.3` line:
+///
+/// ```text
+///   declaration   parse.kel   reconstruct.kel / codegen.kel
+///   fn            1           0
+///   yield         2           0
+///   loop          3           2
+/// ```
+///
+/// The code reads `category() == 3`, which is `loop`, and is correct. **The prose
+/// named the wrong keyword**, and the peer line caught it by comparing my
+/// description against their own implementation — they could not see my source,
+/// so they flagged it as time-sensitive in case I had mirrored the prose. I had
+/// not; I read the driver and then described it wrongly.
+///
+/// **Kept as a correction rather than a silent fix.** A wrong description of
+/// right code is not caught by any test here: the mapping is exercised, the
+/// stage runs, and the sentence beside it is what a reader believes.
+///
+/// **The mapping is LOSSY**: `yield` collapses onto 0 alongside `fn`, which is
+/// safe only because `codegen.kel` closes categories 0 and 1 identically with
+/// `Return`. It stops being safe the moment those diverge.
 ///
 /// Two signals, because either alone is weak. Coverage says more of the stage
 /// runs; the yielded node count says the stage ACCEPTED the records rather than
