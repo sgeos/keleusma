@@ -38,6 +38,10 @@ const CITED_TESTS: &[&str] = &[
     "reset_is_once_per_stream_cycle_not_once_per_loop_iteration",
     "a_composite_written_to_private_data_is_copied_not_aliased",
     "nesting_a_composite_into_a_flat_one_copies_its_bytes_inline",
+    "no_compiled_stream_chunk_emits_return",
+    "a_stream_calling_a_stream_compiles_verifies_and_runs",
+    "a_loop_body_may_consume_from_below_its_entry_height",
+    "compiled_loops_really_do_carry_a_non_empty_entry_stack",
 ];
 
 /// The `src/verify.rs` citations, as (line, the text that line must contain).

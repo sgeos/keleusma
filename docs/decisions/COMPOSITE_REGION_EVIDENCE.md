@@ -130,6 +130,94 @@ have aliased and does not.
 does not arise for the transitively-scalar composites this proof concerns, but a claim phrased
 without that boundary would be false in general.
 
+### 6. What survives `Op::Reset` — **MIXED, and the reason is two-part**
+
+`Op::Reset` (`src/vm.rs`) clears every local of the **current frame** to `Unit`, truncates the
+operand stack to that frame's locals, and resets the **top** arena region only. The persistent
+region is not reclaimed, which is why data-slot copies survive.
+
+**It touches only the current frame, and `Loop` MAY call `Loop`** — `category_can_call` answers
+`true` for that pair. So a caller's frame can sit beneath the resetting frame with locals holding
+handles into the region just reclaimed. That arrangement compiles, verifies, loads and runs.
+
+**What closes it is that the callee never comes back.** A `loop` chunk ends `PopN(1); Reset` and
+emits no `Op::Return`; its only exits are `Reset`, which restarts it in place with the frame
+retained, and `Trap`. So the caller beneath is never resumed.
+
+```sh
+cargo test --test stream_never_returns
+```
+
+`no_compiled_stream_chunk_emits_return` checks five shapes and is mutation-tested;
+`a_stream_calling_a_stream_compiles_verifies_and_runs` pins the nested arrangement as CONSTRUCTIBLE,
+so the premise is not vacuous.
+
+**This is a DYNAMIC property, not a structural one.** Nothing in `verify()` forbids a `Return` in a
+stream chunk — the code generator simply never emits one. A future returning stream reopens the hole
+silently, which is why it is pinned over five shapes with the nested arrangement itself pinned as
+constructible.
+
+**State the premise as: no internal location THAT IS EVER SUBSEQUENTLY READ survives `Reset` holding
+an ephemeral handle.** Stating only the frame-clearing half makes the nested case a counterexample
+to the premise.
+
+**No internal read path bypasses the epoch check**, for ephemeral bodies — every composite-body read
+goes through `resolve` or `ArenaHandle::get`, and `nested_view` calls `handle.get` too, so sub-views
+inherit it. **Read from dispatch, not executed.** The raw-pointer paths address the persistent
+region, which is exempt by design.
+
+### 7. Loop back-edge neutrality — **READ FROM DISPATCH**
+
+`TypedError::LoopNotNeutral`, in the `Op::Loop` arm of `src/verify_typed.rs`, requires the body's
+fall-through to restore the **exact entry operand stack, height and per-slot shape**. Break edges go
+through `join_stacks`, which errors `BranchHeightMismatch` on unequal heights.
+
+**NEUTRALITY IS ON SHAPES, NOT IDENTITIES.** A body that pops a composite of shape `X` and pushes a
+*different* composite of the same shape passes. Nothing of iteration `n` survives — it was popped —
+but a premise phrased as *"the operand stack contents are identical across iterations"* is **stronger
+than what is enforced and is false**. The true form: no NEW entry survives the back edge, the shape
+is invariant, identities are not tracked.
+
+### 8. A stale local handle is an ERROR, not a wrong value — **READ FROM DISPATCH**
+
+`Op::GetField` resolves through the epoch check and maps failure to
+`VmError::InvalidBytecode("flat composite body read after arena reset (stale)")`. A local is not
+assumed same-epoch by construction.
+
+**Mind the reachability**: no route to a stale local was found, because `Reset` clears the resetting
+frame's locals and the only frame that could hold one is never resumed. This is the behaviour *if*
+one were reachable. **It is not a claim that one is, nor that none can be.**
+
+### 9. A loop body MAY consume from below its entry height — **EXECUTED, and this is a gap**
+
+Back-edge neutrality compares shapes, so a body that pops a below-entry operand and pushes a
+same-shape replacement is neutral. **`verify()` accepts that shape.** `interp_region`'s pops guard
+against an empty abstract stack — the frame floor — not against the enclosing loop's entry height.
+
+**The two floors are not the same**: **122 of 245** compiled `Loop` instructions in the shipped
+corpus carry a non-empty operand stack at entry, so the underflow guard does not incidentally cover
+the loop floor.
+
+```sh
+cargo test --test loop_entry_floor
+```
+
+`a_loop_body_may_consume_from_below_its_entry_height` pins the acceptance,
+`the_control_is_accepted_too_so_acceptance_is_not_about_the_loop_shape` is its control, and
+`compiled_loops_really_do_carry_a_non_empty_entry_stack` pins the fact that makes the gap reachable.
+
+**No compiled code does it** — zero ops breach, over 588 loop instances in 23 modules, measured by
+temporarily instrumenting the typed pass's own abstract interpretation with the instrument proven to
+fire. **That instrumentation is reverted and is NOT in the tree, so the figure is a measurement at a
+commit rather than a standing guarantee.** Cite it that way or not at all.
+
+**A linear depth scan gives the same zero and is exact for only 4 of 245 loops**, because the rest
+have branches in the body. Reporting that number would have been a flattering figure from a broken
+instrument.
+
+**Closing it structurally — flooring `verify()` at loop entry — would reject none of the 588 but
+narrows what loads**, which is an operator decision on this line rather than an agent's.
+
 ## What the verifier actually computes, and what a proof would change
 
 `wcmu_region` in `src/verify.rs` is **cumulative, with a maximum only across mutually exclusive

@@ -68,6 +68,8 @@ grep -c '^\s*#\[test\]' tests/selfhost_parse_refusals.rs   # 2
 grep -c '^\s*#\[test\]' tests/composite_escape_window.rs   # 3
 grep -c '^\s*#\[test\]' tests/composite_escape_routes.rs   # 4
 grep -c '^\s*#\[test\]' tests/proof_evidence_index.rs      # 3
+grep -c '^\s*#\[test\]' tests/stream_never_returns.rs      # 2
+grep -c '^\s*#\[test\]' tests/loop_entry_floor.rs           # 3
 
 # `tests/stage_command_reach.rs` IS in the list now: #210 merged 2026-08-21.
 
@@ -666,6 +668,12 @@ looked complete. **In every case the code was reachable and the evidence was not
 - **The interner is a PURE FUNCTION of its input**, so a re-walk is the same answer rather than a
   second one. Rely on that instead of carrying state between calls.
 - **On macOS `timeout` does not exist**; it is `gtimeout`.
+- **A SHARED CHECKOUT CHANGES WHAT A RUNNING COMMAND MEASURES, NOT JUST WHERE A COMMIT LANDS.** A
+  third session working in this directory moved HEAD to its branch mid-run; a full suite was
+  executing against a tree this line did not intend to test, and its output would have looked
+  entirely normal. **Killed rather than read.** Recovery order: back the working tree up to a patch
+  and file copies BEFORE touching git, then stash, checkout, pop, and diff against the backup. Use
+  `scripts/worktree.sh`; see `PARALLEL_DEVELOPMENT.md`.
 - **VERIFY A PUSH BY THE REF, NEVER THE HOOK OUTPUT.** A push printed "all checks passed" and did not
   land, on a dropped SSH connection.
 
