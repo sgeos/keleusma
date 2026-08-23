@@ -106,6 +106,26 @@ $$
 where $\mathrm{live}(v)$ is the set of program points at which $v$ may be read, **including reads by
 the host after control leaves the virtual machine.**
 
+### 4.0.1 THE ESCAPE SET IS BOUNDED BY `RESET`, NOT BY THE YIELD
+
+Established by the `v0.2.3` line, 2026-08-22, and **it widens the obligation materially**:
+
+> The host may hold a yielded handle, **resume**, and read it afterwards. It resolves fine until
+> `RESET`.
+
+So the naive reading — *"values live at the moment of the yield"* — is **too narrow**. The correct set
+is
+
+$$
+\mathrm{live}(v) \;=\; \{\text{points at which the host could still resolve } v\text{'s handle}\}
+$$
+
+which extends **to the next `RESET`**, across arbitrarily many intervening resumes and iterations.
+
+**A proof of B2 over the narrower reading would be unsound.** Copying "at the yield instant" does not
+discharge the obligation if the host can resolve the handle three resumes later; what must be copied
+is anything whose handle remains resolvable, and that window closes only at `RESET`.
+
 ### 4.1 THE CONDITION FAILS AS STATED — counterexample
 
 **This compiles today:**
@@ -158,11 +178,13 @@ Not "reuse is sound", but one of:
 - **B1 (restriction).** Reuse is sound for a loop body containing no `yield` and no other construct
   by which a constructed value escapes the iteration. *The escaping constructs must be enumerated and
   the enumeration justified as exhaustive* — a survivor makes the restriction unsound rather than
-  incomplete.
+  incomplete. **And "escapes" must be read per §4.0.1** — resolvable until `RESET`, not live at the
+  yield.
 - **B2 (copy).** Reuse is sound unconditionally if every escape copies out of the region. **No such
   copy exists today** (§4.1.1), so B2 is a proposal for a change rather than a description of the
   present system. It moves the obligation to the copy's correctness and its WCET cost, which is then
-  no longer free.
+  no longer free. **B2 must define "escape" over §4.0.1's wider set** — a copy at the yield instant
+  does not discharge it, because the host can resolve the handle after resuming.
 
 **A proof of B1 must not assume the language prevents escape.** The counterexample above shows it
 does not.
