@@ -25,10 +25,15 @@ against the obligation at `a49555bb` on `v0.3.0`. Per operator direction of 2026
 document is structured as a general theory over an abstract epoch-guarded bump-arena machine,
 with every Keleusma-specific fact, premise instantiation, and provenance row in appendices at the
 end. Proved generally: the branch bound, unconditional; cross-epoch arm overlap; confined-site
-slot reuse; and the composed plan. The Keleusma instantiation discharges the axioms with measured
-standing recorded per row, and two axioms rest on reference-compiler emission invariants that
-`verify()` does not enforce, so the reuse theorems apply to reference-compiled modules and not to
-arbitrary verified bytecode.
+slot reuse; the composed plan; and, by operator-directed scope expansion later the same day,
+**Theorem B2**, universal slot reuse under an escape-copy discipline, with an accounting
+corollary and a per-site hybrid corollary. The Keleusma instantiation discharges the axioms with
+measured standing recorded per row, and two axioms rest on reference-compiler emission
+invariants that `verify()` does not enforce, so the reuse theorems apply to reference-compiled
+modules and not to arbitrary verified bytecode. B2 is additionally a proved specification rather
+than a description, since no escape route copies in Keleusma today, and its six adoption
+obligations are named in the proof's Appendix C. One instantiation row is open: M1's immutability
+clause, read from dispatch, confirmation pending with the V0.2.X session.
 
 ## Owed by this line
 
