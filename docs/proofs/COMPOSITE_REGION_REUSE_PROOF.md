@@ -9,7 +9,7 @@
 > emission invariants that `verify()` does not enforce, so their conclusions apply to
 > reference-compiled modules and do NOT apply to arbitrary bytecode that merely verifies. The
 > details, including an executed verifier-accepted counterexample to structural enforcement, are
-> in Appendix A. Two pin commits remain to be recorded in Appendix E when they land.
+> in Appendix A, and the pin commits are recorded in Appendix E with their differing standings.
 
 This document discharges part of the obligation stated in `docs/proofs/COMPOSITE_REGION_REUSE.md`
 on the `v0.3.0` line, cited at commit `a49555bb`. Part I is self-contained mathematics and cites
@@ -357,8 +357,19 @@ through (c) were confirmed with the shape-not-identity reading, and M6(d) was id
 same exchange and settled the same day as a code-generation invariant only, with the verifier's
 acceptance of a breaching shape executed, the frame-floor-is-not-the-loop-floor fact executed,
 and the zero-breach emission measurement executed at a commit with its instrumentation reverted.
-The commits carrying their `tests/stream_never_returns.rs` and `tests/loop_entry_floor.rs` pins
-are to be recorded here when they land. The operator rulings relied on are the memory model, the
+Both pin files landed in the V0.2.X line's commit `435a8f6d` on `docs/proof-evidence-index`,
+their #259, verified at origin by ref, with their gate green at 2,580 passed by cargo's own exit
+status. **The two files have different standings, and reading them as five tests of one kind
+would misstate what is guaranteed.** `tests/stream_never_returns.rs` pins an **invariant** and
+re-runs on every build, `no_compiled_stream_chunk_emits_return` over five shapes,
+mutation-tested, and `a_stream_calling_a_stream_compiles_verifies_and_runs`, which pins the
+nested arrangement as constructible so the premise is not vacuous. `tests/loop_entry_floor.rs`
+pins a **gap**: `a_loop_body_may_consume_from_below_its_entry_height` asserts that `verify()`
+**accepts** the breaching shape, with its control and with
+`compiled_loops_really_do_carry_a_non_empty_entry_stack` establishing reachability at 122 of
+245. If the gap is ever closed structurally, those tests fail deliberately, with a message
+saying a proof premise moved rather than reading as a routine fix. The zero-over-588 emission
+measurement is in no commit and no tree, and remains a measurement at a commit. The operator rulings relied on are the memory model, the
 branch topology, the generality directive that produced this document's structure, and the scope,
 all of 2026-08-23, and the standing rule that instruction-set modification requires strong
 justification. An earlier revision of this document interleaved the instantiation with the
