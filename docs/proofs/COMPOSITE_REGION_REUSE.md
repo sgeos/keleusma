@@ -77,16 +77,41 @@ has never been measured.**
 
 ## 3. Theorem A — branch overlap
 
-> Let $s_i, s_j$ be sites in the *then* and *else* arms of one `if`. Then no
-> $\pi \in \Pi$ contains both. Hence a planner may assign them overlapping offsets without any
+> **⚠ THE STATEMENT BELOW IS FALSE AS WRITTEN. Corrected in §3.1 — read that first.**
+>
+> ~~Let $s_i, s_j$ be sites in the *then* and *else* arms of one `if`. Then no
+> $\pi \in \Pi$ contains both.~~ Hence a planner may assign them overlapping offsets without any
 > $\pi$ observing aliasing, and
 
 $$
 \text{plan}(\text{if } A \text{ else } B) \;=\; \max\bigl(\text{plan}(A),\, \text{plan}(B)\bigr).
 $$
 
-**Expected to be short.** It follows from control-flow exclusivity alone and needs no liveness
-argument. The verifier already implements it; the backend does not.
+~~**Expected to be short.** It follows from control-flow exclusivity alone and needs no liveness
+argument.~~ The verifier already implements it; the backend does not.
+
+### 3.1 CORRECTION — A IS TWO THEOREMS, AND ONLY ONE IS FREE
+
+**Raised by the proof session, 2026-08-23, against §1's own path model.**
+
+*"No $\pi$ contains both"* is **false whenever the conditional sits inside a loop.** $\Pi$ counts
+occurrences **with multiplicity** (§1), so one path may take the *then* arm in iteration 1 and the
+*else* arm in iteration 2 — **containing both sites as dynamic occurrences.**
+
+**A splits, and the two halves have different costs:**
+
+| form | statement | status |
+|---|---|---|
+| **bound** | $\max$ across arms **per dynamic instance** | **unconditional** — and it is what the *verifier* implements |
+| **offset-overlap** | the two arms share *addresses* | unconditional **only** for a conditional executed at most once per stream cycle, where the epoch guard covers the cross-cycle case. **Inside a loop it inherits B1's confinement condition exactly.** |
+
+**THE OFFSET-OVERLAP FORM IS THE ONE THE BACKEND WOULD ADOPT.** So the claim that A "needs no
+liveness argument" holds for the **verifier** reading and **not** for the **planner** reading — which
+is the reading this document exists to serve.
+
+**This was the document's own error, not the reviewer's.** §1 defines paths with multiplicity and §3
+then reasoned about them as if each site occurred once. The proof session's document carries both
+forms with proofs.
 
 ## 4. Theorem B — loop-body slot reuse
 
@@ -302,6 +327,17 @@ route reclassified as safe. All three fire. **The middle one matters most: it ca
 maintained against memory rather than against the enum.**
 
 ## 5. What "best" means, and what it costs
+
+**⚠ THIS SECTION PREDATES §4.3 AND §3.1. Read both before using the formula below.**
+
+**B does not hold in the form assumed here** — §4.3's `SetLocal` route defeats it, so the composition
+is Theorem A with the **restricted B1 over the five-route escape set**, not B unconditionally. And
+**A's offset-overlap form is itself conditional inside a loop** (§3.1), so the two halves do not
+compose as freely as the formula suggests.
+
+**Left visible rather than rewritten.** This line wrote the section, the proof session cannot edit
+this file from their lineage, and a formula quietly repaired after two theorems moved underneath it
+would read as though it had always been current.
 
 The strategy tighter than both planners is **Theorem A and Theorem B together**, giving
 

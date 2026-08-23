@@ -497,7 +497,7 @@ fn q3_what_does_the_memory_bound_measure() {
 /// # The mechanism, on `02_struct_field.kel::manhattan_norm`
 ///
 /// `CheckedAdd` is documented as popping two operands and pushing
-/// `(high, low, flag)` — a GROSS push of three, a NET delta of `+1`.
+/// `(low, high, flag)` — a GROSS push of three, a NET delta of `+1`.
 /// `stack_growth()` returns the **net** `1`, and `wcmu_region` uses that value
 /// as the transient rise when computing the peak. The transient is three.
 ///

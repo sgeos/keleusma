@@ -2,7 +2,7 @@
 //!
 //! `NATIVE_BOUNDS_TRANSFER.md` records that `wcmu_region` drives its own running
 //! depth negative on 17 of 826 shipped chunks, and traces one cause to
-//! `CheckedAdd`: it pushes `(high, low, flag)` — a gross push of three — while
+//! `CheckedAdd`: it pushes `(low, high, flag)` — a gross push of three — while
 //! `stack_growth()` returns the net `1`, and the peak calculation uses the net
 //! as the transient rise.
 //!
