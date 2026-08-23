@@ -172,3 +172,73 @@ fn the_full_pipeline_boundary_carries_no_bare_for_case() {
         );
     }
 }
+
+/// **THE TWO `for` FORMS ARE TWO CONSTRUCTS, NOT ONE WITH AN OPTIONAL CLAUSE.**
+///
+/// Measured before costing the work, and it changed the estimate. The bare form
+/// compiles to a plain `Loop`/`EndLoop`; the `limit` form compiles to the
+/// ForLimit machinery — counter slots, a cap, and an overflow check. For the same
+/// body the reference emits **24 ops against 68**.
+///
+/// # Why that matters for whoever closes the gap
+///
+/// "Let phase 5 skip the missing cap" is the obvious reading of the parse-stage
+/// failure and it is **wrong**. Supporting the bare form is not a relaxation of
+/// the existing loop header; it is a second lowering that `parse.kel` does not
+/// emit at all.
+///
+/// `codegen.kel` already handles the resulting nodes — four cases in the
+/// codegen-only corpus drive them from reference-parsed input — so the missing
+/// piece is confined to the front end. That is a smaller claim than "codegen
+/// supports it, so only wiring remains", and it is the accurate one.
+///
+/// # Pinned because the ratio is the cost signal
+///
+/// If the two lowerings ever converge, the work shrinks to what the earlier
+/// reading assumed and this test should fail so its author re-costs it.
+#[test]
+fn the_bare_and_limit_forms_have_different_lowerings() {
+    let ops_of = |src: &str| -> Vec<String> {
+        let m = keleusma::compiler::compile(
+            &keleusma::parser::parse(&keleusma::lexer::tokenize(src).expect("lex")).expect("parse"),
+        )
+        .expect("compile");
+        m.chunks
+            .iter()
+            .find(|c| c.name == "main")
+            .expect("main")
+            .ops
+            .iter()
+            .map(|o| format!("{o:?}"))
+            .collect()
+    };
+
+    const BODY: &str = "{ d.s = d.s + i; } d.s }";
+    let bare = ops_of(&format!(
+        "private data d {{ s: Word }}\nfn main() -> Word {{ for i in 0..4 {BODY}"
+    ));
+    let limit = ops_of(&format!(
+        "private data d {{ s: Word }}\nfn main() -> Word {{ for i in 0..4 limit 8 {BODY}"
+    ));
+
+    assert!(
+        !bare.is_empty() && !limit.is_empty(),
+        "one of the forms produced no ops, so the comparison measures nothing"
+    );
+    assert!(
+        limit.len() > bare.len() * 2,
+        "the `limit` form is {} ops against the bare form's {}. They were 68 and 24 -- a \
+         second lowering, not an optional clause. If they have converged, the parse-stage \
+         gap is smaller than recorded and should be re-costed",
+        limit.len(),
+        bare.len()
+    );
+
+    // The bare form's shape, named: a plain loop, with none of the ForLimit
+    // counter machinery. Asserted rather than inferred from the op count, because
+    // a count can coincide.
+    assert!(
+        bare.iter().any(|o| o.starts_with("Loop")),
+        "the bare form no longer lowers to a plain `Loop`: {bare:?}"
+    );
+}

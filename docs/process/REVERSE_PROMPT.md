@@ -10,9 +10,54 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-23 (Order 1 item 3 moved; one of my findings retired)
+**Date**: 2026-08-23 (session 51 close -- 32 merges, `wire.kel` explained, three costings corrected)
 
-## SESSION 51 — THE DIVERGENCE I COULD NOT EXPLAIN WAS MINE
+## SESSION 51 CLOSE — WHAT I GOT WRONG, AND WHAT IT COST TO FIND OUT
+
+**Thirty-two pull requests merged across sessions 50 and 51. Nothing is waiting on you. Publication
+remains held.**
+
+### The headline: `wire.kel` is not self-hosted, and now we know why
+
+It uses a **bare `for`** — a loop without `limit` — which `parse.kel` does not support. Everything
+downstream (a premature body close, a declaration named after a field, ``no chunk named `acc` ``) is
+mechanism. **The failure now names its cause**; tracing it took seven increments and the message
+does it in one reading.
+
+### Three costings I gave you were wrong, all in the same direction
+
+| what I said | what it is |
+|---|---|
+| "the divergence is unexplained" | it was **my own** hand-rolled derivation inheriting the defect |
+| "let phase 5 skip the missing cap" | **two lowerings** — 24 ops against 68 — not a relaxation |
+| "codegen handles it, so only wiring remains" | codegen handles the **nodes**; the front end must produce them |
+
+Each was corrected by measuring rather than reasoning. The pattern is that my estimates ran
+**small**, and that is now recorded where the next session will meet it.
+
+### The structural finding worth keeping
+
+**A construct can be covered by the wrong corpus, which reads as coverage and is not.** The bare
+`for` appears in four cases — in the corpus that drives the *reference* parser and then
+`codegen.kel`, bypassing the stage that fails. The full-pipeline table has none.
+
+### Also landed
+
+Order 1 item 1 (`CONSTS`) is **done**; item 2 is at **93% produced / 56% computed**, both figures
+derived and pinned because one flatters; item 3 **moved** — let-bound calls now reach the type
+channel. And `wire.kel` was being compiled once per *region* rather than once per artifact: hoisting
+it took the slowest test file from 108 s to 60.6 s at three times the load.
+
+### What I did not do, deliberately
+
+**I did not attempt the bare-`for` support.** It is a second lowering in Keleusma source on the
+compile path, and the byte-identity oracle covers ten stages and not `wire.kel` — so the fix and its
+corpus entry are one change. A correct cost estimate is a better handover than a half-written phase
+machine.
+
+---
+
+## SESSION 51 — THE DIVERGENCE I COULD NOT EXPLAIN WAS MINE (superseded above)
 
 **Retiring a finding I gave you.** I reported an unexplained `wire.kel` chunk-name divergence and
 excluded that stage from its corpus test. **It was my own hand-rolled derivation inheriting a

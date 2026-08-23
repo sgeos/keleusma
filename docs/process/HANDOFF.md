@@ -5,26 +5,24 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-08-23 (later) against `5c3ba628`**, every pinned value below re-measured and
-> the check block executed on that tree. **THIS FILE HAS GONE STALE WITHIN HOURS FOUR TIMES.** If
-> the dates here disagree with the three channels, trust the channels.
+> **REFRESHED 2026-08-23 (session 51 close) against `cfcff555`**, every pinned value below
+> re-measured and the check block executed on that tree. **THIS FILE HAS GONE STALE WITHIN HOURS
+> FIVE TIMES.** If the dates here disagree with the three channels, trust the channels.
 >
-> **AS OF `5c3ba628`: 123 merges on `v0.2.3`, of which 27 are sessions 50 and 51.** Stated as a
-> MEASUREMENT AT A NAMED COMMIT rather than as a running total, because three drafts of this one
-> sentence were wrong in three different ways -- a pull request counted before it merged, a command
-> that returns the branch total quoted for a session figure, and a figure that went stale between
-> being written and being committed. A number that changes every merge does not belong in prose
-> unless it is anchored. Derive it:
+> **AS OF `cfcff555`: 128 merges on `v0.2.3`, of which 32 are sessions 50 and 51.** Stated as a
+> MEASUREMENT AT A NAMED COMMIT, not a running total -- three drafts of that sentence were wrong in
+> three different ways. Derive it:
 > `git log --oneline v0.2.3 | grep -c 'Merge pull request'`.
 >
-> **ORDER 1 ITEM 1 IS DONE** (`CONSTS` self-hosted). Item 2 is at **93% produced / 56% computed**.
-> **ITEM 3 MOVED FOR THE FIRST TIME THIS SESSION**: the type channel now reaches let-bound CALLS
-> from the pipeline.
+> **#251 IS OPEN AND NOT AMONG THEM.** It carries the corrected `for`-lowering costing.
 >
-> **ONE FINDING OF MINE WAS RETIRED AND ONE SURVIVES.** Read "WHAT WAS RETRACTED" before
-> re-asserting anything about `wire.kel`.
+> **ORDER 1: item 1 DONE, item 2 at 93% produced / 56% computed, item 3 MOVED.**
 >
-> **NOTHING IS QUEUED FOR THE OPERATOR.**
+> **`wire.kel` IS NOT SELF-HOSTED AND THE REASON IS NOW KNOWN**: it uses a bare `for`, which
+> `parse.kel` does not support. Read that section before costing anything near it -- the obvious
+> reading of the symptom is wrong.
+>
+> **NOTHING IS QUEUED FOR THE OPERATOR. Publication remains held.**
 
 ## Validity
 
@@ -56,8 +54,9 @@ grep -c '^\s*#\[test\]' tests/wire_slot_layout.rs           # 2
 grep -c '^\s*#\[test\]' tests/selfhost_consts_driver.rs     # 6
 grep -c '^\s*#\[test\]' tests/selfhost_region_coverage.rs   # 5
 grep -c '^\s*#\[test\]' tests/selfhost_chunk_names.rs       # 3
-grep -c '^\s*#\[test\]' tests/parse_record_trace.rs         # 3   (new 2026-08-23)
-grep -c '^\s*#\[test\]' tests/lex_token_trace.rs            # 2   (new 2026-08-23)
+grep -c '^\s*#\[test\]' tests/parse_record_trace.rs         # 4
+grep -c '^\s*#\[test\]' tests/lex_token_trace.rs            # 2
+grep -c '^\s*#\[test\]' tests/selfhost_bare_for.rs          # 4   (+1 after #251 merges)
 
 # `tests/stage_command_reach.rs` IS in the list now: #210 merged 2026-08-21.
 
@@ -209,38 +208,59 @@ emitters. `the_computed_share_is_smaller_than_the_produced_share` asserts the ga
 Four of the six skipped kinds are blocked on a **name index the host does not hold**. The route
 exists -- `intern_index_of`, command 140 -- is itself undriven, and is O(n^2).
 
-## `wire.kel` HAS NEVER BEEN SELF-HOSTED, AND THE DIAGNOSIS IS FOUR HYPOTHESES DEEP
+## `wire.kel` IS NOT SELF-HOSTED, AND THE CAUSE IS A BARE `for` -- READ THIS BEFORE COSTING
 
-`self_host_compile(wire.kel)` **panics** with ``no chunk named `acc` ``, and **`wire.kel` is not in
-the byte-identity corpus**: `assert_stage_byte_identical` covers ten stages and `wire.kel` appears
-in the wire-format tests only as a REFERENCE-compiled input. So the largest stage in the corpus, 486
-chunks, is uncovered by the differential oracle. **Nothing regressed** -- it was never self-compiled;
-what changed is that the tree records it.
+`self_host_compile(wire.kel)` fails. **The cause is a `for` loop written without `limit`**, which
+`parse.kel` does not support: its loop header waits for the cap's integer literal, the bare form
+never supplies one, the header machine never reaches its body phase, and the braces are attributed
+to the wrong block. Everything downstream -- the premature body close, the declaration path reading
+a trailing field access as a name, the `no chunk named X` panic -- is mechanism.
 
-**THE TRIGGER IS FOUR LINES**: a `for` loop containing a data-field assignment, plus a trailing field
-read as the tail expression. The following declaration is then named after the **trailing** field --
-not the assigned one, which is the case that discriminates. Both the loop and the trailing read are
-required; the `if` is irrelevant.
+**THE FAILURE NOW NAMES ITS CAUSE**, which is what this project's thirteen named parser failure
+modes exist for. Tracing it took SEVEN increments; the message now does it in one reading.
 
-**FOUR HYPOTHESES ELIMINATED, EACH BY MEASUREMENT RATHER THAN BY EXHAUSTION:**
+### THE OBVIOUS READING OF THE SYMPTOM IS WRONG, AND IT COST A RE-COST TO FIND OUT
 
-| eliminated | how |
-|---|---|
-| the Rust driver (`in_body`, leaked record, spurious declaration) | the wrong name is in `parse.kel`'s own record stream |
-| a stale name variable in the stage | `ps.mode == 1` emits **the token's own value**; nothing is remembered between declarations |
-| a cursor rewind | `parse_cursor_trace` is monotonic for both the failing and the control case |
-| the lexer | `lex_token_trace` shows every declaration keyword followed by its own name token, `z` included |
+*"Let phase 5 skip the missing cap"* is what the failure suggests. **Measured: the bare form and the
+`limit` form are TWO LOWERINGS.** For the same body the reference emits **24 ops** for the bare form
+(a plain `Loop`/`EndLoop`) against **68** for the `limit` form (counter slots, a cap, an overflow
+check). Supporting the bare form is a SECOND LOWERING `parse.kel` does not emit at all, not a
+relaxation of the existing header. Pinned by
+`the_bare_and_limit_forms_have_different_lowerings`, so a future convergence forces a re-cost.
 
-**THREE INSTRUMENTS NOW EXIST AND ARE PUBLIC**: `parse_cursor_trace` (where it reads),
-`parse_record_trace` (what it emits), `lex_token_trace` (what it reads). Public rather than hidden
-deliberately -- a hidden instrument is one the next person does not know exists, which is how this
-defect survived three diagnoses.
+**A NARROWER CLAIM THAN THE ONE I KEPT MAKING.** "`codegen.kel` handles it, so only wiring remains"
+is too broad. Codegen handles the resulting NODES -- four cases in the codegen-only corpus drive
+them from reference-parsed input -- so the missing piece is the front end PRODUCING them. Real work,
+bounded to one stage.
+
+### WHY IT WENT UNMEASURED, AND THE CORRECTION THAT SHARPENED IT
+
+**The two corpora are not one corpus, and I asserted otherwise.**
+
+| corpus | drives | bare `for` cases |
+|---|---|---|
+| `boundary_cases()` | the WHOLE pipeline | **none** |
+| `codegen_owns_its_constant_pool_and_matches_reference` | the REFERENCE parser, then `codegen.kel` | **four** |
+
+The construct IS covered -- just not by the corpus that exercises the stage that fails. *Any
+construct the corpus does not contain is unverified by construction*, and here the uncovered thing
+is a whole stage's worth of loop.
+
+### FOUR HYPOTHESES ELIMINATED ON THE WAY, EACH BY MEASUREMENT
+
+The Rust driver (the wrong name is in `parse.kel`'s own record stream); a stale name variable
+(`ps.mode == 1` emits the token's own value); a cursor rewind (monotonic for the failing case AND
+the control); the lexer (every declaration keyword is followed by its own name token).
+
+**THREE INSTRUMENTS EXIST AND ARE PUBLIC**: `parse_cursor_trace` (where it reads),
+`parse_record_trace` (what it emits, carrying the cursor per record), `lex_token_trace` (what it
+reads). Public rather than hidden deliberately -- a hidden instrument is one the next person does
+not know exists, which is how this defect survived three diagnoses.
 
 **DO NOT ZIP THE CURSOR AND RECORD TRACES.** They sample at different rates -- 1,232 against 78 for
 the reproduction -- so pairing them by index correlates a record with an unrelated position. It
-produces a table that LOOKS like data; it attributed `y`'s header to the token `{`. Pinned by
-`the_two_traces_sample_at_different_rates_and_must_not_be_paired`. Correlating them properly needs
-the cursor sampled PER RECORD, which the record sink does not carry. **That is the named next step.**
+produces a table that LOOKS like data; it attributed a header to the token `{`. Pinned. The record
+trace now carries its own cursor, which removes the temptation rather than documenting it.
 
 ## WHAT WAS RETIRED: THE `wire.kel` CHUNK-NAME DIVERGENCE WAS MINE
 
@@ -271,7 +291,7 @@ produce that row from `binding_rows` either -- it comes from `expression_nodes_r
 **five** Rust extractions still walking the reference AST. A pipeline analogue of that extraction is
 the slice, not a tweak to the binding rows.
 
-## THE ONE LESSON THIS SESSION PAID FOR FIVE TIMES
+## THE ONE LESSON THIS SESSION PAID FOR SIX TIMES
 
 **A check built from the same model as the thing it checks confirms the model.** Three instances in
 one night, each in a different costume:
@@ -283,6 +303,7 @@ one night, each in a different costume:
 | the chunk-numbering probe | a multi-arm function | grouping and sorting COINCIDE there; only the corpus separated them |
 | the delta-debug predicate | pipeline-vs-source names | did not require a WELL-FORMED input, so it reduced to a broken program |
 | zipping two traces | record index against cursor index | they SAMPLE AT DIFFERENT RATES, so the pairing was meaningless -- and looked like data |
+| the bare-`for` corpus reader | scanned the whole file for `for .. in 0..` | matched four CODEGEN-ONLY cases and a Rust `for` loop; the claim needed the boundary TABLE, not the file |
 
 The old rule -- *"before adding a check, construct the input that makes it fire"* -- is not enough,
 because it does not say WHICH input. The working form: **the input must be the one the real change
@@ -716,44 +737,29 @@ boundary against the "Top-level struct support. Defer." ruling; the operator was
 
 ## WHAT A RESUMING SESSION SHOULD DO FIRST
 
-**Nothing is blocked.** The operator queue is empty.
+**Nothing is blocked.** The operator queue is empty and #251 is the only open pull request on this
+line.
 
-**THE HONESTLY-COSTED OPTIONS, 2026-08-23, in the order I would take them:**
+**EVERY REMAINING OPTION IS NOW CORRECTLY COSTED, AND NONE OF THEM IS SMALL.** That is the main
+thing session 51 produced beyond the merges: four estimates were checked against the code and three
+were wrong in the direction of "smaller than it is".
 
-1. **The `wire.kel` mis-naming defect.** A four-line reproduction exists and the mechanism does NOT.
-   Closing it would let the largest stage self-compile for the first time. Read
-   "`wire.kel` HAS NEVER BEEN SELF-HOSTED" above for what tracing it costs.
-2. **Order 1 item 3, the type checker's input.** The next slice is named by the tree itself: give
-   the alias row a target STRING so a let-bound call compares without comparing id spaces. It needs
-   `chunk_names_from_pipeline`, which is validated for six stages and **not** for `wire.kel` -- so
-   item 1 gates the general case, though not a first slice over the six.
-3. **The remaining six region kinds.** Low value per byte and it moves PRODUCED without moving
-   COMPUTED. Four of the six need the name index first.
+1. **Bare-`for` support in `parse.kel`.** A SECOND LOWERING, not a relaxation -- 24 ops against 68.
+   Closing it would let `wire.kel` self-compile for the first time and let it join the byte-identity
+   corpus, which currently covers ten stages and not it. **The fix and the corpus entry are ONE
+   change**: a fix verified by a corpus that excludes the affected stage is verified by nothing.
+2. **Order 1 item 3, the operator-expression rows.** `let d = 1 + 2` needs a form-2 row carrying the
+   initialiser's node index, and the reference does not produce that from `binding_rows` either --
+   it comes from `expression_nodes_resolvable`, one of FIVE Rust extractions still walking the
+   reference AST. A pipeline analogue of that extraction is the slice.
+3. **The six remaining region kinds.** Low value per byte, and it moves PRODUCED without moving
+   COMPUTED. Four of the six need a name index the host does not hold; the route
+   (`intern_index_of`, command 140) is itself undriven and O(n^2).
 4. **`Op::cost()` against measurement.** Operator's ruling: after Order 1.
 
-**DO NOT RESUME BY SWEEPING THE DRIVER FOR MORE OF THE SAME CLASS.** It is worked out on all three
-structural surfaces — decode arms, seeded slots, declaration record codes — and
-`tests/selfhost_driver_parity.rs` asserts that. The remaining yield is zero.
-
-**DO NOT RESUME BY HUNTING SILENT MISCOMPILES EITHER.** Five were closed on 2026-08-21 and the
-shipping compiler now matches the boundary on all 95 cases. The three that still differ are
-labelled and understood.
-
-The honestly-costed options, in the order I would take them:
-
-- **`CONSTS`, Order 1 item 1.** The largest remaining piece. Commands 176/177 have never run —
-  budget for validating them, and **drive them from a test first** so the stage side is proven
-  independently of the driver. `tests/stage_command_reach.rs` pins that they are unreached.
-- **The three remaining `Diverges` cases**: float arithmetic, and two composite-equality gaps
-  (`eq/struct_tuple_of_impure_struct`, `eq/struct_field_array_of_tuple`).
-- **`Op::cost()` against measurement.** `OPCODE_SPECS` covers 16 distinct opcodes of 66, so 50
-  carry estimates. Worst-case execution time is the headline claim, so this is the largest gap
-  between what is asserted and what is measured. Operator's ruling: after Order 1.
-
-**A COST-ESTIMATION LESSON WORTH CARRYING.** The chained-index specification said three coordinated
-pieces of parser machinery were needed. **Two already existed.** Check whether the code exists
-before costing work that depends on it — the same check that revealed hidden COST for commands
-176/177 revealed hidden PROGRESS here.
+**WHAT NOT TO DO.** Do not re-derive the chunk table (`first_pass` computes it), do not re-diagnose
+the `wire.kel` failure (the cause is above), and do not read "codegen handles it" as "only wiring
+remains" (it handles the NODES).
 
 ## A NOTE ON THE `/goal` MECHANISM, IF THE OPERATOR USES IT
 

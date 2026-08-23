@@ -13,6 +13,55 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE SEVEN-INCREMENT DIAGNOSIS ENDED IN AN UNSUPPORTED CONSTRUCT, AND THE OBVIOUS FIX WAS WRONG
+(2026-08-23, session 51 close).**
+
+`self_host_compile(wire.kel)` failed with `no chunk named `acc``. Seven increments traced it: the
+wrong name is in `parse.kel`'s own record stream, not the driver; `ps.mode == 1` emits the token's
+own value, so nothing is remembered between declarations; the cursor is monotonic; the tokens are
+correct; the body closes at the `for` loop's brace rather than the function's; and the declaration
+path then reads the trailing field access as a name.
+
+**ALL OF THAT IS MECHANISM. THE CAUSE IS THAT `parse.kel` DOES NOT SUPPORT A BARE `for`.** Its loop
+header waits for the cap's integer literal and the bare form never supplies one.
+
+**FOUR ELIMINATIONS WERE SOUND AND NONE WAS THE CAUSE**, because every one of them was a layer
+downstream of it. Being right about what something is NOT, four times running, is not the same as
+approaching what it is.
+
+**WHAT MADE THE LAST STEP POSSIBLE.** The cursor and record traces sample at different rates --
+1,232 against 78 -- so they could not be paired, and an attempt to zip them produced a tidy table
+attributing a header to the token `{`. Carrying the cursor IN the record removed the temptation
+rather than documenting it, and the answer was immediate.
+
+**THEN THE COSTING WAS WRONG AND MEASURING FIXED IT.** "Let phase 5 skip the missing cap" is what
+the symptom suggests. Measured: **24 ops for the bare form against 68 for the `limit` form**, a plain
+`Loop`/`EndLoop` against counter slots and an overflow check. They are TWO LOWERINGS. Supporting the
+bare form is a second lowering `parse.kel` does not emit at all.
+
+**AND A CLAIM I REPEATED FOR SEVERAL INCREMENTS NEEDED NARROWING.** "`codegen.kel` handles it, so
+only wiring remains" is too broad: codegen handles the resulting NODES, so the missing piece is the
+front end producing them.
+
+**THE CORPUS SPLIT IS THE STRUCTURAL LESSON.** I asserted the boundary carries no bare-`for` case
+anywhere; it carries four -- in the corpus that drives the REFERENCE parser and then `codegen.kel`,
+bypassing the stage that fails. The full-pipeline table has none. *Any construct the corpus does not
+contain is unverified by construction*, and the sharper form is: **a construct can be covered by the
+wrong corpus, which reads as coverage and is not.**
+
+**THE FAILURE NOW NAMES ITS CAUSE**, which is what the thirteen named parser failure modes exist
+for. Seven increments become one reading. Any OTHER mis-parsed boundary falls back to a generic
+message naming the instruments -- a guess dressed as a specific cause would be worse than the bare
+message it replaced.
+
+**ALSO THIS SESSION, AND CHEAPER THAN ANY OF THE ABOVE.** `wire.kel` was compiled once per REGION
+rather than once per artifact -- sixty compiles of a 486-function source across the corpus.
+Hoisting it took `selfhost_region_coverage` to 60.6 s at load 27, against 108 s at load 9 before. A
+global cache is impossible here (`no_std`: no `OnceLock`, and `OnceCell` is not `Sync`), which is
+why the repetition existed; that constraint is now recorded in the code.
+
+---
+
 **THE DIVERGENCE I COULD NOT EXPLAIN WAS MINE, AND FOUR HYPOTHESES DIED PROPERLY (2026-08-23).**
 
 Four increments, one thread. Recorded together because the last one retires the first one's finding
