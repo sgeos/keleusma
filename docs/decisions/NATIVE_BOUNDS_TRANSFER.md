@@ -91,7 +91,7 @@ Affected modules include the self-hosted compiler stages `analyze.kel` and `pars
 ### The mechanism, on `02_struct_field.kel::manhattan_norm`
 
 `Op::CheckedAdd` is documented in `src/bytecode.rs` as popping two operands and pushing
-`(high, low, flag)` — a **gross push of three**, a **net delta of `+1`**. `stack_growth()`
+`(low, high, flag)` — a **gross push of three**, a **net delta of `+1`**. `stack_growth()`
 returns the net `1`, and `wcmu_region` uses that value as the transient rise when computing
 `peak = max(peak, current_offset + growth)`. The transient is three.
 
@@ -221,7 +221,7 @@ validate flat offsets. Two models of one quantity, disagreeing.
 `CheckedAdd`, `CheckedSub`, `CheckedMul`, `CheckedDiv`, `CheckedMod` declare `growth = 1,
 shrink = 0`; `CheckedNeg` declares `growth = 2, shrink = 0`.
 
-**The net is correct**: each pops two and pushes `(high, low, flag)`, so `+1` is right. The
+**The net is correct**: each pops two and pushes `(low, high, flag)`, so `+1` is right. The
 defect is that `wcmu_region` uses `growth` as the **transient rise** when computing
 `peak = max(peak, current_offset + growth)`, and the transient is the **gross push of 3**, not
 the net `1`. The peak is under-counted by two at every checked-arithmetic site.

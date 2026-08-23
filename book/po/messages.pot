@@ -12063,13 +12063,7 @@ msgstr ""
 
 #: src/BIG_NUMBERS.md:19
 msgid ""
-"The runtime computes the true result of `op_expr` in `i128`, splits it into "
-"a high and a low half, and pushes `(high, low, flag)` on the operand stack. "
-"The compiler dispatches on `flag` to one of three outcome classes (`ok`, "
-"`overflow`, `underflow`) and binds the pattern variables in that arm's body "
-"to the corresponding slot values. The `ok` arm binds a single `Word` against "
-"the in-range result; the `overflow` and `underflow` arms bind two `Word` "
-"values against the high and low halves."
+"The runtime computes the true result of `op_expr` in `i128`, splits it into a high and a low half, and pushes `(low, high, flag)` on the operand stack, bottom to top. The compiler dispatches on `flag` to one of three outcome classes (`ok`, `overflow`, `underflow`) and binds the pattern variables in that arm's body to the corresponding slot values. The `ok` arm binds a single `Word` against the in-range result; the `overflow` and `underflow` arms bind two `Word` values against the high and low halves."
 msgstr ""
 
 #: src/BIG_NUMBERS.md:21

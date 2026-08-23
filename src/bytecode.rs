@@ -2207,17 +2207,41 @@ pub enum Op {
     /// offset.
     BoundsCheck(u16),
 
-    /// Binary addition.
+    /// Binary addition on `Byte`, `Fixed`, and `Float` operands.
+    ///
+    /// **THE NAME IS WIDER THAN THE OPCODE.** Consolidation B narrowed this
+    /// away from `Int`: the compiler emits `CheckedAdd; PopN(2)` for every
+    /// `Word` expression, and the virtual machine raises a type error if an
+    /// `Int` reaches here, so an `Int` operand is not merely unemitted but
+    /// inadmissible. Stated because a backend or an alternative runtime that
+    /// implements this opcode from its name alone writes an `Int` path no
+    /// compiler output ever reaches, and the `v0.3.0` line planned an
+    /// increment around exactly that before measuring it.
+    ///
+    /// **THE NARROWING IS NOT UNIFORM ACROSS THE ARITHMETIC FAMILY**, which is
+    /// the part that misleads: [`Op::Div`] and [`Op::Mod`] still take `Int`
+    /// operands and are dispatched on them. Only `Add`, `Sub`, `Mul`, and
+    /// [`Op::Neg`] were narrowed.
     Add,
-    /// Binary subtraction.
+    /// Binary subtraction on `Byte`, `Fixed`, and `Float` operands.
+    ///
+    /// Narrowed away from `Int` by Consolidation B; see [`Op::Add`] for the
+    /// reasoning and for why `Div` and `Mod` were not narrowed with it.
     Sub,
-    /// Binary multiplication.
+    /// Binary multiplication on `Byte` and `Float` operands.
+    ///
+    /// Narrowed away from `Int` by Consolidation B; see [`Op::Add`]. `Fixed`
+    /// multiplication goes through [`Op::FixedMul`] rather than this opcode,
+    /// so this one is narrower still than `Add` and `Sub`.
     Mul,
     /// Binary division.
     Div,
     /// Binary modulo.
     Mod,
-    /// Unary negation.
+    /// Unary negation on `Byte`, `Fixed`, and `Float` operands.
+    ///
+    /// Narrowed away from `Int` by Consolidation B: the compiler emits
+    /// `CheckedNeg; PopN(2)` for `-Word`. See [`Op::Add`].
     Neg,
 
     /// Equality comparison.

@@ -13,3 +13,4 @@ Decisions follow a three-file lifecycle. New questions start in PRIORITY or BACK
 | [RESOLVED.md](./RESOLVED.md) | Completed decisions with rationale |
 | [PRIORITY.md](./PRIORITY.md) | Blocking decisions awaiting resolution |
 | [BACKLOG.md](./BACKLOG.md) | Deferred decisions for future consideration |
+| [COMPOSITE_REGION_EVIDENCE.md](./COMPOSITE_REGION_EVIDENCE.md) | What the V0.2.3 runtime establishes for the composite-region-reuse proof, with provenance per claim |

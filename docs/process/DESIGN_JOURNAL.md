@@ -13,6 +13,675 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**M1: SEVEN READ ACCESSORS INTO A COMPOSITE, ZERO WRITE ACCESSORS (2026-08-23).**
+
+The proof session asked for a refutation rather than a confirmation: is there ANY opcode, host entry
+point, or native-visible path that writes into a live ephemeral composite region after
+`NewComposite` finishes? Both its reuse theorems rest on there being none.
+
+**None found, on four independent grounds** -- and the cleanest is a count derived from the
+instruction set itself. `GetField`, `GetIndex`, `GetTupleField`, `GetEnumField` project OUT of a
+composite; **not one has a `Set` counterpart.** The only stores are `SetLocal`, which rebinds a frame
+slot, and `SetData`/`SetDataIndexed`, which write the persistent region. The other three grounds:
+`FlatComposite` exposes `resolve -> &[u8]` and no mutable accessor; all four raw pointer writes in
+the virtual machine derive from `arena.persistent_ptr()`; and natives take
+`&[GenericValue]` with a `&Arena`, with no public API returning `&mut [u8]` into the arena.
+
+**THE PRECISION IS THE PART WORTH SENDING.** Their wording said "ephemeral" and is correct as
+written, but **M1 stated over "a region" unqualified is FALSE here**: `SetData` writes IN PLACE into
+an existing persistent composite, repeatedly, across resets. An abstraction pass is exactly where
+that qualifier gets dropped, and **the two interact** -- the persistent region is where the
+`CopiesOut` routes land, so the copy SOURCE is immutable and the copy DESTINATION is not. If their
+copy-equivalence argument assumes both ends immutable it needs restating; if it needs only the
+source, it stands. I asked rather than assumed which they meant.
+
+**PINNED, WITH A FAILURE MESSAGE THAT REFUSES THE OBVIOUS FIX.** A single `SetField` opcode would
+refute both theorems and **would look like an ordinary instruction-set addition to whoever added
+it**. The guard's message says so and tells the reader to contact the proof's owner rather than
+update the test.
+
+**AND THE FIRST MUTATION OF IT WAS INVALID.** Adding a real `SetField` variant to the `Op` enum broke
+every exhaustive match in the crate, so the test never ran and the grep found nothing -- a mutation
+that fails to compile proves nothing about the guard. Injecting the name into the derived list
+instead fired both assertions. **A mutation must leave the program buildable or it is not a
+mutation**, which is a distinct trap from the ones already recorded.
+
+**A SHARED CHECKOUT DOES NOT ONLY ENDANGER COMMITS. IT SILENTLY CHANGES WHAT A LONG-RUNNING COMMAND
+IS MEASURING (2026-08-23).**
+
+A third session drafting the proof was operating in **the same working directory as this one**. Two
+consequences, and the second is the one no process document had.
+
+**THE KNOWN ONE.** Its `git add -A` swept in seven uncommitted files of mine and pushed them on its
+branch; its `git checkout -b` moved my HEAD from `docs/proof-evidence-index` to its branch, so my next
+commit would have landed there. It disclosed this before I noticed, named the commit and the window,
+and had already rewritten it with **force-with-lease** rather than plain force. Verified
+independently here: `git log e9a40e32..origin/proof/composite-region-reuse` shows two commits, both
+theirs, and the transient one is unreachable from any remote branch. `PARALLEL_DEVELOPMENT.md`
+prescribes worktree isolation for exactly this and neither of us was using one.
+
+**THE ONE WORTH WRITING DOWN.** A full workspace suite was RUNNING in that directory at the time. It
+was executing against a tree whose HEAD had become another line's branch. **I killed it rather than
+read its result**, because a green number from a tree I did not intend to test is worse than no
+number -- I would have quoted it, and nothing in the output would have said which base it ran on.
+
+**NO AMOUNT OF INSPECTING GIT STATE AFTERWARDS WOULD HAVE REVEALED IT.** The working tree looked
+correct, the diff looked correct, and the suite would have printed a plausible pass count. The only
+signal was knowing that the branch had moved DURING the run.
+
+The recovery order is the transferable part: **back up the working tree to a patch and file copies
+BEFORE touching git**, then stash, checkout, pop, and **diff against the backup**. The tracked diff
+came back byte-identical and both new files matched. Waiting for the other session to move first
+would have left the work in the fragile state longer for no gain, so this line took the directory and
+said so.
+
+**COST: one gate re-run.** Cheap, and only because the branch was checked before the result was read.
+
+**P6(d): THE ANSWER IS THE UNFAVOURABLE ONE, AND MY FIRST INSTRUMENT WOULD HAVE HIDDEN IT
+(2026-08-23).**
+
+The proof session asked whether a loop body can consume an operand from BELOW its loop's entry height
+and push a same-shape replacement -- a value that survives the back edge through pure stack
+operations, touching none of the five escaping opcodes.
+
+**`verify()` ACCEPTS that shape.** Built it, ran it, pinned it. `interp_region`'s pops guard against
+an EMPTY abstract stack -- the frame floor -- not the enclosing loop's entry height.
+
+**I expected to close it with "below entry equals frame underflow, which is caught". That is FALSE**:
+**122 of 245** compiled `Loop` instructions in the shipped corpus carry a non-empty operand stack at
+entry, so for about half of them the frame floor sits strictly below the loop floor. The easy
+argument was available, plausible, and wrong.
+
+**THE INSTRUMENT I REACHED FOR FIRST WOULD HAVE PUBLISHED A FLATTERING ZERO.** A linear depth scan
+over each body says zero breaches. **It is exact for 4 of 245 loops** -- the rest have branches, and
+linear accumulation is not path depth. Only splitting exact from approximate revealed that, and the
+split was worth more than the number.
+
+**THE SOUND MEASUREMENT reused the typed pass's own abstract interpretation** -- a floor saved and
+restored around each loop body's fixpoint, checked in `apply_op` -- giving **0 breaches over 588 loop
+instances in 23 modules**, with the instrument PROVEN TO FIRE (2 on the constructed shape, 0 on its
+control). **That instrumentation is reverted and is not in the tree**, so the figure is a measurement
+at a commit rather than a standing guarantee, and it was reported to them in those words. Handing a
+proof author a number without its standing is how a premise gets over-cited.
+
+**WHAT WAS PINNED IS THE GAP, NOT THE ABSENCE.** `tests/loop_entry_floor.rs` asserts that `verify()`
+accepts the shape, with a control, and asserts the non-empty-entry fact that makes it reachable. If
+someone later floors the verifier at loop entry, the test fails and its message says a proof premise
+moved rather than reading as a routine fix. **Closing it structurally would reject none of the 588 --
+but it narrows what loads, which is an operator decision rather than an agent's**, and I declined to
+take it on a peer's request.
+
+**AND THE FIRST PROBE WAS MALFORMED, CAUGHT BY ITS CONTROL.** `EndLoop` targeting the `Loop` rather
+than the body start made both arms reject for an unrelated reason. Fourth instance this session of a
+probe measuring something other than what was intended, and the second where only the control
+separated them.
+
+---
+
+**A TEST OF MINE BROKE ANOTHER LINE'S ABSORPTION, AND THE COUPLING WAS MINE (2026-08-23).**
+
+`examples/scripts/` is a directory the `v0.3.0` line GROWS and this line's tests assert over. Their
+opcode-witness scripts took their census from 64 to 66 witnessed opcodes; each one broke
+`every_shipped_example_is_parsed_or_refused_by_name`, which pinned the directory's SIZE at eleven.
+**The failure appears only on their tree, where their corpus meets my test, and is invisible from
+here.**
+
+**The claim was never about the directory's size.** It was about which shipped examples the
+self-hosted front end refuses -- correcting a count quoted as four when it was two. Pinning the count
+said something I did not mean and coupled it to their unrelated work. The corpus is NAMED now, with
+each name asserted PRESENT so a rename or deletion still fails rather than silently shrinking what is
+checked. **Verified by reproducing their tree at seventeen scripts, not by reading their report.**
+
+**THEN I SWEPT FOR OTHERS, HAVING TOLD THEM IT WAS WORTH DOING.** Five tests walk directories. One
+more genuinely reaches their files: `no_substantial_chunk_reports_a_zero_body_peak` tolerates growth
+(a lower bound, not an equality) but asserts a PROPERTY over every script that compiles, so a witness
+script of theirs could fail it. Two others reach their tree BY DESIGN and should --
+`no_other_file_restates_the_shared_layout` and the push-order guard, the latter having already found
+four backwards sites in their files.
+
+**THE PROOF SESSION ASKED THREE QUESTIONS AND ONE OF ITS PREMISES WAS RIGHT FOR THE WRONG REASON
+(2026-08-23).**
+
+A third session, drafting the proof, asked whether anything internal survives `Op::Reset` holding an
+ephemeral handle (P5), whether a loop body can leave an operand-stack entry behind (P7), and whether
+a stale local read is an error or a wrong value.
+
+**P5 IS TRUE AND THE STATED REASON WOULD HAVE MADE IT FALSE.** `Op::Reset` clears the CURRENT
+frame's locals and truncates the stack -- but only the current frame. And `category_can_call` answers
+TRUE for `Loop -> Loop`, so a caller's frame can sit beneath the resetting one holding handles into
+the region just reclaimed. **I built that arrangement and it compiles, verifies, loads and runs.**
+
+**What actually closes it is that a `loop` chunk never returns.** Its ops end `PopN(1) Reset` and
+contain no `Return`; its only exits are `Reset`, which restarts it in place with the frame retained,
+and `Trap`. So the caller beneath is never resumed.
+
+**THAT IS A DYNAMIC PROPERTY AND NOTHING ENFORCED IT.** `verify()` does not forbid a `Return` in a
+stream chunk; the code generator simply never emits one. A returning stream would reopen the hole and
+no test would have failed. Now `tests/stream_never_returns.rs` does, over five shapes, with the
+nested arrangement pinned as CONSTRUCTIBLE so the premise cannot become vacuous. Mutation-tested by
+widening the chunk filter until a plain `fn`'s `Return` came into scope.
+
+**P7 IS ENFORCED MORE STRONGLY THAN ASKED, AND THE NUANCE IS WHERE THE DANGER IS.**
+`TypedError::LoopNotNeutral` compares the ENTIRE abstract stack, height and per-slot shape, not depth
+alone; `join_stacks` covers the `Break` edges. But **neutrality is on SHAPES, NOT IDENTITIES** -- a
+body popping a composite of shape X and pushing a different one of shape X passes. Their claim
+survives that, because iteration `n`'s entry was popped. **A premise phrased as "the stack contents
+are identical across iterations" would not**, and that is the phrasing a careful writer would reach
+for. Sent as a correction to the wording rather than to the claim.
+
+**THE GENERAL SHAPE, AND IT IS THE SESSION'S RECURRING ONE.** Both answers were "yes, but the
+supporting reason you gave is not the one that holds". A premise that is TRUE for a reason its author
+has wrong survives every test and fails the first time the wrong reason stops applying. **Confirming
+the conclusion would have been worse than useless here**, because it would have licensed the wrong
+statement of it.
+
+**AND THE EVIDENCE INDEX'S OWN GUARD FIRED AGAIN**, this time correctly and in the direction that
+matters: the document cited the new test's COMMAND but not its NAMES, so the two-way pin refused. A
+citation index that names a command and not the test it runs is one rename away from useless.
+
+**WRITING FOR A READER WHO CANNOT CHECK ME (2026-08-23).**
+
+A third session is drafting the composite-region-reuse proof. It will not have been in any of the
+exchanges that produced the evidence, will be on another branch, and **will have no way to notice
+that something I wrote has gone stale.** That changes what the document has to do.
+
+**THE THING THAT MATTERS MOST IS PROVENANCE PER CLAIM, NOT THE CLAIMS.** Two of the proof's premises
+reached the other line from here as PROSE IN A MESSAGE, and one of them had not been measured when
+it was written. It was correct and it was still unsupported by anything a reader could run. So every
+row of `docs/decisions/COMPOSITE_REGION_EVIDENCE.md` says whether it was EXECUTED or READ FROM
+DISPATCH, names the test, and gives the command. **A reader must be able to tell the two apart
+without asking me**, because asking me is exactly what they cannot do.
+
+**AND THE DOCUMENT IS GUARDED, WHICH IS THE PART I WOULD HAVE SKIPPED A MONTH AGO.**
+`tests/proof_evidence_index.rs` asserts that every test it names exists, that every `src/verify.rs:N`
+citation still contains what it claims, and that the sentences marking its LIMITS survive an edit.
+**A renamed test turns the document from evidence into a confident-sounding dead end** -- strictly
+worse than never having written it, because it would be trusted.
+
+**THE GUARD FIRED ON ITS FIRST RUN, ON MY OWN FORMATTING.** The document cited the second verifier
+line as a bare `:1087` rather than `src/verify.rs:1087`, so the citation check could not find it.
+That is the third time this session a check caught something in the thing it was written to protect
+rather than in the code, and the reason is always the same: the check was made to FAIL before it was
+believed.
+
+**THE THIRD SECTION IS THE ONE A PROOF AUTHOR ACTUALLY NEEDS AND WOULD NOT THINK TO ASK FOR.** Not
+the evidence -- the LIMITS. Four things this line has not established, including that the per-opcode
+classification is analysis rather than proof, and that nothing here says anything about the native
+backend. A document that lists only what it proves reads as stronger than it is, and the reader most
+at risk from that is the one who cannot cross-examine it.
+
+Also carried, because a fresh session cannot know it: ownership stated absolutely (`src/verify.rs` is
+this line's, so a theorem implying a change there is a REQUEST and an OPERATOR decision, since it
+LOWERS a published bound); the exact line a theorem would change; and the traps -- `data` with no
+modifier is not `private data`, `Op::Reset` ends a stream cycle rather than an iteration, and a
+`Value` carries a handle rather than bytes.
+
+**AN ENUMERATION THAT CANNOT MISS A ROUTE, BECAUSE IT STARTS FROM THE INSTRUCTION SET (2026-08-23).**
+
+The other line's proof asks whether `yield` is the only way a composite escapes the iteration that
+built it, and warns that **one survivor makes the restriction UNSOUND rather than incomplete.** That
+is a question an enumeration built by listing the routes one thinks of cannot answer, whatever it
+finds -- it has the same shape as the meta-defect this line has now recorded six times: *a suite whose
+coverage is a property of its case list, mistaken for a property of the thing under test.*
+
+**SO THE ENUMERATION STARTS FROM THE 66 OPCODES AND CLASSIFIES EVERY ONE**, with totality asserted
+against the `Op` enum read out of `src/bytecode.rs` at test time. A route can now be missed only by a
+MISCLASSIFICATION, never by an omission, and a new opcode fails the test rather than slipping through.
+That is a weaker guarantee than a proof and a much stronger one than a list.
+
+**FIVE ESCAPING ROUTES**: `Yield`, `SetLocal`, `Return`, and the two native calls. `SetLocal` is the
+one worth naming -- a binding declared OUTSIDE the loop keeps the handle after the iteration ends, and
+the opcode cannot distinguish an inner slot from an outer one, so it is classified by its worst case.
+**The two native calls are a HOST TRUST BOUNDARY this line cannot close**, and saying so is the honest
+result rather than a gap.
+
+**THE TWO "SAFE" CLASSIFICATIONS ARE BACKED BY EXECUTION, AND THAT ASYMMETRY IS DELIBERATE.** A wrong
+`Escapes` makes a restriction loose; a wrong `CopiesOut` makes it UNSOUND. So both were run rather
+than read:
+
+| claim | discriminator | result |
+|---|---|---|
+| `SetData` copies | write in cycle 1, read after two resets that reclaim the region | reads 42 every time; a stored handle would have failed `Stale` |
+| flat nesting copies | inspect the parent's resolved bytes | `[11, 22, 33]` in 24 contiguous bytes -- the child's words are inline |
+
+The `private data` form was used rather than `shared`, because a host buffer must copy by
+construction and would have proved the easy half. **The boxed nesting path DOES alias**, and that
+limit is stated instead of leaving a claim that reads as universal.
+
+**MUTATION-TESTED THREE WAYS** -- a dropped opcode, a stale entry naming a non-opcode, and an escaping
+route reclassified as safe. All three fire. The second matters most: it is what catches a table
+maintained against memory rather than against the enum, which is the failure the derivation exists to
+prevent.
+
+**AND THE `chunks_exact_to_as_chunks` LINT REAPPEARED**, on new code of mine -- the same lint that
+blocked the other line in August. Fixed rather than allowed. Second time this session that a lint the
+other line reported turned out to be reachable from this side too.
+
+**A PROOF WAS ABOUT TO REST ON A CLAIM I HAD NOT MEASURED, AND THE ACCESSOR I MISSED WAS FIVE COPIES
+(2026-08-23).**
+
+The `v0.3.0` line's `docs/proofs/COMPOSITE_REGION_REUSE.md` §4.0.1 cites this line for *"the host may
+hold a yielded handle, resume, and read it afterwards; it resolves fine until `RESET`"*, and derives
+from it that a B2 proof over the narrower "live at the yield" reading would be UNSOUND. **I supplied
+that sentence from reading the code, not from running it.**
+
+**Measured, and it holds with a tighter bound.** `Op::Reset` is emitted ONCE PER STREAM CYCLE, at the
+end of the `loop main` body -- not per `for` iteration. The op stream shows one `Reset` and a
+`Loop`/`EndLoop` pair wholly inside the cycle containing the `Yield`. A handle taken at the first
+iteration reads its own value across two further yields at epoch 0, then goes `Stale` at the `Reset`
+when the epoch becomes 1. **So the window is one stream cycle, which may contain arbitrarily many
+loop-body iterations** -- more useful than "until RESET" without saying when RESET fires.
+
+**THE ASSERTION THAT CARRIES THE THEOREM IS NOT THE ONE THAT LOOKS LIKE IT.** "The held handle still
+reads 1" passes on a runtime that yields the same value twice. The load-bearing property is that at
+the instant iteration 2 yields, the held handle and the fresh one resolve to DIFFERENT values --
+which is precisely what one reused slot collapses, since same address plus same epoch makes both
+`resolve` calls succeed and return the later value. That is a separate test, and the window CLOSING
+is asserted too, because without it the suite would pass on a runtime that never invalidates
+anything.
+
+**THEN THE ACCESSOR, WHICH WAS OFFERED AND I MISSED IT.** They had written *"if you would rather own
+it, a `reconstruct_category()` accessor would remove the copy"* and I never answered. Building it
+turned up three things.
+
+| | |
+|---|---|
+| `ParsedFn::category()`'s doc said "as `reconstruct.kel` consumes it" | **false** -- it is the PARSE category, a different encoding. They found the discrepancy by measurement and worked around it while my documentation told them the opposite of the truth |
+| their description of the mapping: "2 for a `yield` declaration" | **it is 2 for a `loop`.** Anyone mirroring the prose rather than the code seeds `loop` as `fn` and `yield` as `loop` |
+| I asserted two copies | **five** -- three in the driver, one in the test's copy of the driver, one theirs. The assert caught me; I had derived the count from a grep I read too quickly |
+
+**THE TEST'S COPY IS LEFT INDEPENDENT ON PURPOSE.** It is the second implementation the
+driver-parity oracle compares against, and the five-defects-one-cause finding was entirely "the copy
+had something the driver did not". Folding it in would remove the drift and the check together. It
+became a NAMED function rather than an inline expression -- which is what made it checkable at all --
+and an agreement guard sweeps the whole category domain instead of the values the corpus contains.
+**The mutation that makes that guard fire is exactly the other line's prose version of the mapping.**
+
+**THE RECURRING DEFECT, SEVENTH AND EIGHTH INSTANCES.** Deriving a set from the part of the system I
+was thinking about rather than from the system: two copies where there were five. And a check whose
+strength is not where it appears to be: the value-still-reads-1 assertion, which a degenerate runtime
+satisfies.
+
+**ADDRESSING THE OTHER LINE'S CONCERNS FOUND A DEFECT THEY COULD NOT SEE, AND CORRECTED A COUNT
+THEY WERE STILL QUOTING (2026-08-22).**
+
+Six findings from the `v0.3.0` line, four from their handoff and two arriving mid-increment by
+direct message. **Every one was checked against the code before being acted on**, and three of the
+six turned out to be something other than what the report said -- in both directions.
+
+**THE REPORT THAT WAS BIGGER THAN REPORTED.** They cited `GRAMMAR.md:747` claiming the checked
+opcodes push `(high, low, flag)`. That line was corrected on 2026-08-13, and the sweep it triggered
+found eight sites rather than one. **The sweep's scope was `src/`, `docs/` and `book/src/`, so it
+never reached `book/po/`** -- where the extracted catalogue still carried the superseded English and
+the JAPANESE TRANSLATION KEYED TO IT still stated the order backwards. `book.yml` builds the
+Japanese book from that catalogue. A shipped artifact was telling its reader the wrong thing for
+nine days, and the reason it survived the sweep is the reason this project keeps writing down: **a
+guard with a scope narrower than its class is the defect it prevents.** The new guard walks the tree
+and ASSERTS IT REACHED the file the old scope missed.
+
+**THE REPORT THAT WAS SMALLER THAN REPORTED.** `parse_functions` panicking on "four of the eleven"
+example scripts, cause given as a top-level `struct`. Measured: **two**, and the survivors do not
+reach the declaration path at all -- they fault inside `parse.kel` with `IndexOutOfBounds(-1, 65)`.
+The struct/trait/impl skip state closed the other two and the prose count never moved. **A number
+that lives only in prose drifts in both directions**, and this one was quoted as four after half of
+it was repaired. It is a `(script, fault)` TABLE in a test now, so closing either survivor fails
+loudly rather than going unnoticed.
+
+**THE CORRECTION THEY OWED ME, WHICH COST NOTHING BECAUSE IT NEVER LANDED.** They had characterised
+`wcmu_region` as computing peak concurrent liveness and retracted it. Checked rather than accepted:
+`heap` is `saturating_add` at every op, the `If` arm takes a max across the two branches, the loop
+multiplies by the iteration count. Cumulative with a branch max -- their retraction is right. And
+`peak concurrent liveness` appears nowhere in `src/`, `docs/` or `tests/`, so nothing needed undoing.
+
+**THE FINDING WHERE MY SURFACE HELD THE ANSWER TO THEIR OPEN QUESTION.** They found that a composite
+built inside a loop body can be YIELDED to the host, and asked whether their slot reuse hands out a
+pointer or a copy. It is a pointer: after B28 the only non-empty representation is
+`FlatComposite::Arena(ArenaHandle<[u8]>)`. **And the epoch guard does not cover it** -- `resolve`
+fails `Stale` when a RESET advances the epoch, and an overwrite in place at the same address in the
+same epoch advances nothing. So reuse would return iteration `n+1`'s bytes to a caller asking for
+iteration `n`'s: **a silent wrong value, not a `Stale` error.** Their program bounds at heap 112 here,
+decomposing exactly as `k x size`, so this line is the conservative one and the hazard is introduced
+by the reuse.
+
+**TWO OF MY OWN CHECKS COULD NOT FAIL, AND MUTATION FOUND BOTH.**
+
+| the check | why it proved nothing |
+|---|---|
+| the translation clause of the push-order guard | asked whether ANY line held the order and the Japanese for "push"; the `INSTRUCTION_SET.md` entries satisfy that alone, so emptying the paragraph it is about left it green |
+| the first `try_parse_functions` | `&payload` on a `Box<dyn Any + Send>` coerces to `&dyn Any` naming the BOX, since the box is itself `Any`; every refusal reported "the panic payload was not a string" |
+
+The second is the more instructive one. **A test asserting only that an `Err` came back would have
+passed**, and I would have shipped a fallible API whose every error message was a plausible-looking
+lie. It was caught because the pin asserts the FAULT TEXT and not merely the verdict.
+
+**AND ONE INSTRUMENT I BUILT AND THREW AWAY.** Sizing the whole translation-staleness class by
+comparing each single-reference `msgid` against its source line reported **2,329 stale of 2,926**.
+That is not a finding, it is my wrong model of `mdbook-i18n-helpers`, which extracts INLINE content
+and strips markdown syntax. Dropped rather than shipped. **A check built from the same model as the
+thing it checks confirms the model** -- seventh recorded instance, and the first where the right move
+was to delete the instrument rather than repair it.
+
+**AND A CLAIM I MADE TO THE OTHER LINE AND RETRACTED WITHIN THE HOUR.** I reported
+`clippy::err_expect` failing on `tests/selfhost_parse.rs` as PRE-EXISTING on the shared tree, and
+said it would reach them on the next absorption. **They could not reproduce it on a tree byte-identical
+to the merge base, and reported the non-reproduction rather than assuming their setup was wrong.**
+Measured: stash everything of mine, run the same command on `7d576aae`, **exit 0**. My own
+`#[derive(Debug)]` on `ParsedFn`, added minutes earlier so `ParsedProgram` could derive it, is what
+made the lint fire -- `expect_err` is `where T: Debug` on the OK type, and `T` here contains
+`Vec<ParsedFn>`, so the suggestion was inapplicable until the derive existed and clippy suppressed
+the lint until then.
+
+**THE REASONING ERROR IS THE TRANSFERABLE PART.** I concluded "pre-existing" because `git status`
+showed that file unmodified. **Lint applicability is a property of the WHOLE PROGRAM, not of the file
+the lint points at**: a trait impl added in one file turns a diagnostic on in another that nobody
+touched. "The file is unmodified" is not "my change did not cause this". Their hypothesis was right
+in mechanism and one type parameter off in attribution -- they blamed the `Err` type's missing
+`Debug` -- and they reached the right conclusion without being able to see my diff, which is the
+argument for reporting a non-reproduction instead of quietly working around it.
+
+**THE ONE THING NOT DONE, DELIBERATELY.** The other line relayed an operator ruling to extend the
+entry ABI with floating-point registers "across both sessions". `PROMPT.md` reads "No active prompt"
+and nothing reached this line directly. **A relayed ruling is not authorization**, and this file
+already records what accepting one costs: on 2026-08-21 this line took the other's reading of an
+ownership question and escalated it without reading both texts, and the reading was backwards.
+Nothing was started on `src/float.rs`, `src/marshall.rs` or the target descriptor; the ruling goes to
+the operator as an item.
+
+**THE SEVEN-INCREMENT DIAGNOSIS ENDED IN AN UNSUPPORTED CONSTRUCT, AND THE OBVIOUS FIX WAS WRONG
+(2026-08-23, session 51 close).**
+
+`self_host_compile(wire.kel)` failed with `no chunk named `acc``. Seven increments traced it: the
+wrong name is in `parse.kel`'s own record stream, not the driver; `ps.mode == 1` emits the token's
+own value, so nothing is remembered between declarations; the cursor is monotonic; the tokens are
+correct; the body closes at the `for` loop's brace rather than the function's; and the declaration
+path then reads the trailing field access as a name.
+
+**ALL OF THAT IS MECHANISM. THE CAUSE IS THAT `parse.kel` DOES NOT SUPPORT A BARE `for`.** Its loop
+header waits for the cap's integer literal and the bare form never supplies one.
+
+**FOUR ELIMINATIONS WERE SOUND AND NONE WAS THE CAUSE**, because every one of them was a layer
+downstream of it. Being right about what something is NOT, four times running, is not the same as
+approaching what it is.
+
+**WHAT MADE THE LAST STEP POSSIBLE.** The cursor and record traces sample at different rates --
+1,232 against 78 -- so they could not be paired, and an attempt to zip them produced a tidy table
+attributing a header to the token `{`. Carrying the cursor IN the record removed the temptation
+rather than documenting it, and the answer was immediate.
+
+**THEN THE COSTING WAS WRONG AND MEASURING FIXED IT.** "Let phase 5 skip the missing cap" is what
+the symptom suggests. Measured: **24 ops for the bare form against 68 for the `limit` form**, a plain
+`Loop`/`EndLoop` against counter slots and an overflow check. They are TWO LOWERINGS. Supporting the
+bare form is a second lowering `parse.kel` does not emit at all.
+
+**AND A CLAIM I REPEATED FOR SEVERAL INCREMENTS NEEDED NARROWING.** "`codegen.kel` handles it, so
+only wiring remains" is too broad: codegen handles the resulting NODES, so the missing piece is the
+front end producing them.
+
+**THE CORPUS SPLIT IS THE STRUCTURAL LESSON.** I asserted the boundary carries no bare-`for` case
+anywhere; it carries four -- in the corpus that drives the REFERENCE parser and then `codegen.kel`,
+bypassing the stage that fails. The full-pipeline table has none. *Any construct the corpus does not
+contain is unverified by construction*, and the sharper form is: **a construct can be covered by the
+wrong corpus, which reads as coverage and is not.**
+
+**THE FAILURE NOW NAMES ITS CAUSE**, which is what the thirteen named parser failure modes exist
+for. Seven increments become one reading. Any OTHER mis-parsed boundary falls back to a generic
+message naming the instruments -- a guess dressed as a specific cause would be worse than the bare
+message it replaced.
+
+**ALSO THIS SESSION, AND CHEAPER THAN ANY OF THE ABOVE.** `wire.kel` was compiled once per REGION
+rather than once per artifact -- sixty compiles of a 486-function source across the corpus.
+Hoisting it took `selfhost_region_coverage` to 60.6 s at load 27, against 108 s at load 9 before. A
+global cache is impossible here (`no_std`: no `OnceLock`, and `OnceCell` is not `Sync`), which is
+why the repetition existed; that constraint is now recorded in the code.
+
+---
+
+**THE DIVERGENCE I COULD NOT EXPLAIN WAS MINE, AND FOUR HYPOTHESES DIED PROPERLY (2026-08-23).**
+
+Four increments, one thread. Recorded together because the last one retires the first one's finding
+and the sequence is the point.
+
+**1. THE TRACE INSTRUMENT.** The mis-naming defect had been diagnosed three times and stopped short
+of a cause each time, because **the record stream the driver consumes was not observable from
+outside it**. `thread_local!` is unavailable under `no_std`, so a sink is threaded through
+`parse_functions_impl` instead. It showed the wrong name is in `parse.kel`'s OWN stream: the Rust
+driver is faithful, and `ps.mode == 1` emits the token's own value, so nothing is remembered between
+declarations either. Two hypotheses dead.
+
+**2. THE DELEGATION, AND THE RETRACTION.** `chunk_names_from_pipeline` derived the chunk numbering by
+hand. **`first_pass` already computes it** -- documented in three places, and `parse.kel` is seeded
+from that very table.
+
+I got the hand derivation wrong twice: declaration order (wrong), then sorted (right rule, still
+wrong answer). And the `wire.kel` disagreement I had recorded as *"an unexplained divergence"* and
+excluded from the corpus test **was the hand derivation inheriting the defect**, not a property of
+the numbering. Delegating makes it agree on every stage.
+
+**Sixth instance in one session of building what already existed, and the first to reach the tree.**
+The mis-naming evidence moved to `parse.kel`'s record stream, which does not depend on a derivation
+of mine.
+
+**3. THE TOKEN INSTRUMENT.** The cursor is monotonic; the tokens are correct -- every declaration
+keyword is followed by its own name token, `z` included. Two more hypotheses dead, and dead **by
+measurement rather than by exhaustion**: "it must be the tokens" would have been a conclusion from
+having ruled out everything else.
+
+**AND I TRIED TO ZIP TWO TRACES THAT SAMPLE AT DIFFERENT RATES.** 1,232 cursor samples against 78
+records. The pairing is meaningless and **it produced a tidy table** attributing `y`'s header to the
+token `{`. A wrong answer in the shape of a right one is worse than no answer, so the mismatch is
+pinned rather than left as a trap. That is the fifth instance of one lesson this session: **a check
+built from the same model as the thing it checks confirms the model.**
+
+**4. ORDER 1 ITEM 3 MOVED.** `let a = g()` reaches the type channel as a form-1 alias row carrying
+the callee's NAME. The blocker was never the pipeline -- a form-1 row carried the target's ID, and
+the two extractions do not share an id space, so comparing them would have compared the NUMBERING.
+Carrying a string removes the question rather than answering it.
+
+**The slice was small because increments 1 to 3 established the chunk table is `first_pass`'s**, not
+a second numbering. The detour paid for itself, which is not the same as the detour having been
+necessary: had I checked for an existing table first, increments 1 and 3 would still have been
+needed and increment 2 would not.
+
+**WHAT REMAINS, SIZED HONESTLY.** An operator expression needs a pipeline analogue of
+`expression_nodes_resolvable` -- one of FIVE Rust extractions still walking the reference AST. That
+is a slice, not a tweak, and it is not started rather than started badly.
+
+---
+
+**A DERIVATION CHECKED AGAINST A CASE CHOSEN TO EXERCISE IT IS CHECKED AGAINST THE AUTHOR'S MODEL OF
+IT (2026-08-22).**
+
+Coverage work had reached diminishing returns, so this increment moved to the remaining Order 1
+item: the type checker's INPUT. The tree names its own next slice -- give the alias row a target
+STRING, so `let a = g()` can be compared without comparing id spaces -- and that needs a `Call`
+node's CHUNK INDEX turned back into a name.
+
+**THE NUMBERING WAS WRONG TWICE, AND IT IS ONLY KNOWN BECAUSE IT WAS CHECKED RATHER THAN SHIPPED.**
+
+First derivation: consecutive same-named heads in declaration order, reasoning from the grouping
+`self_host_compile_fused` flushes on. That grouping is real -- a multi-arm function is one chunk --
+and it is **not the numbering**. The real rule is **sorted by name**, confirmed by `entry_point:
+Some(14)` being `main`'s position in `lexer.kel`'s sorted table.
+
+**The failure mode is the interesting part.** The wrong derivation produced the right chunk COUNT and
+the right SET of names in the wrong ORDER. Every `Call` node would have resolved to some other
+function's name, and nothing about the count or the set would have looked wrong.
+
+**AND IT PASSED THE PROBE I WROTE FOR IT.** The multi-arm case -- two `fn f` heads plus `main` --
+was written specifically to exercise the grouping rule, and there grouping and sorting COINCIDE.
+Only the real corpus separated them.
+
+That is last increment's mutation lesson in a different costume. There, the mutation took the shape
+the guard expected. Here, the probe took the shape the derivation expected. **The general form: a
+check built from the same model as the thing it checks confirms the model.** The corpus caught both
+because the corpus was not written by that model.
+
+**THEN IT SURFACED SOMETHING NOT RESOLVED, AND THE INCREMENT STOPPED THERE.**
+
+With sorting fixed, `wire.kel` still diverges, in a specific and reproducible shape: the chunk COUNT
+agrees exactly at 486, `crc_end` and `parse_prologue` are absent from the pipeline, and `acc` and
+`dis` are present in it. **`acc` and `dis` are FIELDS of private data blocks**, at lines 157 and 163;
+`crc_end` is at 215 and `parse_prologue` at 403. Each missing function follows a data block whose
+field turns up in its place.
+
+That pairing is suggestive and it is **not a diagnosis**, so it is pinned rather than repaired, with
+its exact shape asserted so a CHANGE in the divergence is not mistaken for the divergence being
+unchanged.
+
+**AND THEN THE SENTENCE THAT FOLLOWED IT HERE WAS WRONG.** This entry first read *"the compile path
+is unaffected -- `wire.kel` self-compiles byte-identically -- so what diverges is the per-function
+METADATA, not the stream"*, and told the reader byte identity forbade any stronger conclusion.
+**I invented that.** Measured within the hour:
+
+* `self_host_compile(wire.kel)` **panics** with ``no chunk named `acc` ``. The mis-named declaration
+  has no chunk to attach to, so the defect reaches the COMPILER, not merely the metadata beside it.
+* **`wire.kel` is not in the byte-identity corpus.** `assert_stage_byte_identical` covers ten stages
+  -- `lexer`, `parse`, `reconstruct`, `codegen`, `analyze` and the five `verify_*`. `wire.kel`
+  appears in the wire-format tests only as a REFERENCE-compiled input, which never runs the
+  self-hosted compiler over it. Nothing was contradicting the claim because nothing was checking it.
+
+**The correction is a bigger finding than the original.** The largest stage in the corpus, 486
+chunks, has never been self-hosted, and the tree did not say so. *Any construct the corpus does not
+contain is unverified by construction* -- the lesson that produced the boolean-literal and
+`Byte`-cast miscompiles -- and here the uncovered thing is an entire stage.
+
+**Nothing regressed.** `wire.kel` was never self-compiled, so no capability was lost; what changed is
+that the tree now records it, in
+`the_self_hosted_compiler_cannot_yet_compile_wire_kel` with `lexer.kel` as the control that keeps it
+a statement about `wire.kel` rather than about the compiler.
+
+**AND THE TRIGGER IS NOW FOUR LINES**, reduced by delta-debugging: a `for` loop containing a
+data-field assignment, plus a trailing field read as the tail expression. Three hypotheses I held
+were each disproved by a variant -- the body's shape, the operator, the single-field data block. Both
+the loop and the trailing read are required; the `if` is irrelevant.
+
+**The delta-debug itself needed a precondition it did not start with.** The first reduction produced
+three lines of a MALFORMED program that "diverged" because the pipeline could not parse it at all. A
+predicate that does not require a well-formed input finds the nearest crash, not the defect under
+study. That is the same shape as the mutation and the probe before it: **a check built without the
+right precondition confirms something other than what it names.**
+
+**A VACUITY GUARD THAT ONLY THE EXCLUDED CASE SATISFIED.** Scoping `wire` out of the corpus test
+dropped it below a `total_chunks > 500` guard -- because `wire.kel`'s 486 chunks were carrying that
+guard almost single-handedly. A guard the one excluded stage satisfied on its own was guarding the
+wrong thing. Moved to 200 and the reason recorded, rather than quietly lowered.
+
+---
+
+**I MUTATION-TESTED A GUARD AND IT STILL COULD NOT FIRE (2026-08-22).**
+
+The most useful thing that happened this increment was catching myself.
+
+`SHAPES` and `SIGNATURES` are now emitted by Keleusma, byte-identical for every stage, taking the
+produced share of the corpus from **81% to 93%**. Both regions' fields are ENCODER DECISIONS -- which
+`SHAPES` index a return type took, which run a parameter list occupies -- so the host cannot derive
+them, and `signature_tables` is now one definition that `add_signatures` CONSUMES. Same route as
+`constant_roots`, and it applies more cleanly here because the whole assignment is a pure function
+of one input.
+
+**THEN THE GUARD DID NOT FIRE.** `the_driver_does_not_yet_reach_the_record_formatters` asserted the
+driver does not reach commands 179 and 180. The driver now drives both. **The test kept passing.**
+
+It searched for the declaration form `i64 = 179`; the driver passes the number as a literal
+argument, `window_emit_records(&fields, 4, 179, "SHAPES")`.
+
+**Third instance of "a guard that cannot fire is worse than none" on this line, and the second I
+have committed** -- one increment after writing that very rule into the tree, and after
+mutation-testing this guard before trusting it.
+
+**THE MUTATION IS WHERE THE REAL LESSON IS, AND IT IS NEW.** I did test it. I mutated by adding
+`const CMD_DS: i64 = 178;` to the driver, and the guard fired. But that is **the exact form the
+guard already matched**. I constructed the input my checker expected rather than the input the real
+change would produce, so the mutation confirmed my assumption instead of testing it.
+
+The rule I had was *"before adding a check, construct the input that makes it fire."* It is not
+enough, and the sharper form is: **the mutation must take the shape the real change would take, not
+the shape the guard expects.** A green mutation says nothing when the mutation was written by the
+same assumption as the guard.
+
+The replacement derives every number the driver names, with comments stripped, and all three
+directions were exercised: driving 178 as a literal argument fires it, ceasing to drive 180 fires
+it, and a comment mentioning 178 does NOT -- the too-loose direction, which this line has four
+recorded instances of.
+
+**A SECOND SELF-CORRECTION: THE COMPUTED SHARE IS 56%, AND I PUBLISHED 57%.** `94,120` of `165,208`
+is 56.97%; the test truncates and reports 56. Three process documents and two pull-request bodies
+said 57% -- an honest rounding of the same measurement, and not the number the tree asserts. A prose
+figure that disagrees with its own test is how every stale-figure incident here began, so both forms
+are now stated in the test itself.
+
+**Determined by measurement rather than arithmetic.** Two census tests should have failed on the new
+coverage and did not -- my bands absorbed the change, leaving stale figures in their messages. Rather
+than compute the new numbers from the region sizes I remembered, I set deliberately tight bounds and
+let one run either confirm them or print the truth. It printed the truth.
+
+**AND THE CENSUS COST IS FINALLY MEASURED: 140 SECONDS**, on a quiet machine. The earlier figures --
+108 s, 747 s, 925 s -- were all contended by the `v0.3.0` line's suite in a sibling worktree, and the
+tree said so rather than quoting one.
+
+**COVERAGE, WITH BOTH FIGURES, BECAUSE ONE OF THEM FLATTERS.** Produced **93%**; computed **56%**,
+unchanged. `SHAPES` and `SIGNATURES` are *encoded but not derived*: Keleusma decides every byte of
+the record layout and the host decides the values. Six kinds remain skipped, four of them blocked on
+a name index the host does not hold.
+
+---
+
+**FOUR MORE COMMANDS THAT HAD NEVER RUN, AND THE 81% SPLIT INTO WHAT IT ACTUALLY IS (2026-08-22).**
+
+Eight region kinds are still skipped by the windowed assembler. Before costing the wiring I looked
+up what the stage already has, which is the check that has paid off four increments running.
+
+**`emit_in_window` dispatches EIGHTEEN region kinds generically**, so the Keleusma side is not the
+gap for any of them. And commands **178 to 181** — `ds_stream_step`, `sh_stream_step`,
+`sg_stream_step`, `ev_stream_step` — are one-record-per-call formatters for exactly the three kinds
+that exceed a single `fin` batch (`SHAPES` at 341 records, `SIGNATURES` at 486, `DATA_SLOTS` at 388)
+plus `ENUM_VARIANTS`.
+
+**Nothing in Rust named any of the four numbers.** Fourth instance of this shape, after `Op::Reset`,
+`Op::IsStruct`, and commands 176/177. Reading "streaming commands already exist" alongside "the
+stage has an emitter for every kind" makes the remaining work look like wiring; it was wiring plus
+validating never-executed code, and only searching for callers surfaced that.
+
+All four now execute and each formats a record the reference agrees with, **mutation-verified in
+both directions** — swapping `ret` and `resume` in `sg_stream_step` and zeroing the run field in
+`ds_stream_step` each fail by their own region's name.
+
+**THE FIELD VALUES COME FROM THE REFERENCE, AND THAT IS CORRECT FOR THIS CLAIM.** `wire.kel` says
+in its own comment above these four: *"COVERAGE IS WHAT THESE ARE, WHICH IS FORMATTING ... counting
+them beside `NAMES` would overstate what is self-hosted."* The question under test is whether the
+stage lays a record out the way the format specifies, not whether Keleusma can derive the values. A
+test feeding values Keleusma computed would be testing something these commands do not do.
+
+**THE WIRING DEPENDENCY, MEASURED RATHER THAN ASSUMED.** `DATA_SLOTS` and `ENUM_VARIANTS` records
+carry a NAME INDEX, and the host does not hold the interner's numbering — the stage computes
+`NAMES` internally and returns bytes. The route exists (`wire.nmap`, exposed as `intern_index_of`,
+command 140) and it is **O(n²)**: it re-interns the whole name set per query, and nothing in Rust
+drives it either. `SHAPES` and `SIGNATURES` carry no name index but do carry the encoder's own index
+assignment — which `SHAPES` slot a return type took, which `PARAM_TYPES` range a parameter list
+occupies. Recorded rather than started, because that is a fifth uncosted dependency and the
+previous four all moved on contact.
+
+**THE 81% IS NOT ALL ONE THING.** "The self-hosted path produces 81% of the corpus's region bytes"
+invites a stronger reading than it supports, and wiring the formatters would raise it toward 97%
+without raising what the compiler DERIVES by a single byte. So the census now pins both:
+
+| standing | regions | share |
+|---|---|---|
+| **computed** — the stage derives every byte | `NAMES`, `STRING_POOL`, `CONSTS` | **57%** |
+| **mixed** — name index and range cursors computed, ten fields host-supplied | `CHUNKS` | |
+| **encoded, not derived** | `HEADER` | |
+| produced, all standings | | **81%** |
+
+The test asserts the computed share stays **strictly below** the produced share, so a future slice
+that raises coverage by formatting cannot quietly present it as derivation.
+
+**THE PREVIOUS ITERATION'S LESSON, APPLIED RATHER THAN RECORDED.** The reach guard for 176/177
+could not fire because it searched for the stage's function names while the driver addresses
+commands by number. The new guard for 178–181 searches for the numbers **and was made to fire** by
+adding a matching declaration to the driver before being trusted.
+
+---
+
 **THE COVERAGE CLAIM WAS A SENTENCE CHECKED BY A TEST THAT LISTED THE SAME SENTENCE (2026-08-22).**
 
 The self-hosted emit path's coverage lived in prose: a doc comment naming four region kinds, and a

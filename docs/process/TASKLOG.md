@@ -10,6 +10,250 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-23, late). P6(d) IS A REAL GAP, AND A TEST OF MINE BROKE THEIR ABSORPTION.**
+>
+> **`verify()` ACCEPTS a loop body that consumes below its entry height** and pushes a same-shape
+> replacement. `interp_region` floors at the FRAME, not at the loop entry, and the two differ:
+> **122 of 245** compiled loops carry a non-empty entry stack. Pinned in `tests/loop_entry_floor.rs`
+> as a GAP, with a control.
+>
+> **No compiled code does it** -- 0 breaches over 588 loop instances -- but measured with TEMPORARY
+> instrumentation of the typed pass, now reverted. **A measurement at a commit, not a standing
+> guarantee**, and reported as such. A linear scan gives the same zero and is exact for only 4 of 245.
+>
+> **`examples/scripts/` is grown by `v0.3.0` and asserted over here.** My size pin at eleven broke
+> their absorption 5; the corpus is NAMED now, verified by reproducing their tree at seventeen.
+> Swept the other four directory-walking tests: one more asserts a property over their files.
+
+> **Currency note (2026-08-23, night). THE PROOF SESSION'S THREE QUESTIONS, ANSWERED BY MEASUREMENT.**
+>
+> **P5 was true for the wrong reason.** `Op::Reset` clears only the CURRENT frame, and
+> `category_can_call` permits `Loop -> Loop`, so a caller's frame CAN sit beneath the resetting one
+> holding stale handles -- that arrangement compiles, verifies and runs. **What closes it is that a
+> `loop` chunk emits no `Return`**, a DYNAMIC property nothing enforced. Now pinned over five shapes
+> in `tests/stream_never_returns.rs`, with the nested case pinned as constructible.
+>
+> **P7 is enforced more strongly than asked** -- `LoopNotNeutral` compares the whole abstract stack,
+> height and per-slot shape; `join_stacks` covers `Break`. **But neutrality is on SHAPES, NOT
+> IDENTITIES**, so "the stack contents are identical across iterations" would be a false premise.
+>
+> **A stale local read is an ERROR** (`InvalidBytecode`, "read after arena reset"), not a wrong
+> value -- with the reachability caveat that no route to one was found.
+>
+> All three added to `COMPOSITE_REGION_EVIDENCE.md` with provenance split stated per row.
+
+> **Currency note (2026-08-23, evening). AN EVIDENCE INDEX FOR THE THIRD SESSION.**
+>
+> **132 merges on `origin/v0.2.3`** (#257 landed at `639f970f`).
+>
+> A third session is drafting the composite-region-reuse proof. `docs/decisions/
+> COMPOSITE_REGION_EVIDENCE.md` collects what this line established for it, **separating EXECUTED
+> claims from READ ones per row**, naming the test and command behind each, stating ownership
+> absolutely, naming the exact `src/verify.rs` line a theorem would change, and listing four things
+> this line has NOT established.
+>
+> `tests/proof_evidence_index.rs` pins it: every named test must exist, every `src/verify.rs:N`
+> citation must still contain what it claims, and the sentences marking its limits must survive.
+> **A stale citation would turn the document into a confident-sounding dead end** for a reader on
+> another branch who cannot notice. The guard fired on its first run, on the document's own
+> formatting.
+
+> **Currency note (2026-08-23, later). THE PROOF'S §6.3 OBLIGATION IS DISCHARGED FROM THIS SIDE.**
+>
+> **131 merges on `origin/v0.2.3`** (#255 landed 22 of 22 at `b94fcfe7`).
+>
+> `tests/composite_escape_routes.rs` answers the other line's *"are there escape routes besides
+> `yield`?"* **by enumerating all 66 opcodes rather than by listing the routes one thinks of.** The
+> classification is asserted TOTAL against the `Op` enum read out of `src/bytecode.rs`, so a route
+> can be missed only by MISCLASSIFICATION, never by omission, and a new opcode fails the test.
+>
+> **FIVE ESCAPING ROUTES**: `Yield`, `SetLocal`, `Return`, `CallVerifiedNative`,
+> `CallExternalNative`. The last two are a HOST TRUST BOUNDARY this line cannot close and are
+> classified as escaping because they must be assumed to be.
+>
+> **THE TWO "SAFE" CLAIMS ARE BACKED BY EXECUTION**, because a wrong one makes the restriction
+> unsound rather than loose. A composite written to a `private data` slot survives two resets that
+> reclaim its construction region, so the slot holds a COPY. A composite nested into a flat composite
+> appears as words packed inline in the parent's own 24 bytes, so nesting copies. The boxed path does
+> alias and that limit is stated rather than assumed away.
+>
+> Mutation-tested three ways: a dropped opcode, a stale non-opcode entry, and a reclassified escaping
+> route each fire.
+
+> **Currency note (2026-08-23, session 52 continued). THE PROOF'S PREMISE IS NOW MEASURED, AND THE
+> ONE UNANSWERED OFFER IS BUILT.**
+>
+> **130 merges on `origin/v0.2.3`** (#253 landed 22 of 22 at `67ade006`).
+>
+> **`tests/composite_escape_window.rs`** pins the premise `COMPOSITE_REGION_REUSE.md` §4.0.1 cites
+> this line for. `Op::Reset` is **once per stream cycle**, not per `for` iteration, so the escape
+> window spans arbitrarily many loop-body iterations and closes at the cycle boundary. The
+> load-bearing test is that two iterations' composites are **live together and distinct**, which is
+> what slot reuse collapses; "the handle still reads 1" passes on a degenerate runtime.
+>
+> **`reconstruct_category()` is built and public.** The other line offered it and the offer went
+> unanswered. Building it found that `ParsedFn::category()`'s doc comment was **false** (it returns
+> the PARSE category, not the reconstruct one), that the other line's prose description of the
+> mapping names the wrong declaration form, and that it was **five copies, not the two I asserted**.
+> The test driver's copy stays independent as the parity oracle, with an agreement guard.
+>
+> **STILL NOT STARTED**: the floating-point entry ABI. Operator item.
+
+> **Currency note (2026-08-22, session 52). THE OTHER LINE'S CONCERNS ARE ADDRESSED, AND ONE OF THEM
+> WAS A LIVE DEFECT IN A SHIPPED ARTIFACT.**
+>
+> **129 merges on `v0.2.3`** as of `7d576aae` (#251 landed at 22 of 22). Derive it:
+> `git log --oneline origin/v0.2.3 | grep -c 'Merge pull request'`. **NOTE THE REF**: the previous
+> note's command read the LOCAL `v0.2.3`, which lags and answers 127 for the same tree.
+>
+> Six findings from the `v0.3.0` line, four from their handoff and two by direct message. **Three
+> were something other than what the report said, in both directions**, and every one was checked
+> against the code before being acted on.
+>
+> **BIGGER THAN REPORTED.** Their `GRAMMAR.md` push-order citation was closed in English on
+> 2026-08-13 by a sweep of eight sites — **whose scope was `src/`, `docs/` and `book/src/`, so it
+> never reached `book/po/`.** The Japanese translation still stated the order backwards and
+> `book.yml` builds the Japanese book from it. Fixed; `tests/push_order_claims.rs` walks the whole
+> tree and asserts it reached the file the old scope missed.
+>
+> **SMALLER THAN REPORTED.** `parse_functions` aborting on "four of eleven" example scripts is
+> **two**, and the survivors fault inside `parse.kel` rather than at the declaration path, so the
+> recorded cause (a top-level `struct`) explains neither. Now a `(script, fault)` table in
+> `tests/selfhost_parse_refusals.rs`, not a number in prose.
+>
+> **THEIR OPEN QUESTION, ANSWERED FROM THIS SURFACE.** A yielded composite is an epoch-guarded arena
+> handle, not a copy, and **the epoch guard does not cover an overwrite in place** — it fires on
+> `RESET`. Slot reuse across iterations would return the wrong bytes SUCCESSFULLY.
+>
+> **NEW PUBLIC API**: `try_parse_functions` -> `Result<ParsedProgram, SelfHostParseError>`. The
+> `panic = "abort"` limit is documented rather than hidden.
+>
+> **TWO OF MY OWN CHECKS COULD NOT FAIL AND MUTATION FOUND BOTH**; one would have shipped a fallible
+> interface whose every error message was wrong, because `&payload` on a `Box<dyn Any + Send>` names
+> the box rather than its contents.
+>
+> **NOT STARTED, DELIBERATELY**: the floating-point entry-ABI ruling relayed from the other line.
+> `PROMPT.md` reads "No active prompt"; a relayed ruling is not authorization. It is in
+> `REVERSE_PROMPT.md` as the one item needing the operator.
+>
+> **A CLAIM MADE AND RETRACTED WITHIN THE INCREMENT**: `clippy::err_expect` failing on
+> `tests/selfhost_parse.rs` was reported to the other line as pre-existing on the shared tree,
+> because `git status` showed the file unmodified. **The pristine tree passes at exit 0.** My own
+> `Debug` derive on `ParsedFn` made the lint's suggestion applicable. **`git status` answers whether
+> I edited a file, not whether I caused a diagnostic in one.**
+
+> **Currency note (2026-08-23, session 51 close). `wire.kel` EXPLAINED; THREE COSTINGS CORRECTED.**
+>
+> **32 merges across sessions 50 and 51** (128 on the branch as of `cfcff555`; #251 open). Order 1:
+> item 1 DONE, item 2 at **93% produced / 56% computed**, item 3 MOVED (let-bound calls reach the
+> type channel as alias rows carrying the callee's name).
+>
+> **`wire.kel` is not self-hosted because it uses a BARE `for`**, which `parse.kel` does not support.
+> The premature body close, the field-named declaration and the `no chunk named X` panic are all
+> mechanism. The failure now names its cause.
+>
+> **THE OBVIOUS FIX IS WRONG.** "Let phase 5 skip the missing cap" — measured, the bare form is
+> **24 ops** (plain `Loop`) against the `limit` form's **68** (counters, cap, overflow check). Two
+> lowerings. Pinned by `the_bare_and_limit_forms_have_different_lowerings`.
+>
+> **A construct can be covered by the WRONG corpus.** Four bare-`for` cases exist — in the corpus
+> driving the reference parser then `codegen.kel`, bypassing the failing stage. The full-pipeline
+> table has none.
+>
+> Three public instruments now exist: `parse_cursor_trace`, `parse_record_trace` (carrying the
+> cursor per record), `lex_token_trace`. **Do not zip the first two** — different sampling rates.
+>
+> Also: the stage is compiled once per artifact rather than once per region;
+> `selfhost_region_coverage` runs 60.6 s at load 27 against 108 s at load 9 before.
+
+> **Currency note (2026-08-23, later). ORDER 1 ITEM 3 MOVED, AND ONE OF MY FINDINGS IS RETIRED.**
+>
+> **Retired**: the `wire.kel` chunk-name divergence. It was `chunk_names_from_pipeline` deriving the
+> numbering by hand and inheriting a defect; `first_pass` already computes that table, documented in
+> three places. Delegating makes it agree on every stage, and `wire` is back in its corpus test.
+> Sixth instance this session of building what already existed, and the first to reach the tree.
+>
+> **Survives, four hypotheses deep**: `self_host_compile(wire.kel)` panics and `wire.kel` is absent
+> from the byte-identity corpus. Eliminated by measurement -- the Rust driver, a stale name
+> variable, a cursor rewind, the lexer. Three public instruments now exist: `parse_cursor_trace`,
+> `parse_record_trace`, `lex_token_trace`. **Do not zip the first two** -- they sample at different
+> rates and the pairing looks like data.
+>
+> **Order 1 item 3**: `let a = g()` reaches the type channel as an alias row carrying the callee's
+> NAME, compared against the reference on both row forms. What remains is an operator expression,
+> needing a pipeline analogue of `expression_nodes_resolvable` -- one of five Rust extractions still
+> walking the reference AST. A slice, not a tweak; not started rather than started badly.
+
+> **Currency note (2026-08-23). A CHUNK NUMBERING WRONG TWICE, AND AN UNRESOLVED `wire.kel`
+> DIVERGENCE.** Work moved to Order 1 item 3, the type checker's INPUT. Its next slice needs a
+> `Call` node's chunk index resolved to a name. The numbering is **sorted by name**, not declaration
+> order; the first derivation gave the right count and set in the wrong order, and **passed the probe
+> written for it** because grouping and sorting coincide on that probe. Only the corpus separated
+> them.
+>
+> **`chunk_names_from_pipeline` is validated for six stages and NOT for `wire.kel`**, where the count
+> agrees at 486 while `crc_end`/`parse_prologue` are absent and the private-data field names
+> `acc`/`dis` are present. Pinned with its exact shape by
+> `the_chunk_name_mapping_is_not_yet_established_for_wire`.
+>
+> **THE CLAIM THAT THE COMPILE PATH WAS UNAFFECTED WAS INVENTED AND IS FALSE.**
+> `self_host_compile(wire.kel)` **panics** with ``no chunk named `acc` ``, and **`wire.kel` is not in
+> the byte-identity corpus** — that oracle covers ten stages, and `wire.kel` appears in the
+> wire-format tests only as a reference-compiled input. So the largest stage in the corpus, 486
+> chunks, **has never been self-hosted and nothing recorded the gap**. Nothing regressed; the tree
+> now says so, pinned by `the_self_hosted_compiler_cannot_yet_compile_wire_kel` with `lexer.kel` as
+> the control.
+>
+> **The trigger is four lines**: a `for` loop containing a data-field assignment plus a trailing
+> field read as the tail expression. Pinned by
+> `the_minimal_shape_that_misnames_the_following_declaration`, with the no-loop control.
+>
+> Also: the corpus test's `total_chunks > 500` vacuity guard was satisfied almost entirely by the
+> stage excluded from it. Moved to 200 with the reason recorded.
+
+> **Currency note (2026-08-22, late). 93% PRODUCED, AND A GUARD THAT COULD NOT FIRE DESPITE BEING
+> MUTATION-TESTED.** `SHAPES` and `SIGNATURES` are emitted by Keleusma byte-identically for every
+> stage; produced coverage **81% → 93%**, computed **56% and unchanged** (both regions are encoded,
+> not derived). `signature_tables` is one definition `add_signatures` consumes.
+>
+> **The reach guard for commands 179/180 kept passing after the driver started driving them.** It
+> searched for `i64 = 179`; the driver passes the number as a literal argument. Third instance of
+> "a guard that cannot fire is worse than none", second committed by this line, one increment after
+> the rule was written down — **and it had been mutation-tested**, by adding a declaration, which is
+> the exact form the guard already matched. **The mutation must take the shape the real change would
+> take, not the shape the guard expects.** Replaced with a comment-stripped derivation over every
+> number the driver names, all three directions exercised.
+>
+> **The computed share is 56%, not the 57% recorded earlier**: 94,120 of 165,208 is 56.97% and the
+> test truncates. **The census costs 140 seconds** on a quiet machine; every earlier figure was
+> contended.
+>
+> Six kinds remain skipped: `ENUM_VARIANTS`, `ENUM_LAYOUTS`, `DATA_SLOTS`, `SHARED_LAYOUT`,
+> `DATA_INIT`, `PARAM_TYPES`. Four are blocked on a name index the host does not hold.
+
+> **Currency note (2026-08-22, evening). THE COVERAGE FIGURE HAS TWO NUMBERS, AND FOUR MORE
+> COMMANDS HAD NEVER RUN.** The census now pins **57% COMPUTED** (`NAMES`, `STRING_POOL`, `CONSTS`
+> — the stage derives every byte) against **81% PRODUCED** (also `CHUNKS`, mixed per field, and
+> `HEADER`, encoded not derived), and asserts the first stays strictly below the second. Wiring the
+> eight skipped kinds would take the produced figure toward 97% **without raising the computed
+> figure at all**; `wire.kel` says as much in its own comment above those emitters.
+>
+> **Commands 178–181 executed for the first time** — the record formatters for `DATA_SLOTS`,
+> `SHAPES`, `SIGNATURES`, `ENUM_VARIANTS`. Fourth instance of written-dispatched-never-run. Each
+> formats a record the reference agrees with, mutation-verified both ways.
+>
+> **The wiring dependency is measured, not assumed**: those records carry a name index the host does
+> not hold and the encoder's own index assignment. `intern_index_of` (command 140) is the route,
+> is also undriven, and is O(n²). Recorded rather than started.
+>
+> `tests/selfhost_region_coverage.rs` is the slowest file in the suite, because
+> `wire_windowed_via_kel` compiles `wire.kel` once per routed region -- twelve stages by five
+> routed kinds. **NO CLEAN TIMING EXISTS**: it was measured at 108 s, 747 s and 925 s under load
+> averages of roughly 9, 13 and 18, and the `v0.3.0` line runs its own suite in a sibling worktree
+> on the same machine, so every one of those figures is contended. Do not quote any of them as the
+> file's cost. Caching the stage compile is a real improvement, is not started, and should be
+> justified by a measurement taken when nothing else is running.
+
 > **Currency note (2026-08-22, latest). THE COVERAGE FIGURE IS 81%, AND IT IS DERIVED.**
 > `tests/selfhost_region_coverage.rs` walks each artifact's own region directory and classifies
 > every non-empty region `Identical` / `Skipped` / `Differs`. **134,776 of 165,208 region bytes**

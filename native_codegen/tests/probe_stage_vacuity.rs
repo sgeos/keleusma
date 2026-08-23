@@ -708,8 +708,18 @@ fn the_single_head_reconstruct_seed_drives_the_stage() {
     println!("  SELECTED: {subject_name}");
     let h = &fns[0];
     let records = h.body_records();
-    // The driver's own mapping. See `reconstruct_via_kel`'s call site.
-    let category = if h.category() == 3 { 2 } else { 0 };
+    // **THE DRIVER'S OWN FUNCTION, no longer a copy of it.** Absorbed 2026-08-23
+    // from `origin/v0.2.3` at `639f970f`; this line kept a mirror until then.
+    //
+    // **THE SWAP WAS VERIFIED AGAINST THE IMPLEMENTATION, NOT AGAINST A TABLE.**
+    // Theirs reads `if parse_category == 3 { 2 } else { 0 }`; the mirror read
+    // `if h.category() == 3 { 2 } else { 0 }` — identical, so behaviour is
+    // preserved. That check was insisted on by the `v0.2.3` line and is the one
+    // thing they said not to skip: **a behaviour change inside a diff that reads
+    // as cleanup is the worst kind.** Had the mirror been built from their PROSE
+    // (which said "2 for a `yield` declaration" and was wrong), this swap would
+    // have silently re-seeded every run against a different category.
+    let category = h.reconstruct_category();
 
     let m = keleusma::selfhost::reconstruct_kel_module();
     let arena = arena_for(&m);

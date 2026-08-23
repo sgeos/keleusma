@@ -13355,3 +13355,208 @@ fn a_missing_header_region_is_refused_rather_than_written_somewhere_else() {
         "the refusal still carries `-255`, which now means a pool overflow: {detail}"
     );
 }
+
+// --- THE FOUR RECORD-FORMATTING STREAM COMMANDS, DRIVEN FOR THE FIRST TIME ----
+
+/// `ds_stream_step`, `sh_stream_step`, `sg_stream_step`, `ev_stream_step`.
+const CMD_DS_STREAM_STEP: i64 = 178;
+const CMD_SH_STREAM_STEP: i64 = 179;
+const CMD_SG_STREAM_STEP: i64 = 180;
+const CMD_EV_STREAM_STEP: i64 = 181;
+
+/// **COMMANDS 178 TO 181 HAD NEVER EXECUTED, AND THIS IS THE FOURTH TIME.**
+///
+/// Written, dispatched at `highest_command()`'s own ceiling, and driven by
+/// nothing in Rust — no test and no driver names any of the four numbers. The
+/// same shape as commands 176 and 177 before 2026-08-21, as `Op::Reset`, and as
+/// `Op::IsStruct`. **Presence, dispatch, and even a doc comment are not evidence
+/// that code runs**, and the cheap check is to search for callers before costing
+/// work that depends on it.
+///
+/// This matters for the region-coverage figure specifically. Eight region kinds
+/// are still skipped by the driver, three of them past a single `fin` batch, and
+/// these four commands are the batching-free route to those three. Reading
+/// "streaming commands already exist" makes wiring them look like a wiring job.
+/// **It is not: the stage side has never run**, so taking those regions means
+/// writing the driver AND validating never-executed code.
+///
+/// # What this test establishes, and what it deliberately does not
+///
+/// These four commands are **formatters**. `wire.kel` says so in its own comment
+/// above them: the run-length grouping, a signature's parameter range and a
+/// shape's size are all decided outside, which makes the regions *encoded but not
+/// derived* — the standing the `HEADER` record has, not the standing `NAMES` has.
+///
+/// So the field values here are taken **from the reference's own record**, and
+/// that is legitimate for exactly this claim: the question under test is whether
+/// the stage lays a record out the way the format specifies, not whether Keleusma
+/// can derive the values. A test that fed values Keleusma computed would be
+/// testing something these commands do not do.
+///
+/// # Why one record and not a region
+///
+/// A whole-region comparison needs the encoder's index assignment — which
+/// `SHAPES` index a signature's return type took, which `PARAM_TYPES` range a
+/// parameter list occupies — and that is the encoder's own numbering, not
+/// something the host holds. Feeding it back from the reference would prove
+/// nothing beyond this. The record layout is what these commands own, and it is
+/// what is checked.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_four_record_formatters_lay_out_a_record_the_reference_agrees_with() {
+    use keleusma::wire_schema::kind;
+
+    // A source reaching all four regions: an enum for `ENUM_VARIANTS`, a data
+    // block for `DATA_SLOTS`, and functions for `SIGNATURES` and `SHAPES`.
+    let src = "enum E { A, B }\n\
+               shared data d { n: Word }\n\
+               private data p { xs: [Word; 3] }\n\
+               fn helper(a: Word, b: Word) -> Word { a + b }\n\
+               fn main() -> Word { d.n = helper(1, 2); p.xs[0] = d.n; E::A as Word }";
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let artifact = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+    let view = keleusma_wire::WireView::parse(&artifact).expect("reference parses");
+
+    // (command, region kind, stride, field widths in bytes at their offsets).
+    // The field layout is restated here rather than imported, on the same ground
+    // as `KIND_CONSTS` elsewhere in this tree: a test of a wire contract that
+    // imports the contract cannot catch the contract changing.
+    // Named rather than written inline: clippy asks for a definition at this
+    // depth and the ask is right, since `(&str, i64, u16, usize, &[(usize,
+    // usize)])` in a signature tells a reader less than the name does.
+    type FormatterCase = (&'static str, i64, u16, usize, &'static [(usize, usize)]);
+    let cases: &[FormatterCase] = &[
+        (
+            "DATA_SLOTS",
+            CMD_DS_STREAM_STEP,
+            kind::DATA_SLOTS,
+            8,
+            &[(0, 4), (4, 1), (5, 1), (6, 2)],
+        ),
+        (
+            "SHAPES",
+            CMD_SH_STREAM_STEP,
+            kind::SHAPES,
+            8,
+            &[(0, 2), (2, 1), (3, 1), (4, 4)],
+        ),
+        (
+            "SIGNATURES",
+            CMD_SG_STREAM_STEP,
+            kind::SIGNATURES,
+            16,
+            &[(0, 4), (4, 4), (8, 4), (12, 4)],
+        ),
+        (
+            "ENUM_VARIANTS",
+            CMD_EV_STREAM_STEP,
+            kind::ENUM_VARIANTS,
+            16,
+            &[(0, 4), (4, 4), (8, 4)],
+        ),
+    ];
+
+    let mut driven = 0usize;
+    for (label, cmd, k, stride, layout) in cases {
+        let region = view.find_region(*k).unwrap_or_else(|| {
+            panic!(
+                "{label}: the reference emitted no region, so this case \
+                                       drives the command against nothing"
+            )
+        });
+        let bytes = view.region_bytes(&region).expect("payload");
+        assert!(
+            bytes.len() >= *stride,
+            "{label}: the region is {} bytes, shorter than one {stride}-byte record",
+            bytes.len()
+        );
+        let want = &bytes[..*stride];
+
+        // Decode the reference's first record into the fields the command reads.
+        let fields: Vec<i64> = layout
+            .iter()
+            .map(|&(off, width)| {
+                let mut v = 0i64;
+                for b in (0..width).rev() {
+                    v = (v << 8) | i64::from(want[off + b]);
+                }
+                v
+            })
+            .collect();
+
+        let mut vm = vm_for(WIRE_KEL);
+        let (ret, got) = run_call(
+            &mut vm,
+            &Call {
+                cmd: *cmd,
+                nregions: 0,
+                seed: &[],
+                regions: &[],
+                fields: &fields,
+                names: &[],
+                pool: &[],
+                args: [0, 0, 0, 0, 0],
+                read_len: *stride,
+            },
+        )
+        .unwrap_or_else(|e| panic!("{label}: command {cmd} faulted: {e:?}"));
+
+        assert_eq!(
+            ret, *stride as i64,
+            "{label}: command {cmd} returned {ret} rather than the {stride}-byte stride"
+        );
+        assert_eq!(
+            got, want,
+            "{label}: the streamed record differs from the reference's first record"
+        );
+        driven += 1;
+    }
+
+    assert_eq!(
+        driven,
+        cases.len(),
+        "not every formatter was driven, so some remain unexecuted"
+    );
+}
+
+/// **THE RECORDS DIFFER FROM EACH OTHER, SO THE COMPARISON ABOVE IS NOT TRIVIAL.**
+///
+/// A source whose first `SHAPES` record happened to be all zeros would let a
+/// command that wrote nothing at all pass. This is the non-vacuity guard for the
+/// test above, and it is separate because the interesting property is of the
+/// INPUT rather than of the stage.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_formatter_probe_records_are_not_all_zero() {
+    use keleusma::wire_schema::kind;
+
+    let src = "enum E { A, B }\n\
+               shared data d { n: Word }\n\
+               private data p { xs: [Word; 3] }\n\
+               fn helper(a: Word, b: Word) -> Word { a + b }\n\
+               fn main() -> Word { d.n = helper(1, 2); p.xs[0] = d.n; E::A as Word }";
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let artifact = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+    let view = keleusma_wire::WireView::parse(&artifact).expect("reference parses");
+
+    let mut nonzero = 0usize;
+    for (label, k, stride) in [
+        ("DATA_SLOTS", kind::DATA_SLOTS, 8usize),
+        ("SHAPES", kind::SHAPES, 8),
+        ("SIGNATURES", kind::SIGNATURES, 16),
+        ("ENUM_VARIANTS", kind::ENUM_VARIANTS, 16),
+    ] {
+        let region = view
+            .find_region(k)
+            .unwrap_or_else(|| panic!("{label}: no region"));
+        let bytes = view.region_bytes(&region).expect("payload");
+        if bytes[..stride].iter().any(|b| *b != 0) {
+            nonzero += 1;
+        }
+    }
+    assert!(
+        nonzero >= 3,
+        "only {nonzero} of the four probe records carry a non-zero byte; a command that \
+         wrote nothing would pass the layout test for the rest"
+    );
+}
