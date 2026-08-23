@@ -122,6 +122,36 @@ $$
 
 which extends **to the next `RESET`**, across arbitrarily many intervening resumes and iterations.
 
+**MEASURED 2026-08-23, and the real bound is TIGHTER AND MORE USEFUL than "until `RESET`".** Pinned
+by the `v0.2.3` line in `tests/composite_escape_window.rs`:
+
+| step | state | epoch | handle held from iteration 1 |
+|---|---|---|---|
+| 0 | `Yielded` (iteration 1) | 0 | resolves → 1 |
+| 1 | `Yielded` (iteration 2) | 0 | resolves → 1 |
+| 2 | `Yielded` (straight-line site) | 0 | resolves → 1 |
+| 3 | `RESET` | 1 | **`Stale`** |
+
+**`Op::Reset` is emitted ONCE PER STREAM CYCLE**, at the end of the `loop main` body — *not* once per
+`for` iteration. The op stream confirms exactly one `Reset`, with the `for` a `Loop`/`EndLoop` pair
+wholly inside the cycle, containing the `Yield`.
+
+$$
+\text{escape window} \;=\; \textbf{one stream cycle} \;\supseteq\; \text{arbitrarily many loop iterations}
+$$
+
+**"Until `RESET`" without saying when `RESET` fires is not actionable; this is.** B1's author needs a
+bound, and the bound is neither the yield nor the iteration.
+
+**THE ASSERTION THAT CARRIES THE THEOREM IS NOT THE ONE THAT LOOKS LIKE IT.** *"The held handle still
+reads 1"* passes on a runtime that merely yields the same value twice. The load-bearing property is
+that **at the instant iteration 2 yields, the held handle and the fresh one resolve to DIFFERENT
+values — 1 and 2, both live, both resolving.** That is exactly what one reused slot collapses: same
+address, same epoch, both `resolve` calls succeed, both return 2.
+
+**The window CLOSING is asserted too** — without it the suite would pass on a runtime that never
+invalidates anything, which is a different and worse property than the one being proved over.
+
 **A proof of B2 over the narrower reading would be unsound.** Copying "at the yield instant" does not
 discharge the obligation if the host can resolve the handle three resumes later; what must be copied
 is anything whose handle remains resolvable, and that window closes only at `RESET`.
@@ -212,9 +242,14 @@ for loop bodies; adopting B lowers published WCMU. That is a change to `src/veri
 2. **Is the loop-dominated direction of the planner gap ever unsafe today?** The backend under-counts
    a loop relative to $\mathrm{WCMU}$; a host provisioning from the backend's supplement alone could
    under-provision. No corpus module has been checked for this shape.
-3. **Are there escape routes besides `yield`?** Writing to shared data copies bytes and is likely
-   safe; returning from inside a loop exits it. **Neither is verified.** B1's enumeration must settle
-   this.
+3. **Are there escape routes besides `yield`?** **STILL OPEN, AND SILENCE IS NOT CLEARANCE.** The
+   measurement in §4.0.1 settles `yield` as ONE member of the escape set and enumerates nothing else.
+   Two named candidates, **neither verified**: a composite written into a `shared data` slot, and a
+   composite reaching the host as an `fn`'s RETURN VALUE rather than through a yield. My earlier note
+   that shared-data writes "cop[y] bytes and [are] likely safe" was a guess and is withdrawn as
+   support for anything. **B1 requires the enumeration justified as exhaustive, and one survivor makes
+   the restriction UNSOUND rather than incomplete.** The obligation sits on the `v0.2.3` line's
+   surface, not this one.
 
 ## 7. Provenance
 
