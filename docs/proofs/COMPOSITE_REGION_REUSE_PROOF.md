@@ -10,9 +10,11 @@
 > apply to reference-compiled modules and do NOT apply to arbitrary bytecode that merely
 > verifies. Theorem B2 is additionally a **proved specification, not a description**: the
 > escape-copy discipline it requires does not exist in Keleusma today, and Appendix C names the
-> adoption obligations. One instantiation row, M1's immutability clause, awaits confirmation by
-> the V0.2.X line. The verifier-accepted counterexample to structural enforcement is in
-> Appendix A, and the pin commits are in Appendix E with their differing standings.
+> adoption obligations. M1's immutability clause is confirmed on four independent grounds, one
+> executable and pinned, and it is scoped to the ephemeral region deliberately, because the
+> persistent region is mutated in place and the unscoped statement is false in Keleusma. The
+> verifier-accepted counterexample to structural enforcement is in Appendix A, and the pin
+> commits are in Appendix E with their differing standings.
 
 This document discharges part of the obligation stated in `docs/proofs/COMPOSITE_REGION_REUSE.md`
 on the `v0.3.0` line, cited at commit `a49555bb`. Part I is self-contained mathematics and cites
@@ -353,7 +355,7 @@ to executed without running them.
 
 | axiom | instantiation and standing |
 |---|---|
-| M1 | Operator ruling on the memory model, obligation document Section 1. Bump arena, ephemeral region cleared only at `RESET`, nothing reclaimed within a run. The immutability clause is **read, not executed**: no opcode appears to write into an existing ephemeral composite region after its construction completes, values being rebound rather than mutated and data-slot writes copying into the persistent region. **Confirmation requested from the V0.2.X line, 2026-08-23. Pending.** Theorems B1 and B2 both rest on it. |
+| M1 | Operator ruling on the memory model, obligation document Section 1. Bump arena, ephemeral region cleared only at `RESET`, nothing reclaimed within a run. The immutability clause is **confirmed by the V0.2.X line, 2026-08-23, on four independent grounds**, and Theorems B1 and B2 both rest on it. Ground one is **executable and pinned**: the instruction set carries seven read accessors into a composite and **zero write accessors**, `the_instruction_set_has_no_write_accessor_into_a_composite` in `tests/composite_escape_routes.rs`, derived from the `Op` enum, mutation-tested two ways, and holding for any module because it is about what the instruction set contains. Grounds two through four are **read from dispatch plus a public-API scan**: no mutable accessor exists on a composite body, `resolve` returning a shared slice and nothing else; every raw-pointer write in the virtual machine targets the persistent region; and the native boundary is immutable by signature, arguments arriving as a shared slice with no public route to a mutable arena view. **The clause is scoped to the ephemeral region deliberately, and the scoping is load-bearing: the persistent region is mutated in place, repeatedly and across resets, by the data-slot writes, so the unscoped statement is false in Keleusma.** Definition 2 ties regions to the ephemeral region, and an abstraction pass must not widen that. Stated refutation boundary, so no more is read than was measured: a native casting a resolved slice to a mutable pointer under `unsafe` is undetectable from the safe API and sits on the same trust boundary as the native escape routes, and an out-of-band `unsafe` arena rewind reclaims rather than mutates, refuting not this clause but the epoch discipline M5 rests on. Grounds two through four say nothing about what `verify()` enforces. |
 | M2 | **Executed.** A non-empty composite value carries an arena handle, not bytes. `resolve` fails `Stale` exactly when the epoch has advanced, and an overwrite in place advances nothing. `tests/composite_escape_window.rs`, all three tests. The load-bearing assertion is that two iterations' composites resolve simultaneously to different values, which is exactly what one reused slot collapses. |
 | M3 | The 66 opcodes are partitioned in `tests/composite_escape_routes.rs`, with **totality asserted against the `Op` enum at test time**, so a route can be missed only by misclassification, never by omission, and a new opcode fails the test. The escaping set is exactly `Yield`, `SetLocal`, `Return`, `CallVerifiedNative`, `CallExternalNative`. `SetLocal` is classified by its worst case because the opcode cannot distinguish an inner binding from an outer one, and it is the route that defeats a restriction phrased as no `yield`, with no host involved. Per-row verdicts are **analysis, not proof**. The `Yield` row and both `CopiesOut` rows, private-data writes and flat nesting, are executed, the latter two deliberately because a wrong `CopiesOut` makes the theory unsound rather than loose. The boxed construction path does alias and does not arise for the transitively-scalar composites this instantiation concerns, a boundary stated rather than assumed away. The rest of the rows are read from dispatch. Disagreements go to the table, where the test makes them concrete. |
 | M4 | **Executed.** `Op::Reset` is emitted once per stream cycle, at the end of the `loop main` body, not per `for` iteration. `reset_is_once_per_stream_cycle_not_once_per_loop_iteration`. |
@@ -416,11 +418,15 @@ carries the following obligations, each named here so none is discovered at impl
 2. **Worst-case execution time.** A copy of $\mathrm{sz}$ bytes at every escaping execution
    enters the worst-case-execution-time model, which is the crate's headline claim, so the cost
    belongs in the cost model before adoption, not after.
-3. **Copy-store provisioning.** Corollary B2a's copy term re-enters the worst-case-memory-usage
-   bound except for copies into host-owned storage. A per-local copy slot reused on overwrite
-   would bound `SetLocal` copies at one slot per local, but its soundness needs a further
-   argument, that no live reference to the old copy exists at overwrite time, which is **not
-   proved here**.
+3. **Copy-store provisioning, and the mutability asymmetry.** Corollary B2a's copy term
+   re-enters the worst-case-memory-usage bound except for copies into host-owned storage. A
+   per-local copy slot reused on overwrite would bound `SetLocal` copies at one slot per local,
+   but its soundness needs a further argument, that no live reference to the old copy exists at
+   overwrite time, which is **not proved here**. The proof needs the copy **source** immutable,
+   which M1 gives for the ephemeral region, and the copy **destination** stable, which is
+   Definition 9's second clause and is an **obligation, not a given**: the persistent region is
+   mutated in place by the data-slot writes, so a copy store located there must be disjoint from
+   every data slot, or stability fails at the destination even though the source is immutable.
 4. **Epoch stamping.** Copy handles must carry the creation epoch and stay behind `resolve`'s
    check, or behavior after `RESET` diverges from the baseline and the equivalence fails.
 5. **Handle-address opacity.** Definition 4 excludes addresses from observations. A host that
@@ -431,6 +437,11 @@ carries the following obligations, each named here so none is discovered at impl
    confinement analysis, yielded values leaving the machine's bound where the host owns the copy
    store, and soundness for a backend that already reuses slots. Corollary B2b's hybrid, copies
    only where confinement fails, is the form that dominates both pure regimes.
+7. **Embedder obligations under `unsafe`.** A native that casts a resolved slice to a mutable
+   pointer defeats M1's instantiation and the discipline together, undetectably from the safe
+   interface, and an out-of-band `unsafe` arena rewind defeats the epoch discipline M5 rests on.
+   Adoption documentation must list both beside handle-address opacity, in the same
+   embedder-obligation terms as the native escape routes.
 
 **Instruction-set position.** Unchanged by the proof. No new opcode is required: the discipline
 has at least two lowerings, a compiler-inserted copy through existing constructs, or a semantics
@@ -480,6 +491,12 @@ branch topology, the generality directive that produced this document's structur
 all of 2026-08-23, and the standing rule that instruction-set modification requires strong
 justification. The scope was expanded by operator direction later on 2026-08-23 to include the
 proof of Theorem B2, which entered as Section 8 with Definition 9 and Lemma 3, together with
-M1's explicit immutability clause, whose instantiation confirmation is pending with the V0.2.X
-line. An earlier revision of this document interleaved the instantiation with the
+M1's explicit immutability clause. That clause was confirmed by the V0.2.X line the same day,
+sought as a refutation and not found, on four independent grounds recorded in the M1 row, with
+ground one pinned as `the_instruction_set_has_no_write_accessor_into_a_composite` in
+`tests/composite_escape_routes.rs`, whose failure message directs a future editor to the proof's
+owner rather than to updating the test, and whose landing commit follows the same channel as the
+earlier pins. The same exchange contributed the persistent-region precision, the source and
+destination asymmetry now stated in Appendix C's third obligation, and the `unsafe` refutation
+boundary now in its seventh. An earlier revision of this document interleaved the instantiation with the
 theory; the reorganization changed no theorem, no proof, and no recorded standing.
