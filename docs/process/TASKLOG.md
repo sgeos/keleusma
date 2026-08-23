@@ -10,6 +10,49 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-22, session 52). THE OTHER LINE'S CONCERNS ARE ADDRESSED, AND ONE OF THEM
+> WAS A LIVE DEFECT IN A SHIPPED ARTIFACT.**
+>
+> **129 merges on `v0.2.3`** as of `7d576aae` (#251 landed at 22 of 22). Derive it:
+> `git log --oneline origin/v0.2.3 | grep -c 'Merge pull request'`. **NOTE THE REF**: the previous
+> note's command read the LOCAL `v0.2.3`, which lags and answers 127 for the same tree.
+>
+> Six findings from the `v0.3.0` line, four from their handoff and two by direct message. **Three
+> were something other than what the report said, in both directions**, and every one was checked
+> against the code before being acted on.
+>
+> **BIGGER THAN REPORTED.** Their `GRAMMAR.md` push-order citation was closed in English on
+> 2026-08-13 by a sweep of eight sites — **whose scope was `src/`, `docs/` and `book/src/`, so it
+> never reached `book/po/`.** The Japanese translation still stated the order backwards and
+> `book.yml` builds the Japanese book from it. Fixed; `tests/push_order_claims.rs` walks the whole
+> tree and asserts it reached the file the old scope missed.
+>
+> **SMALLER THAN REPORTED.** `parse_functions` aborting on "four of eleven" example scripts is
+> **two**, and the survivors fault inside `parse.kel` rather than at the declaration path, so the
+> recorded cause (a top-level `struct`) explains neither. Now a `(script, fault)` table in
+> `tests/selfhost_parse_refusals.rs`, not a number in prose.
+>
+> **THEIR OPEN QUESTION, ANSWERED FROM THIS SURFACE.** A yielded composite is an epoch-guarded arena
+> handle, not a copy, and **the epoch guard does not cover an overwrite in place** — it fires on
+> `RESET`. Slot reuse across iterations would return the wrong bytes SUCCESSFULLY.
+>
+> **NEW PUBLIC API**: `try_parse_functions` -> `Result<ParsedProgram, SelfHostParseError>`. The
+> `panic = "abort"` limit is documented rather than hidden.
+>
+> **TWO OF MY OWN CHECKS COULD NOT FAIL AND MUTATION FOUND BOTH**; one would have shipped a fallible
+> interface whose every error message was wrong, because `&payload` on a `Box<dyn Any + Send>` names
+> the box rather than its contents.
+>
+> **NOT STARTED, DELIBERATELY**: the floating-point entry-ABI ruling relayed from the other line.
+> `PROMPT.md` reads "No active prompt"; a relayed ruling is not authorization. It is in
+> `REVERSE_PROMPT.md` as the one item needing the operator.
+>
+> **A CLAIM MADE AND RETRACTED WITHIN THE INCREMENT**: `clippy::err_expect` failing on
+> `tests/selfhost_parse.rs` was reported to the other line as pre-existing on the shared tree,
+> because `git status` showed the file unmodified. **The pristine tree passes at exit 0.** My own
+> `Debug` derive on `ParsedFn` made the lint's suggestion applicable. **`git status` answers whether
+> I edited a file, not whether I caused a diagnostic in one.**
+
 > **Currency note (2026-08-23, session 51 close). `wire.kel` EXPLAINED; THREE COSTINGS CORRECTED.**
 >
 > **32 merges across sessions 50 and 51** (128 on the branch as of `cfcff555`; #251 open). Order 1:

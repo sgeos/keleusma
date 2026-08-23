@@ -2468,8 +2468,7 @@ fn the_chunk_table_cap_is_refused_by_the_driver_and_not_by_the_stage() {
     // `LoopLimitExceeded` from inside the stage.
     let past = src_with(declared);
     let err = std::panic::catch_unwind(|| keleusma::selfhost::parse_functions_fused(&past))
-        .err()
-        .expect("a program past the cap must be refused");
+        .expect_err("a program past the cap must be refused");
     let msg = err
         .downcast_ref::<String>()
         .cloned()

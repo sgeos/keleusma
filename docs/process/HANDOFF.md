@@ -12,7 +12,10 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > **AS OF `cfcff555`: 128 merges on `v0.2.3`, of which 32 are sessions 50 and 51.** Stated as a
 > MEASUREMENT AT A NAMED COMMIT, not a running total -- three drafts of that sentence were wrong in
 > three different ways. Derive it:
-> `git log --oneline v0.2.3 | grep -c 'Merge pull request'`.
+> `git log --oneline origin/v0.2.3 | grep -c 'Merge pull request'`.
+> **NOTE THE REF.** This command named the LOCAL `v0.2.3` until 2026-08-22, and a local ref
+> lags whatever was merged from elsewhere: it answered 127 for the tree this file describes as
+> 128. The document was right and its own command was not.
 >
 > **#251 IS OPEN AND NOT AMONG THEM.** It carries the corrected `for`-lowering costing.
 >
@@ -56,7 +59,12 @@ grep -c '^\s*#\[test\]' tests/selfhost_region_coverage.rs   # 5
 grep -c '^\s*#\[test\]' tests/selfhost_chunk_names.rs       # 3
 grep -c '^\s*#\[test\]' tests/parse_record_trace.rs         # 4
 grep -c '^\s*#\[test\]' tests/lex_token_trace.rs            # 2
-grep -c '^\s*#\[test\]' tests/selfhost_bare_for.rs          # 4   (+1 after #251 merges)
+grep -c '^\s*#\[test\]' tests/selfhost_bare_for.rs          # 4   -- #251 IS MERGED AND THE
+# COUNT DID NOT MOVE. This line predicted 5 "after #251 merges". Measured after the merge: 4.
+# A PREDICTED COUNT IS NOT A MEASURED ONE, and writing the prediction into the check block is
+# how a check starts failing for a reason that is not the tree.
+grep -c '^\s*#\[test\]' tests/push_order_claims.rs         # 2
+grep -c '^\s*#\[test\]' tests/selfhost_parse_refusals.rs   # 2
 
 # `tests/stage_command_reach.rs` IS in the list now: #210 merged 2026-08-21.
 

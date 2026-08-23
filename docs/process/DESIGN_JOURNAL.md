@@ -13,6 +13,91 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**ADDRESSING THE OTHER LINE'S CONCERNS FOUND A DEFECT THEY COULD NOT SEE, AND CORRECTED A COUNT
+THEY WERE STILL QUOTING (2026-08-22).**
+
+Six findings from the `v0.3.0` line, four from their handoff and two arriving mid-increment by
+direct message. **Every one was checked against the code before being acted on**, and three of the
+six turned out to be something other than what the report said -- in both directions.
+
+**THE REPORT THAT WAS BIGGER THAN REPORTED.** They cited `GRAMMAR.md:747` claiming the checked
+opcodes push `(high, low, flag)`. That line was corrected on 2026-08-13, and the sweep it triggered
+found eight sites rather than one. **The sweep's scope was `src/`, `docs/` and `book/src/`, so it
+never reached `book/po/`** -- where the extracted catalogue still carried the superseded English and
+the JAPANESE TRANSLATION KEYED TO IT still stated the order backwards. `book.yml` builds the
+Japanese book from that catalogue. A shipped artifact was telling its reader the wrong thing for
+nine days, and the reason it survived the sweep is the reason this project keeps writing down: **a
+guard with a scope narrower than its class is the defect it prevents.** The new guard walks the tree
+and ASSERTS IT REACHED the file the old scope missed.
+
+**THE REPORT THAT WAS SMALLER THAN REPORTED.** `parse_functions` panicking on "four of the eleven"
+example scripts, cause given as a top-level `struct`. Measured: **two**, and the survivors do not
+reach the declaration path at all -- they fault inside `parse.kel` with `IndexOutOfBounds(-1, 65)`.
+The struct/trait/impl skip state closed the other two and the prose count never moved. **A number
+that lives only in prose drifts in both directions**, and this one was quoted as four after half of
+it was repaired. It is a `(script, fault)` TABLE in a test now, so closing either survivor fails
+loudly rather than going unnoticed.
+
+**THE CORRECTION THEY OWED ME, WHICH COST NOTHING BECAUSE IT NEVER LANDED.** They had characterised
+`wcmu_region` as computing peak concurrent liveness and retracted it. Checked rather than accepted:
+`heap` is `saturating_add` at every op, the `If` arm takes a max across the two branches, the loop
+multiplies by the iteration count. Cumulative with a branch max -- their retraction is right. And
+`peak concurrent liveness` appears nowhere in `src/`, `docs/` or `tests/`, so nothing needed undoing.
+
+**THE FINDING WHERE MY SURFACE HELD THE ANSWER TO THEIR OPEN QUESTION.** They found that a composite
+built inside a loop body can be YIELDED to the host, and asked whether their slot reuse hands out a
+pointer or a copy. It is a pointer: after B28 the only non-empty representation is
+`FlatComposite::Arena(ArenaHandle<[u8]>)`. **And the epoch guard does not cover it** -- `resolve`
+fails `Stale` when a RESET advances the epoch, and an overwrite in place at the same address in the
+same epoch advances nothing. So reuse would return iteration `n+1`'s bytes to a caller asking for
+iteration `n`'s: **a silent wrong value, not a `Stale` error.** Their program bounds at heap 112 here,
+decomposing exactly as `k x size`, so this line is the conservative one and the hazard is introduced
+by the reuse.
+
+**TWO OF MY OWN CHECKS COULD NOT FAIL, AND MUTATION FOUND BOTH.**
+
+| the check | why it proved nothing |
+|---|---|
+| the translation clause of the push-order guard | asked whether ANY line held the order and the Japanese for "push"; the `INSTRUCTION_SET.md` entries satisfy that alone, so emptying the paragraph it is about left it green |
+| the first `try_parse_functions` | `&payload` on a `Box<dyn Any + Send>` coerces to `&dyn Any` naming the BOX, since the box is itself `Any`; every refusal reported "the panic payload was not a string" |
+
+The second is the more instructive one. **A test asserting only that an `Err` came back would have
+passed**, and I would have shipped a fallible API whose every error message was a plausible-looking
+lie. It was caught because the pin asserts the FAULT TEXT and not merely the verdict.
+
+**AND ONE INSTRUMENT I BUILT AND THREW AWAY.** Sizing the whole translation-staleness class by
+comparing each single-reference `msgid` against its source line reported **2,329 stale of 2,926**.
+That is not a finding, it is my wrong model of `mdbook-i18n-helpers`, which extracts INLINE content
+and strips markdown syntax. Dropped rather than shipped. **A check built from the same model as the
+thing it checks confirms the model** -- seventh recorded instance, and the first where the right move
+was to delete the instrument rather than repair it.
+
+**AND A CLAIM I MADE TO THE OTHER LINE AND RETRACTED WITHIN THE HOUR.** I reported
+`clippy::err_expect` failing on `tests/selfhost_parse.rs` as PRE-EXISTING on the shared tree, and
+said it would reach them on the next absorption. **They could not reproduce it on a tree byte-identical
+to the merge base, and reported the non-reproduction rather than assuming their setup was wrong.**
+Measured: stash everything of mine, run the same command on `7d576aae`, **exit 0**. My own
+`#[derive(Debug)]` on `ParsedFn`, added minutes earlier so `ParsedProgram` could derive it, is what
+made the lint fire -- `expect_err` is `where T: Debug` on the OK type, and `T` here contains
+`Vec<ParsedFn>`, so the suggestion was inapplicable until the derive existed and clippy suppressed
+the lint until then.
+
+**THE REASONING ERROR IS THE TRANSFERABLE PART.** I concluded "pre-existing" because `git status`
+showed that file unmodified. **Lint applicability is a property of the WHOLE PROGRAM, not of the file
+the lint points at**: a trait impl added in one file turns a diagnostic on in another that nobody
+touched. "The file is unmodified" is not "my change did not cause this". Their hypothesis was right
+in mechanism and one type parameter off in attribution -- they blamed the `Err` type's missing
+`Debug` -- and they reached the right conclusion without being able to see my diff, which is the
+argument for reporting a non-reproduction instead of quietly working around it.
+
+**THE ONE THING NOT DONE, DELIBERATELY.** The other line relayed an operator ruling to extend the
+entry ABI with floating-point registers "across both sessions". `PROMPT.md` reads "No active prompt"
+and nothing reached this line directly. **A relayed ruling is not authorization**, and this file
+already records what accepting one costs: on 2026-08-21 this line took the other's reading of an
+ownership question and escalated it without reading both texts, and the reading was backwards.
+Nothing was started on `src/float.rs`, `src/marshall.rs` or the target descriptor; the ruling goes to
+the operator as an item.
+
 **THE SEVEN-INCREMENT DIAGNOSIS ENDED IN AN UNSUPPORTED CONSTRUCT, AND THE OBVIOUS FIX WAS WRONG
 (2026-08-23, session 51 close).**
 
