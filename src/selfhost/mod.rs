@@ -109,6 +109,12 @@ pub struct Body {
 /// A parsed function from the record stream: parser category (1 fn, 2 yield, 3 loop),
 /// name id, value-parameter count, and the postorder records of its `when` guard (empty
 /// when unguarded) and its body.
+///
+/// `Debug` is derived so [`ParsedProgram`] can be, which a fallible API wants: a
+/// caller that gets `Ok` and then finds the wrong shape has nothing to print
+/// otherwise. Every field is private, so the derive widens what can be OBSERVED,
+/// not what can be constructed.
+#[derive(Debug)]
 pub struct ParsedFn {
     cat: i64,
     name: i64,
@@ -136,8 +142,21 @@ pub struct ParsedFn {
 }
 
 impl ParsedFn {
-    /// The declaration category (`fn`, `yield`, and so on) as `reconstruct.kel`
-    /// consumes it.
+    /// The declaration category **as `parse.kel` emits it**: `1` for `fn`, `2`
+    /// for `yield`, `3` for `loop`.
+    ///
+    /// # This is NOT the number `reconstruct.kel` consumes
+    ///
+    /// **This doc comment said "as `reconstruct.kel` consumes it" until
+    /// 2026-08-23, and that was false.** The two stages use different encodings
+    /// and the value must be mapped between them; see [`reconstruct_category`],
+    /// which is what a caller seeding the stage wants.
+    ///
+    /// The `v0.3.0` line found the discrepancy by measurement — handing this
+    /// value to the stage raw "seeds a different program" — and worked around it
+    /// with a mirrored copy of the mapping. **The documentation told them the
+    /// opposite of the truth**, which is how a correct observation still costs
+    /// someone an afternoon.
     pub fn category(&self) -> i64 {
         self.cat
     }
@@ -145,6 +164,16 @@ impl ParsedFn {
     /// The number of value parameters this head declares.
     pub fn param_count(&self) -> usize {
         self.params
+    }
+
+    /// This head's category **in `reconstruct.kel`'s encoding**, which is not
+    /// the one [`category`](Self::category) returns.
+    ///
+    /// Equivalent to [`reconstruct_category`] applied to this head; provided so
+    /// a caller holding a `ParsedFn` does not have to reach for a free function.
+    #[must_use]
+    pub fn reconstruct_category(&self) -> i64 {
+        reconstruct_category(self.cat)
     }
 
     /// The head's `when` guard as a record stream, empty when it has none.
@@ -795,8 +824,161 @@ pub fn parse_functions(
 ) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>) {
     let mut fns = Vec::new();
     let (names, data_records, enum_records) =
-        parse_functions_impl(src, false, &mut |_, f| fns.push(f));
+        parse_functions_impl(src, false, &mut |_, f| fns.push(f), &mut |_, _, _| {});
     (fns, names, data_records, enum_records)
+}
+
+/// Map a `parse.kel` declaration category onto the one `reconstruct.kel` and
+/// `codegen.kel` consume.
+///
+/// # There are two encodings and they do not agree
+///
+/// | declaration | `parse.kel` ([`ParsedFn::category`]) | `reconstruct.kel` / `codegen.kel` |
+/// |---|---|---|
+/// | `fn` | 1 | 0 |
+/// | `yield` | 2 | 0 |
+/// | `loop` | 3 | **2** |
+/// | multiheaded dispatch | not a single head | 3 |
+///
+/// The second column's `1` is a single-head `yield`, which this mapping does not
+/// produce, and `3` is assigned by the multihead path rather than by any single
+/// declaration. **The mapping is deliberately lossy**: `codegen.kel` closes
+/// categories 0 and 1 identically, with `Return`, so collapsing `yield` onto `0`
+/// changes no emitted op. It would stop being safe the moment those two
+/// categories diverge, which is why the loss is stated here rather than left to
+/// be rediscovered.
+///
+/// # Why this is public
+///
+/// The `v0.3.0` line needs it to seed `reconstruct.kel` on real input, and was
+/// carrying a mirrored copy having established by measurement that the raw
+/// parser category "seeds a different program". **A duplicate with a structural
+/// cause returns unless the cause is removed**, and the cause was that the
+/// consumer could not reach the original.
+///
+/// **IT WAS FIVE COPIES, NOT ONE.** Three in this file, one in
+/// `tests/selfhost_codegen.rs`, and theirs. The three here now call this
+/// function. The test's copy is left independent ON PURPOSE — it is the second
+/// implementation the driver-parity oracle compares against, and folding it in
+/// would remove the drift and the check together — so
+/// `the_test_drivers_category_mapping_agrees_with_the_library` pins the two
+/// against each other instead.
+///
+/// **THEIR DESCRIPTION OF THE MAPPING WAS "2 for a `yield` declaration and 0
+/// otherwise", AND THAT IS NOT WHAT IT DOES.** It is 2 for a `loop`. Anyone
+/// mirroring the prose rather than the code seeds `loop` as `fn` and `yield` as
+/// `loop`. That is the argument for exporting the function rather than
+/// documenting the rule.
+#[must_use]
+pub fn reconstruct_category(parse_category: i64) -> i64 {
+    // 3 is `loop` on the parse side; 2 is `loop` on the reconstruct side.
+    if parse_category == 3 { 2 } else { 0 }
+}
+
+/// What the parse pipeline refused, as a value rather than as a process abort.
+///
+/// Carries the message the panicking path would have printed. The three causes it
+/// can name are a stage diagnostic (`parse.kel` reporting one of its own capacity
+/// limits), a declaration form the stage does not recognise, and a raw virtual
+/// machine fault surfacing through the driver.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelfHostParseError {
+    /// The failure message, as [`parse_functions`] would have panicked with.
+    pub message: String,
+}
+
+impl core::fmt::Display for SelfHostParseError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for SelfHostParseError {}
+
+/// [`parse_functions`], returning the refusal instead of aborting the process.
+///
+/// # Why this exists
+///
+/// [`parse_functions`] is `pub` under the `self-host` feature and therefore
+/// reachable from outside this crate, and it PANICS on input the reference
+/// compiler accepts — the self-hosted front end admits a narrower surface than
+/// the language does, so ordinary source can reach a stage limit. **The
+/// `v0.3.0` line reported this from the outside**: their corpus survey had to
+/// wrap every call in `catch_unwind` and print which sources aborted, because
+/// silently skipping them would have hidden it. This entry point makes the
+/// supported behaviour a `Result` rather than each caller reinventing the
+/// workaround.
+///
+/// # What it does NOT promise, and the limit is real
+///
+/// The refusal is recovered by unwinding, so **a build compiled with
+/// `panic = "abort"` still aborts.** There is no way around that short of
+/// threading a `Result` through the whole record driver, which changes a
+/// signature both compile paths and many tests depend on; that is a real
+/// question and a separate one. The process panic hook also still runs, so the
+/// message appears on standard error even when it is returned here.
+///
+/// # What actually fails today, MEASURED rather than recalled
+///
+/// Of the eleven scripts in `examples/scripts/`, **two** are refused:
+/// `09_big_numbers.kel` and `10_multbyte.kel`, both with
+/// `IndexOutOfBounds(-1, 65)` out of `parse.kel`. **This corrects a standing
+/// report of FOUR**, whose other two — `02_struct_field.kel` and
+/// `08_method_dispatch.kel` — were fixed by the struct/trait/impl skip state and
+/// now parse. It also corrects the CAUSE: the surviving two do not reach
+/// `open_decl` at all, so "a top-level `struct`" no longer explains them.
+/// `every_shipped_example_is_parsed_or_refused_by_name` pins the set, so the
+/// count cannot drift again without a test saying so.
+pub fn try_parse_functions(src: &str) -> Result<ParsedProgram, SelfHostParseError> {
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parse_functions(src)));
+    match caught {
+        Ok((functions, names, data_records, enum_records)) => Ok(ParsedProgram {
+            functions,
+            names,
+            data_records,
+            enum_records,
+        }),
+        Err(payload) => Err(SelfHostParseError {
+            // `&payload` would coerce to `&dyn Any` naming the BOX, not its
+            // contents, because `Box<dyn Any + Send>` is itself `Any`. The
+            // downcast then fails for every payload and every refusal reports
+            // "not a string". Measured, not reasoned: the pinning test caught it.
+            message: panic_message(payload.as_ref()),
+        }),
+    }
+}
+
+/// The four-tuple [`parse_functions`] returns, named.
+///
+/// The tuple is kept on the original entry point because its callers destructure
+/// it positionally and several ignore most of it; a fallible API returning a
+/// tuple inside a `Result` reads badly enough to be worth the struct.
+#[derive(Debug)]
+pub struct ParsedProgram {
+    /// The parsed functions, in declaration order.
+    pub functions: Vec<ParsedFn>,
+    /// The interned name table.
+    pub names: Vec<String>,
+    /// Every data block's header records, concatenated in declaration order.
+    pub data_records: Vec<(i64, i64)>,
+    /// Every enum's header records, concatenated in declaration order.
+    pub enum_records: Vec<(i64, i64)>,
+}
+
+/// Recover a panic payload as text.
+///
+/// `panic!` with a formatted message yields a `String`; a literal yields a
+/// `&'static str`. Both are handled because the driver produces both, and a
+/// payload of neither shape is reported as such rather than as an empty message,
+/// which would read as a refusal with no reason.
+fn panic_message(payload: &(dyn core::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else if let Some(s) = payload.downcast_ref::<&'static str>() {
+        (*s).to_string()
+    } else {
+        "parse.kel refused the input and the panic payload was not a string".to_string()
+    }
 }
 
 /// The same, with `lexer.kel` driven INTO `parse.kel` and no token stream
@@ -826,7 +1008,7 @@ pub fn parse_functions_fused(
 ) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>) {
     let mut fns = Vec::new();
     let (names, data_records, enum_records) =
-        parse_functions_impl(src, true, &mut |_, f| fns.push(f));
+        parse_functions_impl(src, true, &mut |_, f| fns.push(f), &mut |_, _, _| {});
     (fns, names, data_records, enum_records)
 }
 
@@ -841,6 +1023,24 @@ pub fn parse_functions_fused(
 pub fn lex_token_count(src: &str) -> usize {
     first_pass(src).token_count
 }
+
+/// One binding row for the type channel: `(name, tag, form, target)`.
+///
+/// `form` matches the stage's `ty.bform`: **0** the value is a TAG, **1** it is
+/// another NAME the stage resolves through one alias hop. `target` is that name
+/// for form 1 and empty otherwise.
+///
+/// # Why the target is a string
+///
+/// The two extractions -- this one and the reference-AST walk -- do not share an
+/// id space: the reference numbers by insertion order as it walks, this one uses
+/// the lexer's intern table. A row carrying an id could only be compared by
+/// comparing the NUMBERINGS, which is not the content. A name removes the
+/// question rather than answering it.
+pub type BindingRow = (String, i64, i64, String);
+
+/// `Node::Call`, whose `arg` is the callee's index into the module's chunk table.
+const NODE_CALL: i64 = 7;
 
 /// `Node::LetIn`, the record whose payload carries the frame slot.
 const NODE_LET_IN: i64 = 5;
@@ -1037,11 +1237,116 @@ pub fn parse_cursor_trace(src: &str) -> Vec<i64> {
 // enum record streams; factoring each into a `type` alias would only scatter it, so
 // allow the complexity lint here as the root test file does file-wide.
 #[allow(clippy::type_complexity)]
+/// What the record walk returns beside the functions: the interned name table,
+/// the data-block records and the enum records.
+///
+/// Named because clippy asks at this depth and the ask is right -- three `Vec`s
+/// of pairs in a signature tell a reader less than the name does.
+type ParseSideTables = (Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>);
+
+/// Every `(kind, value)` token `lexer.kel` produces for `src`, beside the interned
+/// name table.
+///
+/// # The third instrument, and why the set was incomplete
+///
+/// `parse_cursor_trace` shows WHERE the stage is reading and `parse_record_trace`
+/// shows WHAT it emits. Neither shows what it is reading, so a record carrying a
+/// wrong value could be a parser fault or a token fault and the two were not
+/// separable from outside.
+///
+/// That gap is not hypothetical: the declaration-mis-naming defect was narrowed
+/// to "the header record carries the field's name", then to "the cursor never
+/// goes backwards", and stalled there — because the remaining question was what
+/// token sits at that cursor position, and nothing could answer it.
+///
+/// # This is the STAGE's stream, not the reference's
+///
+/// `keleusma::lexer::tokenize` is a different tokenizer with a different stream;
+/// see [`lex_token_count`], which exists because sizing a cap against the
+/// reference's count measures the wrong quantity. Compare these tokens against
+/// each other, never across the two lexers, unless the difference is the point.
+///
+/// # Not part of the compile path
+///
+/// A diagnostic instrument, public for the same reason the other two are: a
+/// hidden instrument is one the next person does not know exists.
+#[must_use]
+pub fn lex_token_trace(src: &str) -> (Vec<String>, Vec<(i64, i64)>) {
+    let (tokens, names) = br_lex(src);
+    (names, tokens)
+}
+
+/// One traced record: `(code, value, cursor)`.
+///
+/// `cursor` is `toks.at` at the moment the record was produced -- the index of the
+/// token most recently READ, since the stage writes it before advancing. A record
+/// emitted by a phase handler rather than a token read carries the cursor of the
+/// last token read, which is the useful answer: it says which token the stage had
+/// reached.
+///
+/// # This is what makes the cursor pairable with a record at all
+///
+/// `parse_cursor_trace` samples once per virtual-machine step and this samples
+/// once per record -- 1,232 against 78 for the mis-naming reproduction -- so
+/// zipping the two by index correlates a record with an unrelated position, and
+/// the result LOOKS like data. Carrying the cursor IN the record removes the
+/// temptation rather than documenting it.
+pub type TracedRecord = (i64, i64, i64);
+
+/// Every `(code, value)` record `parse.kel` emits for `src`, in order, beside the
+/// interned name table.
+///
+/// # Why this exists as public surface
+///
+/// **A defect in this driver was diagnosed three times without it and stopped
+/// short of a cause each time.** The declaration-mis-naming bug pinned by
+/// `tests/selfhost_chunk_names.rs` was narrowed to a four-line reproduction and a
+/// confirmed behavioural rule, and the code site stayed unknown, because the
+/// record stream the driver consumes was not observable from outside it.
+///
+/// `thread_local!` is unavailable here (`no_std`), so a hook cannot be smuggled
+/// in from a test. The sink is threaded through `parse_functions_impl` instead,
+/// and this is its one public reader.
+///
+/// # What it is not
+///
+/// **Not part of the compile path**, and nothing in it should be. Every other
+/// caller passes a sink that discards, so the trace costs a branch on a closure
+/// that does nothing. It is a diagnostic instrument, and the reason it is public
+/// rather than `#[doc(hidden)]` is that a hidden instrument is one the next
+/// person does not know exists — which is how this defect survived three
+/// diagnoses.
+///
+/// # Reading the codes
+///
+/// A declaration header is 1..=3 (`fn`/`yield`/`loop`) and carries the name id;
+/// 4 is a parameter name, 6 a parameter type, 7 the return type, 5 closes a
+/// declaration, 9 opens a data block, 16 opens a body, 15 ends one. Resolve a
+/// name id through the returned table.
+#[must_use]
+pub fn parse_record_trace(src: &str) -> (Vec<String>, Vec<TracedRecord>) {
+    let mut records = Vec::new();
+    let (names, ..) = parse_functions_impl(src, false, &mut |_, _| {}, &mut |code, val, at| {
+        records.push((code, val, at));
+    });
+    (names, records)
+}
+
+/// [`parse_functions_impl`] for the two callers that want the name table in their
+/// callback and no record trace.
+fn parse_functions_impl_named(
+    src: &str,
+    on_function: &mut dyn FnMut(&[String], ParsedFn),
+) -> ParseSideTables {
+    parse_functions_impl(src, false, on_function, &mut |_, _, _| {})
+}
+
 fn parse_functions_impl(
     src: &str,
     fused: bool,
     on_function: &mut dyn FnMut(&[String], ParsedFn),
-) -> (Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>) {
+    on_record: &mut dyn FnMut(i64, i64, i64),
+) -> ParseSideTables {
     // ONE IMPLEMENTATION, TWO FEEDS. The record handling below is long and
     // stateful, and a second copy of it in a fused driver is precisely the drift
     // `selfhost_host` already records paying for once. Only the token FEED
@@ -1263,13 +1568,27 @@ fn parse_functions_impl(
     // moment it runs, so a window corrected afterwards is corrected too late.
     // One token behind the cursor is kept resident, because the parser pushes back
     // by one and that read must still land inside the window.
+    // THE CURSOR AT EACH RECORD, SHARED BETWEEN THE TWO CLOSURES.
+    //
+    // `drive_parse_records_with` takes the record sink and the resume hook
+    // separately, and only the hook is handed the virtual machine -- so the sink
+    // cannot read `BR_P_AT` itself. A cell carries it across.
+    //
+    // **READ BEFORE THE EARLY RETURN.** The window slider below returns
+    // immediately on the collecting feed, and an earlier arrangement read the
+    // cursor after that return, so the collecting feed captured nothing. The
+    // trace it produced would have paired every record with a cursor of zero and
+    // looked like a fact about the parser.
+    let cursor_at = alloc::rc::Rc::new(core::cell::Cell::new(0i64));
+    let cursor_writer = alloc::rc::Rc::clone(&cursor_at);
     let before_resume = |vm: &mut Vm<'_, '_>, shared: &mut [u8]| {
-        let Some((lex_vm, lex_shared)) = lex.as_mut() else {
-            return;
-        };
         let at = match vm.get_shared(shared, BR_P_AT).expect("at") {
             Value::Int(n) => n,
             other => panic!("expected Int at BR_P_AT, got {other:?}"),
+        };
+        cursor_writer.set(at);
+        let Some((lex_vm, lex_shared)) = lex.as_mut() else {
+            return;
         };
         while !eof && (base + win.len() as i64) < at + FUSED_WINDOW as i64 {
             match lex_next(lex_vm, lex_shared) {
@@ -1314,6 +1633,7 @@ fn parse_functions_impl(
         state,
         budget,
         |code, val| {
+            on_record(code, val, cursor_at.get());
             if in_body {
                 match code {
                     0 => {}
@@ -1490,6 +1810,93 @@ fn unescape_string(raw: &str) -> String {
     String::from_utf8(out).expect("a string literal's unescaped content is valid UTF-8")
 }
 
+/// A construct `parse.kel` does not support, if one is present, as a sentence a
+/// user can act on.
+///
+/// # Why this exists, and what it cost not to have it
+///
+/// `self_host_compile(wire.kel)` fails with ``no chunk named `acc` ``. That names
+/// neither the construct nor the file, and tracing it to a cause took SEVEN
+/// increments: through the record stream, the cursor, the token stream, the fold
+/// continuation, and finally the loop header. The cause is a bare `for` -- a loop
+/// written without `limit`, which `parse.kel`'s header machine does not accept,
+/// though `codegen.kel` handles it perfectly well.
+///
+/// This project's parser names thirteen failure modes with their own causes for
+/// exactly this reason. A message that says which construct is unsupported turns
+/// seven increments into one reading.
+///
+/// # It reports only what it can see
+///
+/// A bare `for` is detectable from the token stream: the `for` keyword's header
+/// runs to its opening brace, and the supported form carries `limit` inside it.
+/// Any OTHER unsupported construct returns `None` and the caller falls back to
+/// the generic diagnosis -- **a guess dressed as a specific cause would be worse
+/// than the bare message it replaces.**
+fn unsupported_construct(src: &str) -> Option<&'static str> {
+    /// `Tok::For` in `parse.kel`'s vocabulary.
+    const TOK_FOR: i64 = 45;
+    /// `Tok::Ident`.
+    const TOK_IDENT: i64 = 1;
+    /// `Tok::LBrace`.
+    const TOK_LBRACE: i64 = 2;
+
+    let (names, tokens) = lex_token_trace(src);
+    let limit_id = names.iter().position(|n| n == "limit").map(|i| i as i64);
+    let mut i = 0usize;
+    while i < tokens.len() {
+        if tokens[i].0 != TOK_FOR {
+            i += 1;
+            continue;
+        }
+        // The header runs from the keyword to its opening brace. `limit` is an
+        // IDENT with a known interned id, not a keyword of its own.
+        let mut j = i + 1;
+        let mut has_limit = false;
+        while j < tokens.len() && tokens[j].0 != TOK_LBRACE {
+            if tokens[j].0 == TOK_IDENT && Some(tokens[j].1) == limit_id {
+                has_limit = true;
+            }
+            j += 1;
+        }
+        if !has_limit {
+            return Some(
+                "a `for` loop written without `limit`. The self-hosted parser accepts \
+                 `for v in lo..hi limit CAP { .. }` and not the bare form; \
+                 `codegen.kel` handles both, so this is a parse-stage gap rather than \
+                 an unsupported language feature. Compile with the reference compiler, \
+                 or add a `limit` clause.",
+            );
+        }
+        i = j.max(i + 1);
+    }
+    None
+}
+
+/// The diagnosis for a declaration whose name matches no chunk.
+///
+/// **THE NAME MISMATCH IS ALWAYS A SYMPTOM.** The pipeline produced a declaration
+/// the reference did not, which means a declaration boundary was mis-parsed. The
+/// name reported is whatever token the parser took for a name, and it is
+/// characteristically NOT the function's -- for `wire.kel` it is a private-data
+/// field.
+fn chunk_lookup_failure(src: &str, name: &str) -> ! {
+    match unsupported_construct(src) {
+        Some(cause) => panic!(
+            "the self-hosted pipeline mis-parsed a declaration boundary and produced a \
+             chunk named `{name}`, which the reference compiler did not emit. The source \
+             contains {cause}"
+        ),
+        None => panic!(
+            "no chunk named `{name}`. The pipeline produced a declaration the reference \
+             did not, so a declaration boundary was mis-parsed and `{name}` is whatever \
+             token was taken for a name. No known unsupported construct was detected, so \
+             this is a NEW case: `keleusma::selfhost::parse_record_trace` and \
+             `lex_token_trace` are the instruments for narrowing it"
+        ),
+    }
+}
+
 /// Self-host-compile a whole program: drive the pipeline over every function, reconstruct
 /// each into its codegen Body (grouping same-named heads into one multihead), run
 /// codegen.kel, and splice the self-hosted ops, constant pool, and local_count into the
@@ -1519,7 +1926,7 @@ pub fn self_host_compile(src: &str) -> Module {
         let body = if is_multihead_group(&group) {
             reconstruct_via_kel_multihead(&group, pc)
         } else {
-            let category = if group[0].cat == 3 { 2 } else { 0 };
+            let category = reconstruct_category(group[0].cat);
             reconstruct_via_kel(&group[0].body, category, pc)
         };
         let (ops, pool, lc) = run_codegen(&body, pc);
@@ -1527,12 +1934,64 @@ pub fn self_host_compile(src: &str) -> Module {
             .chunks
             .iter()
             .position(|c| c.name == name)
-            .unwrap_or_else(|| panic!("no chunk named `{name}`"));
+            .unwrap_or_else(|| chunk_lookup_failure(src, &name));
         module.chunks[idx].ops = ops;
         module.chunks[idx].constants = pool_to_constants(&pool, &names);
         module.chunks[idx].local_count = lc as u16;
     }
     module
+}
+
+/// The chunk NAME for each chunk index, derived from the parsed function stream.
+///
+/// # Why this has to be derived rather than read off a record
+///
+/// A `Call` node carries the callee's CHUNK INDEX, not its name -- `reconstruct.kel`
+/// packs `chunk + count * 256` into the node's `arg`. The type channel is keyed by
+/// NAMES, so an alias row for `let a = g()` needs the index turned back into `g`.
+///
+/// **IT DELEGATES, BECAUSE THE TABLE ALREADY EXISTED.** `first_pass` computes
+/// `chunks` -- the deduplicated, lexicographically sorted set of function name ids,
+/// in the module's chunk order -- and `parse.kel` is seeded from it. This is a
+/// name lookup over that table and nothing more.
+///
+/// # I DERIVED IT BY HAND FIRST, GOT IT WRONG TWICE, AND IT WAS ALREADY WRITTEN DOWN
+///
+/// The first version grouped **consecutive same-named heads in declaration
+/// order**, reasoning from the grouping [`self_host_compile_fused`] flushes on.
+/// That grouping is real -- a multi-arm function is one chunk -- and it is not the
+/// numbering. It produced the right chunk COUNT and the right SET of names in the
+/// wrong ORDER, so every `Call` node would have resolved to another function, with
+/// nothing about the count or the set looking wrong.
+///
+/// It also **passed the small multi-arm probe**, because there the two rules
+/// coincide. Only the real corpus separated them.
+///
+/// The second version sorted, and then disagreed on `wire.kel` -- which was
+/// recorded as an unexplained divergence and excluded from the corpus test.
+/// **That divergence was the hand-rolled derivation inheriting a defect**, not a
+/// property of the numbering: this version agrees with the reference on every
+/// stage, `wire.kel` included.
+///
+/// **The rule was documented in three places before any of that**, including on
+/// `chunk_table_from_tokens` and beside the seeding in `parse_functions_impl`.
+/// Checking for it would have cost one search and saved two wrong derivations and
+/// a spurious open finding. That is the sixth instance of this pattern in one
+/// session and the first that reached the tree.
+///
+/// # Still checked, not assumed
+///
+/// `the_derived_chunk_names_match_the_reference_compiler` compares this against
+/// `Module::chunks`' own names over the whole stage corpus, with a non-vacuity
+/// guard. Delegation is a reason to expect agreement, not evidence of it.
+#[must_use]
+pub fn chunk_names_from_pipeline(src: &str) -> Vec<String> {
+    let first = first_pass(src);
+    first
+        .chunks
+        .iter()
+        .map(|&id| first.names.get(id as usize).cloned().unwrap_or_default())
+        .collect()
 }
 
 /// The type checker's BINDING ROWS, derived from the self-hosted pipeline.
@@ -1561,7 +2020,7 @@ pub fn self_host_compile(src: &str) -> Module {
 /// SHAPE lives in the body record stream, and reading it means walking the forest
 /// rather than the header. That walk is the next slice; this one carries the
 /// declared bindings, which are the ones the source states outright.
-pub fn binding_rows_from_pipeline(src: &str) -> (Vec<String>, Vec<(String, i64, i64)>) {
+pub fn binding_rows_from_pipeline(src: &str) -> (Vec<String>, Vec<BindingRow>) {
     let (fns, names, ..) = parse_functions_fused(src);
     // A type NAME id to the stage's scalar tag. The ids come from the same intern
     // table the records index, so this is a lookup rather than a second convention.
@@ -1580,21 +2039,24 @@ pub fn binding_rows_from_pipeline(src: &str) -> (Vec<String>, Vec<(String, i64, 
     };
     let name_of = |id: i64| -> Option<String> { names.get(id as usize).cloned() };
 
-    let mut rows: Vec<(String, i64, i64)> = Vec::new();
+    // The chunk table, for turning a `Call` node's chunk index back into the
+    // callee's NAME. Computed once: it is a whole extra parse of the source.
+    let chunk_names = chunk_names_from_pipeline(src);
+    let mut rows: Vec<BindingRow> = Vec::new();
     for f in &fns {
         // The function's own name carries its declared return type, which is what a
         // `let a = g()` alias hop resolves through.
         if let Some(n) = name_of(f.name) {
             let t = tag_of(f.return_type);
             if t != 0 {
-                rows.push((n, t, 0));
+                rows.push((n, t, 0, String::new()));
             }
         }
         for (i, &pid) in f.param_names.iter().enumerate() {
             let Some(n) = name_of(pid) else { continue };
             let t = f.param_types.get(i).copied().map_or(0, tag_of);
             if t != 0 {
-                rows.push((n, t, 0));
+                rows.push((n, t, 0, String::new()));
             }
         }
 
@@ -1633,25 +2095,37 @@ pub fn binding_rows_from_pipeline(src: &str) -> (Vec<String>, Vec<(String, i64, 
                 // A literal. `push_literal` interns through `intern_int`, so a
                 // kind-1 node is always an integer; booleans are `Unit` carrying
                 // the `PushImmediate` operand.
-                NODE_LITERAL => rows.push((bound, 1, 0)),
-                NODE_UNIT if init.arg == 1 || init.arg == 2 => rows.push((bound, 2, 0)),
-                // **A CALL IS NOT EMITTED HERE, AND THE REASON IS THE ROW SHAPE
-                // RATHER THAN THE PIPELINE.** `let a = g()` is a form-1 alias whose
-                // row carries the TARGET'S NAME ID in the tag position. The two
-                // extractions do not share an id space — the reference numbers by
-                // insertion order as it walks, this one uses the lexer's intern
-                // table — so a form-1 row cannot be compared by name string, which
-                // is the discipline that keeps this honest.
+                NODE_LITERAL => rows.push((bound, 1, 0, String::new())),
+                NODE_UNIT if init.arg == 1 || init.arg == 2 => {
+                    rows.push((bound, 2, 0, String::new()))
+                }
+                // **A CALL IS A FORM-1 ALIAS, AND IT CARRIES THE TARGET'S NAME
+                // RATHER THAN AN ID.** `let a = g()` says `a` takes whatever `g`
+                // returns; joining that to `g`'s declared return type is the
+                // stage's alias hop, not this function's.
                 //
-                // Emitting one would mean either comparing id spaces (comparing the
-                // numbering rather than the content) or changing the row shape to
-                // carry a target string. The second is the right answer and it is a
-                // slice of its own.
+                // The row used to be withheld because a form-1 row carried the
+                // target's NAME ID in the tag position, and the two extractions do
+                // not share an id space -- the reference numbers by insertion order
+                // as it walks, this one uses the lexer's intern table. Comparing
+                // them would have compared the NUMBERING rather than the content.
+                // Carrying the name as a STRING removes the question instead of
+                // answering it.
                 //
-                // Everything else — an operator expression above all — needs the
-                // initialiser's NODE INDEX to reach the stage's bounded fixpoint
-                // (form 2), which is a further slice again. Leaving no row means the
-                // stage accepts, the documented conservative stance.
+                // The chunk index comes from `reconstruct.kel`'s `Call` node, whose
+                // `arg` is the callee's index into the module's chunk table. That
+                // table is `first_pass`'s `chunks`, which `chunk_names_from_pipeline`
+                // reads -- the same numbering `parse.kel` resolved the call against,
+                // not a second one derived here.
+                NODE_CALL => {
+                    if let Some(target) = chunk_names.get(init.arg as usize) {
+                        rows.push((bound, 0, 1, target.clone()));
+                    }
+                }
+                // An operator expression needs the initialiser's NODE INDEX to reach
+                // the stage's bounded fixpoint (form 2), which is a further slice.
+                // Leaving no row means the stage accepts, the documented
+                // conservative stance.
                 _ => {}
             }
         }
@@ -1714,7 +2188,7 @@ pub fn self_host_compile_fused(src: &str) -> Module {
         let body = if is_multihead_group(&refs) {
             reconstruct_via_kel_multihead(&refs, pc)
         } else {
-            let category = if group[0].cat == 3 { 2 } else { 0 };
+            let category = reconstruct_category(group[0].cat);
             reconstruct_via_kel(&group[0].body, category, pc)
         };
         let (ops, pool, lc) = run_codegen(&body, pc);
@@ -1722,14 +2196,14 @@ pub fn self_host_compile_fused(src: &str) -> Module {
             .chunks
             .iter()
             .position(|c| c.name == name)
-            .unwrap_or_else(|| panic!("no chunk named `{name}`"));
+            .unwrap_or_else(|| chunk_lookup_failure(src, name));
         module.chunks[idx].ops = ops;
         module.chunks[idx].constants = pool_to_constants(&pool, names);
         module.chunks[idx].local_count = lc as u16;
         group.clear();
     };
 
-    let (names, ..) = parse_functions_impl(src, false, &mut |names, f| {
+    let (names, ..) = parse_functions_impl_named(src, &mut |names, f| {
         let name = names[f.name as usize].clone();
         if !group.is_empty() && name != group_name {
             flush(&mut group, &group_name, &mut module, names);
@@ -1752,7 +2226,7 @@ pub fn fused_compile_residency(src: &str) -> (usize, usize) {
     let mut group: Vec<ParsedFn> = Vec::new();
     let mut group_name = String::new();
     let (mut peak, mut total) = (0usize, 0usize);
-    parse_functions_impl(src, false, &mut |names, f| {
+    parse_functions_impl_named(src, &mut |names, f| {
         let name = names[f.name as usize].clone();
         if !group.is_empty() && name != group_name {
             group.clear();
@@ -3741,7 +4215,7 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
         let body = if is_multihead_group(&group) {
             reconstruct_via_kel_multihead(&group, pc)
         } else {
-            let category = if group[0].cat == 3 { 2 } else { 0 };
+            let category = reconstruct_category(group[0].cat);
             reconstruct_via_kel(&group[0].body, category, pc)
         };
         let (ops, pool, lc) = run_codegen(&body, pc);
@@ -4783,7 +5257,15 @@ pub struct WindowedArtifact {
 }
 
 /// Emit one region into the window and return the bytes written.
+// EIGHT ARGUMENTS, ONE OVER CLIPPY'S LIMIT, AND ALLOWED RATHER THAN GROUPED.
+// The eighth is the compiled stage, hoisted out of this function so one
+// artifact compiles `wire.kel` once instead of once per region. Grouping the
+// seven that were already here into a struct is a reasonable change and it is
+// not this one; `wire_chunks_from_input` carries the same allow for the same
+// shape of input list.
+#[allow(clippy::too_many_arguments)]
 fn window_emit(
+    stage: &Module,
     blob: &[u8],
     names: usize,
     header: &[i64; 11],
@@ -4792,7 +5274,7 @@ fn window_emit(
     cmd: i64,
     want: usize,
 ) -> Result<Vec<u8>, SelfHostError> {
-    let m = compile_src(&read_stage("kel/wire.kel"));
+    let m = stage.clone();
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
@@ -4948,6 +5430,7 @@ fn enter_wire(vm: &mut Vm<'_, '_>, shared: &mut [u8], cmd: i64) -> Result<i64, S
 /// arrives as an operand-stack error naming neither the call pattern nor the
 /// chunk count.
 fn window_emit_chunks(
+    stage: &Module,
     blob: &[u8],
     header: &[i64; 11],
     chunk_fields: &[i64],
@@ -4957,7 +5440,7 @@ fn window_emit_chunks(
     const CMD_STEP: i64 = 175;
     const FIELDS: usize = 11;
 
-    let m = compile_src(&read_stage("kel/wire.kel"));
+    let m = stage.clone();
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
@@ -5053,12 +5536,24 @@ fn window_emit_chunks(
 /// [`SelfHostError::Unsupported`] when the stage refuses a node, naming the node
 /// index and the refusal code, or when the stage faults.
 pub fn wire_consts_via_kel(module: &Module) -> Result<Vec<u8>, SelfHostError> {
+    window_emit_consts(
+        &compile_src(&read_stage("kel/wire.kel")),
+        &const_node_fields(module),
+    )
+}
+
+/// The constant forest as six words a node, in the encoder's own root order.
+///
+/// Extracted so the standalone entry point and the artifact assembler build the
+/// input the same way. Two constructions of a stage's input is the defect class
+/// this file already records against nine copies of a shared layout.
+fn const_node_fields(module: &Module) -> Vec<i64> {
     let roots = crate::wire_schema::constant_roots_of_module(module);
     let mut fields = Vec::new();
     for r in &roots {
         push_const_preorder(r, &mut fields);
     }
-    window_emit_consts(&fields)
+    fields
 }
 
 /// One constant subtree in depth-first preorder, six words a node.
@@ -5093,7 +5588,7 @@ fn push_const_preorder(c: &ConstValue, out: &mut Vec<i64>) {
 /// activation rather than replacing it, and a stage with several hundred
 /// constants exhausts the arena that way, reporting an operand-stack error that
 /// names neither the call pattern nor the constant count.
-fn window_emit_consts(node_fields: &[i64]) -> Result<Vec<u8>, SelfHostError> {
+fn window_emit_consts(stage: &Module, node_fields: &[i64]) -> Result<Vec<u8>, SelfHostError> {
     const CMD_BEGIN: i64 = 176;
     const CMD_STEP: i64 = 177;
     /// `(tag, payload, children, names_first, flags, discriminant)`.
@@ -5108,7 +5603,7 @@ fn window_emit_consts(node_fields: &[i64]) -> Result<Vec<u8>, SelfHostError> {
         });
     }
 
-    let m = compile_src(&read_stage("kel/wire.kel"));
+    let m = stage.clone();
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
@@ -5151,6 +5646,146 @@ fn window_emit_consts(node_fields: &[i64]) -> Result<Vec<u8>, SelfHostError> {
     Ok(out)
 }
 
+/// Emit a module's `SHAPES` region by STREAMING, one record per call.
+///
+/// # What this region is, and the standing it has
+///
+/// `SHAPES` is the deduplicated table of operand shapes a signature's parameters,
+/// return and resume value refer to by index. The indices are an **encoder
+/// decision** rather than a property of the module, so the host cannot derive
+/// them and must take them from the one definition the encoder itself consumes,
+/// [`crate::wire_schema::signature_tables`].
+///
+/// That makes this region **encoded but not derived**, the standing the `HEADER`
+/// record has: Keleusma decides every byte of the record's layout and the host
+/// decides the values. `wire.kel` says the same thing about its own formatters,
+/// and counting them beside `NAMES` -- which the stage computes from the module
+/// blob -- would overstate what is self-hosted.
+///
+/// # Errors
+///
+/// [`SelfHostError::Unsupported`] when the stage refuses a record or faults.
+pub fn wire_shapes_via_kel(module: &Module) -> Result<Vec<u8>, SelfHostError> {
+    window_emit_records(
+        &compile_src(&read_stage("kel/wire.kel")),
+        &shape_fields(module),
+        4,
+        179,
+        "SHAPES",
+    )
+}
+
+/// The `SHAPES` records as four words each, from the encoder's own table.
+fn shape_fields(module: &Module) -> Vec<i64> {
+    let (shapes, _) = crate::wire_schema::signature_tables(&module.signatures);
+    let mut fields = Vec::with_capacity(shapes.len() * 4);
+    for r in &shapes {
+        fields.push(i64::from(r.tag));
+        fields.push(i64::from(r.kind));
+        fields.push(i64::from(r.reserved));
+        fields.push(i64::from(r.size));
+    }
+    fields
+}
+
+/// Emit a module's `SIGNATURES` region by STREAMING, one record per call.
+///
+/// Same standing as [`wire_shapes_via_kel`]: the parameter run and the two shape
+/// indices come from the encoder's own numbering, so this is encoded rather than
+/// derived.
+///
+/// # Errors
+///
+/// [`SelfHostError::Unsupported`] when the stage refuses a record or faults.
+pub fn wire_signatures_via_kel(module: &Module) -> Result<Vec<u8>, SelfHostError> {
+    window_emit_records(
+        &compile_src(&read_stage("kel/wire.kel")),
+        &signature_fields(module),
+        4,
+        180,
+        "SIGNATURES",
+    )
+}
+
+/// The `SIGNATURES` records as four words each, from the encoder's own table.
+fn signature_fields(module: &Module) -> Vec<i64> {
+    let (_, sigs) = crate::wire_schema::signature_tables(&module.signatures);
+    let mut fields = Vec::with_capacity(sigs.len() * 4);
+    for r in &sigs {
+        fields.push(i64::from(r.params_first));
+        fields.push(i64::from(r.params_count));
+        fields.push(i64::from(r.ret));
+        fields.push(i64::from(r.resume));
+    }
+    fields
+}
+
+/// Drive a stateless record formatter over a field stream, concatenating the
+/// records it returns.
+///
+/// # Why these need no `begin` and the chunk and constant streams do
+///
+/// `wire.kel` says it in its own comment: the chunk and constant streams carry
+/// state between records -- running range cursors, a node cursor -- and these
+/// depend on nothing outside themselves. A `begin` here would exist only to look
+/// symmetric with its neighbours, and a reader would have to open its body to
+/// learn it reset nothing.
+///
+/// The virtual machine is still built ONCE and resumed. Calling a suspended
+/// coroutine stacks another activation rather than replacing it, and `wire.kel`
+/// carries 486 signatures, which exhausts the arena that way.
+///
+/// # Errors
+///
+/// [`SelfHostError::Unsupported`] when the field stream is not a whole number of
+/// records, when the stage refuses one, or when the stage faults.
+fn window_emit_records(
+    stage: &Module,
+    fields: &[i64],
+    per_record: usize,
+    cmd: i64,
+    label: &str,
+) -> Result<Vec<u8>, SelfHostError> {
+    if !fields.len().is_multiple_of(per_record) {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!(
+                "the {label} field stream is {} words, not a multiple of {per_record}",
+                fields.len()
+            ),
+        });
+    }
+
+    let m = stage.clone();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify wire.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+
+    let mut out = Vec::new();
+    for (j, row) in fields.chunks(per_record).enumerate() {
+        for (f, &v) in row.iter().enumerate() {
+            vm.set_shared(&mut shared, FIN_SLOT + f, Value::Int(v))
+                .expect("record field");
+        }
+        let wrote = enter_wire(&mut vm, &mut shared, cmd)?;
+        if wrote <= 0 {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!("wire.kel refused {label} record {j} with {wrote}"),
+            });
+        }
+        for k in 0..wrote as usize {
+            out.push(
+                match vm.get_shared(&shared, wire_slots::BYTES + k).expect("read") {
+                    Value::Byte(b) => b,
+                    other => panic!("shared byte slot held {other:?}"),
+                },
+            );
+        }
+    }
+    Ok(out)
+}
+
 /// See [`WindowedArtifact`]. `regions` gives each region's `(kind, base, len)` in
 /// the artifact the caller is assembling.
 pub fn wire_windowed_via_kel(
@@ -5162,13 +5797,26 @@ pub fn wire_windowed_via_kel(
     let (blob, names) = module_input(module);
     let header = header_fields_of(module);
     let fields = chunk_fields_of(module);
+    // COMPILED ONCE FOR THE WHOLE ARTIFACT, NOT ONCE PER REGION.
+    //
+    // Each `window_emit*` used to compile `wire.kel` itself, so assembling one
+    // stage's artifact compiled a 486-function source five times -- sixty times
+    // across the corpus. `Module` is `Clone`, and cloning one is far cheaper than
+    // compiling it, so the stage is built here and cloned per virtual machine.
+    //
+    // **A GLOBAL CACHE IS NOT AVAILABLE AND THAT IS WHY THIS IS LOCAL.** The crate
+    // is `no_std + alloc`: `std::sync::OnceLock` is out of reach and
+    // `core::cell::OnceCell` is not `Sync`, so a `static` holding the compiled
+    // stage cannot be written here. Hoisting to the caller needs no static and
+    // captures the repetition that actually mattered.
+    let stage = compile_src(&read_stage("kel/wire.kel"));
     let mut out = vec![0u8; artifact_len];
     for &(kind, base, len) in regions {
         // CHUNKS TAKES THE STREAMING PATH, so the 90-record batch no longer
         // decides whether a stage is reachable. `parse` (94) and `wire` (475)
         // were the two it excluded and both emit now.
         if kind == crate::wire_schema::kind::CHUNKS {
-            let win = window_emit_chunks(&blob, &header, &fields, len)?;
+            let win = window_emit_chunks(&stage, &blob, &header, &fields, len)?;
             out[base..base + len].copy_from_slice(&win[..len]);
             continue;
         }
@@ -5182,12 +5830,40 @@ pub fn wire_windowed_via_kel(
         // a mismatch is the interesting event -- it means the root model and the
         // encoder have parted -- so it is reported rather than trimmed away.
         if kind == crate::wire_schema::kind::CONSTS {
-            let win = wire_consts_via_kel(module)?;
+            let win = window_emit_consts(&stage, &const_node_fields(module))?;
             if win.len() != len {
                 return Err(SelfHostError::Unsupported {
                     detail: alloc::format!(
                         "the self-hosted CONSTS region is {} bytes and the reference \
                          reserved {len}; the constant-root model and the encoder disagree",
+                        win.len()
+                    ),
+                });
+            }
+            out[base..base + len].copy_from_slice(&win);
+            continue;
+        }
+        // SHAPES AND SIGNATURES TAKE THE FORMATTER STREAMS, commands 179 and
+        // 180. Both exceed a single `fin` batch on `wire.kel` -- 341 and 486
+        // records against a 256-record batch -- so the one-record-per-call form
+        // is what makes them reachable at all rather than a stylistic choice.
+        //
+        // The length is CHECKED rather than truncated, on the same ground as
+        // CONSTS above: a mismatch means the host's model of the encoder's
+        // numbering has parted from the encoder, which is the interesting event.
+        if kind == crate::wire_schema::kind::SHAPES || kind == crate::wire_schema::kind::SIGNATURES
+        {
+            let win = if kind == crate::wire_schema::kind::SHAPES {
+                window_emit_records(&stage, &shape_fields(module), 4, 179, "SHAPES")?
+            } else {
+                window_emit_records(&stage, &signature_fields(module), 4, 180, "SIGNATURES")?
+            };
+            if win.len() != len {
+                return Err(SelfHostError::Unsupported {
+                    detail: alloc::format!(
+                        "the self-hosted region {kind:#06x} is {} bytes and the reference \
+                         reserved {len}; the host's model of the encoder's shape numbering \
+                         and the encoder disagree",
                         win.len()
                     ),
                 });
@@ -5216,6 +5892,7 @@ pub fn wire_windowed_via_kel(
             });
         }
         let win = window_emit(
+            &stage,
             &blob,
             names,
             &header,

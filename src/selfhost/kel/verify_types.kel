@@ -33,7 +33,21 @@
 // See `docs/decisions/TYPECHECK_IMPLEMENTATION_PLAN.md` for the six slices and the fifteen shapes.
 require word >= 32;
 
-// The host-facing block. `cmd` selects the operation; `verdict` carries the answer out.
+// The host-facing block. `verdict` carries the answer out.
+//
+// **`cmd` IS DECLARED AND NEVER READ, and that is stated here because the header is what a host
+// reads first.** Nothing in this file dispatches on it: the stage has ONE job and no command
+// surface, as the note above `loop main` at the bottom of this file also says. An earlier
+// revision of this comment said `cmd` selected the operation, so the header and the footer
+// contradicted each other and the header was the misleading one. The `v0.3.0` line seeded this
+// stage successfully without touching `cmd` and reported the contradiction.
+//
+// **THE SLOT IS KEPT RATHER THAN REMOVED, AND THE REASON IS MEASURED.** This block is addressed by
+// SLOT INDEX, not by name: `tests/selfhost_typecheck.rs` seeds it through `const N_SLOT: usize = 2`
+// and `const LHS_SLOT: usize = 3`, with every later table's constant derived from those by adding a
+// table width. Deleting `cmd` at slot 0 shifts all of them by one and the seeding goes to the wrong
+// slots SILENTLY, because `set_shared` cannot tell a wrong index from a right one. Appending to a
+// slot-addressed block is safe; deleting from the front is not.
 //
 // The input surface is deliberately EMPTY at slice 0. The stage cannot yet see the program, and
 // stating that in the encoding is better than accepting a table nothing reads: a reader of this
@@ -652,6 +666,18 @@ fn ty_step() -> Word {
 // One step per row across every table at its cap, one step per phase boundary,
 // and one to report the verdict. Stated as a function so the host reads it from
 // here instead of restating a sum that would drift the moment a cap moves.
+//
+// **THIS IS A CAP, NOT A TYPICAL COST, AND A HOST CANNOT TELL THE DIFFERENCE FROM
+// THE OUTSIDE.** It is what the fold needs with every table FULL. A realistic run
+// is far shorter: only phase 0 carries rows in most subjects, the other seven
+// phases advance one step each, so the cost is about `rows + 9`. A host that
+// sizes its drive loop below this bound and then sees `tyc_pending()` forever has
+// no way to distinguish an UNDER-DRIVEN stage from a HUNG one, because both look
+// like a verdict that never arrives. Either drive to `ty_max_steps()`, or size
+// the subject to complete inside the smaller budget and REQUIRE a verdict before
+// counting the run -- the `v0.3.0` differential drives 60 ticks and does the
+// latter, refusing a subject that does not reach a verdict rather than comparing
+// a prefix of a fold.
 fn ty_max_steps() -> Word { 256 + 128 + 128 + 256 + 256 + 256 + 256 + 256 + 8 + 1 }
 
 // `resume` is unused: this stage has one job and no commands. It is named rather

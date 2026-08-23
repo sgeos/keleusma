@@ -15726,19 +15726,9 @@ msgstr "この構文の表層形式は次のとおりです。"
 
 #: src/BIG_NUMBERS.md:19
 msgid ""
-"The runtime computes the true result of `op_expr` in `i128`, splits it into "
-"a high and a low half, and pushes `(high, low, flag)` on the operand stack. "
-"The compiler dispatches on `flag` to one of three outcome classes (`ok`, "
-"`overflow`, `underflow`) and binds the pattern variables in that arm's body "
-"to the corresponding slot values. The `ok` arm binds a single `Word` against"
-" the in-range result; the `overflow` and `underflow` arms bind two `Word` "
-"values against the high and low halves."
+"The runtime computes the true result of `op_expr` in `i128`, splits it into a high and a low half, and pushes `(low, high, flag)` on the operand stack, bottom to top. The compiler dispatches on `flag` to one of three outcome classes (`ok`, `overflow`, `underflow`) and binds the pattern variables in that arm's body to the corresponding slot values. The `ok` arm binds a single `Word` against the in-range result; the `overflow` and `underflow` arms bind two `Word` values against the high and low halves."
 msgstr ""
-"ランタイムは `op_expr` の真の結果を `i128` で計算し、それを上位半分と下位半分に分割して `(high, low, flag)` "
-"をオペランドスタックにプッシュします。コンパイラは `flag` によって 3 "
-"つの結果クラス（`ok`、`overflow`、`underflow`）のいずれかにディスパッチし、その分岐の本体内のパターン変数を対応するスロット値に束縛します。`ok`"
-" の分岐は範囲内の結果に対して単一の `Word` を束縛します。`overflow` と `underflow` の分岐は、上位半分と下位半分に対して"
-" 2 つの `Word` 値を束縛します。"
+"ランタイムは `op_expr` の真の結果を `i128` で計算し、それを上位半分と下位半分に分割して、オペランドスタックに下から上へ `(low, high, flag)` をプッシュします。コンパイラは `flag` によって 3 つの結果クラス（`ok`、`overflow`、`underflow`）のいずれかにディスパッチし、その分岐の本体内のパターン変数を対応するスロット値に束縛します。`ok` の分岐は範囲内の結果に対して単一の `Word` を束縛します。`overflow` と `underflow` の分岐は、上位半分と下位半分に対して 2 つの `Word` 値を束縛します。"
 
 #: src/BIG_NUMBERS.md:21
 msgid ""
