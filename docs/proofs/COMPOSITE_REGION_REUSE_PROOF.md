@@ -495,8 +495,11 @@ M1's explicit immutability clause. That clause was confirmed by the V0.2.X line 
 sought as a refutation and not found, on four independent grounds recorded in the M1 row, with
 ground one pinned as `the_instruction_set_has_no_write_accessor_into_a_composite` in
 `tests/composite_escape_routes.rs`, whose failure message directs a future editor to the proof's
-owner rather than to updating the test, and whose landing commit follows the same channel as the
-earlier pins. The same exchange contributed the persistent-region precision, the source and
+owner rather than to updating the test. That pin landed in the V0.2.X line's commit `a288ae26`
+on `docs/proof-evidence-index`, their #259, verified at origin by ref, derived from the `Op`
+enum at test time and mutation-tested two ways. **The commit pins ground one only.** Grounds two
+through four remain read from dispatch and are in no test, so citing `a288ae26` against M1 as a
+whole would claim more than the test does, and this record cites it against ground one exactly. The same exchange contributed the persistent-region precision, the source and
 destination asymmetry now stated in Appendix C's third obligation, and the `unsafe` refutation
 boundary now in its seventh. An earlier revision of this document interleaved the instantiation with the
 theory; the reorganization changed no theorem, no proof, and no recorded standing.
