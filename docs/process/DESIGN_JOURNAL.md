@@ -13,6 +13,39 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**M1: SEVEN READ ACCESSORS INTO A COMPOSITE, ZERO WRITE ACCESSORS (2026-08-23).**
+
+The proof session asked for a refutation rather than a confirmation: is there ANY opcode, host entry
+point, or native-visible path that writes into a live ephemeral composite region after
+`NewComposite` finishes? Both its reuse theorems rest on there being none.
+
+**None found, on four independent grounds** -- and the cleanest is a count derived from the
+instruction set itself. `GetField`, `GetIndex`, `GetTupleField`, `GetEnumField` project OUT of a
+composite; **not one has a `Set` counterpart.** The only stores are `SetLocal`, which rebinds a frame
+slot, and `SetData`/`SetDataIndexed`, which write the persistent region. The other three grounds:
+`FlatComposite` exposes `resolve -> &[u8]` and no mutable accessor; all four raw pointer writes in
+the virtual machine derive from `arena.persistent_ptr()`; and natives take
+`&[GenericValue]` with a `&Arena`, with no public API returning `&mut [u8]` into the arena.
+
+**THE PRECISION IS THE PART WORTH SENDING.** Their wording said "ephemeral" and is correct as
+written, but **M1 stated over "a region" unqualified is FALSE here**: `SetData` writes IN PLACE into
+an existing persistent composite, repeatedly, across resets. An abstraction pass is exactly where
+that qualifier gets dropped, and **the two interact** -- the persistent region is where the
+`CopiesOut` routes land, so the copy SOURCE is immutable and the copy DESTINATION is not. If their
+copy-equivalence argument assumes both ends immutable it needs restating; if it needs only the
+source, it stands. I asked rather than assumed which they meant.
+
+**PINNED, WITH A FAILURE MESSAGE THAT REFUSES THE OBVIOUS FIX.** A single `SetField` opcode would
+refute both theorems and **would look like an ordinary instruction-set addition to whoever added
+it**. The guard's message says so and tells the reader to contact the proof's owner rather than
+update the test.
+
+**AND THE FIRST MUTATION OF IT WAS INVALID.** Adding a real `SetField` variant to the `Op` enum broke
+every exhaustive match in the crate, so the test never ran and the grep found nothing -- a mutation
+that fails to compile proves nothing about the guard. Injecting the name into the derived list
+instead fired both assertions. **A mutation must leave the program buildable or it is not a
+mutation**, which is a distinct trap from the ones already recorded.
+
 **A SHARED CHECKOUT DOES NOT ONLY ENDANGER COMMITS. IT SILENTLY CHANGES WHAT A LONG-RUNNING COMMAND
 IS MEASURING (2026-08-23).**
 

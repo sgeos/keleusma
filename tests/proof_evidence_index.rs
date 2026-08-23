@@ -42,6 +42,7 @@ const CITED_TESTS: &[&str] = &[
     "a_stream_calling_a_stream_compiles_verifies_and_runs",
     "a_loop_body_may_consume_from_below_its_entry_height",
     "compiled_loops_really_do_carry_a_non_empty_entry_stack",
+    "the_instruction_set_has_no_write_accessor_into_a_composite",
 ];
 
 /// The `src/verify.rs` citations, as (line, the text that line must contain).

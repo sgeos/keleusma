@@ -218,6 +218,38 @@ instrument.
 **Closing it structurally — flooring `verify()` at loop entry — would reject none of the 588 but
 narrows what loads**, which is an operator decision on this line rather than an agent's.
 
+### 10. No route writes a live ephemeral composite region — **MIXED**, and it is FALSE for persistent
+
+The proof's M1 immutability axiom. Four independent grounds:
+
+| ground | provenance |
+|---|---|
+| the instruction set has **seven** read accessors into a composite and **zero** write accessors | **EXECUTED**, derived from the `Op` enum |
+| `FlatComposite::resolve` returns `&[u8]`; there is no `resolve_mut`, and `ArenaHandle::get` returns `&T` | read from dispatch |
+| all four raw pointer writes in the virtual machine derive their base from `arena.persistent_ptr()` | read from dispatch |
+| natives are `Fn(&NativeCtx, &[GenericValue]) -> Result<GenericValue>`; no public API returns `&mut [u8]` into the arena | read from dispatch, plus a public-surface scan |
+
+```sh
+cargo test --test composite_escape_routes
+```
+
+`the_instruction_set_has_no_write_accessor_into_a_composite` pins the first, mutation-tested two
+ways. **A single `SetField` opcode would refute both reuse theorems and would look like an ordinary
+instruction-set addition**, so its failure message says to tell the proof's owner rather than update
+the test.
+
+**M1 IS FALSE FOR THE PERSISTENT REGION.** `SetData` and `SetDataIndexed` write **in place**, at a
+compiler-baked offset, into an existing persistent composite — repeatedly, and across resets. Any
+statement of M1 over "a region" unqualified is false here.
+
+**The two interact.** The persistent region is exactly where the `CopiesOut` routes of §5 land, so
+**the copy source is immutable and the copy destination is not**.
+
+**What would still refute it**: a native casting a resolved `&[u8]` to `*mut` under `unsafe`
+(outside the safe API, undetectable here, the same trust boundary as the native escape routes); a
+host calling the arena's `pub unsafe` rewind or reset out of band (which reclaims rather than
+mutates, but breaks the epoch discipline).
+
 ## What the verifier actually computes, and what a proof would change
 
 `wcmu_region` in `src/verify.rs` is **cumulative, with a maximum only across mutually exclusive

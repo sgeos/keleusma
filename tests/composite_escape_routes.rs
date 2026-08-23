@@ -408,3 +408,79 @@ loop main(t: Word) -> Outer {
          this size"
     );
 }
+
+// ---------------------------------------------------------------------------
+// M1: the immutability clause. No instruction writes into an existing composite
+// region. Derived from the instruction set so a new opcode cannot slip past.
+// ---------------------------------------------------------------------------
+
+/// The instruction set has SEVEN read accessors into a composite and ZERO write
+/// accessors, and that asymmetry is what makes composite bodies immutable after
+/// construction.
+///
+/// # Why this is pinned
+///
+/// The composite-region-reuse proof's M1 axiom — the baseline machine never
+/// modifies a region's bytes after construction completes — rests on it. Both
+/// its Theorem B1 and Theorem B2 rest on M1 in turn: B1 through the claim that
+/// bytes at a shared address change only when the site next executes, B2
+/// explicitly through its copy-equivalence argument.
+///
+/// **A single `SetField` opcode would refute both theorems**, and would look
+/// like an ordinary instruction-set addition to whoever added it. This test is
+/// where they find out.
+///
+/// # What it does NOT establish
+///
+/// Nothing about the PERSISTENT region, which **is** written in place —
+/// `SetData` and `SetDataIndexed` overwrite an existing persistent composite at
+/// a compiler-baked offset, repeatedly, across resets. M1 holds for the
+/// EPHEMERAL region only, and a version of it stated over "a region"
+/// unqualified is false here. The two are not symmetric and the difference is
+/// load-bearing: the persistent region is exactly where the `CopiesOut` routes
+/// land, so the copy destination is mutable while the copy source is not.
+#[test]
+fn the_instruction_set_has_no_write_accessor_into_a_composite() {
+    let names = opcode_names();
+
+    let projections: Vec<&String> = names
+        .iter()
+        .filter(|n| {
+            n.starts_with("Get")
+                && (n.contains("Field") || n.contains("Index"))
+                && *n != "GetDataIndexed"
+        })
+        .collect();
+    assert!(
+        projections.len() >= 4,
+        "expected the composite projections (GetField, GetIndex, GetTupleField, \
+         GetEnumField); found {projections:?}. If they were renamed, this test \
+         is looking for the wrong thing and proves nothing."
+    );
+
+    for p in &projections {
+        let counterpart = p.replacen("Get", "Set", 1);
+        assert!(
+            !names.contains(&counterpart),
+            "{counterpart} exists. An instruction that writes into a composite \
+             refutes the immutability premise the composite-region-reuse proof \
+             rests on, for BOTH of its reuse theorems. This is not a test to \
+             update — tell the proof's owner."
+        );
+    }
+
+    // The complete store set, stated positively so an unrelated new store also
+    // fails here and gets classified deliberately.
+    let stores: Vec<&String> = names
+        .iter()
+        .filter(|n| n.starts_with("Set") || n.starts_with("Store") || n.starts_with("Write"))
+        .collect();
+    assert_eq!(
+        stores,
+        vec!["SetLocal", "SetData", "SetDataIndexed"],
+        "the instruction set's store opcodes changed. SetLocal writes a frame \
+         slot; SetData and SetDataIndexed write the PERSISTENT region. None \
+         writes an ephemeral composite body, and any addition must be checked \
+         against that before the proof's M1 can stand."
+    );
+}
