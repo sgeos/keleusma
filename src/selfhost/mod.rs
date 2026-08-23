@@ -109,6 +109,12 @@ pub struct Body {
 /// A parsed function from the record stream: parser category (1 fn, 2 yield, 3 loop),
 /// name id, value-parameter count, and the postorder records of its `when` guard (empty
 /// when unguarded) and its body.
+///
+/// `Debug` is derived so [`ParsedProgram`] can be, which a fallible API wants: a
+/// caller that gets `Ok` and then finds the wrong shape has nothing to print
+/// otherwise. Every field is private, so the derive widens what can be OBSERVED,
+/// not what can be constructed.
+#[derive(Debug)]
 pub struct ParsedFn {
     cat: i64,
     name: i64,
@@ -797,6 +803,112 @@ pub fn parse_functions(
     let (names, data_records, enum_records) =
         parse_functions_impl(src, false, &mut |_, f| fns.push(f), &mut |_, _, _| {});
     (fns, names, data_records, enum_records)
+}
+
+/// What the parse pipeline refused, as a value rather than as a process abort.
+///
+/// Carries the message the panicking path would have printed. The three causes it
+/// can name are a stage diagnostic (`parse.kel` reporting one of its own capacity
+/// limits), a declaration form the stage does not recognise, and a raw virtual
+/// machine fault surfacing through the driver.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelfHostParseError {
+    /// The failure message, as [`parse_functions`] would have panicked with.
+    pub message: String,
+}
+
+impl core::fmt::Display for SelfHostParseError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for SelfHostParseError {}
+
+/// [`parse_functions`], returning the refusal instead of aborting the process.
+///
+/// # Why this exists
+///
+/// [`parse_functions`] is `pub` under the `self-host` feature and therefore
+/// reachable from outside this crate, and it PANICS on input the reference
+/// compiler accepts — the self-hosted front end admits a narrower surface than
+/// the language does, so ordinary source can reach a stage limit. **The
+/// `v0.3.0` line reported this from the outside**: their corpus survey had to
+/// wrap every call in `catch_unwind` and print which sources aborted, because
+/// silently skipping them would have hidden it. This entry point makes the
+/// supported behaviour a `Result` rather than each caller reinventing the
+/// workaround.
+///
+/// # What it does NOT promise, and the limit is real
+///
+/// The refusal is recovered by unwinding, so **a build compiled with
+/// `panic = "abort"` still aborts.** There is no way around that short of
+/// threading a `Result` through the whole record driver, which changes a
+/// signature both compile paths and many tests depend on; that is a real
+/// question and a separate one. The process panic hook also still runs, so the
+/// message appears on standard error even when it is returned here.
+///
+/// # What actually fails today, MEASURED rather than recalled
+///
+/// Of the eleven scripts in `examples/scripts/`, **two** are refused:
+/// `09_big_numbers.kel` and `10_multbyte.kel`, both with
+/// `IndexOutOfBounds(-1, 65)` out of `parse.kel`. **This corrects a standing
+/// report of FOUR**, whose other two — `02_struct_field.kel` and
+/// `08_method_dispatch.kel` — were fixed by the struct/trait/impl skip state and
+/// now parse. It also corrects the CAUSE: the surviving two do not reach
+/// `open_decl` at all, so "a top-level `struct`" no longer explains them.
+/// `every_shipped_example_is_parsed_or_refused_by_name` pins the set, so the
+/// count cannot drift again without a test saying so.
+pub fn try_parse_functions(src: &str) -> Result<ParsedProgram, SelfHostParseError> {
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parse_functions(src)));
+    match caught {
+        Ok((functions, names, data_records, enum_records)) => Ok(ParsedProgram {
+            functions,
+            names,
+            data_records,
+            enum_records,
+        }),
+        Err(payload) => Err(SelfHostParseError {
+            // `&payload` would coerce to `&dyn Any` naming the BOX, not its
+            // contents, because `Box<dyn Any + Send>` is itself `Any`. The
+            // downcast then fails for every payload and every refusal reports
+            // "not a string". Measured, not reasoned: the pinning test caught it.
+            message: panic_message(payload.as_ref()),
+        }),
+    }
+}
+
+/// The four-tuple [`parse_functions`] returns, named.
+///
+/// The tuple is kept on the original entry point because its callers destructure
+/// it positionally and several ignore most of it; a fallible API returning a
+/// tuple inside a `Result` reads badly enough to be worth the struct.
+#[derive(Debug)]
+pub struct ParsedProgram {
+    /// The parsed functions, in declaration order.
+    pub functions: Vec<ParsedFn>,
+    /// The interned name table.
+    pub names: Vec<String>,
+    /// Every data block's header records, concatenated in declaration order.
+    pub data_records: Vec<(i64, i64)>,
+    /// Every enum's header records, concatenated in declaration order.
+    pub enum_records: Vec<(i64, i64)>,
+}
+
+/// Recover a panic payload as text.
+///
+/// `panic!` with a formatted message yields a `String`; a literal yields a
+/// `&'static str`. Both are handled because the driver produces both, and a
+/// payload of neither shape is reported as such rather than as an empty message,
+/// which would read as a refusal with no reason.
+fn panic_message(payload: &(dyn core::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else if let Some(s) = payload.downcast_ref::<&'static str>() {
+        (*s).to_string()
+    } else {
+        "parse.kel refused the input and the panic payload was not a string".to_string()
+    }
 }
 
 /// The same, with `lexer.kel` driven INTO `parse.kel` and no token stream
