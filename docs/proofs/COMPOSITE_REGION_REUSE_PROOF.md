@@ -311,7 +311,11 @@ iteration, which it does not today.
    which is P6(d), whose verifier-level gap is executed and pinned while its emission-side zero
    is a measurement at a commit only. A future returning stream, a code-generator change, or
    hand-written bytecode defeats Theorems A2, A3, B1, and Corollary C without failing
-   verification. Theorem A1 depends on neither fact. Closing P6(d) structurally, by flooring the
+   verification. Theorem A1 depends on neither fact. The producer matters too. The zero-breach
+   measurement covered the eleven example scripts and the twelve stage sources compiled by the
+   **reference** compiler, and says nothing about modules the self-hosted compiler emits, a
+   different producer, beyond the constructs where the byte-identity corpus makes the two
+   artifacts identical. Closing P6(d) structurally, by flooring the
    typed pass's pops at loop entry, would convert the compiler property into a verifier
    guarantee, and Section 10 records whose decision that is.
 3. **A stale internal handle is an error, not a wrong value, and no route to one was found.**
@@ -358,7 +362,7 @@ addition, which is the intended forcing function.
 | loop accounting stops multiplying confined sites | `src/verify.rs:1079` | V0.2.X line | **operator**, it lowers a published worst-case-memory-usage figure |
 | branch maximum | `src/verify.rs:992` | V0.2.X line | already implemented, Theorem A1 justifies it |
 | backend stops reusing slots of unconfined sites | native backend planner | V0.3.X line | required for soundness independent of this proof, per the obligation document's Section 4.1.1 |
-| backend may overlap exclusive arms | native backend planner | V0.3.X line | licensed by Theorems A2 and A3, within the compiler-emitted scope Section 8 states |
+| backend may overlap exclusive arms | native backend planner | V0.3.X line | licensed by Theorems A2 and A3, within the reference-compiled scope Section 8 states. The zero-breach measurement covered modules from the reference compiler only, and says nothing about the self-hosted compiler as a producer beyond where byte identity holds |
 | verifier floors operand-stack pops at loop entry, converting P6(d) from an emitted invariant into an enforced one | `src/verify_typed.rs` | V0.2.X line | **operator**, it narrows the acceptance surface of `verify()`. The measured cost is zero, no loop instance among the 588 in the shipped corpus would be rejected, and the V0.2.X line has raised the item on its own channel |
 
 This document's conclusions authorize none of these changes. Each is a request to its owning line,
