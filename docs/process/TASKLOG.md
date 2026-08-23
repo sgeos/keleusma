@@ -10,6 +10,25 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-23, session 52 continued). THE PROOF'S PREMISE IS NOW MEASURED, AND THE
+> ONE UNANSWERED OFFER IS BUILT.**
+>
+> **130 merges on `origin/v0.2.3`** (#253 landed 22 of 22 at `67ade006`).
+>
+> **`tests/composite_escape_window.rs`** pins the premise `COMPOSITE_REGION_REUSE.md` §4.0.1 cites
+> this line for. `Op::Reset` is **once per stream cycle**, not per `for` iteration, so the escape
+> window spans arbitrarily many loop-body iterations and closes at the cycle boundary. The
+> load-bearing test is that two iterations' composites are **live together and distinct**, which is
+> what slot reuse collapses; "the handle still reads 1" passes on a degenerate runtime.
+>
+> **`reconstruct_category()` is built and public.** The other line offered it and the offer went
+> unanswered. Building it found that `ParsedFn::category()`'s doc comment was **false** (it returns
+> the PARSE category, not the reconstruct one), that the other line's prose description of the
+> mapping names the wrong declaration form, and that it was **five copies, not the two I asserted**.
+> The test driver's copy stays independent as the parity oracle, with an agreement guard.
+>
+> **STILL NOT STARTED**: the floating-point entry ABI. Operator item.
+
 > **Currency note (2026-08-22, session 52). THE OTHER LINE'S CONCERNS ARE ADDRESSED, AND ONE OF THEM
 > WAS A LIVE DEFECT IN A SHIPPED ARTIFACT.**
 >

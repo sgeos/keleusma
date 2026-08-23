@@ -13,6 +13,51 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**A PROOF WAS ABOUT TO REST ON A CLAIM I HAD NOT MEASURED, AND THE ACCESSOR I MISSED WAS FIVE COPIES
+(2026-08-23).**
+
+The `v0.3.0` line's `docs/proofs/COMPOSITE_REGION_REUSE.md` §4.0.1 cites this line for *"the host may
+hold a yielded handle, resume, and read it afterwards; it resolves fine until `RESET`"*, and derives
+from it that a B2 proof over the narrower "live at the yield" reading would be UNSOUND. **I supplied
+that sentence from reading the code, not from running it.**
+
+**Measured, and it holds with a tighter bound.** `Op::Reset` is emitted ONCE PER STREAM CYCLE, at the
+end of the `loop main` body -- not per `for` iteration. The op stream shows one `Reset` and a
+`Loop`/`EndLoop` pair wholly inside the cycle containing the `Yield`. A handle taken at the first
+iteration reads its own value across two further yields at epoch 0, then goes `Stale` at the `Reset`
+when the epoch becomes 1. **So the window is one stream cycle, which may contain arbitrarily many
+loop-body iterations** -- more useful than "until RESET" without saying when RESET fires.
+
+**THE ASSERTION THAT CARRIES THE THEOREM IS NOT THE ONE THAT LOOKS LIKE IT.** "The held handle still
+reads 1" passes on a runtime that yields the same value twice. The load-bearing property is that at
+the instant iteration 2 yields, the held handle and the fresh one resolve to DIFFERENT values --
+which is precisely what one reused slot collapses, since same address plus same epoch makes both
+`resolve` calls succeed and return the later value. That is a separate test, and the window CLOSING
+is asserted too, because without it the suite would pass on a runtime that never invalidates
+anything.
+
+**THEN THE ACCESSOR, WHICH WAS OFFERED AND I MISSED IT.** They had written *"if you would rather own
+it, a `reconstruct_category()` accessor would remove the copy"* and I never answered. Building it
+turned up three things.
+
+| | |
+|---|---|
+| `ParsedFn::category()`'s doc said "as `reconstruct.kel` consumes it" | **false** -- it is the PARSE category, a different encoding. They found the discrepancy by measurement and worked around it while my documentation told them the opposite of the truth |
+| their description of the mapping: "2 for a `yield` declaration" | **it is 2 for a `loop`.** Anyone mirroring the prose rather than the code seeds `loop` as `fn` and `yield` as `loop` |
+| I asserted two copies | **five** -- three in the driver, one in the test's copy of the driver, one theirs. The assert caught me; I had derived the count from a grep I read too quickly |
+
+**THE TEST'S COPY IS LEFT INDEPENDENT ON PURPOSE.** It is the second implementation the
+driver-parity oracle compares against, and the five-defects-one-cause finding was entirely "the copy
+had something the driver did not". Folding it in would remove the drift and the check together. It
+became a NAMED function rather than an inline expression -- which is what made it checkable at all --
+and an agreement guard sweeps the whole category domain instead of the values the corpus contains.
+**The mutation that makes that guard fire is exactly the other line's prose version of the mapping.**
+
+**THE RECURRING DEFECT, SEVENTH AND EIGHTH INSTANCES.** Deriving a set from the part of the system I
+was thinking about rather than from the system: two copies where there were five. And a check whose
+strength is not where it appears to be: the value-still-reads-1 assertion, which a degenerate runtime
+satisfies.
+
 **ADDRESSING THE OTHER LINE'S CONCERNS FOUND A DEFECT THEY COULD NOT SEE, AND CORRECTED A COUNT
 THEY WERE STILL QUOTING (2026-08-22).**
 
