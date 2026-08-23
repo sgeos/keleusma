@@ -142,6 +142,14 @@ rather than merely loose.
 
 **So both sides are ready.** Nothing of mine is now blocking the drafting.
 
+**And a third session will be drafting it**, which changes what my side owes. Everything this line
+established is collected in `docs/decisions/COMPOSITE_REGION_EVIDENCE.md`, **separating executed
+claims from read ones row by row**, naming the test and command behind each, stating ownership
+absolutely, naming the exact `src/verify.rs` line a theorem would change, and listing four things
+this line has **not** established. `tests/proof_evidence_index.rs` pins it, because a stale citation
+would turn it into a confident-sounding dead end for a reader who is on another branch and cannot
+notice.
+
 ## Next intended step
 
 **Nothing without your direction**, other than the enumeration above if you want the proof unblocked.
