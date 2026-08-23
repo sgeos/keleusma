@@ -5,11 +5,14 @@
 > **STATUS.** Part I is a general theory over an abstract machine, proved from stated axioms and
 > applicable to any system that discharges them. Part II instantiates the axioms for Keleusma
 > with measured standing recorded per row. In the instantiation, Theorem A1 is unconditional,
-> while Theorems A2, A3, B1, and Corollary C rest on two axioms discharged by reference-compiler
-> emission invariants that `verify()` does not enforce, so their conclusions apply to
-> reference-compiled modules and do NOT apply to arbitrary bytecode that merely verifies. The
-> details, including an executed verifier-accepted counterexample to structural enforcement, are
-> in Appendix A, and the pin commits are recorded in Appendix E with their differing standings.
+> while Theorems A2, A3, B1, B2, and the corollaries rest on axioms discharged in part by
+> reference-compiler emission invariants that `verify()` does not enforce, so their conclusions
+> apply to reference-compiled modules and do NOT apply to arbitrary bytecode that merely
+> verifies. Theorem B2 is additionally a **proved specification, not a description**: the
+> escape-copy discipline it requires does not exist in Keleusma today, and Appendix C names the
+> adoption obligations. One instantiation row, M1's immutability clause, awaits confirmation by
+> the V0.2.X line. The verifier-accepted counterexample to structural enforcement is in
+> Appendix A, and the pin commits are in Appendix E with their differing standings.
 
 This document discharges part of the obligation stated in `docs/proofs/COMPOSITE_REGION_REUSE.md`
 on the `v0.3.0` line, cited at commit `a49555bb`. Part I is self-contained mathematics and cites
@@ -61,7 +64,9 @@ loop enclosing $s$.
 **reuse plan**, some sites' dynamic executions share one offset. A reuse plan is **sound** when
 for every program and every path the machine under the plan is observationally equivalent to the
 machine under no reuse, where the observations are the outcome of every dereference, by the
-environment or by the machine, and every scalar output.
+environment or by the machine, and every scalar output. Handle addresses are not observations.
+An environment that compares handle addresses for value identity lies outside this observation
+model, and Theorem B2 in particular does not hold for it.
 
 **Definition 5, confinement.** Let $v$ be the value allocated at site $s$ in scope $n$, with
 region $r_n$. The value is **confined** when, along every path, no reference to $r_n$ is ever an
@@ -70,8 +75,9 @@ value it allocates on every path is confined.
 
 Confinement is deliberately coarse. It forbids some harmless flows, for example a callee
 returning the value back into the same scope, because the classification of M3 is by worst case.
-The coarseness weakens applicability and never soundness. Section 8 records the refinements that
-are not proved.
+The coarseness weakens applicability and never soundness. Section 9 records the refinements that
+are not proved, and Section 8 proves the regime that removes the condition entirely at a copy
+cost.
 
 ## 3. Axioms
 
@@ -80,7 +86,7 @@ standing, is an instantiation concern. Appendix A does so for Keleusma.
 
 | # | axiom |
 |---|---|
-| M1 | **Bump ephemeral allocation.** Allocation in the ephemeral region is by bump pointer. The region is reclaimed, and the epoch advanced, only at cycle boundaries. Nothing else reclaims within a cycle. |
+| M1 | **Bump ephemeral allocation, immutable regions.** Allocation in the ephemeral region is by bump pointer. The region is reclaimed, and the epoch advanced, only at cycle boundaries. Nothing else reclaims within a cycle. A region's bytes are not modified after its construction completes, except by a reuse plan's reallocation of the same offsets. |
 | M2 | **Epoch-guarded handles.** A handle carries the epoch current at its creation. Dereference succeeds exactly when the carried epoch equals the current epoch. An overwrite in place advances nothing. |
 | M3 | **Total instruction classification.** The instruction set is partitioned, totally, into four classes with these semantics. `NoRegion` instructions neither create nor transport references. `WithinScope` instructions create or move references only into locations whose lifetime is contained in the current scope. `CopiesOut` instructions write the referenced bytes, never references, to their destinations. Only `Escapes` instructions can place a reference into a location that outlives the current scope. No instruction fabricates a handle; references originate only at allocation instructions. Totality must hold and keep holding as the instruction set changes. |
 | M4 | **Cycle cadence.** Each cycle contains exactly one epoch advance, at its end. |
@@ -148,7 +154,7 @@ exactly that. Both location classes of the invariant are therefore empty. $\blac
 The dependence on M6(d) is real and is why it is a separate clause. Without it, a value could
 cross the back edge through pure stack operations, touching no escaping instruction, and
 confinement would not see it. An instantiation that discharges M6(d) by a producer invariant
-rather than a structural check inherits the scoping consequence stated in Section 8.
+rather than a structural check inherits the scoping consequence stated in Section 9.
 
 ## 5. The branch theorems
 
@@ -234,7 +240,84 @@ same no-reuse baseline and their location sets are disjoint by construction. Whe
 confined, its contribution reverts to $k \cdot \mathrm{sz}(s)$, and any planner reusing its slot
 anyway is unsound.
 
-## 8. Limits of the general theory
+## 8. Theorem B2, universal slot reuse under an escape-copy discipline
+
+Theorem B1 restricts the plan to confined sites. The alternative regime changes the machine
+instead of restricting the plan: if every escaping flow transports a copy, no site needs
+confinement. This section proves that regime sound in general. Whether any concrete system
+implements the discipline is an instantiation question, and Appendix C records that Keleusma
+does not today.
+
+**Definition 9, escape-copy discipline.** A machine satisfies the escape-copy discipline when
+every execution of an `Escapes`-classified instruction whose operand is a reference to a region
+transports a **fresh copy** in its place, subject to all of the following.
+
+1. **Faithfulness.** The copy's bytes equal the referenced bytes at the instant of the copy.
+2. **Stability.** A copy's bytes are not modified while any reference to it is reachable within
+   its epoch. In particular the copy store is disjoint from every reused slot.
+3. **Epoch stamping.** A copy handle carries the epoch current at its creation, and dereference
+   remains governed by M2.
+4. **Recursion.** The discipline applies equally when the operand is a reference to a copy, so
+   an escape of a copy produces a further copy.
+5. **Depth.** A copy contains no reference into any ephemeral region or reused slot.
+
+**Lemma 3, unconditional scope clearance.** Under M3 with the escape-copy discipline in force,
+M6, and M7, for every site $s$ in a loop and every scope $n$, at the end of scope $n$ no
+reachable location holds a reference to $r_n$. No confinement hypothesis is needed.
+
+*Proof.* The induction of Lemma 2 goes through with its `Escapes` case replaced. An escaping
+instruction with a reference to $r_n$ as operand consumes it and places a reference to a fresh
+copy in the outliving location. By clause 5 the copy holds no reference to $r_n$, so the case
+creates no location holding one. The environment-reply flow also closes without confinement:
+under the discipline the environment only ever receives copy references, by clauses 4 and 5
+those reference no site region, and by M7 it presents only what it received, so a reply cannot
+reintroduce a reference to $r_n$. Every other case is as in Lemma 2, and the scope-end argument
+by M6, including its dependence on M6(d), is unchanged. $\blacksquare$
+
+**Theorem B2. Requires M1, M2, M4, M5, M6, M7, and the escape-copy discipline.** The plan
+assigning every site, loop or straight-line, one slot reused across all its dynamic executions
+is sound, under the observation model of Definition 4, which excludes handle addresses.
+
+*Proof.* Every observation is a dereference outcome or a scalar output, and scalar computation
+reads regions only through dereferences, so it suffices that every dereference returns the same
+result in the two regimes.
+
+A dereference of a reference to a site region $r_m$ occurs, by Lemma 3, only during scope $m$
+itself, before the site's next execution begins, so the slot holds exactly $v_m$'s bytes, which
+equal the baseline bytes by M1's immutability. For a straight-line site, consecutive executions
+are separated by an epoch boundary by M4, and the cross-epoch case below covers them.
+
+A dereference of a copy reference within the copy's epoch returns, by clauses 1 and 2 and
+induction along the copy chain of clause 4, the construction bytes of the originally escaped
+value, which is what the baseline returns for the corresponding original reference, since
+baseline regions are immutable after construction and unreclaimed within the epoch by M1.
+Across epochs, by clause 3 and M2 the copy dereference fails stale, and the corresponding
+baseline dereference fails stale by M2 and M4, identically. By M5 no internal location that is
+subsequently read carries any of this across a boundary in either regime. Hence observational
+equivalence. $\blacksquare$
+
+**Corollary B2a, accounting.** Under Theorem B2's hypotheses, worst-case memory accounting
+counts each site once per cycle in the arena term and must add a **copy-store term**,
+
+$$
+\max_{\pi \in \Pi} \sum_{e \in \mathrm{esc}(\pi)} \mathrm{sz}(e)
+$$
+
+with $\mathrm{esc}(\pi)$ the multiset of escaping executions per cycle along $\pi$. The copy
+term re-enters the machine's bound except where the copy store is environment-owned, as it can
+be for values yielded outward. Consequently, for a site that escapes on every iteration, the
+regime does not tighten the bound, it relocates it. The gains are elsewhere: soundness of
+uniform reuse with no confinement analysis, the removal of yielded values from the machine's
+bound where the environment owns the copy store, and the neutralization of the escape hazard
+for a planner that already reuses slots.
+
+**Corollary B2b, the hybrid plan.** The regimes compose per site: a plan that reuses confined
+sites without copies, by Theorem B1, and unconfined sites with the discipline applied to their
+escapes, by Theorem B2, is sound, since each argument is an observational equivalence against
+the same baseline and the location sets are disjoint. The hybrid pays copy costs only where
+confinement fails.
+
+## 9. Limits of the general theory
 
 1. **The axioms are obligations, and their standing transfers to the theorems.** An instantiation
    that discharges an axiom by a **producer invariant**, a property of what a particular compiler
@@ -270,7 +353,7 @@ to executed without running them.
 
 | axiom | instantiation and standing |
 |---|---|
-| M1 | Operator ruling on the memory model, obligation document Section 1. Bump arena, ephemeral region cleared only at `RESET`, nothing reclaimed within a run. |
+| M1 | Operator ruling on the memory model, obligation document Section 1. Bump arena, ephemeral region cleared only at `RESET`, nothing reclaimed within a run. The immutability clause is **read, not executed**: no opcode appears to write into an existing ephemeral composite region after its construction completes, values being rebound rather than mutated and data-slot writes copying into the persistent region. **Confirmation requested from the V0.2.X line, 2026-08-23. Pending.** Theorems B1 and B2 both rest on it. |
 | M2 | **Executed.** A non-empty composite value carries an arena handle, not bytes. `resolve` fails `Stale` exactly when the epoch has advanced, and an overwrite in place advances nothing. `tests/composite_escape_window.rs`, all three tests. The load-bearing assertion is that two iterations' composites resolve simultaneously to different values, which is exactly what one reused slot collapses. |
 | M3 | The 66 opcodes are partitioned in `tests/composite_escape_routes.rs`, with **totality asserted against the `Op` enum at test time**, so a route can be missed only by misclassification, never by omission, and a new opcode fails the test. The escaping set is exactly `Yield`, `SetLocal`, `Return`, `CallVerifiedNative`, `CallExternalNative`. `SetLocal` is classified by its worst case because the opcode cannot distinguish an inner binding from an outer one, and it is the route that defeats a restriction phrased as no `yield`, with no host involved. Per-row verdicts are **analysis, not proof**. The `Yield` row and both `CopiesOut` rows, private-data writes and flat nesting, are executed, the latter two deliberately because a wrong `CopiesOut` makes the theory unsound rather than loose. The boxed construction path does alias and does not arise for the transitively-scalar composites this instantiation concerns, a boundary stated rather than assumed away. The rest of the rows are read from dispatch. Disagreements go to the table, where the test makes them concrete. |
 | M4 | **Executed.** `Op::Reset` is emitted once per stream cycle, at the end of the `loop main` body, not per `for` iteration. `reset_is_once_per_stream_cycle_not_once_per_loop_iteration`. |
@@ -278,9 +361,10 @@ to executed without running them.
 | M6 | (a) **Confirmed.** `TypedError::LoopNotNeutral` in the `Op::Loop` arm of `src/verify_typed.rs` compares the entire abstract stack, height and per-slot shape, read from dispatch. Neutrality is on **shapes, not identities**, so the correct reading is that no new entry survives the back edge, never that the entries are identical across iterations. (b) **Confirmed.** `Break` edges join through `join_stacks`, read from dispatch. (c) Read from dispatch, with call termination from totality. (d) **Settled 2026-08-23 in the unfavorable direction: a code-generation invariant only, and the verifier gap is executed, not conjectured.** `verify()` accepts a shape that pops a below-entry entry inside a loop and pushes a same-shape replacement, pinned in the V0.2.X line's `tests/loop_entry_floor.rs`. The typed pass floors pops at the frame, not at the loop entry, and the frame floor does not incidentally cover the loop floor, because 122 of 245 `Loop` instances in the shipped corpus carry a non-empty operand stack at entry, executed and pinned. The emission side was measured exactly, by a per-path floor check inside the typed pass's own abstract interpretation, proven to fire on the breaching shape: **zero breaches over 588 loop instances across 23 shipped modules**. That instrumentation is reverted and the zero is **a measurement at a commit, not a standing guarantee**, cited as exactly that. A linear depth scan also reported zero and was discarded as exact for only 4 of the 245 loops, recorded because the flattering number came from a broken instrument first. |
 | M7 | Trust assumption, not a theorem. The host holds and may return handles it received and does not fabricate them. Native retention is unknowable from this side, which is why both native-call opcodes are classified escaping. |
 
-**The scoping consequence of Section 8, instantiated.** M5's second half and M6(d) are invariants
-of what the **reference** compiler emits. Therefore Theorems A2, A3, B1, and Corollary C hold for
-reference-compiled modules and do not hold for arbitrary bytecode that merely passes `verify()`.
+**The scoping consequence of Section 9, instantiated.** M5's second half and M6(d) are invariants
+of what the **reference** compiler emits. Therefore Theorems A2, A3, B1, B2, and the corollaries
+hold for reference-compiled modules and do not hold for arbitrary bytecode that merely passes
+`verify()`.
 The producer matters further: the zero-breach measurement covered the eleven example scripts and
 the twelve stage sources compiled by the reference compiler, and says nothing about modules the
 self-hosted compiler emits, a different producer, beyond the constructs where the byte-identity
@@ -314,24 +398,46 @@ corpus makes the two artifacts identical.
    the kind the typed operand-stack verifier already computes. Any operand whose flow cannot be
    established must be treated as escaping.
 
-## Appendix C. B2 and instruction-set remedies, as proposals
+## Appendix C. B2 in Keleusma, and instruction-set remedies
 
-**B2, copy at escape.** Reuse becomes unconditional if every escaping flow hands out a copy whose
-storage is outside every reused slot, in the persistent region or in host memory. The escaped
-handle then references the copy, so every later resolve of it is independent of the slot's
-overwrites, and the escape-window question of the obligation document's Section 4.0.1 is answered
-by construction rather than bounded. The obligations B2 creates are the correctness of the copy,
-its worst-case execution time cost at every escape site, and the provisioning of the copy
-storage, which re-enters the memory bound. None of this exists today, and this document does not
-license it.
+**Theorem B2 is proved in general, and the discipline it requires does not exist in Keleusma
+today.** No escape route copies: a yielded composite is a handle, `SetLocal` stores the handle,
+and the native calls receive it. In this codebase B2 is therefore a **proved specification for a
+change**, not a description of the present system, and it answers the escape-window question of
+the obligation document's Section 4.0.1 by construction rather than by bounding. Adoption
+carries the following obligations, each named here so none is discovered at implementation time.
 
-**Instruction-set position.** No new opcode is required for anything proved here. Theorem B1 is a
-planner and verifier change over the existing instruction set. B2, if ever adopted, has at least
-two lowerings that need no new opcode, a compiler-inserted copy through existing constructs, or a
-semantics change to `Yield` and its siblings. A dedicated copy opcode would require the strong
-justification the operator demands for instruction-set modification, and no such justification
-arises from this work. The classification test pins the opcode count at 66 and fails on any
-addition, which is the intended forcing function.
+1. **The copy itself.** Every escape of a composite must copy its bytes, at `Yield`, at
+   `SetLocal` where the target slot outlives the scope, at `Return` across the surviving frame,
+   and at both native calls. Correctness is Definition 9's faithfulness and depth clauses. The
+   flat representation makes copies deep by construction for transitively-scalar composites, and
+   the **boxed path remains a boundary**: it stores operands as separate values, a deep copy
+   there is additional work, and nothing here covers it.
+2. **Worst-case execution time.** A copy of $\mathrm{sz}$ bytes at every escaping execution
+   enters the worst-case-execution-time model, which is the crate's headline claim, so the cost
+   belongs in the cost model before adoption, not after.
+3. **Copy-store provisioning.** Corollary B2a's copy term re-enters the worst-case-memory-usage
+   bound except for copies into host-owned storage. A per-local copy slot reused on overwrite
+   would bound `SetLocal` copies at one slot per local, but its soundness needs a further
+   argument, that no live reference to the old copy exists at overwrite time, which is **not
+   proved here**.
+4. **Epoch stamping.** Copy handles must carry the creation epoch and stay behind `resolve`'s
+   check, or behavior after `RESET` diverges from the baseline and the equivalence fails.
+5. **Handle-address opacity.** Definition 4 excludes addresses from observations. A host that
+   compares handle addresses for value identity breaks Theorem B2's equivalence, so adoption
+   requires documenting address opacity as an embedder obligation, in those words.
+6. **The accounting is honest, not free.** By Corollary B2a, a site escaping on every iteration
+   relocates its bound rather than tightening it. The definitive gains are uniform reuse with no
+   confinement analysis, yielded values leaving the machine's bound where the host owns the copy
+   store, and soundness for a backend that already reuses slots. Corollary B2b's hybrid, copies
+   only where confinement fails, is the form that dominates both pure regimes.
+
+**Instruction-set position.** Unchanged by the proof. No new opcode is required: the discipline
+has at least two lowerings, a compiler-inserted copy through existing constructs, or a semantics
+change to the five escaping opcodes' handling of composite operands. A dedicated copy opcode
+would require the strong justification the operator demands for instruction-set modification,
+and no such justification arises from this work. The classification test pins the opcode count
+at 66 and fails on any addition, which is the intended forcing function.
 
 ## Appendix D. Change control
 
@@ -372,5 +478,8 @@ saying a proof premise moved rather than reading as a routine fix. The zero-over
 measurement is in no commit and no tree, and remains a measurement at a commit. The operator rulings relied on are the memory model, the
 branch topology, the generality directive that produced this document's structure, and the scope,
 all of 2026-08-23, and the standing rule that instruction-set modification requires strong
-justification. An earlier revision of this document interleaved the instantiation with the
+justification. The scope was expanded by operator direction later on 2026-08-23 to include the
+proof of Theorem B2, which entered as Section 8 with Definition 9 and Lemma 3, together with
+M1's explicit immutability clause, whose instantiation confirmation is pending with the V0.2.X
+line. An earlier revision of this document interleaved the instantiation with the
 theory; the reorganization changed no theorem, no proof, and no recorded standing.
