@@ -10,6 +10,28 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-23, later). THE PROOF'S §6.3 OBLIGATION IS DISCHARGED FROM THIS SIDE.**
+>
+> **131 merges on `origin/v0.2.3`** (#255 landed 22 of 22 at `b94fcfe7`).
+>
+> `tests/composite_escape_routes.rs` answers the other line's *"are there escape routes besides
+> `yield`?"* **by enumerating all 66 opcodes rather than by listing the routes one thinks of.** The
+> classification is asserted TOTAL against the `Op` enum read out of `src/bytecode.rs`, so a route
+> can be missed only by MISCLASSIFICATION, never by omission, and a new opcode fails the test.
+>
+> **FIVE ESCAPING ROUTES**: `Yield`, `SetLocal`, `Return`, `CallVerifiedNative`,
+> `CallExternalNative`. The last two are a HOST TRUST BOUNDARY this line cannot close and are
+> classified as escaping because they must be assumed to be.
+>
+> **THE TWO "SAFE" CLAIMS ARE BACKED BY EXECUTION**, because a wrong one makes the restriction
+> unsound rather than loose. A composite written to a `private data` slot survives two resets that
+> reclaim its construction region, so the slot holds a COPY. A composite nested into a flat composite
+> appears as words packed inline in the parent's own 24 bytes, so nesting copies. The boxed path does
+> alias and that limit is stated rather than assumed away.
+>
+> Mutation-tested three ways: a dropped opcode, a stale non-opcode entry, and a reclassified escaping
+> route each fire.
+
 > **Currency note (2026-08-23, session 52 continued). THE PROOF'S PREMISE IS NOW MEASURED, AND THE
 > ONE UNANSWERED OFFER IS BUILT.**
 >

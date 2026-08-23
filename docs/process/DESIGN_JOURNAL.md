@@ -13,6 +13,47 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**AN ENUMERATION THAT CANNOT MISS A ROUTE, BECAUSE IT STARTS FROM THE INSTRUCTION SET (2026-08-23).**
+
+The other line's proof asks whether `yield` is the only way a composite escapes the iteration that
+built it, and warns that **one survivor makes the restriction UNSOUND rather than incomplete.** That
+is a question an enumeration built by listing the routes one thinks of cannot answer, whatever it
+finds -- it has the same shape as the meta-defect this line has now recorded six times: *a suite whose
+coverage is a property of its case list, mistaken for a property of the thing under test.*
+
+**SO THE ENUMERATION STARTS FROM THE 66 OPCODES AND CLASSIFIES EVERY ONE**, with totality asserted
+against the `Op` enum read out of `src/bytecode.rs` at test time. A route can now be missed only by a
+MISCLASSIFICATION, never by an omission, and a new opcode fails the test rather than slipping through.
+That is a weaker guarantee than a proof and a much stronger one than a list.
+
+**FIVE ESCAPING ROUTES**: `Yield`, `SetLocal`, `Return`, and the two native calls. `SetLocal` is the
+one worth naming -- a binding declared OUTSIDE the loop keeps the handle after the iteration ends, and
+the opcode cannot distinguish an inner slot from an outer one, so it is classified by its worst case.
+**The two native calls are a HOST TRUST BOUNDARY this line cannot close**, and saying so is the honest
+result rather than a gap.
+
+**THE TWO "SAFE" CLASSIFICATIONS ARE BACKED BY EXECUTION, AND THAT ASYMMETRY IS DELIBERATE.** A wrong
+`Escapes` makes a restriction loose; a wrong `CopiesOut` makes it UNSOUND. So both were run rather
+than read:
+
+| claim | discriminator | result |
+|---|---|---|
+| `SetData` copies | write in cycle 1, read after two resets that reclaim the region | reads 42 every time; a stored handle would have failed `Stale` |
+| flat nesting copies | inspect the parent's resolved bytes | `[11, 22, 33]` in 24 contiguous bytes -- the child's words are inline |
+
+The `private data` form was used rather than `shared`, because a host buffer must copy by
+construction and would have proved the easy half. **The boxed nesting path DOES alias**, and that
+limit is stated instead of leaving a claim that reads as universal.
+
+**MUTATION-TESTED THREE WAYS** -- a dropped opcode, a stale entry naming a non-opcode, and an escaping
+route reclassified as safe. All three fire. The second matters most: it is what catches a table
+maintained against memory rather than against the enum, which is the failure the derivation exists to
+prevent.
+
+**AND THE `chunks_exact_to_as_chunks` LINT REAPPEARED**, on new code of mine -- the same lint that
+blocked the other line in August. Fixed rather than allowed. Second time this session that a lint the
+other line reported turned out to be reachable from this side too.
+
 **A PROOF WAS ABOUT TO REST ON A CLAIM I HAD NOT MEASURED, AND THE ACCESSOR I MISSED WAS FIVE COPIES
 (2026-08-23).**
 
