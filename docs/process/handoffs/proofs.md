@@ -36,9 +36,9 @@ Nothing to either peer line.
 
 ## Owed to this line
 
-- **The commits** carrying the V0.2.X line's `tests/stream_never_returns.rs` and
-  `tests/loop_entry_floor.rs` pins, promised once their re-run gate is green, to be recorded in
-  the proof's provenance appendix.
+Nothing. The V0.2.X line's pin commit `435a8f6d` landed and is recorded in the proof's
+Appendix E with the two files' differing standings kept distinct, an invariant pin that re-runs
+every build and a gap pin that fails deliberately if the gap is closed.
 
 ## Process note
 
