@@ -1,4 +1,4 @@
-# Region Slot Reuse Under Escape Confinement — Theorems and Proofs
+# Region Slot Reuse Under Escape Confinement
 
 > **Navigation**: [Documentation Root](../README.md)
 
@@ -8,7 +8,7 @@
 > while Theorems A2, A3, B1, B2, and the corollaries rest on axioms discharged in part by
 > reference-compiler emission invariants that `verify()` does not enforce, so their conclusions
 > apply to reference-compiled modules and do NOT apply to arbitrary bytecode that merely
-> verifies. Theorem B2 is additionally a **proved specification, not a description**: the
+> verifies. Theorem B2 is additionally a **proved specification, not a description**. The
 > escape-copy discipline it requires does not exist in Keleusma today, and Appendix C names the
 > adoption obligations. M1's immutability clause is confirmed on four independent grounds, one
 > executable and pinned, and it is scoped to the ephemeral region deliberately, because the
@@ -23,7 +23,7 @@ proposal lives in the appendices.
 
 ---
 
-# Part I — General theory
+# Part I. General theory
 
 ## 1. Setting
 
@@ -90,7 +90,7 @@ standing, is an instantiation concern. Appendix A does so for Keleusma.
 |---|---|
 | M1 | **Bump ephemeral allocation, immutable regions.** Allocation in the ephemeral region is by bump pointer. The region is reclaimed, and the epoch advanced, only at cycle boundaries. Nothing else reclaims within a cycle. A region's bytes are not modified after its construction completes, except by a reuse plan's reallocation of the same offsets. |
 | M2 | **Epoch-guarded handles.** A handle carries the epoch current at its creation. Dereference succeeds exactly when the carried epoch equals the current epoch. An overwrite in place advances nothing. |
-| M3 | **Total instruction classification.** The instruction set is partitioned, totally, into four classes with these semantics. `NoRegion` instructions neither create nor transport references. `WithinScope` instructions create or move references only into locations whose lifetime is contained in the current scope. `CopiesOut` instructions write the referenced bytes, never references, to their destinations. Only `Escapes` instructions can place a reference into a location that outlives the current scope. No instruction fabricates a handle; references originate only at allocation instructions. Totality must hold and keep holding as the instruction set changes. |
+| M3 | **Total instruction classification.** The instruction set is partitioned, totally, into four classes with these semantics. `NoRegion` instructions neither create nor transport references. `WithinScope` instructions create or move references only into locations whose lifetime is contained in the current scope. `CopiesOut` instructions write the referenced bytes, never references, to their destinations. Only `Escapes` instructions can place a reference into a location that outlives the current scope. No instruction fabricates a handle, and references originate only at allocation instructions. Totality must hold and keep holding as the instruction set changes. |
 | M4 | **Cycle cadence.** Each cycle contains exactly one epoch advance, at its end. |
 | M5 | **Boundary clearance.** At a cycle boundary, no machine-internal location that is ever subsequently read holds a reference into the ephemeral region. The environment may retain handles across the boundary. |
 | M6 | **Scope discipline.** (a) A loop's back edge restores the exact entry operand stack, height and per-slot shape, so no entry created within the scope survives above the entry height. (b) Early exits restore the same discipline. (c) A frame created within a scope is destroyed within it and its contents become unreachable, and every call made within a scope returns within it. (d) No instruction within a loop body consumes operand-stack entries below the loop's entry height. |
@@ -245,7 +245,7 @@ anyway is unsound.
 ## 8. Theorem B2, universal slot reuse under an escape-copy discipline
 
 Theorem B1 restricts the plan to confined sites. The alternative regime changes the machine
-instead of restricting the plan: if every escaping flow transports a copy, no site needs
+instead of restricting the plan. If every escaping flow transports a copy, no site needs
 confinement. This section proves that regime sound in general. Whether any concrete system
 implements the discipline is an instantiation question, and Appendix C records that Keleusma
 does not today.
@@ -270,8 +270,8 @@ reachable location holds a reference to $r_n$. No confinement hypothesis is need
 *Proof.* The induction of Lemma 2 goes through with its `Escapes` case replaced. An escaping
 instruction with a reference to $r_n$ as operand consumes it and places a reference to a fresh
 copy in the outliving location. By clause 5 the copy holds no reference to $r_n$, so the case
-creates no location holding one. The environment-reply flow also closes without confinement:
-under the discipline the environment only ever receives copy references, by clauses 4 and 5
+creates no location holding one. The environment-reply flow also closes without confinement.
+Under the discipline the environment only ever receives copy references, by clauses 4 and 5
 those reference no site region, and by M7 it presents only what it received, so a reply cannot
 reintroduce a reference to $r_n$. Every other case is as in Lemma 2, and the scope-end argument
 by M6, including its dependence on M6(d), is unchanged. $\blacksquare$
@@ -308,12 +308,12 @@ $$
 with $\mathrm{esc}(\pi)$ the multiset of escaping executions per cycle along $\pi$. The copy
 term re-enters the machine's bound except where the copy store is environment-owned, as it can
 be for values yielded outward. Consequently, for a site that escapes on every iteration, the
-regime does not tighten the bound, it relocates it. The gains are elsewhere: soundness of
-uniform reuse with no confinement analysis, the removal of yielded values from the machine's
-bound where the environment owns the copy store, and the neutralization of the escape hazard
-for a planner that already reuses slots.
+regime does not tighten the bound, it relocates it. The gains lie elsewhere, in the soundness
+of uniform reuse with no confinement analysis, in the removal of yielded values from the
+machine's bound where the environment owns the copy store, and in the neutralization of the
+escape hazard for a planner that already reuses slots.
 
-**Corollary B2b, the hybrid plan.** The regimes compose per site: a plan that reuses confined
+**Corollary B2b, the hybrid plan.** The regimes compose per site. A plan that reuses confined
 sites without copies, by Theorem B1, and unconfined sites with the discipline applied to their
 escapes, by Theorem B2, is sound, since each argument is an observational equivalence against
 the same baseline and the location sets are disjoint. The hybrid pays copy costs only where
@@ -339,9 +339,9 @@ confinement fails.
 
 ---
 
-# Part II — The Keleusma instantiation, appendices
+# Part II. The Keleusma instantiation, appendices
 
-Everything project-specific is below this line. The mapping is: the machine is the Keleusma
+Everything project-specific is below this line. The mapping is as follows. The machine is the Keleusma
 virtual machine, allocation instructions are `NewComposite`, dereference is `resolve`, the epoch
 advance is `Op::Reset`, a cycle is one stream cycle of `loop main`, a scope is one loop
 iteration, the environment is the host, and external calls are the two native-call opcodes.
@@ -355,19 +355,19 @@ to executed without running them.
 
 | axiom | instantiation and standing |
 |---|---|
-| M1 | Operator ruling on the memory model, obligation document Section 1. Bump arena, ephemeral region cleared only at `RESET`, nothing reclaimed within a run. The immutability clause is **confirmed by the V0.2.X line, 2026-08-23, on four independent grounds**, and Theorems B1 and B2 both rest on it. Ground one is **executable and pinned**: the instruction set carries seven read accessors into a composite and **zero write accessors**, `the_instruction_set_has_no_write_accessor_into_a_composite` in `tests/composite_escape_routes.rs`, derived from the `Op` enum, mutation-tested two ways, and holding for any module because it is about what the instruction set contains. Grounds two through four are **read from dispatch plus a public-API scan**: no mutable accessor exists on a composite body, `resolve` returning a shared slice and nothing else; every raw-pointer write in the virtual machine targets the persistent region; and the native boundary is immutable by signature, arguments arriving as a shared slice with no public route to a mutable arena view. **The clause is scoped to the ephemeral region deliberately, and the scoping is load-bearing: the persistent region is mutated in place, repeatedly and across resets, by the data-slot writes, so the unscoped statement is false in Keleusma.** Definition 2 ties regions to the ephemeral region, and an abstraction pass must not widen that. Stated refutation boundary, so no more is read than was measured: a native casting a resolved slice to a mutable pointer under `unsafe` is undetectable from the safe API and sits on the same trust boundary as the native escape routes, and an out-of-band `unsafe` arena rewind reclaims rather than mutates, refuting not this clause but the epoch discipline M5 rests on. Grounds two through four say nothing about what `verify()` enforces. |
+| M1 | Operator ruling on the memory model, obligation document Section 1. Bump arena, ephemeral region cleared only at `RESET`, nothing reclaimed within a run. The immutability clause is **confirmed by the V0.2.X line, 2026-08-23, on four independent grounds**, and Theorems B1 and B2 both rest on it. Ground one is **executable and pinned**. The instruction set carries seven read accessors into a composite and **zero write accessors**, `the_instruction_set_has_no_write_accessor_into_a_composite` in `tests/composite_escape_routes.rs`, derived from the `Op` enum, mutation-tested two ways, and holding for any module because it is about what the instruction set contains. Grounds two through four are **read from dispatch plus a scan of the public interface**. No mutable accessor exists on a composite body, `resolve` returning a shared slice and nothing else. Every raw-pointer write in the virtual machine targets the persistent region. The native boundary is immutable by signature, arguments arriving as a shared slice with no public route to a mutable arena view. **The clause is scoped to the ephemeral region deliberately, and the scoping is load-bearing. The persistent region is mutated in place, repeatedly and across resets, by the data-slot writes, so the unscoped statement is false in Keleusma.** Definition 2 ties regions to the ephemeral region, and an abstraction pass must not widen that. Stated refutation boundary, so no more is read than was measured. A native casting a resolved slice to a mutable pointer under `unsafe` is undetectable from the safe interface and sits on the same trust boundary as the native escape routes, and an out-of-band `unsafe` arena rewind reclaims rather than mutates, refuting not this clause but the epoch discipline M5 rests on. Grounds two through four say nothing about what `verify()` enforces. |
 | M2 | **Executed.** A non-empty composite value carries an arena handle, not bytes. `resolve` fails `Stale` exactly when the epoch has advanced, and an overwrite in place advances nothing. `tests/composite_escape_window.rs`, all three tests. The load-bearing assertion is that two iterations' composites resolve simultaneously to different values, which is exactly what one reused slot collapses. |
 | M3 | The 66 opcodes are partitioned in `tests/composite_escape_routes.rs`, with **totality asserted against the `Op` enum at test time**, so a route can be missed only by misclassification, never by omission, and a new opcode fails the test. The escaping set is exactly `Yield`, `SetLocal`, `Return`, `CallVerifiedNative`, `CallExternalNative`. `SetLocal` is classified by its worst case because the opcode cannot distinguish an inner binding from an outer one, and it is the route that defeats a restriction phrased as no `yield`, with no host involved. Per-row verdicts are **analysis, not proof**. The `Yield` row and both `CopiesOut` rows, private-data writes and flat nesting, are executed, the latter two deliberately because a wrong `CopiesOut` makes the theory unsound rather than loose. The boxed construction path does alias and does not arise for the transitively-scalar composites this instantiation concerns, a boundary stated rather than assumed away. The rest of the rows are read from dispatch. Disagreements go to the table, where the test makes them concrete. |
 | M4 | **Executed.** `Op::Reset` is emitted once per stream cycle, at the end of the `loop main` body, not per `for` iteration. `reset_is_once_per_stream_cycle_not_once_per_loop_iteration`. |
 | M5 | **Confirmed by the V0.2.X line, 2026-08-23, and the basis is two facts, not one.** First, `Op::Reset` clears the current frame's locals and truncates its operand stack, `src/vm.rs:5304`, read from dispatch. Second, a caller frame beneath a nested stream can hold stale references and is never resumed, because stream chunks emit no `Return`. The second fact is a **code-generation invariant, not a structural one**, executed over five shapes in their `tests/stream_never_returns.rs`. Stating the first fact alone would make the nested-stream arrangement a counterexample to the axiom. Every ephemeral composite-body read is epoch-checked at resolve time, `FlatComposite::resolve` and `ArenaHandle::get`, with `nested_view` bounds-checked as a real fault, read from dispatch. |
-| M6 | (a) **Confirmed.** `TypedError::LoopNotNeutral` in the `Op::Loop` arm of `src/verify_typed.rs` compares the entire abstract stack, height and per-slot shape, read from dispatch. Neutrality is on **shapes, not identities**, so the correct reading is that no new entry survives the back edge, never that the entries are identical across iterations. (b) **Confirmed.** `Break` edges join through `join_stacks`, read from dispatch. (c) Read from dispatch, with call termination from totality. (d) **Settled 2026-08-23 in the unfavorable direction: a code-generation invariant only, and the verifier gap is executed, not conjectured.** `verify()` accepts a shape that pops a below-entry entry inside a loop and pushes a same-shape replacement, pinned in the V0.2.X line's `tests/loop_entry_floor.rs`. The typed pass floors pops at the frame, not at the loop entry, and the frame floor does not incidentally cover the loop floor, because 122 of 245 `Loop` instances in the shipped corpus carry a non-empty operand stack at entry, executed and pinned. The emission side was measured exactly, by a per-path floor check inside the typed pass's own abstract interpretation, proven to fire on the breaching shape: **zero breaches over 588 loop instances across 23 shipped modules**. That instrumentation is reverted and the zero is **a measurement at a commit, not a standing guarantee**, cited as exactly that. A linear depth scan also reported zero and was discarded as exact for only 4 of the 245 loops, recorded because the flattering number came from a broken instrument first. |
+| M6 | (a) **Confirmed.** `TypedError::LoopNotNeutral` in the `Op::Loop` arm of `src/verify_typed.rs` compares the entire abstract stack, height and per-slot shape, read from dispatch. Neutrality is on **shapes, not identities**, so the correct reading is that no new entry survives the back edge, never that the entries are identical across iterations. (b) **Confirmed.** `Break` edges join through `join_stacks`, read from dispatch. (c) Read from dispatch, with call termination from totality. (d) **Settled 2026-08-23 in the unfavorable direction, a code-generation invariant only, with the verifier gap executed rather than conjectured.** `verify()` accepts a shape that pops a below-entry entry inside a loop and pushes a same-shape replacement, pinned in the V0.2.X line's `tests/loop_entry_floor.rs`. The typed pass floors pops at the frame, not at the loop entry, and the frame floor does not incidentally cover the loop floor, because 122 of 245 `Loop` instances in the shipped corpus carry a non-empty operand stack at entry, executed and pinned. The emission side was measured exactly, by a per-path floor check inside the typed pass's own abstract interpretation, proven to fire on the breaching shape, with the result **zero breaches over 588 loop instances across 23 shipped modules**. That instrumentation is reverted and the zero is **a measurement at a commit, not a standing guarantee**, cited as exactly that. A linear depth scan also reported zero and was discarded as exact for only 4 of the 245 loops, recorded because the flattering number came from a broken instrument first. |
 | M7 | Trust assumption, not a theorem. The host holds and may return handles it received and does not fabricate them. Native retention is unknowable from this side, which is why both native-call opcodes are classified escaping. |
 
 **The scoping consequence of Section 9, instantiated.** M5's second half and M6(d) are invariants
 of what the **reference** compiler emits. Therefore Theorems A2, A3, B1, B2, and the corollaries
 hold for reference-compiled modules and do not hold for arbitrary bytecode that merely passes
 `verify()`.
-The producer matters further: the zero-breach measurement covered the eleven example scripts and
+The producer matters further. The zero-breach measurement covered the eleven example scripts and
 the twelve stage sources compiled by the reference compiler, and says nothing about modules the
 self-hosted compiler emits, a different producer, beyond the constructs where the byte-identity
 corpus makes the two artifacts identical.
@@ -403,7 +403,7 @@ corpus makes the two artifacts identical.
 ## Appendix C. B2 in Keleusma, and instruction-set remedies
 
 **Theorem B2 is proved in general, and the discipline it requires does not exist in Keleusma
-today.** No escape route copies: a yielded composite is a handle, `SetLocal` stores the handle,
+today.** No escape route copies. A yielded composite is a handle, `SetLocal` stores the handle,
 and the native calls receive it. In this codebase B2 is therefore a **proved specification for a
 change**, not a description of the present system, and it answers the escape-window question of
 the obligation document's Section 4.0.1 by construction rather than by bounding. Adoption
@@ -413,7 +413,7 @@ carries the following obligations, each named here so none is discovered at impl
    `SetLocal` where the target slot outlives the scope, at `Return` across the surviving frame,
    and at both native calls. Correctness is Definition 9's faithfulness and depth clauses. The
    flat representation makes copies deep by construction for transitively-scalar composites, and
-   the **boxed path remains a boundary**: it stores operands as separate values, a deep copy
+   the **boxed path remains a boundary**. It stores operands as separate values, a deep copy
    there is additional work, and nothing here covers it.
 2. **Worst-case execution time.** A copy of $\mathrm{sz}$ bytes at every escaping execution
    enters the worst-case-execution-time model, which is the crate's headline claim, so the cost
@@ -424,7 +424,7 @@ carries the following obligations, each named here so none is discovered at impl
    but its soundness needs a further argument, that no live reference to the old copy exists at
    overwrite time, which is **not proved here**. The proof needs the copy **source** immutable,
    which M1 gives for the ephemeral region, and the copy **destination** stable, which is
-   Definition 9's second clause and is an **obligation, not a given**: the persistent region is
+   Definition 9's second clause and is an **obligation, not a given**. The persistent region is
    mutated in place by the data-slot writes, so a copy store located there must be disjoint from
    every data slot, or stability fails at the destination even though the source is immutable.
 4. **Epoch stamping.** Copy handles must carry the creation epoch and stay behind `resolve`'s
@@ -443,7 +443,7 @@ carries the following obligations, each named here so none is discovered at impl
    Adoption documentation must list both beside handle-address opacity, in the same
    embedder-obligation terms as the native escape routes.
 
-**Instruction-set position.** Unchanged by the proof. No new opcode is required: the discipline
+**Instruction-set position.** Unchanged by the proof. No new opcode is required. The discipline
 has at least two lowerings, a compiler-inserted copy through existing constructs, or a semantics
 change to the five escaping opcodes' handling of composite operands. A dedicated copy opcode
 would require the strong justification the operator demands for instruction-set modification,
@@ -481,7 +481,7 @@ would misstate what is guaranteed.** `tests/stream_never_returns.rs` pins an **i
 re-runs on every build, `no_compiled_stream_chunk_emits_return` over five shapes,
 mutation-tested, and `a_stream_calling_a_stream_compiles_verifies_and_runs`, which pins the
 nested arrangement as constructible so the premise is not vacuous. `tests/loop_entry_floor.rs`
-pins a **gap**: `a_loop_body_may_consume_from_below_its_entry_height` asserts that `verify()`
+pins a **gap**. `a_loop_body_may_consume_from_below_its_entry_height` asserts that `verify()`
 **accepts** the breaching shape, with its control and with
 `compiled_loops_really_do_carry_a_non_empty_entry_stack` establishing reachability at 122 of
 245. If the gap is ever closed structurally, those tests fail deliberately, with a message
@@ -502,4 +502,4 @@ through four remain read from dispatch and are in no test, so citing `a288ae26` 
 whole would claim more than the test does, and this record cites it against ground one exactly. The same exchange contributed the persistent-region precision, the source and
 destination asymmetry now stated in Appendix C's third obligation, and the `unsafe` refutation
 boundary now in its seventh. An earlier revision of this document interleaved the instantiation with the
-theory; the reorganization changed no theorem, no proof, and no recorded standing.
+theory. The reorganization changed no theorem, no proof, and no recorded standing.
