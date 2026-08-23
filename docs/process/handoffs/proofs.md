@@ -1,8 +1,8 @@
-# Mailbox — the proof line (`proofs`)
+# Mailbox of the proof line `proofs`
 
 > **Navigation**: [Handoffs](./README.md) | [Process](../README.md)
 
-**Branch**: `proofs`, the proof line's top-level branch, cut at `e9a40e32` on the `v0.2.3`
+**Branch.** `proofs`, the proof line's top-level branch, cut at `e9a40e32` on the `v0.2.3`
 lineage, which includes the evidence index and its guard. Individual proofs are cut from this
 branch as feature branches and merged back with no-fast-forward merges, per the operator ruling
 of 2026-08-23. This branch merges ultimately into the V0.2.X line, and the V0.2.X line is then
@@ -24,8 +24,8 @@ feature branch. Read it with `git show origin/proofs:docs/process/handoffs/proof
 against the obligation at `a49555bb` on `v0.3.0`. Per operator direction of 2026-08-23 the
 document is structured as a general theory over an abstract epoch-guarded bump-arena machine,
 with every Keleusma-specific fact, premise instantiation, and provenance row in appendices at the
-end. Proved generally: the branch bound, unconditional; cross-epoch arm overlap; confined-site
-slot reuse; the composed plan; and, by operator-directed scope expansion later the same day,
+end. Proved generally are the unconditional branch bound, cross-epoch arm overlap, confined-site
+slot reuse, the composed plan, and, by operator-directed scope expansion later the same day,
 **Theorem B2**, universal slot reuse under an escape-copy discipline, with an accounting
 corollary and a per-site hybrid corollary. The Keleusma instantiation discharges the axioms with
 measured standing recorded per row, and two axioms rest on reference-compiler emission
