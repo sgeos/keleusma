@@ -128,14 +128,19 @@ host can hold a yielded composite across a resume. It is measured now and pinned
 tighter than I gave them: `Op::Reset` fires **once per stream cycle**, not per loop iteration, so the
 escape window spans arbitrarily many iterations and closes at the cycle boundary.
 
-**But the proof's own §6.3 is not something I have discharged.** It asks whether there are escape
-routes besides `yield`, and warns that one survivor makes the restriction *unsound* rather than
-incomplete. I have settled `yield` as a member. I have **not** enumerated the rest, and I named two
-unverified candidates to them rather than let silence read as clearance.
+**Their §6.3 is now discharged from this side too.** It asks whether there are escape routes besides
+`yield` and warns that one survivor makes the restriction *unsound* rather than incomplete. Rather
+than list the routes I could think of — which is the shape of defect this line has recorded six times
+— the enumeration **starts from the 66 opcodes and classifies every one**, with totality asserted
+against the instruction-set enum. A route can now be missed only by a misclassification, never by an
+omission, and a new opcode fails the test.
 
-**So: their side is ready to draft, and mine has one open obligation.** Drafting can start — the
-counterexample, the memory model and the two planners' figures are all measured — but a completed
-B1 needs that enumeration, and it is on my surface rather than theirs.
+**Five escaping routes**: `Yield`, `SetLocal`, `Return`, and the two native calls. The native calls
+are a **host trust boundary I cannot close**, and that is the honest answer rather than a gap. The two
+"safe" classifications are backed by execution, because a wrong one there makes a restriction unsound
+rather than merely loose.
+
+**So both sides are ready.** Nothing of mine is now blocking the drafting.
 
 ## Next intended step
 
