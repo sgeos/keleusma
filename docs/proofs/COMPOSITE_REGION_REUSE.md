@@ -124,9 +124,32 @@ A composite constructed in the loop body is **yielded to the host**. The host re
 control returns to the loop, which constructs the next iteration's value at the same offset if the
 slot is reused. So $\mathrm{live}(v_n)$ **escapes** $\mathrm{iteration}_n$.
 
-**The backend reuses that slot today.** Whether this is a live mis-compilation depends on whether the
-native lowering hands the host a pointer into the region or a copy. **That is not established here
-and is recorded as an open question in §6.**
+**The backend reuses that slot today**, and the question of whether that is a live mis-compilation is
+**no longer open.**
+
+### 4.1.1 ANSWERED — a yielded composite is a HANDLE, and the epoch guard does not cover this
+
+Established by the `v0.2.3` line against the runtime, 2026-08-22:
+
+- After B28 the only non-empty composite representation is
+  $\texttt{FlatComposite::Arena(ArenaHandle}\langle[\texttt{u8}]\rangle\texttt{)}$ — **a pointer and
+  length into the arena**, read through `resolve`. **A yielded composite is not a copy.**
+- The handle carries the arena **epoch**, and `resolve` fails `Stale` when a `RESET` advances it.
+- **An overwrite in place advances nothing.** Same address, same epoch ⟹ `resolve` **succeeds** and
+  returns iteration $n{+}1$'s bytes to a host that asked for iteration $n$'s.
+
+$$
+\textbf{Consequence: a silent wrong value, not a }\texttt{Stale}\textbf{ error.}
+$$
+
+**So slot reuse across iterations is UNSOUND TODAY for any composite that leaves its iteration by
+`yield`.** This is the live-defect branch, not the benign one. It is not caught by the epoch guard,
+and it is not caught by the differential — no corpus module has the shape.
+
+Their independent measurement of the §4.1 program: stack $320$, heap $112$, where
+$112 = 2\times24$ (loop-body site, two iterations) $+\;24 + 24$ (the straight-line sites)
+$+\;16$ (the array) — **exactly $k \times \mathrm{sz}$.** The backend's $\mathrm{sites} \times
+\mathrm{sz}$ would give $88$.
 
 ### 4.2 What Theorem B must therefore become
 
@@ -136,8 +159,10 @@ Not "reuse is sound", but one of:
   by which a constructed value escapes the iteration. *The escaping constructs must be enumerated and
   the enumeration justified as exhaustive* — a survivor makes the restriction unsound rather than
   incomplete.
-- **B2 (copy).** Reuse is sound unconditionally if every escape copies out of the region. This moves
-  the obligation to the copy's correctness and its WCET cost, which is then no longer free.
+- **B2 (copy).** Reuse is sound unconditionally if every escape copies out of the region. **No such
+  copy exists today** (§4.1.1), so B2 is a proposal for a change rather than a description of the
+  present system. It moves the obligation to the copy's correctness and its WCET cost, which is then
+  no longer free.
 
 **A proof of B1 must not assume the language prevents escape.** The counterexample above shows it
 does not.
@@ -159,8 +184,9 @@ for loop bodies; adopting B lowers published WCMU. That is a change to `src/veri
 
 ## 6. Open questions the proof does not have to answer, but a reader should not assume away
 
-1. **Does the native lowering hand the host a pointer into the region, or a copy?** If a copy, §4.1
-   is not a live defect and B2 may already hold. **Not established.**
+1. ~~**Does the native lowering hand the host a pointer into the region, or a copy?**~~
+   **ANSWERED 2026-08-22 — a POINTER.** See §4.1.1. B2 does *not* already hold, and §4.1 **is** the
+   live-defect branch. This question is closed and the answer is the unfavourable one.
 2. **Is the loop-dominated direction of the planner gap ever unsafe today?** The backend under-counts
    a loop relative to $\mathrm{WCMU}$; a host provisioning from the backend's supplement alone could
    under-provision. No corpus module has been checked for this shape.
