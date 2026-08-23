@@ -209,7 +209,9 @@ Not "reuse is sound", but one of:
   by which a constructed value escapes the iteration. *The escaping constructs must be enumerated and
   the enumeration justified as exhaustive* — a survivor makes the restriction unsound rather than
   incomplete. **And "escapes" must be read per §4.0.1** — resolvable until `RESET`, not live at the
-  yield.
+  yield. **THE ENUMERATION IS NOW DONE — see §4.3 — AND IT IS FIVE ROUTES, NOT ONE.** A B1 restricted
+  to "no `yield`" is **unsound**: `SetLocal` to a binding declared outside the loop escapes with no
+  yield and no host involved.
 - **B2 (copy).** Reuse is sound unconditionally if every escape copies out of the region. **No such
   copy exists today** (§4.1.1), so B2 is a proposal for a change rather than a description of the
   present system. It moves the obligation to the copy's correctness and its WCET cost, which is then
@@ -218,6 +220,86 @@ Not "reuse is sound", but one of:
 
 **A proof of B1 must not assume the language prevents escape.** The counterexample above shows it
 does not.
+
+## 4.3 THE ESCAPE SET, ENUMERATED BY OPCODE — and B1's naive form is UNSOUND
+
+Discharged by the `v0.2.3` line, 2026-08-23, in `tests/composite_escape_routes.rs`.
+
+### The method, which is why this is not a list
+
+**A list of routes someone could think of cannot answer the question**, whatever it contains — it has
+the shape of *coverage that is a property of the case list, mistaken for a property of the thing under
+test.* Their line has recorded that meta-defect six times.
+
+**So the classification starts from all 66 opcodes and classifies every one**, with **totality
+asserted against the `Op` enum read out of `src/bytecode.rs` at test time.**
+
+$$
+\text{a route can be missed only by MISCLASSIFICATION, never by OMISSION}
+$$
+
+and a **new opcode fails the test** rather than slipping through unclassified. Weaker than a proof,
+much stronger than a list.
+
+### The five escaping routes
+
+| opcode | why it escapes |
+|---|---|
+| `Yield` | the host receives the **handle, not a copy** — verified by execution |
+| **`SetLocal`** | **a binding declared OUTSIDE the loop keeps the handle after the iteration ends.** The opcode cannot distinguish an inner slot from an outer one — that is a property of the slot the compiler assigned — so it is classified by its **worst case** |
+| `Return` | a callee **invoked from** the loop body returning a composite it built. A `return` in the loop itself exits the loop, so that direction is not the case |
+| `CallVerifiedNative` | **host trust boundary** |
+| `CallExternalNative` | **host trust boundary** |
+
+### ⚠ `SetLocal` DEFEATS "a loop body containing no `yield`"
+
+$$
+\texttt{let mut last = ...; for x in xs \{ last = P \{ .. \} \}}
+$$
+
+**No `yield`. No host. No native call.** Under one reused slot, `last` aliases whatever the final
+iteration wrote. **B1 restricted to "no `yield`" is NOT SUFFICIENT** — the restriction must be stated
+over all five routes, and the `SetLocal` case is the ordinary one, not the exotic one.
+
+### The two native calls are an EMBEDDER obligation, not a language property
+
+A native receives the composite and **what it retains is the host's affair.** They are classified as
+escaping because they **must be assumed to be.** If B1 excludes them, that is a **documented
+obligation on the embedder**, and B1 must **say so in those words** rather than silently count them
+safe.
+
+### The two "safe" answers are backed by EXECUTION, and the asymmetry is deliberate
+
+> A wrong `Escapes` makes the restriction **loose**. A wrong `CopiesOut` makes it **UNSOUND.**
+
+So the safe ones were **run, not read**:
+
+- **A composite written to a `private data` slot COPIES.** It survives two resets that reclaim the
+  region it was built in, reading back correctly at a later epoch — **which a stored handle could not
+  do.** `write_data_slot` packs the body into the persistent pool at its baked offset. *(`private`
+  was used rather than `shared` deliberately: a host `&mut [u8]` buffer must copy by construction, so
+  proving that would have proved the easy half.)* **This confirms the guess §6.3 previously withdrew,
+  in a stronger form than the guess.**
+- **Nesting into a flat composite COPIES.** `Outer { i: Inner { x: 11, y: 22 }, z: 33 }` resolves to
+  `[11, 22, 33]` in 24 contiguous bytes — the child's words are **inline in the parent's own
+  allocation**, not a handle to the child's.
+
+**STATED WITH ITS LIMIT: the BOXED path DOES alias.** It stores operands as separate values. It does
+not arise for the transitively-scalar composites this proof concerns, **but the boundary is given
+rather than a claim that reads as universal.**
+
+### What is NOT claimed
+
+**Not that each individual opcode's classification is correct.** What is mechanically guaranteed is
+**totality, and that it stays total.** Three entries are backed by execution; the rest by reading the
+VM dispatch — and the test says which where a reader meets it.
+
+**If the proof's author disagrees with any single classification, the table is the place to argue**,
+and the test makes the disagreement concrete rather than rhetorical.
+
+Mutation-tested three ways — a dropped opcode, a stale entry naming a non-opcode, and an escaping
+route reclassified as safe. All three fire. **The middle one matters most: it catches a table
+maintained against memory rather than against the enum.**
 
 ## 5. What "best" means, and what it costs
 
@@ -242,7 +324,11 @@ for loop bodies; adopting B lowers published WCMU. That is a change to `src/veri
 2. **Is the loop-dominated direction of the planner gap ever unsafe today?** The backend under-counts
    a loop relative to $\mathrm{WCMU}$; a host provisioning from the backend's supplement alone could
    under-provision. No corpus module has been checked for this shape.
-3. **Are there escape routes besides `yield`?** **STILL OPEN, AND SILENCE IS NOT CLEARANCE.** The
+3. ~~**Are there escape routes besides `yield`?**~~ **DISCHARGED 2026-08-23 — see §4.3. THE ANSWER
+   IS FIVE, AND ONE OF THEM BREAKS B1 AS ORIGINALLY WRITTEN.** The text below is the state of this
+   question before that work and is kept for the reasoning it records.
+
+   ~~**STILL OPEN, AND SILENCE IS NOT CLEARANCE.**~~ The
    measurement in §4.0.1 settles `yield` as ONE member of the escape set and enumerates nothing else.
    Two named candidates, **neither verified**: a composite written into a `shared data` slot, and a
    composite reaching the host as an `fn`'s RETURN VALUE rather than through a yield. My earlier note
