@@ -13,6 +13,43 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**WRITING FOR A READER WHO CANNOT CHECK ME (2026-08-23).**
+
+A third session is drafting the composite-region-reuse proof. It will not have been in any of the
+exchanges that produced the evidence, will be on another branch, and **will have no way to notice
+that something I wrote has gone stale.** That changes what the document has to do.
+
+**THE THING THAT MATTERS MOST IS PROVENANCE PER CLAIM, NOT THE CLAIMS.** Two of the proof's premises
+reached the other line from here as PROSE IN A MESSAGE, and one of them had not been measured when
+it was written. It was correct and it was still unsupported by anything a reader could run. So every
+row of `docs/decisions/COMPOSITE_REGION_EVIDENCE.md` says whether it was EXECUTED or READ FROM
+DISPATCH, names the test, and gives the command. **A reader must be able to tell the two apart
+without asking me**, because asking me is exactly what they cannot do.
+
+**AND THE DOCUMENT IS GUARDED, WHICH IS THE PART I WOULD HAVE SKIPPED A MONTH AGO.**
+`tests/proof_evidence_index.rs` asserts that every test it names exists, that every `src/verify.rs:N`
+citation still contains what it claims, and that the sentences marking its LIMITS survive an edit.
+**A renamed test turns the document from evidence into a confident-sounding dead end** -- strictly
+worse than never having written it, because it would be trusted.
+
+**THE GUARD FIRED ON ITS FIRST RUN, ON MY OWN FORMATTING.** The document cited the second verifier
+line as a bare `:1087` rather than `src/verify.rs:1087`, so the citation check could not find it.
+That is the third time this session a check caught something in the thing it was written to protect
+rather than in the code, and the reason is always the same: the check was made to FAIL before it was
+believed.
+
+**THE THIRD SECTION IS THE ONE A PROOF AUTHOR ACTUALLY NEEDS AND WOULD NOT THINK TO ASK FOR.** Not
+the evidence -- the LIMITS. Four things this line has not established, including that the per-opcode
+classification is analysis rather than proof, and that nothing here says anything about the native
+backend. A document that lists only what it proves reads as stronger than it is, and the reader most
+at risk from that is the one who cannot cross-examine it.
+
+Also carried, because a fresh session cannot know it: ownership stated absolutely (`src/verify.rs` is
+this line's, so a theorem implying a change there is a REQUEST and an OPERATOR decision, since it
+LOWERS a published bound); the exact line a theorem would change; and the traps -- `data` with no
+modifier is not `private data`, `Op::Reset` ends a stream cycle rather than an iteration, and a
+`Value` carries a handle rather than bytes.
+
 **AN ENUMERATION THAT CANNOT MISS A ROUTE, BECAUSE IT STARTS FROM THE INSTRUCTION SET (2026-08-23).**
 
 The other line's proof asks whether `yield` is the only way a composite escapes the iteration that

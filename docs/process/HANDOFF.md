@@ -67,6 +67,7 @@ grep -c '^\s*#\[test\]' tests/push_order_claims.rs         # 2
 grep -c '^\s*#\[test\]' tests/selfhost_parse_refusals.rs   # 2
 grep -c '^\s*#\[test\]' tests/composite_escape_window.rs   # 3
 grep -c '^\s*#\[test\]' tests/composite_escape_routes.rs   # 4
+grep -c '^\s*#\[test\]' tests/proof_evidence_index.rs      # 3
 
 # `tests/stage_command_reach.rs` IS in the list now: #210 merged 2026-08-21.
 
