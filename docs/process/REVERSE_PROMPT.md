@@ -105,6 +105,24 @@ I also built an instrument to size the whole translation-staleness class and **t
 reported 2,329 stale entries of 2,926, which measures my wrong model of the extractor rather than the
 tree. Deleting it beat repairing it.
 
+## Both items you directed are done
+
+**The floor check is in.** `verify()` now refuses an instruction consuming an operand from below its
+enclosing loop's entry height. Zero of 588 loop instances rejected, as measured before the change, so
+no working program lost capability. It broke two of my own tests: one because my change was wrong at
+depth zero, where it shadowed the frame-underflow diagnosis with a worse one, and one because the
+floor genuinely **subsumes** an older check's witness. Both handled deliberately rather than patched.
+
+**The corpus extension turned up more than the gap I reported.** Not one script used `loop main` or a
+data segment, so `Stream`, `Yield`, `Reset` and the data opcodes were unexercised there entirely.
+Three scripts now cover the three dispositions of a per-iteration composite. The yielded one is a
+live demonstration of the proof's subject — four composites at four addresses in one epoch, then
+`Reset`, then the addresses repeat at the next.
+
+**And the pinning test had the same defect the corpus did.** It counted `match` dispatch as loop
+iteration, which is the error the other line made twice while measuring the same question. Their
+discriminator fixed it.
+
 ## One observation I recorded rather than acted on
 
 **The continuous-integration `Doc` job does not cover `self-host`.** It builds `keleusma` with

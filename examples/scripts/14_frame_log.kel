@@ -1,0 +1,59 @@
+// A composite built once per loop iteration and copied into a data slot.
+//
+// The third shape in this trio. `12_sensor_window.kel` builds a value
+// and drops it; `13_telemetry_stream.kel` hands it to the host; this
+// one stores it into the persistent data segment.
+//
+// The storing route is different in kind from the other two. A data
+// slot holds a COPY of the composite's bytes, packed into the arena's
+// persistent region at a compiler-baked offset, not a reference to the
+// ephemeral body the iteration constructed. That is why the value here
+// survives the stream's `Reset`, which reclaims the ephemeral region
+// and advances the arena epoch, while a handle to the constructed body
+// would go stale at exactly that point.
+//
+// The asymmetry is worth stating because it runs the other way from
+// the usual one: the ephemeral body is never mutated after it is
+// built, and the persistent slot is overwritten in place on every
+// iteration and every cycle.
+//
+// This is also the first script in this directory to use a data
+// segment at all, so it is the only one exercising `SetData`,
+// `GetData` and persistence across a `Reset`.
+//
+// Run: keleusma run examples/scripts/14_frame_log.kel
+// Expected: yields 81, then 84, 87, 90 on successive cycles. The
+// checksum term is constant at 78, and `count` rises by 3 per cycle
+// because the data segment survives the `Reset`.
+
+struct Frame { id: Word, len: Word, checksum: Word }
+
+private data log {
+    latest: Frame,
+    count: Word,
+}
+
+// A stand-in for a real frame check, kept pure so the script stays total.
+fn checksum(id: Word, len: Word) -> Word {
+    id * 31 + len
+}
+
+loop main(tick: Word) -> Word {
+    let lens = [4, 8, 16];
+
+    for i in 0..3 {
+        // Built in the ephemeral region, then COPIED into the slot.
+        log.latest = Frame {
+            id: i,
+            len: lens[i],
+            checksum: checksum(i, lens[i]),
+        };
+        log.count = log.count + 1;
+    }
+
+    // Read back after the loop. This survives the `Reset` below because
+    // the persistent region is not reclaimed there.
+    let _ack = yield log.latest.checksum + log.count;
+
+    0
+}

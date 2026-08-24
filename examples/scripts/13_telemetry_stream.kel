@@ -1,0 +1,52 @@
+// A composite built once per loop iteration and handed to the host.
+//
+// The counterpart to `12_sensor_window.kel`. The construction site is
+// the same shape -- one `Reading` per iteration of a bounded `for` --
+// but the value LEAVES the iteration through `yield`, so the host may
+// still be holding it when the next iteration builds its successor.
+//
+// That difference is the whole subject of the composite-region-reuse
+// work: the confined site may share one slot across iterations, and
+// this one may not. A planner that reused a slot here would hand the
+// host the next reading's bytes where it asked for this one's, and
+// the arena's epoch guard would NOT catch it, because an overwrite in
+// place advances no epoch.
+//
+// This is also the first script in this directory to use `loop main`
+// at all, so it is the only one exercising `Stream`, `Yield` and the
+// `Reset` at a stream-cycle boundary.
+//
+// A note on the closing yield. A `loop` body must yield on EVERY path
+// from `Stream` to `Reset`, and the path that skips a bounded `for`
+// entirely does not, so yielding only inside the loop is refused as a
+// productivity violation. The end-of-cycle marker below is what makes
+// the stream productive, and it is the conservative-verification
+// stance doing its job rather than a workaround.
+//
+// Run: keleusma run examples/scripts/13_telemetry_stream.kel
+// Expected per cycle: Reading{0,1}, Reading{1,8}, Reading{2,15}, then
+// the end marker Reading{9,0}, then Reset.
+
+struct Reading { channel: Word, value: Word }
+
+// Stand-in for a host sensor read, kept pure so the script stays total.
+fn sample(channel: Word) -> Word {
+    channel * 7 + 1
+}
+
+loop main(ack: Word) -> Reading {
+    let channels = [0, 1, 2];
+
+    for c in channels {
+        // Built here, observed by the host, and still reachable from the
+        // host when the next iteration runs.
+        let _ack = yield Reading { channel: c, value: sample(c) };
+    }
+
+    // The end-of-cycle marker, yielded on every path so the stream is
+    // productive whatever the channel list contains.
+    let _end = yield Reading { channel: 9, value: 0 };
+
+    // The cycle's closing value. `loop` bodies discard it and reset.
+    Reading { channel: 9, value: 0 }
+}

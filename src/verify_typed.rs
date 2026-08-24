@@ -155,6 +155,34 @@ pub enum TypedError {
         /// Operand-stack height where the body falls through.
         exit_height: usize,
     },
+    /// An instruction inside a loop body consumes an operand from BELOW the
+    /// loop's entry height.
+    ///
+    /// Back-edge neutrality (see [`TypedError::LoopNotNeutral`]) compares
+    /// SHAPES, not identities, so a body that pops a below-entry operand and
+    /// pushes a same-shape replacement is neutral — and the surviving entry was
+    /// then constructed in the current iteration while touching none of the
+    /// escaping instructions. That defeats any confinement argument over loop
+    /// bodies, and it was accepted until 2026-08-23.
+    ///
+    /// **The frame floor does not cover this.** `apply_op`'s underflow guard
+    /// fires only on an empty abstract stack, and 122 of 245 compiled `Loop`
+    /// instructions in the shipped corpus carry a NON-EMPTY operand stack at
+    /// entry, so for about half of them the frame floor sits strictly below the
+    /// loop floor.
+    ///
+    /// Adopting this rejected **zero** of the 588 loop instances across the
+    /// shipped corpus, measured before the check was added.
+    LoopFloorBreach {
+        /// Instruction index of the offending instruction.
+        ip: usize,
+        /// Operand-stack height at the enclosing loop's entry.
+        floor: usize,
+        /// Operand-stack height available to the instruction.
+        available: usize,
+        /// Operands the instruction consumes.
+        required: usize,
+    },
     /// A `SetLocal` stores a value whose shape is incompatible with the
     /// slot's declared shape, which would make a later `GetLocal` seeding
     /// untrustworthy.
@@ -498,7 +526,7 @@ fn check_chunk_seeded(
         locals,
     };
     let mut breaks: Vec<AbsState> = Vec::new();
-    interp_region(&ctx, 0, chunk.ops.len(), state, &mut breaks).map(|_| ())
+    interp_region(&ctx, 0, chunk.ops.len(), state, &mut breaks, 0).map(|_| ())
 }
 
 /// Abstract state at a program point: the operand stack and the per-slot
@@ -565,6 +593,7 @@ fn interp_region(
     end: usize,
     mut state: AbsState,
     breaks: &mut Vec<AbsState>,
+    floor: usize,
 ) -> Result<Option<AbsState>, TypedError> {
     let ops = &ctx.chunk.ops;
     let mut ip = start;
@@ -577,12 +606,14 @@ fn interp_region(
                 return Ok(None);
             }
             Op::BreakIf(_) => {
+                check_floor(ctx, op, state.stack.len(), floor, ip)?;
                 let AbsState { stack, locals } = &mut state;
                 apply_op(ctx, op, stack, locals, ip)?;
                 breaks.push(state.clone());
                 ip += 1;
             }
             Op::If(target) => {
+                check_floor(ctx, op, state.stack.len(), floor, ip)?;
                 {
                     let AbsState { stack, locals } = &mut state;
                     apply_op(ctx, op, stack, locals, ip)?;
@@ -593,8 +624,9 @@ fn interp_region(
                         Op::Else(e) => *e as usize,
                         _ => unreachable!(),
                     };
-                    let then_end = interp_region(ctx, ip + 1, target - 1, state.clone(), breaks)?;
-                    let else_end = interp_region(ctx, target, endif, state, breaks)?;
+                    let then_end =
+                        interp_region(ctx, ip + 1, target - 1, state.clone(), breaks, floor)?;
+                    let else_end = interp_region(ctx, target, endif, state, breaks, floor)?;
                     match join_ends(then_end, else_end, ip)? {
                         Some(joined) => state = joined,
                         None => return Ok(None),
@@ -604,7 +636,7 @@ fn interp_region(
                     // No else: the then-arm merges with the fall-through path
                     // (the state unchanged after popping the condition).
                     let skip = state.clone();
-                    let then_end = interp_region(ctx, ip + 1, target, state, breaks)?;
+                    let then_end = interp_region(ctx, ip + 1, target, state, breaks, floor)?;
                     match join_ends(then_end, Some(skip), ip)? {
                         Some(joined) => state = joined,
                         None => return Ok(None),
@@ -637,8 +669,14 @@ fn interp_region(
                 let mut iters = 0usize;
                 loop {
                     loop_breaks.clear();
-                    body_end =
-                        interp_region(ctx, ip + 1, exit - 1, head.clone(), &mut loop_breaks)?;
+                    body_end = interp_region(
+                        ctx,
+                        ip + 1,
+                        exit - 1,
+                        head.clone(),
+                        &mut loop_breaks,
+                        entry_height,
+                    )?;
                     let Some(be) = &body_end else {
                         // The body always exits via Break/Trap/Return: no
                         // back-edge, so no fixpoint is needed.
@@ -667,8 +705,14 @@ fn interp_region(
                         // only locals, so `head.stack` is unchanged.
                         invalidate_written_locals(ctx.chunk, ip + 1, exit - 1, &mut head.locals);
                         loop_breaks.clear();
-                        body_end =
-                            interp_region(ctx, ip + 1, exit - 1, head.clone(), &mut loop_breaks)?;
+                        body_end = interp_region(
+                            ctx,
+                            ip + 1,
+                            exit - 1,
+                            head.clone(),
+                            &mut loop_breaks,
+                            entry_height,
+                        )?;
                         if let Some(be) = &body_end
                             && be.stack != head.stack
                         {
@@ -694,6 +738,7 @@ fn interp_region(
             }
             _ => {
                 let AbsState { stack, locals } = &mut state;
+                check_floor(ctx, op, stack.len(), floor, ip)?;
                 apply_op(ctx, op, stack, locals, ip)?;
                 ip += 1;
             }
@@ -779,6 +824,37 @@ fn join_all(states: Vec<AbsState>, ip: usize) -> Result<Option<AbsState>, TypedE
 /// discipline exactly matches the scalar depth pass. Shape is tracked
 /// precisely for the ops that carry or consume it and conservatively (`Top`)
 /// otherwise.
+/// Refuse an instruction that would consume an operand from below `floor`.
+///
+/// `floor` is the enclosing loop's entry height, or `0` outside any loop. See
+/// [`TypedError::LoopFloorBreach`] for why the frame-level underflow guard in
+/// [`apply_op`] does not subsume this.
+fn check_floor(
+    ctx: &Ctx,
+    op: &Op,
+    height: usize,
+    floor: usize,
+    ip: usize,
+) -> Result<(), TypedError> {
+    // Outside any loop the floor is the frame, and `apply_op`'s own underflow
+    // guard is the apter diagnosis. Reporting a loop-floor breach there would
+    // name a loop the reader is not inside.
+    if floor == 0 {
+        return Ok(());
+    }
+    let (req, _net) = op_depth_effect(op, ctx.chunk);
+    let req = req.max(0) as usize;
+    if height < floor + req {
+        return Err(TypedError::LoopFloorBreach {
+            ip,
+            floor,
+            available: height,
+            required: req,
+        });
+    }
+    Ok(())
+}
+
 fn apply_op(
     ctx: &Ctx,
     op: &Op,
@@ -1866,12 +1942,25 @@ mod tests {
         ));
     }
 
-    // A loop body that returns to the entry height but with a different slot
-    // shape is not neutral (Phase 1 residual: back-edge equality, not just
-    // height). Modelled by a body that pops a seeded composite local and
-    // pushes a scalar in its place across the back-edge.
+    // A loop body that returns to the entry height with a different slot shape
+    // is refused -- but SINCE 2026-08-23 THE ENTRY-HEIGHT FLOOR CATCHES IT
+    // FIRST, and that subsumption is the point of this test rather than an
+    // inconvenience to work around.
+    //
+    // Replacing a slot's shape at EQUAL HEIGHT necessarily pops an entry that
+    // was on the stack at loop entry and pushes a different one, because an
+    // entry created and destroyed within the body leaves the back-edge shape
+    // untouched. So every witness for the shape case is also a below-entry
+    // reach, and `LoopFloorBreach` now reports it more precisely: it names the
+    // reach rather than its downstream effect on the back edge.
+    //
+    // **`LoopNotNeutral` IS NOT DEAD.** Its HEIGHT case remains reachable and
+    // is covered by `loop_neutrality` below, whose second case pushes and never
+    // pops, so the back edge differs in HEIGHT rather than in shape. Only the equal-height shape witness is
+    // subsumed. This test was updated deliberately when the floor landed; the
+    // assertion it used to carry is recorded above so the change is legible.
     #[test]
-    fn loop_non_neutral_by_shape_rejects() {
+    fn loop_shape_replacement_is_caught_by_the_entry_floor() {
         // Entry stack seeded with one composite via GetLocal; the loop body
         // replaces it with a scalar (Const) at equal height.
         let ops = vec![
@@ -1892,9 +1981,11 @@ mod tests {
         assert!(
             matches!(
                 typed_check_chunk_with_sig(&chunk(ops, ints()), &sig, 8, 8),
-                Err(TypedError::LoopNotNeutral { .. })
+                Err(TypedError::LoopFloorBreach { .. })
             ),
-            "a loop back-edge that changes a slot's shape at equal height must be rejected"
+            "a loop body that replaces a below-entry slot must be rejected, and \
+             since the entry-height floor landed the floor names the cause; \
+             before that it surfaced as LoopNotNeutral"
         );
     }
 

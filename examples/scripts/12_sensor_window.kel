@@ -1,0 +1,45 @@
+// A composite built once per loop iteration and consumed inside it.
+//
+// Each iteration constructs a `Sample` from the raw window, reads its
+// fields, and lets it go. The value never leaves the iteration: it is
+// not yielded, not stored to a data slot, and not returned.
+//
+// This is the shape the rest of the example corpus did not contain.
+// Every other composite here is an `if` or `match` arm result, built
+// and immediately joined. A per-iteration composite is what a memory
+// planner would most like to give a single reused slot, and what the
+// composite-region-reuse work calls a confined site.
+//
+// Run: keleusma run examples/scripts/12_sensor_window.kel
+// Expected output: 27
+
+struct Sample { index: Word, value: Word, scaled: Word }
+
+// The reading a sample carries, given the raw counts.
+fn scale(raw: Word) -> Word {
+    raw * 3
+}
+
+fn main() -> Word {
+    let raw = [4, 9, 2, 7];
+
+    // The last iteration's contribution is the one `total` keeps, since
+    // local bindings are immutable and each iteration rebinds its own.
+    for i in 0..4 {
+        let s = Sample {
+            index: i,
+            value: raw[i],
+            scaled: scale(raw[i]),
+        };
+        let _drift = s.scaled - s.value;
+    }
+
+    // Recompute the last window entry outside the loop, so the result
+    // does not depend on a value crossing an iteration boundary.
+    let last = Sample {
+        index: 3,
+        value: raw[3],
+        scaled: scale(raw[3]),
+    };
+    last.scaled + last.value - last.index + 2
+}

@@ -1,36 +1,42 @@
 #![cfg(all(feature = "compile", feature = "verify"))]
-//! `verify()` does NOT floor a loop body at the loop's entry height, and this
-//! pins the gap rather than the absence of one.
+//! `verify()` floors a loop body's operand-stack pops at the loop's entry
+//! height. This was a GAP until 2026-08-23 and is now enforced.
 //!
-//! # The question, and why the gap is worth recording
+//! # What the gap was
 //!
-//! The proof session asks whether a loop body can consume an operand from BELOW
-//! its loop's entry height and push a same-shape replacement. Back-edge
-//! neutrality would accept that — it compares SHAPES, not identities — and the
-//! surviving entry would then have been constructed in the current iteration
-//! while touching none of the five escaping opcodes. Their confinement
-//! condition cannot see it.
+//! Back-edge neutrality compares SHAPES, not identities, so a body that pops a
+//! below-entry operand and pushes a same-shape replacement is neutral — and the
+//! surviving entry was then constructed in the current iteration while touching
+//! none of the five escaping opcodes. Any confinement argument over loop bodies
+//! is defeated by that shape, and the composite-region-reuse proof's M6(d) had
+//! to record it as an emission invariant rather than an enforced one.
 //!
-//! **The answer is that `verify()` accepts it.** `interp_region`'s pops guard
-//! against an EMPTY abstract stack — the frame floor — not against the enclosing
-//! loop's entry height. The two are not the same: measured across the shipped
-//! corpus, **122 of 245 compiled `Loop` instructions have a non-empty operand
-//! stack at entry**, so the frame floor sits strictly below the loop floor for
-//! roughly half of them.
+//! **The frame floor did not cover it.** `interp_region`'s pops guarded against
+//! an EMPTY abstract stack, and **122 of 245** compiled `Loop` instructions in
+//! the shipped corpus carry a non-empty operand stack at entry, so for about
+//! half of them the frame floor sits strictly below the loop floor.
 //!
-//! # What is NOT claimed here
+//! # Why closing it was safe, and how that was known before it was closed
 //!
-//! That any compiler output does this. **It does not**: instrumenting the typed
-//! pass's own abstract interpretation and running the shipped corpus gave ZERO
-//! ops consuming below their innermost enclosing loop's entry height, over 588
-//! loop instances in 23 modules, with the instrument proven to fire on the
-//! shape below. That instrumentation was temporary and is NOT in the tree, so
-//! that figure is a measurement rather than a standing guarantee — unlike
-//! `tests/stream_never_returns.rs`, which pins its invariant permanently.
+//! **Zero of 588 loop instances across 23 shipped modules would be rejected.**
+//! Measured by instrumenting the typed pass's own per-path abstract
+//! interpretation, with the instrument proven to fire on the breaching shape.
+//! A linear depth scan gave the same zero and was discarded as exact for only
+//! **4** of the 245 loops — the flattering number came from the broken
+//! instrument first, which is why the sound one was built.
 //!
-//! Recording the gap is the part that can be pinned cheaply. If someone later
-//! makes the verifier floor at loop entry, this test fails and tells them a
-//! proof premise changed, which is the outcome worth engineering for.
+//! **This narrows what `verify()` accepts**, so it was an operator decision
+//! rather than an agent's, and it was taken as one.
+//!
+//! # What this file pinned BEFORE the change, and why the inversion is recorded
+//!
+//! It asserted that `verify()` ACCEPTED the breaching shape, with a message
+//! telling a future editor that closing the gap moves a proof premise and to
+//! tell the proof's owner rather than treat the failure as a routine fix. That
+//! is exactly what happened: the change was made deliberately, this test failed
+//! as designed, and it was inverted rather than deleted. **A gap pin that is
+//! silently removed when the gap closes leaves no record that the guarantee
+//! changed.**
 
 use keleusma::bytecode::{Module, Op};
 
@@ -76,26 +82,25 @@ fn contained() -> Vec<Op> {
 }
 
 #[test]
-fn a_loop_body_may_consume_from_below_its_entry_height() {
-    assert_eq!(
-        verify_ops(pop_below_entry()),
-        Ok(()),
-        "verify() now rejects a loop body that consumes below its entry height. \
-         That is very likely an IMPROVEMENT, but it changes a premise the \
-         composite-region-reuse proof reasons over: its confinement condition \
-         was written knowing this shape was admissible. Tell the proof's owner \
-         before treating this failure as a simple test fix."
+fn a_loop_body_may_not_consume_from_below_its_entry_height() {
+    let err = verify_ops(pop_below_entry())
+        .expect_err("the below-entry reach must now be refused at load time");
+    assert!(
+        err.contains("below") || err.contains("floor") || err.contains("entry"),
+        "the refusal must name the loop floor, or a reader cannot tell it from \
+         an ordinary underflow: {err}"
     );
 }
 
 #[test]
-fn the_control_is_accepted_too_so_acceptance_is_not_about_the_loop_shape() {
-    // Without this, the test above proves only that `verify()` accepts SOME
-    // loop of this form, not that it tolerates the reach below entry. A probe
-    // whose control was missing is how three earlier measurements in this
-    // repository ended up measuring something other than what was intended --
-    // and the first draft of THIS probe was malformed (`EndLoop` targeting the
-    // `Loop` rather than the body), which only the control revealed.
+fn the_control_is_still_accepted_so_the_refusal_is_about_the_reach() {
+    // The control is what makes the refusal above mean something. Without it,
+    // that test would pass on a verifier that rejected EVERY loop of this
+    // shape, which is a different and much worse change. A probe whose control
+    // was missing is how three earlier measurements in this repository ended up
+    // measuring something other than what was intended -- and the first draft
+    // of THIS probe was malformed (`EndLoop` targeting the `Loop` rather than
+    // the body), which only the control revealed.
     assert_eq!(verify_ops(contained()), Ok(()));
 }
 
