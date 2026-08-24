@@ -41,6 +41,16 @@ instantiation row is open. The write-accessor pin landed in their `a288ae26`, re
 proof's Appendix E against ground one only, since grounds two through four are read from
 dispatch and in no test.
 
+## Merge readiness
+
+The V0.2.X operator ruled on 2026-08-24 that the proof line merges into the V0.2.X line and the
+V0.3.X line rebases onto the result. Acceptance is authorized on their side at their tip
+`7b44b487`, and the merge waits only on this line's operator releasing the branch. The sequence
+when released is a no-fast-forward merge of `proof/composite-region-reuse` into `proofs`,
+verified by the pre-push gate since a pull request based on `proofs` triggers no workflow on
+this repository, followed by a pull request from `proofs` based on `v0.2.3` directly, which
+gates on the full continuous-integration matrix normally.
+
 ## Owed by this line
 
 Nothing to either peer line.
