@@ -439,8 +439,11 @@ corpus makes the two artifacts identical.
 2. **A standing guarantee for M5's second half.** M6(d) is structurally enforced by `verify()`
    as of the V0.2.X line's `92e5696a`, so the sole remaining emission invariant is that streams
    never return, which closes M5's nested-stream hole and re-runs as a pin on every build of
-   that line. A future returning stream or hand-written bytecode with such a shape defeats the
-   reuse theorems without failing verification.
+   that line. The surviving half is the weaker of the two, a property of what the reference
+   compiler emits and of nothing else, so the conditional theorems' producer scope is now
+   exactly as wide as one code-generation choice. A future returning stream or hand-written
+   bytecode with such a shape defeats the reuse theorems without failing verification, and
+   `tests/stream_never_returns.rs` is what would announce the change.
 3. **A stale internal handle is an error, not a wrong value, and no route to one was found.**
    `Op::GetField` resolves through the epoch check and faults `InvalidBytecode` on staleness. The
    V0.2.X line found no live route to a stale local and does not claim unreachability. This
@@ -616,8 +619,9 @@ floor zero, which is also why the empty-entry derivation remains the correct acc
 zero-rejection cost. The floor additionally subsumes `LoopNotNeutral`'s equal-height shape
 witness, recorded in the M6 row. The corpus stamp moved with the same commit, 248 static
 `Op::Loop` scopes across 26 modules, the eight iterating loops becoming eleven, the new three
-carrying empty entry stacks by construction since each `for` sits at statement position in a
-`loop main` body, with the non-empty-entry count not re-run over them. The source-form enumeration landed
+carrying entry stacks **inferred empty rather than measured empty**, a reasoned claim from each
+`for` sitting at statement position in a `loop main` body, with the non-empty-entry count not
+re-run over them. Nothing beyond this stamp leans on that inference. The source-form enumeration landed
 with a result stronger than requested, no local assignment exists in the language at all, and
 its bytecode-level caveat is recorded in the M3 row where a reader meets the classification. One
 piece of work is deliberately not requested. Characterizing the compiler's temporary-allocation
