@@ -163,6 +163,78 @@ fn the_corpus_builds_composites_inside_loops_and_disposes_of_them_three_ways() {
 ///
 /// A README that silently stops describing its directory is worse than none,
 /// because a reader takes the table as the roster.
+/// At least one confined site is reachable WITHOUT a callee summary.
+///
+/// # Why this is separate from the three dispositions
+///
+/// The `v0.3.0` line measured the corpus after `12` through `14` landed and
+/// found **all three composite sites disqualified** by a crude escape test:
+/// one by `Yield`, three by `SetLocal`, three by `Call`. Every subject needed
+/// two analysis features at once, so a confinement predicate with only its
+/// local-store handling would admit **nothing** even with subjects present.
+///
+/// `12_sensor_window.kel` calls a helper to compute a field, which is realistic
+/// and is exactly why it is not the right first subject. This pins that the
+/// corpus also carries a site whose only obstacle is the local store, so the
+/// predicate has something to admit on day one.
+///
+/// # What it does not claim
+///
+/// Nothing about whether such a site IS confined — that is the analysis's job.
+/// Only that the corpus contains one whose loop body makes no call, so a
+/// verdict is reachable without a callee summary.
+#[test]
+fn a_confined_candidate_exists_with_no_call_in_its_loop_body() {
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(scripts_dir())
+        .expect("readable")
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "kel"))
+        .collect();
+    paths.sort();
+
+    let mut candidates = 0usize;
+    for path in &paths {
+        let Some(module) = compile_file(path) else {
+            continue;
+        };
+        for chunk in &module.chunks {
+            for (i, op) in chunk.ops.iter().enumerate() {
+                let Op::Loop(exit) = op else { continue };
+                let end = (*exit as usize).min(chunk.ops.len());
+                let body = &chunk.ops[i + 1..end];
+                if body
+                    .iter()
+                    .any(|o| matches!(o, Op::Break(t) if *t == *exit))
+                {
+                    continue; // dispatch, not iteration
+                }
+                let builds = body.iter().any(|o| matches!(o, Op::NewComposite(_)));
+                let calls = body.iter().any(|o| {
+                    matches!(
+                        o,
+                        Op::Call(..) | Op::CallVerifiedNative(..) | Op::CallExternalNative(..)
+                    )
+                });
+                let escapes = body
+                    .iter()
+                    .any(|o| matches!(o, Op::Yield | Op::SetData(_) | Op::SetDataIndexed(_, _)));
+                if builds && !calls && !escapes {
+                    candidates += 1;
+                }
+            }
+        }
+    }
+
+    assert!(
+        candidates > 0,
+        "no iterating loop in the corpus builds a composite without also making \
+         a call or escaping it. A confinement predicate would then need a callee \
+         summary before it could admit ANYTHING, which is the state the corpus \
+         was in before 15_pixel_blend.kel."
+    );
+}
+
 #[test]
 fn the_readme_indexes_every_top_level_script() {
     let dir = scripts_dir();

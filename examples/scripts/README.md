@@ -22,8 +22,9 @@ keleusma run examples/scripts/<file>.kel
 | [`12_sensor_window.kel`](./12_sensor_window.kel) | Per-iteration composite, confined | A struct built once per `for` iteration and consumed inside it |
 | [`13_telemetry_stream.kel`](./13_telemetry_stream.kel) | Per-iteration composite, yielded | `loop main` streaming a struct built inside a `for`. **Not runnable through `keleusma run`** — see below |
 | [`14_frame_log.kel`](./14_frame_log.kel) | Per-iteration composite, stored | A struct copied into a `private data` slot each iteration, surviving the stream's `Reset`. **Diverges under `keleusma run`** — see below |
+| [`15_pixel_blend.kel`](./15_pixel_blend.kel) | Per-iteration composite, call-free | The same confined shape as `12` with **no call in the loop body**, so a confinement analysis needs only its local-store handling to admit it |
 
-Scripts `01` through `12` are atomic-total (`fn main`) and run end to end through the CLI.
+Scripts `01` through `12` and `15` are atomic-total (`fn main`) and run end to end through the CLI.
 
 **`13` and `14` are `loop main` stream programs and neither terminates under `keleusma run`.** They are here because the analyses that read this directory need the shape, not because they are runnable demonstrations:
 
