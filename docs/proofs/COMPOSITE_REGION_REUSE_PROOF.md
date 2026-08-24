@@ -2,26 +2,22 @@
 
 > **Navigation**: [Documentation Root](../README.md)
 
-> **STATUS.** Part I is a general theory over an abstract machine, proved from stated axioms and
-> applicable to any system that discharges them. Part II instantiates the axioms for Keleusma
-> with measured standing recorded per row. In the instantiation, Theorem A1 is unconditional,
-> while Theorems A2, A3, B1, B1r, B2, and the corollaries rest on axioms discharged in part by
-> reference-compiler emission invariants that `verify()` does not enforce, so their conclusions
-> apply to reference-compiled modules and do NOT apply to arbitrary bytecode that merely
-> verifies. That scoping has narrowed. M6(d) is structurally enforced by `verify()` as of the
-> V0.2.X line's `92e5696a`, recorded in Appendix E, so the sole remaining emission invariant is
-> M5's stream-never-returns half. Theorem B2 is additionally a **proved specification, not a description**. The
-> escape-copy discipline it requires does not exist in Keleusma today, and Appendix C names the
-> adoption obligations. M1's immutability clause is confirmed on four independent grounds, one
-> executable and pinned, and it is scoped to the ephemeral region deliberately, because the
-> persistent region is mutated in place and the unscoped statement is false in Keleusma. The
-> verifier-accepted counterexample to structural enforcement is in Appendix A, and the pin
-> commits are in Appendix E with their differing standings.
+> **STATUS.** This is the post-audit revision. The document at `de8b3f68` was adversarially
+> audited by five independent contexts on 2026-08-24, the findings are recorded in
+> [`AUDIT_2026-08-24.md`](./AUDIT_2026-08-24.md), and every verified finding is repaired here.
+> Part I is a general theory over an abstract machine, proved from stated axioms. Part II
+> instantiates the axioms for Keleusma with measured standing per row. Theorem A1 is
+> unconditional. The other theorems apply, in the instantiation, to reference-compiled modules
+> whose composites are transitively scalar, and the producer invariants they rest on are listed
+> exhaustively in the scoping paragraph of Appendix A. Two pins from the V0.2.X line are
+> awaited, the address-opacity discriminator and the Break row correction, both marked in their
+> rows. A fresh adversarial re-audit of this revision is required before any merge.
 
 This document discharges part of the obligation stated in `docs/proofs/COMPOSITE_REGION_REUSE.md`
-on the `v0.3.0` line, cited at commit `a49555bb`. Part I is self-contained mathematics and cites
-no project artifact. Every project-specific fact, premise, measurement, ownership statement, and
-proposal lives in the appendices.
+on the `v0.3.0` line. The obligation was read at commit `a49555bb`, and it has since been
+corrected on its own line at `d5b706e8` and `c3ff3c06`, both verified reachable, so the pin names
+the state this work was drafted against rather than the current text. Part I is self-contained
+mathematics and cites no project artifact. Everything project-specific lives in the appendices.
 
 ---
 
@@ -29,619 +25,535 @@ proposal lives in the appendices.
 
 ## 1. Setting
 
-An abstract machine executes programs over a fixed finite instruction set with structured control
-flow. Machine state comprises a stack of frames, each holding an operand stack and local slots, an
-**ephemeral region** managed by a bump allocator and stamped with an **epoch** counter, optional
-persistent storage, and an external **environment** that the machine can call out to and yield
-values to. Conditionals execute exactly one arm per dynamic instance. Loops are structured, with a
-well-defined body entry and exit. The language of programs is total, so every call terminates.
+An abstract machine executes programs over a fixed finite instruction set with structured
+control flow. Machine state comprises a stack of frames, each holding an operand stack and local
+slots, an **ephemeral region** managed by a bump allocator and stamped with an **epoch**
+counter, optional persistent storage, and an external **environment** that the machine can call
+out to and yield values to, receiving a reply value on each resume after a yield. Conditionals
+have finitely many arms and execute exactly one arm per dynamic instance. **Loops are iterating
+constructs** with a well-defined body entry, one or more back edges, and one or more exit
+edges. A dispatch construct that executes a body once and exits is a conditional in this
+theory, whatever its lowering. Calls push frames, and a call may or may not return.
 
 The question the theory answers is when a static planner may assign one fixed memory slot to an
-allocation site whose dynamic executions would otherwise each receive a fresh bump allocation, and
-what a worst-case memory bound may consequently count.
+allocation site whose dynamic executions would otherwise each receive a fresh bump allocation,
+and what a worst-case memory bound may consequently count.
 
 ## 2. Definitions
 
-**Definition 1, sites and paths.** Let $\mathcal{S} = \{s_1,\dots,s_m\}$ be the static allocation
+**Definition 1, sites, paths, and per-cycle memory.** Let $\mathcal{S}$ be the static allocation
 sites of a program unit and $\mathrm{sz}(s)$ the byte size site $s$ allocates. Let $\Pi$ be the
-set of execution paths. For $\pi \in \Pi$, $\mathrm{alloc}(\pi)$ is the multiset of dynamic site
-executions along $\pi$, a site inside a loop executed $k$ times contributing $k$ occurrences. The
-memory a path consumes is $M(\pi) = \sum_{s \in \mathrm{alloc}(\pi)} \mathrm{sz}(s)$ and the
-worst-case memory usage is $\mathrm{WCMU} = \max_{\pi \in \Pi} M(\pi)$.
+set of execution paths, each partitioned into cycles by Definition 3. For a path $\pi$ and a
+cycle $c$ on it, $\mathrm{alloc}_c(\pi)$ is the multiset of dynamic site executions within $c$,
+and the cycle's memory consumption is
+$M_c(\pi) = \sum_{s \in \mathrm{alloc}_c(\pi)} \mathrm{sz}(s)$. The baseline per-cycle worst
+case is $\mathrm{WCMU} = \sup_{\pi, c} M_c(\pi)$, a supremum that is finite exactly when static
+iteration bounds exist, which is hypothesis H of Section 5. Because the ephemeral region is
+reclaimed at every cycle boundary, $M_c(\pi)$ bounds the baseline machine's ephemeral occupancy
+throughout cycle $c$.
 
-**Definition 2, regions, handles, and references.** Each dynamic execution of an allocation
-instruction allocates a **region** $r$, an address interval in the ephemeral region. A **handle**
-is a triple of address, length, and epoch. A **dereference** of a handle succeeds and returns the
-bytes at its address exactly when the handle's epoch equals the current epoch, and otherwise
-fails with a staleness error. A **reference to $r$** is any value, in any location, that is a
-handle whose address range lies in $r$, or a view derived from such a handle. Views obtained by
-projecting a nested component alias the parent region and count as references to it.
+**Definition 2, regions, handles, and references, by provenance.** Each dynamic execution of an
+allocation instruction creates a **region** $r$, an identity, placed at an address interval in
+the ephemeral region. The handle produced by that execution **refers to $r$**. A view derived
+from a reference to $r$ is a reference to $r$. A **reference to $r$** is exactly the handle
+created by $r$'s allocation or a value transitively derived from it by view derivation or
+transport. A handle whose address interval merely coincides with $r$'s, through allocator reuse
+of addresses in another epoch or under a plan, is **not** a reference to $r$. A **dereference**
+of a handle succeeds exactly when the handle's carried epoch equals the current epoch, returning
+the bytes then present at its address interval, and otherwise fails with a staleness error.
 
-**Definition 3, cycles and scopes.** A **cycle** is the dynamic interval between consecutive
-epoch advances. A **scope** of a loop $L$ is one iteration, the dynamic interval from one
-execution of $L$'s body entry to the corresponding body end, whether reached normally or by early
-exit. For a site $s$ inside nested loops, the scope of $s$ means the iteration of the innermost
-loop enclosing $s$.
+**Definition 3, cycles and scopes.** A **cycle** is a maximal interval of execution containing
+no epoch advance in its interior, the interval from machine start to the first advance included.
+The **scope** of an instruction execution is the current iteration of the innermost dynamically
+enclosing loop of its frame, and its enclosing cycle when no loop encloses it. An iteration
+runs from one execution of the loop's body entry to the corresponding body end, whether reached
+at a back edge or at an exit edge. The scope of a value is the scope of the execution that
+allocated it, so for a site inside nested loops the governing scope is always the innermost.
 
-**Definition 4, plans and soundness.** A plan assigns each site a fixed offset. Under the
-**no-reuse regime**, every dynamic site execution receives a fresh bump allocation. Under a
-**reuse plan**, some sites' dynamic executions share one offset. A reuse plan is **sound** when
-for every program and every path the machine under the plan is observationally equivalent to the
-machine under no reuse, where the observations are the outcome of every dereference, by the
-environment or by the machine, and every scalar output. Handle addresses are not observations.
-An environment that compares handle addresses for value identity lies outside this observation
-model, and Theorem B2 in particular does not hold for it.
+**Definition 4, locations and lifetimes.** A **location** is an operand-stack entry, a local
+slot of a frame, a cell of persistent storage, or environment storage. An operand-stack entry's
+lifetime runs from its push to its pop or unwinding. A local slot's lifetime is its frame's. A
+persistent cell and environment storage have unbounded lifetime. A location **outlives** a
+scope when its lifetime extends past the scope's end.
 
-**Definition 5, confinement.** Let $v$ be the value allocated at site $s$ in scope $n$, with
-region $r_n$. The value is **confined** when, along every path, no reference to $r_n$ is ever an
-operand of an instruction classified `Escapes` under axiom M3. A site is confined when every
-value it allocates on every path is confined.
+**Definition 5, plans, well-formedness, observations, and soundness.** A **plan** for a program
+unit designates a subset $R \subseteq \mathcal{S}$ of reused sites and assigns each a fixed
+slot, an address interval of at least its size, with sites paired under Theorem A2 permitted to
+share one slot of the larger size. A plan is **well-formed** when its slots are pairwise
+disjoint, except as A2 licenses, and disjoint from the bump range used for all other
+allocations. The **baseline** is the empty plan, under which every execution receives a fresh
+bump allocation. The **observations** of a run are the outcome of every dereference, success
+with its returned bytes or staleness, by the machine or the environment, and every scalar
+output. Handle addresses are not observations. The environment's behavior, its replies and its
+dereference and presentation choices, is a function of its prior observations. A plan is
+**sound** when, for the unit it is defined for, every path under every environment behavior
+yields identical observations under the plan and under the baseline. The comparison assumes
+both runs complete, provisioning being Section 7's subject.
 
-Confinement is deliberately coarse. It forbids some harmless flows, for example a callee
-returning the value back into the same scope, because the classification of M3 is by worst case.
-The coarseness weakens applicability and never soundness. Theorem B1r at the end of Section 6
-proves the refinement that admits local stores to boundary-dead slots, which is the form every
-expressible in-loop binding takes in the instantiation. Section 9 records the return refinement,
-which remains unproved, and Section 8 proves the regime that removes the condition entirely at a
-copy cost.
+**Definition 6, operands and confinement.** The **operands** of an instruction execution are
+all values it reads, operand-stack entries and any slot or storage contents alike. Let $v$ be
+the value allocated at site $s$ in scope $n$, with region $r_n$. The value is **confined** when,
+along every path, no reference to $r_n$ is ever an operand of an execution of an
+`Escapes`-classified instruction. A site is confined when every value it allocates on every
+path is confined. Confinement is deliberately coarse, and Section 6's refined form and Section
+8's discipline each relax it in a different direction.
 
 ## 3. Axioms
 
-Any system claiming the theorems must discharge these. How each is discharged, and with what
-standing, is an instantiation concern. Appendix A does so for Keleusma.
+Any system claiming the theorems must discharge these. Appendix A does so for Keleusma, with
+standing per row.
 
 | # | axiom |
 |---|---|
-| M1 | **Bump ephemeral allocation, immutable regions.** Allocation in the ephemeral region is by bump pointer. The region is reclaimed, and the epoch advanced, only at cycle boundaries. Nothing else reclaims within a cycle. A region's bytes are not modified after its construction completes, except by a reuse plan's reallocation of the same offsets. |
-| M2 | **Epoch-guarded handles.** A handle carries the epoch current at its creation. Dereference succeeds exactly when the carried epoch equals the current epoch. An overwrite in place advances nothing. |
-| M3 | **Total instruction classification.** The instruction set is partitioned, totally, into four classes with these semantics. `NoRegion` instructions neither create nor transport references. `WithinScope` instructions create or move references only into locations whose lifetime is contained in the current scope. `CopiesOut` instructions write the referenced bytes, never references, to their destinations. Only `Escapes` instructions can place a reference into a location that outlives the current scope. No instruction fabricates a handle, and references originate only at allocation instructions. Totality must hold and keep holding as the instruction set changes. |
-| M4 | **Cycle cadence.** Each cycle contains exactly one epoch advance, at its end. |
+| M1 | **Bump ephemeral allocation, immutable regions.** Allocation in the ephemeral region is by bump pointer. The region is reclaimed, and the epoch advanced, only at cycle boundaries, and nothing else reclaims within a cycle. A region's bytes are not modified after its construction completes, except by a reuse plan's reallocation of the same slot. |
+| M2 | **Epoch-guarded handles.** A handle carries the epoch current at its creation, dereference is governed by Definition 2, and an overwrite in place advances nothing. |
+| M3 | **Total instruction classification.** The non-allocation instructions are partitioned, totally, into `NoRegion`, `WithinScope`, `CopiesOut`, and `Escapes`, with these semantics. (i) No instruction fabricates a handle, and references to regions originate only at allocation instructions. (ii) A `NoRegion` execution may read reference operands but neither derives nor moves references and produces only scalars or nothing. (iii) A `WithinScope` execution may derive or move references, but only into locations whose lifetime is contained in its scope. (iv) A `CopiesOut` execution writes referenced bytes, never references, to its destinations. (v) **Exhaustiveness.** Any execution that places a reference into a location outliving its scope belongs to an `Escapes`-classified instruction. (vi) An allocation execution creates a fresh region, copies any composite operands' bytes inline, and pushes exactly one fresh reference to the new region onto the executing frame's operand stack. Totality must hold and keep holding as the instruction set changes. |
+| M4 | **Cycle cadence.** Every cycle ends with exactly one epoch advance, and no instruction of the cycle executes after its advance. |
 | M5 | **Boundary clearance.** At a cycle boundary, no machine-internal location that is ever subsequently read holds a reference into the ephemeral region. The environment may retain handles across the boundary. |
-| M6 | **Scope discipline.** (a) A loop's back edge restores the exact entry operand stack, height and per-slot shape, so no entry created within the scope survives above the entry height. (b) Early exits restore the same discipline. (c) A frame created within a scope is destroyed within it and its contents become unreachable, and every call made within a scope returns within it. (d) No instruction within a loop body consumes operand-stack entries below the loop's entry height. |
-| M7 | **Environment trust.** The environment presents to the machine only handles it received from the machine. What an external callee retains is unknown, which is why external calls are classified `Escapes` in any instantiation of M3. |
+| M6 | **Iterating-loop discipline.** (a) Every back edge restores the exact entry operand stack, height and per-slot shape. (b) Every early exit of an iterating loop likewise restores the exact entry stack, so no entry created within the exiting scope survives it. (c) A frame created within a scope is destroyed before that scope ends, and a call that never returns leaves its enclosing scope forever open, so scope-end conclusions are vacuous for it. (d) No instruction reads or writes operand-stack entries below the innermost enclosing loop's entry height. |
+| M7 | **Environment trust.** The environment presents to the machine only handles it received from the machine, does not fabricate or alter handles, and behaves per Definition 5. What an external callee retains is unknown, which is why external calls are classified `Escapes` in any instantiation. |
+| M8 | **Address opacity.** No instruction's scalar result or control effect depends on the address component of any operand handle. Dereference outcomes depend only on epoch validity and the referenced bytes. |
+| M9 | **Flat values.** No machine value other than a handle or a view contains a reference, and region bytes never encode references, so copying bytes never copies a reference and bytes cannot be reconstituted into a handle. |
+
+Clause (v) of M3 is the engine of every confinement argument. Wherever a proof shows a
+destination outlives the executing scope, the placing execution is `Escapes`-classified in any
+conforming machine, and confinement then applies to any reference reaching it. Environment
+storage outlives every scope by Definition 4, so every transfer of a value to the environment,
+yields included, is `Escapes`-classified by (v).
 
 ## 4. Lemmas
 
-**Lemma 1, origination.** Under M3 and M7, every reference to a region $r$ is connected by a
-chain of transports and view derivations to the single allocation that created $r$.
+**Lemma 1, provenance closure. Requires M3, M7, M9.** At every moment, the set of references to
+a region $r$ consists of the handle pushed by $r$'s allocation and values derived from members
+of the set by view derivation or transport, and the environment holds only references it
+received from the machine. No reference to $r$ exists before $r$'s allocation or arises by any
+other route.
 
-*Proof.* By M3 no instruction fabricates a handle, allocation instructions produce a reference
-only to the region just allocated, `CopiesOut` instructions produce values holding no reference
-to their operands' regions, and projections derive views from an existing reference. Every other
-instruction moves, duplicates, or consumes existing values. By M7 the environment presents only
-handles it received, so no reference enters from outside except by returning along a chain that
-began at the machine. $\blacksquare$
+*Proof.* By Definition 2 references to $r$ are provenance-generated from the allocation's
+handle. M3(i) excludes fabrication, M9 excludes reconstitution from bytes and containment in
+other values, M3(vi) makes the allocation's push the sole origin, and M7 confines the
+environment to received handles. $\blacksquare$
 
-**Lemma 2, confinement is preserved to the scope boundary.** Under M3, M6, and M7, let $v$ be
-confined, allocated at site $s$ in scope $n$ of loop $L$, with region $r_n$. Then at the end of
-scope $n$ no reachable location holds a reference to $r_n$.
+**Lemma 2, confinement clearance. Requires M3, M6, M7, M9.** Let $v$ be confined, allocated at
+site $s$ in scope $n$, with region $r_n$, and suppose scope $n$ ends. Then at its end no
+reachable location holds a reference to $r_n$.
 
 *Proof.* By induction over the instructions executed during scope $n$, with the invariant that
-every reference to $r_n$ resides either in an operand-stack entry above the scope entry height of
-the frame executing $L$, or inside a frame created during scope $n$.
+every reference to $r_n$ resides either in an operand-stack entry of the frame executing the
+innermost loop, above that scope's entry height, or inside a frame created during scope $n$.
 
-The invariant is established at origination. The allocation at $s$ executes inside the body, so
-its result is pushed above the entry height of the executing frame, and by Lemma 1 this is the
-only reference at that moment.
+The invariant holds at origination, where M3(vi) pushes the sole reference, per Lemma 1, onto
+the executing frame's stack, above the entry height because M6(d) keeps the height from dipping
+below entry mid-scope.
 
-Preservation is by cases on the class of the executed instruction, under M3.
+Preservation is by cases on the executed instruction's class, arguing from the class semantics
+and never from instruction names. An `Escapes` execution with a reference to $r_n$ among its
+operands is excluded by confinement outright, and Definition 6 makes slot and storage contents
+operands, so no slot-reading escape evades this. Since transfers to the environment are
+`Escapes` by M3(v), the environment never receives a reference to $r_n$, and by Lemma 1 a
+resume reply cannot carry one, M9 excluding concealment inside the reply value. A `WithinScope`
+execution moves or derives references only into locations whose lifetime is contained in its
+scope, which are exactly the invariant's two classes, entries above the entry height and
+locations of frames created during the scope, including callee argument slots however they are
+filled. A `CopiesOut` execution writes bytes, and by M9 bytes carry no references. A `NoRegion`
+execution derives and moves nothing. An allocation execution consuming a reference to $r_n$
+copies bytes inline by M3(vi) and produces a reference to its own fresh region only. Control
+transfers move no data, and any unwinding they perform destroys entries.
 
-*Case `Escapes`.* Excluded. Confinement says no reference to $r_n$ is ever an operand of such an
-instruction. In particular no local-store instruction ever stores one, so no local slot in any
-frame ever holds a reference to $r_n$, and no local-load instruction can produce one.
-
-*Case `CopiesOut`.* The referenced bytes are written to the destination. Bytes are not
-references, so no new location holding a reference arises. An allocation instruction consuming a
-reference to $r_n$ as a nested operand copies its bytes inline into the new region and consumes
-the operand. The produced value references the new region, not $r_n$.
-
-*Case `WithinScope`.* Duplication and projection produce stack entries in the executing frame,
-above the entry height. A call transfers operand-stack entries into a callee frame, which is a
-frame created during scope $n$. Within the callee the same case analysis applies. By M6(c) the
-callee returns within the scope and its frame becomes unreachable at that point. Its result value
-cannot be a reference to $r_n$, because that would make a reference to $r_n$ an operand of the
-return instruction, which confinement excludes.
-
-*Case `NoRegion`.* These instructions consume reference operands, if any, and produce scalars or
-nothing. References are removed, never created. Control instructions move no data, and any stack
-unwinding they perform removes entries.
-
-One flow enters from outside the instruction stream. A resume after a yield pushes an
-environment-supplied reply. By M7 the environment presents only handles it received, and
-confinement ensures it never received a reference to $r_n$, so the reply cannot carry one.
-
-At the end of scope $n$, by M6(a) the operand stack of the frame executing $L$ stands at its
-entry height with its entry shape, so every entry above the entry height is gone, and by M6(c)
-every frame created during the scope has returned. It remains to rule out a reference to $r_n$
-sitting at or below the entry height, which shape restoration alone would permit if the body
-popped a below-entry entry and pushed a same-shape replacement built in scope $n$. M6(d) excludes
-exactly that. Both location classes of the invariant are therefore empty. $\blacksquare$
-
-The dependence on M6(d) is real and is why it is a separate clause. Without it, a value could
-cross the back edge through pure stack operations, touching no escaping instruction, and
-confinement would not see it. An instantiation that discharges M6(d) by a producer invariant
-rather than a structural check inherits the scoping consequence stated in Section 9.
-
-## 5. The branch theorems
-
-**Theorem A1, branch bound.** For every path $\pi$, replacing the contribution of each dynamic
-instance of a conditional by the maximum of its two arms' contributions yields an upper bound on
-$M(\pi)$. Consequently the rule
-$\mathrm{plan}(\texttt{if}\ A\ \texttt{else}\ B) = \max(\mathrm{plan}(A), \mathrm{plan}(B))$,
-applied per instance and multiplied by iteration counts where the conditional sits inside a loop,
-over-approximates worst-case memory usage. This holds from structured control flow alone, with no
-axiom beyond the setting.
-
-*Proof.* Structured control flow executes exactly one arm per dynamic instance. The instance's
-contribution to $M(\pi)$ is therefore the sum over the arm taken, which is at most the maximum of
-the two arms' sums. Summing the bound over all instances of the path preserves the inequality.
+At the end of scope $n$, if reached at a back edge, M6(a) restores the entry stack exactly, and
+if reached at an exit edge, M6(b) does the same, so in either case no entry created within the
+scope survives, and no entry at or below the entry height was touched, by M6(d) in the strong
+read-or-write form. Every frame created during the scope has been destroyed by M6(c), a call
+that never returned having instead prevented the scope from ending, which the lemma's
+hypothesis excludes. A `Return` that destroys the frame executing the loop ends the scope with
+the frame, and its result lands in a location of the caller, which outlives the scope, so by
+M3(v) that `Return` execution is `Escapes`-classified and confinement excludes a reference to
+$r_n$ among its operands. Both invariant classes are therefore empty at the scope's end.
 $\blacksquare$
 
-A flat claim that no path contains sites of both arms fails under the multiplicity path model of
-Definition 1 whenever the conditional sits inside a loop, because one path may take the first arm
-in one iteration and the second arm in another. Theorem A1 is the form that survives as a bound.
-The overlap claim needs the separate treatment below, and it does need liveness reasoning.
+## 5. Branch theorems
 
-**Theorem A2, arm overlap once per cycle. Requires M1, M2, M4, M5.** Let $s_i$ and $s_j$ be sites
-in the two arms of a conditional that executes at most once per cycle. A plan assigning $s_i$ and
-$s_j$ overlapping offsets is sound.
+**Theorem A1, per-instance branch bound.** Fix any assignment of a static value
+$B(\text{arm})$ to each arm of each conditional such that $B(\text{arm})$ bounds the arm's
+dynamic allocation contribution on every execution of it. Then replacing each dynamic
+instance's contribution by $\max_{\text{arms}} B$ preserves an upper bound on $M_c(\pi)$ for
+every cycle of every path. This holds for conditionals of any arity, from structured control
+flow alone.
 
-*Proof.* Within one cycle the conditional executes at most once and takes one arm, so at most one
-of the two regions is allocated in that epoch, and by Lemma 1 no reference to the other exists at
-all. Any reference surviving into a later cycle is, by M5, environment-held, and by M2 with M4
-every dereference of it fails stale under the reuse plan and under no reuse alike, because the
-epoch advanced at the intervening boundary in both regimes. No observation distinguishes the
-regimes. $\blacksquare$
+*Proof.* Each dynamic instance executes exactly one arm, contributing that arm's dynamic sum,
+which is at most its $B$, which is at most the maximum over arms. Summing over the instances of
+the cycle preserves the inequality. $\blacksquare$
 
-**Corollary A3, arm overlap inside loops. Requires M1 through M7.** If the conditional sits
-inside a loop and every site in both arms is confined, the plan may overlap the arms and
-additionally reuse the shared slot across scopes. *Proof.* Per scope at most one arm executes, so
-at most one write to the shared slot occurs per scope, and by Lemma 2 no reference to any prior
-scope's value survives its scope. The cross-cycle case is as in Theorem A2. $\blacksquare$
+**Hypothesis H, static caps.** Every loop of the unit carries a static iteration cap dominating
+every dynamic iteration count of one scope-entry. Totality yields termination, not caps, so H
+is a genuine hypothesis, discharged in the instantiation by the language's capped loop forms.
 
-## 6. Theorem B1, confined-site slot reuse
+**Corollary A1s, the static bound.** Under H, define $B$ over the unit's structure by
+$B(\text{sequence}) = \sum B$, $B(\text{conditional}) = \max_{\text{arms}} B$, and
+$B(\text{loop}) = \mathrm{cap} \times B(\text{body})$, with a site contributing
+$\mathrm{sz}(s)$. Then $B(\text{unit}) \geq M_c(\pi)$ for every cycle of every path.
 
-**Theorem B1. Requires M1 through M7.** Let $s$ be a confined site inside a loop $L$. A plan
-assigning $s$ one slot reused across scopes and across cycles is sound. Consequently worst-case
-memory accounting may count $s$ once per cycle, contributing $\mathrm{sz}(s)$ in place of
-$k \cdot \mathrm{sz}(s)$.
+*Proof.* Structural induction. A sequence's dynamic contribution is the sum of its parts', each
+bounded by induction. A conditional instance is bounded by Theorem A1 with the inductively
+obtained arm values. A loop's contribution in one scope-entry is at most cap many iterations,
+each bounded by $B(\text{body})$ inductively. $\blacksquare$
 
-*Proof.* The reuse plan differs from no reuse only in that $r_n$ and $r_{n+1}$ share addresses.
-An observational divergence therefore requires a dereference of a reference to that address range
-that returns different bytes in the two regimes. Bytes at the shared address differ from the
-no-reuse bytes of $v_n$ only from the moment the $(n{+}1)$-th execution of $s$ begins to write.
-So a divergence requires a reference to $r_n$, created in scope $n$, dereferenced at or after the
-start of the $(n{+}1)$-th execution of $s$ within the same epoch, or dereferenced in a later
-epoch.
+**Theorem A2, arm overlap. Requires M1 through M5, M7, M8, M9.** Let $s_i$ and $s_j$ be sites
+in two distinct arms of one conditional, and suppose **each of the two sites executes at most
+once per cycle** on every path. A well-formed plan whose sole reuse is one shared slot for
+$s_i$ and $s_j$ is sound.
 
-Within the epoch, the $(n{+}1)$-th execution of $s$ lies in scope $n{+}1$ of $L$, which begins
-after scope $n$ ends. By Lemma 2, at the end of scope $n$ no reachable location holds a reference
-to $r_n$, and by Lemma 1 none can subsequently arise, since the originating chain is closed and
-the environment, by M7 with confinement, never received one. So no such dereference exists.
+*Proof.* Within one cycle, at most one execution of each site occurs, and since one dynamic
+instance of the conditional takes one arm, at most one of the two regions is created per
+dynamic instance. If the conditional itself runs at most once per cycle, at most one of the two
+regions exists per epoch, and by Lemma 1 no reference to the other exists at all. If the
+conditional runs several times per cycle, the per-site hypothesis still permits at most one
+execution of each site per cycle, and the slot's second write, if any, is the other site's
+sole execution, whose region's first and only observation window begins at that write, while
+every reference to the earlier region was created before it. A dereference of the earlier
+region's reference after the overwrite would return changed bytes, so soundness needs such
+references dead, which the per-site hypothesis alone does not give when both arms run in one
+cycle. **The theorem therefore additionally requires that at most one of the two sites executes
+per cycle**, which the exactly-one-arm property delivers whenever the conditional executes at
+most once per cycle, the intended reading, now stated. Cross-cycle, any surviving reference is
+environment-held by M5, or sits unread internally, and a dereference requires loading, which is
+a read, so every dereference of it fails stale by M2 with M4 identically in both regimes. M8
+ensures no scalar or control difference arises from the differing addresses. $\blacksquare$
 
-Across epochs, by M5 the only surviving references are environment-held, and by M2 every
-dereference of them fails stale identically in both regimes.
+The statement's hypothesis is accordingly, in full, that the conditional executes at most once
+per cycle. The proof shows why the weaker per-site form is insufficient, which the audit
+established by countermodel.
 
-All other observations are unaffected. Every dereference of a reference to $r_m$, for the current
-scope $m$, occurs while the slot holds exactly $v_m$'s bytes, which equal the no-reuse bytes, and
-scalar computation never reads the region except through dereferences. Hence observational
-equivalence, and the accounting consequence follows by applying Definition 1 to the reuse plan's
-allocation behavior, one live allocation for $s$ per cycle. $\blacksquare$
+## 6. Confined-site reuse
+
+**Theorem B1. Requires M1 through M9 and Hypothesis H not required.** Let $s$ be a confined
+site, $L$ the innermost loop enclosing it, and $P$ a well-formed plan whose sole reuse is one
+slot for $s$. Then $P$ is sound, and per-cycle accounting may count $s$ once, contributing
+$\mathrm{sz}(s)$ in place of its full multiplicity.
+
+*Proof.* By well-formedness, the two regimes differ only in the addresses of $s$'s regions,
+successive ones sharing the slot under $P$. By M8 and Definition 5, an observational divergence
+requires a dereference returning different bytes in the two regimes, and the slot's bytes
+differ from the baseline bytes of $v_n$ only from the start of $s$'s next execution, which by
+Definition 3 lies in a later scope of $L$, every execution of $s$ being separated from the next
+by at least one boundary of its innermost scope. So a divergence requires a reference to $r_n$
+dereferenced after scope $n$ ends within the epoch, or in a later epoch. Within the epoch,
+Lemma 2 empties every reachable location at scope $n$'s end, and by Lemma 1 no reference can
+subsequently arise, the environment never having received one. Across epochs, M5 leaves
+surviving references environment-held or forever unread, and dereferencing requires reading, so
+every such dereference fails stale by M2 with M4, identically in both regimes. Dereferences of
+the current scope's reference occur while the slot holds exactly its bytes, equal to baseline
+by M1's immutability. $\blacksquare$
 
 ### The refined form, local stores to boundary-dead slots
 
-The coarse Definition 8 forbids every local store, and in a language whose local bindings are
-immutable that forbids too much, because the only expressible in-loop store targets a binding
-declared inside the body, whose slot the compiler retires with the iteration. The refinement
-below admits exactly that shape. Its definitions and lemma are numbered by order of addition, so
-they follow Section 8's Definition 9 and Lemma 3 numerically while preceding them in the
-document.
+**Definition 7, deadness at loop boundaries.** Let $L$ be the **innermost** loop enclosing site
+$s$. A local slot $\ell$ of the frame executing $L$ is **dead at the boundaries of $L$** when,
+at **every** back edge and at every exit edge of $L$, every path onward either never reads
+$\ell$ or writes $\ell$ before its first read of it, reads in the sense of Definition 6.
 
-**Definition 10, deadness at loop boundaries.** Fix a loop $L$. A local slot $\ell$ of the frame
-executing $L$ is **dead at the boundaries of $L$** when, at the back edge and at every exit edge
-of $L$, every path onward either never reads $\ell$ or writes $\ell$ before its first read of
-$\ell$. This is the standard liveness notion, decidable by dataflow over the program unit.
+**Definition 8, refined confinement.** Let $D$ be a set of slots dead at the boundaries of the
+innermost loop $L$ enclosing $s$. The value $v$ at $s$ in scope $n$ is **confined relative to
+$D$** when, along every path, no reference to $r_n$ is ever an operand of an `Escapes`
+execution other than a local store targeting a slot in $D$.
 
-**Definition 11, refined confinement.** Let $D$ be a set of slots dead at the boundaries of $L$.
-The value $v$ at site $s$ in scope $n$ is **confined relative to $D$** when, along every path,
-no reference to $r_n$ is ever an operand of an `Escapes`-classified instruction other than a
-local store targeting a slot in $D$.
+**Lemma 3, refined clearance. Requires M3, M6, M7, M9.** Let $v$ be confined relative to $D$,
+with $L$ innermost, and suppose scope $n$ ends. Then no dereference of a reference to $r_n$
+occurs after scope $n$ ends.
 
-**Lemma 4. Requires M3, M6, M7.** Let $v$ be confined relative to $D$. Then no dereference of a
-reference to $r_n$ occurs after scope $n$ ends.
+*Proof.* Extend Lemma 2's invariant with a third class, slots in $D$. The excused store places
+a reference in a $D$-slot, and a load of a $D$-slot during scope $n$ pushes a copy above the
+entry height, both preserving the invariant, and every other case is as in Lemma 2. At scope
+$n$'s end, reached at a back edge or exit edge of the **same** loop $L$ whose boundaries anchor
+$D$'s deadness, the first two classes are empty as in Lemma 2, so every surviving reference
+sits in a $D$-slot. By Definition 7, on every path onward from that boundary each such slot is
+written before it is read, and Definition 6 counts every access that takes the content as an
+operand as a read, so the stale content is never an operand of anything before being
+overwritten, and in particular is never dereferenced and never copied. $\blacksquare$
 
-*Proof.* Extend Lemma 2's invariant with a third location class. Every reference to $r_n$
-resides in an operand-stack entry above the scope entry height of the frame executing $L$, in a
-frame created during scope $n$, or in a slot belonging to $D$. The new cases preserve it. A
-local store to $\ell \in D$ places the reference in $\ell$, which the invariant now admits, and
-a local load of $\ell$ during scope $n$ pushes a copy onto the executing frame's stack above the
-entry height. Every other case is as in Lemma 2. At the end of scope $n$, the first two classes
-are empty by M6 exactly as before, so every surviving reference to $r_n$ sits in a slot in $D$.
-By Definition 10, on every path after the boundary each such slot is written before it is read,
-so its content is never loaded again, and by M3 a reference in a slot can reach an instruction's
-operands only through a local load. A dereference requires the reference as an operand, so no
-dereference of a reference to $r_n$ occurs after the boundary, and no further copies of it can
-arise. $\blacksquare$
+**Theorem B1r. Requires M1 through M9.** With $s$, $L$ innermost, and a well-formed single-slot
+plan as in Theorem B1, and $v$ confined relative to some $D$ per Definitions 7 and 8, the
+conclusion of Theorem B1 holds unchanged.
 
-**Theorem B1r. Requires M1 through M7.** Let $s$ be a site inside a loop $L$ whose values are
-confined relative to some $D$ of slots dead at the boundaries of $L$. Then the conclusion of
-Theorem B1 holds for $s$ unchanged. One slot reused across scopes and cycles is sound, and
-worst-case memory accounting may count $s$ once per cycle.
+*Proof.* Theorem B1's within-epoch step needed exactly that no dereference of a reference to
+$r_n$ occurs after scope $n$ ends, which Lemma 3 delivers, together with the environment
+premise, which still holds because yields, returns crossing the loop frame, and external calls
+remain unexcused `Escapes`, so the environment never receives a reference to $r_n$. The
+$D$-slot residue survives internally without being read, which M5 permits, its clause covering
+only locations subsequently read while so holding, and the cross-epoch and byte-equality
+arguments are unchanged. $\blacksquare$
 
-*Proof.* The proof of Theorem B1 used Lemma 2 only to conclude that no dereference of a
-reference to $r_n$ can occur at or after the start of the $(n{+}1)$-th execution of $s$ within
-the epoch. Lemma 4 yields the same conclusion under the refined hypothesis, since the
-$(n{+}1)$-th execution begins after scope $n$ ends. The stale reference sitting unread in a
-$D$-slot is overwritten without ever being loaded, so it is never an operand of anything. The
-cross-epoch and equivalence arguments are unchanged. $\blacksquare$
+**Corollary A3, arm overlap inside loops. Requires M1 through M9.** Let a conditional sit
+inside a loop, let every site in its arms be confined or confined relative to suitable $D$
+sets, all anchored at their innermost loops, and let the plan share one slot across the arms'
+sites and reuse it across scopes. The plan is sound. *Proof.* Per scope of the enclosing loop,
+one arm executes, and within any arm a nested site's executions are governed by its own
+innermost scope, so consecutive writes to the shared slot are always separated by a boundary of
+the writing site's innermost scope. Lemma 2 or Lemma 3 empties references at each such
+boundary, and the cross-cycle case is as in Theorem A2. $\blacksquare$
 
-**Remark, what the refinement unblocks.** A binding declared inside the loop body is written at
-its declaration before any read in each scope, and it is out of scope at the boundary, so its
-slot is dead at the boundaries whenever the compiler's slot assignment preserves definite
-initialization. Both confinement relative to $D$ and membership of $D$ are static dataflow
-properties of the compiled unit, so the gate on applying Theorem B1r is an analysis, not a
-further theorem.
+**Remark, what the refinement admits.** A binding declared inside a loop body compiles to a
+slot written at its declaration before any read in each scope and dead at the boundaries
+whenever slot assignment preserves definite initialization, so the refined form admits the
+ordinary in-loop binding. Both membership of $D$ and refined confinement are static dataflow
+properties, liveness and reference flow, so the gate on applying B1r is an analysis.
 
-## 7. Corollary C, the composed plan
+## 7. Composition and the plan bound
 
-**Corollary C. Requires M1 through M7.** Define $\mathrm{alloc}^{\ast}(\pi)$ from
-$\mathrm{alloc}(\pi)$ by counting each confined loop site once per cycle, confinement in the
-sense of Definition 8 or of Definition 11, counting every other
-loop site with its full multiplicity, and bounding each conditional instance by the maximum of
-its arms per Theorem A1. Then
+**Lemma 4, composition. Requires M1 through M9.** Let $P$ be a well-formed plan, and suppose
+each reused element of $P$, a single site or an A2-paired pair sharing a slot, satisfies the
+hypothesis of Theorem B1, Theorem B1r, or Theorem A2 respectively. Then $P$ is sound.
 
-$$
-\mathrm{plan} \;=\; \max_{\pi \in \Pi} \sum_{s \in \mathrm{alloc}^{\ast}(\pi)} \mathrm{sz}(s)
-\;\;\geq\;\; \mathrm{WCMU}
-$$
+*Proof.* Order the reused elements and let $P_0, \dots, P_k$ be the plans reusing the first $i$
+elements, $P_0$ the baseline and $P_k = P$. Adjacent plans differ at exactly one element.
+Lemmas 1, 2, and 3 hold in the machine under **any** well-formed plan, because their statements
+and proofs concern provenance, operands, and location lifetimes, none of which a plan changes,
+a plan changing only which addresses regions occupy and hence which bytes an unsound
+dereference would see. The corresponding theorem's equivalence argument between $P_i$ and
+$P_{i+1}$ therefore applies verbatim, its byte-equality step using well-formedness to keep
+every other element's slot and the bump range disjoint from the element under consideration.
+Observational equivalence composes transitively along the chain. $\blacksquare$
 
-and the overlap forms, Theorem A2 and Corollaries A3 and B1, license the corresponding slotted
-layout. The soundness arguments compose because each is an observational equivalence against the
-same no-reuse baseline and their location sets are disjoint by construction. Where a site is not
-confined, its contribution reverts to $k \cdot \mathrm{sz}(s)$, and any planner reusing its slot
-anyway is unsound.
-
-## 8. Theorem B2, universal slot reuse under an escape-copy discipline
-
-Theorem B1 restricts the plan to confined sites. The alternative regime changes the machine
-instead of restricting the plan. If every escaping flow transports a copy, no site needs
-confinement. This section proves that regime sound in general. Whether any concrete system
-implements the discipline is an instantiation question, and Appendix C records that Keleusma
-does not today.
-
-**Definition 9, escape-copy discipline.** A machine satisfies the escape-copy discipline when
-every execution of an `Escapes`-classified instruction whose operand is a reference to a region
-transports a **fresh copy** in its place, subject to all of the following.
-
-1. **Faithfulness.** The copy's bytes equal the referenced bytes at the instant of the copy.
-2. **Stability.** A copy's bytes are not modified while any reference to it is reachable within
-   its epoch. In particular the copy store is disjoint from every reused slot.
-3. **Epoch stamping.** A copy handle carries the epoch current at its creation, and dereference
-   remains governed by M2.
-4. **Recursion.** The discipline applies equally when the operand is a reference to a copy, so
-   an escape of a copy produces a further copy.
-5. **Depth.** A copy contains no reference into any ephemeral region or reused slot.
-
-**Lemma 3, unconditional scope clearance.** Under M3 with the escape-copy discipline in force,
-M6, and M7, for every site $s$ in a loop and every scope $n$, at the end of scope $n$ no
-reachable location holds a reference to $r_n$. No confinement hypothesis is needed.
-
-*Proof.* The induction of Lemma 2 goes through with its `Escapes` case replaced. An escaping
-instruction with a reference to $r_n$ as operand consumes it and places a reference to a fresh
-copy in the outliving location. By clause 5 the copy holds no reference to $r_n$, so the case
-creates no location holding one. The environment-reply flow also closes without confinement.
-Under the discipline the environment only ever receives copy references, by clauses 4 and 5
-those reference no site region, and by M7 it presents only what it received, so a reply cannot
-reintroduce a reference to $r_n$. Every other case is as in Lemma 2, and the scope-end argument
-by M6, including its dependence on M6(d), is unchanged. $\blacksquare$
-
-**Theorem B2. Requires M1, M2, M4, M5, M6, M7, and the escape-copy discipline.** The plan
-assigning every site, loop or straight-line, one slot reused across all its dynamic executions
-is sound, under the observation model of Definition 4, which excludes handle addresses.
-
-*Proof.* Every observation is a dereference outcome or a scalar output, and scalar computation
-reads regions only through dereferences, so it suffices that every dereference returns the same
-result in the two regimes.
-
-A dereference of a reference to a site region $r_m$ occurs, by Lemma 3, only during scope $m$
-itself, before the site's next execution begins, so the slot holds exactly $v_m$'s bytes, which
-equal the baseline bytes by M1's immutability. For a straight-line site, consecutive executions
-are separated by an epoch boundary by M4, and the cross-epoch case below covers them.
-
-A dereference of a copy reference within the copy's epoch returns, by clauses 1 and 2 and
-induction along the copy chain of clause 4, the construction bytes of the originally escaped
-value, which is what the baseline returns for the corresponding original reference, since
-baseline regions are immutable after construction and unreclaimed within the epoch by M1.
-Across epochs, by clause 3 and M2 the copy dereference fails stale, and the corresponding
-baseline dereference fails stale by M2 and M4, identically. By M5 no internal location that is
-subsequently read carries any of this across a boundary in either regime. Hence observational
-equivalence. $\blacksquare$
-
-**Corollary B2a, accounting.** Under Theorem B2's hypotheses, worst-case memory accounting
-counts each site once per cycle in the arena term and must add a **copy-store term**,
+**Theorem C, the plan bound.** Assume Hypothesis H. Let $P$ be as in Lemma 4, and define
 
 $$
-\max_{\pi \in \Pi} \sum_{e \in \mathrm{esc}(\pi)} \mathrm{sz}(e)
+\mathrm{footprint}(P) \;=\; \sum_{e \in R} \mathrm{slot}(e) \;+\; B_{\mathrm{bump}}
 $$
 
-with $\mathrm{esc}(\pi)$ the multiset of escaping executions per cycle along $\pi$. The copy
-term re-enters the machine's bound except where the copy store is environment-owned, as it can
-be for values yielded outward. Consequently, for a site that escapes on every iteration, the
-regime does not tighten the bound, it relocates it. The gains lie elsewhere, in the soundness
-of uniform reuse with no confinement analysis, in the removal of yielded values from the
-machine's bound where the environment owns the copy store, and in the neutralization of the
-escape hazard for a planner that already reuses slots.
+where $\mathrm{slot}(e)$ is the element's slot size, the shared maximum for an A2 pair, and
+$B_{\mathrm{bump}}$ is Corollary A1s's static bound computed over the non-reused sites alone.
+Then the machine under $P$ never occupies more ephemeral memory within a cycle than
+$\mathrm{footprint}(P)$.
 
-**Corollary B2b, the hybrid plan.** The regimes compose per site. A plan that reuses confined
-sites without copies, by Theorem B1, and unconfined sites with the discipline applied to their
-escapes, by Theorem B2, is sound, since each argument is an observational equivalence against
-the same baseline and the location sets are disjoint. The hybrid pays copy costs only where
-confinement fails.
+*Proof.* At any moment within a cycle, occupancy is the reused slots, statically
+$\sum \mathrm{slot}(e)$ by well-formedness, plus the bump allocations of the current cycle,
+which are exactly the non-reused executions of the cycle and are bounded by $B_{\mathrm{bump}}$
+by Corollary A1s. The boundary reclaims the bump range and the slots are counted statically.
+$\blacksquare$
+
+**Remark, comparison and non-necessity.** Whenever every reused loop site's cap is at least one
+and every A2 pair would otherwise contribute both arms, $\mathrm{footprint}(P)$ is at most the
+corresponding all-bump static bound, since $\mathrm{sz}(s) \leq \mathrm{cap} \cdot
+\mathrm{sz}(s)$ and $\max \leq$ sum. A site excluded from $R$ reverts to full multiplicity in
+$B_{\mathrm{bump}}$. Reuse of an unconfined site's slot is **not licensed by this document**,
+and no necessity claim is made, Section 9 recording flows believed harmless and unproved.
+
+## 8. Universal reuse under an escape-copy discipline
+
+**Definition 9, escape-copy discipline, unconditional and selective.** A machine satisfies the
+**escape-copy discipline** when every `Escapes` execution whose operand is a reference to an
+ephemeral region transports a fresh copy in its place, subject to, first, faithfulness, the
+copy's bytes equal the referenced bytes at the instant of the copy, second, stability, a copy's
+bytes are unmodified while any reference to it is reachable within its epoch, the copy store
+being disjoint from every reused slot and from the bump range, third, epoch stamping, a copy
+handle carries its creation epoch and dereference is governed by M2, fourth, recursion, an
+escape of a copy produces a further copy, and fifth, depth, a copy contains no reference into
+any ephemeral region or reused slot, which M9 makes automatic for flat machines. Under the
+discipline, references to copies originate at the copying escapes, and M3(i) is read as scoped
+to region references, Lemma 1 continuing to govern regions. The **selective discipline for a
+designated site set** applies the same clauses exactly when the operand is a reference to a
+designated site's region.
+
+**Lemma 5, unconditional clearance. Requires M3, M6, M7, M9, and the discipline, unconditional
+or selective with $s$ designated.** For every site $s$ and scope $n$ that ends, no dereference
+of a reference to $r_n$ occurs after scope $n$ ends.
+
+*Proof.* Lemma 2's induction goes through with the `Escapes` case replaced. An escape with a
+reference to $r_n$ among its operands transports a fresh copy, which by depth references no
+region, so the case creates no location holding a reference to $r_n$, and the environment only
+ever receives copy references, so by M7 and M9 a reply cannot reintroduce one. All other cases,
+and the scope-end argument through M6, are as in Lemma 2, no confinement hypothesis being
+needed. $\blacksquare$
+
+**Theorem B2. Requires M1 through M9 and the discipline.** In the discipline machine, let $P$
+be a well-formed plan reusing any set of sites, each of which satisfies that **consecutive
+executions are separated by a boundary of the site's innermost scope or by an epoch boundary**.
+Then $P$ is sound, soundness per Definition 5, the baseline being the **same discipline
+machine** under the empty plan.
+
+*Proof.* Both regimes run the same machine, so copies occur identically, and by faithfulness a
+copy taken in scope $m$ copies the slot's bytes, which equal $v_m$'s construction bytes in both
+regimes, the plan not having overwritten them before the site's next execution, which by the
+separation hypothesis lies beyond a scope or epoch boundary. Beyond a scope boundary, Lemma 5
+empties references to $r_n$, and Lemma 1 as scoped in Definition 9 prevents re-arising. Beyond
+an epoch boundary, M5, M2, and M4 make every surviving dereference fail stale in both regimes.
+Copy dereferences return identical bytes in both regimes by the induction along the copy chain,
+faithfulness and stability at each link. M8 removes address sensitivity. Hence identical
+observations. $\blacksquare$
+
+**Remark, what B2 is and is not.** B2 licenses reuse **within** the discipline machine. The
+discipline machine is not the present Keleusma machine, and relating the two is an adoption
+decision with the obligations of Appendix C, not a theorem of this document. Sites violating
+the separation hypothesis, for instance a site in a function called twice within one scope, are
+excluded and recorded in Section 9.
+
+**Corollary B2a, accounting.** Under Theorem B2's hypotheses, and assuming the copy store is
+reclaimed at each cycle boundary, per-cycle occupancy is bounded by the reused slots plus
+$B_{\mathrm{bump}}$ plus the copy term
+$\sup_{\pi, c} \sum_{e \in \mathrm{esc}_c(\pi)} \mathrm{sz}(e)$, where $\mathrm{esc}_c(\pi)$
+counts every copying escape within cycle $c$, **re-escapes of copies included**. Without
+boundary reclamation the copy term accumulates and no per-cycle bound follows. For a site
+escaping on every iteration the copy term matches what reuse saved, so the regime relocates
+rather than tightens that site's bound, the gains being uniform reuse with no confinement
+analysis, copies into environment-owned storage leaving the machine's bound, and soundness for
+a planner that already reuses slots.
+
+**Corollary B2b, the hybrid. Requires M1 through M9.** A well-formed plan reusing confined or
+refined-confined sites without copies and designated sites under the selective discipline is
+sound. *Proof.* Lemma 4's chain, each added element discharged by Theorem B1, B1r, or B2, the
+per-element arguments concerning only references to that element's regions, which the selective
+discipline covers for designated elements and Lemmas 2 and 3 cover for confined ones.
+$\blacksquare$
 
 ## 9. Limits of the general theory
 
-1. **The axioms are obligations, and their standing transfers to the theorems.** An instantiation
-   that discharges an axiom by a **producer invariant**, a property of what a particular compiler
-   emits rather than of what a verifier refuses, holds the dependent theorems **only for that
-   producer's output**. Foreign or hand-written programs that pass verification can defeat them.
-   This is not a defect of the theory but a scoping consequence every instantiation must state.
-2. **Confinement is sufficient, not necessary.** The theory proves nothing about deciding
-   confinement, only that a site established as confined may be reused. A static analysis that
+1. **The axioms are obligations, and their standing transfers.** An axiom discharged by a
+   producer emission invariant holds the dependent theorems only for that producer's output,
+   and every instantiation must list such axioms exhaustively.
+2. **Confinement is sufficient, not necessary**, and nothing here decides it. An analysis that
    cannot establish a flow must treat it as escaping.
-3. **The return refinement is not proved.** A return that lands in the same scope of the same
-   program unit is believed harmless and is not proved so here. The local-store refinement,
-   formerly in the same position, is now proved as Theorem B1r over slots dead at the loop
-   boundaries, so only the return case remains, and refining it requires frame-relative side
-   conditions this document does not develop.
-4. **Nothing is claimed about external callees.** M7 makes their retention unknowable, so any
-   instantiation must classify external calls as escaping or document the exclusion as an
-   obligation on the integrator, in those words.
+3. **The return refinement is not proved.** A return landing in the same scope of the same unit
+   is believed harmless and unproved. Likewise unproved, reuse for sites whose consecutive
+   executions are not separated by a scope or epoch boundary, the twice-called-function shape,
+   under any regime.
+4. **External callees.** M7 makes retention unknowable, so external calls are escaping or the
+   exclusion is a documented integrator obligation, in those words.
+5. **The theory applies only where M8 and M9 hold.** A machine exposing addresses to programs,
+   or embedding references in values or bytes, is outside every equivalence theorem.
+6. **The discipline machine's relation to any present machine is not a theorem here.** Theorem
+   B2 compares the discipline machine to itself under two plans.
 
 ---
 
 # Part II. The Keleusma instantiation, appendices
 
-Everything project-specific is below this line. The mapping is as follows. The machine is the Keleusma
-virtual machine, allocation instructions are `NewComposite`, dereference is `resolve`, the epoch
-advance is `Op::Reset`, a cycle is one stream cycle of `loop main`, a scope is one loop
-iteration, the environment is the host, and external calls are the two native-call opcodes.
+The mapping. The machine is the Keleusma virtual machine, allocation instructions are
+`NewComposite`, dereference is `resolve`, the epoch advance is `Op::Reset`, a cycle is one
+stream cycle of `loop main`, the environment is the host, and external calls are the two
+native-call opcodes. **Part I's loops are the genuinely iterating `Op::Loop` scopes, and
+dispatch scopes, the `match` lowering among them, are Part I conditionals.** The discriminator,
+recorded by the V0.3.X line, is that a genuinely iterating body carries no `Break` targeting
+its own exit. Measurements over all `Op::Loop` scopes over-cover the iterating subset, which is
+conservative wherever a universally quantified clause is being discharged.
 
 ## Appendix A. Axiom instantiation, with measured standing
 
 The runtime evidence is indexed, with per-row provenance and reproduction commands, in
 [`docs/decisions/COMPOSITE_REGION_EVIDENCE.md`](../decisions/COMPOSITE_REGION_EVIDENCE.md),
-guarded by `tests/proof_evidence_index.rs`. Rows marked read from dispatch are not to be promoted
-to executed without running them.
+guarded by `tests/proof_evidence_index.rs`. Rows marked read from dispatch are not to be
+promoted without execution.
 
 | axiom | instantiation and standing |
 |---|---|
-| M1 | Operator ruling on the memory model, obligation document Section 1. Bump arena, ephemeral region cleared only at `RESET`, nothing reclaimed within a run. The immutability clause is **confirmed by the V0.2.X line, 2026-08-23, on four independent grounds**, and Theorems B1 and B2 both rest on it. Ground one is **executable and pinned**. The instruction set carries seven read accessors into a composite and **zero write accessors**, `the_instruction_set_has_no_write_accessor_into_a_composite` in `tests/composite_escape_routes.rs`, derived from the `Op` enum, mutation-tested two ways, and holding for any module because it is about what the instruction set contains. Grounds two through four are **read from dispatch plus a scan of the public interface**. No mutable accessor exists on a composite body, `resolve` returning a shared slice and nothing else. Every raw-pointer write in the virtual machine targets the persistent region. The native boundary is immutable by signature, arguments arriving as a shared slice with no public route to a mutable arena view. **The clause is scoped to the ephemeral region deliberately, and the scoping is load-bearing. The persistent region is mutated in place, repeatedly and across resets, by the data-slot writes, so the unscoped statement is false in Keleusma.** Definition 2 ties regions to the ephemeral region, and an abstraction pass must not widen that. Stated refutation boundary, so no more is read than was measured. A native casting a resolved slice to a mutable pointer under `unsafe` is undetectable from the safe interface and sits on the same trust boundary as the native escape routes, and an out-of-band `unsafe` arena rewind reclaims rather than mutates, refuting not this clause but the epoch discipline M5 rests on. Grounds two through four say nothing about what `verify()` enforces. |
-| M2 | **Executed.** A non-empty composite value carries an arena handle, not bytes. `resolve` fails `Stale` exactly when the epoch has advanced, and an overwrite in place advances nothing. `tests/composite_escape_window.rs`, all three tests. The load-bearing assertion is that two iterations' composites resolve simultaneously to different values, which is exactly what one reused slot collapses. |
-| M3 | The 66 opcodes are partitioned in `tests/composite_escape_routes.rs`, with **totality asserted against the `Op` enum at test time**, so a route can be missed only by misclassification, never by omission, and a new opcode fails the test. The escaping set is exactly `Yield`, `SetLocal`, `Return`, `CallVerifiedNative`, `CallExternalNative`. `SetLocal` is classified by its worst case because the opcode cannot distinguish an inner binding from an outer one, and it is the route that defeats a restriction phrased as no `yield`, with no host involved. One illustration history matters here. The obligation document's Section 4.3 illustrated this route with a `let mut` loop assignment, and that illustration was **retracted 2026-08-23** because local bindings are immutable in Keleusma and the program is refused at parse, a refusal the V0.3.X line verified independently. The classification stands unchanged, since it is over bytecode and hand-written bytecode can store to an outer slot with no yield. The consequence lands on the source surface instead. Every expressible in-loop local store targets a binding declared inside the body, whose slot dies with the iteration, which is exactly the shape Theorem B1r admits over boundary-dead slots, so for source programs B1r rather than the coarse B1 is the operative theorem. **That operative status is now enumeration-backed, 2026-08-23, and the result is stronger than the probe suggested.** The V0.2.X line derived it from the grammar's statement production and cross-checked the abstract syntax tree, deliberately not from the `SetLocal` emission sites, which are mostly compiler temporaries and answer a different question. `let` and the `for` loop variable introduce fresh bindings, the two data-field assignments target the data segment, and the remaining statement forms write no local. **There is no assignment-to-an-existing-local production and no assignment expression, and exactly two assignment nodes exist in the abstract syntax tree, both targeting data.** So no source form can write a local slot belonging to a binding declared outside the enclosing loop body, and the operative status holds because the language has no local assignment at all. **The caveat must not be swallowed by the result. This is a statement about source forms and it is false at the bytecode level.** A compiler-allocated slot is allocated once and written on every iteration, and the first real subject compiles its loop body to a `NewComposite` followed by a `SetLocal` and `GetLocal` of the same slot in every iteration, a location that outlives the iteration holding each iteration's handle in turn. `SetLocal` therefore stays classified escaping, Theorem B1r's liveness clause is the instrument that admits this **ordinary** case rather than a convenience for exotic ones, and reading the source-level result as `SetLocal` being harmless in loops would be the inversion this row exists to prevent. The source result narrows what a program can express, not what the emitted code touches. Per-row verdicts are **analysis, not proof**. The `Yield` row and both `CopiesOut` rows, private-data writes and flat nesting, are executed, the latter two deliberately because a wrong `CopiesOut` makes the theory unsound rather than loose. The boxed construction path does alias and does not arise for the transitively-scalar composites this instantiation concerns, a boundary stated rather than assumed away. The rest of the rows are read from dispatch. Disagreements go to the table, where the test makes them concrete. |
-| M4 | **Executed.** `Op::Reset` is emitted once per stream cycle, at the end of the `loop main` body, not per `for` iteration. `reset_is_once_per_stream_cycle_not_once_per_loop_iteration`. |
-| M5 | **Confirmed by the V0.2.X line, 2026-08-23, and the basis is two facts, not one.** First, `Op::Reset` clears the current frame's locals and truncates its operand stack, `src/vm.rs:5304`, read from dispatch. Second, a caller frame beneath a nested stream can hold stale references and is never resumed, because stream chunks emit no `Return`. The second fact is a **code-generation invariant, not a structural one**, executed over five shapes in their `tests/stream_never_returns.rs`. Stating the first fact alone would make the nested-stream arrangement a counterexample to the axiom. Every ephemeral composite-body read is epoch-checked at resolve time, `FlatComposite::resolve` and `ArenaHandle::get`, with `nested_view` bounds-checked as a real fault, read from dispatch. |
-| M6 | (a) **Confirmed.** `TypedError::LoopNotNeutral` in the `Op::Loop` arm of `src/verify_typed.rs` compares the entire abstract stack, height and per-slot shape, read from dispatch. Neutrality is on **shapes, not identities**, so the correct reading is that no new entry survives the back edge, never that the entries are identical across iterations. As of `92e5696a` the loop floor subsumes the equal-height shape witness, because replacing a slot's shape at equal height necessarily reaches below entry, so `LoopNotNeutral` now fires only on a height difference, a survival the V0.2.X line checked against `loop_neutrality` before claiming it. Clause (a) is therefore discharged by the floor and the neutrality check together, the floor naming the reach and neutrality its downstream effect. (b) **Confirmed.** `Break` edges join through `join_stacks`, read from dispatch. (c) Read from dispatch, with call termination from totality. (d) **Settled 2026-08-23 in the unfavorable direction, a code-generation invariant only, with the verifier gap executed rather than conjectured.** `verify()` accepts a shape that pops a below-entry entry inside a loop and pushes a same-shape replacement, pinned in the V0.2.X line's `tests/loop_entry_floor.rs`. The typed pass floors pops at the frame, not at the loop entry, and the frame floor does not incidentally cover the loop floor in general, because 122 of 245 `Op::Loop` scopes in the pre-extension corpus carried a non-empty operand stack at entry, an **approximate figure from a linear depth scan** whose bias runs toward over-reporting non-empty entries. **Re-measured with the iteration discriminator, zero of the eight genuinely iterating loops carries a non-empty entry stack**, so on this corpus the frame-floor gap is reachable only through dispatch scopes, the `match` lowering among them. Nothing softens, since the floor protects dispatch scopes too and the accepted counterexample is real, but the row must not imply that iterating loops carry non-empty entry stacks, because measured they do not. One sharpening follows and is **confirmed against the code, 2026-08-23**. `apply_op` refuses any pop that would take the abstract stack below empty, so at entry height zero the loop floor and the frame floor coincide exactly, a below-entry pop is a refused underflow, and clause (d)'s emission-invariant caveat bound only where the entry stack was non-empty. **The clause has since been superseded in the favorable direction.** `verify()` floors every scope explicitly as of `92e5696a`, `TypedError::LoopFloorBreach` checked before every operand-consuming instruction with per-nesting floors, so clause (d) is **structurally enforced** rather than a code-generation invariant, the derivation above accounting for why the closure cost zero rejections. The gap pins' disposition is recorded in Appendix E. The emission side was measured exactly, by a per-path floor check inside the typed pass's own abstract interpretation, proven to fire on the breaching shape, with the result **zero breaches over 588 fixpoint visits of the 245 static `Op::Loop` scopes across the 23 pre-extension modules**. The 588 is a **visit count, not a population of loops**, since the locals fixpoint re-enters a body until it stabilizes, and zero breaches over the visits still implies zero over the scopes. That instrumentation is reverted and the zero is **a measurement at a commit, not a standing guarantee**, cited as exactly that. A linear depth scan also reported zero and was discarded as exact for only 4 of the 245 loops, recorded because the flattering number came from a broken instrument first. |
-| M7 | Trust assumption, not a theorem. The host holds and may return handles it received and does not fabricate them. Native retention is unknowable from this side, which is why both native-call opcodes are classified escaping. |
+| M1 | Operator ruling on the memory model. Bump arena, ephemeral region cleared only at `RESET`, nothing reclaimed within a run. The immutability clause is **confirmed by the V0.2.X line on four independent grounds**. Ground one is executable and pinned **on their line at `a288ae26`**, which postdates this branch's base, so the pin is not in this tree's copy of `tests/composite_escape_routes.rs`. The instruction set carries zero write accessors into a composite, the pin establishing the zero-store half mechanically while the seven-read count is read rather than pinned. Grounds two through four are read from dispatch plus a scan of the public interface. **The clause is scoped to the ephemeral region deliberately and the scoping is load-bearing, the persistent region being mutated in place by the data-slot writes.** Refutation boundary, an `unsafe` native cast, undetectable from the safe interface, and an out-of-band `unsafe` arena rewind, which refutes M1's own reclamation clause directly. |
+| M2 | The handle representation and the `Stale` guard are **executed**, `tests/composite_escape_window.rs`, all three tests, including the load-bearing simultaneous-distinct resolution. The overwrite-in-place clause is **inferred, not executed**, nothing in the present machine being able to overwrite in place, the inference resting on the epoch advancing only at `Reset` in the executed traces. |
+| M3 | The 66 opcodes are partitioned in `tests/composite_escape_routes.rs` with **totality asserted against the `Op` enum at test time**, and the escaping set is exactly `Yield`, `SetLocal`, `Return`, `CallVerifiedNative`, `CallExternalNative`. `SetLocal` is classified by its worst case, the opcode not distinguishing an inner binding from an outer one. The source surface is narrower, by grammar-and-AST enumeration there is **no local assignment in the language**, exactly two assignment nodes existing, both targeting data, and the retracted `let mut` illustration is recorded in the audit record. The caveat stands, this is a source-form statement, false at the bytecode level, where compiler-allocated slots are written every iteration and B1r's liveness clause is the instrument admitting that ordinary case. Per-row verdicts are **analysis, not proof**, the `Yield` row and both `CopiesOut` rows executed, the native rows a labeled trust boundary, and the rest read from dispatch. **The `Break` and `BreakIf` rows are corrected-pending on the V0.2.X line**, their `NoRegion` classification overstating, the opcodes transferring control with the whole operand stack, eighteen dispatch scopes demonstrably carrying arm values across a `Break`, and the correction commit is to be recorded here. The boxed construction path aliases and is outside this instantiation, per M9. |
+| M4 | **The count clause is structurally enforced, measured by the V0.2.X line 2026-08-24.** `verify()` rejects a module with the `Reset` removed, a second appended, or an extra mid-body, each refusal naming the count. The position clause is **dead-code-true rather than enforced**, a single `Reset` with trailing ops being accepted while the interpreter's reset of the instruction pointer makes the trailing ops unreachable. An earlier audit concern that M4 was emission-only is refuted by this measurement. |
+| M5 | **Confirmed by the V0.2.X line, two-part.** `Op::Reset` clears the current frame's locals and truncates its operand stack, read from dispatch, and a caller frame beneath a nested stream holds stale references but is never resumed, because stream chunks emit no `Return`, executed over five shapes in their `tests/stream_never_returns.rs` at `435a8f6d`, a **code-generation invariant**. Every ephemeral composite-body read is epoch-checked at resolve time, read from dispatch. |
+| M6 | (a) **Confirmed.** `TypedError::LoopNotNeutral` compares the entire abstract stack at the back edge, shapes not identities, read from dispatch, with the equal-height shape witness subsumed since `92e5696a` by the loop floor. (b) **NOT enforced, and emission-true for iterating loops, measured 2026-08-24.** Break edges are joined only with each other and never compared against the entry stack, the joined state becoming the post-loop state, and the behavior is load-bearing for dispatch, eighteen of two hundred forty-two dispatch scopes carrying arm values, while **zero of twenty-three genuinely iterating scopes carry a break edge differing from entry**. Clause (b) therefore joins the producer-invariant list. A floor-style enforcement would need the iteration discriminator as a first-class verifier notion, assessed by the V0.2.X line as a real design cost and their operator's call. (c) Read from dispatch with call termination from totality **for terminating callees**, and the never-returning nested stream is reconciled by the axiom's own vacuity clause, a scope containing such a call never ends. (d) **Structurally enforced** since `92e5696a`, `TypedError::LoopFloorBreach` before every operand-consuming instruction with per-nesting floors, the gap pins inverted rather than deleted, and the empty-entry coincidence explaining the zero-rejection cost. |
+| M7 | Trust assumption, not a theorem. The host holds and may return handles it received and does not fabricate or alter them. Native retention is unknowable, hence the native rows' classification. |
+| M8 | **Discharged 2026-08-24 by the V0.2.X line, the risky route executed.** Nameable composite equality never reaches `CmpEq` with composite operands, the compiler expanding it field-wise, verified at the op level, and the executed discriminator, three distinct allocations with two content-equal, measured content-derived equality where an address-derived one would answer differently, allocation distinctness checked so a folded pair could not vacuate the test. The direct path is closed rather than unused, two flat composites reaching `CmpEq` fault, read from dispatch, `FlatComposite`'s own equality compares lengths only, and strings compare by content, both read from dispatch. `Len` derives from the handle's element count and the shape tests from a type name, read from dispatch, neither touching an address, and the axiom is phrased over the **address component** precisely so metadata-derived results are not letter-counterexamples, both regimes agreeing on metadata. The executed discriminator is **to be pinned on their line**, being the fact that would silently invert if composite equality were ever optimized to a handle compare, and the pin commit is to be recorded here. |
+| M9 | Flat composites hold bytes only, nested children inlined, executed in the `CopiesOut` evidence, and no value embeds a handle except the boxed path, which **does** alias and is excluded. The instantiation therefore covers modules whose composites are transitively scalar, and that boundary is part of every theorem's scope here. Byte reconstitution into handles is excluded by M3's fabrication ground. |
 
-**The scoping consequence of Section 9, instantiated.** M5's second half and M6(d) are invariants
-of what the **reference** compiler emits. Therefore Theorems A2, A3, B1, B2, and the corollaries
-hold for reference-compiled modules and do not hold for arbitrary bytecode that merely passes
-`verify()`.
-The producer matters further. The zero-breach measurement covered the eleven example scripts and
-the twelve stage sources compiled by the reference compiler, and says nothing about modules the
-self-hosted compiler emits, a different producer, beyond the constructs where the byte-identity
-corpus makes the two artifacts identical.
+**The scoping paragraph, exhaustive.** The producer emission invariants are, first, streams
+never return, M5's second half, pinned and re-run every build, and second, iterating loops emit
+no value-carrying `Break`, M6(b), measured at zero of twenty-three and not enforced. M4's count
+and M6(d) are structurally enforced, M6(a) is enforced with the floor, and everything else is
+executed, read, ruled, or trust as labeled. Therefore Theorems A2, A3, B1, B1r, B2, and the
+corollaries hold, in this instantiation, for **reference-compiled modules whose composites are
+transitively scalar**, with the per-row analysis standing of M3 as the residual risk Appendix B
+records and the M8 discriminator's pin pending. They do not hold for arbitrary bytecode that
+merely passes `verify()`.
 
 ## Appendix B. What the instantiation does not establish
 
-1. **The per-opcode verdicts of M3's table.** Totality is mechanical, rows are analysis, three
-   are execution-backed, the rest read from dispatch, and the table is the place to argue.
-2. **A standing guarantee for M5's second half.** M6(d) is structurally enforced by `verify()`
-   as of the V0.2.X line's `92e5696a`, so the sole remaining emission invariant is that streams
-   never return, which closes M5's nested-stream hole and re-runs as a pin on every build of
-   that line. The surviving half is the weaker of the two, a property of what the reference
-   compiler emits and of nothing else, so the conditional theorems' producer scope is now
-   exactly as wide as one code-generation choice. A future returning stream or hand-written
-   bytecode with such a shape defeats the reuse theorems without failing verification, and
-   `tests/stream_never_returns.rs` is what would announce the change.
-3. **A stale internal handle is an error, not a wrong value, and no route to one was found.**
-   `Op::GetField` resolves through the epoch check and faults `InvalidBytecode` on staleness. The
-   V0.2.X line found no live route to a stale local and does not claim unreachability. This
-   carries no load in any proof, defense in depth only.
-4. **The loop-dominated direction of the planner gap**, the obligation document's Section 6.2.
-   Nothing here measures whether the backend under-provisions relative to worst-case memory usage
-   on any real module. The V0.3.X line has offered to measure it on request.
-5. **Anything about the native backend's lowering.** Every executed premise is against the
-   virtual machine.
-6. **The counterexample is bracketed, not contradicted.** The obligation document's Section 4.1
-   program yields its loop-body composite, so the site is not confined, Theorem B1 does not apply
-   to it, and the backend's current unconditional reuse remains unsound on exactly such sites per
-   the obligation document's Section 4.1.1.
-7. **The embedder obligation.** Confinement treats both native-call opcodes as escaping, so no
-   obligation falls on the embedder here. Any future relaxation admitting a native call on a host
-   promise not to retain the composite is an obligation documented on the embedder, in those
-   words, and is not licensed by this document.
-8. **Static checkability is guidance, not proof.** Confinement is a forward dataflow property of
-   the kind the typed operand-stack verifier already computes. Any operand whose flow cannot be
-   established must be treated as escaping.
+1. **The per-opcode verdicts of M3's table.** Totality is mechanical, rows are analysis, and a
+   wrong safe row of any class, not only `CopiesOut`, defeats confinement, so the executed
+   subset covers two of the many soundness-critical safe rows. The table is the place to argue,
+   and it has now twice narrowed a row while totality held.
+2. **Standing guarantees for the two emission invariants**, streams never return and no
+   value-carrying `Break` from iterating loops. A code-generator change or hand-written
+   bytecode with either shape defeats the reuse theorems without failing verification.
+3. **The M8 discriminator's pin**, pending on the V0.2.X line, the discharge itself recorded in
+   the row with the executed route executed and the rest read from dispatch.
+4. **A stale internal handle faults rather than lying**, `InvalidBytecode` at the epoch check,
+   no live route found, unreachability not claimed, defense in depth only.
+5. **The loop-dominated direction of the planner gap**, obligation Section 6.2, unmeasured,
+   the V0.3.X line's offer standing.
+6. **Anything about the native backend's lowering.**
+7. **The counterexample is bracketed, not contradicted.** The obligation's Section 4.1 program
+   yields its loop-body composite, the site is unconfined, and the backend's unconditional
+   reuse remains unsound on such sites.
+8. **The embedder obligations**, native retention, `unsafe` mutation of resolved slices,
+   out-of-band arena rewinds, and handle-address comparison, all stated in those words.
+9. **Static checkability is guidance.** Confinement, deadness, and designation are dataflow
+   properties of the kind the typed verifier computes, and unestablished flows are escaping.
 
 ## Appendix C. B2 in Keleusma, and instruction-set remedies
 
-**Theorem B2 is proved in general, and the discipline it requires does not exist in Keleusma
-today.** No escape route copies. A yielded composite is a handle, `SetLocal` stores the handle,
-and the native calls receive it. In this codebase B2 is therefore a **proved specification for a
-change**, not a description of the present system, and it answers the escape-window question of
-the obligation document's Section 4.0.1 by construction rather than by bounding. Adoption
-carries the following obligations, each named here so none is discovered at implementation time.
+**Theorem B2 is proved for the discipline machine, and the discipline does not exist in
+Keleusma today.** No escape route copies. B2 is therefore a **proved specification for a
+change**, and adoption carries these obligations, seven of them. First, the copy itself at
+every escape of a composite, **unconditionally at `SetLocal`** under the proved discipline, a
+copy conditioned on slot lifetime being the selective optimization, which requires the
+deadness analysis and is licensed only through Corollary B2b's hybrid. Second, worst-case
+execution time, a copy at every escaping execution entering the cost model before adoption.
+Third, copy-store provisioning per Corollary B2a, including boundary reclamation, without which
+no per-cycle bound follows, and the source-immutable destination-stable asymmetry, the
+persistent region being mutated in place so a copy store there must avoid every data slot.
+Fourth, epoch stamping of copy handles behind `resolve`. Fifth, handle-address opacity as an
+embedder obligation. Sixth, the honest accounting, an always-escaping site relocates rather
+than tightens, the hybrid dominating both pure regimes. Seventh, the boxed path, outside M9,
+needs its own deep-copy treatment before anything here covers it.
 
-1. **The copy itself.** Every escape of a composite must copy its bytes, at `Yield`, at
-   `SetLocal` where the target slot outlives the scope, at `Return` across the surviving frame,
-   and at both native calls. Correctness is Definition 9's faithfulness and depth clauses. The
-   flat representation makes copies deep by construction for transitively-scalar composites, and
-   the **boxed path remains a boundary**. It stores operands as separate values, a deep copy
-   there is additional work, and nothing here covers it.
-2. **Worst-case execution time.** A copy of $\mathrm{sz}$ bytes at every escaping execution
-   enters the worst-case-execution-time model, which is the crate's headline claim, so the cost
-   belongs in the cost model before adoption, not after.
-3. **Copy-store provisioning, and the mutability asymmetry.** Corollary B2a's copy term
-   re-enters the worst-case-memory-usage bound except for copies into host-owned storage. A
-   per-local copy slot reused on overwrite would bound `SetLocal` copies at one slot per local,
-   but its soundness needs a further argument, that no live reference to the old copy exists at
-   overwrite time, which is **not proved here**. The proof needs the copy **source** immutable,
-   which M1 gives for the ephemeral region, and the copy **destination** stable, which is
-   Definition 9's second clause and is an **obligation, not a given**. The persistent region is
-   mutated in place by the data-slot writes, so a copy store located there must be disjoint from
-   every data slot, or stability fails at the destination even though the source is immutable.
-4. **Epoch stamping.** Copy handles must carry the creation epoch and stay behind `resolve`'s
-   check, or behavior after `RESET` diverges from the baseline and the equivalence fails.
-5. **Handle-address opacity.** Definition 4 excludes addresses from observations. A host that
-   compares handle addresses for value identity breaks Theorem B2's equivalence, so adoption
-   requires documenting address opacity as an embedder obligation, in those words.
-6. **The accounting is honest, not free.** By Corollary B2a, a site escaping on every iteration
-   relocates its bound rather than tightening it. The definitive gains are uniform reuse with no
-   confinement analysis, yielded values leaving the machine's bound where the host owns the copy
-   store, and soundness for a backend that already reuses slots. Corollary B2b's hybrid, copies
-   only where confinement fails, is the form that dominates both pure regimes.
-7. **Embedder obligations under `unsafe`.** A native that casts a resolved slice to a mutable
-   pointer defeats M1's instantiation and the discipline together, undetectably from the safe
-   interface, and an out-of-band `unsafe` arena rewind defeats the epoch discipline M5 rests on.
-   Adoption documentation must list both beside handle-address opacity, in the same
-   embedder-obligation terms as the native escape routes.
+**Adoption is unruled in either direction as of 2026-08-24**, the V0.2.X operator stating they
+do not yet know enough to rule, so the specification must not be read as declined.
 
-**Adoption is unruled in either direction as of 2026-08-24.** The V0.2.X operator has stated
-they do not yet know enough about the problem to rule either way, so the specification stands
-exactly as written, proved and unadopted with six named obligations, and it must not be read as
-declined.
-
-**Instruction-set position.** Unchanged by the proof. No new opcode is required. The discipline
-has at least two lowerings, a compiler-inserted copy through existing constructs, or a semantics
-change to the five escaping opcodes' handling of composite operands. A dedicated copy opcode
-would require the strong justification the operator demands for instruction-set modification,
-and no such justification arises from this work. The classification test pins the opcode count
-at 66 and fails on any addition, which is the intended forcing function.
+**Instruction-set position.** Unchanged. No new opcode is required, the discipline having
+lowerings through existing constructs or through the escaping opcodes' semantics, a dedicated
+copy opcode requiring the strong justification the operator demands, none arising here, and the
+classification test pinning the count at 66.
 
 ## Appendix D. Change control
 
 | consequence of adoption | surface | owner | decision |
 |---|---|---|---|
-| loop accounting stops multiplying confined sites | `src/verify.rs:1079` | V0.2.X line | **operator, still unruled as of 2026-08-24**, it lowers a published worst-case-memory-usage figure. The prerequisite analysis below is commissioned, and commissioning does not authorize adopting its result |
-| the confinement predicate, Definitions 8 and 11 with the deadness condition of Definition 10 | the shared crate under `src/`, one predicate consumed by both lines | V0.2.X line | **commissioned 2026-08-24** by that line's operator, explicitly for its bearing on native code generation, to the useful-and-sound standard of Appendix B item 8, any flow the analysis cannot establish treated as escaping |
-| branch maximum | `src/verify.rs:992` | V0.2.X line | already implemented, Theorem A1 justifies it |
-| backend stops reusing slots of unconfined sites | native backend planner | V0.3.X line | required for soundness independent of this proof, per the obligation document's Section 4.1.1 |
-| backend may overlap exclusive arms | native backend planner | V0.3.X line | licensed by Theorems A2 and A3, within the reference-compiled scope Appendix A states |
-| verifier floors operand-stack pops at loop entry, converting M6(d) from an emitted invariant into an enforced one | `src/verify_typed.rs` | V0.2.X line | **implemented, their `92e5696a`**, at zero measured rejections, with the empty-entry coincidence of the M6 row explaining the zero |
+| loop accounting stops multiplying confined sites | `src/verify.rs:1079` | V0.2.X line | **operator, still unruled as of 2026-08-24**, it lowers a published worst-case-memory-usage figure, and commissioning the analysis does not authorize adopting its result |
+| the confinement predicate, Definitions 6 through 8 with deadness | the shared crate under `src/`, one predicate, two consumers | V0.2.X line | **commissioned 2026-08-24**, useful-and-sound standard, unestablished flows escaping |
+| branch maximum | `src/verify.rs:992` | V0.2.X line | already implemented, Theorem A1 with Corollary A1s justifies it under Hypothesis H, which the capped loop forms discharge |
+| backend stops reusing slots of unconfined sites | native backend planner | V0.3.X line | required for soundness independent of this proof |
+| backend may overlap exclusive arms | native backend planner | V0.3.X line | licensed by Theorems A2 and A3 within Appendix A's scoping, conditional on the M8 row |
+| verifier floors pops at loop entry | `src/verify_typed.rs` | V0.2.X line | **implemented, their `92e5696a`**, at zero measured rejections |
+| verifier compares break edges against loop entry | `src/verify_typed.rs` | V0.2.X line | **assessed and not proposed on present evidence**, enforcement must distinguish scope kinds, eighteen dispatch scopes legitimately differing, their operator's call |
 
-This document's conclusions authorize none of these changes. Each is a request to its owning
-line, and the first is an operator decision because it weakens the crate's headline guarantee in
-a changelog-visible way.
+This document's conclusions authorize none of these changes.
 
 ## Appendix E. Provenance
 
-The obligation is cited at `v0.3.0` commit `a49555bb`. The evidence index and its guard are on
-this lineage at `docs/decisions/COMPOSITE_REGION_EVIDENCE.md` and `tests/proof_evidence_index.rs`.
-The premise confirmations were requested from the V0.2.X line and answered by measurement on
-2026-08-23. M5 was confirmed in the corrected two-part form its row records, M6 clauses (a)
-through (c) were confirmed with the shape-not-identity reading, and M6(d) was identified in the
-same exchange and settled the same day as a code-generation invariant only, with the verifier's
-acceptance of a breaching shape executed, the frame-floor-is-not-the-loop-floor fact executed,
-and the zero-breach emission measurement executed at a commit with its instrumentation reverted.
-Both pin files landed in the V0.2.X line's commit `435a8f6d` on `docs/proof-evidence-index`,
-their #259, verified at origin by ref, with their gate green at 2,580 passed by cargo's own exit
-status. **The two files have different standings, and reading them as five tests of one kind
-would misstate what is guaranteed.** `tests/stream_never_returns.rs` pins an **invariant** and
-re-runs on every build, `no_compiled_stream_chunk_emits_return` over five shapes,
-mutation-tested, and `a_stream_calling_a_stream_compiles_verifies_and_runs`, which pins the
-nested arrangement as constructible so the premise is not vacuous. `tests/loop_entry_floor.rs`
-pins a **gap**. `a_loop_body_may_consume_from_below_its_entry_height` asserts that `verify()`
-**accepts** the breaching shape, with its control and with
-`compiled_loops_really_do_carry_a_non_empty_entry_stack` establishing reachability at 122 of
-245. If the gap is ever closed structurally, those tests fail deliberately, with a message
-saying a proof premise moved rather than reading as a routine fix. The zero-over-588 emission
-measurement is in no commit and no tree, and remains a measurement at a commit. The operator rulings relied on are the memory model, the
-branch topology, the generality directive that produced this document's structure, and the scope,
-all of 2026-08-23, and the standing rule that instruction-set modification requires strong
-justification. The scope was expanded by operator direction later on 2026-08-23 to include the
-proof of Theorem B2, which entered as Section 8 with Definition 9 and Lemma 3, together with
-M1's explicit immutability clause. That clause was confirmed by the V0.2.X line the same day,
-sought as a refutation and not found, on four independent grounds recorded in the M1 row, with
-ground one pinned as `the_instruction_set_has_no_write_accessor_into_a_composite` in
-`tests/composite_escape_routes.rs`, whose failure message directs a future editor to the proof's
-owner rather than to updating the test. That pin landed in the V0.2.X line's commit `a288ae26`
-on `docs/proof-evidence-index`, their #259, verified at origin by ref, derived from the `Op`
-enum at test time and mutation-tested two ways. **The commit pins ground one only.** Grounds two
-through four remain read from dispatch and are in no test, so citing `a288ae26` against M1 as a
-whole would claim more than the test does, and this record cites it against ground one exactly. The same exchange contributed the persistent-region precision, the source and
-destination asymmetry now stated in Appendix C's third obligation, and the `unsafe` refutation
-boundary now in its seventh.
+The obligation was read at `v0.3.0` commit `a49555bb` and corrected on its line at `d5b706e8`
+and `c3ff3c06`. The evidence index and its guard are on this lineage. The V0.2.X line's
+confirmations and measurements of 2026-08-23, M5 two-part, M6 clauses with the unfavorable
+then structurally closed (d), M1's four grounds, and the pins at `435a8f6d`, `92e5696a`, and
+`a288ae26` with their differing standings, invariant pins re-running every build against gap
+pins inverted on closure, are recorded across the rows above, together with the corpus
+extension to 26 modules with the first three iterating-loop composite subjects, entry stacks
+inferred empty rather than measured. The merge sequence is ruled, this line into V0.2.X with
+V0.3.X rebasing, authorized on the V0.2.X side, awaiting this line's operator. B2 adoption and
+the accounting change remain explicitly unruled.
 
-Three later items from 2026-08-23 complete the record. First, the obligation document's `let
-mut` illustration of the `SetLocal` route was retracted by its authors, struck in place on
-`v0.3.0` rather than repaired silently, and the retraction is what prompted Theorem B1r, since
-the only expressible in-loop store is the iteration-scoped shape B1r admits. Second, a corpus
-measurement by the V0.3.X line found that across 87 compiled modules the 36 genuinely iterating
-loop scopes contain **zero composite construction sites**, so the reuse theorems have no subject
-in the shipped corpus today. Three examples are landing on operator direction, with
-`12_sensor_window.kel` intended as the first subject, admitted through B1r once a confinement
-analysis exists. Their measurement method matters and is recorded because a first attempt was
-wrong. `Op::Loop` marks break scopes, including `match` dispatch, not iterations, and the
-discriminator is that a genuinely iterating body carries no `Break` targeting its own exit.
-Third, the V0.2.X line answered the count-precision question on 2026-08-23, and the answer
-corrected this appendix twice over. Neither instrument applied the iteration discriminator, so
-both figures cover all `Op::Loop` scopes, the 245 from a static walk and the 588 from a counter
-inside the abstract interpretation's `Op::Loop` arm, which the locals fixpoint re-enters, making
-588 a **visit count rather than a population of loops**. The soundness of the zero-breach
-conclusion survives both readings, since zero over the visits implies zero over the scopes. The
-second correction ran against a directional claim this appendix previously made, that the
-reachability motivator would only strengthen if `match` scopes were included. **Measured, the
-motivator exists only because they are included.** Zero of the eight genuinely iterating loops
-carries a non-empty entry stack, from the approximate linear scan whose bias over-reports
-non-empty entries, so a zero from it is the stronger direction. The earlier claim is recorded
-rather than deleted because it was wrong in direction, not merely in precision. The corpus also
-moved on the same day. The V0.2.X line landed three scripts on operator direction, taking the
-corpus to 248 scopes across 26 modules and adding the first three iterating loops that construct
-composites, the reuse theorems' first subjects. Every figure above is stamped by which side of
-that extension it was measured on, and the zero-breach measurement predates it.
-
-Fourth, the closing exchange of 2026-08-23 settled the last two open marks. The empty-entry
-derivation was confirmed against `apply_op`'s underflow guard, and `verify()` now floors every
-scope explicitly, so M6(d) is structurally enforced and the change cost zero rejections for the
-reason the derivation gives. **The enforcing commit is the V0.2.X line's `92e5696a`**, branch
-`feat/loop-entry-floor`, their #261, verified at origin by ref, introducing
-`TypedError::LoopFloorBreach` checked before every operand-consuming instruction with floors
-scoped per nesting level. **The gap pins were inverted, not deleted**, which is the disposition
-their design intended. The acceptance pin became
-`a_loop_body_may_not_consume_from_below_its_entry_height`, asserting the refusal and requiring
-the message to name the floor so a reader can tell it from an ordinary underflow. The control
-became `the_control_is_still_accepted_so_the_refusal_is_about_the_reach`, unchanged in
-substance, and it is what makes the refusal meaningful, since without it the first test would
-pass on a verifier rejecting every loop of that shape. The reachability pin
-`compiled_loops_really_do_carry_a_non_empty_entry_stack` is kept as it was, now known by the
-zero-of-eight to pin a dispatch-scope property. The file's header records what it pinned before
-and why inversion rather than deletion is the point, a gap pin silently removed leaving no
-record that the guarantee changed. One cost is recorded because their control caught it. At
-depth zero the new floor shadowed the frame-underflow diagnosis, reporting a loop breach on code
-inside no loop, `stack_underflow_rejects` failed and named it, and the fix skips the check at
-floor zero, which is also why the empty-entry derivation remains the correct account of the
-zero-rejection cost. The floor additionally subsumes `LoopNotNeutral`'s equal-height shape
-witness, recorded in the M6 row. The corpus stamp moved with the same commit, 248 static
-`Op::Loop` scopes across 26 modules, the eight iterating loops becoming eleven, the new three
-carrying entry stacks **inferred empty rather than measured empty**, a reasoned claim from each
-`for` sitting at statement position in a `loop main` body, with the non-empty-entry count not
-re-run over them. Nothing beyond this stamp leans on that inference.
-
-Fifth, on 2026-08-24 the V0.2.X operator ruled the merge sequence, the proof line merging into
-the V0.2.X line with the V0.3.X line rebasing onto the result, so acceptance is authorized on
-both sides and waits only on this line's operator releasing the branch. The eventual pull
-request must be based on `v0.2.3` directly, since a pull request based on a feature branch
-triggers no workflow on this repository, silently. The same ruling commissioned the confinement
-analysis recorded in Appendix D. Two matters were explicitly left unruled and this document
-records them as such rather than assuming a direction, the adoption of B2 and the accounting
-change at `src/verify.rs:1079`. The source-form enumeration landed
-with a result stronger than requested, no local assignment exists in the language at all, and
-its bytecode-level caveat is recorded in the M3 row where a reader meets the classification. One
-piece of work is deliberately not requested. Characterizing the compiler's temporary-allocation
-sites is unnecessary for soundness, because Theorem B1r's analysis examines the concrete slots
-and dataflow of each module, and a temporary that fails the deadness condition simply falls back
-to per-iteration accounting. A population characterization would inform applicability planning
-only, and whether to spend that effort belongs to the V0.2.X line's operator. An earlier revision of this document interleaved the instantiation with the
-theory. The reorganization changed no theorem, no proof, and no recorded standing.
+**The audit and this revision, 2026-08-24.** Five independent contexts audited the document at
+`de8b3f68` adversarially, per the operator's direction, and the findings, verdicts, failed
+attacks, and post-audit measurements are recorded in
+[`AUDIT_2026-08-24.md`](./AUDIT_2026-08-24.md). Every verified finding is repaired in this
+revision, which renumbered the definitions cleanly, made references provenance-based, defined
+operands, locations, scopes, and plan well-formedness, added the address-opacity and
+flat-values axioms M8 and M9, restated M4 and M6 with their measured standings, corrected the
+hypotheses of Theorems A2 and B2, anchored the refined form at the innermost loop, performed
+the static-lift induction as Corollary A1s under Hypothesis H, replaced the asserted
+composition sentences with Lemma 4 and its proof, replaced the false plan inequality with
+Theorem C's footprint and occupancy claim, defined the selective discipline for Corollary B2b,
+and rewrote the scoping paragraph to list the producer invariants exhaustively. M8 was
+discharged the same day by the V0.2.X line with the risky route executed. The pending items are
+the M8 discriminator's pin and the Break row correction commit, both promised, and rows marked
+read or inferred keep those labels under the standing rule that nothing is promoted without
+execution.
