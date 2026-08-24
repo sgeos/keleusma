@@ -13,6 +13,47 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**I TOLD THE OTHER LINE THEIR DIFFERENTIAL WOULD DISAGREE. IT CANNOT. (2026-08-24)**
+
+I wrote that `13_telemetry_stream.kel` gives the `v0.3.0` backend's differential its first real
+instance of the yield-route unsoundness. **Measured on their absorbed tree: all three of my scripts
+are REFUSED before the differential runs**, so their planner never sees them.
+
+  13_telemetry_stream   UnsupportedOp("Stream")
+  12_sensor_window      UnsupportedOp("NewComposite ... operand of unknown packed width")
+  14_frame_log          same
+
+**THEIR YIELD-ROUTE GAP IS UNREACHABLE IN THEIR BACKEND BY CONSTRUCTION**, because `yield` exists
+only inside a `Stream` and they do not lower `Stream` at all -- an unattempted workstream. So no
+corpus example can exercise it until that lands. **I reasoned from the virtual machine's behaviour to
+their backend's without checking whether the module reaches their planner**, which is the error this
+project has recorded twice this week in the other direction: neither line is a reliable narrator
+about the other's code.
+
+**THE CLAIM NEVER REACHED THE TREE, AND I CHECKED RATHER THAN ASSUMED IT HAD NOT.** It lived in
+messages and pull-request bodies; `COMPOSITE_REGION_EVIDENCE.md` already states that nothing in it
+establishes anything about the native backend's lowering, and the script headers describe the virtual
+machine plus a conditional hazard. Nothing needed retracting in the repository.
+
+**THE SCOPING FACT IS WORTH MORE THAN THE INSTANCE WOULD HAVE BEEN**: the gap is real, gated behind a
+much larger piece of work, and the `SetLocal` route -- which needs no stream -- is the one that goes
+live the moment they fix an unrelated packed-width refusal.
+
+**AND THEIR CENSUS FOUND A CORPUS GAP MINE DID NOT.** With my three scripts absorbed, iterating loops
+went 36 to 39 and composite sites inside them 0 to 3 -- **and ZERO survive a crude escape test.**
+Disqualified 1 by `Yield`, 3 by `SetLocal`, 3 by `Call`. **Every subject needs two analysis features
+at once**, because `12_sensor_window.kel` calls a helper to compute a field.
+
+So a confinement predicate with only its local-store handling would admit NOTHING even now that
+subjects exist. `15_pixel_blend.kel` is the isolate: a per-iteration composite with no call in the
+body, so the only obstacle is the `let`. Pinned by
+`a_confined_candidate_exists_with_no_call_in_its_loop_body`, which fires when a call is put back.
+
+**THE INTERFACE IS SETTLED BY THEIR ARGUMENT**: a per-site predicate over a chunk they already hold,
+three-valued -- yes / no / **cannot establish** -- with the third distinct from `no`, because folding
+it in costs the measurement that says whether the analysis is improving. Soundness is identical
+either way; the third value carries the whole diagnostic.
+
 **I SHIPPED THREE CORPUS SCRIPTS AND BROKE THREE THINGS ABOUT THEIR DIRECTORY (2026-08-24).**
 
 The scripts themselves are right. What I did not check is everything AROUND them, and all three
