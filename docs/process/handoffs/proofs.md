@@ -27,7 +27,9 @@ with every Keleusma-specific fact, premise instantiation, and provenance row in 
 end. Proved generally are the unconditional branch bound, cross-epoch arm overlap, confined-site
 slot reuse, the composed plan, and, by operator-directed scope expansion later the same day,
 **Theorem B2**, universal slot reuse under an escape-copy discipline, with an accounting
-corollary and a per-site hybrid corollary. The Keleusma instantiation discharges the axioms with
+corollary and a per-site hybrid corollary, and **Theorem B1r**, which admits local stores to
+boundary-dead slots and is the operative form for source programs, since local bindings are
+immutable and every expressible in-loop store is iteration-scoped. The Keleusma instantiation discharges the axioms with
 measured standing recorded per row, and two axioms rest on reference-compiler emission
 invariants that `verify()` does not enforce, so the reuse theorems apply to reference-compiled
 modules and not to arbitrary verified bytecode. B2 is additionally a proved specification rather
