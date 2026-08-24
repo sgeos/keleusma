@@ -45,6 +45,7 @@ const CITED_TESTS: &[&str] = &[
     "the_instruction_set_has_no_write_accessor_into_a_composite",
     "a_dispatch_break_may_carry_a_value_past_the_loop_entry_height",
     "composite_equality_is_content_derived_not_address_derived",
+    "a_composite_written_to_an_indexed_data_slot_is_copied_not_aliased",
 ];
 
 /// The `src/verify.rs` citations, as (line, the text that line must contain).

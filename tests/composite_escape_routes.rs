@@ -658,3 +658,94 @@ fn main() -> Word {
          updating this test."
     );
 }
+
+/// `SetDataIndexed` copies too, not only `SetData`.
+///
+/// # Why this exists separately
+///
+/// An audit counted **three** `CopiesOut` rows where the evidence index claimed
+/// two were executed: `SetData`, `SetDataIndexed`, and `NewComposite`'s flat
+/// nesting. `SetDataIndexed` was read from dispatch.
+///
+/// **By this line's own asymmetry principle a wrong `CopiesOut` is the unsound
+/// kind** — it would let a reuse plan alias a destination believed to hold a
+/// copy — so the soundness-critical rows should all be executed rather than
+/// two of three.
+///
+/// The discriminator is the same as `SetData`'s: write inside a loop, then read
+/// back across resets that reclaim the ephemeral region. A stored handle would
+/// fail `Stale`; a copy does not.
+#[test]
+fn a_composite_written_to_an_indexed_data_slot_is_copied_not_aliased() {
+    use keleusma::bytecode::GenericValue as Value;
+    use keleusma::vm::{Vm, VmState};
+
+    const SRC: &str = "\
+struct Frame { id: Word, len: Word }
+private data log { slots: [Frame; 3], seen: Word }
+loop main(t: Word) -> Word {
+    if log.seen == 0 {
+        for i in 0..3 {
+            log.slots[i] = Frame { id: i, len: i * 10 };
+        }
+        log.seen = 1;
+    }
+    let _ack = yield log.slots[2].len;
+    0
+}
+";
+    let module = compile(SRC);
+    let sites: usize = module
+        .chunks
+        .iter()
+        .map(|c| {
+            c.ops
+                .iter()
+                .filter(|o| matches!(o, Op::SetDataIndexed(..)))
+                .count()
+        })
+        .sum();
+    assert!(
+        sites > 0,
+        "no SetDataIndexed was emitted, so this test exercises the wrong opcode"
+    );
+
+    let need = keleusma::vm::required_persistent_capacity_for(&module);
+    let mut arena = keleusma_arena::Arena::with_capacity((1 << 16) + need);
+    arena.resize_persistent(need).expect("persistent region");
+    let mut vm = Vm::new(module, &arena).expect("verify");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+
+    let mut reads = Vec::new();
+    let mut resets = 0;
+    let mut epochs = Vec::new();
+    let mut state = vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call");
+    for _ in 0..5 {
+        epochs.push(vm.arena().epoch());
+        match &state {
+            VmState::Yielded(Value::Int(n)) => reads.push(*n),
+            VmState::Reset => resets += 1,
+            other => panic!("unexpected state {other:?}"),
+        }
+        state = vm
+            .resume_with_shared(&mut shared, Value::Int(0))
+            .expect("resume");
+    }
+
+    assert!(
+        resets >= 2,
+        "the run must cross two resets, or it never reclaims the region the \
+         composites were built in"
+    );
+    assert!(
+        epochs.last() > epochs.first(),
+        "the epoch never advanced, so nothing was reclaimed: {epochs:?}"
+    );
+    assert!(
+        reads.iter().all(|n| *n == 20),
+        "the indexed slot read back differently after a reset: {reads:?}. A slot \
+         holding a handle rather than a copy would fail here, which is the point."
+    );
+}

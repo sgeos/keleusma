@@ -10,6 +10,29 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-24, session 52 CLOSE). 139 merges at `dadbce7e`, no open pull request.**
+>
+> **EIGHT OPERATOR RULINGS, SIX IMPLEMENTED.** The two outstanding are WORK: the floating-point entry
+> ABI (authorized -- FP registers feature-gated onto the existing `floats`, `Fixed` UNCONDITIONAL,
+> which is the harder half) and the confinement analysis (commissioned -- per-site, three-valued
+> `yes`/`no`/`cannot establish`, shared crate, with `SetLocal`-to-boundary-dead and a callee summary
+> both required on day one or it admits nothing). **B2 adoption is UNRULED, not declined.**
+>
+> **ORDER 1 DID NOT MOVE.** Bare-`for` remains the largest single win and the `parse.kel` phase
+> machine is located: phase 4 waits for a `limit` the bare form never supplies.
+>
+> **A THIRD LINE EXISTS.** The proof line merges INTO this one, `v0.3.0` then rebases. Its branch is
+> not offered; a fresh adversarial re-audit runs first. **This line verified the proof's PREMISES,
+> not its PROOFS**, and that must not be read as endorsement of the mathematics.
+>
+> **THE AUDIT FOUND A DEFECT IN THIS LINE'S OWN TABLE.** `Break` was classified as carrying no
+> region; it consumes nothing and transfers control WITH THE WHOLE OPERAND STACK, and 18 dispatch
+> scopes carry `match` arm values across it. Reclassified -- not an escape because it ENDS THE SCOPE,
+> not because it cannot carry a region.
+>
+> **THREE CHECKS WRITTEN THIS SESSION COULD NOT FAIL**, each satisfied by a different part of a
+> document from the one it was about. Mutation caught all three; reading caught none.
+
 > **Currency note (2026-08-24). A LANGUAGE DECISION IS ON THE RECORD FOR V0.3.0.**
 >
 > [`docs/decisions/YIELD_OWNERSHIP_MODE.md`](../decisions/YIELD_OWNERSHIP_MODE.md). **Accepted in

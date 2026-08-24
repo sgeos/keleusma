@@ -120,6 +120,7 @@ is why these two were run rather than read.
 | claim | discriminator | test |
 |---|---|---|
 | a composite written to a **`private data`** slot is copied | it survives two resets that reclaim the region it was built in; a stored handle would fail `Stale` | `a_composite_written_to_private_data_is_copied_not_aliased` |
+| a composite written to an **indexed** data slot is copied | the same discriminator, written inside a loop | `a_composite_written_to_an_indexed_data_slot_is_copied_not_aliased` |
 | nesting into a **flat** composite copies | the parent's 24 bytes are `[11, 22, 33]` — the child's words inline | `nesting_a_composite_into_a_flat_one_copies_its_bytes_inline` |
 
 **`private` was used rather than `shared` on purpose.** A host `&mut [u8]` buffer must copy by
@@ -181,6 +182,14 @@ verifies.
 value; measured across 87 modules, **18 dispatch scopes do exactly that**, and comparing break edges
 to entry would refuse `match`. For genuinely ITERATING loops the count is **zero** — an emission
 fact, not an enforced one.
+
+**THE ITERATING/DISPATCH DISCRIMINATOR IS CIRCULAR, AND THE GRAMMAR CLOSES IT.** A scope containing
+an unconditional `Break` to its own exit is filed as dispatch — but a genuine `for` loop with a
+`break;` emits exactly that, so it is misfiled, and the zero-count could never see an iterating loop
+violating through its own early exit. **`break_stmt = 'break' ';'` has no expression form**, so such
+a break is value-free by construction and cannot be a violation. The classification is imperfect and
+the conclusion holds. An alternative discriminator was tried and **over-counts at 247 of 248**, so it
+is not offered: a second broken heuristic is not a correction.
 
 Pinned by `a_dispatch_break_may_carry_a_value_past_the_loop_entry_height` in
 `tests/composite_escape_routes.rs`, so a future check comparing break edges to entry fails with a
@@ -305,6 +314,12 @@ cargo test --test composite_escape_routes
 distinct allocations, two with identical content, returning `1` for content-derived and `0` for
 address-derived. **The distinctness assertion is not decoration** — a folded pair would make the
 equality hold trivially and prove nothing. Mutation-tested both ways.
+
+**THE ORDERING FAMILY FAULTS ON COMPOSITE OPERANDS**, so it yields no observable:
+`CmpLt`/`Gt`/`Le`/`Ge` on two structs give `TypeError("cannot compare Struct and Struct")`. **That is
+a RUNTIME refusal, not a type-checker one** — the program compiles and loads first. Weaker standing
+than a static rejection, and enough for the axiom, since a faulting instruction produces no result to
+derive an address from.
 
 **PHRASE THE AXIOM AS NOT-THE-ADDRESS, NOT AS ONLY-THE-BYTES.** `Len` takes an element count and the
 shape tests take a type name — metadata rather than referenced bytes, and neither an address. Under

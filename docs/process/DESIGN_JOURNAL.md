@@ -13,6 +13,46 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**SESSION 52 CLOSE. THE PATTERN WORTH KEEPING IS NOT ANY ONE FINDING (2026-08-24).**
+
+Thirteen merges, eight operator rulings, and a third line joined the work. The increment-by-increment
+reasoning is below this entry; what follows is only what generalises.
+
+**EVERY SIGNIFICANT CORRECTION THIS SESSION CAME FROM SOMEONE ELSE RUNNING SOMETHING.** The
+`v0.3.0` line measured that my three corpus scripts never reach their planner, refuting a claim I had
+reasoned to rather than tested. Their census found that every composite site needed TWO analysis
+features, which my own walker could not see because it reported presence rather than admissibility.
+An adversarial audit read `join_all` correctly and, in chasing it, I found `Break` misclassified in
+my own table. **In none of these cases was the code wrong and the reader confused; the reader was
+right and my instrument was silent.**
+
+**THREE CHECKS I WROTE COULD NOT FAIL, ALL IN ONE DAY, ALL THE SAME SHAPE.** A translation clause
+satisfied by an unrelated catalogue entry; an evidence citation satisfied by a command name rather
+than a test name; a README guard satisfied by prose below the table rather than the table row.
+**Mutation caught all three. Reading caught none.** The rule that survives: scope a check to the
+entry it is about, never to the file, and a `contains` over a whole document is almost never the
+check you meant.
+
+**AND ONE MUTATION THAT PROVED NOTHING WHILE LOOKING LIKE PROOF.** Adding a real `SetField` variant
+broke every exhaustive match, so the test never ran and the grep for its message found nothing --
+indistinguishable from the guard not firing. **A mutation must leave the program buildable or it is
+not a mutation**, and its failure to build presents as silence.
+
+**THE MEASUREMENTS THAT MATTERED WERE THE ONES THAT REFUTED THE EASY ANSWER.** "Below entry equals
+frame underflow, which is caught" was available, plausible and false -- 122 of 245 loops carry a
+non-empty entry stack. A linear depth scan gave the right number for the wrong reason and was exact
+for **4 of 245** loops. Splitting exact from approximate was worth more than either figure.
+
+**WHAT THIS LINE SUPPLIED TO THE PROOF, AND WHAT IT DID NOT.** Premises, each with provenance,
+indexed and guarded so a renamed test or a moved line fails rather than rotting. **Not the
+mathematics.** Nobody has checked the arguments, the proof line recommends an independent review
+before merge, and the distinction is the entire basis of the involvement.
+
+**THE PROCESS LESSON WITH THE LONGEST REACH** is not about code: a shared working directory silently
+changes what a long-running command is MEASURING, and no inspection of git state afterwards reveals
+it. A green suite was killed rather than read, because a number from a tree I did not intend to test
+is worse than no number -- I would have quoted it.
+
 **AN ADVERSARIAL AUDIT ASKED TWO QUESTIONS ABOUT MY SURFACE. BOTH ANSWERS WERE FINE AND CHASING THE
 SECOND FOUND A DEFECT IN MY OWN TABLE (2026-08-24).**
 
