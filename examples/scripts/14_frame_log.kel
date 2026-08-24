@@ -21,10 +21,15 @@
 // segment at all, so it is the only one exercising `SetData`,
 // `GetData` and persistence across a `Reset`.
 //
-// Run: keleusma run examples/scripts/14_frame_log.kel
-// Expected: yields 81, then 84, 87, 90 on successive cycles. The
-// checksum term is constant at 78, and `count` rises by 3 per cycle
-// because the data segment survives the `Reset`.
+// RUNS FOREVER under `keleusma run`, by design rather than by defect.
+// A `loop` function is productively divergent: it yields and resets
+// without end, so the command has nothing to print a final value for
+// and does not terminate. Interrupt it, or drive it from a host.
+//
+// It yields 81, then 84, 87, 90 on successive cycles. The checksum term
+// is constant at 78, and `count` rises by 3 per cycle because the data
+// segment is NOT reclaimed by the `Reset` that ends each cycle -- which
+// is the property this script exists to show.
 
 struct Frame { id: Word, len: Word, checksum: Word }
 
