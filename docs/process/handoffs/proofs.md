@@ -41,6 +41,17 @@ instantiation row is open. The write-accessor pin landed in their `a288ae26`, re
 proof's Appendix E against ground one only, since grounds two through four are read from
 dispatch and in no test.
 
+## The audit and the revision, 2026-08-24
+
+On operator direction, five independent contexts adversarially audited the proof at `de8b3f68`.
+The empirical layer held and the mathematical layer did not, four results judged not established
+as literally written. Every verified finding is repaired in the post-audit revision at
+`15532455`, with the full record in `docs/proofs/AUDIT_2026-08-24.md` on the feature branch. The
+revision adds two axioms, makes references provenance-based, proves composition as a lemma, and
+replaces the plan inequality with a footprint-and-occupancy theorem. Two pins are awaited from
+the V0.2.X line, the address-opacity discriminator and the Break row correction. **A fresh
+adversarial re-audit of the revision is required before the merge sequence starts.**
+
 ## Merge readiness
 
 The V0.2.X operator ruled on 2026-08-24 that the proof line merges into the V0.2.X line and the
