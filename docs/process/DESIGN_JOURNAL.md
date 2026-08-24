@@ -11,6 +11,106 @@ which is overwritten each session per [COMMUNICATION.md](./COMMUNICATION.md). Th
 journal was relocated out of `REVERSE_PROMPT.md` on 2026-07-22 (process-audit item 5)
 when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec. The
 content below is that accreted history, verbatim; new reasoning is appended at the top.
+**[v0.3.0] TWO OPERATOR QUESTIONS ANSWERED, AND BOTH TURNED OUT TO BE ABOUT A STALE REASON RATHER
+THAN AN OPEN DECISION (2026-08-24).**
+
+Absorption 7 of `v0.2.3` at `dadbce7e`, then the two operator-requested investigations that had been
+carried as "authorized, started on neither line" for several sessions.
+
+**`Op::IsStruct` — not a removal candidate, and the interesting part is a comment.** The operator's
+test was three conjoined conditions: no documented intent, no obvious intent, no producers. **Two
+fail plainly.** It is specified in two normative documents, and its peek-not-pop semantics were
+deliberately repaired in a V0.2.x spec-conformance audit — an opcode argued over and then pinned is
+the opposite of an undocumented one. Its intent is readable from the fact that **six sites in `src/`
+handle the two in a single match arm** — `Op::IsEnum(_, _, _) | Op::IsStruct(_)` — across the stack
+model, both verifier passes, and the self-hosted driver.
+
+The third condition is where the work was. **The emission site at `src/compiler.rs:11399` exists and
+no construct known to this tree reaches it.** Three separate repairs closed the three routes: the
+un-annotated parameter is folded, the generic-parameter case now rewrites the pattern with the type,
+and the annotated-different case is refused by the type checker. `tests/opcode_reachability.rs`
+today holds **five assertions about the opcode and every one is a negative**, over fifteen source
+shapes in two loops plus three singleton controls plus three shapes refused before lowering.
+
+**I DRAFTED THAT AS "UNREACHABLE FROM SOURCE" AND THIS LINE'S OWN TEST FILE TALKED ME OUT OF IT.**
+`native_codegen/tests/miscompilation_reach.rs` had already recorded this finding, and it explicitly
+refuses the stronger claim: *"A reader who can construct a survivor should treat this as incomplete
+rather than as a boundary."* The reason it gives is specific — **this line falsified the `v0.2.3`
+line's first producerless claim within the hour**, with a generic struct that compiled, verified,
+took a bound, loaded, and died with `InvalidBytecode`. Having done that once, this line has no
+standing to make the stronger claim itself. The write-up now says *no producer found by a bounded
+search* throughout. **The lesson is narrower than "be careful": the restraint was already written
+down in my own surface, and I would have contradicted it by not looking.**
+
+It also supplied the better argument. The load-bearing half is **not** the probe enumeration but the
+emission condition: `ty` is supplied at exactly two roots, function parameters and match arms, and
+both now run the nominal check first, rejecting precisely the mismatch that would satisfy the
+condition. A probe that fails to *compile* is weaker evidence than one that compiles and does not
+reach the site, and the two are counted separately.
+
+**And `src/compiler.rs:11385` still says the opposite.** It states the opcode "still has producers.
+Four are pinned in `tests/opcode_reachability.rs`, TWO OF WHICH STILL REACH THE LOAD-TIME HOLE."
+Written at `2ada8791`; the repair that closed both named routes is `6d217f0a`, and
+`git merge-base --is-ancestor` confirms the repair came after. **The comment was true when written
+and has been stale since.** That matters more than staleness usually does, because it names a live
+breach of the load-time guarantee — a module `verify()` accepts that then traps `InvalidBytecode` —
+and an auditor reading it concludes the guarantee is broken when the tests beside it prove it is not.
+
+Recorded as **"specified, retained, no source-level producer as of 2026-08-24"**, never as
+"unreachable": the guard, both verifier arms, and the VM path all remain live, and this line's input
+domain is bytecode rather than source. `Vm::new_unchecked` exists precisely so trusted bytecode can
+skip verification. **"No producer in the reference compiler" is not "absent from the input domain",**
+and that distinction is this line's whole founding premise.
+
+**`Fixed` in a shared slot — the representation was never the open question.** The backend refuses
+the slot with *"fixed-point representation is unsettled"*. **That message is wrong about which thing
+is unsettled.** `ScalarKind::Fixed` is a signed Q-format integer of the runtime's word width;
+`size_in_bytes` returns `word_bytes`, pinned by the other line's own unit tests at both 64 and 32
+bits. A backend lowering it as a word-width signed integer would agree byte for byte.
+
+What is absent is the **scale**. `Fixed<N>` is an integer scaled by `2^N`, and `N` is carried by the
+opcodes — `WordToFixed(frac_bits)` and its family — **and by nothing in the layout descriptor**.
+`value_layout.rs` says so in as many words. **Erasing it is sound inside a module and not across a
+host boundary**: every internal producer and consumer is type-checked against the same `N`, but a
+host handed the shared buffer gets `word_bytes` of raw integer and nothing to consult.
+
+**The measurement that makes this an ABI finding rather than a struct observation**: two modules
+differing only in `N` compile to **byte-identical shared-slot layouts**. `Fixed<16>` and `Fixed<8>`
+differ by a factor of 256 and are indistinguishable to the host. A missing field is an observation
+about a struct; two programs with different meanings and identical host-visible layouts is an
+observation about the interface. Pinned in `native_codegen/tests/fixed_shared_scale.rs`, with a
+vacuity control, **because the useful assertion here is a negative and a negative decays silently**.
+If a scale ever becomes recoverable that file fails, which is how a decision landing on the other
+line reaches this one without anyone remembering to send a message.
+
+The surface **admits** the declaration today — `shared data cal { scale: Fixed<16> }` compiles — so
+the case is live. Options priced in `docs/decisions/FIXED_SHARED_SLOT_ABI.md`. Preference **B over
+A over C**, stated as a preference: B refuses `Fixed` in host-visible position and is the only option
+whose guarantee is structural rather than documentary; A reuses the unused `len` field at no wire
+cost but leaves a host that ignores the new semantics reading a plausible wrong number, and carries a
+silent-misread hazard for artifacts already compiled; C picks a canonical Q format and is the worst
+failure mode of the three.
+
+**AND ABSORPTION 7 RETIRED A DESIGN CONCLUSION THIS LINE HAD DRAWN.** `15_pixel_blend.kel` is the
+call-free confined subject asked for last session. The census moved `410/39/3` to **`411/40/4`**,
+survivors still zero — but the breakdown is the point: `d_setlocal = 4`, `d_call = 3`, so **one site
+is blocked by `SetLocal` alone.**
+
+The census existed to produce the conclusion *"a confinement analysis needs BOTH boundary-dead
+`SetLocal` and a callee summary on day one, or it returns nothing."* **That was true only because
+all three prior subjects tripped both, confounding the two requirements.** With one call-free
+subject the confound is gone and the conclusion is false: B1r alone would admit something, so **the
+callee summary is a second increment rather than a precondition.** Soundness is unchanged; only the
+sequencing is. The comment is rewritten in place and marked SUPERSEDED rather than deleted, and the
+census now prints the isolation figure and asserts `sites > d_call` — **stated as `> 0` and not
+`== 1`, because the property worth pinning is that the requirements are SEPARATED**, and an exact
+count would turn every future call-free subject into a failure.
+
+**Both findings are the same shape and it is worth naming.** Neither question was open. In each case
+a decision had already been made and a stale explanation was still sitting where the next reader
+would find it. **The expensive part of both investigations was establishing that the thing everyone
+believed was undecided had in fact been decided** — once by three repairs nobody had reconciled with
+the comment above them, once by a size function nobody had connected to the refusal message.
 ---
 
 **AN ADVERSARIAL AUDIT ASKED TWO QUESTIONS ABOUT MY SURFACE. BOTH ANSWERS WERE FINE AND CHASING THE

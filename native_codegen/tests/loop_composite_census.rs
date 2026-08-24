@@ -197,6 +197,15 @@ fn how_many_loop_body_sites_survive_a_crude_confinement_test() {
     println!("  disqualified by Call (callee may Return a composite) : {d_call}");
     println!("  disqualified by a native call          : {d_native}");
     println!("\n  Counts overlap: one site may be hit by several.");
+    // **THE ISOLATION FIGURE, AND IT IS THE ONE THE DESIGN NEEDS.** Until
+    // absorption 7 every site tripped BOTH `SetLocal` and `Call`, so the census
+    // could not say whether a confinement analysis needed a callee summary or
+    // only local-store handling -- the two requirements were never separated by
+    // any subject. `15_pixel_blend.kel` separates them.
+    println!(
+        "  sites blocked WITHOUT a call in the body : {} (of {sites})",
+        sites.saturating_sub(d_call)
+    );
     for w in confined_where.iter().take(12) {
         println!("    survivor: {w}");
     }
@@ -236,12 +245,25 @@ fn how_many_loop_body_sites_survive_a_crude_confinement_test() {
     );
     // **ZERO SURVIVORS IS THE DESIGN INPUT, NOT A DISAPPOINTMENT.** A crude
     // "any Escapes opcode in the body" predicate admits NOTHING even with
-    // subjects present. Every one of the three trips `SetLocal`, because a `let`
-    // inside a loop body is a store, and all three trip `Call`.
+    // subjects present. Every site trips `SetLocal`, because a `let` inside a
+    // loop body is a store.
     //
-    // **SO THE CONFINEMENT ANALYSIS NEEDS BOTH FEATURES ON DAY ONE** — SetLocal
-    // to a boundary-dead slot (Theorem B1r) and a callee summary — or it returns
-    // nothing at all. That is what this number is for.
+    // **SUPERSEDED, 2026-08-24 (absorption 7): "THE ANALYSIS NEEDS BOTH FEATURES
+    // ON DAY ONE OR IT RETURNS NOTHING" IS NO LONGER TRUE.** That conclusion was
+    // drawn when all three subjects tripped BOTH `SetLocal` and `Call`, so the
+    // two requirements were inseparable and either alone bought nothing.
+    //
+    // **`15_pixel_blend.kel` separates them.** It is the call-free confined shape
+    // this line asked the `v0.2.3` line for, and with it the counts are
+    // `sites = 4`, `d_setlocal = 4`, `d_call = 3`. **One site is blocked by
+    // `SetLocal` ALONE.** So an analysis implementing only Theorem B1r's
+    // boundary-dead store handling -- no callee summary at all -- would admit
+    // something rather than nothing, which makes the callee summary a SECOND
+    // increment instead of a precondition.
+    //
+    // **THE SEQUENCING CHANGES; THE SOUNDNESS DOES NOT.** A site admitted on
+    // B1r alone is still only as sound as B1r, and the planner's reuse remains
+    // unsound for any site that is not confined.
     //
     // **WHEN THE ANALYSIS LANDS THIS SHOULD RISE.** A survivor count that stays
     // at zero after the predicate exists means the predicate is not admitting
@@ -253,5 +275,26 @@ fn how_many_loop_body_sites_survive_a_crude_confinement_test() {
          adding exactly that, to isolate the SetLocal requirement from the callee \
          summary — or this census stopped counting a disqualifier. Check the \
          breakdown before treating it as progress."
+    );
+
+    // **THE ISOLATION IS THE RESULT OF ABSORPTION 7 AND IT IS PINNED HERE.**
+    //
+    // Without at least one call-free site, `SetLocal` and `Call` are confounded
+    // and the census cannot tell the two requirements apart -- which is exactly
+    // the state that produced the superseded "needs both on day one" reading
+    // above. This assertion is what stops that reading from coming back
+    // unnoticed if the corpus loses `15_pixel_blend.kel`.
+    //
+    // Stated as `> 0` rather than `== 1` deliberately: the useful property is
+    // that the requirements are SEPARATED, and pinning the exact count would
+    // make every future call-free subject a failure.
+    assert!(
+        sites > d_call,
+        "EVERY site in an iterating loop again has a Call in its body \
+         ({sites} sites, {d_call} with a call), so `SetLocal` and `Call` are \
+         confounded once more and this census can no longer say which \
+         requirement a confinement analysis needs first. The corpus has probably \
+         lost `15_pixel_blend.kel`. Restore a call-free subject before reading \
+         the breakdown as a design input."
     );
 }
