@@ -197,6 +197,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: keleusma (docs.rs feature set)
         run: cargo doc -p keleusma --no-deps --features signatures,encryption,shell
+      # The docs.rs set does NOT include `self-host`, so every doc comment
+      # under `src/selfhost/` was invisible to this job. A broken or private
+      # intra-doc link there fails no test and no clippy run, which is one
+      # feature set over from how V0.2.1 shipped with a red Doc job. The
+      # module is large and publicly documented, so it gets its own build.
+      - name: keleusma (self-host feature)
+        run: cargo doc -p keleusma --no-deps --features self-host
       - name: keleusma-arena (all features)
         run: cargo doc -p keleusma-arena --no-deps --all-features
       - name: keleusma-macros
