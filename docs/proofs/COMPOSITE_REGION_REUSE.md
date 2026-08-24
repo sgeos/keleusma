@@ -278,13 +278,30 @@ much stronger than a list.
 
 ### ⚠ `SetLocal` DEFEATS "a loop body containing no `yield`"
 
+> **⚠ THE ILLUSTRATION THIS SECTION USED DOES NOT PARSE. Corrected below; the CLASSIFICATION is
+> unaffected.**
+>
+> It read $\texttt{let mut last = ...; for x in xs \{ last = P \{ .. \} \}}$ and called `SetLocal`
+> "the ordinary case". **`let mut` is not Keleusma** — local bindings are immutable and the program
+> is refused at parse. Verified independently on this tree, 2026-08-23, after the `v0.2.3` line
+> retracted the illustration they had supplied and I had repeated.
+
+**`SetLocal` REMAINS CORRECTLY CLASSIFIED AS ESCAPING**, and for a reason the retraction does not
+touch: the opcode cannot distinguish an inner binding from an outer one — that is a property of the
+slot the compiler assigned — and **hand-written bytecode can do what the source surface cannot.**
+Classification by worst case stands.
+
+**WHAT DOES NOT STAND IS THE "ORDINARY CASE" ARGUMENT.** The expressible in-loop `SetLocal` is a
+`let` **inside** the body, whose slot's lifetime is the iteration. Under the proof's own §9.3 that is
+*"believed harmless and not proved so here"*.
+
 $$
-\texttt{let mut last = ...; for x in xs \{ last = P \{ .. \} \}}
+\textbf{Consequence: B1's first subject is blocked by the THEORY EXTENSION, not by the dataflow.}
 $$
 
-**No `yield`. No host. No native call.** Under one reused slot, `last` aliases whatever the final
-iteration wrote. **B1 restricted to "no `yield`" is NOT SUFFICIENT** — the restriction must be stated
-over all five routes, and the `SetLocal` case is the ordinary one, not the exotic one.
+A confinement analysis could establish that site perfectly and B1 would still not apply to it,
+because the harmlessness of an iteration-scoped `let` is unproved rather than undecided. **That moves
+the gating item from §6.3's territory to §9.3's.**
 
 ### The two native calls are an EMBEDDER obligation, not a language property
 
