@@ -468,7 +468,7 @@ for i in 0..8 {
 }
 ````
 
-The loop variable is immutable within each iteration. Ranges use `..` for exclusive upper bound. The compiler verifies that the iterable is a fixed-size array or a range expression with statically known or bounded endpoints.
+The loop variable is immutable within each iteration. Ranges use `..` for exclusive upper bound. The compiler verifies that the iterable is a fixed-size array or a range expression with statically known or bounded endpoints. A range over **runtime** endpoints is admitted by supplying the bound explicitly with a `limit` clause; see [Bounded Repetition with a Limit](#bounded-repetition-with-a-limit) immediately below, which also covers the optional `on` block capturing how the loop ended.
 
 A `for` loop is a statement and needs no trailing semicolon, but one is accepted, as it is after the block-form `if`, `match`, and `loop` statements. A semicolon at statement position with nothing to terminate is an empty statement and is discarded. Earlier revisions rejected the form after `for` alone, with `unexpected token Semicolon in expression`, because `for` is a statement and consumes no terminator while the other three are expressions whose expression-statement path already consumed one. That diagnostic named the semicolon rather than the `for` and misdirected two defect reports toward `break`, neither of which was about `break`. The current behaviour is pinned by `tests/block_form_statements.rs`, and the agreement of the reference and self-hosted parsers on the form by `tests/selfhost_codegen.rs`.
 
