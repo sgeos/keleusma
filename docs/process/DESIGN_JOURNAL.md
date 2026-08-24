@@ -13,6 +13,86 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**I SHIPPED THREE CORPUS SCRIPTS AND BROKE THREE THINGS ABOUT THEIR DIRECTORY (2026-08-24).**
+
+The scripts themselves are right. What I did not check is everything AROUND them, and all three
+defects were invisible to every test that walks the corpus, because those walk the DIRECTORY and none
+of them reads the index or the CLI.
+
+| what broke | how it surfaced |
+|---|---|
+| both stream scripts carried a `Run:` line that does not work | running the documented command |
+| `README.md` indexes the scripts and I added none of mine | reading the directory listing after the merge |
+| `README.md` asserted every top-level script is `fn main`, which my two `loop main` scripts falsified | the same reading |
+
+**THE `Run:` LINES WERE THE WORST OF THE THREE**, because they instruct. `13_telemetry_stream.kel` is
+REFUSED by `keleusma run` -- the command requires a `loop main` to yield `Word` and this one yields a
+composite, which is the entire point of the example. `14_frame_log.kel` RUNS FOREVER, because a
+`loop` function is productively divergent by design; I found that out by waiting ten minutes for a
+command that was never going to return. Both headers now state what actually happens and why the
+behaviour is a property of the command rather than a defect in the script.
+
+**THE README INVARIANT IS THE INSTRUCTIVE ONE.** It said "all scripts in this directory's top level
+are atomic-total (`fn main`), so they run end to end through the CLI". That was TRUE when written and
+my additions made it FALSE, silently, in a file nothing tests. A reader takes a sentence like that at
+face value. It is corrected in place with a note saying it used to say otherwise, rather than quietly
+reworded.
+
+**AND THE GUARD I WROTE FOR IT COULD NOT FAIL.** `the_readme_indexes_every_top_level_script` asked
+whether the README CONTAINED each script's name. Deleting a script's table row left it green,
+because the prose I had just written below the table mentions the same filename. **The check was
+satisfied by a different part of the document from the one it is about** -- the THIRD instance of
+that exact shape this session, after the translation clause satisfied by an unrelated catalogue entry
+and the evidence-index citation satisfied by a command rather than a test name.
+
+Scoped to table rows, it fires on the deletion and on a row naming a file that does not exist.
+**Mutation caught all three instances of this shape and reading caught none of them.**
+
+**THE LOOP-ENTRY FLOOR IS ENFORCED, AND THE CORPUS COULD NOT EXERCISE THE THING IT WAS CITED FOR
+(2026-08-23).**
+
+Two operator-directed items. Both turned up something the plan did not predict.
+
+**THE FLOOR LANDED, AND IT BROKE TWO OF MY OWN TESTS -- ONE CORRECTLY, ONE BECAUSE MY CHANGE WAS
+WRONG.** `verify()` now refuses an instruction that consumes an operand from below its enclosing
+loop's entry height, `TypedError::LoopFloorBreach`. The predicted cost was zero rejections across
+the shipped corpus and that held. What it did NOT predict:
+
+- **`stack_underflow_rejects` failed because my check shadowed the frame guard.** At depth zero the
+  floor IS the frame, so my check fired first and reported a loop breach on code inside no loop --
+  a worse diagnosis than the one it displaced. Fixed by skipping the check at floor zero.
+- **`loop_non_neutral_by_shape_rejects` failed because the floor SUBSUMES it.** Replacing a slot's
+  shape at equal height necessarily reaches below entry, since an entry created and destroyed inside
+  the body leaves the back-edge shape untouched. So every witness for the shape case is also a
+  below-entry reach. **`LoopNotNeutral` is not dead** -- its height case survives, covered by
+  `loop_neutrality` -- but the equal-height shape witness is gone. The test was updated and renamed
+  rather than deleted, with the old assertion recorded, because a subsumption that leaves no trace
+  reads later as a check that was never there.
+
+**AND I CITED A TEST BY A NAME THAT DID NOT EXIST** in the comment explaining that subsumption. The
+surviving witness is `loop_neutrality`, not the name I invented for it. Caught by grepping my own
+citation, which is the habit the evidence-index guard was built to enforce and which I had not yet
+applied to ordinary source comments.
+
+**THE CORPUS FINDING IS LARGER THAN THE ONE I REPORTED.** I had measured that no composite was built
+inside an ITERATING loop body -- all 30 in-loop sites were arm results followed by `Break`, since
+`Op::Loop` encodes dispatch as well as iteration. Writing the replacements showed the gap is wider:
+**not one script in `examples/scripts/` used `loop main` or a data segment at all**, so `Stream`,
+`Yield`, `Reset`, `SetData` and `GetData` were unexercised by that directory entirely.
+
+Three scripts now cover the three dispositions of a per-iteration composite: consumed in the
+iteration, yielded to the host, copied to a data slot. **The yielding one is a live demonstration of
+the proof's subject** -- four composites at four distinct addresses in one epoch, then `Reset`, then
+the same addresses at the next epoch, which is the no-reuse model and the staleness rule visible at
+run time.
+
+**TWO THINGS THE LANGUAGE TAUGHT ME WHILE WRITING THEM.** `let mut` does not parse -- locals are
+immutable -- so **the program I gave the proof session to illustrate the `SetLocal` escape is not
+valid Keleusma**, and I owe them that correction. And a `loop` body must yield on EVERY path from
+`Stream` to `Reset`, so a stream that yields only inside a bounded `for` is refused for
+productivity: the zero-iteration path reaches `Reset` without yielding. Both are the totality stance
+working, and neither was in my head when I proposed the scripts.
+
 **M1: SEVEN READ ACCESSORS INTO A COMPOSITE, ZERO WRITE ACCESSORS (2026-08-23).**
 
 The proof session asked for a refutation rather than a confirmation: is there ANY opcode, host entry

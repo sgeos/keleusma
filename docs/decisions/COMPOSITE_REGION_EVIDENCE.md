@@ -188,35 +188,43 @@ assumed same-epoch by construction.
 frame's locals and the only frame that could hold one is never resumed. This is the behaviour *if*
 one were reachable. **It is not a claim that one is, nor that none can be.**
 
-### 9. A loop body MAY consume from below its entry height — **EXECUTED, and this is a gap**
+### 9. A loop body may NOT consume from below its entry height — **ENFORCED since 2026-08-23**
 
-Back-edge neutrality compares shapes, so a body that pops a below-entry operand and pushes a
-same-shape replacement is neutral. **`verify()` accepts that shape.** `interp_region`'s pops guard
-against an empty abstract stack — the frame floor — not against the enclosing loop's entry height.
+**This was a gap and is now closed.** Back-edge neutrality compares shapes, so a body that popped a
+below-entry operand and pushed a same-shape replacement was neutral, and the surviving entry had
+been constructed in the current iteration while touching none of the escaping opcodes.
+`verify()` accepted it.
 
-**The two floors are not the same**: **122 of 245** compiled `Loop` instructions in the shipped
-corpus carry a non-empty operand stack at entry, so the underflow guard does not incidentally cover
-the loop floor.
+`src/verify_typed.rs` now carries an entry-height floor: `TypedError::LoopFloorBreach`, checked
+before every operand-consuming instruction, with the floor scoped by the recursion so nested loops
+get their own and code outside any loop keeps the frame-underflow diagnosis.
 
 ```sh
 cargo test --test loop_entry_floor
 ```
 
-`a_loop_body_may_consume_from_below_its_entry_height` pins the acceptance,
-`the_control_is_accepted_too_so_acceptance_is_not_about_the_loop_shape` is its control, and
-`compiled_loops_really_do_carry_a_non_empty_entry_stack` pins the fact that makes the gap reachable.
+`a_loop_body_may_not_consume_from_below_its_entry_height` pins the refusal,
+`the_control_is_still_accepted_so_the_refusal_is_about_the_reach` is its control, and
+`compiled_loops_really_do_carry_a_non_empty_entry_stack` pins the fact that made the gap reachable.
 
-**No compiled code does it** — zero ops breach, over 588 loop instances in 23 modules, measured by
-temporarily instrumenting the typed pass's own abstract interpretation with the instrument proven to
-fire. **That instrumentation is reverted and is NOT in the tree, so the figure is a measurement at a
-commit rather than a standing guarantee.** Cite it that way or not at all.
+**Why closing it was safe, known BEFORE it was closed**: zero of 588 loop instances across 23
+shipped modules would be rejected, measured by instrumenting the typed pass's own per-path
+interpretation with the instrument proven to fire. **A linear depth scan gave the same zero and was
+exact for only 4 of the 245 loops** — the flattering number came from the broken instrument first.
 
-**A linear depth scan gives the same zero and is exact for only 4 of 245 loops**, because the rest
-have branches in the body. Reporting that number would have been a flattering figure from a broken
-instrument.
+**The frame floor never covered it**: 122 of 245 compiled `Loop` instructions carry a non-empty
+operand stack at entry, pinned by `compiled_loops_really_do_carry_a_non_empty_entry_stack`.
 
-**Closing it structurally — flooring `verify()` at loop entry — would reject none of the 588 but
-narrows what loads**, which is an operator decision on this line rather than an agent's.
+**Two consequences inside the verifier, both deliberate.** The floor is skipped at depth zero, since
+outside a loop the frame guard is the apter diagnosis and reporting a loop breach there would name a
+loop the reader is not inside. And the floor **subsumes the equal-height shape witness** for
+`LoopNotNeutral`: replacing a slot's shape at equal height necessarily reaches below entry, so that
+error now fires only on a HEIGHT difference. `LoopNotNeutral` is not dead — `loop_neutrality` covers
+the height case — and the subsumed unit test was updated rather than deleted, so the change stays
+legible.
+
+**For the proof, M6(d) is no longer an emission invariant.** It is enforced by `verify()`, and the
+scoping caveat that attached to it can be dropped for this clause.
 
 ### 10. No route writes a live ephemeral composite region — **MIXED**, and it is FALSE for persistent
 

@@ -10,6 +10,30 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-23, operator-directed). THE FLOOR IS ENFORCED AND THE CORPUS CAN NOW
+> EXERCISE THE MEMORY MODEL.**
+>
+> **`verify()` floors loop-body pops at the entry height.** `TypedError::LoopFloorBreach`, scoped by
+> the recursion. Zero of 588 loop instances rejected, as measured beforehand. **M6(d) is enforced
+> rather than an emission invariant.** Two deliberate consequences: the floor is skipped at depth
+> zero, where the frame guard is the apter diagnosis, and it **subsumes the equal-height shape
+> witness** for `LoopNotNeutral`, whose height case survives via `loop_neutrality`.
+>
+> **THE CORPUS COULD NOT EXERCISE WHAT IT WAS CITED FOR.** Not one script used `loop main` or a data
+> segment, so `Stream`, `Yield`, `Reset`, `SetData` and `GetData` were unexercised there, and **zero
+> composites were built inside an iterating loop** -- all 30 in-loop sites were arm results, since
+> `Op::Loop` marks dispatch as well as iteration. Three scripts now cover the three dispositions:
+> `12_sensor_window` (confined), `13_telemetry_stream` (yielded), `14_frame_log` (copied to data).
+>
+> **`tests/corpus_pattern_coverage.rs` pins them, and its first draft had the same defect** -- it
+> counted dispatch scopes as loops, the error the `v0.3.0` line made twice. Fixed with their
+> discriminator: an unconditional `Break` targeting the scope's own exit means dispatch.
+>
+> **TWO LANGUAGE FACTS ESTABLISHED WHILE WRITING THEM**: `let mut` does not parse, and **the grammar
+> has no local assignment at all** -- exactly two assignment nodes, both targeting data. So no source
+> form writes a local declared outside its loop. **But `SetLocal` still targets compile-time slots
+> that outlive iterations**, so the opcode classification stands.
+
 > **Currency note (2026-08-23, late). P6(d) IS A REAL GAP, AND A TEST OF MINE BROKE THEIR ABSORPTION.**
 >
 > **`verify()` ACCEPTS a loop body that consumes below its entry height** and pushes a same-shape

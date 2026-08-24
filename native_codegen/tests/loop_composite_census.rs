@@ -213,18 +213,45 @@ fn how_many_loop_body_sites_survive_a_crude_confinement_test() {
          for-in loops or the Break-attribution discriminator has broken; \
          establish WHICH before reading the site count as a result"
     );
-    // **THE ZERO IS PINNED, NOT MERELY PRINTED.** A composite appearing inside an
-    // iterating loop is NEWS: it gives Theorem B1 its first subject and gives the
-    // backend's slot-reuse unsoundness its first live instance. It must not
-    // arrive as a number quietly changing.
+    // **THE ZERO IS GONE, AND THAT WAS THE GUARD WORKING.** It fired on
+    // absorption naming the three scripts the `v0.2.3` line landed on operator
+    // direction. The verdict is REWRITTEN to the new state; the assertion is not
+    // deleted.
+    //
+    // **WHAT THE NEW STATE MEANS.** Theorem B1/B1r now has subjects, and the
+    // native planner's slot reuse is unsound for any of them that is not
+    // confined. **It is NOT yet live**: all three are refused by the backend
+    // before the differential runs — `13_telemetry_stream` on
+    // `UnsupportedOp("Stream")`, the other two on an unknown packed width. The
+    // yield route is gated behind Workstream B by construction, since `yield`
+    // exists only inside a `Stream` this backend does not lower.
+    assert!(
+        nobreak_sites > 0,
+        "THE SUBJECTS ARE GONE. Composite sites inside iterating loops went to \
+         zero, which is how this file read before 2026-08-24. Either the corpus \
+         lost 12_sensor_window/13_telemetry_stream/14_frame_log, or the \
+         Break-attribution discriminator has broken and is misreading real loops \
+         as once-executors. Establish WHICH -- the second would make every figure \
+         here an artefact."
+    );
+    // **ZERO SURVIVORS IS THE DESIGN INPUT, NOT A DISAPPOINTMENT.** A crude
+    // "any Escapes opcode in the body" predicate admits NOTHING even with
+    // subjects present. Every one of the three trips `SetLocal`, because a `let`
+    // inside a loop body is a store, and all three trip `Call`.
+    //
+    // **SO THE CONFINEMENT ANALYSIS NEEDS BOTH FEATURES ON DAY ONE** — SetLocal
+    // to a boundary-dead slot (Theorem B1r) and a callee summary — or it returns
+    // nothing at all. That is what this number is for.
+    //
+    // **WHEN THE ANALYSIS LANDS THIS SHOULD RISE.** A survivor count that stays
+    // at zero after the predicate exists means the predicate is not admitting
+    // anything, which is news of a different kind.
     assert_eq!(
-        nobreak_sites, 0,
-        "A COMPOSITE IS NOW BUILT INSIDE AN ITERATING LOOP, in {nobreak_bodies} \
-         real loop(s). This is NEWS and probably deliberate -- the v0.2.3 line \
-         was asked to land exactly this shape. Consequences, both of which need \
-         acting on rather than re-pinning: Theorem B1 now has a subject, and the \
-         native planner's reuse of that slot is UNSOUND if the site is not \
-         confined. Check the differential for a disagreement before changing \
-         this number."
+        confined, 0,
+        "A SITE NOW SURVIVES THE CRUDE TEST. Either the corpus gained a loop-body \
+         composite with no store and no call — the `v0.2.3` line said it was \
+         adding exactly that, to isolate the SetLocal requirement from the callee \
+         summary — or this census stopped counting a disqualifier. Check the \
+         breakdown before treating it as progress."
     );
 }
