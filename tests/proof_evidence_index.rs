@@ -43,6 +43,8 @@ const CITED_TESTS: &[&str] = &[
     "a_loop_body_may_not_consume_from_below_its_entry_height",
     "compiled_loops_really_do_carry_a_non_empty_entry_stack",
     "the_instruction_set_has_no_write_accessor_into_a_composite",
+    "a_dispatch_break_may_carry_a_value_past_the_loop_entry_height",
+    "composite_equality_is_content_derived_not_address_derived",
 ];
 
 /// The `src/verify.rs` citations, as (line, the text that line must contain).
