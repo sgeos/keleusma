@@ -508,6 +508,11 @@ carries the following obligations, each named here so none is discovered at impl
    Adoption documentation must list both beside handle-address opacity, in the same
    embedder-obligation terms as the native escape routes.
 
+**Adoption is unruled in either direction as of 2026-08-24.** The V0.2.X operator has stated
+they do not yet know enough about the problem to rule either way, so the specification stands
+exactly as written, proved and unadopted with six named obligations, and it must not be read as
+declined.
+
 **Instruction-set position.** Unchanged by the proof. No new opcode is required. The discipline
 has at least two lowerings, a compiler-inserted copy through existing constructs, or a semantics
 change to the five escaping opcodes' handling of composite operands. A dedicated copy opcode
@@ -519,7 +524,8 @@ at 66 and fails on any addition, which is the intended forcing function.
 
 | consequence of adoption | surface | owner | decision |
 |---|---|---|---|
-| loop accounting stops multiplying confined sites | `src/verify.rs:1079` | V0.2.X line | **operator**, it lowers a published worst-case-memory-usage figure |
+| loop accounting stops multiplying confined sites | `src/verify.rs:1079` | V0.2.X line | **operator, still unruled as of 2026-08-24**, it lowers a published worst-case-memory-usage figure. The prerequisite analysis below is commissioned, and commissioning does not authorize adopting its result |
+| the confinement predicate, Definitions 8 and 11 with the deadness condition of Definition 10 | the shared crate under `src/`, one predicate consumed by both lines | V0.2.X line | **commissioned 2026-08-24** by that line's operator, explicitly for its bearing on native code generation, to the useful-and-sound standard of Appendix B item 8, any flow the analysis cannot establish treated as escaping |
 | branch maximum | `src/verify.rs:992` | V0.2.X line | already implemented, Theorem A1 justifies it |
 | backend stops reusing slots of unconfined sites | native backend planner | V0.3.X line | required for soundness independent of this proof, per the obligation document's Section 4.1.1 |
 | backend may overlap exclusive arms | native backend planner | V0.3.X line | licensed by Theorems A2 and A3, within the reference-compiled scope Appendix A states |
@@ -621,7 +627,16 @@ witness, recorded in the M6 row. The corpus stamp moved with the same commit, 24
 `Op::Loop` scopes across 26 modules, the eight iterating loops becoming eleven, the new three
 carrying entry stacks **inferred empty rather than measured empty**, a reasoned claim from each
 `for` sitting at statement position in a `loop main` body, with the non-empty-entry count not
-re-run over them. Nothing beyond this stamp leans on that inference. The source-form enumeration landed
+re-run over them. Nothing beyond this stamp leans on that inference.
+
+Fifth, on 2026-08-24 the V0.2.X operator ruled the merge sequence, the proof line merging into
+the V0.2.X line with the V0.3.X line rebasing onto the result, so acceptance is authorized on
+both sides and waits only on this line's operator releasing the branch. The eventual pull
+request must be based on `v0.2.3` directly, since a pull request based on a feature branch
+triggers no workflow on this repository, silently. The same ruling commissioned the confinement
+analysis recorded in Appendix D. Two matters were explicitly left unruled and this document
+records them as such rather than assuming a direction, the adoption of B2 and the accounting
+change at `src/verify.rs:1079`. The source-form enumeration landed
 with a result stronger than requested, no local assignment exists in the language at all, and
 its bytecode-level caveat is recorded in the M3 row where a reader meets the classification. One
 piece of work is deliberately not requested. Characterizing the compiler's temporary-allocation
