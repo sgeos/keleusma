@@ -568,7 +568,7 @@ test pinning the count at 66.
 | consequence of adoption | surface | owner | decision |
 |---|---|---|---|
 | loop accounting stops multiplying confined sites | `src/verify.rs:1079` | V0.2.X line | **operator, still unruled as of 2026-08-24**, it lowers a published worst-case-memory-usage figure, and commissioning the analysis does not authorize adopting its result. Theorem C's remark applies, the change helps loop-dominated shapes and can hurt branch-dominated ones, so adoption should be per-site by comparing both bounds |
-| the confinement predicate, Definitions 6 through 8 with the separation hypothesis | the shared crate under `src/`, one predicate, two consumers | V0.2.X line | **commissioned 2026-08-24**, useful-and-sound standard, unestablished flows escaping |
+| the confinement predicate, Definitions 6 through 8 with the separation hypothesis | the shared crate under `src/`, one predicate, two consumers | V0.2.X line | **commissioned 2026-08-24 and in draft on their line the same day**, `src/confine.rs` behind the `verify` feature, not yet merged, consuming the escape classification directly with `Break` and `BreakIf` as `WithinIteration` on this document's reasoning, and a drift guard asserting the shipping and test classifications agree opcode by opcode. Useful-and-sound standard, unestablished flows reporting `CannotEstablish` and treated as escaping. Their draft already returns three of the four per-iteration corpus sites Confined, the first subject included, a `Call` touching only scalars no longer disqualifying |
 | branch maximum | `src/verify.rs:992` | V0.2.X line | already implemented, Theorem A1 with Corollary A1s justifies it under Hypothesis H, discharged by the capped loop forms and the analyses' call-graph traversal, read |
 | backend stops reusing slots of unconfined or unseparated sites | native backend planner | V0.3.X line | required for soundness independent of this proof |
 | backend may overlap exclusive arms | native backend planner | V0.3.X line | the theorems license this only for a runtime discharging M1 through M9 itself, per Appendix B item 6, so the license is conditional on that discharge, plus Appendix A's scoping and the open M8 items |
@@ -590,7 +590,9 @@ adoption and the accounting change remain explicitly unruled.
 The V0.2.X line's `f90fe688`, their #268, carries the four closing pins in
 `tests/composite_escape_routes.rs`, now eight tests, all named in their evidence index so the
 index guard fails on any rename, with their gate green at 2,587 by cargo's own exit status and
-the branch asserted unchanged for the run.
+the branch asserted unchanged for the run. It merged at 22 of 22, the line's tip moving to
+`71792ecc` with `f90fe688` its second parent, both resolving, the tip being the one to cite for
+the line's position.
 
 **The audits and revisions, 2026-08-24.** Round one, five independent contexts against
 `de8b3f68`, its record in [`AUDIT_2026-08-24.md`](./AUDIT_2026-08-24.md), repaired in the
