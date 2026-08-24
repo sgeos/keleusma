@@ -5,7 +5,7 @@
 > **STATUS.** Part I is a general theory over an abstract machine, proved from stated axioms and
 > applicable to any system that discharges them. Part II instantiates the axioms for Keleusma
 > with measured standing recorded per row. In the instantiation, Theorem A1 is unconditional,
-> while Theorems A2, A3, B1, B2, and the corollaries rest on axioms discharged in part by
+> while Theorems A2, A3, B1, B1r, B2, and the corollaries rest on axioms discharged in part by
 > reference-compiler emission invariants that `verify()` does not enforce, so their conclusions
 > apply to reference-compiled modules and do NOT apply to arbitrary bytecode that merely
 > verifies. Theorem B2 is additionally a **proved specification, not a description**. The
@@ -77,9 +77,11 @@ value it allocates on every path is confined.
 
 Confinement is deliberately coarse. It forbids some harmless flows, for example a callee
 returning the value back into the same scope, because the classification of M3 is by worst case.
-The coarseness weakens applicability and never soundness. Section 9 records the refinements that
-are not proved, and Section 8 proves the regime that removes the condition entirely at a copy
-cost.
+The coarseness weakens applicability and never soundness. Theorem B1r at the end of Section 6
+proves the refinement that admits local stores to boundary-dead slots, which is the form every
+expressible in-loop binding takes in the instantiation. Section 9 records the return refinement,
+which remains unproved, and Section 8 proves the regime that removes the condition entirely at a
+copy cost.
 
 ## 3. Axioms
 
@@ -224,10 +226,65 @@ scalar computation never reads the region except through dereferences. Hence obs
 equivalence, and the accounting consequence follows by applying Definition 1 to the reuse plan's
 allocation behavior, one live allocation for $s$ per cycle. $\blacksquare$
 
+### The refined form, local stores to boundary-dead slots
+
+The coarse Definition 8 forbids every local store, and in a language whose local bindings are
+immutable that forbids too much, because the only expressible in-loop store targets a binding
+declared inside the body, whose slot the compiler retires with the iteration. The refinement
+below admits exactly that shape. Its definitions and lemma are numbered by order of addition, so
+they follow Section 8's Definition 9 and Lemma 3 numerically while preceding them in the
+document.
+
+**Definition 10, deadness at loop boundaries.** Fix a loop $L$. A local slot $\ell$ of the frame
+executing $L$ is **dead at the boundaries of $L$** when, at the back edge and at every exit edge
+of $L$, every path onward either never reads $\ell$ or writes $\ell$ before its first read of
+$\ell$. This is the standard liveness notion, decidable by dataflow over the program unit.
+
+**Definition 11, refined confinement.** Let $D$ be a set of slots dead at the boundaries of $L$.
+The value $v$ at site $s$ in scope $n$ is **confined relative to $D$** when, along every path,
+no reference to $r_n$ is ever an operand of an `Escapes`-classified instruction other than a
+local store targeting a slot in $D$.
+
+**Lemma 4. Requires M3, M6, M7.** Let $v$ be confined relative to $D$. Then no dereference of a
+reference to $r_n$ occurs after scope $n$ ends.
+
+*Proof.* Extend Lemma 2's invariant with a third location class. Every reference to $r_n$
+resides in an operand-stack entry above the scope entry height of the frame executing $L$, in a
+frame created during scope $n$, or in a slot belonging to $D$. The new cases preserve it. A
+local store to $\ell \in D$ places the reference in $\ell$, which the invariant now admits, and
+a local load of $\ell$ during scope $n$ pushes a copy onto the executing frame's stack above the
+entry height. Every other case is as in Lemma 2. At the end of scope $n$, the first two classes
+are empty by M6 exactly as before, so every surviving reference to $r_n$ sits in a slot in $D$.
+By Definition 10, on every path after the boundary each such slot is written before it is read,
+so its content is never loaded again, and by M3 a reference in a slot can reach an instruction's
+operands only through a local load. A dereference requires the reference as an operand, so no
+dereference of a reference to $r_n$ occurs after the boundary, and no further copies of it can
+arise. $\blacksquare$
+
+**Theorem B1r. Requires M1 through M7.** Let $s$ be a site inside a loop $L$ whose values are
+confined relative to some $D$ of slots dead at the boundaries of $L$. Then the conclusion of
+Theorem B1 holds for $s$ unchanged. One slot reused across scopes and cycles is sound, and
+worst-case memory accounting may count $s$ once per cycle.
+
+*Proof.* The proof of Theorem B1 used Lemma 2 only to conclude that no dereference of a
+reference to $r_n$ can occur at or after the start of the $(n{+}1)$-th execution of $s$ within
+the epoch. Lemma 4 yields the same conclusion under the refined hypothesis, since the
+$(n{+}1)$-th execution begins after scope $n$ ends. The stale reference sitting unread in a
+$D$-slot is overwritten without ever being loaded, so it is never an operand of anything. The
+cross-epoch and equivalence arguments are unchanged. $\blacksquare$
+
+**Remark, what the refinement unblocks.** A binding declared inside the loop body is written at
+its declaration before any read in each scope, and it is out of scope at the boundary, so its
+slot is dead at the boundaries whenever the compiler's slot assignment preserves definite
+initialization. Both confinement relative to $D$ and membership of $D$ are static dataflow
+properties of the compiled unit, so the gate on applying Theorem B1r is an analysis, not a
+further theorem.
+
 ## 7. Corollary C, the composed plan
 
 **Corollary C. Requires M1 through M7.** Define $\mathrm{alloc}^{\ast}(\pi)$ from
-$\mathrm{alloc}(\pi)$ by counting each confined loop site once per cycle, counting every other
+$\mathrm{alloc}(\pi)$ by counting each confined loop site once per cycle, confinement in the
+sense of Definition 8 or of Definition 11, counting every other
 loop site with its full multiplicity, and bounding each conditional instance by the maximum of
 its arms per Theorem A1. Then
 
@@ -329,10 +386,11 @@ confinement fails.
 2. **Confinement is sufficient, not necessary.** The theory proves nothing about deciding
    confinement, only that a site established as confined may be reused. A static analysis that
    cannot establish a flow must treat it as escaping.
-3. **The coarse classification forbids harmless flows.** A store to a local slot that dies within
-   the scope, and a return that lands in the same scope of the same program unit, are believed
-   harmless and are not proved so here. Refining them requires frame-relative side conditions and
-   additional discipline axioms.
+3. **The return refinement is not proved.** A return that lands in the same scope of the same
+   program unit is believed harmless and is not proved so here. The local-store refinement,
+   formerly in the same position, is now proved as Theorem B1r over slots dead at the loop
+   boundaries, so only the return case remains, and refining it requires frame-relative side
+   conditions this document does not develop.
 4. **Nothing is claimed about external callees.** M7 makes their retention unknowable, so any
    instantiation must classify external calls as escaping or document the exclusion as an
    obligation on the integrator, in those words.
@@ -357,7 +415,7 @@ to executed without running them.
 |---|---|
 | M1 | Operator ruling on the memory model, obligation document Section 1. Bump arena, ephemeral region cleared only at `RESET`, nothing reclaimed within a run. The immutability clause is **confirmed by the V0.2.X line, 2026-08-23, on four independent grounds**, and Theorems B1 and B2 both rest on it. Ground one is **executable and pinned**. The instruction set carries seven read accessors into a composite and **zero write accessors**, `the_instruction_set_has_no_write_accessor_into_a_composite` in `tests/composite_escape_routes.rs`, derived from the `Op` enum, mutation-tested two ways, and holding for any module because it is about what the instruction set contains. Grounds two through four are **read from dispatch plus a scan of the public interface**. No mutable accessor exists on a composite body, `resolve` returning a shared slice and nothing else. Every raw-pointer write in the virtual machine targets the persistent region. The native boundary is immutable by signature, arguments arriving as a shared slice with no public route to a mutable arena view. **The clause is scoped to the ephemeral region deliberately, and the scoping is load-bearing. The persistent region is mutated in place, repeatedly and across resets, by the data-slot writes, so the unscoped statement is false in Keleusma.** Definition 2 ties regions to the ephemeral region, and an abstraction pass must not widen that. Stated refutation boundary, so no more is read than was measured. A native casting a resolved slice to a mutable pointer under `unsafe` is undetectable from the safe interface and sits on the same trust boundary as the native escape routes, and an out-of-band `unsafe` arena rewind reclaims rather than mutates, refuting not this clause but the epoch discipline M5 rests on. Grounds two through four say nothing about what `verify()` enforces. |
 | M2 | **Executed.** A non-empty composite value carries an arena handle, not bytes. `resolve` fails `Stale` exactly when the epoch has advanced, and an overwrite in place advances nothing. `tests/composite_escape_window.rs`, all three tests. The load-bearing assertion is that two iterations' composites resolve simultaneously to different values, which is exactly what one reused slot collapses. |
-| M3 | The 66 opcodes are partitioned in `tests/composite_escape_routes.rs`, with **totality asserted against the `Op` enum at test time**, so a route can be missed only by misclassification, never by omission, and a new opcode fails the test. The escaping set is exactly `Yield`, `SetLocal`, `Return`, `CallVerifiedNative`, `CallExternalNative`. `SetLocal` is classified by its worst case because the opcode cannot distinguish an inner binding from an outer one, and it is the route that defeats a restriction phrased as no `yield`, with no host involved. Per-row verdicts are **analysis, not proof**. The `Yield` row and both `CopiesOut` rows, private-data writes and flat nesting, are executed, the latter two deliberately because a wrong `CopiesOut` makes the theory unsound rather than loose. The boxed construction path does alias and does not arise for the transitively-scalar composites this instantiation concerns, a boundary stated rather than assumed away. The rest of the rows are read from dispatch. Disagreements go to the table, where the test makes them concrete. |
+| M3 | The 66 opcodes are partitioned in `tests/composite_escape_routes.rs`, with **totality asserted against the `Op` enum at test time**, so a route can be missed only by misclassification, never by omission, and a new opcode fails the test. The escaping set is exactly `Yield`, `SetLocal`, `Return`, `CallVerifiedNative`, `CallExternalNative`. `SetLocal` is classified by its worst case because the opcode cannot distinguish an inner binding from an outer one, and it is the route that defeats a restriction phrased as no `yield`, with no host involved. One illustration history matters here. The obligation document's Section 4.3 illustrated this route with a `let mut` loop assignment, and that illustration was **retracted 2026-08-23** because local bindings are immutable in Keleusma and the program is refused at parse, a refusal the V0.3.X line verified independently. The classification stands unchanged, since it is over bytecode and hand-written bytecode can store to an outer slot with no yield. The consequence lands on the source surface instead. Every expressible in-loop local store targets a binding declared inside the body, whose slot dies with the iteration, which is exactly the shape Theorem B1r admits over boundary-dead slots, so for source programs B1r rather than the coarse B1 is the operative theorem. Per-row verdicts are **analysis, not proof**. The `Yield` row and both `CopiesOut` rows, private-data writes and flat nesting, are executed, the latter two deliberately because a wrong `CopiesOut` makes the theory unsound rather than loose. The boxed construction path does alias and does not arise for the transitively-scalar composites this instantiation concerns, a boundary stated rather than assumed away. The rest of the rows are read from dispatch. Disagreements go to the table, where the test makes them concrete. |
 | M4 | **Executed.** `Op::Reset` is emitted once per stream cycle, at the end of the `loop main` body, not per `for` iteration. `reset_is_once_per_stream_cycle_not_once_per_loop_iteration`. |
 | M5 | **Confirmed by the V0.2.X line, 2026-08-23, and the basis is two facts, not one.** First, `Op::Reset` clears the current frame's locals and truncates its operand stack, `src/vm.rs:5304`, read from dispatch. Second, a caller frame beneath a nested stream can hold stale references and is never resumed, because stream chunks emit no `Return`. The second fact is a **code-generation invariant, not a structural one**, executed over five shapes in their `tests/stream_never_returns.rs`. Stating the first fact alone would make the nested-stream arrangement a counterexample to the axiom. Every ephemeral composite-body read is epoch-checked at resolve time, `FlatComposite::resolve` and `ArenaHandle::get`, with `nested_view` bounds-checked as a real fault, read from dispatch. |
 | M6 | (a) **Confirmed.** `TypedError::LoopNotNeutral` in the `Op::Loop` arm of `src/verify_typed.rs` compares the entire abstract stack, height and per-slot shape, read from dispatch. Neutrality is on **shapes, not identities**, so the correct reading is that no new entry survives the back edge, never that the entries are identical across iterations. (b) **Confirmed.** `Break` edges join through `join_stacks`, read from dispatch. (c) Read from dispatch, with call termination from totality. (d) **Settled 2026-08-23 in the unfavorable direction, a code-generation invariant only, with the verifier gap executed rather than conjectured.** `verify()` accepts a shape that pops a below-entry entry inside a loop and pushes a same-shape replacement, pinned in the V0.2.X line's `tests/loop_entry_floor.rs`. The typed pass floors pops at the frame, not at the loop entry, and the frame floor does not incidentally cover the loop floor, because 122 of 245 `Loop` instances in the shipped corpus carry a non-empty operand stack at entry, executed and pinned. The emission side was measured exactly, by a per-path floor check inside the typed pass's own abstract interpretation, proven to fire on the breaching shape, with the result **zero breaches over 588 loop instances across 23 shipped modules**. That instrumentation is reverted and the zero is **a measurement at a commit, not a standing guarantee**, cited as exactly that. A linear depth scan also reported zero and was discarded as exact for only 4 of the 245 loops, recorded because the flattering number came from a broken instrument first. |
@@ -501,5 +559,23 @@ enum at test time and mutation-tested two ways. **The commit pins ground one onl
 through four remain read from dispatch and are in no test, so citing `a288ae26` against M1 as a
 whole would claim more than the test does, and this record cites it against ground one exactly. The same exchange contributed the persistent-region precision, the source and
 destination asymmetry now stated in Appendix C's third obligation, and the `unsafe` refutation
-boundary now in its seventh. An earlier revision of this document interleaved the instantiation with the
+boundary now in its seventh.
+
+Three later items from 2026-08-23 complete the record. First, the obligation document's `let
+mut` illustration of the `SetLocal` route was retracted by its authors, struck in place on
+`v0.3.0` rather than repaired silently, and the retraction is what prompted Theorem B1r, since
+the only expressible in-loop store is the iteration-scoped shape B1r admits. Second, a corpus
+measurement by the V0.3.X line found that across 87 compiled modules the 36 genuinely iterating
+loop scopes contain **zero composite construction sites**, so the reuse theorems have no subject
+in the shipped corpus today. Three examples are landing on operator direction, with
+`12_sensor_window.kel` intended as the first subject, admitted through B1r once a confinement
+analysis exists. Their measurement method matters and is recorded because a first attempt was
+wrong. `Op::Loop` marks break scopes, including `match` dispatch, not iterations, and the
+discriminator is that a genuinely iterating body carries no `Break` targeting its own exit.
+Third, the two figures cited in the M6 row, 122 of 245 entries non-empty and zero breaches over
+588 instances, count `Op::Loop` scopes as measured by the V0.2.X line's instrument. Whether that
+instrument applied the iteration discriminator is **confirmation pending** with that line. The
+M6(d) premise is safe either way, because measuring over all `Op::Loop` scopes is a superset of
+the iterating ones and zero breaches over the superset implies zero over the subset, so the
+pending item is label precision, not soundness. An earlier revision of this document interleaved the instantiation with the
 theory. The reorganization changed no theorem, no proof, and no recorded standing.
