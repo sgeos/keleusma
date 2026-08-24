@@ -23,9 +23,20 @@
 // the stream productive, and it is the conservative-verification
 // stance doing its job rather than a workaround.
 //
-// Run: keleusma run examples/scripts/13_telemetry_stream.kel
-// Expected per cycle: Reading{0,1}, Reading{1,8}, Reading{2,15}, then
-// the end marker Reading{9,0}, then Reset.
+// NOT RUNNABLE THROUGH `keleusma run`, and that is a property of the
+// command rather than of this script. The command refuses a `loop main`
+// whose yields are not `Word`:
+//
+//   error: loop main yielded a non-Word value (signature requires Word)
+//
+// Yielding a COMPOSITE is the entire point here, so the script is driven
+// from a host instead. `tests/corpus_pattern_coverage.rs` compiles it,
+// and any embedder can step it with `call_with_shared` / `resume_with_shared`.
+//
+// Per cycle it yields Reading{0,1}, Reading{1,8}, Reading{2,15}, then the
+// end marker Reading{9,0}, then resets. Observed on the virtual machine,
+// the four composites occupy four DISTINCT addresses within one epoch,
+// and the addresses repeat at the next epoch after the reset.
 
 struct Reading { channel: Word, value: Word }
 

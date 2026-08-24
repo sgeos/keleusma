@@ -13,6 +13,41 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**I SHIPPED THREE CORPUS SCRIPTS AND BROKE THREE THINGS ABOUT THEIR DIRECTORY (2026-08-24).**
+
+The scripts themselves are right. What I did not check is everything AROUND them, and all three
+defects were invisible to every test that walks the corpus, because those walk the DIRECTORY and none
+of them reads the index or the CLI.
+
+| what broke | how it surfaced |
+|---|---|
+| both stream scripts carried a `Run:` line that does not work | running the documented command |
+| `README.md` indexes the scripts and I added none of mine | reading the directory listing after the merge |
+| `README.md` asserted every top-level script is `fn main`, which my two `loop main` scripts falsified | the same reading |
+
+**THE `Run:` LINES WERE THE WORST OF THE THREE**, because they instruct. `13_telemetry_stream.kel` is
+REFUSED by `keleusma run` -- the command requires a `loop main` to yield `Word` and this one yields a
+composite, which is the entire point of the example. `14_frame_log.kel` RUNS FOREVER, because a
+`loop` function is productively divergent by design; I found that out by waiting ten minutes for a
+command that was never going to return. Both headers now state what actually happens and why the
+behaviour is a property of the command rather than a defect in the script.
+
+**THE README INVARIANT IS THE INSTRUCTIVE ONE.** It said "all scripts in this directory's top level
+are atomic-total (`fn main`), so they run end to end through the CLI". That was TRUE when written and
+my additions made it FALSE, silently, in a file nothing tests. A reader takes a sentence like that at
+face value. It is corrected in place with a note saying it used to say otherwise, rather than quietly
+reworded.
+
+**AND THE GUARD I WROTE FOR IT COULD NOT FAIL.** `the_readme_indexes_every_top_level_script` asked
+whether the README CONTAINED each script's name. Deleting a script's table row left it green,
+because the prose I had just written below the table mentions the same filename. **The check was
+satisfied by a different part of the document from the one it is about** -- the THIRD instance of
+that exact shape this session, after the translation clause satisfied by an unrelated catalogue entry
+and the evidence-index citation satisfied by a command rather than a test name.
+
+Scoped to table rows, it fires on the deletion and on a row naming a file that does not exist.
+**Mutation caught all three instances of this shape and reading caught none of them.**
+
 **THE LOOP-ENTRY FLOOR IS ENFORCED, AND THE CORPUS COULD NOT EXERCISE THE THING IT WAS CITED FOR
 (2026-08-23).**
 

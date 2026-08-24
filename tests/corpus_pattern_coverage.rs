@@ -150,3 +150,79 @@ fn the_corpus_builds_composites_inside_loops_and_disposes_of_them_three_ways() {
          cause is that the dispatch filter has stopped excluding match scopes."
     );
 }
+
+/// Every top-level script is indexed in the directory's README, and every
+/// indexed name exists.
+///
+/// # Why
+///
+/// `examples/scripts/README.md` carries a table of the scripts and a sentence
+/// stating an invariant about them. **Adding three scripts made that sentence
+/// false and left them out of the table**, and neither showed up in any test —
+/// the corpus walkers read the directory, not the index.
+///
+/// A README that silently stops describing its directory is worse than none,
+/// because a reader takes the table as the roster.
+#[test]
+fn the_readme_indexes_every_top_level_script() {
+    let dir = scripts_dir();
+    let readme = std::fs::read_to_string(dir.join("README.md")).expect("README.md is present");
+
+    let mut names: Vec<String> = std::fs::read_dir(&dir)
+        .expect("readable")
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "kel"))
+        .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .collect();
+    names.sort();
+
+    assert!(
+        names.len() >= 12,
+        "expected the script roster, found {}; this test would pass vacuously",
+        names.len()
+    );
+
+    // Names taken from the TABLE ROWS, not from anywhere in the file.
+    //
+    // **The first version of this test asked whether the README merely
+    // CONTAINED each name, and it could not fail.** Deleting a script's table
+    // row left it green, because the prose below the table mentions the same
+    // file. A check satisfied by a different part of the document than the one
+    // it is about is not a check, and this is the third instance of that shape
+    // in one session, after a translation clause and an evidence citation.
+    // Mutation caught all three; reading caught none of them.
+    let indexed: Vec<String> = readme
+        .lines()
+        .filter(|l| l.trim_start().starts_with("| [`"))
+        .filter_map(|l| {
+            let start = l.find("[`")? + 2;
+            let end = l[start..].find('`')? + start;
+            Some(l[start..end].to_string())
+        })
+        .filter(|n| n.ends_with(".kel"))
+        .collect();
+
+    assert!(
+        !indexed.is_empty(),
+        "no table row in examples/scripts/README.md names a script, so the \
+         index was checked against nothing"
+    );
+
+    let missing: Vec<&String> = names.iter().filter(|n| !indexed.contains(n)).collect();
+    assert!(
+        missing.is_empty(),
+        "these scripts have no row in the examples/scripts/README.md table: \
+         {missing:?}. The corpus walkers read the DIRECTORY and would not have \
+         noticed, which is exactly how three scripts were added unindexed."
+    );
+
+    // The other direction: a row naming a file that no longer exists sends its
+    // reader to a dead link, the same defect pointing the other way.
+    for named in &indexed {
+        assert!(
+            names.iter().any(|n| n == named),
+            "examples/scripts/README.md indexes {named:?}, which is not present"
+        );
+    }
+}

@@ -19,8 +19,20 @@ keleusma run examples/scripts/<file>.kel
 | [`09_big_numbers.kel`](./09_big_numbers.kel) | Big-number arithmetic | Pattern-matched checked arms binding `(high, low)` halves of an `i128` intermediate |
 | [`10_multbyte.kel`](./10_multbyte.kel) | Byte-typed arithmetic | Multiplication on `Byte` operands |
 | [`11_signed.kel`](./11_signed.kel) | Signed compiled module | `signed` modifier on the entry function, Ed25519 signature flow through the CLI |
+| [`12_sensor_window.kel`](./12_sensor_window.kel) | Per-iteration composite, confined | A struct built once per `for` iteration and consumed inside it |
+| [`13_telemetry_stream.kel`](./13_telemetry_stream.kel) | Per-iteration composite, yielded | `loop main` streaming a struct built inside a `for`. **Not runnable through `keleusma run`** — see below |
+| [`14_frame_log.kel`](./14_frame_log.kel) | Per-iteration composite, stored | A struct copied into a `private data` slot each iteration, surviving the stream's `Reset`. **Diverges under `keleusma run`** — see below |
 
-All scripts in this directory's top level are atomic-total (`fn main`), so they run end to end through the CLI. For yield-driven and stream-driven examples, see the Rust embedding examples under [`examples/`](../).
+Scripts `01` through `12` are atomic-total (`fn main`) and run end to end through the CLI.
+
+**`13` and `14` are `loop main` stream programs and neither terminates under `keleusma run`.** They are here because the analyses that read this directory need the shape, not because they are runnable demonstrations:
+
+- **`13_telemetry_stream.kel` is refused outright.** The command requires a `loop main` to yield `Word`, and this one yields a composite — which is the whole point of the example. Drive it from a host with `call_with_shared` / `resume_with_shared`.
+- **`14_frame_log.kel` runs forever**, because a `loop` function is productively divergent by design. Interrupt it, or drive it from a host.
+
+**This sentence used to say every top-level script was atomic-total, and adding `13` and `14` made that false.** It is corrected rather than quietly left, because a reader takes an invariant like that at face value.
+
+For further yield-driven and stream-driven examples, see the Rust embedding examples under [`examples/`](../).
 
 ## Example-specific scripts
 
