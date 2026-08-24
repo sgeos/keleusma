@@ -10,6 +10,26 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-24). A LANGUAGE DECISION IS ON THE RECORD FOR V0.3.0.**
+>
+> [`docs/decisions/YIELD_OWNERSHIP_MODE.md`](../decisions/YIELD_OWNERSHIP_MODE.md). **Accepted in
+> principle by the operator**: a `yield`/`loop` declaration states `ref` or `out` in its return
+> position, choosing machine-owned storage the host borrows, or host-supplied storage the machine
+> constructs into. **Both mandatory**, so the form carrying obligations cannot be the silent one.
+>
+> **Not scheduled, not implemented, not V0.2.x.** No new opcode is required.
+>
+> The position was chosen because the signature is the caller-callee contract, and because per-site
+> placement would force a host-visible protocol change. Ada's `in`/`out` was proposed and does not
+> survive the move -- `out` transfers, `in` has no meaning on a return -- so `ref` was taken from the
+> same family. A possessive pair, `yield my`/`yield your`, was the strongest option AT A SITE and was
+> rejected once the position moved: a declaration has no speaker, and deixis has already cost this
+> project an operator escalation.
+>
+> **`out` is cheaper than the proof's Theorem B2, not merely different**: it constructs directly into
+> host storage, so there is no arena region for that site and no copy. Six open questions are named,
+> including how the host learns the buffer size and the `Text`/opaque depth limit.
+
 > **Currency note (2026-08-23, operator-directed). THE FLOOR IS ENFORCED AND THE CORPUS CAN NOW
 > EXERCISE THE MEMORY MODEL.**
 >

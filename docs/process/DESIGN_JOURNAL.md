@@ -13,6 +13,90 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**AN ADVERSARIAL AUDIT ASKED TWO QUESTIONS ABOUT MY SURFACE. BOTH ANSWERS WERE FINE AND CHASING THE
+SECOND FOUND A DEFECT IN MY OWN TABLE (2026-08-24).**
+
+The proof line's operator commissioned a five-auditor adversarial audit by fresh contexts. Two
+findings reached me as read-from-dispatch, per the standing rule, for measurement.
+
+**`Op::Reset` PLACEMENT: ENFORCED, not emission-only.** Measured by mutating a real module --
+removing the `Reset`, appending a second, and inserting one mid-body -- and all three are refused by
+name: *"Stream block must contain exactly one Reset, found N"*. So the proof's M4 is structurally
+enforced and its scoping sentence does not overclaim.
+
+**THE NUANCE WORTH HAVING**: the COUNT is enforced, the POSITION is not. A single `Reset` with ops
+after it is ACCEPTED. Those ops are DEAD -- `Op::Reset` returns `VmState::Reset` and rewinds `ip` to
+just after `Stream`, so control never falls through. "At its end" is true dynamically without being
+structurally enforced.
+
+**BREAK EDGES ARE NEVER COMPARED TO THE LOOP ENTRY STACK, AND THE AUDITOR READ THAT CORRECTLY.**
+`join_all` folds the break states through `join_stacks`, which errors only on height mismatch AMONG
+THE BREAKS; the joined state becomes the post-loop state and never meets `head`.
+
+**IT IS LOAD-BEARING RATHER THAN A DEFECT.** Measured across 87 modules: **242 dispatch scopes, 18 of
+which carry a value across the break** -- `match` arm values -- against **23 iterating scopes, ZERO
+carrying**. Comparing break edges to entry would refuse `match`. So the proof's M6(b) is emission-true
+for iterating loops and not enforced, which puts it beside the stream-never-returns invariant rather
+than beside the enforced entry floor. Pinned, with a failure message naming what a future check would
+break.
+
+**AND THE ITEM THAT WAS ACTUALLY MINE.** Chasing that showed
+`tests/composite_escape_routes.rs` classified `Break` and `BreakIf` as `NoRegion`, whose stated
+meaning is that no region outlives anything through the instruction. **That overstated.**
+`op_depth_effect(Op::Break)` is `(0, 0)`: it consumes nothing and **transfers control with the whole
+operand stack**, so a composite on the stack crosses the edge -- which 18 dispatch scopes
+demonstrably do.
+
+Reclassified `WithinIteration`. **The reason they are not escaping is not that they cannot carry a
+region -- it is that they END THE SCOPE**, leaving no later iteration to alias the value. The reuse
+hazard requires a NEXT iteration and a `Break` guarantees there is none. The escaping set is
+unchanged at five.
+
+**SECOND TIME THE PER-OPCODE VERDICTS HAVE NEEDED NARROWING WHILE TOTALITY HELD.** Totality is
+mechanical and stayed true; the rows are analysis and one was wrong. That is exactly what "the table
+is the place to argue" was for, and it took an outside reader to use it.
+
+**I TOLD THE OTHER LINE THEIR DIFFERENTIAL WOULD DISAGREE. IT CANNOT. (2026-08-24)**
+
+I wrote that `13_telemetry_stream.kel` gives the `v0.3.0` backend's differential its first real
+instance of the yield-route unsoundness. **Measured on their absorbed tree: all three of my scripts
+are REFUSED before the differential runs**, so their planner never sees them.
+
+  13_telemetry_stream   UnsupportedOp("Stream")
+  12_sensor_window      UnsupportedOp("NewComposite ... operand of unknown packed width")
+  14_frame_log          same
+
+**THEIR YIELD-ROUTE GAP IS UNREACHABLE IN THEIR BACKEND BY CONSTRUCTION**, because `yield` exists
+only inside a `Stream` and they do not lower `Stream` at all -- an unattempted workstream. So no
+corpus example can exercise it until that lands. **I reasoned from the virtual machine's behaviour to
+their backend's without checking whether the module reaches their planner**, which is the error this
+project has recorded twice this week in the other direction: neither line is a reliable narrator
+about the other's code.
+
+**THE CLAIM NEVER REACHED THE TREE, AND I CHECKED RATHER THAN ASSUMED IT HAD NOT.** It lived in
+messages and pull-request bodies; `COMPOSITE_REGION_EVIDENCE.md` already states that nothing in it
+establishes anything about the native backend's lowering, and the script headers describe the virtual
+machine plus a conditional hazard. Nothing needed retracting in the repository.
+
+**THE SCOPING FACT IS WORTH MORE THAN THE INSTANCE WOULD HAVE BEEN**: the gap is real, gated behind a
+much larger piece of work, and the `SetLocal` route -- which needs no stream -- is the one that goes
+live the moment they fix an unrelated packed-width refusal.
+
+**AND THEIR CENSUS FOUND A CORPUS GAP MINE DID NOT.** With my three scripts absorbed, iterating loops
+went 36 to 39 and composite sites inside them 0 to 3 -- **and ZERO survive a crude escape test.**
+Disqualified 1 by `Yield`, 3 by `SetLocal`, 3 by `Call`. **Every subject needs two analysis features
+at once**, because `12_sensor_window.kel` calls a helper to compute a field.
+
+So a confinement predicate with only its local-store handling would admit NOTHING even now that
+subjects exist. `15_pixel_blend.kel` is the isolate: a per-iteration composite with no call in the
+body, so the only obstacle is the `let`. Pinned by
+`a_confined_candidate_exists_with_no_call_in_its_loop_body`, which fires when a call is put back.
+
+**THE INTERFACE IS SETTLED BY THEIR ARGUMENT**: a per-site predicate over a chunk they already hold,
+three-valued -- yes / no / **cannot establish** -- with the third distinct from `no`, because folding
+it in costs the measurement that says whether the analysis is improving. Soundness is identical
+either way; the third value carries the whole diagnostic.
+
 **I SHIPPED THREE CORPUS SCRIPTS AND BROKE THREE THINGS ABOUT THEIR DIRECTORY (2026-08-24).**
 
 The scripts themselves are right. What I did not check is everything AROUND them, and all three

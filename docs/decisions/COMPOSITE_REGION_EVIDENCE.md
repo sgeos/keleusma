@@ -169,8 +169,24 @@ region, which is exempt by design.
 ### 7. Loop back-edge neutrality — **READ FROM DISPATCH**
 
 `TypedError::LoopNotNeutral`, in the `Op::Loop` arm of `src/verify_typed.rs`, requires the body's
-fall-through to restore the **exact entry operand stack, height and per-slot shape**. Break edges go
-through `join_stacks`, which errors `BranchHeightMismatch` on unequal heights.
+fall-through to restore the **exact entry operand stack, height and per-slot shape**.
+
+**BREAK EDGES ARE A DIFFERENT AND WEAKER CHECK, AND THIS SENTENCE USED TO BLUR THEM.** They go
+through `join_all` into `join_stacks`, which errors `BranchHeightMismatch` on unequal heights
+**among the break edges themselves**. The joined state becomes the post-loop state and is **never
+compared to the loop's entry stack**, so a break edge carrying a different stack than entry
+verifies.
+
+**That is load-bearing rather than a defect.** A `match` arm lowers to a `Break` carrying the arm's
+value; measured across 87 modules, **18 dispatch scopes do exactly that**, and comparing break edges
+to entry would refuse `match`. For genuinely ITERATING loops the count is **zero** — an emission
+fact, not an enforced one.
+
+Pinned by `a_dispatch_break_may_carry_a_value_past_the_loop_entry_height` in
+`tests/composite_escape_routes.rs`, so a future check comparing break edges to entry fails with a
+message naming what it breaks. **Found by an adversarial audit of the proof, which read the code
+correctly**; the earlier wording here would have let a reader conclude the entry stack was
+involved.
 
 **NEUTRALITY IS ON SHAPES, NOT IDENTITIES.** A body that pops a composite of shape `X` and pushes a
 *different* composite of the same shape passes. Nothing of iteration `n` survives — it was popped —
@@ -241,6 +257,14 @@ The proof's M1 immutability axiom. Four independent grounds:
 cargo test --test composite_escape_routes
 ```
 
+**A CORRECTION TO §4's TABLE, 2026-08-24.** `Break` and `BreakIf` were classified `NoRegion`, whose
+stated meaning is that no region outlives anything through the instruction. **That overstated.**
+`Break` has depth effect `(0, 0)`: it consumes nothing and **transfers control with the whole
+operand stack**, so a composite on the stack crosses the edge — which 18 dispatch scopes
+demonstrably do. They are reclassified `WithinIteration`, and the reason they are not escaping is
+**not** that they cannot carry a region but that they **end the scope**, leaving no later iteration
+to alias it. The escaping set is unchanged at five.
+
 `the_instruction_set_has_no_write_accessor_into_a_composite` pins the first, mutation-tested two
 ways. **A single `SetField` opcode would refute both reuse theorems and would look like an ordinary
 instruction-set addition**, so its failure message says to tell the proof's owner rather than update
@@ -257,6 +281,35 @@ statement of M1 over "a region" unqualified is false here.
 (outside the safe API, undetectable here, the same trust boundary as the native escape routes); a
 host calling the arena's `pub unsafe` rewind or reset out of band (which reclaims rather than
 mutates, but breaks the epoch discipline).
+
+### 11. No instruction derives a scalar from a handle's ADDRESS — **MIXED**
+
+The proof's address-opacity axiom. If it failed, a program could observe addresses through scalar
+output and **every equivalence theorem would fall**, since the reuse plan and the baseline differ in
+exactly that observable.
+
+The comparison family is closed four independent ways:
+
+| | provenance |
+|---|---|
+| nameable composite equality is expanded **field-wise by the compiler**, so it never reaches `CmpEq` with composite operands | **EXECUTED**, at the op level |
+| two flat composites reaching `CmpEq` directly **FAULT** — the path is closed, not merely unused | read from dispatch |
+| `FlatComposite`'s `PartialEq` compares byte **lengths**, not pointers — only empty equals empty | read from dispatch |
+| strings compare **by content**, never by handle identity | read from dispatch |
+
+```sh
+cargo test --test composite_escape_routes
+```
+
+`composite_equality_is_content_derived_not_address_derived` is the executed discriminator: three
+distinct allocations, two with identical content, returning `1` for content-derived and `0` for
+address-derived. **The distinctness assertion is not decoration** — a folded pair would make the
+equality hold trivially and prove nothing. Mutation-tested both ways.
+
+**PHRASE THE AXIOM AS NOT-THE-ADDRESS, NOT AS ONLY-THE-BYTES.** `Len` takes an element count and the
+shape tests take a type name — metadata rather than referenced bytes, and neither an address. Under
+an *only-the-bytes* phrasing both are counterexamples in letter; under *not-the-address* neither is,
+and both regimes agree on metadata regardless.
 
 ## What the verifier actually computes, and what a proof would change
 

@@ -35,6 +35,7 @@
 //! A host native receives a composite and what it does with it is the host's
 //! affair. It is classified as escaping because it must be assumed to be.
 
+use keleusma::bytecode::Op;
 use std::collections::BTreeMap;
 
 /// What an opcode can do to a composite's region.
@@ -45,6 +46,12 @@ enum Route {
     NoRegion,
     /// Moves a composite only within the iteration's own dataflow: the operand
     /// stack, or a frame slot that dies with the iteration.
+    ///
+    /// **Also covers an instruction that carries a region OUT of a scope while
+    /// ENDING that scope**, which is `Break` and `BreakIf`. The value leaves,
+    /// but no later execution of the site can alias it, because the `Break`
+    /// guarantees there is no later iteration. The reuse hazard requires a NEXT
+    /// iteration; these remove it.
     WithinIteration,
     /// Moves a composite outward but COPIES the bytes, so the destination does
     /// not alias the source region.
@@ -108,6 +115,30 @@ fn classification() -> BTreeMap<&'static str, Route> {
         ("GetTupleField", WithinIteration),
         ("GetEnumField", WithinIteration),
         // --- No region can leave through these. ---
+        // --- Transports the stack across a scope edge, and TERMINATES the scope.
+        //
+        // `Break` has depth effect (0, 0) and `BreakIf` (1, -1): neither
+        // consumes a composite, but **`Break` transfers control and the whole
+        // operand stack goes with it**, so a composite sitting on the stack
+        // crosses the edge. Measured across 87 modules, **18 dispatch scopes do
+        // exactly that** with `match` arm values.
+        //
+        // **THESE WERE CLASSIFIED `NoRegion` UNTIL 2026-08-24, AND THAT
+        // OVERSTATED.** `NoRegion` means a region cannot outlive anything
+        // through the instruction, and a region demonstrably can.
+        //
+        // They are not escaping either, and the reason is NOT that they cannot
+        // carry a region — it is that they **end the scope**. A value carried
+        // out by a `Break` leaves a loop that has no further iteration, so no
+        // later execution of the site can alias it. The reuse hazard needs a
+        // NEXT iteration, and a `Break` guarantees there is none.
+        //
+        // Measured: **zero ITERATING loops emit a value-carrying `Break`** (23
+        // scopes). That is an emission fact and is deliberately not what this
+        // classification rests on.
+        ("Break", WithinIteration),
+        ("BreakIf", WithinIteration),
+        // --- No region can leave through these.
         ("Const", NoRegion),
         ("PushImmediate", NoRegion),
         ("BoundsCheck", NoRegion),
@@ -130,8 +161,6 @@ fn classification() -> BTreeMap<&'static str, Route> {
         ("EndIf", NoRegion),
         ("Loop", NoRegion),
         ("EndLoop", NoRegion),
-        ("Break", NoRegion),
-        ("BreakIf", NoRegion),
         ("Stream", NoRegion),
         // Reset ENDS the window rather than opening one: it reclaims the
         // ephemeral region and advances the epoch, which is what makes every
@@ -482,5 +511,150 @@ fn the_instruction_set_has_no_write_accessor_into_a_composite() {
          slot; SetData and SetDataIndexed write the PERSISTENT region. None \
          writes an ephemeral composite body, and any addition must be checked \
          against that before the proof's M1 can stand."
+    );
+}
+
+/// Break edges are NOT compared against the loop's entry stack, and `match`
+/// lowering depends on that.
+///
+/// # Why this is pinned as behaviour rather than reported as a gap
+///
+/// `interp_region`'s `Op::Loop` arm joins the break states with each other
+/// through `join_all`, and the joined state becomes the post-loop state. It is
+/// never compared to the entry state, so a break edge carrying a different
+/// stack than entry verifies.
+///
+/// **That is load-bearing.** An arm of a `match` lowers to a `Break` carrying
+/// the arm's value, and 18 dispatch scopes across the corpus do exactly that.
+/// Comparing break edges to entry would refuse `match`.
+///
+/// Recorded because an adversarial audit of the composite-region-reuse proof
+/// read the code correctly and asked whether it was a defect. It is not, for
+/// dispatch. For genuinely ITERATING loops no value-carrying break is emitted —
+/// **an emission fact, not an enforced one** — which is why the proof's M6(b)
+/// sits beside the stream-never-returns invariant rather than beside the
+/// enforced entry floor.
+#[test]
+fn a_dispatch_break_may_carry_a_value_past_the_loop_entry_height() {
+    let src = "\
+enum Shape { Circle(Word), Square(Word) }
+fn area(s: Shape) -> Word {
+    match s {
+        Shape::Circle(r) => r * 3,
+        Shape::Square(w) => w * w,
+    }
+}
+fn main() -> Word { area(Shape::Square(4)) }
+";
+    let module = compile(src);
+
+    let mut carrying = 0usize;
+    for chunk in &module.chunks {
+        let mut depth = 0i32;
+        let mut at = vec![0i32; chunk.ops.len()];
+        for (i, op) in chunk.ops.iter().enumerate() {
+            at[i] = depth;
+            depth += keleusma::verify::op_depth_effect(op, chunk).1;
+        }
+        for (i, op) in chunk.ops.iter().enumerate() {
+            let Op::Loop(exit) = op else { continue };
+            let end = (*exit as usize).min(chunk.ops.len());
+            for j in (i + 1)..end {
+                if matches!(&chunk.ops[j], Op::Break(t) if *t == *exit) && at[j] != at[i] {
+                    carrying += 1;
+                }
+            }
+        }
+    }
+
+    assert!(
+        carrying > 0,
+        "no dispatch break carries a value past its scope's entry height. Either \
+         `match` stopped lowering through Loop/Break, or the depth model changed. \
+         If a check comparing break edges to loop entry was added, it will have \
+         refused this program -- tell the composite-region-reuse proof's owner, \
+         because its M6(b) row cites this behaviour."
+    );
+
+    keleusma::verify::verify(&module).expect("and the verifier accepts it");
+}
+
+/// Composite equality is derived from CONTENT, never from a handle's address.
+///
+/// # Why four lines of Keleusma guard an axiom
+///
+/// The composite-region-reuse proof's address-opacity axiom requires that no
+/// instruction's scalar result depends on the address component of an operand
+/// handle. If it failed, a program could observe addresses through scalar
+/// output and **every equivalence theorem in the document would fall**, because
+/// the reuse plan and the baseline differ in exactly that observable.
+///
+/// **This is the fact that would silently invert** if composite equality were
+/// ever "optimised" to a handle compare — a change that would look like a
+/// performance win and would break the proof without failing any other test.
+///
+/// # Why the distinctness assertion is not decoration
+///
+/// If the compiler folded `x` and `y` into one allocation, the equality would
+/// hold trivially and the test would prove nothing about content versus
+/// address. Three separate `NewComposite` sites are asserted first.
+///
+/// # What this does not establish
+///
+/// Only that the comparison family is content-derived. `Len` takes an element
+/// count and the shape tests take a type name — metadata rather than referenced
+/// bytes, and neither an address. That is why the axiom is phrased as
+/// *not-the-address* rather than *only-the-bytes*.
+#[test]
+fn composite_equality_is_content_derived_not_address_derived() {
+    use keleusma::bytecode::GenericValue as Value;
+    use keleusma::vm::{Vm, VmState};
+
+    const SRC: &str = "\
+struct P { a: Word, b: Word }
+fn main() -> Word {
+    let x = P { a: 1, b: 2 };
+    let y = P { a: 1, b: 2 };
+    let z = P { a: 1, b: 3 };
+    if x == y {
+        if x == z { 3 } else { 1 }
+    } else {
+        0
+    }
+}
+";
+    let module = compile(SRC);
+
+    let sites: usize = module
+        .chunks
+        .iter()
+        .map(|c| {
+            c.ops
+                .iter()
+                .filter(|o| matches!(o, Op::NewComposite(_)))
+                .count()
+        })
+        .sum();
+    assert_eq!(
+        sites, 3,
+        "expected three distinct composite allocations; with fewer, `x` and `y` \
+         may share one and the equality below would hold trivially, proving \
+         nothing about content versus address"
+    );
+
+    let arena = keleusma_arena::Arena::with_capacity(1 << 16);
+    let mut vm = Vm::new(module, &arena).expect("verify");
+    let state = vm.call(&[]).expect("call");
+
+    let VmState::Finished(Value::Int(n)) = state else {
+        panic!("expected a scalar result, got {state:?}");
+    };
+    assert_eq!(
+        n, 1,
+        "composite equality returned {n}. 1 means content-derived: two distinct \
+         allocations with identical bytes compare equal and differing bytes do \
+         not. 0 means ADDRESS-DERIVED, which refutes the address-opacity axiom \
+         the composite-region-reuse proof rests on -- tell its owner rather than \
+         updating this test."
     );
 }
