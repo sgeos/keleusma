@@ -14,3 +14,4 @@ Decisions follow a three-file lifecycle. New questions start in PRIORITY or BACK
 | [PRIORITY.md](./PRIORITY.md) | Blocking decisions awaiting resolution |
 | [BACKLOG.md](./BACKLOG.md) | Deferred decisions for future consideration |
 | [COMPOSITE_REGION_EVIDENCE.md](./COMPOSITE_REGION_EVIDENCE.md) | What the V0.2.3 runtime establishes for the composite-region-reuse proof, with provenance per claim |
+| [YIELD_OWNERSHIP_MODE.md](./YIELD_OWNERSHIP_MODE.md) | Accepted in principle: `ref`/`out` on a yielding declaration's return signature, choosing machine-owned or host-owned storage for the yielded value (V0.3.0 or later) |

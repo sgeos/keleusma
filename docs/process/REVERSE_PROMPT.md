@@ -123,6 +123,19 @@ live demonstration of the proof's subject — four composites at four addresses 
 iteration, which is the error the other line made twice while measuring the same question. Their
 discriminator fixed it.
 
+## A language decision is on the record
+
+[`docs/decisions/YIELD_OWNERSHIP_MODE.md`](../decisions/YIELD_OWNERSHIP_MODE.md) records `ref`/`out`
+on a yielding declaration's return signature, accepted in principle and **not scheduled**. It carries
+your C illustration, the keyword survey, why Ada's `in` does not transfer to a return position, why
+the possessive pair was rejected once the position moved, and **six open questions it does not
+settle** — the buffer-size query and the `Text`/opaque depth limit being the two that would bite an
+implementer first.
+
+The measured part worth keeping: **`out` is cheaper than the proof's escape-copy discipline, not
+merely different.** It constructs directly into host storage, so that site has no arena region and no
+copy — where B2 with a machine-owned copy store is *worse* than doing nothing.
+
 ## One observation I recorded rather than acted on
 
 **The continuous-integration `Doc` job does not cover `self-host`.** It builds `keleusma` with
