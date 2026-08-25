@@ -3154,6 +3154,25 @@ fn every_lowering_module_executes_or_is_exempt() {
     //
     // Derived from the sibling harness SOURCES rather than from a list of names,
     // because a list is the thing that goes stale silently.
+    //
+    // **COMMENT LINES ARE EXCLUDED, AND THAT IS A REPAIR RATHER THAN A REFINEMENT
+    // (2026-08-24).** A harness DRIVES a module by naming it in code; naming it
+    // in prose proves nothing. Before this, any comment anywhere in a sibling
+    // source satisfied the claim.
+    //
+    // **IT WAS LIVE, NOT HYPOTHETICAL, AND THIS LINE CAUSED IT.**
+    // `comment_citations.rs` documents its prefix-resolution rule using the
+    // `rogue_ai` corpus family as the worked example, so it mentions
+    // `rogue_ai_boss` and `rogue_ai_hunter` -- two modules exempted here on the
+    // ground that another harness covers them. **Their exemption was being
+    // satisfied by a paragraph about citation scanning.** The coverage claim
+    // happens to remain TRUE (`rogue_ai_differential.rs` drives them), but the
+    // check would have passed with that harness deleted.
+    //
+    // Found by the `v0.2.3` line's generalisation of a different defect: **any
+    // figure counting things in a population that includes its own record has
+    // this shape.** Sibling sources are a population that every new test file in
+    // this package joins, including files with nothing to do with the corpus.
     let sibling_sources: String = {
         let mut acc = String::new();
         let mut seen = 0usize;
@@ -3165,7 +3184,12 @@ fn every_lowering_module_executes_or_is_exempt() {
                     && let Ok(t) = std::fs::read_to_string(&p)
                 {
                     seen += 1;
-                    acc.push_str(&t);
+                    for line in t.lines() {
+                        if !line.trim_start().starts_with("//") {
+                            acc.push_str(line);
+                            acc.push('\n');
+                        }
+                    }
                 }
             }
         }

@@ -80,6 +80,38 @@ failure message quoted 407, already stale. **The guard against the class printed
 class in the text it shows when it fires.** A reader hitting that failure would have been handed a
 stale figure by the mechanism telling them a figure was wrong.
 
+**AND APPLYING THE TEST TO THE WHOLE REGISTER FOUND A LIVE GUARD DEFECT, WHICH IS THE FIRST TIME
+TODAY THAT A PROCESS OBSERVATION PAID OUT IN A REAL BUG.** They generalised self-inclusion past
+scanners — *any figure counting things in a population that includes its own record* — so I audited
+every figure in my check block instead of assuming. Most count the corpus or the other line's `src/`
+with the record in `docs/`: clean.
+
+**One was not clean, and it was not a figure. It was a guard.** `corpus_differential`'s exemption
+audit verifies "another harness covers this module" by searching **every sibling `.rs` in
+`native_codegen/tests/`** for the module name — a population joined by every new test file in the
+package, whatever it is about.
+
+**`comment_citations.rs` documents its prefix rule using the `rogue_ai` family as the worked
+example**, so it names `rogue_ai_boss` and `rogue_ai_hunter`: two modules exempted on the ground that
+another harness covers them. **Their exemption was being satisfied by a paragraph about citation
+scanning.** I wrote that paragraph this evening while fixing a different instance of this same class.
+
+Measured cost: with the covering harness deleted, the pre-fix check would have named only
+`rogue_ai_tracker.kel`. **Two of three exemptions had silently lost their guard.** And the coverage
+claim stayed true the whole time — `rogue_ai_differential.rs` really does drive them — so nothing
+would have looked wrong from any angle.
+
+Repaired at the intent rather than by excluding my file: **comment lines are excluded from the
+sibling scan, because a harness DRIVES a module by naming it in code; naming it in prose proves
+nothing.** The check still passes, confirming the coverage was genuine and only the verification was
+weak. Must-fire proven by removing the covering harness — all three now named.
+
+**THE PART I WANT TO REMEMBER IS NOT THE FIX.** A guard that reads sibling sources treats this
+package's own documentation as evidence, so **every test file added here is a potential false witness
+for every other test's claim.** Nothing about writing a citation scanner suggests it could weaken a
+corpus-coverage audit, and I would never have looked without their generalisation. Process
+observations have felt like bookkeeping all day; this one found a bug.
+
 **THE CLASS ON MY SURFACE: 142 COMMENT LINES ACROSS 35 FILES CARRY A "MEASURED" CLAIM, AND I HAVE
 AUDITED NONE.** They disclosed ~180 on theirs and declined the sweep; I decline it too, on their
 argument, which is better than the one I would have reached for. **A blanket date-and-mark pass over
