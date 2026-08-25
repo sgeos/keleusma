@@ -17,11 +17,15 @@
 //!
 //! # Why this went unmeasured
 //!
-//! **The 95-case construct-support boundary contains exactly one `for` case, and
-//! it is the `limit` form.** There is no bare-`for` case, so its support was never
+//! **The construct-support boundary contained exactly one `for` case, and it was
+//! the `limit` form.** There was no bare-`for` case, so its support was never
 //! measured. That is the same shape as the boolean-literal and `Byte`-cast
 //! miscompiles: *any construct the corpus does not contain is unverified by
 //! construction*.
+//!
+//! **CLOSED 2026-08-25.** `ctrl/for_bare` is in the table, marked `Refuses`,
+//! taking it to 96 cases at 90 SOk / 2 Refuses / 3 Diverges / 1 RefRejects. The
+//! gap is now MEASURED rather than only diagnosed here.
 //!
 //! # The failure is loud, which is the one piece of good news
 //!
@@ -120,7 +124,7 @@ fn the_bare_form_never_yields_a_module() {
 ///
 /// | corpus | drives | bare `for` cases |
 /// |---|---|---|
-/// | `boundary_cases()` | the **whole** self-hosted pipeline, `parse.kel` included | **none** |
+/// | `boundary_cases()` | the **whole** self-hosted pipeline, `parse.kel` included | **none until 2026-08-25; now one, marked `Refuses`** |
 /// | `codegen_owns_its_constant_pool_and_matches_reference` | the REFERENCE parser, then `codegen.kel` | four |
 ///
 /// So **`codegen.kel` handles the bare `for` perfectly well** — those four cases
@@ -138,7 +142,7 @@ fn the_bare_form_never_yields_a_module() {
 /// failed, and the failure is what surfaced the distinction above — so the
 /// scoping is recorded rather than quietly corrected.
 #[test]
-fn the_full_pipeline_boundary_carries_no_bare_for_case() {
+fn the_boundary_marks_the_bare_for_case_refused_rather_than_supported() {
     const BOUNDARY: &str = include_str!("selfhost_codegen.rs");
 
     // THE TABLE ONLY. `boundary_cases()` is what drives the whole pipeline; the
@@ -162,15 +166,40 @@ fn the_full_pipeline_boundary_carries_no_bare_for_case() {
         !for_cases.is_empty(),
         "no `for` case at all in the boundary table; the reader is broken"
     );
-    for case in &for_cases {
-        assert!(
-            case.contains("limit"),
-            "the boundary table now carries a `for` case without `limit`: {case}\n\
-             If the bare form is supported by `parse.kel`, delete this file. If it is \
-             not, that case's verdict should say so rather than the table implying \
-             coverage it does not have."
-        );
-    }
+    // **THIS PIN'S OWN INSTRUCTION, FOLLOWED.** It used to require that every
+    // `for` case carry `limit`, and its failure message said: if the bare form
+    // is not supported, that case's verdict should say so rather than the table
+    // implying coverage it does not have. A `ctrl/for_bare` case marked
+    // `Refuses` was added on 2026-08-25 and does exactly that, so the pin's
+    // subject moves from ABSENCE to VERDICT.
+    //
+    // The table now implies no coverage it does not have, which is the property
+    // the original was protecting. What must not happen is the bare case
+    // appearing as supported while `parse.kel` refuses it.
+    let bare: Vec<&str> = for_cases
+        .iter()
+        .filter(|l| !l.contains("limit"))
+        .copied()
+        .collect();
+    assert_eq!(
+        bare.len(),
+        1,
+        "expected exactly one bare `for` case in the boundary table, found \
+         {}: {bare:?}. If the bare form became supported, this file's subject \
+         is gone and it should be retired rather than adjusted.",
+        bare.len()
+    );
+    let case_start = table
+        .find("\"ctrl/for_bare\"")
+        .expect("the bare case is labelled `ctrl/for_bare`");
+    let verdict = &table[case_start..case_start + 200];
+    assert!(
+        verdict.contains("Refuses"),
+        "the boundary's bare `for` case is no longer marked as refused. If \
+         `parse.kel` now lowers the bare form, retire this file; if it does \
+         not, the table is claiming coverage it does not have -- which is the \
+         defect this test was written for."
+    );
 }
 
 /// **THE TWO `for` FORMS ARE TWO CONSTRUCTS, NOT ONE WITH AN OPTIONAL CLAUSE.**

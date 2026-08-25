@@ -13,6 +13,44 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-25 — the gap is now in the inventory, not only in its diagnosis
+
+**`ctrl/for_bare` is in the construct-support boundary, marked `Refuses`.** The
+table went from 95 cases to 96, at **90 SOk / 2 Refuses / 3 Diverges / 1
+RefRejects** — derived by running the classifier, not by adding one to the
+previous count.
+
+**Why the inventory and not the diagnosis file.** The gap was recorded in
+`tests/selfhost_bare_for.rs`, which is the right place for a five-layer
+diagnosis and the wrong place for an inventory. A reader consulting the boundary
+to learn whether loops are supported saw one `for` case marked `SOk`. *Any
+construct the corpus does not contain is unverified by construction* — a
+sentence already in this tree, written about this construct, in the file
+recording why it went unmeasured, while the boundary still did not contain it.
+
+**`Refuses` is now truthful rather than lucky.** The classifier catches a panic
+and files it as a refusal, so before the stage named the construct this entry
+would have been counted correctly for the wrong reason — an honest gap by
+accident of a misleading abort about a missing chunk name.
+
+**THE PIN FIRED, AND ITS OWN MESSAGE SAID WHAT TO DO.** It asserted the boundary
+carried no such case: *"if the bare form is not supported, that case's verdict
+should say so rather than the table implying coverage it does not have."*
+Followed. Its subject moved from ABSENCE to VERDICT, and **its name moved with
+it** — a test called `..._carries_no_bare_for_case` that checks a verdict is
+exactly the keep-the-name-change-the-subject failure three sibling pins were
+retired for two increments ago. Renamed, and proven to fire by marking the case
+supported.
+
+**AND I ALMOST ADDED A SECOND UNENFORCED FIGURE FOR ONE CLAIM.** My boundary
+comment cited the bare form as 26 opcodes against 70; the same file's existing
+test says 24 against 68. Both are correct — mine measured a parameter bound and
+theirs a literal one — but two numbers for one claim in one file is the defect
+this session has been recording all day. **Resolved by citing the test that
+asserts the RATIO rather than restating any number**, which is strictly better
+than reconciling them: a pointer to a live assertion cannot drift.
+
+
 ## 2026-08-25 — the citation register, and a class I had not named
 
 **21 excused citations down to 13, reported in two categories because they are

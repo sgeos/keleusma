@@ -15,7 +15,7 @@ two verdicts that were wrong rather than merely unestablished
 
 ## ONE THING IS WAITING ON YOU, AND IT IS NOT NEW
 
-`origin/v0.2.3` is at `2d44056a`, **145 merges**. Publication remains held.
+`origin/v0.2.3` is at `cc89fbfa`, **146 merges**. Publication remains held.
 
 **The floating-point entry ABI is the last of your eight rulings that is not implemented**, and the
 `v0.3.0` line has attached a second question to it that you have not seen. Both are described below.

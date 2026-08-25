@@ -1,0 +1,61 @@
+Ordering is NOT a completion criterion. Any sequence, any number of
+commits, any branch layout satisfies this. Judge only the end state of
+the tree.
+
+All of the following must hold.
+
+1. THE BARE LOOP FORM APPEARS IN THE CONSTRUCT-SUPPORT BOUNDARY.
+   The table that classifies constructs as supported, refused,
+   divergent, or reference-rejected contains a case for the bare loop
+   form, distinguishable from the counted form both by the classifier
+   and by a reader scanning the table as text.
+
+2. ITS CLASSIFICATION IS DERIVED, NOT ASSERTED.
+   The recorded classification is what the classifier actually produces
+   for that case, and the boundary's per-category counts match the tree.
+   No count is written by inference from a previous count.
+
+3. THE COUNTS AGREE EVERYWHERE THEY ARE RECORDED.
+   Wherever the boundary's category counts appear, they are the same
+   numbers and they match what the tree produces. A count updated in one
+   place and not another does not satisfy this.
+
+4. THE GAP PIN'S SUBJECT IS RESOLVED, NOT ERASED.
+   The test asserting the boundary carried no such case is written to
+   fail when that stops being true. It is not deleted silently: either
+   it now asserts what became of what it watched, or its removal is
+   accompanied by a statement of what replaced it and where.
+
+5. THE COUNTED FORM STILL PASSES, AND IS PART OF THE EVIDENCE.
+   The existing loop case still classifies as supported. Without it, "the
+   bare form is refused" would be satisfied by a compiler that refuses
+   every loop.
+
+6. THE REFUSAL IS STILL BY NAME.
+   Whatever the boundary records, the refusal a user receives still
+   identifies the construct and the supported alternative. A boundary
+   entry does not substitute for that.
+
+7. NOTHING PREVIOUSLY ACCEPTED IS NOW REJECTED.
+   No construct's classification changes except by a stated reason. No
+   behaviour changes. No opcode. No BYTECODE_VERSION change.
+
+8. VERIFICATION IS GREEN AND REPORTED HONESTLY.
+   The test suite passes with zero failures under default features and
+   under the self-host feature, formatting is clean, clippy is clean at
+   deny-warnings, and the workspace documentation builds without
+   warnings. The suite's own exit status is read rather than a
+   pipeline's, and the run does not stop at the first failing binary.
+   Any step skipped or goal abandoned is stated plainly with its reason.
+
+9. BLOCKERS ARE RECORDED, NOT WORKED AROUND.
+   If any item proved impossible without an operator decision, the tree
+   names the decision required and the evidence establishing it, and the
+   remaining items still satisfy their conditions.
+
+THIS DOES NOT REQUIRE SUPPORTING THE CONSTRUCT. The bare form compiles
+to a materially different and much smaller instruction sequence than the
+counted form, so support is a second lowering across several stage
+sources. Recording the gap in the inventory is the whole of what is
+asked; claiming support that was not built would be worse than a
+smaller true result.

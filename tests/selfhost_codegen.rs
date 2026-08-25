@@ -8331,6 +8331,33 @@ fn boundary_cases() -> &'static [(&'static str, Support, &'static str)] {
             SOk,
             "private data acc { s: Word }\nfn f(n: Word) -> Word { acc.s = 0; for i in 0..n limit 8 { acc.s = acc.s + i; } acc.s }",
         ),
+        // **THE BARE LOOP FORM, WHICH THIS TABLE DID NOT CONTAIN UNTIL
+        // 2026-08-25.** Identical to the case above but for the missing `limit
+        // 8`, so the pair isolates the counted form's cap and nothing else.
+        //
+        // Its absence was the reason the gap went unmeasured: a construct not in
+        // this table is unverified by construction, and a reader consulting it to
+        // learn whether loops are supported saw one `for` case, marked `SOk`.
+        //
+        // `Refuses` is now the TRUTHFUL classification rather than a lucky one.
+        // The classifier catches a panic and files it here, so before the stage
+        // named the construct this would have been counted correctly for the
+        // wrong reason -- an honest gap by accident of a misleading abort about a
+        // missing chunk name. `parse.kel` phase 4 now reports it, so the entry
+        // and the user's message say the same thing.
+        //
+        // It is a SECOND LOWERING and not a relaxation. The size difference is
+        // asserted rather than restated here:
+        // `the_bare_and_limit_forms_have_different_lowerings` in
+        // `tests/selfhost_bare_for.rs` pins the RATIO. A figure quoted here
+        // would be a second unenforced number for one claim, and the two would
+        // differ anyway -- the counts depend on whether the bound is a literal
+        // or a parameter.
+        (
+            "ctrl/for_bare",
+            Refuses,
+            "private data acc { s: Word }\nfn f(n: Word) -> Word { acc.s = 0; for i in 0..n { acc.s = acc.s + i; } acc.s }",
+        ),
         (
             "ctrl/loop_yield",
             SOk,
