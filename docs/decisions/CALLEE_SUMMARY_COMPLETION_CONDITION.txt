@@ -1,0 +1,67 @@
+Ordering is NOT a completion criterion. Any sequence, any number of
+commits, any branch layout satisfies this. Judge only the end state of
+the tree.
+
+All of the following must hold.
+
+1. A CALLEE SUMMARY EXISTS AND IS PER PARAMETER.
+   Code under `src/` records, for a chunk and one of its parameters,
+   whether that parameter's region may escape the call, and whether the
+   return value may alias it. Both facts are present; a single
+   whole-chunk boolean does not satisfy this.
+
+2. A CALL THAT CANNOT LEAK STOPS DISQUALIFYING ITS SITE.
+   For a corpus program that passes a composite to a Keleusma function
+   which neither yields it, hands it to a native, nor returns it, the
+   construction site is reported confined, and a test asserts it.
+
+3. A CALL THAT DOES LEAK STILL REFUSES.
+   For a program whose callee yields or otherwise releases a passed
+   composite, the site is not reported confined, and a test asserts it.
+   This is what makes item 2 evidence rather than a constant function.
+
+4. AN UNRESOLVABLE CALLEE IS CONSERVATIVE.
+   When no summary can be established -- a callee outside the module, a
+   chunk that cannot be reached, or a cyclic call graph -- the result is
+   at least as strong a refusal as the tree produced before summaries
+   existed. No input becomes confined because a summary was missing. The
+   code makes this checkable rather than asserting it in a comment.
+
+5. TERMINATION DOES NOT DEPEND ON THE LANGUAGE'S ACYCLICITY GUARANTEE.
+   A cyclic or self-referential call graph produces a conservative
+   answer rather than unbounded recursion. A test exercises the cycle.
+
+6. THE EXISTING PREDICATE IS NOT NARROWED.
+   Analysing a chunk without summaries answers exactly as it did before
+   this work. Existing public signatures still accept what they
+   accepted. No new opcode. No BYTECODE_VERSION change.
+
+7. THE CORPUS COUNT MOVES DELIBERATELY.
+   The recorded per-verdict counts over the example corpus match the
+   tree, and any change is accompanied by a statement of which verdict
+   category moved and why. A count that no longer matches, or that was
+   updated without that statement, does not satisfy this.
+
+8. EVERY NEW TEST IS FALSIFIABLE, AND THE MUTATION COMPILES.
+   For each new assertion, the tree's evidence states what change makes
+   it fail, and that change compiles. A mutation that fails to build
+   proves nothing and must not be presented as a check.
+
+9. VERIFICATION IS GREEN AND REPORTED HONESTLY.
+   The test suite passes with zero failures under default features and
+   under the self-host feature, formatting is clean, clippy is clean at
+   deny-warnings, and the workspace documentation builds without
+   warnings. Any step skipped or goal abandoned is stated plainly with
+   its reason rather than omitted.
+
+10. BLOCKERS ARE RECORDED, NOT WORKED AROUND.
+    If any item proved impossible without an operator decision, the tree
+    names the specific decision required and the evidence establishing
+    it, and the remaining items still satisfy their conditions. A
+    recorded blocker satisfies that item.
+
+A NOTE ON WHAT THIS DOES NOT REQUIRE. All four of the corpus verdicts
+this increment targets sit outside any iterating loop, so closing them
+changes no per-iteration verdict. Item 2 is satisfied by a confined
+verdict at either scope; claiming a per-iteration improvement that did
+not occur would be a worse outcome than a smaller true one.

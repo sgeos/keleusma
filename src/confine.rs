@@ -37,10 +37,26 @@
 //! # What this module does NOT do
 //!
 //! It produces the predicate, not the transformation: no slot assignment
-//! and no actual reuse. It gives no whole-module verdict. It does not
-//! summarise callees — a composite passed to a `Call` yields
-//! [`CannotEstablish`](crate::confine::Confinement::CannotEstablish), which
-//! is where the next increment shows up as a measurable change.
+//! and no actual reuse. It gives no whole-module verdict — only a verdict
+//! per site.
+//!
+//! # Callees
+//!
+//! [`module_confinement`](crate::confine::module_confinement) summarises what
+//! each chunk does with each of its parameters, so a call that provably
+//! cannot release its argument stops disqualifying the site. Two facts per
+//! parameter, and both are load-bearing: whether the parameter can LEAK, and
+//! whether the return value may ALIAS it. Recording only the first would force
+//! every caller to assume every return aliases every argument, which is what
+//! it already does with no summary at all.
+//!
+//! [`chunk_confinement`](crate::confine::chunk_confinement) keeps the
+//! summary-free answer, in which every call is assumed to do both.
+//!
+//! **A summary that cannot be established answers conservatively**, and every
+//! accessor defaults that way. A missing summary reading as a clean one would
+//! turn this unsound in the direction hardest to notice, because the verdict
+//! would improve.
 //!
 //! # Known imprecision, stated rather than discovered later
 //!
@@ -49,7 +65,7 @@
 //! and the array's identity is not tracked per element. That is sound and
 //! it costs precision on programs that index arrays of structs.
 
-use crate::bytecode::{ArrayElem, Chunk, EnumField, Op, StructField, TupleField};
+use crate::bytecode::{ArrayElem, Chunk, EnumField, Module, Op, StructField, TupleField};
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec;
 use alloc::vec::Vec;
@@ -251,6 +267,29 @@ pub enum Reason {
     NotAnalysed,
 }
 
+/// Something the walk observed a tracked region reach.
+///
+/// The walk reports events; what they MEAN is the caller's business. That
+/// separation is what lets one walk answer both questions — is this site
+/// confined, and does this parameter leak — without a second implementation
+/// that would follow the escape routes slightly differently and pass its own
+/// tests while doing so.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Event {
+    /// Reached a `Yield`.
+    Yielded { ip: usize },
+    /// Reached a `Return`.
+    Returned { ip: usize },
+    /// Reached a native call.
+    HandedToNative { ip: usize },
+    /// Written to a local slot.
+    StoredToLocal { ip: usize, slot: u16 },
+    /// Passed to a Keleusma call whose summary does not rule out a leak.
+    PassedToCall { ip: usize },
+    /// Reached an opcode classified as escaping with no handler.
+    UnmodelledRoute { ip: usize },
+}
+
 /// One site's answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SiteVerdict {
@@ -265,21 +304,42 @@ pub struct SiteVerdict {
 }
 
 /// Answer the confinement question for every composite construction site in
-/// `chunk`, in address order.
+/// `chunk`, with no knowledge of what its callees do.
+///
+/// Every Keleusma call is therefore assumed to leak and to re-export every
+/// composite argument. For the answer that uses callee summaries, see
+/// [`module_confinement`].
 ///
 /// The chunk is expected to have passed structural verification; if the operand
 /// stack cannot be tracked (which that verification rules out) every site is
-/// reported [`Confinement::CannotEstablish`] with [`Reason::NotAnalysed`]
-/// rather than being silently admitted.
+/// reported [`CannotEstablish`](Confinement::CannotEstablish)
+/// with [`Reason::NotAnalysed`] rather
+/// than being silently admitted.
 pub fn chunk_confinement(chunk: &Chunk) -> Vec<SiteVerdict> {
+    chunk_confinement_with(chunk, &Summaries::default())
+}
+
+/// [`chunk_confinement`], using what is
+/// known about the chunk's callees.
+///
+/// A callee with no entry, or a parameter beyond the entry's length, answers
+/// conservatively, so passing [`Summaries::default`] is identical to
+/// [`chunk_confinement`].
+pub fn chunk_confinement_with(chunk: &Chunk, summaries: &Summaries) -> Vec<SiteVerdict> {
     let scopes = site_scopes(chunk);
     if scopes.is_empty() {
         return Vec::new();
     }
 
-    let mut escapes: BTreeMap<usize, (Confinement, Reason)> = BTreeMap::new();
-    let mut note = |site: usize, verdict: Confinement, reason: Reason| {
-        let slot = escapes
+    let mut findings: BTreeMap<usize, (Confinement, Reason)> = BTreeMap::new();
+    let mut note = |token: Token, event: Event| {
+        // A summary run's parameters cannot appear here: this seeding tracks
+        // construction sites only.
+        let Token::Site(site) = token else { return };
+        let Some((verdict, reason)) = site_meaning(chunk, &scopes, site, event) else {
+            return;
+        };
+        let slot = findings
             .entry(site)
             .or_insert((Confinement::Confined, Reason::None));
         // Keep the most severe finding, so a site with both a real route and an
@@ -289,7 +349,7 @@ pub fn chunk_confinement(chunk: &Chunk) -> Vec<SiteVerdict> {
         }
     };
 
-    let ok = interpret(chunk, &scopes, &mut note);
+    let ok = interpret(chunk, empty_locals(chunk), summaries, &mut note);
     if !ok {
         return scopes
             .iter()
@@ -305,7 +365,7 @@ pub fn chunk_confinement(chunk: &Chunk) -> Vec<SiteVerdict> {
     scopes
         .iter()
         .map(|(&ip, &scope)| {
-            let (verdict, reason) = escapes
+            let (verdict, reason) = findings
                 .get(&ip)
                 .copied()
                 .unwrap_or((Confinement::Confined, Reason::None));
@@ -319,7 +379,169 @@ pub fn chunk_confinement(chunk: &Chunk) -> Vec<SiteVerdict> {
         .collect()
 }
 
-/// The construction sites and the scope each is judged against.
+/// Answer the confinement question for every site in every chunk of `module`,
+/// using summaries of what each chunk does with its parameters.
+///
+/// Returned per chunk, in chunk order.
+pub fn module_confinement(module: &Module) -> Vec<Vec<SiteVerdict>> {
+    let summaries = module_summaries(module);
+    module
+        .chunks
+        .iter()
+        .map(|c| chunk_confinement_with(c, &summaries))
+        .collect()
+}
+
+/// What each chunk of `module` does with each of its parameters.
+///
+/// # Termination does not rest on the language's acyclicity guarantee
+///
+/// The call graph is acyclic by construction, and this does not rely on it. A
+/// chunk is summarised only once every chunk it calls has a summary, and the
+/// loop stops as soon as a round adds nothing. **A cycle simply never becomes
+/// ready**, so it keeps the conservative no-summary answer rather than
+/// recursing without bound. The round count is bounded by the number of chunks,
+/// which makes termination checkable by inspection rather than by argument.
+pub fn module_summaries(module: &Module) -> Summaries {
+    let n = module.chunks.len();
+    let mut per_chunk: Vec<Option<ChunkSummary>> = vec![None; n];
+    let mut summaries = Summaries {
+        per_chunk: per_chunk.clone(),
+    };
+
+    // Callees of each chunk, from the instruction stream. An out-of-range
+    // index is left in: it can never become ready, so the caller stays
+    // conservative, which is the right answer for a malformed module.
+    let callees: Vec<Vec<usize>> = module
+        .chunks
+        .iter()
+        .map(|c| {
+            let mut v: Vec<usize> = c
+                .ops
+                .iter()
+                .filter_map(|o| match o {
+                    Op::Call(idx, _) => Some(*idx as usize),
+                    _ => None,
+                })
+                .collect();
+            v.sort_unstable();
+            v.dedup();
+            v
+        })
+        .collect();
+
+    for _round in 0..n {
+        let mut progressed = false;
+        for i in 0..n {
+            if per_chunk[i].is_some() {
+                continue;
+            }
+            // Ready when every callee other than itself is summarised. A
+            // self-call is never ready, which is the cycle case.
+            let ready = callees[i]
+                .iter()
+                .all(|&c| c != i && c < n && per_chunk[c].is_some());
+            if !ready {
+                continue;
+            }
+            per_chunk[i] = Some(summarize_chunk(&module.chunks[i], &summaries));
+            summaries.per_chunk[i] = per_chunk[i].clone();
+            progressed = true;
+        }
+        if !progressed {
+            break;
+        }
+    }
+    summaries
+}
+
+/// Summarise one chunk, given summaries for everything it calls.
+fn summarize_chunk(chunk: &Chunk, summaries: &Summaries) -> ChunkSummary {
+    let params = chunk.param_count as usize;
+    if params == 0 {
+        return ChunkSummary {
+            leaks: Vec::new(),
+            returns: Vec::new(),
+        };
+    }
+    // The virtual machine makes a call's arguments the callee frame's first
+    // `arg_count` local slots, so parameter `i` is slot `i`.
+    let mut seed = empty_locals(chunk);
+    if seed.len() < params {
+        // Fewer slots than parameters is malformed; assume the worst.
+        return ChunkSummary::opaque(params);
+    }
+    for (i, cell) in seed.iter_mut().enumerate().take(params) {
+        cell.insert(Token::Param(i as u8));
+    }
+
+    let mut leaks = vec![false; params];
+    let mut returns = vec![false; params];
+    let mut note = |token: Token, event: Event| {
+        let Token::Param(i) = token else { return };
+        let i = i as usize;
+        if i >= params {
+            return;
+        }
+        match event {
+            // The callee's frame dies when it returns, so a write into it
+            // carries nothing past the call. This is where a parameter and a
+            // construction site are answered by DIFFERENT rules, and why they
+            // do not share a token space.
+            Event::StoredToLocal { .. } => {}
+            // Reaching the caller is not a leak — the caller sees the return
+            // value and tracks what IT does with it. It does mean the return
+            // value may alias this parameter.
+            Event::Returned { .. } => returns[i] = true,
+            Event::Yielded { .. }
+            | Event::HandedToNative { .. }
+            | Event::PassedToCall { .. }
+            | Event::UnmodelledRoute { .. } => leaks[i] = true,
+        }
+    };
+
+    if !interpret(chunk, seed, summaries, &mut note) {
+        return ChunkSummary::opaque(params);
+    }
+    ChunkSummary { leaks, returns }
+}
+
+/// What an event means for a construction site, or `None` if it is harmless.
+///
+/// This is where a `SetLocal` is decided by LIVENESS: a write to a slot that is
+/// dead at the site's scope boundary carries nothing past it.
+fn site_meaning(
+    chunk: &Chunk,
+    scopes: &BTreeMap<usize, Scope>,
+    site: usize,
+    event: Event,
+) -> Option<(Confinement, Reason)> {
+    match event {
+        Event::Yielded { ip } => Some((Confinement::Escapes, Reason::Yielded { ip })),
+        Event::Returned { ip } => Some((Confinement::Escapes, Reason::Returned { ip })),
+        Event::HandedToNative { ip } => Some((Confinement::Escapes, Reason::HandedToNative { ip })),
+        Event::PassedToCall { ip } => {
+            Some((Confinement::CannotEstablish, Reason::PassedToCall { ip }))
+        }
+        Event::UnmodelledRoute { ip } => {
+            Some((Confinement::CannotEstablish, Reason::UnmodelledRoute { ip }))
+        }
+        Event::StoredToLocal { ip, slot } => {
+            let scope = scopes.get(&site).copied().unwrap_or(Scope::Invocation);
+            let (start, end) = scope_range(chunk, scope);
+            if boundary_dead(chunk, start, end, slot) {
+                None
+            } else {
+                Some((
+                    Confinement::CannotEstablish,
+                    Reason::StoredToLiveSlot { ip, slot },
+                ))
+            }
+        }
+    }
+}
+
+/// The construction sites and the scope each is judged against./// The construction sites and the scope each is judged against.
 ///
 /// The dispatch discriminator: a `Op::Loop` scope containing an **unconditional**
 /// `Break` targeting its own exit leaves in one pass and is therefore dispatch,
@@ -376,10 +598,82 @@ fn scope_range(chunk: &Chunk, scope: Scope) -> (usize, usize) {
     }
 }
 
-/// The set of sites a stack entry or local slot may alias. Empty means the
-/// value holds no region built by any site in this chunk — which covers
-/// scalars, parameters, and composites the caller built.
-type Alias = BTreeSet<usize>;
+/// What one chunk does with each of its parameters.
+///
+/// Two facts per parameter, and both are needed. A summary carrying only
+/// `leaks` would force every caller to treat every return value as aliasing
+/// every argument, which is what it already does without a summary at all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChunkSummary {
+    /// Per parameter: may this parameter's region become reachable after the
+    /// call returns, other than through the return value?
+    leaks: Vec<bool>,
+    /// Per parameter: may the return value alias this parameter's region?
+    returns: Vec<bool>,
+}
+
+impl ChunkSummary {
+    /// The summary that assumes the worst of every parameter.
+    fn opaque(param_count: usize) -> Self {
+        ChunkSummary {
+            leaks: vec![true; param_count],
+            returns: vec![true; param_count],
+        }
+    }
+}
+
+/// Per-chunk summaries for one module, indexed by chunk.
+///
+/// **An absent or short entry answers conservatively.** A missing summary that
+/// read as a clean one would turn a sound analysis unsound in the way hardest
+/// to notice, because the verdict would IMPROVE. Every accessor therefore
+/// defaults to `true`, and [`Summaries::default`] — no summaries at all — is
+/// exactly the behaviour of the analysis before summaries existed.
+#[derive(Debug, Clone, Default)]
+pub struct Summaries {
+    per_chunk: Vec<Option<ChunkSummary>>,
+}
+
+impl Summaries {
+    /// May argument `arg` of a call to `callee` leak? Unknown means yes.
+    fn leaks(&self, callee: usize, arg: usize) -> bool {
+        match self.per_chunk.get(callee).and_then(|s| s.as_ref()) {
+            Some(s) => s.leaks.get(arg).copied().unwrap_or(true),
+            None => true,
+        }
+    }
+
+    /// May the return value of a call to `callee` alias argument `arg`?
+    /// Unknown means yes.
+    fn returns(&self, callee: usize, arg: usize) -> bool {
+        match self.per_chunk.get(callee).and_then(|s| s.as_ref()) {
+            Some(s) => s.returns.get(arg).copied().unwrap_or(true),
+            None => true,
+        }
+    }
+}
+
+/// What a tracked region originates from.
+///
+/// **Sites and parameters must not share a token space.** They are answered by
+/// different rules — a site is judged against a scope with a liveness test, a
+/// parameter is judged against the callee's whole invocation and its slot is
+/// written by the CALLER during frame setup, so the liveness test would report
+/// every parameter as live across its boundary. Making the distinction a type
+/// rather than a numbering convention is what keeps the two rules from meeting
+/// by accident.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Token {
+    /// A composite built at this address in the chunk under analysis.
+    Site(usize),
+    /// The chunk's parameter at this position, for a summary run.
+    Param(u8),
+}
+
+/// The set of tokens a stack entry or local slot may alias. Empty means the
+/// value holds no tracked region — which covers scalars and composites built
+/// outside the chunk.
+type Alias = BTreeSet<Token>;
 
 #[derive(Clone, PartialEq, Eq)]
 struct State {
@@ -387,19 +681,34 @@ struct State {
     locals: Vec<Alias>,
 }
 
-/// Walk the chunk, reporting every route by which a site's region leaves its
-/// scope. Returns `false` if the walk could not be completed.
+/// Walk `chunk` from the top with `seed` locals, reporting every event a
+/// tracked region reaches. Returns `false` if the walk could not be completed.
 fn interpret(
     chunk: &Chunk,
-    scopes: &BTreeMap<usize, Scope>,
-    note: &mut impl FnMut(usize, Confinement, Reason),
+    seed: Vec<Alias>,
+    summaries: &Summaries,
+    note: &mut impl FnMut(Token, Event),
 ) -> bool {
     let state = State {
         stack: Vec::new(),
-        locals: vec![Alias::new(); chunk.local_count as usize],
+        locals: seed,
     };
     let mut breaks = Vec::new();
-    walk(chunk, 0, chunk.ops.len(), state, &mut breaks, scopes, note).is_ok()
+    walk(
+        chunk,
+        0,
+        chunk.ops.len(),
+        state,
+        &mut breaks,
+        summaries,
+        note,
+    )
+    .is_ok()
+}
+
+/// Locals seeded with nothing tracked, for a construction-site run.
+fn empty_locals(chunk: &Chunk) -> Vec<Alias> {
+    vec![Alias::new(); chunk.local_count as usize]
 }
 
 /// A walk that ran off the rails. Structural verification rules this out; it is
@@ -416,8 +725,8 @@ fn walk(
     end: usize,
     mut state: State,
     breaks: &mut Vec<State>,
-    scopes: &BTreeMap<usize, Scope>,
-    note: &mut impl FnMut(usize, Confinement, Reason),
+    summaries: &Summaries,
+    note: &mut impl FnMut(Token, Event),
 ) -> Result<Option<State>, Derailed> {
     let ops = &chunk.ops;
     let mut ip = start;
@@ -432,8 +741,8 @@ fn walk(
                 // here means the chunk returns nothing, which carries no
                 // region.
                 let v = state.stack.last().cloned().unwrap_or_default();
-                for &site in &v {
-                    note(site, Confinement::Escapes, Reason::Returned { ip });
+                for &t in &v {
+                    note(t, Event::Returned { ip });
                 }
                 return Ok(None);
             }
@@ -445,12 +754,12 @@ fn walk(
                 // Pops its condition, then MAY leave. Both continuations are
                 // live, so the state joins into the enclosing scope's exit set
                 // and also falls through.
-                apply(chunk, ip, op, &mut state, scopes, note)?;
+                apply(chunk, ip, op, &mut state, summaries, note)?;
                 breaks.push(state.clone());
                 ip += 1;
             }
             Op::If(target) => {
-                apply(chunk, ip, op, &mut state, scopes, note)?;
+                apply(chunk, ip, op, &mut state, summaries, note)?;
                 let target = *target as usize;
                 if target > 0 && matches!(ops.get(target - 1), Some(Op::Else(_))) {
                     let Some(Op::Else(endif)) = ops.get(target - 1) else {
@@ -463,10 +772,10 @@ fn walk(
                         target - 1,
                         state.clone(),
                         breaks,
-                        scopes,
+                        summaries,
                         note,
                     )?;
-                    let else_end = walk(chunk, target, endif, state, breaks, scopes, note)?;
+                    let else_end = walk(chunk, target, endif, state, breaks, summaries, note)?;
                     match join(then_end, else_end) {
                         Some(joined) => state = joined,
                         None => return Ok(None),
@@ -474,7 +783,7 @@ fn walk(
                     ip = endif + 1;
                 } else {
                     let skip = state.clone();
-                    let then_end = walk(chunk, ip + 1, target, state, breaks, scopes, note)?;
+                    let then_end = walk(chunk, ip + 1, target, state, breaks, summaries, note)?;
                     match join(then_end, Some(skip)) {
                         Some(joined) => state = joined,
                         None => return Ok(None),
@@ -491,7 +800,7 @@ fn walk(
                 // join only adds, so this ascending fixpoint terminates. The
                 // cap is a backstop, not the termination argument.
                 let mut head = state.clone();
-                let cap = (head.locals.len() + 1) * (scopes.len() + 1) + 2;
+                let cap = (head.locals.len() + 1) * (chunk.ops.len() + 1) + 2;
                 let mut body_end = None;
                 let mut inner_breaks = Vec::new();
                 for round in 0..=cap {
@@ -502,7 +811,7 @@ fn walk(
                         exit - 1,
                         head.clone(),
                         &mut inner_breaks,
-                        scopes,
+                        summaries,
                         note,
                     )?;
                     let Some(be) = &body_end else { break };
@@ -534,7 +843,7 @@ fn walk(
                 ip = exit;
             }
             _ => {
-                apply(chunk, ip, op, &mut state, scopes, note)?;
+                apply(chunk, ip, op, &mut state, summaries, note)?;
                 ip += 1;
             }
         }
@@ -575,8 +884,8 @@ fn apply(
     ip: usize,
     op: &Op,
     state: &mut State,
-    scopes: &BTreeMap<usize, Scope>,
-    note: &mut impl FnMut(usize, Confinement, Reason),
+    summaries: &Summaries,
+    note: &mut impl FnMut(Token, Event),
 ) -> Result<(), Derailed> {
     // Pop and push counts come from the verifier's own depth table rather than
     // a second one that could drift from it.
@@ -593,43 +902,37 @@ fn apply(
     if state.stack.len() < pops {
         return Err(Derailed);
     }
+    // `taken` is in stack order, so `taken[i]` is argument `i` of a call.
     let taken: Vec<Alias> = state.stack.split_off(state.stack.len() - pops);
     let union: Alias = taken.iter().flatten().copied().collect();
 
     match op {
         Op::Yield => {
-            for &site in &union {
-                note(site, Confinement::Escapes, Reason::Yielded { ip });
+            for &t in &union {
+                note(t, Event::Yielded { ip });
             }
         }
         Op::CallExternalNative(_, _) | Op::CallVerifiedNative(_, _) => {
-            for &site in &union {
-                note(site, Confinement::Escapes, Reason::HandedToNative { ip });
+            for &t in &union {
+                note(t, Event::HandedToNative { ip });
             }
         }
-        Op::Call(_, _) => {
-            // No callee summary yet: a callee may retain or re-export any
-            // composite argument. Sound, and deliberately visible as the
-            // measurement that a summary would move.
-            for &site in &union {
-                note(
-                    site,
-                    Confinement::CannotEstablish,
-                    Reason::PassedToCall { ip },
-                );
+        Op::Call(callee, _) => {
+            // Only the arguments the summary cannot clear are reported. With
+            // no summary every accessor answers `true`, so this is exactly the
+            // pre-summary behaviour.
+            for (arg, aliases) in taken.iter().enumerate() {
+                if !summaries.leaks(*callee as usize, arg) {
+                    continue;
+                }
+                for &t in aliases {
+                    note(t, Event::PassedToCall { ip });
+                }
             }
         }
         Op::SetLocal(slot) => {
-            for &site in &union {
-                let scope = scopes.get(&site).copied().unwrap_or(Scope::Invocation);
-                let (s, e) = scope_range(chunk, scope);
-                if !boundary_dead(chunk, s, e, *slot) {
-                    note(
-                        site,
-                        Confinement::CannotEstablish,
-                        Reason::StoredToLiveSlot { ip, slot: *slot },
-                    );
-                }
+            for &t in &union {
+                note(t, Event::StoredToLocal { ip, slot: *slot });
             }
         }
         // `Return` is the remaining escaping route and is handled by the walk,
@@ -637,7 +940,7 @@ fn apply(
         Op::Return => {}
         other => {
             // BACKSTOP. Every route classified `Escapes` needs a handler
-            // above; one without a handler would leave its sites reported
+            // above; one without a handler would leave its tokens reported
             // confined on the strength of a flow nothing followed.
             //
             // A new opcode is a compile error in `route_of`, which forces a
@@ -646,12 +949,8 @@ fn apply(
             // the classification, and an escaping route with no handler
             // degrades to "cannot establish" rather than to silence.
             if route_of(other) == Route::Escapes {
-                for &site in &union {
-                    note(
-                        site,
-                        Confinement::CannotEstablish,
-                        Reason::UnmodelledRoute { ip },
-                    );
+                for &t in &union {
+                    note(t, Event::UnmodelledRoute { ip });
                 }
             }
         }
@@ -668,21 +967,27 @@ fn apply(
         Alias::new()
     } else {
         match op {
-            // A fresh region. Its operands were copied into it, so it aliases none
-            // of them.
+            // A fresh region. Its operands were copied into it, so it aliases
+            // none of them.
             Op::NewComposite(_) => {
                 let mut s = Alias::new();
-                s.insert(ip);
+                s.insert(Token::Site(ip));
                 s
             }
             // Copies bytes out; nothing is produced that aliases anything.
             Op::SetData(_) | Op::SetDataIndexed(_, _) => Alias::new(),
             // Reads a slot.
             Op::GetLocal(slot) => state.locals.get(*slot as usize).cloned().ok_or(Derailed)?,
-            // The resumed value comes from the host, not from a site here.
+            // The resumed value comes from the host, not from a token here.
             Op::Yield => Alias::new(),
-            // A returned value may be an argument passed straight through.
-            Op::Call(_, _) => union.clone(),
+            // The return value aliases only the arguments the summary says it
+            // may. Without a summary that is all of them, as before.
+            Op::Call(callee, _) => taken
+                .iter()
+                .enumerate()
+                .filter(|(arg, _)| summaries.returns(*callee as usize, *arg))
+                .flat_map(|(_, a)| a.iter().copied())
+                .collect(),
             // A native's result is the host's, built outside this chunk.
             Op::CallExternalNative(_, _) | Op::CallVerifiedNative(_, _) => Alias::new(),
             // A projection reads either a fixed-size scalar, which COPIES a
@@ -704,7 +1009,7 @@ fn apply(
 
     // An out-of-range slot would mean a dropped write or a read of a slot this
     // pass never modelled, and both UNDER-approximate: a region would go
-    // untracked and the site could be reported confined on the strength of a
+    // untracked and the token could be reported confined on the strength of a
     // flow that was never followed. Structural verification rules the case out;
     // this refuses rather than defaulting.
     if let Op::SetLocal(slot) = op {
@@ -822,7 +1127,7 @@ fn reads_before_write(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bytecode::{BlockType, ConstValue};
+    use crate::bytecode::{BlockType, ConstValue, Module};
     use crate::value_layout::CompositeKind;
     use alloc::string::String;
 
@@ -1100,6 +1405,201 @@ mod tests {
                 "{consumer:?} fell to the backstop, so its route is unfollowed"
             );
         }
+    }
+
+    /// A chunk with `params` parameters, taking `ops`.
+    fn chunk_with_params(ops: Vec<Op>, params: u8) -> Chunk {
+        let mut c = chunk(ops);
+        c.param_count = params;
+        c
+    }
+
+    fn module_of(chunks: Vec<Chunk>) -> Module {
+        Module {
+            chunks,
+            signatures: Vec::new(),
+            native_return_shapes: Vec::new(),
+            native_names: Vec::new(),
+            entry_point: None,
+            data_layout: None,
+            word_bits_log2: 6,
+            addr_bits_log2: 6,
+            float_bits_log2: 6,
+            wcet_cycles: 0,
+            wcmu_bytes: 0,
+            aux_arena_bytes: 0,
+            persistent_composite_bytes: 0,
+            flags: 0,
+            shared_data_bytes: 0,
+            private_data_bytes: 0,
+            schema_hash: 0,
+            enum_layouts: Vec::new(),
+        }
+    }
+
+    /// A caller that builds a composite and passes it to chunk 1.
+    fn caller() -> Chunk {
+        chunk(vec![
+            Op::Const(0),
+            Op::Const(1),
+            new_struct(),
+            Op::Call(1, 1),
+            Op::PopN(1),
+            Op::Const(0),
+            Op::Return,
+        ])
+    }
+
+    /// The site in chunk 0, under `module_confinement`.
+    fn caller_site(module: &Module) -> SiteVerdict {
+        let all = module_confinement(module);
+        let mut sites: Vec<SiteVerdict> = all[0].clone();
+        assert_eq!(sites.len(), 1, "the caller builds exactly one composite");
+        sites.pop().unwrap()
+    }
+
+    /// A callee that only reads a scalar field of its argument admits the
+    /// caller's site. **This is the whole point of the summary**: without one,
+    /// the call alone disqualifies every composite argument.
+    #[test]
+    fn a_callee_that_cannot_leak_its_argument_admits_the_callers_site() {
+        let callee = chunk_with_params(
+            vec![
+                Op::GetLocal(0),
+                Op::GetField(StructField::Flat {
+                    offset: 0,
+                    kind: crate::value_layout::ScalarKind::Int,
+                }),
+                Op::Return,
+            ],
+            1,
+        );
+        let m = module_of(vec![caller(), callee]);
+        let v = caller_site(&m);
+        assert_eq!(
+            (v.verdict, v.reason),
+            (Confinement::Confined, Reason::None),
+            "the callee reads a scalar field and returns it; nothing carries \
+             the argument's region anywhere"
+        );
+    }
+
+    /// FALSIFIABILITY, and item 3 of the completion condition: a callee that
+    /// DOES release the argument still refuses.
+    ///
+    /// This differs from the test above by replacing the projection with a
+    /// `Yield`, which compiles and which flips the verdict. Without it, the
+    /// test above would pass equally if summaries always answered "clean".
+    #[test]
+    fn a_callee_that_yields_its_argument_still_refuses_the_callers_site() {
+        let callee = chunk_with_params(vec![Op::GetLocal(0), Op::Yield, Op::Return], 1);
+        let m = module_of(vec![caller(), callee]);
+        let v = caller_site(&m);
+        assert_eq!(
+            v.verdict,
+            Confinement::CannotEstablish,
+            "the callee hands the argument to the host, so the caller's site \
+             must not be admitted"
+        );
+        assert!(
+            matches!(v.reason, Reason::PassedToCall { .. }),
+            "and the refusal must name the call: {:?}",
+            v.reason
+        );
+    }
+
+    /// A callee that RETURNS its argument makes the return value alias it, so
+    /// what the caller then does with the return matters.
+    ///
+    /// Here the caller drops it, so the site is still confined — the point is
+    /// that `returns` is tracked separately from `leaks` and does not by itself
+    /// disqualify.
+    #[test]
+    fn returning_an_argument_is_recorded_separately_from_leaking_it() {
+        let callee = chunk_with_params(vec![Op::GetLocal(0), Op::Return], 1);
+        let m = module_of(vec![caller(), callee]);
+        let s = module_summaries(&m);
+        assert!(
+            !s.leaks(1, 0),
+            "returning to the caller is not a leak: the caller sees the value"
+        );
+        assert!(s.returns(1, 0), "but the return value does alias it");
+        // The caller drops the result, so nothing escapes.
+        assert_eq!(caller_site(&m).verdict, Confinement::Confined);
+    }
+
+    /// **TERMINATION DOES NOT REST ON THE LANGUAGE'S ACYCLICITY GUARANTEE.**
+    ///
+    /// The call graph cannot contain a cycle in a well-formed module, and this
+    /// does not rely on that. A self-calling chunk never becomes ready, so it
+    /// keeps the conservative no-summary answer instead of recursing without
+    /// bound. If this test hangs rather than fails, the readiness rule stopped
+    /// excluding cycles.
+    #[test]
+    fn a_cyclic_call_graph_stays_conservative_rather_than_recursing() {
+        // Chunk 1 calls itself.
+        let cyclic = chunk_with_params(vec![Op::GetLocal(0), Op::Call(1, 1), Op::Return], 1);
+        let m = module_of(vec![caller(), cyclic]);
+        let s = module_summaries(&m);
+        assert!(
+            s.leaks(1, 0) && s.returns(1, 0),
+            "a chunk in a cycle must keep the conservative answer"
+        );
+        assert_eq!(
+            caller_site(&m).verdict,
+            Confinement::CannotEstablish,
+            "and its caller must not be admitted on the strength of a summary \
+             that was never computed"
+        );
+    }
+
+    /// A callee outside the module answers conservatively rather than cleanly.
+    ///
+    /// Item 4 of the completion condition. An out-of-range chunk index is
+    /// malformed, and the failure that matters is the one where a MISSING
+    /// summary reads as a clean one — the verdict would improve, which is the
+    /// hardest direction to notice.
+    #[test]
+    fn an_out_of_range_callee_is_conservative() {
+        // The caller alone; chunk 1 does not exist.
+        let m = module_of(vec![caller()]);
+        let s = module_summaries(&m);
+        assert!(s.leaks(1, 0), "an absent callee must be assumed to leak");
+        assert!(s.leaks(99, 7), "and so must an absurd index");
+        assert_eq!(
+            caller_site(&m).verdict,
+            Confinement::CannotEstablish,
+            "a call to a chunk that is not there must not admit the site"
+        );
+    }
+
+    /// Summaries are an ADDITION: analysing a chunk without them answers
+    /// exactly as before.
+    #[test]
+    fn the_summary_free_answer_is_unchanged() {
+        let callee = chunk_with_params(
+            vec![
+                Op::GetLocal(0),
+                Op::GetField(StructField::Flat {
+                    offset: 0,
+                    kind: crate::value_layout::ScalarKind::Int,
+                }),
+                Op::Return,
+            ],
+            1,
+        );
+        let m = module_of(vec![caller(), callee]);
+        let without = chunk_confinement(&m.chunks[0]);
+        assert_eq!(
+            without[0].verdict,
+            Confinement::CannotEstablish,
+            "with no summary every call is assumed to leak, as before"
+        );
+        assert_eq!(
+            chunk_confinement_with(&m.chunks[0], &Summaries::default()),
+            without,
+            "and an empty summary table is identical to no table at all"
+        );
     }
 
     /// The same program returning a NESTED composite field does alias, because

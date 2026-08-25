@@ -10,7 +10,20 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
-> **Currency note (2026-08-24, session 53). 142 merges at `44b3d071`, no open pull request.**
+> **Currency note (2026-08-24, session 53, third increment). THE CONFINEMENT ANALYSIS IS COMPLETE.**
+>
+> `module_confinement` summarises what each chunk does with each parameter, two facts each: whether
+> the parameter can LEAK, and whether the return value may ALIAS it. Corpus, `examples/scripts` FLAT:
+> without summaries 33 sites / 17 confined / 12 escapes / **4 cannot-establish**; with summaries
+> 33 / **23** / 10 / **0**. Both pinned.
+>
+> **THE ESCAPES COLUMN ALSO FELL, AND THAT HALF WAS NOT AIMED AT.** Two verdicts were WRONG rather
+> than unestablished: without a summary a call's return is assumed to alias every argument, so a site
+> passed to a helper and then reached by the enclosing `return` was reported as escaping through a
+> route that does not exist. Nothing in the corpus said so.
+>
+> **A MISSING SUMMARY MUST NOT READ AS A CLEAN ONE.** Flipping the accessor default compiles and
+> turns FIVE tests red. Termination is by inspection, not by appeal to the acyclicity guarantee.
 >
 > **SEVEN OF THE EIGHT RULINGS ARE IMPLEMENTED.** The confinement analysis landed as
 > `src/confine.rs` (feature `verify`): per-site, three-valued, a library predicate NOT wired into

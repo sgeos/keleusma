@@ -75,8 +75,8 @@ grep -c '^\s*#\[test\]' tests/loop_entry_floor.rs           # 3
 grep -c '^\s*#\[test\]' tests/corpus_pattern_coverage.rs    # 3
 # THE CONFINEMENT ANALYSIS, session 53. `confine.rs`'s own unit tests are in
 # `src/`, so the lib count moves too.
-grep -c '^\s*#\[test\]' tests/confinement_analysis.rs        # 6
-grep -c '^\s*#\[test\]' src/confine.rs                       # 7
+grep -c '^\s*#\[test\]' tests/confinement_analysis.rs        # 8
+grep -c '^\s*#\[test\]' src/confine.rs                       # 13
 # THE CITATION GUARD, session 53. A comment naming a test that does not exist
 # cannot fail; this makes a NEW one fail. Its 21-entry excuse list is a DEBT
 # REGISTER, not a baseline -- shrink it, never grow it.
@@ -835,41 +835,52 @@ GATING:
 This line's surface is `src/float.rs`, `src/marshall.rs` and the target descriptor. **Sequence with
 the `v0.3.0` line before writing** — both lines have started nothing and both said so.
 
-### 2. THE CONFINEMENT ANALYSIS — DONE IN SESSION 53, AND ONE INCREMENT REMAINS
+### 2. THE CONFINEMENT ANALYSIS — COMPLETE, INCLUDING THE CALLEE SUMMARY
 
-**`src/confine.rs` answers the commissioned question**, per site, over a chunk the caller holds, as
-**confined / cannot establish / escapes**. Feature `verify`. It is a library predicate and is
-deliberately **not wired into `verify()`** — its consumer is the other line's native code
-generation, and a predicate that rejects nothing has no business in the load path.
+**`src/confine.rs` answers the commissioned question** per site, over a chunk the caller holds, as
+**confined / cannot establish / escapes**. Feature `verify`. A library predicate for the other line's
+native code generation, deliberately **not wired into `verify()`** — a predicate that rejects nothing
+has no business in the load path.
 
-**Three of the four per-iteration corpus sites come back confined.** The crude any-`Escapes`-opcode
-test the `v0.3.0` line ran admitted none of three.
+`chunk_confinement` is the summary-free answer; `module_confinement` summarises what each chunk does
+with each parameter first. **Two facts per parameter and both are load-bearing**: whether it can
+LEAK, and whether the return value may ALIAS it.
 
-**THE OTHER LINE'S CENSUS WAS RIGHT THAT ADMISSIBILITY NEEDED MEASURING AND WRONG ABOUT WHAT ITS
-MEASUREMENT SAID.** It concluded that two analysis features were mandatory on day one because 3 of 3
-sites were disqualified by `Call`. Only the boundary-dead rule was needed. `12_sensor_window.kel`
-calls `scale(raw[i])` and `raw[i]` is a `Word`; the call never touches the composite. **The crude
-test saw the opcode and a dataflow analysis follows the value.** Both lines have since converged on
-this independently, and the other line's census now prints an isolation figure rather than a
-conflated one.
+**THE CORPUS COUNTS, WITH THEIR SCAN RULE, AND BOTH PATHS PINNED:**
 
-**WHAT REMAINS IS THE CALLEE SUMMARY**, for a composite genuinely passed to a Keleusma call. That
-case reports `CannotEstablish` today, which is exactly the measurement the summary would move: the
-corpus counts, pinned in `the_corpus_verdict_counts_are_recorded`, are **33 sites / 17 confined /
-12 escapes / 4 cannot-establish** scanning `examples/scripts` FLAT. The call graph is acyclic, so a
-bottom-up summary terminates with no fixpoint.
+| path | sites | confined | escapes | cannot establish |
+|---|---|---|---|---|
+| `chunk_confinement`, no summaries | 33 | 17 | 12 | **4** |
+| `module_confinement`, summarised | 33 | **23** | 10 | **0** |
 
-**THE COUNT TEST STATES ITS SCAN RULE, AND THAT IS NOT DECORATION.** `examples/scripts` also holds
-`piano_roll/` and `rogue/` with 34 further scripts; scanned recursively the same corpus gives
-**251** sites. `tests/corpus_pattern_coverage.rs` states **79** in its prose, which reproduces
-against neither rule. It is prose rather than an assertion so nothing fails, and it is recorded as
-unreproducible rather than as wrong. **A bare site count is not a measurement.**
+Scanned `examples/scripts` FLAT. Recursively it is 251 sites, because that directory also holds
+`piano_roll/` and `rogue/` with 34 further scripts. **A bare site count is not a measurement.**
+
+**THE SECOND HALF OF THAT DELTA IS THE INTERESTING ONE.** Four `CannotEstablish` becoming `Confined`
+was the expected win. **Two `Escapes` also became `Confined`, and those were WRONG rather than merely
+unestablished** — without a summary a call's return is assumed to alias every argument, so a site
+passed to `add_2` and then reached by the enclosing `Return` was reported as escaping through a route
+that does not exist.
+
+**AND THE OTHER LINE'S CENSUS WAS RIGHT THAT ADMISSIBILITY NEEDED MEASURING AND WRONG ABOUT WHAT ITS
+MEASUREMENT SAID.** It concluded two analysis features were mandatory on day one because 3 of 3 sites
+were disqualified by `Call`. Only the boundary-dead rule was needed: `12_sensor_window.kel` calls
+`scale(raw[i])` and `raw[i]` is a `Word`. **The crude test saw the opcode and a dataflow analysis
+follows the value.** Both lines converged on this independently.
+
+**DO NOT MAKE A MISSING SUMMARY READ AS A CLEAN ONE.** Every accessor defaults to "leaks" and
+"returns". Flipping that default compiles and turns **five** tests red, including all three
+conservatism tests — measured, not asserted. It is the direction hardest to notice, because the
+verdict IMPROVES.
+
+**TERMINATION DOES NOT REST ON THE LANGUAGE'S ACYCLICITY GUARANTEE.** A chunk is summarised only once
+all its callees are, in at most `chunks.len()` rounds; a cycle never becomes ready and keeps the
+conservative answer rather than recursing.
 
 **DO NOT "FIX" THE BACKSTOP IN `apply` BY DELETING IT.** A new opcode is a compile error in
-`route_of`, which forces a decision about its route — but the transfer function's catch-all arm
-would have accepted it silently. The catch-all asks the classification and degrades an unhandled
-escaping route to `CannotEstablish`. **It cannot be exercised without adding an opcode.** What is
-tested is the other half: that every currently escaping opcode reaches its own handler.
+`route_of`, but the transfer function's catch-all would accept it silently. The catch-all asks the
+classification and degrades an unhandled escaping route to `CannotEstablish`. It cannot be exercised
+without adding an opcode; what is tested is that every currently escaping opcode reaches its handler.
 
 ### 3. ORDER 1, WHICH DID NOT MOVE THIS SESSION
 
