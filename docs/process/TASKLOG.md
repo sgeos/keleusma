@@ -10,6 +10,74 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-24, session 53, third increment). THE CONFINEMENT ANALYSIS IS COMPLETE.**
+>
+> `module_confinement` summarises what each chunk does with each parameter, two facts each: whether
+> the parameter can LEAK, and whether the return value may ALIAS it. Corpus, `examples/scripts` FLAT:
+> without summaries 33 sites / 17 confined / 12 escapes / **4 cannot-establish**; with summaries
+> 33 / **23** / 10 / **0**. Both pinned.
+>
+> **THE ESCAPES COLUMN ALSO FELL, AND THAT HALF WAS NOT AIMED AT.** Two verdicts were WRONG rather
+> than unestablished: without a summary a call's return is assumed to alias every argument, so a site
+> passed to a helper and then reached by the enclosing `return` was reported as escaping through a
+> route that does not exist. Nothing in the corpus said so.
+>
+> **A MISSING SUMMARY MUST NOT READ AS A CLEAN ONE.** Flipping the accessor default compiles and
+> turns FIVE tests red. Termination is by inspection, not by appeal to the acyclicity guarantee.
+>
+> **SEVEN OF THE EIGHT RULINGS ARE IMPLEMENTED.** The confinement analysis landed as
+> `src/confine.rs` (feature `verify`): per-site, three-valued, a library predicate NOT wired into
+> `verify()`. **THE FLOATING-POINT ENTRY ABI IS THE ONE THAT REMAINS**, and the `v0.3.0` line has
+> attached a second question to it -- where a `Fixed` shared slot's SCALE lives, since the
+> representation is settled and the scale is not host-visible. That one is the operator's and is
+> theirs to bring. **B2 adoption remains UNRULED, not declined.**
+>
+> **THE DAY-ONE REQUIREMENT OF "BOTH FEATURES OR IT ADMITS NOTHING" WAS WRONG, AND THE OTHER LINE
+> AGREES.** Their census disqualified 3 of 3 sites by `Call` using a crude any-`Escapes`-opcode
+> test. A dataflow analysis follows the value: `12_sensor_window.kel`'s call passes a `Word`. Only
+> the boundary-dead rule was needed; **three of the four per-iteration corpus sites now come back
+> confined.** The callee summary is a second increment, not a precondition.
+>
+> **CORPUS COUNTS, WITH THEIR SCAN RULE, BECAUSE A BARE COUNT IS NOT A MEASUREMENT.**
+> `examples/scripts` FLAT: 33 sites / 17 confined / 12 escapes / 4 cannot-establish. Recursively:
+> 251, because that directory also holds `piano_roll/` and `rogue/`.
+> `tests/corpus_pattern_coverage.rs` states **79** in prose, reproducing against neither rule;
+> recorded as unreproducible rather than as wrong.
+>
+> **A DEFECT ON THIS LINE'S SURFACE, REPORTED BY THE `v0.3.0` LINE, CONFIRMED AND REPAIRED (#270).**
+> A comment in `src/compiler.rs` asserted two `Op::IsStruct` routes verify and then trap
+> `InvalidBytecode` -- the class `verify()` exists to exclude -- while the tests beside it disproved
+> it. Re-measured with controls: wrong on THREE counts, not the two reported.
+>
+> **UNDER IT, THE SHARPER DEFECT: THE COMMENT CITED A TEST THAT WAS NEVER WRITTEN**, twice.
+> `tests/comment_citations.rs` now requires every four-or-more-word backticked citation in a `src/`
+> or `tests/` comment to resolve. **24 did not**; three fixed, 21 a debt register guarded against
+> outliving its own justification. Threshold MEASURED, not asserted: 897/104 at two words, 453/48 at
+> three, 175/21 at four, with the 83 extra dominated by standard-library names and file stems.
+
+> **Currency note (2026-08-24, session 52 CLOSE). 139 merges at `dadbce7e`, no open pull request.**
+>
+> **EIGHT OPERATOR RULINGS, SIX IMPLEMENTED.** The two outstanding are WORK: the floating-point entry
+> ABI (authorized -- FP registers feature-gated onto the existing `floats`, `Fixed` UNCONDITIONAL,
+> which is the harder half) and the confinement analysis (commissioned -- per-site, three-valued
+> `yes`/`no`/`cannot establish`, shared crate, with `SetLocal`-to-boundary-dead and a callee summary
+> both required on day one or it admits nothing). **B2 adoption is UNRULED, not declined.**
+>
+> **ORDER 1 DID NOT MOVE.** Bare-`for` remains the largest single win and the `parse.kel` phase
+> machine is located: phase 4 waits for a `limit` the bare form never supplies.
+>
+> **A THIRD LINE EXISTS.** The proof line merges INTO this one, `v0.3.0` then rebases. Its branch is
+> not offered; a fresh adversarial re-audit runs first. **This line verified the proof's PREMISES,
+> not its PROOFS**, and that must not be read as endorsement of the mathematics.
+>
+> **THE AUDIT FOUND A DEFECT IN THIS LINE'S OWN TABLE.** `Break` was classified as carrying no
+> region; it consumes nothing and transfers control WITH THE WHOLE OPERAND STACK, and 18 dispatch
+> scopes carry `match` arm values across it. Reclassified -- not an escape because it ENDS THE SCOPE,
+> not because it cannot carry a region.
+>
+> **THREE CHECKS WRITTEN THIS SESSION COULD NOT FAIL**, each satisfied by a different part of a
+> document from the one it was about. Mutation caught all three; reading caught none.
+
 > **Currency note (2026-08-24). A LANGUAGE DECISION IS ON THE RECORD FOR V0.3.0.**
 >
 > [`docs/decisions/YIELD_OWNERSHIP_MODE.md`](../decisions/YIELD_OWNERSHIP_MODE.md). **Accepted in

@@ -10,181 +10,122 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-22 — the `v0.3.0` line's concerns, all addressed; one of them was a live defect in a shipped artifact
+**Date**: 2026-08-24 (session 53) — the confinement analysis is complete, and closing it surfaced
+two verdicts that were wrong rather than merely unestablished
 
-## ONE ITEM NEEDS YOU. EVERYTHING ELSE IS DONE OR ANSWERED.
+## ONE THING IS WAITING ON YOU, AND IT IS NOT NEW
 
-### The item: a floating-point ABI ruling reached me SECOND-HAND, and I did not act on it
+`origin/v0.2.3` is at `03f3e3d9`, **143 merges**. Publication remains held.
 
-The `v0.3.0` line reports that you ruled the entry application binary interface should be extended
-with floating-point registers rather than boxing floats through integer bit patterns, and that **"the
-complete change should be made across both sessions"**. They also report that the `Fixed` shared-data
-slot layout is to be settled alongside it, as one question rather than two.
+**The floating-point entry ABI is the last of your eight rulings that is not implemented**, and the
+`v0.3.0` line has attached a second question to it that you have not seen. Both are described below.
+Nothing else needs you.
 
-**I have started nothing.** `PROMPT.md` reads "No active prompt" and no such ruling reached this line
-directly. A relayed ruling is not authorization I can act on, and this is not caution for its own
-sake: on 2026-08-21 I accepted that line's reading of an ownership question and passed it to you
-without reading both texts, and **the reading was backwards**. That cost one wasted escalation. The
-cost of getting this one wrong is a half-landed application binary interface change across two lines,
-which is the failure their own message was written to prevent.
+## What landed
 
-**What I need from you is one word.** If the ruling is real, my side is `src/float.rs`,
-`src/marshall.rs` and the target descriptor, and I will coordinate the sequencing with them before
-writing. If it is not, they should hear that from you rather than from me.
+**The confinement analysis is finished, callee summary included.** `src/confine.rs` answers *is this
+construction site's region unreachable once its enclosing iteration ends?* per site, as **confined /
+cannot establish / escapes**. `module_confinement` summarises what each chunk does with each
+parameter first; `chunk_confinement` keeps the summary-free answer. It is a library predicate for the
+other line's code generation and is deliberately **not wired into `verify()`**.
 
-**A second thing is coming and does not need you yet.** They are having a mathematical proof written,
-in a new `docs/proofs/`, about whether a composite region may be reused. **If it discharges loop-body
-reuse it licenses a change to `src/verify.rs` that LOWERS a published worst-case-memory-usage figure**
-— a changelog-visible weakening of the crate's headline guarantee, not a refactor. Flagging it now so
-it is not a surprise when it arrives.
+| path | sites | confined | escapes | cannot establish |
+|---|---|---|---|---|
+| no summaries | 33 | 17 | 12 | **4** |
+| summarised | 33 | **23** | 10 | **0** |
 
-## WHAT I FOUND WHILE CHECKING THEIR REPORTS, WHICH IS THE PART WORTH READING
+**Also repaired**, on the `v0.3.0` line's report: a `src/compiler.rs` comment asserting two
+`Op::IsStruct` routes verify and then trap `InvalidBytecode` — the class `verify()` exists to exclude
+— while the tests beside it disproved it. Under it, a citation to a test **that was never written**,
+twice. `tests/comment_citations.rs` now makes a new one fail.
 
-### A shipped artifact was telling its Japanese readers the wrong thing
+## The finding I would put in front of you if you read one paragraph
 
-They cited one line of `GRAMMAR.md` claiming the checked-arithmetic opcodes push `(high, low, flag)`
-when the runtime pushes `(low, high, flag)`. That line was corrected on 2026-08-13, and the sweep it
-triggered found **eight** sites rather than one.
+**Closing the gap revealed that two verdicts had been wrong, not merely unestablished.**
 
-**The sweep's scope was the Rust sources, `docs/`, and `book/src/`. It never reached `book/po/`.**
-The extracted message catalogue still carried the superseded English, and **the Japanese translation
-keyed to it still stated the order backwards, in Japanese.** Continuous integration builds the
-Japanese book from that catalogue.
+I aimed the callee summary at the four `cannot-establish` verdicts and it closed all four. It also
+moved **two `escapes` to `confined`** — and those had been *false*. Without a summary, a call's
+return value is assumed to alias every argument, so a composite passed to a helper and then reached
+by the enclosing `return` was reported as escaping **through a route that does not exist**.
 
-Both files are corrected, and the new guard walks the whole tree rather than a chosen list of
-directories — and asserts that it reached the file the old scope missed.
+**Nothing in the corpus said so.** The count looked healthy and the analysis was confidently
+reporting a route that was not there. A conservative default hides false positives exactly as well as
+it hides gaps, and the only reason this surfaced is that the fix for one happened to remove the
+other. I would not have found it by reading.
 
-### A count I would have kept quoting was wrong in the direction that flatters
+**The related correction, which the other line has accepted:** their census concluded two analysis
+features were mandatory on day one because 3 of 3 sites were disqualified by `Call`. Only one was
+needed — `12_sensor_window.kel` passes a `Word`, so the call never touches the composite. Their test
+saw the *opcode*; a dataflow analysis follows the *value*. Their conclusion that admissibility needed
+measuring was right; what the measurement said was not.
 
-They reported `parse_functions` aborting on **four of eleven** shipped example scripts. Measured:
-**two**. The struct/trait/impl skip state closed the other two some time ago and the prose count
-never moved. **The cause changed too** — the survivors never reach the declaration path, so "a
-top-level `struct`" explains neither of them.
+## The remaining ruling, and the question now attached to it
 
-It is a table of `(script, fault)` in a test now rather than a number in prose, so closing either one
-fails loudly.
+**The floating-point entry ABI.** Your ruling stands: floating-point registers gate on a feature,
+`Fixed` is always available. The asymmetry is unchanged — the FP half may assume `floats`, and the
+`Fixed` half is unconditional and is the harder one.
 
-### Their open question had an answer on my side, and it is the unfavourable one
+**The `v0.3.0` line has since found a second, related question and it is genuinely yours.** A
+`Fixed` value's *representation* is settled — a signed Q-format integer of the word width — but its
+**scale is not host-visible**. `Fixed<16>` and `Fixed<8>` differ by 256x and compile to byte-identical
+shared-slot layouts, so a host cannot tell them apart. That is sound inside a module, where the type
+checker already enforced compatibility, and a shared slot is not inside the module. They measured it
+rather than reasoned it, and they price three options, preferring: **refuse `Fixed` in a
+host-visible position at the source and make hosts marshal through `Word`.** That is a breaking
+source change and needs your authorization. I have not acted on it and it is theirs to bring you.
 
-They found that a composite built inside a loop body can be yielded to the host, and asked whether
-that hands out a pointer or a copy. **A pointer** — an epoch-guarded arena handle. **And the epoch
-guard does not cover their case**: it fails `Stale` when a `RESET` advances the epoch, and an
-overwrite in place at the same address within the same epoch advances nothing. Reusing one slot
-across iterations would return the wrong bytes **successfully**, as a silent wrong value rather than
-an error.
+## The second thing that landed, and why it was worth the detour
 
-## WHAT I FIXED
+The `v0.3.0` line reported a comment in `src/compiler.rs` asserting that two `Op::IsStruct` routes
+"verify, receive a memory bound, load, and then trap `InvalidBytecode`" — **the exact class
+`verify()` exists to exclude** — while the tests beside it disproved it. Re-measured with controls
+rather than taken on trust: it was wrong on **three** counts, not the two reported.
 
-| their finding | outcome |
-|---|---|
-| `ty.cmd` documented as selecting an operation, never read | header corrected; the slot is kept, and the reason is now measured rather than asserted |
-| `ty_max_steps()` is a cap a host cannot distinguish from a hang | stated at the function, with their own drive-budget discipline written in as the answer |
-| `Op::Add`/`Sub`/`Mul`/`Neg` carry no `Int` operands | confirmed at the virtual machine, not just the compiler, and documented — **plus the asymmetry they did not have**: `Div` and `Mod` still take `Int` |
-| `CheckedMul`'s `u8` is the Q-format fraction count | already documented; nothing to do |
-| a public API aborts the process on ordinary source | `try_parse_functions` returns the refusal; the `panic = "abort"` limit is stated, not hidden |
-| their `wcmu_region` correction | confirmed against the code; nothing of mine ever carried the wrong characterisation |
-| a `reconstruct_category()` accessor they offered | **built** — and the offer had gone unanswered, which is the one concern I had genuinely missed |
+**Under it was the sharper defect. The comment cited a test that was never written**, twice, and the
+same file held a second dangling citation of the same kind. **A citation to a test that does not
+exist cannot fail** — the shape of the three could-not-fail checks this line paid for in session 52,
+one level up.
 
-**Also fixed, and I first reported its cause wrongly**: `clippy::err_expect` fails `-D warnings` on
-`tests/selfhost_parse.rs`. I told the other line it was pre-existing on the shared tree, because
-`git status` showed that file unmodified. **The other line could not reproduce it, and they were
-right.** Stashing my work and running the same command on the merge base gives exit 0 — **my own
-`Debug` derive on `ParsedFn` is what made the lint applicable, and therefore what made it fire.**
-`git status` answers whether I edited a file; it does not answer whether I caused a diagnostic in
-one, because lint applicability is a property of the whole program.
+So it is scoped by class rather than by where I looked. `tests/comment_citations.rs` requires every
+four-or-more-word backticked citation in a `src/` or `tests/` comment to resolve somewhere in the
+repository. **24 did not.** Three verified and fixed, 21 recorded as a debt register with a guard
+against the excuse list outliving its own justification in either direction.
 
-## TWO OF MY OWN CHECKS COULD NOT FAIL, AND MUTATION FOUND BOTH
+**The threshold is measured rather than asserted**, on the other line's fair point that a cut
+defended by rationale is a blind spot with a story attached: two words gives 897 citations and 104
+unresolved, three gives 453 and 48, four gives 175 and 21. The 83 extra at two words are dominated
+by standard-library names, `.kel` file stems, and prose — **three** would repay triage, not eighty.
+The file says plainly that it is silent about shorter citations.
 
-The second is the one worth your attention. `try_parse_functions` reported *"the panic payload was
-not a string"* for **every** refusal, because `&payload` on a `Box<dyn Any + Send>` names the box
-rather than its contents — the box is itself `Any`. **A test asserting only that an error came back
-would have passed**, and I would have shipped a fallible interface whose every message was a
-plausible-looking lie. It was caught because the pin asserts the fault TEXT, not the verdict.
+## The smaller thing, because it is the one I would want told
 
-I also built an instrument to size the whole translation-staleness class and **threw it away**: it
-reported 2,329 stale entries of 2,926, which measures my wrong model of the extractor rather than the
-tree. Deleting it beat repairing it.
+**My citation guard manufactured two of the three findings I forwarded to the other line.**
+`must_contain` and `head_name` are ordinary function parameters written inline in a single-line
+signature, which the scan did not reach. I passed the list on without checking it, and the substitute
+for ground truth this time was **my own instrument's output** — which feels like ground truth in a way
+another line's does not. The scanner now reaches inline parameters and the rule is tested directly.
 
-## Both items you directed are done
+**The one that was real is the best find in it.** A comment cited a *vacuity control* by a name that
+does not exist. The control is real under another name, so the guard was never missing — but a reader
+checking whether that test could go vacuous would have found nothing and concluded there was none.
 
-**The floor check is in.** `verify()` now refuses an instruction consuming an operand from below its
-enclosing loop's entry height. Zero of 588 loop instances rejected, as measured before the change, so
-no working program lost capability. It broke two of my own tests: one because my change was wrong at
-depth zero, where it shadowed the frame-underflow diagnosis with a worse one, and one because the
-floor genuinely **subsumes** an older check's witness. Both handled deliberately rather than patched.
+## A class I measured and did NOT fix, recorded so it is not mistaken for done
 
-**The corpus extension turned up more than the gap I reported.** Not one script used `loop main` or a
-data segment, so `Stream`, `Yield`, `Reset` and the data opcodes were unexercised there entirely.
-Three scripts now cover the three dispositions of a per-iteration composite. The yielded one is a
-live demonstration of the proof's subject — four composites at four addresses in one epoch, then
-`Reset`, then the addresses repeat at the next.
+**A measurement written into prose, in a file where every other claim is enforced, reads as a record
+and therefore as already-checked.** My own threshold table went stale within hours — in the very
+commit that staled it — and every figure moved except the one a test pins. The `v0.3.0` line found
+the same in three blocks of one file, including one where the drifted number was the *justification*
+for a decision.
 
-**And the pinning test had the same defect the corpus did.** It counted `match` dispatch as loop
-iteration, which is the error the other line made twice while measuring the same question. Their
-discriminator fixed it.
+**The class is large here: about 180 comment lines across `src/` and `tests/` carry a "measured"
+claim.** Most are probably fine and I have not audited them. I fixed my instance and I am not
+claiming more than that. The rule both lines arrived at independently is worth applying to new ones:
+**a measurement written into a file of tests needs a date and an enforced-or-not marker at the moment
+it is written.**
 
-## A language decision is on the record
+## What I would spend the next increment on
 
-[`docs/decisions/YIELD_OWNERSHIP_MODE.md`](../decisions/YIELD_OWNERSHIP_MODE.md) records `ref`/`out`
-on a yielding declaration's return signature, accepted in principle and **not scheduled**. It carries
-your C illustration, the keyword survey, why Ada's `in` does not transfer to a return position, why
-the possessive pair was rejected once the position moved, and **six open questions it does not
-settle** — the buffer-size query and the `Text`/opaque depth limit being the two that would bite an
-implementer first.
-
-The measured part worth keeping: **`out` is cheaper than the proof's escape-copy discipline, not
-merely different.** It constructs directly into host storage, so that site has no arena region and no
-copy — where B2 with a machine-owned copy store is *worse* than doing nothing.
-
-## One observation I recorded rather than acted on
-
-**The continuous-integration `Doc` job does not cover `self-host`.** It builds `keleusma` with
-`signatures,encryption,shell`, matching the published docs.rs feature set, which is a deliberate and
-defensible choice. The consequence is that **a broken intra-doc link anywhere under `src/selfhost/`
-is invisible to continuous integration** — the same class of gap that let V0.2.1 ship with a red
-`Doc` job, one feature set over. I ran that build locally and it is clean. Closing it means another
-documentation build in the matrix, which is your cost to authorise rather than mine to add.
-
-## Verification
-
-Local `fmt`, `clippy` across `signatures,shell,self-host`, and all four continuous-integration
-feature checks are clean; the full workspace suite under `self-host` is the gate and continuous
-integration is binding. Nothing is published, and publication remains held.
-
-## On the proof: my side of its premise is now measured, and one thing is NOT clear to go
-
-The `v0.3.0` line has `docs/proofs/COMPOSITE_REGION_REUSE.md` open, with the proof itself delegated.
-Two of its sections cite this line, and **one of them cited a sentence I had not measured** — that a
-host can hold a yielded composite across a resume. It is measured now and pinned, and the bound is
-tighter than I gave them: `Op::Reset` fires **once per stream cycle**, not per loop iteration, so the
-escape window spans arbitrarily many iterations and closes at the cycle boundary.
-
-**Their §6.3 is now discharged from this side too.** It asks whether there are escape routes besides
-`yield` and warns that one survivor makes the restriction *unsound* rather than incomplete. Rather
-than list the routes I could think of — which is the shape of defect this line has recorded six times
-— the enumeration **starts from the 66 opcodes and classifies every one**, with totality asserted
-against the instruction-set enum. A route can now be missed only by a misclassification, never by an
-omission, and a new opcode fails the test.
-
-**Five escaping routes**: `Yield`, `SetLocal`, `Return`, and the two native calls. The native calls
-are a **host trust boundary I cannot close**, and that is the honest answer rather than a gap. The two
-"safe" classifications are backed by execution, because a wrong one there makes a restriction unsound
-rather than merely loose.
-
-**So both sides are ready.** Nothing of mine is now blocking the drafting.
-
-**And a third session will be drafting it**, which changes what my side owes. Everything this line
-established is collected in `docs/decisions/COMPOSITE_REGION_EVIDENCE.md`, **separating executed
-claims from read ones row by row**, naming the test and command behind each, stating ownership
-absolutely, naming the exact `src/verify.rs` line a theorem would change, and listing four things
-this line has **not** established. `tests/proof_evidence_index.rs` pins it, because a stale citation
-would turn it into a confident-sounding dead end for a reader who is on another branch and cannot
-notice.
-
-## Next intended step
-
-**Nothing without your direction**, other than the enumeration above if you want the proof unblocked.
-Otherwise: the four options from the last handoff are unchanged and
-correctly costed — bare-`for` support in `parse.kel`, Order 1 item 3's operator-expression rows, the
-six remaining region kinds, and `Op::cost()` against measurement. The floating-point ruling above
-would displace all of them if it is real.
+**Order 1's bare-`for` in `parse.kel`**, unchanged and still the largest single win: a second
+lowering, 24 ops against 68, and closing it would let `wire.kel` self-compile for the first time and
+join the byte-identity corpus. The phase machine is located — `forst.for_phase` phase 4 waits for a
+`limit` identifier the bare form never supplies.

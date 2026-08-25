@@ -5,27 +5,29 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-08-23 (session 51 close) against `cfcff555`**, every pinned value below
+> **REFRESHED 2026-08-25 (session 53) against `03f3e3d9`**, every pinned value below
 > re-measured and the check block executed on that tree. **THIS FILE HAS GONE STALE WITHIN HOURS
 > FIVE TIMES.** If the dates here disagree with the three channels, trust the channels.
 >
-> **AS OF `cfcff555`: 128 merges on `v0.2.3`, of which 32 are sessions 50 and 51.** Stated as a
-> MEASUREMENT AT A NAMED COMMIT, not a running total -- three drafts of that sentence were wrong in
-> three different ways. Derive it:
-> `git log --oneline origin/v0.2.3 | grep -c 'Merge pull request'`.
-> **NOTE THE REF.** This command named the LOCAL `v0.2.3` until 2026-08-22, and a local ref
-> lags whatever was merged from elsewhere: it answered 127 for the tree this file describes as
-> 128. The document was right and its own command was not.
+> **AS OF `03f3e3d9`: 143 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive it:
+> `git log --oneline origin/v0.2.3 | grep -c 'Merge pull request'`. **NOTE THE REF** -- the local
+> `v0.2.3` lags and answers a smaller number for the same tree.
 >
-> **#251 IS OPEN AND NOT AMONG THEM.** It carries the corrected `for`-lowering costing.
+> **THE OPERATOR QUEUE IS EMPTY. NO OPEN PULL REQUEST.** Both of this session's merged at 22 of 22.
 >
-> **ORDER 1: item 1 DONE, item 2 at 93% produced / 56% computed, item 3 MOVED.**
+> **OF THE EIGHT RULINGS, SEVEN ARE NOW DONE.** The confinement analysis landed in session 53 as
+> `src/confine.rs`. **THE FLOATING-POINT ENTRY ABI IS THE ONE THAT REMAINS**, and the `v0.3.0` line
+> has since attached a second question to it -- where a `Fixed` shared slot's SCALE lives, since the
+> representation is settled and the scale is not. See "WHAT A RESUMING SESSION SHOULD DO FIRST".
 >
-> **`wire.kel` IS NOT SELF-HOSTED AND THE REASON IS NOW KNOWN**: it uses a bare `for`, which
-> `parse.kel` does not support. Read that section before costing anything near it -- the obvious
-> reading of the symptom is wrong.
+> **A THIRD LINE EXISTS NOW.** A proof line drafts `docs/proofs/` and merges INTO this line; the
+> `v0.3.0` line then rebases. Its branch is not offered yet and a fresh adversarial re-audit runs
+> before it is.
 >
-> **NOTHING IS QUEUED FOR THE OPERATOR. Publication remains held.**
+> **ORDER 1 DID NOT MOVE THIS SESSION.** Item 1 DONE, item 2 at 93% produced / 56% computed, item 3
+> MOVED. The bare-`for` gap is still open and still the largest single win.
+>
+> **Publication remains held.**
 
 ## Validity
 
@@ -59,18 +61,26 @@ grep -c '^\s*#\[test\]' tests/selfhost_region_coverage.rs   # 5
 grep -c '^\s*#\[test\]' tests/selfhost_chunk_names.rs       # 3
 grep -c '^\s*#\[test\]' tests/parse_record_trace.rs         # 4
 grep -c '^\s*#\[test\]' tests/lex_token_trace.rs            # 2
-grep -c '^\s*#\[test\]' tests/selfhost_bare_for.rs          # 4   -- #251 IS MERGED AND THE
-# COUNT DID NOT MOVE. This line predicted 5 "after #251 merges". Measured after the merge: 4.
-# A PREDICTED COUNT IS NOT A MEASURED ONE, and writing the prediction into the check block is
-# how a check starts failing for a reason that is not the tree.
-grep -c '^\s*#\[test\]' tests/push_order_claims.rs         # 2
-grep -c '^\s*#\[test\]' tests/selfhost_parse_refusals.rs   # 2
-grep -c '^\s*#\[test\]' tests/composite_escape_window.rs   # 3
-grep -c '^\s*#\[test\]' tests/composite_escape_routes.rs   # 7
-grep -c '^\s*#\[test\]' tests/proof_evidence_index.rs      # 3
-grep -c '^\s*#\[test\]' tests/stream_never_returns.rs      # 2
+grep -c '^\s*#\[test\]' tests/selfhost_bare_for.rs          # 4
+# THE PROOF-SUPPORT FAMILY, all added in session 52. Several are GAP pins that
+# fail DELIBERATELY if the gap they record is closed -- read the message before
+# treating a failure as a fix.
+grep -c '^\s*#\[test\]' tests/push_order_claims.rs          # 2
+grep -c '^\s*#\[test\]' tests/selfhost_parse_refusals.rs    # 2
+grep -c '^\s*#\[test\]' tests/composite_escape_window.rs    # 3
+grep -c '^\s*#\[test\]' tests/composite_escape_routes.rs    # 9
+grep -c '^\s*#\[test\]' tests/proof_evidence_index.rs       # 3
+grep -c '^\s*#\[test\]' tests/stream_never_returns.rs       # 2
 grep -c '^\s*#\[test\]' tests/loop_entry_floor.rs           # 3
 grep -c '^\s*#\[test\]' tests/corpus_pattern_coverage.rs    # 3
+# THE CONFINEMENT ANALYSIS, session 53. `confine.rs`'s own unit tests are in
+# `src/`, so the lib count moves too.
+grep -c '^\s*#\[test\]' tests/confinement_analysis.rs        # 8
+grep -c '^\s*#\[test\]' src/confine.rs                       # 13
+# THE CITATION GUARD, session 53. A comment naming a test that does not exist
+# cannot fail; this makes a NEW one fail. Its 21-entry excuse list is a DEBT
+# REGISTER, not a baseline -- shrink it, never grow it.
+grep -c '^\s*#\[test\]' tests/comment_citations.rs           # 4
 
 # `tests/stage_command_reach.rs` IS in the list now: #210 merged 2026-08-21.
 
@@ -97,7 +107,7 @@ awk '/fn boundary_cases\(\)/,/^}/' tests/selfhost_codegen.rs \
   | sed 's://.*::' | grep -oE '\b(SOk|Refuses|Diverges|RefRejects)\b' | sort | uniq -c
 ```
 
-**A CHECK THAT PASSES IS NOT A CURRENT DOCUMENT.** IS NOT A CURRENT DOCUMENT.** The last one passed every check six merges after
+**A CHECK THAT PASSES IS NOT A CURRENT DOCUMENT.** The last one passed every check six merges after
 it was written. If the counts hold but the dates below are old, read the three channels first and
 trust them over this file.
 
@@ -534,7 +544,7 @@ length two are still refused, so it is the SECOND category of conservative rejec
 whose value proposition is definitive WCET and WCMU, **"reachable" needed qualifying and both framings
 are asserted**.
 
-## THE MACRO POSITION## THE MACRO POSITION
+## THE MACRO POSITION
 
 **V0.2.x completes when the five success criteria in
 [`../roadmap/V0_2_X_ROADMAP.md`](../roadmap/V0_2_X_ROADMAP.md) hold. None do.** Order 1 needs:
@@ -636,6 +646,46 @@ call-argument confound (a call cannot exceed its callee's arity, so the paramete
 malformed nested `match`, a malformed else-if chain, and an enum-pattern `match` where the corpus only
 ever matches integer literals.
 
+## THE DEFECT SESSION 52 FOUND THREE TIMES IN ONE DAY
+
+**A CHECK SATISFIED BY A DIFFERENT PART OF THE DOCUMENT FROM THE ONE IT IS ABOUT.** All three passed
+on first writing, all three were caught by MUTATION, and none by reading.
+
+| the check | what satisfied it instead |
+|---|---|
+| the push-order guard's translation clause | an unrelated `INSTRUCTION_SET.md` catalogue entry |
+| the evidence index's test citation | the COMMAND name, not the test name |
+| the README index guard | the prose BELOW the table, not the table row |
+
+**The working rule: scope a check to the entry it is about, not to the file.** A `contains` over a
+whole document is almost never the check you meant.
+
+## A MUTATION THAT FAILS TO COMPILE PROVES NOTHING, AND IT LOOKS LIKE SILENCE
+
+Adding a real `SetField` variant to test the write-accessor guard broke every exhaustive match in the
+crate. The test never ran, the grep for its failure message found nothing, and **that is
+indistinguishable from the guard not firing**. Injecting the name into the derived list instead fired
+both assertions. **Check that the mutant built** before concluding anything about the guard.
+
+## THE CORPUS WAS NEVER CHOSEN TO EXERCISE THE MEMORY MODEL, AND DID NOT
+
+Measured 2026-08-24: **79 composite construction sites and NOT ONE built inside an iterating loop
+body.** All 30 inside a `Loop` region were `match` arm results followed by `Break` — because
+**`Op::Loop` MARKS DISPATCH AS WELL AS ITERATION**, which fooled this line's first walker and the
+other line's first two.
+
+**THE DISCRIMINATOR**: a scope containing an UNCONDITIONAL `Break` targeting its own exit runs once.
+A `for` range test is a `BreakIf` and does not count.
+
+Four scripts now cover the shapes: `12_sensor_window` (confined), `13_telemetry_stream` (yielded),
+`14_frame_log` (copied to a data slot), `15_pixel_blend` (confined, **no call in the body**).
+`tests/corpus_pattern_coverage.rs` pins all of it, including that the README indexes every script.
+
+**A CORPUS TEST THAT PINS A DIRECTORY'S SIZE COUPLES THIS LINE TO ANOTHER'S WORK.** The refusal test
+pinned eleven scripts and broke the other line's absorption the moment they added witness files —
+**visible only on their tree**. The corpus is NAMED now. A lower bound plus a property tolerates
+growth; an equality does not.
+
 ## THE META-DEFECT THIS LINE KEEPS FINDING
 
 **A suite whose coverage is a property of its case list, mistaken for a property of the thing under
@@ -736,50 +786,150 @@ looked complete. **In every case the code was reachable and the evidence was not
 
 ## Open, held by the operator
 
-**NOTHING.** Twenty pull requests merged across sessions 50 and 51 and the queue is empty on this
-line. **Publication remains held**, and a prior "expedite" is not authorization for it.
+**NOTHING.** The queue is empty and `PROMPT.md` reads "No active prompt". **Publication remains
+held**, and a prior "expedite" is not authorization for it.
 
-Two questions were raised today and **both are withdrawn**: the `src/verify.rs` ownership dispute
-(it needed no ruling — see "WHAT WAS RETRACTED") and the `Op::IsStruct` removal recommendation (it
-was wrong — the opcode had four producers). **Do not re-raise either without reading that section.**
+**EIGHT RULINGS LANDED 2026-08-24. DO NOT RE-ASK THEM.**
 
-**THE ONE DECISION THAT IS GENUINELY OPEN IS NOT THE OPERATOR'S — IT IS THE NEXT SESSION'S.** The
-`CONSTS` driver route: duplicate the encoder's root-selection, lift the test's model into the
-library, or extract one definition the encoder itself consumes. The third is right in principle and
-is **not mechanical**, because `SchemaBuilder` needs a range back per contributor and cannot consume
-a flat list. `docs/decisions/CONSTS_STREAMING_BRIEF.md` carries the sharpened decision.
+| # | ruling | state |
+|---|---|---|
+| 1 | floating-point entry ABI: **yes**, FP registers feature-gated, `Fixed` always available | authorized, **not started** |
+| 2, 4 | confinement analysis: **add it**, useful-and-sound standard, shared crate | commissioned, **not started** |
+| 3 | Theorem B2 adoption | **UNRULED IN EITHER DIRECTION** — recorded as such, and it must NOT be read as declined |
+| 5 | publication | **held** |
+| 6 | `GRAMMAR.md` cross-reference to the `limit` section | done, #264 |
+| 7 | continuous-integration `Doc` job covering `self-host` | done, #264 |
+| 8 | merge sequence: proof line into this one, `v0.3.0` rebases | relayed to both lines, both took it to their own operators |
 
-**THE DEAD `native@1c1ffb1e` GATE RECORD.** Unchanged: stalled 227+ hours, no process, worktree
-clean, the `v0.3.0` line confirms nothing waits on it. Untouched because it is theirs.
+**THE `ref`/`out` LANGUAGE DECISION IS ON THE RECORD** in
+[`../decisions/YIELD_OWNERSHIP_MODE.md`](../decisions/YIELD_OWNERSHIP_MODE.md), accepted in
+principle and **not scheduled**. V0.3.0 or later, no new opcode. It names six open questions it does
+not settle. **`out` is cheaper than the proof's Theorem B2, not merely different** — it constructs
+directly into host storage, so that site has no arena region and no copy, where B2 with a
+machine-owned copy store measured WORSE than doing nothing.
 
-**THE RULINGS OF 2026-08-19 ARE ALL IMPLEMENTED OR RECORDED. Do not re-ask them.** #212 moved a
-boundary against the "Top-level struct support. Defer." ruling; the operator was told and merged it.
+**THE DEAD `native@1c1ffb1e` GATE RECORD.** Unchanged and untouched, because it is the other line's.
 
 ## WHAT A RESUMING SESSION SHOULD DO FIRST
 
-**Nothing is blocked.** The operator queue is empty and #251 is the only open pull request on this
-line.
+**Nothing is blocked and nothing is queued for the operator.** Eight rulings landed on 2026-08-24;
+six are implemented. The two that remain are WORK, and they are the two largest items on the line.
 
-**EVERY REMAINING OPTION IS NOW CORRECTLY COSTED, AND NONE OF THEM IS SMALL.** That is the main
-thing session 51 produced beyond the merges: four estimates were checked against the code and three
-were wrong in the direction of "smaller than it is".
+### 1. THE FLOATING-POINT ENTRY ABI — AUTHORIZED, NOT STARTED, AND IT NEEDS THE OTHER LINE
 
-1. **Bare-`for` support in `parse.kel`.** A SECOND LOWERING, not a relaxation -- 24 ops against 68.
-   Closing it would let `wire.kel` self-compile for the first time and let it join the byte-identity
-   corpus, which currently covers ten stages and not it. **The fix and the corpus entry are ONE
-   change**: a fix verified by a corpus that excludes the affected stage is verified by nothing.
-2. **Order 1 item 3, the operator-expression rows.** `let d = 1 + 2` needs a form-2 row carrying the
-   initialiser's node index, and the reference does not produce that from `binding_rows` either --
-   it comes from `expression_nodes_resolvable`, one of FIVE Rust extractions still walking the
-   reference AST. A pipeline analogue of that extraction is the slice.
-3. **The six remaining region kinds.** Low value per byte, and it moves PRODUCED without moving
-   COMPUTED. Four of the six need a name index the host does not hold; the route
-   (`intern_index_of`, command 140) is itself undriven and O(n^2).
-4. **`Op::cost()` against measurement.** Operator's ruling: after Order 1.
+Ruled YES. **Floating-point registers are GATED BY A FEATURE; fixed-point is ALWAYS AVAILABLE.**
+That maps onto `floats`, an existing default-on cargo feature that already gates the `Float` type
+and its two opcodes, so no new switch is needed.
 
-**WHAT NOT TO DO.** Do not re-derive the chunk table (`first_pass` computes it), do not re-diagnose
-the `wire.kel` failure (the cause is above), and do not read "codegen handles it" as "only wiring
-remains" (it handles the NODES).
+**THE TWO HALVES GATE DIFFERENTLY, AND THAT IS THE PART TO CARRY.** The `v0.3.0` line had them as
+one question because their operator judged them one. They are one question in SEQUENCING and two in
+GATING:
+
+- The FP entry ABI may assume `floats`, so a `--no-default-features` build must keep the un-floated
+  entry signature VALID rather than replaced.
+- **The `Fixed` shared-data slot layout is UNCONDITIONAL.** `Fixed` exists in every build, so their
+  `alloc_format_kind` "representation is unsettled" must be settled for all configurations and
+  `slot_entry` cannot keep refusing `Fixed` behind a float gate. **That is the harder half and it is
+  not feature-gated.**
+
+This line's surface is `src/float.rs`, `src/marshall.rs` and the target descriptor. **Sequence with
+the `v0.3.0` line before writing** — both lines have started nothing and both said so.
+
+### 2. THE CONFINEMENT ANALYSIS — COMPLETE, INCLUDING THE CALLEE SUMMARY
+
+**`src/confine.rs` answers the commissioned question** per site, over a chunk the caller holds, as
+**confined / cannot establish / escapes**. Feature `verify`. A library predicate for the other line's
+native code generation, deliberately **not wired into `verify()`** — a predicate that rejects nothing
+has no business in the load path.
+
+`chunk_confinement` is the summary-free answer; `module_confinement` summarises what each chunk does
+with each parameter first. **Two facts per parameter and both are load-bearing**: whether it can
+LEAK, and whether the return value may ALIAS it.
+
+**THE CORPUS COUNTS, WITH THEIR SCAN RULE, AND BOTH PATHS PINNED:**
+
+| path | sites | confined | escapes | cannot establish |
+|---|---|---|---|---|
+| `chunk_confinement`, no summaries | 33 | 17 | 12 | **4** |
+| `module_confinement`, summarised | 33 | **23** | 10 | **0** |
+
+Scanned `examples/scripts` FLAT. Recursively it is 251 sites, because that directory also holds
+`piano_roll/` and `rogue/` with 34 further scripts. **A bare site count is not a measurement.**
+
+**THE SECOND HALF OF THAT DELTA IS THE INTERESTING ONE.** Four `CannotEstablish` becoming `Confined`
+was the expected win. **Two `Escapes` also became `Confined`, and those were WRONG rather than merely
+unestablished** — without a summary a call's return is assumed to alias every argument, so a site
+passed to `add_2` and then reached by the enclosing `Return` was reported as escaping through a route
+that does not exist.
+
+**AND THE OTHER LINE'S CENSUS WAS RIGHT THAT ADMISSIBILITY NEEDED MEASURING AND WRONG ABOUT WHAT ITS
+MEASUREMENT SAID.** It concluded two analysis features were mandatory on day one because 3 of 3 sites
+were disqualified by `Call`. Only the boundary-dead rule was needed: `12_sensor_window.kel` calls
+`scale(raw[i])` and `raw[i]` is a `Word`. **The crude test saw the opcode and a dataflow analysis
+follows the value.** Both lines converged on this independently.
+
+**DO NOT MAKE A MISSING SUMMARY READ AS A CLEAN ONE.** Every accessor defaults to "leaks" and
+"returns". Flipping that default compiles and turns **five** tests red, including all three
+conservatism tests — measured, not asserted. It is the direction hardest to notice, because the
+verdict IMPROVES.
+
+**TERMINATION DOES NOT REST ON THE LANGUAGE'S ACYCLICITY GUARANTEE.** A chunk is summarised only once
+all its callees are, in at most `chunks.len()` rounds; a cycle never becomes ready and keeps the
+conservative answer rather than recursing.
+
+**DO NOT "FIX" THE BACKSTOP IN `apply` BY DELETING IT.** A new opcode is a compile error in
+`route_of`, but the transfer function's catch-all would accept it silently. The catch-all asks the
+classification and degrades an unhandled escaping route to `CannotEstablish`. It cannot be exercised
+without adding an opcode; what is tested is that every currently escaping opcode reaches its handler.
+
+### 3. ORDER 1, WHICH DID NOT MOVE THIS SESSION
+
+Unchanged and still correctly costed. **Bare-`for` support in `parse.kel` is the largest single
+win**: a SECOND LOWERING, not a relaxation — 24 ops against 68 — and closing it would let `wire.kel`
+self-compile for the first time and join the byte-identity corpus, which covers ten stages and not
+it. **The fix and its corpus entry are ONE change.**
+
+The `parse.kel` header machine is located: `forst.for_phase` runs 1 variable, 2 `in`, 3 low bound,
+4 high bound, 5 cap, 6 `{`, 7 body, and **phase 4 waits for the `limit` identifier that the bare
+form never supplies**.
+
+### WHAT NOT TO DO
+
+Do not re-derive the chunk table (`first_pass` computes it). Do not re-diagnose the `wire.kel`
+failure. Do not read "codegen handles it" as "only wiring remains" — it handles the NODES. Do not
+act on a ruling RELAYED by another line; take it to the operator, which cost one escalation and has
+since worked three times in both directions.
+
+## THE THIRD LINE, AND WHAT THIS LINE OWES IT
+
+A **proof line** drafts `docs/proofs/COMPOSITE_REGION_REUSE_PROOF.md`. Ruled: **it merges into this
+line, and `v0.3.0` then rebases.** Acceptance is authorized here; the branch is not offered yet and a
+fresh adversarial re-audit runs first. When it comes it must be based on `v0.2.3` directly — a pull
+request based on a feature branch triggers **no workflow at all, silently**.
+
+**THIS LINE VERIFIED THE PROOF'S PREMISES, NOT ITS PROOFS.** That distinction is the whole basis of
+the involvement and must not be read as endorsement of the mathematics. Nobody has checked the
+arguments; the proof line's own recommendation is an independent review before merge.
+
+**THE EVIDENCE THIS LINE SUPPLIED IS INDEXED IN
+[`../decisions/COMPOSITE_REGION_EVIDENCE.md`](../decisions/COMPOSITE_REGION_EVIDENCE.md)**, with
+per-row provenance, reproduction commands, and a guard (`tests/proof_evidence_index.rs`) that fails
+if a cited test is renamed or a cited line moves. **Rows marked read-from-dispatch must not be
+promoted without running them.**
+
+### THE GAP PINS FAIL ON PURPOSE — READ THE MESSAGE BEFORE "FIXING" ONE
+
+Three tests record a GAP rather than an invariant, and are written to fail when the gap closes:
+
+| test | what it records |
+|---|---|
+| `a_dispatch_break_may_carry_a_value_past_the_loop_entry_height` | break edges are never compared to loop entry, and **`match` depends on it** |
+| `composite_equality_is_content_derived_not_address_derived` | the fact the proof's address-opacity axiom rests on |
+| `the_instruction_set_has_no_write_accessor_into_a_composite` | a `SetField` would refute BOTH reuse theorems and would look like an ordinary addition |
+
+`tests/loop_entry_floor.rs` was such a pin and **was inverted rather than deleted** when the floor
+landed, with its old assertion recorded. A gap pin silently removed leaves no trace that a guarantee
+changed.
 
 ## A NOTE ON THE `/goal` MECHANISM, IF THE OPERATOR USES IT
 

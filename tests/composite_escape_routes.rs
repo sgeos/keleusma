@@ -61,7 +61,8 @@ enum Route {
 }
 
 /// The classification. Every one of the instruction set's opcodes appears
-/// exactly once; `the_classification_is_total` proves it against the enum.
+/// exactly once; `the_classification_is_total_over_the_instruction_set` proves
+/// it against the enum.
 fn classification() -> BTreeMap<&'static str, Route> {
     use Route::*;
     [
@@ -656,5 +657,245 @@ fn main() -> Word {
          not. 0 means ADDRESS-DERIVED, which refutes the address-opacity axiom \
          the composite-region-reuse proof rests on -- tell its owner rather than \
          updating this test."
+    );
+}
+
+/// The classification above and the one the shipping crate uses are the same
+/// classification.
+///
+/// # Why this exists
+///
+/// `keleusma::confine` needs the escape set to answer its question, and a
+/// second hand-written copy of a table is a table that drifts. This test makes
+/// the two agree instruction by instruction, so a change to either is a
+/// failure here rather than a silent divergence between what the analysis
+/// believes and what this file documents.
+///
+/// The two are derived DIFFERENTLY on purpose: this file keys on names parsed
+/// out of the `Op` enum's own text, and `confine::route_of` is an exhaustive
+/// `match` that fails to compile on a new opcode. Neither can be quietly
+/// widened to match the other.
+#[test]
+fn the_shipping_classification_agrees_with_this_one() {
+    use keleusma::bytecode::{ArrayElem, EnumField, NewCompositeOperand, StructField, TupleField};
+    use keleusma::confine::{Route as CrateRoute, route_of};
+    use keleusma::value_layout::{CompositeKind, ScalarKind};
+
+    let scalar = ScalarKind::Int;
+    // One instance of every opcode. A variant missing from this list is caught
+    // by the coverage assertion below, which compares against the names parsed
+    // out of the enum rather than against this list's own length.
+    let instances: Vec<Op> = vec![
+        Op::Const(0),
+        Op::GetLocal(0),
+        Op::SetLocal(0),
+        Op::GetData(0),
+        Op::SetData(0),
+        Op::GetDataIndexed(0, 0),
+        Op::SetDataIndexed(0, 0),
+        Op::BoundsCheck(0),
+        Op::Add,
+        Op::Sub,
+        Op::Mul,
+        Op::Div,
+        Op::Mod,
+        Op::Neg,
+        Op::CmpEq,
+        Op::CmpNe,
+        Op::CmpLt,
+        Op::CmpGt,
+        Op::CmpLe,
+        Op::CmpGe,
+        Op::Not,
+        Op::If(0),
+        Op::Else(0),
+        Op::EndIf,
+        Op::Loop(0),
+        Op::EndLoop(0),
+        Op::Break(0),
+        Op::BreakIf(0),
+        Op::Stream,
+        Op::Reset,
+        Op::Call(0, 0),
+        Op::Return,
+        Op::Yield,
+        Op::Dup,
+        Op::NewComposite(NewCompositeOperand::Flat {
+            kind: CompositeKind::Struct,
+            count: 0,
+            byte_size: 0,
+        }),
+        Op::GetField(StructField::Flat {
+            offset: 0,
+            kind: scalar,
+        }),
+        Op::GetIndex(ArrayElem::Flat { kind: scalar }),
+        Op::GetTupleField(TupleField::Flat {
+            offset: 0,
+            kind: scalar,
+        }),
+        Op::GetEnumField(EnumField::Flat {
+            offset: 0,
+            kind: scalar,
+        }),
+        Op::Len,
+        Op::IsEnum(0, 0, 0),
+        Op::IsStruct(0),
+        Op::IntToFloat,
+        Op::FloatToInt,
+        Op::WordToByte,
+        Op::ByteToWord,
+        Op::WordToFixed(0),
+        Op::FixedToWord(0),
+        Op::FixedMul(0),
+        Op::FixedDiv(0),
+        Op::Trap(0),
+        Op::CheckedAdd,
+        Op::CheckedSub,
+        Op::CheckedMul(0),
+        Op::CheckedNeg,
+        Op::CheckedDiv(0),
+        Op::CheckedMod,
+        Op::PushImmediate(0),
+        Op::PopN(0),
+        Op::BitAnd,
+        Op::BitOr,
+        Op::BitXor,
+        Op::Shl,
+        Op::Shr,
+        Op::CallVerifiedNative(0, 0),
+        Op::CallExternalNative(0, 0),
+    ];
+
+    // The variant name, taken from the instruction's own `Debug` rendering
+    // rather than restated beside it.
+    let name_of = |op: &Op| -> String {
+        let rendered = format!("{op:?}");
+        rendered
+            .split(['(', ' '])
+            .next()
+            .expect("a Debug rendering is non-empty")
+            .to_string()
+    };
+
+    let covered: BTreeMap<String, &Op> = instances.iter().map(|op| (name_of(op), op)).collect();
+    let names = opcode_names();
+    let missing: Vec<&String> = names.iter().filter(|n| !covered.contains_key(*n)).collect();
+    assert!(
+        missing.is_empty(),
+        "the instance list does not reach every opcode, so the agreement below \
+         is a property of the list rather than of the instruction set. \
+         Unreached: {missing:?}"
+    );
+
+    let local = classification();
+    for (name, op) in &covered {
+        let here = local
+            .get(name.as_str())
+            .unwrap_or_else(|| panic!("{name} is classified in this file"));
+        let there = route_of(op);
+        let there_here = match there {
+            CrateRoute::NoRegion => Route::NoRegion,
+            CrateRoute::WithinIteration => Route::WithinIteration,
+            CrateRoute::CopiesOut => Route::CopiesOut,
+            CrateRoute::Escapes => Route::Escapes,
+        };
+        assert_eq!(
+            *here, there_here,
+            "{name} is {here:?} in tests/composite_escape_routes.rs and \
+             {there:?} in keleusma::confine. One of the two moved without the \
+             other; the analysis and its documented basis must not diverge."
+        );
+    }
+}
+
+/// `SetDataIndexed` copies too, not only `SetData`.
+///
+/// # Why this exists separately
+///
+/// An audit counted **three** `CopiesOut` rows where the evidence index claimed
+/// two were executed: `SetData`, `SetDataIndexed`, and `NewComposite`'s flat
+/// nesting. `SetDataIndexed` was read from dispatch.
+///
+/// **By this line's own asymmetry principle a wrong `CopiesOut` is the unsound
+/// kind** — it would let a reuse plan alias a destination believed to hold a
+/// copy — so the soundness-critical rows should all be executed rather than
+/// two of three.
+///
+/// The discriminator is the same as `SetData`'s: write inside a loop, then read
+/// back across resets that reclaim the ephemeral region. A stored handle would
+/// fail `Stale`; a copy does not.
+#[test]
+fn a_composite_written_to_an_indexed_data_slot_is_copied_not_aliased() {
+    use keleusma::bytecode::GenericValue as Value;
+    use keleusma::vm::{Vm, VmState};
+
+    const SRC: &str = "\
+struct Frame { id: Word, len: Word }
+private data log { slots: [Frame; 3], seen: Word }
+loop main(t: Word) -> Word {
+    if log.seen == 0 {
+        for i in 0..3 {
+            log.slots[i] = Frame { id: i, len: i * 10 };
+        }
+        log.seen = 1;
+    }
+    let _ack = yield log.slots[2].len;
+    0
+}
+";
+    let module = compile(SRC);
+    let sites: usize = module
+        .chunks
+        .iter()
+        .map(|c| {
+            c.ops
+                .iter()
+                .filter(|o| matches!(o, Op::SetDataIndexed(..)))
+                .count()
+        })
+        .sum();
+    assert!(
+        sites > 0,
+        "no SetDataIndexed was emitted, so this test exercises the wrong opcode"
+    );
+
+    let need = keleusma::vm::required_persistent_capacity_for(&module);
+    let mut arena = keleusma_arena::Arena::with_capacity((1 << 16) + need);
+    arena.resize_persistent(need).expect("persistent region");
+    let mut vm = Vm::new(module, &arena).expect("verify");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+
+    let mut reads = Vec::new();
+    let mut resets = 0;
+    let mut epochs = Vec::new();
+    let mut state = vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call");
+    for _ in 0..5 {
+        epochs.push(vm.arena().epoch());
+        match &state {
+            VmState::Yielded(Value::Int(n)) => reads.push(*n),
+            VmState::Reset => resets += 1,
+            other => panic!("unexpected state {other:?}"),
+        }
+        state = vm
+            .resume_with_shared(&mut shared, Value::Int(0))
+            .expect("resume");
+    }
+
+    assert!(
+        resets >= 2,
+        "the run must cross two resets, or it never reclaims the region the \
+         composites were built in"
+    );
+    assert!(
+        epochs.last() > epochs.first(),
+        "the epoch never advanced, so nothing was reclaimed: {epochs:?}"
+    );
+    assert!(
+        reads.iter().all(|n| *n == 20),
+        "the indexed slot read back differently after a reset: {reads:?}. A slot \
+         holding a handle rather than a copy would fail here, which is the point."
     );
 }
