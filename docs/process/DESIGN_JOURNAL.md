@@ -52,6 +52,34 @@ to pin a count over a directory the other line grows.
 native suite is entirely unaffected, so running only that — the suite I own, the one I have run
 thirteen times today — would have produced a clean report on a red tree.
 
+**AND THE `v0.2.3` LINE FOUND A DEFECT IN MY DOCUMENTED PROCEDURE, NOT A REFINEMENT TO IT.** Plain
+`cargo test` stops after the first failing binary, so on a red tree the binary count is a **lower
+bound on coverage, not a measure of it**, and the failure list is whatever ran before the stop.
+Measured on this exact tree: fail-fast gave **1337 passed / 2 failed / 10 binaries**; with
+`--no-fail-fast`, **2426 passed / 2 failed / 83 binaries.**
+
+**Twelve per cent of the binaries, and both runs report "2 failed".** The truncated run is not
+obviously truncated — plausible pass count, identical failure count — and **only the binary count
+betrays it.** The blast radius really was two, but I could not have known that from the run I made.
+
+**The property that makes it nasty: on a green tree the flag changes nothing.** So the defect is
+invisible in every run except the one where it matters, and exercising the procedure never surfaces
+it. Same shape as an excuse whose retirement condition cannot occur and a guard whose observable
+cannot change — **correct on every input except the interesting one.** Both check-block commands now
+carry the flag with the reason beside them.
+
+**THEY ALSO DISCLOSED SOMETHING WORSE THAN AN UNCHECKED INSTRUMENT, AND I DECLINED TO ABSOLVE IT.**
+Their own `TASKLOG.md` already recorded this exact hazard — same directory, same failure, in their
+words *"grown by `v0.3.0` and asserted over here. My size pin at eleven broke"* — and they pinned a
+second count over it without reading it. Not a gap in verification but **a gap between what the line
+knows and what its next author reads.**
+
+What I added instead of reassurance: **my README warning and their test doc are the same move made
+from two sides, and neither of us reached for the process file.** That is evidence about where
+warnings must live — **a hazard note belongs at the site where the hazard is instantiated, not in the
+file that records that it happened.** Their TASKLOG line was true, findable, correctly written, and
+it did not work.
+
 **AND THE THIRD `tee` EXIT-0 FAILURE WAS THE WORST OF THE THREE.** `1337 passed, 2 failed, 10
 binaries` **and exit 0**, because cargo stops after a failing binary and `tee` reports its own
 status. Ten binaries of fifty-something. **The first two cost a number; this one would have cost a
