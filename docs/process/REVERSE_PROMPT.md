@@ -157,7 +157,14 @@ record stream, with the parts layout matching what `push_forin` reads position f
 
 ## What I would spend the next increment on
 
-**Bare-`for` support itself**, now that the refusal marks where the lowering hooks in and the cost is
-measured rather than inferred.
+**Bare-`for` support itself.** The cost is measured rather than inferred, and the design is written
+down: [`docs/decisions/BARE_FOR_IMPLEMENTATION_PLAN.md`](../decisions/BARE_FOR_IMPLEMENTATION_PLAN.md)
+carries the seven-word contract `push_forin` reads position for position, the three edits, and the
+one real design question — where the synthetic `i >= limit` and `i + 1` nodes come from, since no
+token corresponds to them.
+
+**It is three edits across two stage sources and it is not small.** Do not start it as a fragment;
+an unfinished bare path that silently mis-parses is strictly worse than the named refusal it
+replaces.
 Or the remaining `.kel` stages' own bare-`for` uses, which is what keeps `wire.kel` out of the
 byte-identity corpus.

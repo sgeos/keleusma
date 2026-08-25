@@ -948,6 +948,13 @@ work starts** — that is the pin doing its job, not a regression.
 **A BETTER ESTIMATE IS NOT A SMALL ESTIMATE.** Two stages of Keleusma, in a phase machine and a
 record stream, with the parts layout matching what `push_forin` reads position for position.
 
+**THE DESIGN IS WRITTEN DOWN**, so the next session executes rather than re-derives:
+[`../decisions/BARE_FOR_IMPLEMENTATION_PLAN.md`](../decisions/BARE_FOR_IMPLEMENTATION_PLAN.md). It
+carries the seven-word contract, the three edits, and the one real design question — the synthetic
+`i >= limit` and `i + 1` nodes, which no token corresponds to. **Finishing is `ctrl/for_bare` moving
+from `Refuses` to `SOk`**, since that case drives the whole pipeline; the four codegen-only cases
+will keep passing while `parse.kel` is wrong, because they never call it.
+
 Closing it would let `wire.kel` self-compile and join the byte-identity corpus, which covers ten
 stages and not it. **The fix and its corpus entry are ONE change.**
 
