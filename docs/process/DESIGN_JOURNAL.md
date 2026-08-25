@@ -13,6 +13,146 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**[v0.3.0] THE ARENA BOUND GAP IS ALSO AN IMMUNITY, AND MY CITATION OF THEIR MEASUREMENT WAS TOO
+STRONG (2026-08-24).**
+
+Three corrections out of one exchange with `keleusma-02`, two of them to me.
+
+**I CITED THEIR MEASUREMENT FOR MORE THAN IT SHOWS, AND THEY CAUGHT IT.** I wrote that their
+17/12/4 to 23/10/0 *"measured exactly this imprecision"* in my census. It did not. It establishes
+that *"a call in the body means an escape"* is **loose in a corpus both lines share**; it does not
+establish that any particular one of my four subjects is misfiled. Their scan is flat over
+`examples/scripts`; mine is over composite sites inside iterating loops across four directories.
+**Different populations, and the weaker claim is the true one.** Tightened in the census and the
+handoff, with the distinction spelled out so the careless version is not re-derived.
+
+That is the second time today I have had to weaken a claim about someone else's evidence, and both
+times the direction was the same: borrowing a number and inheriting a conclusion that number does
+not carry. **A measurement is scoped to its population, and citing it across populations is the same
+class as reading a stale figure beside a fresh one.**
+
+**THE PLANNER RESULT IS THE ONE WORTH KEEPING, AND IT INVERTS HOW THE GAP SHOULD BE DESCRIBED.**
+Checking whether my backend consumes escape verdicts, I found `plan_chunk_region` consumes none at
+all — no liveness, no aliasing, no confinement; the words do not appear in `region.rs`. It gives
+every static site its own offset, which is exactly the arena bound gap: `sites x size` against a
+verified `peak_live x size`, 11 of 71 modules over, unbounded in static site count.
+
+**That gap has been recorded as a cost since it was measured. It is also the reason a wrong
+confinement verdict cannot miscompile anything on this line.** A planner that reuses a slot has to be
+RIGHT that the previous occupant is dead. This one never reuses, so it never needs a verdict — not a
+correct one, not a conservative one, not any. **The conservatism that costs the bytes is what buys
+the immunity.**
+
+Their point, and the reason it went into `region.rs` rather than a decision document: **whoever
+closes the gap is buying both halves.** From that commit onward a confinement verdict wrong in the
+unsafe direction is a miscompile rather than a wasted byte, and the person writing the overlap
+optimisation is the person who needs to read that. So the doc comment on `plan_chunk_region` now
+carries the gap, the immunity, and the two facts about the verdicts it would consume — that
+`Confined` is sound while `Escapes` is only an upper bound, and that neither line can yet say
+"confined to the caller's iteration" about a region a helper built.
+
+**AND MY `Op::Return` PARAGRAPH FOUND SOMETHING ON THEIR SIDE.** I had verified that my census is not
+missing that route because `has_call` proxies it. They checked the same route against their real
+analysis and found their per-chunk scoping reports the CALLEE's site as escaping while the caller
+carries no site at all — sound, and permanently pessimistic. **So the two instruments are
+complementary rather than redundant, and neither can currently say what a planner actually wants**
+about a callee-built region. Recorded as a stated limitation on both sides rather than discovered
+later, which is the whole reason to write down what a check does not cover.
+
+**AND THE GUARD MANUFACTURED A FINDING OUT OF THE SENTENCE I WROTE ABOUT ALL THIS.** The moment
+`region.rs` gained the paragraph above, `comment_citations.rs` went red on
+**`peak_livexsize`** — the prose formula `peak_live x size`, welded into a fake identifier by the
+rule that recovers a citation wrapped across a line break. **That rule collapsed ALL whitespace**,
+and a formula separated by spaces is indistinguishable from a name split at a newline once you have
+thrown the difference away.
+
+**This is the failure mode the file's own header names as the reason its threshold was set
+carefully: a guard that manufactures findings gets switched off.** It manufactured one on the run
+that introduced the sentence.
+
+Fixed at the cause: `comment_blocks` now joins lines with `\n` rather than a space, and recovery
+rejoins **only across the newline**. The obvious alternative — reject any span containing
+whitespace — would have passed the formula case while silently losing every wrapped citation, which
+is a gap rather than noise and therefore worse. **Both directions are pinned in one test**, because
+fixing noise by creating a blind spot is the trade that looks like a fix.
+
+**THE INSTRUMENT DISCIPLINE PAID A THIRD TIME IN ONE DAY.** That run reported `27 passed, 1 failed,
+5 binaries` and **exited 0**, because `tee` returns its own status and the suite aborts after a
+failing binary. Summing the per-binary lines is what caught it; the exit code said success and the
+tail said nothing. Same lesson as the `| tail -40` truncation this morning, one layer along: **the
+signal that looks authoritative is the one that has already been transformed.**
+
+**Then the very next run inverted it.** It reported FAILED, exit 1, on a suite that was 275 passed /
+0 failed / 52 binaries. The exit code belonged to a trailing `grep -c FAILED` I had appended **as a
+safety check**: no match, grep exits 1, and a compound command reports its last command's status.
+**A check appended to a pipeline replaces the status it was meant to confirm.** Three instances in
+one day of the same thing — the authoritative-looking signal had been transformed — and the third
+was caused by guarding against the second.
+
+**THEIR NAME FOR THE PATTERN IS BETTER THAN MINE.** I had called the threshold defect "a rule
+inferred from N examples is not the N examples", and counted three instances between us in a day.
+They pointed out the shared tell: in all three the rule was **cheaper to apply than the enumeration,
+and the enumeration was available** — their compiler had printed the exact list and they wrote a
+regex; I had the measured composition and wrote a rationale. **"A cheap substitute for available
+ground truth"** names the cause rather than the symptom, and it is the version worth carrying.
+
+---
+
+---
+
+**[v0.3.0] AN `Escapes` VERDICT IS A BOUND, AND I HAD WRITTEN ONE DOWN AS A COUNT THAT MORNING
+(2026-08-24).**
+
+`keleusma-02` finished the confinement analysis and reported the half they did not aim at. Callee
+summaries closed all four cannot-establish sites, as designed. **They also moved the escape count
+from 12 to 10, and those two verdicts were wrong rather than merely unestablished** — with no
+summary a call's return is assumed to alias every argument, so a composite passed to a callee and
+then returned was reported as escaping through a route that does not exist.
+
+**Their framing is the part worth keeping: a conservative default hides false positives exactly as
+well as it hides gaps, and there is no third value to record it in.** `Escapes` and `Confined` are
+both confident answers. Nothing in the corpus said one was wrong, and it surfaced only because the
+fix for an unrelated class happened to remove the imprecision producing it. That is a different
+failure from the ones we have been trading — a `cannot-establish` announces itself; a false
+`Escapes` does not.
+
+**CHECKED AGAINST MY TREE RATHER THAN REASONED ABOUT, IN BOTH PLACES IT COULD BITE.**
+
+The backend is clean, and for a reason worth stating: `plan_chunk_region` consumes **no escape
+reasoning at all**. It walks `Op::NewComposite` and gives every static site its own monotonically
+increasing offset; `region.rs` does not mention escape, confinement, or aliasing anywhere. **The very
+conservatism that produces the arena bound gap is what removes the exposure** — a planner that never
+reuses never needs a verdict to be right. That is the first time the gap has looked like anything
+other than a cost.
+
+**The census was NOT clean, and the defect was in prose I wrote this morning.** I reported
+`d_setlocal = 4`, `d_call = 3` and concluded "**one** site is blocked by `SetLocal` alone". `d_call`
+is syntactic — it counts bodies CONTAINING a call, not composites that reach one — so the honest
+statement is **at least one**, and the two figures are bounds pointing in opposite directions:
+`sites - d_call` is a LOWER bound on what B1r alone admits, `d_call` an UPPER bound on what needs a
+summary. Their measurement makes the gap between them known to be non-zero in practice rather than
+in principle. Corrected in the census, the report it prints, the assertion's rationale, and the
+handoff.
+
+**The `> 0` assertion I chose this morning turns out to have a second and better justification than
+the one I gave it.** I wrote it as `sites > d_call` rather than `== 1` so a future call-free subject
+would not read as a regression. The stronger reason is that equality would assert a syntactic
+over-approximation as if it were a reachability result — exactly the reading their false escapes
+disprove. **The right shape for the wrong reason is still worth noticing**, because the reasoning is
+what gets reused and the reasoning was weaker than the code.
+
+**ONE THING VERIFIED THAT I EXPECTED TO BE A DEFECT.** The escape set has five routes and my census
+matches four opcodes, with no arm for `Op::Return` — which looked like an unsound omission, the bad
+direction. It is not: that route is *"a callee invoked from the loop body returning a composite it
+built"*, and a `return` in the loop itself exits the loop rather than carrying a handle into the next
+iteration. `has_call` is already its proxy. Confirmed against the proof document's route table
+instead of inferred from the opcode list, which is the same discipline that made their termination
+argument by inspection better than an appeal to acyclicity.
+
+---
+
+---
+
 **[v0.3.0] A CITATION TO A TEST THAT DOES NOT EXIST CANNOT FAIL, AND THE FLOAT GUARD HAD BEEN
 CLOSING THREE ROUTES OF FOUR (2026-08-24).**
 

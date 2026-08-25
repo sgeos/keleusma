@@ -148,6 +148,12 @@ const EXCUSED: &[(&str, &str)] = &[
          demonstrating itself",
     ),
     (
+        "peak_livexsize",
+        "the welded form of the prose formula `peak_live x size`, quoted here as \
+         the worked example of a finding this guard MANUFACTURED before the \
+         recovery rule distinguished a line break from a space",
+    ),
+    (
         "some_test_name",
         "a placeholder in this file's own prose, illustrating the SHAPE of a \
          citation rather than naming one",
@@ -257,12 +263,12 @@ fn comment_blocks(text: &str) -> Vec<String> {
                 .unwrap_or(t);
             cur.push(t.trim().to_string());
         } else if !cur.is_empty() {
-            blocks.push(cur.join(" "));
+            blocks.push(cur.join("\n"));
             cur.clear();
         }
     }
     if !cur.is_empty() {
-        blocks.push(cur.join(" "));
+        blocks.push(cur.join("\n"));
     }
     blocks
 }
@@ -283,7 +289,18 @@ fn citations(block: &str) -> Vec<String> {
             break;
         };
         let span: String = bytes[i + 1..close].iter().collect();
-        let span: String = span.split_whitespace().collect::<Vec<_>>().join("");
+        // **REJOIN ACROSS A LINE BREAK ONLY.** Collapsing ALL whitespace was the
+        // first rule here, and it welded the prose formula `peak_live x size`
+        // into `peak_livexsize` and reported it as a dangling citation -- a
+        // finding this guard manufactured out of a sentence. A wrapped
+        // identifier is split at a NEWLINE; an expression is separated by
+        // SPACES. Keeping the two apart is the whole distinction, and it is why
+        // `comment_blocks` joins with `\n` rather than with a space.
+        let span: String = span
+            .split('\n')
+            .map(|part| part.trim_matches(|c: char| c == ' ' || c == '\t'))
+            .collect::<Vec<_>>()
+            .join("");
         let ok = !span.is_empty()
             && span.chars().next().is_some_and(|c| c.is_ascii_lowercase())
             && span
@@ -465,6 +482,49 @@ fn no_excused_name_has_started_resolving() {
          Either something adopted the name -- in which case drop the excuse, the \
          citation is fine -- or the excuse was wrong when written. Do not leave \
          an excuse standing over a name that resolves"
+    );
+}
+
+/// **A GUARD THAT MANUFACTURES FINDINGS GETS SWITCHED OFF, AND THIS ONE
+/// MANUFACTURED ONE.**
+///
+/// The recovery rule for a citation wrapped across a line break originally
+/// collapsed **all** whitespace inside a backticked span. That also welds a prose
+/// formula into a fake identifier: `peak_live x size`, written in `region.rs` to
+/// describe the arena bound, became `peak_livexsize` and was reported as a
+/// dangling citation. **The guard invented a finding out of a sentence**, and it
+/// did so on the run that introduced the sentence.
+///
+/// The distinction it was missing: **a wrapped identifier is split at a NEWLINE;
+/// an expression is separated by SPACES.** `comment_blocks` now joins lines with
+/// `\n` rather than a space so the two remain distinguishable, and recovery
+/// rejoins only across the newline.
+#[test]
+fn a_prose_formula_is_not_a_citation_and_a_wrapped_name_still_is() {
+    // The real case, verbatim in shape from `region.rs`.
+    let formula = citations("the region is `peak_live x size` where the runtime");
+    assert!(
+        formula.is_empty(),
+        "a prose formula was read as a citation ({formula:?}). The guard is \
+         manufacturing findings, which is how a guard stops being trusted"
+    );
+
+    // **THE CAPABILITY THAT RULE EXISTS FOR MUST SURVIVE THE FIX.** Without this
+    // the obvious repair -- reject any span with whitespace -- would pass the
+    // assertion above while silently losing every wrapped citation, which is a
+    // gap rather than noise and therefore worse.
+    let wrapped = citations("cited as `the_float_guard_closes_\nevery_route_it_names` here");
+    assert_eq!(
+        wrapped,
+        vec!["the_float_guard_closes_every_route_it_names"],
+        "a citation wrapped across a line break is no longer recovered, so every \
+         long name that happens to wrap is now invisible to this guard"
+    );
+
+    // A multi-word span with no newline is prose, whatever it contains.
+    assert!(
+        citations("`two words`").is_empty(),
+        "a spaced span is being treated as an identifier"
     );
 }
 
