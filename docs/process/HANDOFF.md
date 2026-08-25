@@ -5,11 +5,11 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-08-25 (session 53) against `03f3e3d9`**, every pinned value below
+> **REFRESHED 2026-08-25 (session 53) against `a5905b1a`**, every pinned value below
 > re-measured and the check block executed on that tree. **THIS FILE HAS GONE STALE WITHIN HOURS
 > FIVE TIMES.** If the dates here disagree with the three channels, trust the channels.
 >
-> **AS OF `03f3e3d9`: 143 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive it:
+> **AS OF `a5905b1a`: 144 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive it:
 > `git log --oneline origin/v0.2.3 | grep -c 'Merge pull request'`. **NOTE THE REF** -- the local
 > `v0.2.3` lags and answers a smaller number for the same tree.
 >
@@ -59,9 +59,9 @@ grep -c '^\s*#\[test\]' tests/wire_slot_layout.rs           # 2
 grep -c '^\s*#\[test\]' tests/selfhost_consts_driver.rs     # 6
 grep -c '^\s*#\[test\]' tests/selfhost_region_coverage.rs   # 5
 grep -c '^\s*#\[test\]' tests/selfhost_chunk_names.rs       # 3
-grep -c '^\s*#\[test\]' tests/parse_record_trace.rs         # 4
+grep -c '^\s*#\[test\]' tests/parse_record_trace.rs         # 2
 grep -c '^\s*#\[test\]' tests/lex_token_trace.rs            # 2
-grep -c '^\s*#\[test\]' tests/selfhost_bare_for.rs          # 4
+grep -c '^\s*#\[test\]' tests/selfhost_bare_for.rs          # 6
 # THE PROOF-SUPPORT FAMILY, all added in session 52. Several are GAP pins that
 # fail DELIBERATELY if the gap they record is closed -- read the message before
 # treating a failure as a fix.
@@ -75,12 +75,12 @@ grep -c '^\s*#\[test\]' tests/loop_entry_floor.rs           # 3
 grep -c '^\s*#\[test\]' tests/corpus_pattern_coverage.rs    # 3
 # THE CONFINEMENT ANALYSIS, session 53. `confine.rs`'s own unit tests are in
 # `src/`, so the lib count moves too.
-grep -c '^\s*#\[test\]' tests/confinement_analysis.rs        # 8
+grep -c '^\s*#\[test\]' tests/confinement_analysis.rs        # 9
 grep -c '^\s*#\[test\]' src/confine.rs                       # 13
 # THE CITATION GUARD, session 53. A comment naming a test that does not exist
 # cannot fail; this makes a NEW one fail. Its 21-entry excuse list is a DEBT
 # REGISTER, not a baseline -- shrink it, never grow it.
-grep -c '^\s*#\[test\]' tests/comment_citations.rs           # 4
+grep -c '^\s*#\[test\]' tests/comment_citations.rs           # 5
 
 # `tests/stage_command_reach.rs` IS in the list now: #210 merged 2026-08-21.
 
@@ -91,7 +91,7 @@ grep -oE 'fn (nm_max_names|mi_max_nodes|fl_max_nodes|ck_max|highest_command)\(\)
 grep -oE 'fn max_nesting\(\) -> Word \{ [0-9]+ \}' src/selfhost/kel/verify_depth.kel   # 32
 
 # THE MARGIN PINS. Moved twice this session, both times for a NAMED reason.
-grep -oE 'assert_eq!\(worst_(names|blob), [0-9]+' tests/selfhost_wire.rs   # 676, 35333
+grep -oE 'assert_eq!\(worst_(names|blob), [0-9]+' tests/selfhost_wire.rs   # 677, 35376
 
 # THE PARSER'S CAPS. Unchanged; the token cap now binds only the COLLECTING feed.
 grep -rhoE 'pub const PARSE_[A-Z_]+: usize = [0-9]+;' src/ | sort
@@ -110,6 +110,44 @@ awk '/fn boundary_cases\(\)/,/^}/' tests/selfhost_codegen.rs \
 **A CHECK THAT PASSES IS NOT A CURRENT DOCUMENT.** The last one passed every check six merges after
 it was written. If the counts hold but the dates below are old, read the three channels first and
 trust them over this file.
+
+## RUN THE SUITE WITH `--no-fail-fast`, AND THE REASON IS NOT TIDINESS
+
+Plain `cargo test` **stops after the first failing binary**. So on a red tree the number of
+binaries that ran is a LOWER BOUND ON COVERAGE rather than a measure of it, and the failure list is
+whatever happened to run before the stop — not the blast radius.
+
+**Worked example, 2026-08-25.** A one-line change to `parse.kel` showed ONE failing file. Re-run
+with `--no-fail-fast`: **three** files, five tests, across two more subsystems. Shipping on the
+first reading would have broken two more things than the change appeared to touch.
+
+**The property that makes this nasty: on a GREEN tree the flag changes nothing.** The defect is
+invisible in every run except the one where it matters, so exercising the procedure never surfaces
+it. Same shape as an excuse whose retirement condition cannot occur, and a guard whose observable
+can never change — a check that is correct on every input except the interesting one.
+
+**AND READ CARGO'S OWN EXIT STATUS, NEVER A PIPELINE'S. IT LIES IN BOTH DIRECTIONS.**
+
+```
+cargo test | tee log              -> tee's status.   EXIT 0 ON A RED TREE.
+cargo test | ... | grep FAILED    -> grep's status.  EXIT 1 ON A GREEN ONE.
+```
+
+Both were hit on 2026-08-25, by both lines, in one day. The `v0.3.0` line reported a run as
+`1337 passed, 2 failed, 10 binaries` **exiting 0**, of fifty-something binaries. This line reported
+83 binaries green with an empty failure list **exiting 1**, because the trailing `grep` for failures
+found none — a safety check that inverted the verdict it was added to protect.
+
+**The rule: read the status of the thing you are asking about, never of the thing you piped it
+into.** `set -o pipefail` with `${PIPESTATUS[0]}`, or redirect to a file and read `$?` directly.
+
+**Keep TWO independent signals.** Cargo's status gives the verdict; counting `^test result: ok`
+lines gives the coverage. Either alone has been wrong: the status lied in both polarities, and a
+count cannot tell a truncated run from a complete one.
+
+**An audit of these invocations is re-runnable, not done.** This line audited its gate commands,
+reported them sound, and then wrote a new one with the inverted defect. **An audit's conclusion
+stops growing the moment it is written; the population it describes does not.**
 
 ## Derive numbers; do not copy them forward
 
