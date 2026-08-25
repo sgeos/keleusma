@@ -5,11 +5,11 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-08-25 (session 53) against `2d44056a`**, every pinned value below
+> **REFRESHED 2026-08-25 (session 53) against `cc89fbfa`**, every pinned value below
 > re-measured and the check block executed on that tree. **THIS FILE HAS GONE STALE WITHIN HOURS
 > FIVE TIMES.** If the dates here disagree with the three channels, trust the channels.
 >
-> **AS OF `2d44056a`: 145 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive it:
+> **AS OF `cc89fbfa`: 146 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive it:
 > `git log --oneline origin/v0.2.3 | grep -c 'Merge pull request'`. **NOTE THE REF** -- the local
 > `v0.2.3` lags and answers a smaller number for the same tree.
 >
@@ -98,7 +98,10 @@ grep -rhoE 'pub const PARSE_[A-Z_]+: usize = [0-9]+;' src/ | sort
 
 # THE CONSTRUCT-SUPPORT BOUNDARY. **THE ENUM HAS FOUR VARIANTS, NOT THREE**: `Gap`
 # split into `Refuses` and `Diverges` because it conflated an honest refusal with a
-# silent miscompile. Expect 90 SOk / 1 Refuses / 3 Diverges / 1 RefRejects.
+# silent miscompile. Expect 90 SOk / 2 Refuses / 3 Diverges / 1 RefRejects.
+# The second `Refuses` is `ctrl/for_bare`, added 2026-08-25: the bare loop form
+# was absent from this table entirely, so its lack of support was unverified by
+# construction.
 # **THE TABLE MOVED INTO A FUNCTION** so a second test can measure the SHIPPING
 # compiler against it. The `use Support::{...}` line inside it contributes one of
 # each name and must be excluded, or every count reads one too high.
@@ -233,7 +236,7 @@ push cancelled run `31932202253` and `31932359730` replaced it.
 | **`parse.kel` failure modes named** | **THIRTEEN**, across **ELEVEN** guarded counters |
 | shared-slot layouts | **nine copies collapsed to two definitions**, in `selfhost_host` |
 | architecture | one binary, selectable phases -- see `../decisions/PIPELINE_THEN_MONOLITH.md` |
-| construct-support boundary | **90 SOk / 1 Refuses / 3 Diverges / 1 RefRejects**, 95 cases |
+| construct-support boundary | **90 SOk / 2 Refuses / 3 Diverges / 1 RefRejects**, 96 cases |
 | **the SHIPPING compiler against that table** | **90 identical / 3 differs / 1 faults / 1 ref-rejects — it AGREES with the boundary on all 95** |
 | **chained array indexing** | **`a[0][1]` and its split form both byte-identical** |
 | operand-stack models | **agree on every one of the 66 opcodes**; the known list is EMPTY |
@@ -489,7 +492,7 @@ fifth was different**: a genuine parser gap, and the only one whose repair was a
 | differs | 21 | 11 | 5 | 5 | **3** |
 | faults | 30 | 7 | 7 | 1 | **1** |
 
-**The shipping compiler reaches the same verdict as the boundary on all 95 cases**, and the three
+**The shipping compiler reaches the same verdict as the boundary on every case**, and the three
 that differ are all already labelled `Diverges` — float arithmetic and two composite-equality gaps.
 
 **PROPORTIONALITY, AND STATE IT EVERY TIME.** `self_hosted_compile` cross-checks against the
@@ -498,7 +501,7 @@ was to direct callers of the `self_host_compile*` entry points.
 
 **THREE GUARDS NOW COVER THE CLASS, AND NONE IS SUFFICIENT ALONE.**
 - `the_shipping_compiler_matches_the_boundary_it_is_recorded_against` — per-case verdict agreement
-  through the SHIPPING compiler. Bounded by the 95 cases.
+  through the SHIPPING compiler. Bounded by the table's cases.
 - `tests/selfhost_driver_parity.rs` — compares the two drivers by STRUCTURE, so it does not depend
   on corpus coverage. **Catches three of the four slot-class defects, not all four**, and says so.
 - `tests/selfhost_chained_index.rs` — the parser repair, with a leak probe, because the record it

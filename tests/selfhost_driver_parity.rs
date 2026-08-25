@@ -25,7 +25,7 @@
 //!
 //! First, the corpus guard it complements
 //! (`selfhost_codegen::the_shipping_compiler_matches_the_boundary_it_is_recorded_against`) is
-//! only as good as the 95 cases in its table; a divergence no case exercises is invisible to it.
+//! only as good as the cases in its table; a divergence no case exercises is invisible to it.
 //! This one does not depend on corpus coverage at all.
 //!
 //! Second, **every set it derives is asserted non-vacuous**. A regex that stops matching produces
