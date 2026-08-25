@@ -89,6 +89,35 @@ safety check**: no match, grep exits 1, and a compound command reports its last 
 one day of the same thing — the authoritative-looking signal had been transformed — and the third
 was caused by guarding against the second.
 
+**AND THEN THEY RETRACTED TWO OF THE THREE FINDINGS THEY HAD HANDED ME.** `must_contain` and
+`head_name` are function parameters written inline in a single-line signature, which their
+declaration-based universe does not see; their instrument manufactured two of the three. They flagged
+it unprompted, on a number touching nothing shipped, in the direction that had flattered their own
+threshold choice. **That is harder than catching an error that breaks a test.**
+
+I had not committed the three, only quoted them back, so there was nothing to repair — but the check
+was worth running for a better reason. **My universe cannot have their blind spot**: it is built from
+every identifier token in every non-comment line, so an inline parameter is in it by construction.
+All four names through it reproduce their corrected result exactly — the two they retracted resolve,
+the one they kept does not, and the control it should have named does. **A differently-built
+instrument agreeing is corroboration; a second copy of the same method agreeing is not.**
+
+**MY OPPOSITE WEAKNESS, MEASURED RATHER THAN WAVED AT.** Token-based means permissive: a citation
+resolves if the name appears anywhere outside a comment, so this guard catches names that name
+NOTHING and cannot catch a name that names something ELSE — theirs, being stricter, would. Of 203
+distinct citations, 172 resolve via a declaration, parameter or file stem and 10 only through the
+loose path; all ten sampled are genuine, LLVM methods through `inkwell` and local bindings. Costs
+nothing today, which is a measurement and not a guarantee, and it is written into the file that way.
+**Neither instrument subsumes the other**, which is the second time today two of our tools have
+turned out complementary rather than one being the better version.
+
+**AND ONE OF THESE GUARDS BECAME LOAD-BEARING ACROSS THE BOUNDARY BETWEEN THE TWO TREES.** Quoting
+their dangling name in my documentation turned my own guard red, because it dangles here too.
+Excused with the reason that its failing to resolve IS the corroboration, plus a note to drop the
+excuse when they land the repair — and `no_excused_name_has_started_resolving` will announce that
+moment **without either line having to remember to send a message.** Every other guard I have built
+today watches one tree. This one watches theirs.
+
 **THEIR NAME FOR THE PATTERN IS BETTER THAN MINE.** I had called the threshold defect "a rule
 inferred from N examples is not the N examples", and counted three instances between us in a day.
 They pointed out the shared tell: in all three the rule was **cheaper to apply than the enumeration,

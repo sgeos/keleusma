@@ -154,6 +154,14 @@ const EXCUSED: &[(&str, &str)] = &[
          recovery rule distinguished a line break from a space",
     ),
     (
+        "orders_differ_somewhere",
+        "the `v0.2.3` line's one surviving dangling citation, quoted here as the \
+         cross-instrument check. **Its failing to resolve IS the corroboration** \
+         -- excused rather than fixed because the stale pointer is in their tree \
+         and the repair is theirs. Drop this when they land it, at which point \
+         `no_excused_name_has_started_resolving` will say so first",
+    ),
+    (
         "some_test_name",
         "a placeholder in this file's own prose, illustrating the SHAPE of a \
          citation rather than naming one",
@@ -317,6 +325,39 @@ fn citations(block: &str) -> Vec<String> {
 
 /// Every identifier written in a NON-comment line anywhere in the repository,
 /// plus every source file's stem. This is what a citation may resolve to.
+///
+/// # ⚠ THIS UNIVERSE IS PERMISSIVE, AND THAT IS THE TRADE
+///
+/// **Any token counts.** A citation resolves if the name appears anywhere outside
+/// a comment — as a declaration, a parameter, a local, a method call, a file
+/// stem. So **a citation naming the wrong thing still resolves if that name
+/// happens to exist somewhere unrelated.** This guard catches names that name
+/// NOTHING; it cannot catch a name that names something else.
+///
+/// Measured 2026-08-24 rather than left as a worry: of **203** distinct
+/// citations, **172** resolve via a declaration, a parameter, or a file stem, and
+/// **10** resolve only through the loose token path. Sampling those ten, they are
+/// genuine — LLVM API methods reached through `inkwell` (`add_global_mapping`,
+/// `run_passes`, `get_declaration`) and local bindings (`d_call`). **So the
+/// permissiveness is real and currently costs nothing**, which is a measurement
+/// and not a guarantee.
+///
+/// # THE OTHER LINE'S SCANNER HAS THE OPPOSITE WEAKNESS, AND THAT IS USEFUL
+///
+/// `keleusma-02` builds their universe from **declaration keywords and a `name:`
+/// form on an indented line**. Stricter, so a coincidental match cannot resolve
+/// a wrong citation — and it **misses parameters written inline in a single-line
+/// signature**, which made their scan report two function parameters as dangling.
+/// They handed those to this line as findings before checking, and retracted them.
+///
+/// **The two instruments fail in opposite directions**: theirs manufactures
+/// findings, this one can miss one. Neither subsumes the other, and a name both
+/// call dangling is corroborated by construction rather than by agreement between
+/// two copies of the same method. `orders_differ_somewhere` — their one surviving
+/// finding — **is absent from this universe too**, while the control it should
+/// have named, `the_two_walk_orders_genuinely_disagree_on_this_corpus`, is
+/// present. Checked here on their behalf, since a differently-built instrument
+/// agreeing is worth more than this one agreeing with itself.
 fn resolvable_universe() -> BTreeSet<String> {
     let mut universe = BTreeSet::new();
     for p in rust_and_kel_sources(&repo_root()) {
