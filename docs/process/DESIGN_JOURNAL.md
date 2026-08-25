@@ -693,6 +693,133 @@ would find it. **The expensive part of both investigations was establishing that
 believed was undecided had in fact been decided** — once by three repairs nobody had reconciled with
 the comment above them, once by a size function nobody had connected to the refusal message.
 ---
+## 2026-08-25 — the biggest remaining item was costed a third too high
+
+**Bare-`for` support was recorded as "a second lowering across three stage
+sources". Measured, it is TWO, and the hardest is already written.**
+
+| stage | state |
+|---|---|
+| `codegen.kel` | **DONE.** `push_forin` emits the whole bare lowering from a seven-word `for_parts` entry; four cases exercise it |
+| the Rust driver | **DONE.** Reads `for_parts` out of the reconstructed body |
+| `reconstruct.kel` | **DECLARED, NEVER WRITTEN.** Zero writes, against sixteen mentions of the counted form's equivalent |
+| `parse.kel` | **ABSENT.** No mention of the node, the parts, or the kind |
+
+**Why the old estimate was reasonable and still wrong.** It came from a correct
+observation — the two forms are different lowerings, not one with an optional
+clause — and inferred the WORK from the DIFFERENCE. Two lowerings means two must
+be written, *unless one already is*.
+
+**And the reason one already is closes a loop.** `codegen.kel` got the lowering
+because the codegen-only corpus drives the REFERENCE parser, so it has always
+received nodes `parse.kel` never produced. **The same corpus split that hid the
+gap is why the lowering exists and was never connected** — the construct is in a
+corpus, just not the one exercising the stage that fails.
+
+**Pinned rather than asserted.**
+`the_bare_lowering_exists_in_codegen_and_is_unreached_by_the_earlier_stages`
+measures the stage sources and distinguishes DECLARED from WRITTEN, which is the
+whole distinction: a test satisfied by the declaration would report the stage as
+done. It fails when the work starts, and says so in its message.
+
+**The mutation proving that did not take on the first attempt.** I inserted the
+write before `fn main(`, which `reconstruct.kel` does not contain, so the file
+was unchanged and the test passed for the wrong reason — a no-op mutation
+reading as evidence. Caught by checking the write count before trusting the
+result, and redone.
+
+**Three stale claims found in the handoff while correcting the cost**, one of
+them mine from two increments ago: the state table still read "`wire.kel`
+PARSES, 486 functions" after #273 deliberately retired that milestone. **The
+increment that changes a fact is where the fact is recorded, and I missed my own
+table.**
+
+
+## 2026-08-25 — the gap is now in the inventory, not only in its diagnosis
+
+**`ctrl/for_bare` is in the construct-support boundary, marked `Refuses`.** The
+table went from 95 cases to 96, at **90 SOk / 2 Refuses / 3 Diverges / 1
+RefRejects** — derived by running the classifier, not by adding one to the
+previous count.
+
+**Why the inventory and not the diagnosis file.** The gap was recorded in
+`tests/selfhost_bare_for.rs`, which is the right place for a five-layer
+diagnosis and the wrong place for an inventory. A reader consulting the boundary
+to learn whether loops are supported saw one `for` case marked `SOk`. *Any
+construct the corpus does not contain is unverified by construction* — a
+sentence already in this tree, written about this construct, in the file
+recording why it went unmeasured, while the boundary still did not contain it.
+
+**`Refuses` is now truthful rather than lucky.** The classifier catches a panic
+and files it as a refusal, so before the stage named the construct this entry
+would have been counted correctly for the wrong reason — an honest gap by
+accident of a misleading abort about a missing chunk name.
+
+**THE PIN FIRED, AND ITS OWN MESSAGE SAID WHAT TO DO.** It asserted the boundary
+carried no such case: *"if the bare form is not supported, that case's verdict
+should say so rather than the table implying coverage it does not have."*
+Followed. Its subject moved from ABSENCE to VERDICT, and **its name moved with
+it** — a test called `..._carries_no_bare_for_case` that checks a verdict is
+exactly the keep-the-name-change-the-subject failure three sibling pins were
+retired for two increments ago. Renamed, and proven to fire by marking the case
+supported.
+
+**AND I ALMOST ADDED A SECOND UNENFORCED FIGURE FOR ONE CLAIM.** My boundary
+comment cited the bare form as 26 opcodes against 70; the same file's existing
+test says 24 against 68. Both are correct — mine measured a parameter bound and
+theirs a literal one — but two numbers for one claim in one file is the defect
+this session has been recording all day. **Resolved by citing the test that
+asserts the RATIO rather than restating any number**, which is strictly better
+than reconciling them: a pointer to a live assertion cannot drift.
+
+
+## 2026-08-25 — the citation register, and a class I had not named
+
+**21 excused citations down to 13, reported in two categories because they are
+not the same event.** Seven repaired; one was never a defect. A register that
+falls because the scanner stopped manufacturing findings has not been paid down,
+and conflating the two would overstate it.
+
+**TWO OF THE SEVEN WERE REVERSALS.** A citation naming a test that asserts the
+OPPOSITE of what the tree does: one pointed at a rejection of a trailing
+semicolon after `for` that the tree now accepts, the other at a divergence
+between two compilers that has since been closed. **A dangling citation fails to
+inform; a reversed one misinforms, and does so with a plausible-looking
+pointer.**
+
+Both needed the surrounding PROSE rewritten, not the name swapped. Repointing
+`disagree` to `agree` while leaving a paragraph asserting the divergence — with a
+measured `Int(3)` in it — would have left the text wrong and the guard green.
+**That is the trap in a name-only repair**, and it is the same shape as
+repointing a test rather than retiring it: the pointer resolves, the claim does
+not.
+
+The eighth was a local written `let (a, b) = ...`, invisible to a scan that reads
+the identifier after `let `. **Third false positive of that family**, after
+inline parameters and the two forwarded earlier.
+
+**THE FILE CAUGHT ME TWICE WHILE I WAS REPAIRING IT.**
+
+My replacement prose for one repair named the nonexistent function in backticks —
+"the name cited here was `type_flat_scalar_kind`, which has never existed" — and
+the guard failed on my own explanation. Writing about a nonexistent name in
+backticks re-creates the citation. I had already hit this once today and did it
+again.
+
+Then I updated the threshold table's two-word row by SUBTRACTING the eight
+removals from 84, giving 76, one paragraph below a heading about measurements
+that are not measured. Derived: **74**. Two repairs resolved names a shorter cut
+counts and a four-word cut does not, so the arithmetic does not carry across
+rows. The miss stays in the file, because the alternative is a table that models
+the discipline it describes and was produced by ignoring it.
+
+**And the gate reported a green tree as exit 1 again**, from a trailing `grep`
+for failures — after I wrote the guidance about exactly that. The guidance was
+right and incomplete: capturing cargo's status is necessary and not sufficient,
+because a composite command takes its LAST member's status. Print the captured
+value last, or read the printed value rather than the command's.
+
+
 ## 2026-08-25 — a named refusal, and the milestone it cost
 
 **`parse.kel` now refuses the bare `for v in a..b { .. }` form by name**, at

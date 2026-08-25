@@ -17,11 +17,15 @@
 //!
 //! # Why this went unmeasured
 //!
-//! **The 95-case construct-support boundary contains exactly one `for` case, and
-//! it is the `limit` form.** There is no bare-`for` case, so its support was never
+//! **The construct-support boundary contained exactly one `for` case, and it was
+//! the `limit` form.** There was no bare-`for` case, so its support was never
 //! measured. That is the same shape as the boolean-literal and `Byte`-cast
 //! miscompiles: *any construct the corpus does not contain is unverified by
 //! construction*.
+//!
+//! **CLOSED 2026-08-25.** `ctrl/for_bare` is in the table, marked `Refuses`,
+//! taking it to 96 cases at 90 SOk / 2 Refuses / 3 Diverges / 1 RefRejects. The
+//! gap is now MEASURED rather than only diagnosed here.
 //!
 //! # The failure is loud, which is the one piece of good news
 //!
@@ -120,7 +124,7 @@ fn the_bare_form_never_yields_a_module() {
 ///
 /// | corpus | drives | bare `for` cases |
 /// |---|---|---|
-/// | `boundary_cases()` | the **whole** self-hosted pipeline, `parse.kel` included | **none** |
+/// | `boundary_cases()` | the **whole** self-hosted pipeline, `parse.kel` included | **none until 2026-08-25; now one, marked `Refuses`** |
 /// | `codegen_owns_its_constant_pool_and_matches_reference` | the REFERENCE parser, then `codegen.kel` | four |
 ///
 /// So **`codegen.kel` handles the bare `for` perfectly well** — those four cases
@@ -138,7 +142,7 @@ fn the_bare_form_never_yields_a_module() {
 /// failed, and the failure is what surfaced the distinction above — so the
 /// scoping is recorded rather than quietly corrected.
 #[test]
-fn the_full_pipeline_boundary_carries_no_bare_for_case() {
+fn the_boundary_marks_the_bare_for_case_refused_rather_than_supported() {
     const BOUNDARY: &str = include_str!("selfhost_codegen.rs");
 
     // THE TABLE ONLY. `boundary_cases()` is what drives the whole pipeline; the
@@ -162,15 +166,40 @@ fn the_full_pipeline_boundary_carries_no_bare_for_case() {
         !for_cases.is_empty(),
         "no `for` case at all in the boundary table; the reader is broken"
     );
-    for case in &for_cases {
-        assert!(
-            case.contains("limit"),
-            "the boundary table now carries a `for` case without `limit`: {case}\n\
-             If the bare form is supported by `parse.kel`, delete this file. If it is \
-             not, that case's verdict should say so rather than the table implying \
-             coverage it does not have."
-        );
-    }
+    // **THIS PIN'S OWN INSTRUCTION, FOLLOWED.** It used to require that every
+    // `for` case carry `limit`, and its failure message said: if the bare form
+    // is not supported, that case's verdict should say so rather than the table
+    // implying coverage it does not have. A `ctrl/for_bare` case marked
+    // `Refuses` was added on 2026-08-25 and does exactly that, so the pin's
+    // subject moves from ABSENCE to VERDICT.
+    //
+    // The table now implies no coverage it does not have, which is the property
+    // the original was protecting. What must not happen is the bare case
+    // appearing as supported while `parse.kel` refuses it.
+    let bare: Vec<&str> = for_cases
+        .iter()
+        .filter(|l| !l.contains("limit"))
+        .copied()
+        .collect();
+    assert_eq!(
+        bare.len(),
+        1,
+        "expected exactly one bare `for` case in the boundary table, found \
+         {}: {bare:?}. If the bare form became supported, this file's subject \
+         is gone and it should be retired rather than adjusted.",
+        bare.len()
+    );
+    let case_start = table
+        .find("\"ctrl/for_bare\"")
+        .expect("the bare case is labelled `ctrl/for_bare`");
+    let verdict = &table[case_start..case_start + 200];
+    assert!(
+        verdict.contains("Refuses"),
+        "the boundary's bare `for` case is no longer marked as refused. If \
+         `parse.kel` now lowers the bare form, retire this file; if it does \
+         not, the table is claiming coverage it does not have -- which is the \
+         defect this test was written for."
+    );
 }
 
 /// **THE TWO `for` FORMS ARE TWO CONSTRUCTS, NOT ONE WITH AN OPTIONAL CLAUSE.**
@@ -304,5 +333,79 @@ fn the_counted_form_is_still_accepted_by_the_same_entry_point() {
         parsed.functions.len(),
         2,
         "the counted form parsed, but not into the two functions it declares"
+    );
+}
+
+/// **WHERE THE BARE FORM'S SUPPORT ACTUALLY STANDS, MEASURED ACROSS THE STAGES.**
+///
+/// The recorded cost was "a second lowering across three stage sources". That
+/// was written from a correct observation — the two `for` forms are different
+/// lowerings, not one with an optional clause — and it inferred the WORK from
+/// the DIFFERENCE. Two lowerings means two must be written, unless one already
+/// is.
+///
+/// **`codegen.kel` already has it.** `push_forin` emits the whole bare lowering
+/// from a seven-word `for_parts` entry, and four bare-`for` cases exercise it in
+/// `codegen_owns_its_constant_pool_and_matches_reference`. It got written
+/// because that corpus drives the REFERENCE parser, so it has always received
+/// nodes `parse.kel` has never produced. **The same corpus split that hid the
+/// gap is why the lowering exists and was never connected.**
+///
+/// So the remaining work is two stages, not three, and the part that had to
+/// reproduce the reference byte for byte is done. **A better estimate is not a
+/// small estimate**: emitting the records in `parse.kel` and populating the
+/// parts in `reconstruct.kel` is real work in a phase machine.
+///
+/// # This is a GAP PIN
+///
+/// It fails when the work starts. That is not a regression — it means the state
+/// it records has changed, and its successor should say what became of it, as
+/// three sibling pins did when the refusal landed and one did when the boundary
+/// case did.
+#[test]
+fn the_bare_lowering_exists_in_codegen_and_is_unreached_by_the_earlier_stages() {
+    const CODEGEN: &str = include_str!("../src/selfhost/kel/codegen.kel");
+    const RECONSTRUCT: &str = include_str!("../src/selfhost/kel/reconstruct.kel");
+    const PARSE: &str = include_str!("../src/selfhost/kel/parse.kel");
+
+    // DONE: the lowering itself.
+    assert!(
+        CODEGEN.contains("fn push_forin("),
+        "`codegen.kel` no longer defines `push_forin`. If the bare lowering was \
+         renamed the cost recorded above needs re-deriving; if it was removed, \
+         the estimate is three stages again."
+    );
+
+    // NOT DONE: `reconstruct.kel` DECLARES the parts and never writes them.
+    // Declared-versus-written is the whole distinction — a test satisfied by the
+    // declaration would report the stage as done.
+    assert!(
+        RECONSTRUCT.contains("for_parts: [Word;"),
+        "`reconstruct.kel` no longer declares `for_parts`, so the measurement \
+         below is about a different structure than the one recorded"
+    );
+    let writes = RECONSTRUCT.matches("for_parts[").count();
+    assert_eq!(
+        writes, 0,
+        "`reconstruct.kel` now indexes `for_parts` {writes} time(s). **THE WORK \
+         HAS STARTED**, which is what this pin watches for. Retire it and record \
+         what the stage now does, the way the refusal and boundary pins were \
+         moved rather than deleted."
+    );
+
+    // NOT DONE: `parse.kel` does not know the node at all.
+    assert!(
+        !PARSE.contains("for_parts") && !PARSE.contains("forin"),
+        "`parse.kel` now mentions the bare form's node or its parts. **THE WORK \
+         HAS STARTED** — see the note above."
+    );
+
+    // THE CONTRAST THAT MAKES THE ZERO MEAN SOMETHING. The counted form's
+    // equivalent is populated, so "declared but unwritten" is a real state of
+    // this stage rather than an artefact of how the file is written.
+    assert!(
+        RECONSTRUCT.matches("limit_parts").count() > 10,
+        "`limit_parts` is barely referenced in `reconstruct.kel`, so the zero \
+         above no longer contrasts with anything and says little"
     );
 }

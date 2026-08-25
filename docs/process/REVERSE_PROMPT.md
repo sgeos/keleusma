@@ -15,7 +15,7 @@ two verdicts that were wrong rather than merely unestablished
 
 ## ONE THING IS WAITING ON YOU, AND IT IS NOT NEW
 
-`origin/v0.2.3` is at `a5905b1a`, **144 merges**. Publication remains held.
+`origin/v0.2.3` is at `cc89fbfa`, **146 merges**. Publication remains held.
 
 **The floating-point entry ABI is the last of your eight rulings that is not implemented**, and the
 `v0.3.0` line has attached a second question to it that you have not seen. Both are described below.
@@ -139,11 +139,32 @@ rejects it — *"the self-hosted pipeline mis-parsed a declaration boundary and 
 kept in the test's doc. If you disagree, the decision is reversible and the measurement is there to
 argue with.
 
-**This is not bare-`for` support.** Bare is 26 opcodes, `for … limit` is 70 — a second lowering
-across three stage sources, still the largest single Order 1 win, still open.
+**This is not bare-`for` support**, which remains the largest single Order 1 win. The two forms are
+different lowerings rather than one with an optional clause —
+`the_bare_and_limit_forms_have_different_lowerings` asserts the size ratio.
+
+**RE-COSTED 2026-08-25, AND IT IS TWO STAGE SOURCES, NOT THREE.** `codegen.kel` **already has the
+bare lowering**: `push_forin` emits it in full from a seven-word `for_parts` entry, and four
+bare-`for` cases exercise it — because that corpus drives the REFERENCE parser, so it has always
+received nodes `parse.kel` never produced. **The same corpus split that hid the gap is why the
+lowering exists and was never connected.** `reconstruct.kel` declares `for_parts` and writes it zero
+times, against sixteen mentions of the counted form's equivalent. Pinned by
+`the_bare_lowering_exists_in_codegen_and_is_unreached_by_the_earlier_stages`, which fails when the
+work starts.
+
+**A better estimate is not a small estimate.** Two stages of Keleusma, in a phase machine and a
+record stream, with the parts layout matching what `push_forin` reads position for position.
 
 ## What I would spend the next increment on
 
-**Bare-`for` support itself**, now that the refusal marks exactly where the second lowering hooks in.
+**Bare-`for` support itself.** The cost is measured rather than inferred, and the design is written
+down: [`docs/decisions/BARE_FOR_IMPLEMENTATION_PLAN.md`](../decisions/BARE_FOR_IMPLEMENTATION_PLAN.md)
+carries the seven-word contract `push_forin` reads position for position, the three edits, and the
+one real design question — where the synthetic `i >= limit` and `i + 1` nodes come from, since no
+token corresponds to them.
+
+**It is three edits across two stage sources and it is not small.** Do not start it as a fragment;
+an unfinished bare path that silently mis-parses is strictly worse than the named refusal it
+replaces.
 Or the remaining `.kel` stages' own bare-`for` uses, which is what keeps `wire.kel` out of the
 byte-identity corpus.

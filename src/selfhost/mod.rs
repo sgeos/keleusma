@@ -413,7 +413,7 @@ fn decode_op(w: i64) -> Op {
         // Op tags 46..=63 -- the composite/enum family and the scalar arithmetic/shift ops. These are
         // ported verbatim from the differential-oracle decoder in `tests/selfhost_codegen.rs::decode_op`
         // (the main workspace), which is the proven-correct reference. Kept in lockstep with that
-        // decoder; the `all_wire_ops_decode` regression test below guards against drift, and the
+        // decoder; the `all_wire_op_tags_decode` regression test below guards against drift, and the
         // `verify.sh` merge gate exercises this whole subproject so a future op cannot ride in undecoded.
         58 => Op::WordToByte,
         59 => Op::Add,

@@ -5,11 +5,11 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-08-25 (session 53) against `a5905b1a`**, every pinned value below
+> **REFRESHED 2026-08-25 (session 53) against `cc89fbfa`**, every pinned value below
 > re-measured and the check block executed on that tree. **THIS FILE HAS GONE STALE WITHIN HOURS
 > FIVE TIMES.** If the dates here disagree with the three channels, trust the channels.
 >
-> **AS OF `a5905b1a`: 144 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive it:
+> **AS OF `cc89fbfa`: 146 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive it:
 > `git log --oneline origin/v0.2.3 | grep -c 'Merge pull request'`. **NOTE THE REF** -- the local
 > `v0.2.3` lags and answers a smaller number for the same tree.
 >
@@ -98,7 +98,10 @@ grep -rhoE 'pub const PARSE_[A-Z_]+: usize = [0-9]+;' src/ | sort
 
 # THE CONSTRUCT-SUPPORT BOUNDARY. **THE ENUM HAS FOUR VARIANTS, NOT THREE**: `Gap`
 # split into `Refuses` and `Diverges` because it conflated an honest refusal with a
-# silent miscompile. Expect 90 SOk / 1 Refuses / 3 Diverges / 1 RefRejects.
+# silent miscompile. Expect 90 SOk / 2 Refuses / 3 Diverges / 1 RefRejects.
+# The second `Refuses` is `ctrl/for_bare`, added 2026-08-25: the bare loop form
+# was absent from this table entirely, so its lack of support was unverified by
+# construction.
 # **THE TABLE MOVED INTO A FUNCTION** so a second test can measure the SHIPPING
 # compiler against it. The `use Support::{...}` line inside it contributes one of
 # each name and must be excluded, or every count reads one too high.
@@ -140,6 +143,11 @@ found none — a safety check that inverted the verdict it was added to protect.
 
 **The rule: read the status of the thing you are asking about, never of the thing you piped it
 into.** `set -o pipefail` with `${PIPESTATUS[0]}`, or redirect to a file and read `$?` directly.
+
+**AND DO NOT PUT A FILTER LAST IN THE CHAIN.** Even with cargo's status captured correctly, a
+composite command ending in `grep -E "FAILED"` exits 1 on a green tree, because the composite takes
+its last member's status. This was written down and then repeated within the hour. Print the
+captured status LAST, or read the printed value rather than the command's.
 
 **Keep TWO independent signals.** Cargo's status gives the verdict; counting `^test result: ok`
 lines gives the coverage. Either alone has been wrong: the status lied in both polarities, and a
@@ -224,12 +232,12 @@ push cancelled run `31932202253` and `31932359730` replaced it.
 | emit path | **11 of 11 stages**; every emit-side cap removed |
 | `lexer` into `parse` | **FUSED**, one-token window, byte-identical |
 | `parse` into `reconstruct` | **FUSED at function granularity, 3.4x to 41.1x residency** |
-| **`wire.kel`** | **PARSES, 486 functions.** The last excluding cap is gone |
+| **`wire.kel`** | **REFUSED BY NAME** since #273. It used to "parse" to 486 functions -- a count the NEXT stage called a mis-parse. See the `wire.kel` section below |
 | **`parse.kel` failure modes named** | **THIRTEEN**, across **ELEVEN** guarded counters |
 | shared-slot layouts | **nine copies collapsed to two definitions**, in `selfhost_host` |
 | architecture | one binary, selectable phases -- see `../decisions/PIPELINE_THEN_MONOLITH.md` |
-| construct-support boundary | **90 SOk / 1 Refuses / 3 Diverges / 1 RefRejects**, 95 cases |
-| **the SHIPPING compiler against that table** | **90 identical / 3 differs / 1 faults / 1 ref-rejects — it AGREES with the boundary on all 95** |
+| construct-support boundary | **90 SOk / 2 Refuses / 3 Diverges / 1 RefRejects**, 96 cases |
+| **the SHIPPING compiler against that table** | **it AGREES with the boundary on every case** |
 | **chained array indexing** | **`a[0][1]` and its split form both byte-identical** |
 | operand-stack models | **agree on every one of the 66 opcodes**; the known list is EMPTY |
 
@@ -484,7 +492,7 @@ fifth was different**: a genuine parser gap, and the only one whose repair was a
 | differs | 21 | 11 | 5 | 5 | **3** |
 | faults | 30 | 7 | 7 | 1 | **1** |
 
-**The shipping compiler reaches the same verdict as the boundary on all 95 cases**, and the three
+**The shipping compiler reaches the same verdict as the boundary on every case**, and the three
 that differ are all already labelled `Diverges` — float arithmetic and two composite-equality gaps.
 
 **PROPORTIONALITY, AND STATE IT EVERY TIME.** `self_hosted_compile` cross-checks against the
@@ -493,7 +501,7 @@ was to direct callers of the `self_host_compile*` entry points.
 
 **THREE GUARDS NOW COVER THE CLASS, AND NONE IS SUFFICIENT ALONE.**
 - `the_shipping_compiler_matches_the_boundary_it_is_recorded_against` — per-case verdict agreement
-  through the SHIPPING compiler. Bounded by the 95 cases.
+  through the SHIPPING compiler. Bounded by the table's cases.
 - `tests/selfhost_driver_parity.rs` — compares the two drivers by STRUCTURE, so it does not depend
   on corpus coverage. **Catches three of the four slot-class defects, not all four**, and says so.
 - `tests/selfhost_chained_index.rs` — the parser repair, with a leak probe, because the record it
@@ -922,10 +930,33 @@ without adding an opcode; what is tested is that every currently escaping opcode
 
 ### 3. ORDER 1, WHICH DID NOT MOVE THIS SESSION
 
-Unchanged and still correctly costed. **Bare-`for` support in `parse.kel` is the largest single
-win**: a SECOND LOWERING, not a relaxation — 24 ops against 68 — and closing it would let `wire.kel`
-self-compile for the first time and join the byte-identity corpus, which covers ten stages and not
-it. **The fix and its corpus entry are ONE change.**
+Still the largest single win, and **RE-COSTED 2026-08-25 — it is TWO stage sources, not three.**
+It is a SECOND LOWERING, not a relaxation; the size ratio is asserted by
+`the_bare_and_limit_forms_have_different_lowerings` rather than quoted here, because two figures for
+one claim is a defect this session recorded four times.
+
+**`codegen.kel` ALREADY HAS THE LOWERING.** `push_forin` emits it in full from a seven-word
+`for_parts` entry, and four bare-`for` cases exercise it — because that corpus drives the REFERENCE
+parser, so it has always received nodes `parse.kel` never produced. **The same corpus split that hid
+the gap is why the lowering exists and was never connected.**
+
+`reconstruct.kel` declares `for_parts` and writes it **zero** times, against sixteen mentions of the
+counted form's equivalent. `parse.kel` does not mention the node at all. Pinned by
+`the_bare_lowering_exists_in_codegen_and_is_unreached_by_the_earlier_stages`, which **fails when the
+work starts** — that is the pin doing its job, not a regression.
+
+**A BETTER ESTIMATE IS NOT A SMALL ESTIMATE.** Two stages of Keleusma, in a phase machine and a
+record stream, with the parts layout matching what `push_forin` reads position for position.
+
+**THE DESIGN IS WRITTEN DOWN**, so the next session executes rather than re-derives:
+[`../decisions/BARE_FOR_IMPLEMENTATION_PLAN.md`](../decisions/BARE_FOR_IMPLEMENTATION_PLAN.md). It
+carries the seven-word contract, the three edits, and the one real design question — the synthetic
+`i >= limit` and `i + 1` nodes, which no token corresponds to. **Finishing is `ctrl/for_bare` moving
+from `Refuses` to `SOk`**, since that case drives the whole pipeline; the four codegen-only cases
+will keep passing while `parse.kel` is wrong, because they never call it.
+
+Closing it would let `wire.kel` self-compile and join the byte-identity corpus, which covers ten
+stages and not it. **The fix and its corpus entry are ONE change.**
 
 The `parse.kel` header machine is located: `forst.for_phase` runs 1 variable, 2 `in`, 3 low bound,
 4 high bound, 5 cap, 6 `{`, 7 body, and **phase 4 waits for the `limit` identifier that the bare

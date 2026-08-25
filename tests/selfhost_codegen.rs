@@ -8137,17 +8137,25 @@ fn boundary_cases() -> &'static [(&'static str, Support, &'static str)] {
         //
         // **AN OPS-ONLY COMPARISON WOULD HAVE CALLED THIS CLEAN.** It is why the
         // sweep that found it compares bytes.
-        // **`Ok` HERE MEANS THIS FILE'S COMPILER, AND THE LIBRARY'S DIVERGES.**
+        // **`Ok` HERE MEANS THIS FILE'S COMPILER, AND THE DIVERGENCE IS CLOSED.**
         //
-        // Measured: the reference and this file's `self_host_compile` both emit
-        // `StaticStr("hi")`; `keleusma::selfhost::self_host_compile` emits
-        // `Int(3)`, the lexer's intern id as a plain integer. Identical ops, a
-        // different constant pool.
+        // The two once differed: the reference and this file's
+        // `self_host_compile` emitted `StaticStr("hi")` while
+        // `keleusma::selfhost::self_host_compile` emitted `Int(3)`, the lexer's
+        // intern id as a plain integer — identical ops, a different constant
+        // pool. `the_two_self_hosted_compilers_agree_on_a_string_literal` now
+        // checks three-way agreement, so the next drift is caught rather than
+        // assumed absent.
         //
-        // The `Ok` is honest about what this table measures and MISLEADING about
-        // the shipping compiler, which is the whole problem with the table
-        // measuring a copy. Pinned separately and explicitly by
-        // `the_two_self_hosted_compilers_disagree_on_a_string_literal`.
+        // **THE COMMENT HERE ASSERTED THE DIVERGENCE AS A PRESENT FACT LONG
+        // AFTER IT WAS FIXED**, and cited a test named for the disagreement that
+        // was never written under that name. Both the claim and the pointer were
+        // stale, which is why repointing the name alone would not have been the
+        // repair.
+        //
+        // The standing caveat is unchanged and separate: this table measures a
+        // COPY of the compiler, so `Ok` remains a statement about this file
+        // rather than about the shipping one.
         (
             "literal/string",
             SOk,
@@ -8322,6 +8330,33 @@ fn boundary_cases() -> &'static [(&'static str, Support, &'static str)] {
             "ctrl/for_limit",
             SOk,
             "private data acc { s: Word }\nfn f(n: Word) -> Word { acc.s = 0; for i in 0..n limit 8 { acc.s = acc.s + i; } acc.s }",
+        ),
+        // **THE BARE LOOP FORM, WHICH THIS TABLE DID NOT CONTAIN UNTIL
+        // 2026-08-25.** Identical to the case above but for the missing `limit
+        // 8`, so the pair isolates the counted form's cap and nothing else.
+        //
+        // Its absence was the reason the gap went unmeasured: a construct not in
+        // this table is unverified by construction, and a reader consulting it to
+        // learn whether loops are supported saw one `for` case, marked `SOk`.
+        //
+        // `Refuses` is now the TRUTHFUL classification rather than a lucky one.
+        // The classifier catches a panic and files it here, so before the stage
+        // named the construct this would have been counted correctly for the
+        // wrong reason -- an honest gap by accident of a misleading abort about a
+        // missing chunk name. `parse.kel` phase 4 now reports it, so the entry
+        // and the user's message say the same thing.
+        //
+        // It is a SECOND LOWERING and not a relaxation. The size difference is
+        // asserted rather than restated here:
+        // `the_bare_and_limit_forms_have_different_lowerings` in
+        // `tests/selfhost_bare_for.rs` pins the RATIO. A figure quoted here
+        // would be a second unenforced number for one claim, and the two would
+        // differ anyway -- the counts depend on whether the bound is a literal
+        // or a parameter.
+        (
+            "ctrl/for_bare",
+            Refuses,
+            "private data acc { s: Word }\nfn f(n: Word) -> Word { acc.s = 0; for i in 0..n { acc.s = acc.s + i; } acc.s }",
         ),
         (
             "ctrl/loop_yield",

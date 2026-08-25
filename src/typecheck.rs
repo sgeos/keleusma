@@ -1842,7 +1842,7 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
     // Pass 1b. Build struct field types, enum variant types, and data
     // block field types. Generic types allocate a fresh `Type::Var`
     // per declared type parameter and resolve field/variant type
-    // expressions through `from_expr_with_params` so the recorded
+    // expressions through `Ctx::resolve_type_with_params` so the recorded
     // declarations carry abstract type variables. Construction at use
     // sites instantiates these abstract variables with fresh per-call
     // variables and applies the substitution to declared field types

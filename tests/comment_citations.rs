@@ -44,9 +44,17 @@
 //!
 //! | minimum words | citations | unresolved | enforced? |
 //! |---|---|---|---|
-//! | two | ~905 | 84 | no |
-//! | three | ~455 | 39 | no |
-//! | four | ~176 | **21** | the unresolved count only |
+//! | two | ~910 | 74 | no |
+//! | three | ~460 | 31 | no |
+//! | four | ~180 | **13** | the unresolved count only |
+//!
+//! **THE TWO-WORD FIGURE WAS FIRST WRITTEN AS 76 BY SUBTRACTING** the eight
+//! removed entries from the previous 84, in this file, one paragraph below a
+//! heading about measurements that are not measured. It is 74. Two of the eight
+//! repairs resolved names that a shorter cut counts and a four-word cut does
+//! not, so the arithmetic does not carry across rows. Derived, not subtracted,
+//! and the miss is left here because the alternative is a table that models the
+//! discipline it describes and was produced by ignoring it.
 //!
 //! **THE TOTALS ARE APPROXIMATE ON PURPOSE, AND THAT IS NOT MODESTY.** This
 //! scanner counts citations in this repository, and this file is in this
@@ -78,7 +86,9 @@
 //! FILE stems rather than functions, target names, and ordinary prose.
 //!
 //! **THREE OF THEM WERE FORWARDED TO ANOTHER LINE AS WORTH INVESTIGATING, AND
-//! TWO WERE THIS SCANNER'S OWN FAULT.** `must_contain` and `head_name` are
+//! TWO WERE THIS SCANNER'S OWN FAULT.** (A third false positive of the same
+//! family, tuple-destructured bindings, was found during the 2026-08-25 triage
+//! and fixed the same way.) `must_contain` and `head_name` are
 //! function parameters written inline in a single-line signature, which the
 //! `name:` rule below did not reach until it was widened. They were never
 //! defects. Only one of the three was real, and it was a stale name rather than
@@ -103,9 +113,43 @@
 //!
 //! # The allow list is a debt, not a baseline
 //!
-//! Measured 2026-08-24: **21 citations** resolve to nothing. They are listed
-//! rather than fixed because verifying each means establishing what it was
-//! meant to name, which is per-item work this increment did not do.
+//! **21 on 2026-08-24, thirteen on 2026-08-25.** The fall is deliberately
+//! reported in two categories, because they are not the same event:
+//!
+//! - **Seven citations repaired.** Each now names something a reader can find,
+//!   verified by reading the named item and confirming it supports the claim
+//!   the citing sentence makes. **Two of the seven were REVERSALS** — a
+//!   citation naming a test that asserts the OPPOSITE of what the tree does,
+//!   which is worse than naming nothing because it looks like a reference. Both
+//!   needed the surrounding prose rewritten, not just the pointer: one asserted
+//!   a trailing semicolon after `for` is rejected when it is accepted, the
+//!   other asserted two compilers diverge on a string literal when they now
+//!   agree.
+//! - **One was never a defect.** `shared_data_flat_bytes` is an ordinary local
+//!   in `compile_with_target`, written `let (a, b) = ...`, which `defined_names`
+//!   could not see — the same class as the inline-parameter miss. Fixed in the
+//!   scan, not in the comment.
+//!
+//! **Conflating those two would overstate the repair.** A register that falls
+//! because the scanner stopped manufacturing findings has not been paid down.
+//!
+//! **ONE OF THE SEVEN WAS REPAIRED TWICE, AND THE FIRST REPAIR RESOLVED WITHOUT
+//! SUPPORTING THE CLAIM.** A comment saying pass 1b resolves field and variant
+//! type expressions "through X" was repointed at
+//! `from_expr_with_params_and_frac`, which exists — but that pass calls
+//! `Ctx::resolve_type_with_params`, and the method's own documentation says it
+//! is reached THROUGH that. **A citation can resolve and still be wrong.**
+//!
+//! That is the reversal above with the volume turned down, and it is why this
+//! increment's completion condition asks for the named item to SUPPORT the
+//! claim rather than merely exist. **The guard's green is evidence about the
+//! NAME and says nothing about the claim** — nothing here can tell a correct
+//! repointing from an incorrect one, because both resolve. Anyone shrinking the
+//! register below should read that sentence twice.
+//!
+//! The thirteen that remain are listed rather than fixed because verifying each
+//! means establishing what it was meant to name, and none has a near match in
+//! the tree — they are archaeology rather than renames.
 //! **Shrink this list; never grow it.** `no_allow_list_entry_is_stale` enforces
 //! both directions: an entry whose citation was deleted, and an entry whose
 //! name has since come to exist, are equally stale. So the list cannot quietly
@@ -133,25 +177,17 @@ fn root() -> PathBuf {
 /// Each is a claim someone made in a comment that the reader cannot follow.
 /// None has been shown harmless; none has been shown harmful either.
 const UNRESOLVED: &[&str] = &[
-    "a_trailing_semicolon_after_for_is_rejected_where_after_if_it_is_accepted",
-    "all_wire_ops_decode",
     "chunks_exact_to_as_chunks",
-    "closures_rejected_at_typecheck",
     "enforce_chunk_size_limit",
-    "first_class_function_rejected_at_compile",
-    "from_expr_with_params",
     "hot_swap_new_schema_replaced",
     "layout_has_flat_text",
     "narrow_runtime_can_register_text_library_via_lifted_impl",
     "nested_option_match_is_a_language_limitation",
-    "shared_data_flat_bytes",
     "the_pipeline_rows_are_the_declared_subset",
     "the_reserved_kinds_are_not_emitted_by_any_encoder",
     "the_rules_reach_only_literal_direct_occurrences",
     "the_rules_still_do_not_reach_a_derived_operand",
     "the_token_cap_binds_only_the_collecting_feed",
-    "the_two_self_hosted_compilers_disagree_on_a_string_literal",
-    "type_flat_scalar_kind",
     "yield_dynamic_string_fails",
     "yield_tuple_with_dynamic_string_fails",
 ];
@@ -243,12 +279,25 @@ fn defined_names() -> BTreeSet<String> {
                 let mut rest = t;
                 while let Some(i) = rest.find(kw) {
                     rest = &rest[i + kw.len()..];
-                    let ident: String = rest
-                        .trim_start_matches("mut ")
-                        .chars()
-                        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
-                        .collect();
-                    if !ident.is_empty() {
+                    let after = rest.trim_start_matches("mut ");
+                    // A TUPLE-DESTRUCTURED BINDING is still a binding.
+                    // `let (a, b) = ...` used to yield nothing, because the
+                    // character after `let ` is `(`. `shared_data_flat_bytes`
+                    // was reported as a dangling citation on that ground alone
+                    // and is an ordinary local in `compile_with_target` — the
+                    // same class as the inline-parameter miss this scan was
+                    // already corrected for.
+                    let after = after.trim_start_matches(['(', ' ']);
+                    for part in after.split(',') {
+                        let ident: String = part
+                            .trim_start_matches([' ', '(', '&'])
+                            .trim_start_matches("mut ")
+                            .chars()
+                            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                            .collect();
+                        if ident.is_empty() {
+                            break;
+                        }
                         names.insert(ident);
                     }
                 }
@@ -483,7 +532,7 @@ fn no_allow_list_entry_is_stale() {
 fn the_unresolved_backlog_is_recorded() {
     assert_eq!(
         UNRESOLVED.len(),
-        21,
+        13,
         "the recorded backlog of unresolved citations changed. Down is the \
          whole point — update this number and say which citation you resolved. \
          Up needs a reason in the commit message."
