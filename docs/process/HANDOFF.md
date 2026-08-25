@@ -5,11 +5,11 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-08-25 (session 53) against `a5905b1a`**, every pinned value below
+> **REFRESHED 2026-08-25 (session 53) against `2d44056a`**, every pinned value below
 > re-measured and the check block executed on that tree. **THIS FILE HAS GONE STALE WITHIN HOURS
 > FIVE TIMES.** If the dates here disagree with the three channels, trust the channels.
 >
-> **AS OF `a5905b1a`: 144 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive it:
+> **AS OF `2d44056a`: 145 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive it:
 > `git log --oneline origin/v0.2.3 | grep -c 'Merge pull request'`. **NOTE THE REF** -- the local
 > `v0.2.3` lags and answers a smaller number for the same tree.
 >
@@ -140,6 +140,11 @@ found none — a safety check that inverted the verdict it was added to protect.
 
 **The rule: read the status of the thing you are asking about, never of the thing you piped it
 into.** `set -o pipefail` with `${PIPESTATUS[0]}`, or redirect to a file and read `$?` directly.
+
+**AND DO NOT PUT A FILTER LAST IN THE CHAIN.** Even with cargo's status captured correctly, a
+composite command ending in `grep -E "FAILED"` exits 1 on a green tree, because the composite takes
+its last member's status. This was written down and then repeated within the hour. Print the
+captured status LAST, or read the printed value rather than the command's.
 
 **Keep TWO independent signals.** Cargo's status gives the verdict; counting `^test result: ok`
 lines gives the coverage. Either alone has been wrong: the status lied in both polarities, and a

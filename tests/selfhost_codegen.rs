@@ -8137,17 +8137,25 @@ fn boundary_cases() -> &'static [(&'static str, Support, &'static str)] {
         //
         // **AN OPS-ONLY COMPARISON WOULD HAVE CALLED THIS CLEAN.** It is why the
         // sweep that found it compares bytes.
-        // **`Ok` HERE MEANS THIS FILE'S COMPILER, AND THE LIBRARY'S DIVERGES.**
+        // **`Ok` HERE MEANS THIS FILE'S COMPILER, AND THE DIVERGENCE IS CLOSED.**
         //
-        // Measured: the reference and this file's `self_host_compile` both emit
-        // `StaticStr("hi")`; `keleusma::selfhost::self_host_compile` emits
-        // `Int(3)`, the lexer's intern id as a plain integer. Identical ops, a
-        // different constant pool.
+        // The two once differed: the reference and this file's
+        // `self_host_compile` emitted `StaticStr("hi")` while
+        // `keleusma::selfhost::self_host_compile` emitted `Int(3)`, the lexer's
+        // intern id as a plain integer — identical ops, a different constant
+        // pool. `the_two_self_hosted_compilers_agree_on_a_string_literal` now
+        // checks three-way agreement, so the next drift is caught rather than
+        // assumed absent.
         //
-        // The `Ok` is honest about what this table measures and MISLEADING about
-        // the shipping compiler, which is the whole problem with the table
-        // measuring a copy. Pinned separately and explicitly by
-        // `the_two_self_hosted_compilers_disagree_on_a_string_literal`.
+        // **THE COMMENT HERE ASSERTED THE DIVERGENCE AS A PRESENT FACT LONG
+        // AFTER IT WAS FIXED**, and cited a test named for the disagreement that
+        // was never written under that name. Both the claim and the pointer were
+        // stale, which is why repointing the name alone would not have been the
+        // repair.
+        //
+        // The standing caveat is unchanged and separate: this table measures a
+        // COPY of the compiler, so `Ok` remains a statement about this file
+        // rather than about the shipping one.
         (
             "literal/string",
             SOk,
