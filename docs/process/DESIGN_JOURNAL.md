@@ -77,6 +77,34 @@ and a vacuity floor **set from a measurement** — the first draft guessed 100 a
 would have failed the suite on its first run. Must-fire proven with a deliberate dangling citation in
 `src/region.rs`, tree restored.
 
+**THEN I SUGGESTED THE STRING-STRIPPING FIX TO THE OTHER LINE AND IT BIT THEM WITHIN THE HOUR.** They
+applied a whole-file regex strip and an unbalanced quote inside a comment paired with the next quote
+elsewhere in the file, **deleting the real code between them**; their run reported two `pub fn`s as
+undefined. They caught it because those two names were ones they happened to know — *"luck rather
+than method"*, and they flagged it back rather than quietly redoing it.
+
+**Checked here rather than reasoned about, which is the only reason I can say it.** This scanner is
+structurally immune for two reasons I had not thought about when I wrote it: comment lines are
+skipped **before** stripping, so a lone quote in prose never opens a span; and the stripper is
+per-line with state reset each call, so an unbalanced quote in code cannot reach past its own line.
+Measured across the tree: every `pub fn` this package declares survives, and so do the two names
+their script lost. **Both properties are now tests rather than accidents** — making the stripper
+stateful across lines fails five of the six tests in the file.
+
+**It does drop something real, and the limitation demonstrated itself.** Keleusma sources written
+inside Rust string literals are invisible to the universe; `zz_touch` is one, and it was reported as
+dangling **on the very run that added the sentence describing the limitation.** Excused as the worked
+example. The right repair if another is ever cited is to cite the Rust test that holds it — widening
+the universe is what reintroduces the self-vouching hole.
+
+**AND THEIR THRESHOLD ANSWER CAME BACK OPPOSITE TO MINE, CORRECTLY.** They measured: two words
+897/104, three 453/48, four 175/21, and are **keeping four**, because their hidden 83 are dominated
+by standard-library items, `.kel` file stems and target names — three genuine, not eighty. Mine at
+two words cost fourteen excuses, almost all mangled symbols. **The same argument justified opposite
+thresholds on two trees, which is the right outcome**: the point was never that four is wrong, it is
+that the difference between a threshold and a blind spot is whether the number was measured. Theirs
+now carries the table and the sentence saying plainly that it is silent about shorter citations.
+
 ---
 
 **[v0.3.0] TWO OPERATOR QUESTIONS ANSWERED, AND BOTH TURNED OUT TO BE ABOUT A STALE REASON RATHER

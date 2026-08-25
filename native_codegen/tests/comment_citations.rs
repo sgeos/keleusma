@@ -141,6 +141,13 @@ const EXCUSED: &[(&str, &str)] = &[
          introduced it, which is the behaviour being demonstrated",
     ),
     (
+        "zz_touch",
+        "a Keleusma `fn` written inside a Rust test string, quoted here as the \
+         worked example of what string-stripping drops. **It dangled on the run \
+         that introduced the sentence describing it**, which is the limitation \
+         demonstrating itself",
+    ),
+    (
         "some_test_name",
         "a placeholder in this file's own prose, illustrating the SHAPE of a \
          citation rather than naming one",
@@ -458,6 +465,106 @@ fn no_excused_name_has_started_resolving() {
          Either something adopted the name -- in which case drop the excuse, the \
          citation is fine -- or the excuse was wrong when written. Do not leave \
          an excuse standing over a name that resolves"
+    );
+}
+
+/// **STRIPPING STRING LITERALS CAN SWALLOW REAL CODE, AND THIS PROVES IT DOES
+/// NOT HERE.**
+///
+/// Reported by the `v0.2.3` line against their own measurement script: they added
+/// a whole-file regex strip and **an unbalanced quote inside a comment paired with
+/// the next quote elsewhere in the file, deleting the real code between them.**
+/// Their run then reported two `pub fn`s as undefined. They caught it because
+/// those two names happened to be ones they knew — *"luck rather than method"*,
+/// their words. This test is the method.
+///
+/// # Why this scanner is not exposed to their failure, verified rather than argued
+///
+/// Two structural reasons, both checked below rather than asserted:
+///
+/// 1. **Comment lines never reach the stripper.** `resolvable_universe` skips
+///    them before stripping, so a lone quote in prose cannot open a span at all.
+/// 2. **The stripper is per-LINE**, with its state reset at every line, so an
+///    unbalanced quote in code can blank the rest of its own line and nothing
+///    beyond it. There is no cross-line span to run away.
+///
+/// # What it DOES drop, stated because it is a real limitation
+///
+/// Keleusma sources embedded in Rust string literals. `is_ident_cont`,
+/// `keyword_code` and `zz_touch` are `fn`s written inside test strings; they are
+/// real code in the repository and invisible to this universe. **A citation to
+/// one would be reported as dangling.** None is cited today. If one ever is, the
+/// fix is to cite the Rust test that holds it, not to widen the universe —
+/// widening is what reintroduces the self-vouching hole this stripping closed.
+#[test]
+fn the_string_stripper_does_not_swallow_a_definition() {
+    let universe = resolvable_universe();
+
+    // Every `pub fn` this package declares must survive stripping. These are
+    // ordinary declarations in files that embed no Keleusma sources, so any
+    // absence here is the stripper eating code rather than a known limitation.
+    let mut declared = Vec::new();
+    for p in rust_and_kel_sources(&package_root().join("src")) {
+        let Ok(text) = std::fs::read_to_string(&p) else {
+            continue;
+        };
+        for line in text.lines() {
+            if is_comment(line) {
+                continue;
+            }
+            let t = line.trim_start();
+            if let Some(rest) = t.strip_prefix("pub fn ") {
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .collect();
+                if !name.is_empty() {
+                    declared.push(name);
+                }
+            }
+        }
+    }
+    declared.sort();
+    declared.dedup();
+    assert!(
+        declared.len() >= 10,
+        "only {} `pub fn` declarations found in src/; 14 were measured on          2026-08-24, so the walk is not reading this package and the check below          proves nothing",
+        declared.len()
+    );
+
+    let missing: Vec<&String> = declared.iter().filter(|n| !universe.contains(*n)).collect();
+    assert!(
+        missing.is_empty(),
+        "{missing:?} are declared `pub fn` in this package and absent from the          resolvable universe. The string stripper has eaten real code, which is          exactly the failure the `v0.2.3` line hit. Every citation to these names          would now be reported as dangling"
+    );
+
+    // The parent crate too, since citations here routinely name it. Chosen
+    // because they are the two the other line's broken script reported.
+    for probe in ["module_wcmu", "call_with_shared"] {
+        assert!(
+            universe.contains(probe),
+            "`{probe}` is a `pub fn` in the parent crate and is absent from the              universe; the stripper is eating code across files"
+        );
+    }
+}
+
+/// The stripper's own containment property, tested directly rather than inferred
+/// from the whole-tree result above.
+#[test]
+fn an_unbalanced_quote_cannot_reach_beyond_its_own_line() {
+    // A lone quote opens a span that runs to end of line and no further.
+    let bitten = strip_string_literals(r#"let c = '"'; fn eaten_here() {}"#);
+    assert!(
+        !bitten.contains("eaten_here"),
+        "the stripper did not blank after a lone quote, so the containment claim          below is not the one being tested: {bitten}"
+    );
+
+    // **THE PROPERTY THAT MATTERS.** The next line is independent, because the
+    // stripper is called per line and holds no state between calls.
+    let next = strip_string_literals("pub fn survives_the_previous_line() {}");
+    assert!(
+        next.contains("survives_the_previous_line"),
+        "a definition on the line AFTER an unbalanced quote was blanked. The          stripper has become stateful across lines and can now swallow code the          way the `v0.2.3` line's whole-file regex did: {next}"
     );
 }
 
