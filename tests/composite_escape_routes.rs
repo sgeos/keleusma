@@ -61,7 +61,8 @@ enum Route {
 }
 
 /// The classification. Every one of the instruction set's opcodes appears
-/// exactly once; `the_classification_is_total` proves it against the enum.
+/// exactly once; `the_classification_is_total_over_the_instruction_set` proves
+/// it against the enum.
 fn classification() -> BTreeMap<&'static str, Route> {
     use Route::*;
     [
