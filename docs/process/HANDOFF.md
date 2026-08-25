@@ -5,16 +5,15 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-08-24 (session 53) against `71792ecc`**, every pinned value below
+> **REFRESHED 2026-08-24 (session 53) against `44b3d071`**, every pinned value below
 > re-measured and the check block executed on that tree. **THIS FILE HAS GONE STALE WITHIN HOURS
 > FIVE TIMES.** If the dates here disagree with the three channels, trust the channels.
 >
-> **AS OF `71792ecc`: 140 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive it:
+> **AS OF `44b3d071`: 142 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive it:
 > `git log --oneline origin/v0.2.3 | grep -c 'Merge pull request'`. **NOTE THE REF** -- the local
 > `v0.2.3` lags and answers a smaller number for the same tree.
 >
-> **THE OPERATOR QUEUE IS EMPTY. ONE OPEN PULL REQUEST**, the confinement analysis, whose branch is
-> `feat/confinement-analysis`.
+> **THE OPERATOR QUEUE IS EMPTY. NO OPEN PULL REQUEST.** Both of this session's merged at 22 of 22.
 >
 > **OF THE EIGHT RULINGS, SEVEN ARE NOW DONE.** The confinement analysis landed in session 53 as
 > `src/confine.rs`. **THE FLOATING-POINT ENTRY ABI IS THE ONE THAT REMAINS**, and the `v0.3.0` line
@@ -78,6 +77,10 @@ grep -c '^\s*#\[test\]' tests/corpus_pattern_coverage.rs    # 3
 # `src/`, so the lib count moves too.
 grep -c '^\s*#\[test\]' tests/confinement_analysis.rs        # 6
 grep -c '^\s*#\[test\]' src/confine.rs                       # 7
+# THE CITATION GUARD, session 53. A comment naming a test that does not exist
+# cannot fail; this makes a NEW one fail. Its 21-entry excuse list is a DEBT
+# REGISTER, not a baseline -- shrink it, never grow it.
+grep -c '^\s*#\[test\]' tests/comment_citations.rs           # 3
 
 # `tests/stage_command_reach.rs` IS in the list now: #210 merged 2026-08-21.
 

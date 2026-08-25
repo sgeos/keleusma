@@ -15,7 +15,7 @@ commissioned from turned out to be measuring the wrong thing
 
 ## ONE THING IS WAITING ON YOU, AND IT IS NOT NEW
 
-`origin/v0.2.3` is at `71792ecc`, **140 merges**. Publication remains held.
+`origin/v0.2.3` is at `44b3d071`, **142 merges**. Publication remains held.
 
 **The floating-point entry ABI is the last of your eight rulings that is not implemented**, and the
 `v0.3.0` line has attached a second question to it that you have not seen. Both are described below.
@@ -63,16 +63,33 @@ rather than reasoned it, and they price three options, preferring: **refuse `Fix
 host-visible position at the source and make hosts marshal through `Word`.** That is a breaking
 source change and needs your authorization. I have not acted on it and it is theirs to bring you.
 
-## A defect on my surface, reported by the other line and confirmed
+## The second thing that landed, and why it was worth the detour
 
-A comment in `src/compiler.rs` asserts that two `Op::IsStruct` routes "verify, receive a memory
-bound, load, and then trap `InvalidBytecode`" — **the exact class `verify()` exists to exclude**. My
-own repair closed both routes and the tests beside the comment prove it. An auditor reading that
-paragraph would conclude the load-time guarantee is breached while the tests disprove it. **This is
-a documentation defect, not a code defect**, and it is next.
+The `v0.3.0` line reported a comment in `src/compiler.rs` asserting that two `Op::IsStruct` routes
+"verify, receive a memory bound, load, and then trap `InvalidBytecode`" — **the exact class
+`verify()` exists to exclude** — while the tests beside it disproved it. Re-measured with controls
+rather than taken on trust: it was wrong on **three** counts, not the two reported.
 
-## Next intended step
+**Under it was the sharper defect. The comment cited a test that was never written**, twice, and the
+same file held a second dangling citation of the same kind. **A citation to a test that does not
+exist cannot fail** — the shape of the three could-not-fail checks this line paid for in session 52,
+one level up.
 
-Repair that comment, with the two named routes re-measured rather than assumed closed. Then the
-callee summary, which is the one increment the confinement analysis is missing and whose effect is
-already visible as a number that should move.
+So it is scoped by class rather than by where I looked. `tests/comment_citations.rs` requires every
+four-or-more-word backticked citation in a `src/` or `tests/` comment to resolve somewhere in the
+repository. **24 did not.** Three verified and fixed, 21 recorded as a debt register with a guard
+against the excuse list outliving its own justification in either direction.
+
+**The threshold is measured rather than asserted**, on the other line's fair point that a cut
+defended by rationale is a blind spot with a story attached: two words gives 897 citations and 104
+unresolved, three gives 453 and 48, four gives 175 and 21. The 83 extra at two words are dominated
+by standard-library names, `.kel` file stems, and prose — **three** would repay triage, not eighty.
+The file says plainly that it is silent about shorter citations.
+
+## What I would spend the next increment on
+
+**The callee summary**, which is the one thing the confinement analysis is missing and whose effect
+is already visible as a number that should move: the 4 `cannot-establish` verdicts in the corpus
+count. The call graph is acyclic, so a bottom-up summary terminates with no fixpoint.
+
+**Then Order 1's bare-`for`**, unchanged and still the largest single win.

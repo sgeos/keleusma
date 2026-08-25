@@ -10,7 +10,7 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
-> **Currency note (2026-08-24, session 53). 140 merges at `71792ecc`.**
+> **Currency note (2026-08-24, session 53). 142 merges at `44b3d071`, no open pull request.**
 >
 > **SEVEN OF THE EIGHT RULINGS ARE IMPLEMENTED.** The confinement analysis landed as
 > `src/confine.rs` (feature `verify`): per-site, three-valued, a library predicate NOT wired into
@@ -31,10 +31,16 @@ Current sprint source of truth.
 > `tests/corpus_pattern_coverage.rs` states **79** in prose, reproducing against neither rule;
 > recorded as unreproducible rather than as wrong.
 >
-> **A DEFECT ON THIS LINE'S SURFACE, REPORTED BY THE `v0.3.0` LINE AND CONFIRMED.** A comment in
-> `src/compiler.rs` asserts two `Op::IsStruct` routes verify and then trap `InvalidBytecode` -- the
-> class `verify()` exists to exclude. The repair closed both; the tests beside the comment prove it.
-> Documentation defect, next on the list.
+> **A DEFECT ON THIS LINE'S SURFACE, REPORTED BY THE `v0.3.0` LINE, CONFIRMED AND REPAIRED (#270).**
+> A comment in `src/compiler.rs` asserted two `Op::IsStruct` routes verify and then trap
+> `InvalidBytecode` -- the class `verify()` exists to exclude -- while the tests beside it disproved
+> it. Re-measured with controls: wrong on THREE counts, not the two reported.
+>
+> **UNDER IT, THE SHARPER DEFECT: THE COMMENT CITED A TEST THAT WAS NEVER WRITTEN**, twice.
+> `tests/comment_citations.rs` now requires every four-or-more-word backticked citation in a `src/`
+> or `tests/` comment to resolve. **24 did not**; three fixed, 21 a debt register guarded against
+> outliving its own justification. Threshold MEASURED, not asserted: 897/104 at two words, 453/48 at
+> three, 175/21 at four, with the 83 extra dominated by standard-library names and file stems.
 
 > **Currency note (2026-08-24, session 52 CLOSE). 139 merges at `dadbce7e`, no open pull request.**
 >
