@@ -18,7 +18,7 @@
 //! at the same region offset on every call, while the caller holds two of those
 //! results live at once. One buffer, one offset, two live values.
 //!
-//! A single composite return is fine — `callee_returns_array` below passes —
+//! A single composite return is fine — `a_single_composite_return_is_correct` below passes —
 //! which is why the corpus looked clean until a caller kept two alive.
 //!
 //! # This is the case `sret` exists for, and I said the corpus did not have one

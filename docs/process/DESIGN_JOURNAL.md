@@ -11,6 +11,74 @@ which is overwritten each session per [COMMUNICATION.md](./COMMUNICATION.md). Th
 journal was relocated out of `REVERSE_PROMPT.md` on 2026-07-22 (process-audit item 5)
 when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec. The
 content below is that accreted history, verbatim; new reasoning is appended at the top.
+---
+
+**[v0.3.0] A CITATION TO A TEST THAT DOES NOT EXIST CANNOT FAIL, AND THE FLOAT GUARD HAD BEEN
+CLOSING THREE ROUTES OF FOUR (2026-08-24).**
+
+The `v0.2.3` line repaired the stale `Op::IsStruct` comment I reported and found something under it:
+the comment cited `op_is_struct_still_has_producers_and_two_still_trap`, **a test that was never
+written**. They scoped it by class, scanned `src/` and `tests/`, found 24 unresolved citations, and
+told me.
+
+**Their scanner does not reach my surface.** `native_codegen` is a detached workspace their suite
+never builds and CI never touches. So I ran the same class check here, and the first finding is
+worse than theirs.
+
+**`src/lib.rs` claimed "the list is a claim and `the_float_guard_closes_every_route_it_names` tests
+each one" about the four routes a `Float` can take into a module. That test was never written, and
+route 3 — the native return shape — had no test at all.**
+
+**Proved rather than argued**: I disabled the route-3 guard and ran the file. **Only** the
+newly-written test failed; the other six passed. So the guard could have been deleted outright and
+nothing would have gone red. That is exactly the shape the file's own module header warns about —
+*"a guard that closes three of four while reading as total"* — committed by the file that warns
+about it. The route was implemented; only its test was missing, which is the version of this that is
+invisible to every signal except a citation check.
+
+The new test uses a **declared-but-uncalled** native, and that is the discriminating choice rather
+than the simple one. Measured: `native_return_shapes` is `[Scalar { kind: 5 }]` while the only chunk
+signature is `ret: Scalar { kind: 3 }`, so no float reaches a signature or a constant and the
+refusal can only be route 3. A native that were *called* would put a float local in play and route 2
+might reach it first. It ships with a `Word`-returning control, because without one it would pass
+just as happily if the backend refused every module declaring any native at all.
+
+**SIX MORE, AND THREE OF THEM ARE INSTRUMENTS THAT WERE NEVER BUILT.** `slot_entry` is cited four
+times across two files as the function closing route 4 and does not exist; the real one is
+`resolve_shared_scalar`, so route 4's entire safety argument named something no reader could find.
+And `spike_opcode_stack_audit.rs` opens by declaring *"Three instruments, because each is blind to
+something"* — **one was built.** `verify_typed` and `Arena::bottom_peak` appear in that file only in
+prose. **The missing instrument is the one the header itself calls indispensable**, the third, *"the
+only one of the three that is not another model."* The file's ground truth is the instrument that
+does not exist. Header corrected to a built/not-built table rather than deleted; the plan is still
+the right plan and `audit_1` did its job.
+
+**MY THRESHOLD WAS A GUESS, AND THE GUESS WAS THE BLIND SPOT.** The first scan required four
+underscore-separated words, with a confident-sounding rationale about precision. Measured: four
+words gives 79 citations and 3 unresolved; three words 183 and 10; two words 407 and 16. **The
+four-word cut found `disagrees_with_typed_verifier` and missed both its siblings in the same list** —
+reporting one third of a three-part finding — **and missed `slot_entry` entirely.** A threshold that
+hides two thirds of a finding it half-reports is not precision; it is a blind spot with a rationale.
+Lowered to two words, where the extra entries are overwhelmingly mangled symbol names that excuse
+cleanly as a class.
+
+**THE GUARD CAUGHT ITSELF TWICE, AND THE FIRST IS THE BEST THING HERE.** Its universe of resolvable
+names was built from all non-comment lines — **including the excuse table's own string literals.** So
+every excused name "resolved", to the excuse list itself. **The registry would have vouched for every
+name it suppressed**, and it would have looked green forever. Fixed by stripping string literals
+before tokenizing: a name inside a string is not a definition. Second, it flagged a directory and a
+corpus family as dangling; both are things a comment may legitimately name, so directories joined the
+universe and resolution now accepts a prefix at an underscore boundary — bounded, since `slot_entry`
+still dangles and so does the deliberate truncation left in the prose to demonstrate it.
+
+Three guards, because the excuse list is the dangerous part: no excuse outlives its citation; **an
+excuse that has become false is a lie that passes**, so an excused name that starts resolving fails;
+and a vacuity floor **set from a measurement** — the first draft guessed 100 against an actual 79 and
+would have failed the suite on its first run. Must-fire proven with a deliberate dangling citation in
+`src/region.rs`, tree restored.
+
+---
+
 **[v0.3.0] TWO OPERATOR QUESTIONS ANSWERED, AND BOTH TURNED OUT TO BE ABOUT A STALE REASON RATHER
 THAN AN OPEN DECISION (2026-08-24).**
 

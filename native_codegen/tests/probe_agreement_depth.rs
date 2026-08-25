@@ -190,7 +190,7 @@ impl Depth {
 /// Run the module once and return `(results, calls, shared_touched, shared_total)`.
 ///
 /// `seed` perturbs the entry arguments. Seed 0 reproduces `corpus_differential`'s
-/// own `args_for`, so the reported figures describe the differential's run; a
+/// own `args_for_seed`, so the reported figures describe the differential's run; a
 /// nonzero seed exists only to answer whether the output responds to its input.
 fn run_once(m: &Module, seed: i64) -> Result<(Vec<i64>, usize, usize, usize), String> {
     CALLS.with(|c| *c.borrow_mut() = 0);

@@ -1195,9 +1195,18 @@ fn lower_module_with<'ctx>(
     //   3. native return shapes    -- here
     //   4. data-segment slots      -- here
     //
-    // **The list is a claim and `the_float_guard_closes_every_route_it_names`
-    // tests each one.** A guard that closes three of four while reading as total
-    // is the shape this line keeps finding.
+    // **The list is a claim, and `float_guard_routes.rs` tests each route with a
+    // named test per route.** A guard that closes three of four while reading as
+    // total is the shape this line keeps finding.
+    //
+    // **AND THIS COMMENT WAS ITSELF AN INSTANCE OF IT UNTIL 2026-08-24.** It
+    // cited a test called `the_float_guard_closes_every_route_it_names` **that
+    // was never written**, and route 3 -- the native return shape -- had no test
+    // at all. Proved by disabling this guard: every other test in that file
+    // still passed. A citation to a test that does not exist cannot fail, so it
+    // read as coverage every time anyone checked, while being coverage for three
+    // routes. `comment_citations.rs` now scans this package for exactly
+    // that shape.
     for (i, c) in program.chunks.iter().enumerate() {
         if let Some(k) = c
             .constants
@@ -1222,7 +1231,7 @@ fn lower_module_with<'ctx>(
         )));
     }
     // Route 4, the data segment, is closed AT THE ACCESS rather than at the
-    // declaration, and deliberately not re-checked here. `slot_entry` admits
+    // declaration, and deliberately not re-checked here. `resolve_shared_scalar` admits
     // only `SCALAR_INT`, `SCALAR_BYTE` and `SCALAR_BOOL`, refusing anything else
     // as `UnsupportedDataSlot`.
     //

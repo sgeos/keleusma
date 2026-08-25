@@ -579,7 +579,7 @@ const PAYLOAD: &[u8] = b"keleusma wire payload: 0123456789 ABCDEF \x01\x02\x7f\x
 /// The subject chunk is a real compiled chunk, because verifying a chunk is what
 /// these stages do. Returns the WHOLE segment, sized from the stage's own layout,
 /// so both sides can be given identical bytes.
-/// Stages with a `stage_seed` arm. Named so the applied/not-applied line is
+/// Stages the seeding switch has an arm for. Named so the applied/not-applied line is
 /// printed for exactly those, rather than for every module in the corpus.
 const STAGE_SEEDED: &[&str] = &[
     "verify_depth.kel",
@@ -1320,7 +1320,7 @@ fn run_vm(
     let entry = m.entry_point.expect("entry");
     let n = m.chunks[entry].param_count as usize;
     // A Stream's first call is tick 0, matching the native driver's `f.call(0)`.
-    // Passing `args_for` here instead desynchronised every stream in the corpus,
+    // Passing `args_for_seed` here instead desynchronised every stream in the corpus,
     // which showed up as a call-count difference rather than a value difference.
     let vals: Vec<Value> = if m.chunks[entry].block_type == BlockType::Stream && n == 1 {
         vec![Value::Int(0)]

@@ -83,6 +83,13 @@ there. **No new field, no size change, no new opcode.**
   weaker argument than a version check, and it should be made deliberately rather than inherited.
 - **Does not cover the composite case.** A `Fixed` field inside a flat composite shared slot has the
   same problem and no spare field at all; this option is a scalar-slot answer only.
+- **AND IT REINSTATES EXACTLY THE HAZARD THE VERSION BUMP WAS TAKEN TO CLOSE.** This is the
+  `v0.2.3` line's point, made on review of this document, and it is stronger than the one above.
+  The operator authorised moving `BYTECODE_VERSION` to 2 **precisely to convert an
+  accept-then-misread into a rejection** — a version-1 artifact is now refused on the version check
+  rather than accepted and read wrong. Option A takes a `len = 0` artifact and reads it back as Q0:
+  **accepted, and silently wrong.** Adopting it would spend the guarantee that bump bought, on the
+  same class of failure, in a different field.
 
 ### B — refuse `Fixed` in a host-visible position, permanently and at the SOURCE
 
