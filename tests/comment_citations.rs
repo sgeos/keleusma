@@ -23,7 +23,10 @@
 //! `snake_case` identifiers of at least four underscore-separated words — the
 //! shape a test name has and a field name almost never does — and requires each
 //! to be defined somewhere in the repository as a function, type, constant,
-//! module, binding, or struct field, in Rust **or** in a `.kel` stage source.
+//! module, binding, struct field, or function parameter, in Rust **or** in a
+//! `.kel` stage source. **Definitions are taken from code only** — see
+//! `defined_names`, which skips comment lines so that this guard cannot vouch
+//! for prose with prose.
 //!
 //! **The four-word threshold is a heuristic and it hides things.** It does not
 //! claim every citation is a test, and it cannot: a citation may name a
@@ -37,20 +40,59 @@
 //! The `v0.3.0` line found that its own four-word cut reported one third of a
 //! three-part finding and missed the other two, and made the fair point that a
 //! threshold defended by rationale rather than measurement is a blind spot with
-//! a story attached. Measured here on 2026-08-24:
+//! a story attached. Measured 2026-08-25:
 //!
-//! | minimum words | citations | unresolved |
-//! |---|---|---|
-//! | two | 897 | 104 |
-//! | three | 453 | 48 |
-//! | four | 175 | 21 |
+//! | minimum words | citations | unresolved | enforced? |
+//! |---|---|---|---|
+//! | two | ~905 | 84 | no |
+//! | three | ~455 | 39 | no |
+//! | four | ~176 | **21** | the unresolved count only |
 //!
-//! **The 83 additional at two words are dominated by names this scan has no
-//! business resolving**: standard-library and language items (`as_bytes`,
+//! **THE TOTALS ARE APPROXIMATE ON PURPOSE, AND THAT IS NOT MODESTY.** This
+//! scanner counts citations in this repository, and this file is in this
+//! repository — so **the record of the measurement lives inside the population
+//! the measurement counts**, and writing the number down changes it. Two
+//! attempts at an exact table were wrong at the moment they were committed: the
+//! first read 897/104, 453/48, 175/21, measured before the same commit widened
+//! the universe; the second read 905/454/176 and was 906/455/177 immediately
+//! after the prose stating it was added. Each correction added prose, and prose
+//! contains citations.
+//!
+//! **An exact total is not a property this file can hold**, so chasing one is
+//! the error, not the staleness. The test to apply before publishing a figure
+//! is *does writing this down change what it counts?*
+//!
+//! **The unresolved counts are exact and held across every re-derivation** —
+//! 84, 39, 21 — because added prose contributes citations that RESOLVE rather
+//! than dangle. Totals are self-inclusive and unstable; findings are not.
+//! Precision is kept where it means something and dropped where it cannot be
+//! held. The `v0.3.0` line found this property first, in its own file, and the
+//! split is theirs.
+//!
+//! **Only the four-word unresolved count is enforced**, by
+//! `the_unresolved_backlog_is_recorded`.
+//!
+//! **The 63 unresolved that a two-word cut adds are dominated by names this
+//! scan has no business resolving**: standard-library and language items (`as_bytes`,
 //! `catch_unwind`, `size_of`, `unwrap_or`, and about twenty more), `.kel` stage
-//! FILE stems rather than functions, target names, and ordinary prose. A
-//! handful — `orders_differ_somewhere`, `must_contain`, `head_name` — would
-//! repay triage.
+//! FILE stems rather than functions, target names, and ordinary prose.
+//!
+//! **THREE OF THEM WERE FORWARDED TO ANOTHER LINE AS WORTH INVESTIGATING, AND
+//! TWO WERE THIS SCANNER'S OWN FAULT.** `must_contain` and `head_name` are
+//! function parameters written inline in a single-line signature, which the
+//! `name:` rule below did not reach until it was widened. They were never
+//! defects. Only one of the three was real, and it was a stale name rather than
+//! a missing thing: a comment in `tests/selfhost_wire.rs` cited a VACUITY
+//! CONTROL that exists under a different name, so a reader checking whether
+//! that slice could go vacuous would have found nothing and concluded there was
+//! no control. Repaired.
+//!
+//! The `v0.3.0` line ran all four names through a token-based universe built on
+//! a different principle and reached the same three verdicts, which is
+//! corroboration rather than agreement. **The two scanners fail in opposite
+//! directions**: this one is declaration-based and can MANUFACTURE a finding,
+//! theirs is token-based and can MISS one where a citation names something
+//! other than what it claims. Neither subsumes the other.
 //!
 //! Four words is therefore kept **as a signal-to-noise judgement with the noise
 //! measured**, not as a claim of completeness. Lowering it is a real option and
@@ -159,6 +201,32 @@ fn defined_names() -> BTreeSet<String> {
         };
         for line in text.lines() {
             let t = line.trim_start();
+            // **PROSE IS NOT EVIDENCE OF A DEFINITION.** A comment containing
+            // `fn foo` or `bar: Baz` would otherwise put those names in the
+            // universe, so a citation could resolve against another comment —
+            // this guard vouching for prose with prose.
+            //
+            // The `v0.3.0` line found the same coupling in a corpus-coverage
+            // audit of theirs, where two modules' exemptions were being
+            // satisfied by a paragraph rather than by the harness that actually
+            // drove them.
+            //
+            // **The exclusion costs nothing, and the evidence is this suite
+            // rather than a side measurement.** Every test here still passes
+            // with comment lines skipped, and
+            // `every_comment_citation_resolves_or_is_a_recorded_debt` is
+            // exactly the check that would fail if any citation had been
+            // resolving against prose. `a_name_only_a_comment_mentions_does_
+            // not_resolve` pins the property directly.
+            //
+            // A throwaway script written to size the class first reported "1194
+            // comment-only names, six citation-shaped". **Those six do not
+            // exist anywhere in the tree** — the script was wrong and the
+            // figures are not repeated here. It was caught only because one of
+            // the six was picked to build a test around and would not grep.
+            if t.starts_with("//") || t.starts_with('*') || t.starts_with("/*") {
+                continue;
+            }
             // Declarations: `fn f`, `struct S`, `let x`, `const C`, and the rest.
             for kw in [
                 "fn ",
@@ -185,21 +253,34 @@ fn defined_names() -> BTreeSet<String> {
                     }
                 }
             }
-            // Struct and enum fields, and named record arguments: `name:` at the
-            // start of an indented line.
-            if line.starts_with(' ')
-                && let Some(colon) = t.find(':')
-            {
-                let head = t[..colon]
-                    .trim_start_matches("pub ")
-                    .trim_start_matches("pub(crate) ")
-                    .trim();
-                if !head.is_empty()
-                    && head
-                        .chars()
-                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-                {
-                    names.insert(head.to_string());
+            // Anything bound with a `name:` type ascription: a struct or enum
+            // field, a named record argument, and — the case this missed —
+            // **a function parameter written inline in a single-line
+            // signature**.
+            //
+            // The rule was once "at the start of an indented line", which
+            // covered fields and missed `fn f(src: &str, must_contain: &str)`
+            // entirely. That MANUFACTURED findings: two of three citations
+            // this file's author forwarded to another line as worth
+            // investigating were parameters of exactly that shape, and were
+            // not defects at all. A guard that invents findings is worse than
+            // a narrow one, because it trains its reader to disregard it. So
+            // every `name:` on the line is taken, not just the first.
+            for (i, _) in t.match_indices(':') {
+                // A `::` path separator is not an ascription.
+                if t[..i].ends_with(':') || t[i + 1..].starts_with(':') {
+                    continue;
+                }
+                let head: String = t[..i]
+                    .chars()
+                    .rev()
+                    .take_while(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '_')
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+                if !head.is_empty() {
+                    names.insert(head);
                 }
             }
         }
@@ -318,6 +399,56 @@ fn every_comment_citation_resolves_or_is_a_recorded_debt() {
             .map(|(n, s)| format!("  `{n}` at {s}"))
             .collect::<Vec<_>>()
             .join("\n")
+    );
+}
+
+/// A function parameter written inline in a single-line signature resolves.
+///
+/// **This is the rule whose absence manufactured findings.** `must_contain` and
+/// `head_name` are parameters of `match_body` and `assert_multihead_matches`
+/// respectively; with the old "`name:` at the start of an indented line" rule
+/// they resolved to nothing, and both were forwarded to another line as
+/// citations worth investigating. Neither was a defect.
+///
+/// Both are below this file's four-word citation threshold, so no citation
+/// check would catch a regression here. The rule is therefore tested directly.
+/// To see it fail, restrict the `name:` scan back to indented lines.
+#[test]
+fn an_inline_function_parameter_is_a_defined_name() {
+    let defined = defined_names();
+    for (name, owner) in [
+        ("must_contain", "match_body"),
+        ("head_name", "assert_multihead_matches"),
+    ] {
+        assert!(
+            defined.contains(name),
+            "`{name}`, a parameter of `{owner}`, does not resolve. The scan has \
+             stopped reaching inline signatures, and citations naming such a \
+             parameter will be reported as dangling when they are not."
+        );
+    }
+}
+
+/// A name that only a comment mentions is NOT a definition.
+///
+/// The name below appears in this repository exactly once, in the line above
+/// it, written as a declaration inside a comment. If `defined_names` ever
+/// admits it, this guard has started vouching for prose with prose: a citation
+/// could then resolve against another comment rather than against anything
+/// that exists.
+///
+/// To see it fail, stop skipping comment lines in `defined_names`.
+// fn a_name_only_a_comment_mentions() {}
+#[test]
+fn a_name_only_a_comment_mentions_does_not_resolve() {
+    // Assembled at run time so that writing this test does not put the name
+    // into the very universe it is checking — the hazard one line up.
+    let planted = ["a_name", "only_a", "comment", "mentions"].join("_");
+    assert!(
+        !defined_names().contains(&planted),
+        "`{planted}` appears only inside a comment, and `defined_names` \
+         admitted it. Comments are not definitions; a guard that treats them as \
+         definitions can satisfy one comment's claim with another comment."
     );
 }
 

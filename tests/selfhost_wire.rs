@@ -7490,8 +7490,14 @@ fn the_interner_reports_an_input_it_cannot_hold() {
 //
 // THE INPUT IS DEPTH-FIRST, ON PURPOSE. Keleusma receives a preorder walk —
 // three words per node: tag, payload, child count. Handing it a breadth-first
-// input would make the test vacuous, so `orders_differ_somewhere` below asserts
-// that the two orders actually disagree on this corpus rather than assuming it.
+// input would make the test vacuous, so
+// `the_two_walk_orders_genuinely_disagree_on_this_corpus` below asserts that the
+// two orders actually disagree on this corpus rather than assuming it.
+//
+// **THAT CITATION NAMED A TEST THAT DOES NOT EXIST UNTIL 2026-08-24**, and the
+// control it points at was real the whole time. A reader auditing whether this
+// slice can go vacuous would have searched for the cited name, found nothing,
+// and reasonably concluded there was no control at all.
 //
 // THE ORACLE IS REAL, and that is a recent correction. This plan previously
 // recorded that the flattener would need hand-built constant trees, because all
