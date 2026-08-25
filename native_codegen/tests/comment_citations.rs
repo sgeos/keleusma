@@ -840,6 +840,53 @@ fn the_other_lines_dangling_citation_is_still_dangling() {
     );
 }
 
+/// **A NAME MENTIONED ONLY IN PROSE MUST NOT COUNT AS DEFINED.**
+///
+/// Reported by the `v0.2.3` line, who found this hole in their own definition
+/// universe: theirs scanned every line including comments, so a comment saying
+/// `fn foo` put `foo` into the set of things that EXIST. **Their guard could
+/// vouch for prose with prose** — a citation in one comment resolving against a
+/// mention in another.
+///
+/// This universe skips comment lines, so it does not have the hole. **That was
+/// asserted in a doc paragraph and is now a test**, because the property is one
+/// line of code away from being lost and nothing else would notice: every
+/// citation would keep resolving, more of them than before.
+///
+/// # The planted name is assembled at run time, and that is not decoration
+///
+/// Writing it as a literal would put it in a non-comment line and therefore in
+/// the universe it is checking — **the self-inclusion hazard that has now bitten
+/// this file three times**, most recently in an assert message. The fragments
+/// below never appear joined anywhere in the tree.
+///
+/// The name IS written in this comment, deliberately and without backticks:
+/// planted_marker_never_declared_anywhere. Backticks would make it a citation
+/// and the citation guard would flag it as dangling, which is a different test.
+/// **Its presence here is the point — a comment mention must not define it.**
+#[test]
+fn a_name_mentioned_only_in_a_comment_is_not_defined() {
+    let planted = ["planted", "marker", "never", "declared", "anywhere"].join("_");
+    let universe = resolvable_universe();
+
+    assert!(
+        !resolves(&planted, &universe),
+        "a name that appears ONLY in a comment resolved as though it were \
+         declared. Comment lines are being read into the universe, so this guard \
+         can now vouch for prose with prose: a citation in one comment would \
+         resolve against a mention in another, and every dangling citation in \
+         this package would start passing"
+    );
+
+    // The control. Without it the assertion above passes just as well if
+    // `resolves` has broken and returns false for everything.
+    assert!(
+        resolves("resolvable_universe", &universe),
+        "a real function in this very file does not resolve, so `resolves` is \
+         broken and the assertion above proves nothing"
+    );
+}
+
 /// **THE SCAN MUST REACH SOMETHING**, or an empty `dangling` above means only
 /// that nothing was read.
 ///

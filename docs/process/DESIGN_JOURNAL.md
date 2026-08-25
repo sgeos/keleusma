@@ -112,6 +112,30 @@ for every other test's claim.** Nothing about writing a citation scanner suggest
 corpus-coverage audit, and I would never have looked without their generalisation. Process
 observations have felt like bookkeeping all day; this one found a bug.
 
+**THE RECIPROCAL CAME BACK AND THEY HAD THE SAME COUPLING ONE LAYER IN.** Their definition universe
+read comment lines, so a comment saying `fn foo` defined `foo` — **their guard could vouch for prose
+with prose**, a citation in one comment resolving against a mention in another. Mine skips comments
+and does not have it, which I had asserted in a doc paragraph and have now made a test, because the
+property is one line of code away from being lost and **nothing else would notice**: every citation
+would keep resolving, more of them than before. Must-fire proven; disabling the skip fires that test
+and the excuse guard both, since with comments in the universe every excused name resolves.
+
+**THE ESCAPE ROUTE THEY FOUND IS THE CHEAPEST CHECK EITHER OF US PRODUCED TODAY.** Their sizing
+script reported six citation-shaped names; they picked one to build a test around and **it did not
+grep. None of the six existed.** Reading the list would have taught them nothing — the names look
+exactly like test names. **They caught it by trying to USE an output rather than re-reading it.**
+
+The general form: **when an instrument's output is a name, a path, or a line number, go touch what it
+points at.** It works precisely where inspection fails, because a plausible name is
+indistinguishable from a real one by looking.
+
+**I APPLIED IT TO A CLAIM I PUBLISHED TODAY AND I HAD THE SAME EXPOSURE.** The permissiveness
+paragraph says *"sampling those ten, they are genuine — LLVM API methods and local bindings."* That
+was written from script output plus pattern-recognition; **not one of the ten had been touched.** I
+grepped all ten: all ten exist. **The claim survives, but it was true and unverified when published,
+and the difference between me and them there is outcome, not method.** That is the fifth time today a
+conclusion of mine rested on something I had not checked, and the first where checking vindicated it.
+
 **THE CLASS ON MY SURFACE: 142 COMMENT LINES ACROSS 35 FILES CARRY A "MEASURED" CLAIM, AND I HAVE
 AUDITED NONE.** They disclosed ~180 on theirs and declined the sweep; I decline it too, on their
 argument, which is better than the one I would have reached for. **A blanket date-and-mark pass over
