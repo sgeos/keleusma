@@ -58,6 +58,22 @@
 //! turn this unsound in the direction hardest to notice, because the verdict
 //! would improve.
 //!
+//! # The scope is per chunk, and a callee-built region is judged in the callee
+//!
+//! A site is judged against a scope in the chunk that BUILDS it. So a helper
+//! that constructs a composite and returns it has that site judged against the
+//! helper's own invocation, where returning it is an escape — sound, and the
+//! conservative answer.
+//!
+//! **It does not answer the question a memory planner would want**, which is
+//! whether that region is confined to the CALLER's iteration. Measured: for a
+//! loop whose body calls such a helper, the site is reported in the helper as
+//! escaping and the caller carries no site at all. `module_confinement` will
+//! report it that way however tightly the caller uses the value.
+//!
+//! Inter-procedural confinement of a callee-built region is the increment that
+//! would close it, and it is not attempted here.
+//!
 //! # Known imprecision, stated rather than discovered later
 //!
 //! An indexed read of an array whose elements are composites aliases the

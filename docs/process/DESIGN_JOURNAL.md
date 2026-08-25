@@ -13,6 +13,107 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-25 — the guard manufactured two of the three findings it reported
+
+**A small increment with one lesson worth the space.** I forwarded three
+citations to the `v0.3.0` line as "genuinely worth triage" out of 83 that a
+lower threshold would have surfaced. **Two were artifacts of my own scanner.**
+
+`must_contain` and `head_name` are function parameters written inline in a
+single-line signature — `fn match_body(src: &str, header: &str, must_contain:
+&str)`. `defined_names` looked for `name:` only at the start of an INDENTED
+line, which covers struct fields and misses every inline signature in the tree.
+So the scanner reported two perfectly ordinary parameters as naming nothing, and
+I passed the list on without checking it.
+
+**The cause is the one both lines have been naming all day, with a new
+substitute.** "A cheap substitute for available ground truth" — and this time the
+substitute was *my own instrument's output*. I had the tree and a grep. Reading
+three lines of context would have settled it. **Output from an instrument you
+built feels like ground truth in a way another line's does not**, which is what
+makes the substitution easy to make and hard to notice.
+
+**The third was real and better than expected.** A comment in
+`tests/selfhost_wire.rs` cited a VACUITY CONTROL by a name that does not exist.
+The control is real — `the_two_walk_orders_genuinely_disagree_on_this_corpus` —
+so this was a stale pointer, not a missing guard. But a reader auditing whether
+that slice could go vacuous would have searched the cited name, found nothing,
+and concluded there was no control at all. That is the failure mode the whole
+guard exists for, found inside its own backlog.
+
+**The scanner now reaches inline parameters, and the rule is tested directly
+rather than through a citation.** Both names are below the four-word citation
+threshold, so no citation check would catch a regression; the test asserts the
+rule instead, and reverting it to the indented-line form compiles and turns that
+test red.
+
+**Independent corroboration, from an instrument built on the opposite
+principle.** The `v0.3.0` line ran all four names through a token-based universe
+— every identifier in every non-comment line — and reached the same three
+verdicts. That is worth more than agreement, because a token-based scan cannot
+have this blind spot by construction. **The two fail in opposite directions**:
+declaration-based manufactures findings, token-based misses a citation that
+names something other than what it claims. Recorded in both files as
+complementary rather than one being the better version.
+
+**And the guard's own documentation went stale within hours of shipping, in the
+commit that staled it.** The threshold table read 897/104, 453/48, 175/21 —
+measured before the universe was widened to reach inline parameters, in the very
+change that widened it. Re-measured: 905/84, 454/39, 176/21. **Every figure moved
+except the one a test checks.** A table of numbers in a guard, reading as
+evidence, answerable to nothing. The `v0.3.0` line named why it slips through:
+prose in a data table inherits documentation's standard of scrutiny rather than
+the register's, and every other field in such a table is checked by something.
+**And the corrected table was wrong at the moment it was committed, which is
+the finding under the finding.** This scanner counts citations in this
+repository and its own file is in this repository, so the record of the
+measurement lives inside the population it counts. The correction added prose;
+prose contains citations; the totals moved by one as they were published. Two
+exact tables, both invalid on publication.
+
+**Re-measuring is not the fix.** An exact total is not a property this file can
+hold. The totals are now approximate and the UNRESOLVED counts stay exact —
+84, 39, 21 — because they held across every re-derivation: added prose
+contributes citations that RESOLVE rather than dangle. Totals are
+self-inclusive and unstable; findings are not. The `v0.3.0` line found this
+property in its own file first and the split is theirs; the test it yields is
+usable before publishing rather than after — **does writing this down change
+what it counts?**
+
+**And the guard treated prose as evidence of a definition.** `defined_names`
+scanned every line including comments, so a comment containing `fn foo` put
+`foo` into the universe of things that exist — meaning a citation could resolve
+against another comment. **The guard could vouch for prose with prose.** The
+`v0.3.0` line found the same coupling in a coverage audit of theirs, where two
+modules' exemptions were being satisfied by a paragraph rather than by the
+harness that drove them. Repaired at the intent on both sides: a name is defined
+by code declaring it. **Both of us reached for excluding the offending file
+first, which fixes the instance and leaves the class.**
+
+**The sizing script for that class produced names that do not exist**, and I
+caught it only by trying to USE one. It reported six comment-only
+citation-shaped names; none of the six greps anywhere in the tree. The
+conclusion survived on better evidence — the shipped suite stays green with the
+exclusion, and one of its tests is exactly the check that would fail if a
+citation had been resolving against prose — but the figures were removed rather
+than repeated.
+
+**That is the fourth instrument failure of the day, all mine, all first outputs
+of something freshly written**, and the first caught before shipping. The escape
+route is worth more than the instance: **go and touch the thing the output
+points at.** Re-reading six plausible test names tells you nothing, because a
+plausible name is indistinguishable from a real one by inspection. Grepping one
+told me immediately. It is cheaper than verification and it terminates.
+
+**Also recorded: a limitation of the confinement analysis, measured rather than
+reasoned.** A site is judged in the chunk that BUILDS it, so a helper that
+constructs a composite and returns it has that site judged against the helper's
+invocation, where returning is an escape. Sound, and it does not answer whether
+the region is confined to the CALLER's iteration. Compiled the case and
+confirmed: the site is reported in the helper as escaping and the caller carries
+no site at all. Stated in the module rather than left to be discovered.
+
+
 ## 2026-08-24 — the callee summary, and a delta whose interesting half was not the one aimed at
 
 **The confinement analysis is complete.** `module_confinement` summarises what

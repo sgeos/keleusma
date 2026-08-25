@@ -15,7 +15,7 @@ two verdicts that were wrong rather than merely unestablished
 
 ## ONE THING IS WAITING ON YOU, AND IT IS NOT NEW
 
-`origin/v0.2.3` is at `44b3d071`, **142 merges**. Publication remains held.
+`origin/v0.2.3` is at `03f3e3d9`, **143 merges**. Publication remains held.
 
 **The floating-point entry ABI is the last of your eight rulings that is not implemented**, and the
 `v0.3.0` line has attached a second question to it that you have not seen. Both are described below.
@@ -97,12 +97,35 @@ unresolved, three gives 453 and 48, four gives 175 and 21. The 83 extra at two w
 by standard-library names, `.kel` file stems, and prose — **three** would repay triage, not eighty.
 The file says plainly that it is silent about shorter citations.
 
+## The smaller thing, because it is the one I would want told
+
+**My citation guard manufactured two of the three findings I forwarded to the other line.**
+`must_contain` and `head_name` are ordinary function parameters written inline in a single-line
+signature, which the scan did not reach. I passed the list on without checking it, and the substitute
+for ground truth this time was **my own instrument's output** — which feels like ground truth in a way
+another line's does not. The scanner now reaches inline parameters and the rule is tested directly.
+
+**The one that was real is the best find in it.** A comment cited a *vacuity control* by a name that
+does not exist. The control is real under another name, so the guard was never missing — but a reader
+checking whether that test could go vacuous would have found nothing and concluded there was none.
+
+## A class I measured and did NOT fix, recorded so it is not mistaken for done
+
+**A measurement written into prose, in a file where every other claim is enforced, reads as a record
+and therefore as already-checked.** My own threshold table went stale within hours — in the very
+commit that staled it — and every figure moved except the one a test pins. The `v0.3.0` line found
+the same in three blocks of one file, including one where the drifted number was the *justification*
+for a decision.
+
+**The class is large here: about 180 comment lines across `src/` and `tests/` carry a "measured"
+claim.** Most are probably fine and I have not audited them. I fixed my instance and I am not
+claiming more than that. The rule both lines arrived at independently is worth applying to new ones:
+**a measurement written into a file of tests needs a date and an enforced-or-not marker at the moment
+it is written.**
+
 ## What I would spend the next increment on
 
 **Order 1's bare-`for` in `parse.kel`**, unchanged and still the largest single win: a second
 lowering, 24 ops against 68, and closing it would let `wire.kel` self-compile for the first time and
 join the byte-identity corpus. The phase machine is located — `forst.for_phase` phase 4 waits for a
 `limit` identifier the bare form never supplies.
-
-**Or the three dangling citations worth triage** out of the 21 recorded: `orders_differ_somewhere`,
-`must_contain`, `head_name`. Small, and each is a claim a reader currently cannot follow.
