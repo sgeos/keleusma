@@ -12952,7 +12952,15 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // diagnostic code for the unsupported bare `for` form -- the first
     // UNSUPPORTED-CONSTRUCT code among eleven that are all capacity limits.
     // Predicted one and observed one.
-    assert_eq!(worst_names, 677, "the worst-case name count moved");
+    //
+    // TWELFTH MOVE: 677 -> 680, three names. The bare `for` form's support added
+    // `for_bare`, `forin_count`, `step_forin_emit`, `fold_record` and a `let`, and
+    // retired the refusal code -- a net of five against an observed three, because
+    // the count is of INTERNED names and several already existed elsewhere in the
+    // stage. **NOT PREDICTED THIS TIME**: the eleventh move's miss established
+    // that the per-name constant applies to name-only changes, and this change is
+    // not one.
+    assert_eq!(worst_names, 680, "the worst-case name count moved");
     // 35,154 -> 35,213 bytes, 59 for the two field names plus the comment-free
     // identifiers the recognition introduces. Then 35,213 -> 35,233, twenty bytes
     // for `al_elem_bytes` and the locals the nested-array sizing introduced.
@@ -12983,7 +12991,20 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // name-only changes and this is the first move to test it against something
     // else. It did not hold, and the constant should be treated as applying to
     // name-only moves until someone decomposes this one.
-    assert_eq!(worst_blob, 35376, "the worst-case blob size moved");
+    // TWELFTH MOVE: 35,376 -> 35,698, three hundred and twenty-two bytes for three
+    // names.
+    //
+    // **DELIBERATELY NOT PREDICTED.** The eleventh move's miss established that the
+    // 7-byte per-name constant was derived from name-only changes and does not hold
+    // for a change that also adds calls, branches and literals. This change adds a
+    // phase-machine branch, two emission ladders, a drain reason and a fold helper,
+    // so applying the constant would have been the same error with a bigger number.
+    //
+    // The residual is NOT decomposed. What can be said is the direction and the
+    // reason: 107 bytes per name against the name-only figure of about 18 is
+    // consistent with the bulk being code rather than identifiers, which is what
+    // this change is.
+    assert_eq!(worst_blob, 35698, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**
