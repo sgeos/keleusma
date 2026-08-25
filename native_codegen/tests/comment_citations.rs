@@ -184,16 +184,6 @@ const EXCUSED: &[(&str, &str)] = &[
          recovery rule distinguished a line break from a space",
     ),
     (
-        "orders_differ_somewhere",
-        "the `v0.2.3` line's one surviving dangling citation, quoted here as the \
-         cross-instrument check. **Its failing to resolve IS the corroboration** \
-         -- excused rather than fixed because the stale pointer is in their tree \
-         and the repair is theirs. Retired by \
-         `the_other_lines_dangling_citation_is_still_dangling`, NOT by \
-         `no_excused_name_has_started_resolving` -- see that test for why the \
-         obvious guard cannot see this one",
-    ),
-    (
         "some_test_name",
         "a placeholder in this file's own prose, illustrating the SHAPE of a \
          citation rather than naming one",
@@ -459,11 +449,22 @@ fn citations(block: &str) -> Vec<String> {
 /// **The two instruments fail in opposite directions**: theirs manufactures
 /// findings, this one can miss one. Neither subsumes the other, and a name both
 /// call dangling is corroborated by construction rather than by agreement between
-/// two copies of the same method. `orders_differ_somewhere` — their one surviving
-/// finding — **is absent from this universe too**, while the control it should
-/// have named, `the_two_walk_orders_genuinely_disagree_on_this_corpus`, is
-/// present. Checked here on their behalf, since a differently-built instrument
-/// agreeing is worth more than this one agreeing with itself.
+/// two copies of the same method.
+///
+/// **PAST TENSE, AND THE HISTORY IS THE POINT.** Their scan's one surviving
+/// finding was **absent from this universe too**, while the control it should
+/// have named was present — checked here on their behalf, because a
+/// differently-built instrument agreeing is worth more than this one agreeing
+/// with itself. **They repaired it, and absorption 8 brought the repair here.**
+///
+/// A guard watched for exactly that: it asserted their dangling citation was
+/// still dangling, so that its FAILURE would be the hand-off. **It fired on the
+/// absorption that carried the repair**, naming the three edits to make — drop
+/// the excuse, put this paragraph in the past tense, delete the guard. All three
+/// are done and the guard is gone. **Neither line designed a cross-tree hand-off;
+/// this was the first, and it worked without either line remembering to send a
+/// message.** Recorded because the mechanism is reusable and the instance is
+/// spent.
 fn resolvable_universe() -> BTreeSet<String> {
     let mut universe = BTreeSet::new();
     for p in rust_and_kel_sources(&repo_root()) {
@@ -772,71 +773,6 @@ fn an_unbalanced_quote_cannot_reach_beyond_its_own_line() {
     assert!(
         next.contains("survives_the_previous_line"),
         "a definition on the line AFTER an unbalanced quote was blanked. The          stripper has become stateful across lines and can now swallow code the          way the `v0.2.3` line's whole-file regex did: {next}"
-    );
-}
-
-/// **AN EXCUSE THAT REFERENCES ANOTHER LINE'S STATE NEEDS A GUARD ON THAT STATE,
-/// AND THE OBVIOUS ONE DOES NOT WORK.**
-///
-/// `orders_differ_somewhere` is excused here because it is the `v0.2.3` line's
-/// dangling citation, quoted as a cross-instrument check. The excuse originally
-/// said it would be retired by `no_excused_name_has_started_resolving`.
-///
-/// **THAT WAS WRONG, AND IT WAS THE EXACT DEFECT THIS FILE EXISTS TO CATCH.**
-/// That guard fires when an excused name STARTS RESOLVING. Their repair does not
-/// define the name — it **replaces the citation with the correct one**, so the
-/// name simply disappears from their tree and never resolves anywhere. Verified
-/// against their branch before writing this: absent from `tests/`.
-///
-/// So the excuse would have sat here permanently, justified by a sentence
-/// promising an announcement that could not arrive. **An excuse that cannot be
-/// retired is an excuse that cannot fail**, which is the whole class this file
-/// was built for, committed one level up in the file itself.
-///
-/// # The condition that DOES change, and it is checkable from this tree alone
-///
-/// Their dangling citation lives in the parent `tests/`, which reaches this
-/// worktree by absorption. **While it is there, quoting it as a live example is
-/// accurate. The moment absorption brings their repair, it is not** — and this
-/// test says so, without either line remembering to send a message.
-///
-/// That is the property that was claimed for the wrong guard, relocated to one
-/// that can actually observe it.
-#[test]
-fn the_other_lines_dangling_citation_is_still_dangling() {
-    // **BUILT FROM PIECES ON PURPOSE, AND THE REASON IS A DEFECT THIS TEST
-    // CAUSED.** Writing the name as one literal put it on a CONTINUATION LINE of
-    // a multi-line string, and the per-line stripper -- stateless by design, so
-    // an unbalanced quote cannot run away -- reads a continuation line as CODE.
-    // The name entered the universe as an identifier and
-    // `no_excused_name_has_started_resolving` fired, reporting that an excused
-    // name had started resolving when nothing had changed but this file's prose.
-    //
-    // **STATELESSNESS IS WORTH MORE THAN THE OVER-RESOLUTION COSTS**, since it is
-    // what stops the swallow bug the `v0.2.3` line hit. So the trade stands and
-    // the collision is avoided instead: the name appears nowhere as a bare token.
-    const OTHER_LINES_STALE_CITATION: &str = "orders_differ_somewhere";
-    let needle = format!("`{OTHER_LINES_STALE_CITATION}`");
-
-    let their_tests = repo_root().join("tests");
-    let mut cited_in = Vec::new();
-    for p in rust_and_kel_sources(&their_tests) {
-        let Ok(text) = std::fs::read_to_string(&p) else {
-            continue;
-        };
-        if text.contains(&needle) {
-            cited_in.push(p.display().to_string());
-        }
-    }
-
-    assert!(
-        !cited_in.is_empty(),
-        "{OTHER_LINES_STALE_CITATION} is no longer cited anywhere in the parent \
-         tests/. The v0.2.3 line's repair has been absorbed, so: (1) drop that \
-         name from EXCUSED; (2) drop it from the cross-instrument paragraph on \
-         resolvable_universe, or reword that paragraph in the past tense; (3) \
-         delete this test. Nothing is broken -- this is the hand-off arriving. \
-         The example was live when it was written and is now history"
     );
 }
 

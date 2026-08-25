@@ -13,6 +13,60 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**[v0.3.0] THE CROSS-TREE HAND-OFF FIRED, AND THE SAME ABSORPTION TURNED THE TREE RED FOR A REASON
+NEITHER LINE COULD SEE FROM ITS OWN TREE (2026-08-25).**
+
+Absorption 8 at `a5905b1a`, eleven commits, one append/append journal conflict resolved by keeping
+both. Two results, and they point in opposite directions.
+
+**THE HAND-OFF WORKED.** `the_other_lines_dangling_citation_is_still_dangling` failed, alone among
+nine, on exactly the absorption that carried their repair, naming its three edits. I made all three
+and deleted the guard — sixty-five lines. Neither line designed a cross-tree hand-off and this was
+the first.
+
+**The reusable part is the inversion, and my first attempt had it backwards.** Attaching it to their
+name *starting to resolve* could never fire, because their repair REMOVES the name. **To hand
+something across a tree boundary, assert the current state PERSISTS and let its ending be the
+message.** The granularity is absorption rather than their merge, which is honest rather than a
+limitation: my universe is my worktree, and the alternative is polling their branch.
+
+**AND THE SAME ABSORPTION IS RED IN THE MAIN WORKSPACE.** Their new `confinement_analysis.rs` pins
+corpus verdict counts at `(33, 17, 12, 4)`; the merged tree measures `(38, 21, 12, 5)`.
+
+**Proven rather than inferred**: six files moved aside, both pins green, 8 passed; moved back, red.
+The cause is exactly this line's six witness scripts, because **`examples/scripts/` is grown by this
+line and asserted over on theirs** — their own TASKLOG says so. Delta +5 sites, +4 confined, +1
+cannot-establish, **escapes unmoved**: six new scripts and not one new escape.
+
+**THE PART WORTH KEEPING IS THAT NEITHER LINE COULD SEE IT.** Their gate is green because they lack
+my files; mine is red because it has both. **It is the day's defect class one level out** — a
+coverage audit satisfied by its own package's prose, a citation universe vouching for prose with
+prose, and now a pin whose population a *different line* grows. The first two were visible to
+whoever looked hard enough at one tree. This one is invisible from either.
+
+Reported, not fixed; `tests/` is theirs. The one durable thing I own is a warning in
+`examples/scripts/README.md`, at the point of contact, telling whoever writes the next such test not
+to pin a count over a directory the other line grows.
+
+**I AM HOLDING THE BRANCH RATHER THAN CALLING IT GREEN**, and the reason is worth stating: the
+native suite is entirely unaffected, so running only that — the suite I own, the one I have run
+thirteen times today — would have produced a clean report on a red tree.
+
+**AND THE THIRD `tee` EXIT-0 FAILURE WAS THE WORST OF THE THREE.** `1337 passed, 2 failed, 10
+binaries` **and exit 0**, because cargo stops after a failing binary and `tee` reports its own
+status. Ten binaries of fifty-something. **The first two cost a number; this one would have cost a
+false green on a red tree**, and only summing the per-binary lines caught it.
+
+**ONE PREDICTION, CAUTIOUS AND WRONG IN THE SAFE DIRECTION.** Before merging I predicted
+`src/selfhost/kel/` unchanged would hold the Order-1 figures and that `src/compiler.rs` changing made
+`bound_transfer` the one to watch. Measured after: **1044 / 71 / 74 / 35 / 11 and 411 / 40 / 4 / 0 /
+1, every figure unmoved.** Recorded because a prediction that did not pan out is evidence about my
+model, and I have been recording only the ones that did.
+
+---
+
+---
+
 **[v0.3.0] I WROTE "DERIVE NUMBERS; DO NOT COPY THEM FORWARD" INTO THE HANDOFF THIS MORNING AND
 SHIPPED SIX STALE FIGURES INTO A NEW FILE THIS EVENING (2026-08-24).**
 
