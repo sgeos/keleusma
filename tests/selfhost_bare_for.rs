@@ -242,3 +242,67 @@ fn the_bare_and_limit_forms_have_different_lowerings() {
         "the bare form no longer lowers to a plain `Loop`: {bare:?}"
     );
 }
+
+/// **THE REFUSAL NAMES THE CONSTRUCT AND THE REMEDY.**
+///
+/// Before this, `parse.kel` never left phase 4 of the loop header, the opening
+/// brace was attributed to the enclosing block, and the failure surfaced five
+/// layers downstream as ``no chunk named `acc` `` — naming neither the
+/// construct nor the file. Seven iterations of diagnosis were spent on that
+/// message once.
+///
+/// The refusal is now raised where the fact is known: phase 4 ends at the
+/// contextual `limit` identifier, so a `{` there is unambiguously the bare
+/// form.
+///
+/// To see this fail, delete the `Tok::LBrace()` arm from phase 4 of
+/// `step_forheader` in `src/selfhost/kel/parse.kel`. The stage then returns to
+/// the downstream panic and this test reports a message naming neither thing.
+#[test]
+fn the_bare_form_is_refused_by_a_message_naming_the_construct_and_the_remedy() {
+    let err = keleusma::selfhost::try_parse_functions(BARE)
+        .expect_err("the bare form must be refused, not accepted");
+    let message = err.to_string();
+
+    // ITEM 1: the construct, not an unrelated symbol.
+    assert!(
+        message.contains("bare `for") && message.contains("not implemented"),
+        "the refusal does not name the construct as unimplemented: {message}"
+    );
+    assert!(
+        !message.contains("no chunk named"),
+        "the refusal is still the downstream symptom rather than the cause: \
+         {message}"
+    );
+
+    // ITEM 2: the remedy, because that is what a reader needs next.
+    assert!(
+        message.contains("limit"),
+        "the refusal does not name the counted form as the supported \
+         alternative: {message}"
+    );
+
+    // A capacity diagnostic tells a reader to split the function, and that
+    // advice is wrong here. The message says so.
+    assert!(
+        message.contains("UNSUPPORTED CONSTRUCT"),
+        "the refusal does not distinguish itself from a capacity limit: \
+         {message}"
+    );
+}
+
+/// THE CONTROL, and it carries the weight for the test above.
+///
+/// "The bare form is refused" is satisfied by a front end that refuses
+/// everything. This asserts the counted form still parses, so the refusal is a
+/// property of the construct rather than of the compiler.
+#[test]
+fn the_counted_form_is_still_accepted_by_the_same_entry_point() {
+    let parsed = keleusma::selfhost::try_parse_functions(WITH_LIMIT)
+        .expect("the counted form must still be accepted");
+    assert_eq!(
+        parsed.functions.len(),
+        2,
+        "the counted form parsed, but not into the two functions it declares"
+    );
+}

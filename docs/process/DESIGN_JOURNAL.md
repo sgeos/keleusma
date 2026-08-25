@@ -693,6 +693,79 @@ would find it. **The expensive part of both investigations was establishing that
 believed was undecided had in fact been decided** — once by three repairs nobody had reconciled with
 the comment above them, once by a size function nobody had connected to the refusal message.
 ---
+## 2026-08-25 — a named refusal, and the milestone it cost
+
+**`parse.kel` now refuses the bare `for v in a..b { .. }` form by name**, at
+phase 4 of the loop header where the fact is known. It was previously surfacing
+five layers downstream as ``no chunk named `acc` ``, a message naming neither the
+construct nor the file, which once cost seven iterations of diagnosis. The
+diagnostic channel already existed; the bare form simply did not use it. This is
+the first UNSUPPORTED-CONSTRUCT code among eleven that are all capacity limits.
+
+**It is not support. Measured: bare is 26 opcodes, `for … limit` is 70** — a
+second lowering, not a relaxation, and a multi-file change across three stage
+sources. Saying so plainly beats starting it and leaving it half-landed.
+
+**IT COST A TRACKED MILESTONE, AND THE MEASUREMENT IS WHY IT IS STILL RIGHT.** A
+test asserted "the payoff: `wire.kel` PARSES", to 486 chunks. With the change
+stashed:
+
+    PARSE:   ok, 486 functions
+    COMPILE: panicked -> "the self-hosted pipeline mis-parsed a declaration
+             boundary and produced a chunk named `acc`"
+
+So the celebrated parse is one the very next stage calls mis-parsed, and 486 is a
+count from a stream whose declaration boundaries are wrong. **Accept-then-misread
+— the hazard `BYTECODE_VERSION` moved to 2 to close.** A milestone that reads as
+capability while being a wrong answer is worse than a refusal, because nobody
+looks at it again. The transcript is kept in the test's doc: **the regression is
+visible in the diff and the reason is only visible in a baseline measured
+before deciding.**
+
+**Three symptom pins retired rather than repointed.** They asserted specific
+wrong records in a stream no longer produced. Repointing would have kept the
+names and changed the subjects, which is how a test comes to measure something
+other than what it says. Their shared helper went too — it mirrored driver state,
+its own doc required callers to check it, and with no callers there is nothing
+to check it against.
+
+**A prediction made before measuring, and missed.** The stage-margin blob was
+predicted at 35,351 from a constant that comment had derived; observed 35,376.
+Written up as a miss with the arithmetic, because the tenth move is recorded
+there as the first whose count matched its author's prediction and that record is
+worth nothing if the next miss is quietly reconciled. The constant is now marked
+as derived from name-only changes and untested against anything else.
+
+## The two cross-line findings, both about populations
+
+**MY CORPUS PIN WAS OVER A DIRECTORY ANOTHER LINE GROWS.**
+`confinement_analysis.rs` scanned `examples/scripts/` flat. The `v0.3.0` line
+keeps an unnumbered witness corpus there, so their tree went red at 38/21/12/5
+while this gate stayed green — the files are not here. Fixed by scoping to the
+numbered application scripts and **naming the fifteen members**, so the
+population is explicit rather than implied by a glob. Verified both directions
+against a simulation of their tree.
+
+**And this line had already been bitten and written it down.**
+`TASKLOG.md` line 136: "`examples/scripts/` is grown by `v0.3.0` and asserted
+over here. My size pin at eleven broke". True, findable, correctly written, and
+it did not work. **A hazard note belongs at the site where the hazard is
+instantiated**; the file recording that it happened is the right place for the
+history and the wrong place for the warning.
+
+**A CLEAN GATE READ AS A FAILURE.** My gate reported 83 binaries green with an
+empty failure list and **exited 1** — the trailing `grep` for failures found
+none, and grep exits 1 on no match. A safety check that inverted the verdict it
+was added to protect. The other line hit the mirror image the same day:
+`cargo test | tee` exiting 0 on a red tree.
+
+**The audit did not catch it because the audit was over a population that kept
+growing.** I checked my gate invocations, reported them sound, then wrote a new
+one with the inverted defect. **An audit's conclusion stops growing the moment it
+is written; the thing it describes does not.** Both polarities and the
+two-signal remedy are now in the handoff.
+
+
 ## 2026-08-25 — the guard manufactured two of the three findings it reported
 
 **A small increment with one lesson worth the space.** I forwarded three

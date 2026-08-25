@@ -15,7 +15,7 @@ two verdicts that were wrong rather than merely unestablished
 
 ## ONE THING IS WAITING ON YOU, AND IT IS NOT NEW
 
-`origin/v0.2.3` is at `03f3e3d9`, **143 merges**. Publication remains held.
+`origin/v0.2.3` is at `a5905b1a`, **144 merges**. Publication remains held.
 
 **The floating-point entry ABI is the last of your eight rulings that is not implemented**, and the
 `v0.3.0` line has attached a second question to it that you have not seen. Both are described below.
@@ -123,9 +123,27 @@ claiming more than that. The rule both lines arrived at independently is worth a
 **a measurement written into a file of tests needs a date and an enforced-or-not marker at the moment
 it is written.**
 
+## THE ONE THING ON THIS INCREMENT I WOULD WANT YOU TO SEE
+
+**A named refusal cost a tracked milestone, and I think that is right.** `parse.kel` now refuses the
+bare `for v in a..b { .. }` form by name instead of letting it surface five layers downstream as a
+missing chunk name. `wire.kel` contains one, and a test asserted "the payoff: `wire.kel` PARSES", to
+486 chunks.
+
+**Measured with the change stashed, before deciding:** that parse runs, and the very next stage
+rejects it — *"the self-hosted pipeline mis-parsed a declaration boundary and produced a chunk named
+`acc`"*. So 486 was a count from a stream whose declaration boundaries are wrong.
+**Accept-then-misread**, which is the hazard `BYTECODE_VERSION` moved to 2 to close.
+
+**The regression is visible in the diff and the reason is only visible in that transcript**, so it is
+kept in the test's doc. If you disagree, the decision is reversible and the measurement is there to
+argue with.
+
+**This is not bare-`for` support.** Bare is 26 opcodes, `for … limit` is 70 — a second lowering
+across three stage sources, still the largest single Order 1 win, still open.
+
 ## What I would spend the next increment on
 
-**Order 1's bare-`for` in `parse.kel`**, unchanged and still the largest single win: a second
-lowering, 24 ops against 68, and closing it would let `wire.kel` self-compile for the first time and
-join the byte-identity corpus. The phase machine is located — `forst.for_phase` phase 4 waits for a
-`limit` identifier the bare form never supplies.
+**Bare-`for` support itself**, now that the refusal marks exactly where the second lowering hooks in.
+Or the remaining `.kel` stages' own bare-`for` uses, which is what keeps `wire.kel` out of the
+byte-identity corpus.

@@ -12947,7 +12947,12 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     //
     // No error code and no guard, because this was a missing feature rather than a
     // named refusal -- the same shape as the eighth move.
-    assert_eq!(worst_names, 676, "the worst-case name count moved");
+    //
+    // ELEVENTH MOVE: 676 -> 677, one name. `parse.kel` gained `pe_bare_for`, the
+    // diagnostic code for the unsupported bare `for` form -- the first
+    // UNSUPPORTED-CONSTRUCT code among eleven that are all capacity limits.
+    // Predicted one and observed one.
+    assert_eq!(worst_names, 677, "the worst-case name count moved");
     // 35,154 -> 35,213 bytes, 59 for the two field names plus the comment-free
     // identifiers the recognition introduces. Then 35,213 -> 35,233, twenty bytes
     // for `al_elem_bytes` and the locals the nested-array sizing introduced.
@@ -12961,7 +12966,24 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     //
     // Stating the arithmetic matters because this pin has moved ten times and a delta
     // nobody can decompose is indistinguishable from a delta nobody looked at.
-    assert_eq!(worst_blob, 35333, "the worst-case blob size moved");
+    // ELEVENTH MOVE: 35,333 -> 35,376, forty-three bytes.
+    //
+    // **THE PREDICTION WAS MADE BEFORE MEASURING AND IT WAS WRONG.** Applying the
+    // constant this comment established -- 11 characters plus 7 bytes of per-name
+    // overhead -- gives 35,351. The observed figure is 35,376, twenty-five bytes
+    // over.
+    //
+    // Recorded as a miss rather than re-derived into agreement, because the tenth
+    // move is written up above as the first whose count matched its author's
+    // prediction, and that record is worth nothing if a subsequent miss is quietly
+    // reconciled. The plausible residual is that this change is NOT one name: it
+    // adds a call and a branch to `step_forheader` and a literal to the constant
+    // pool, where the ninth and tenth moves added names alone. **That is a
+    // hypothesis, not a decomposition** -- the 7-byte constant was derived from
+    // name-only changes and this is the first move to test it against something
+    // else. It did not hold, and the constant should be treated as applying to
+    // name-only moves until someone decomposes this one.
+    assert_eq!(worst_blob, 35376, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**
