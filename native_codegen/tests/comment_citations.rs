@@ -32,25 +32,41 @@
 //! **THE FIRST DRAFT SET THIS AT FOUR AND THAT WAS A GUESS. IT WAS MEASURED
 //! INSTEAD, AND THE GUESS WAS HIDING MOST OF THE FINDINGS.**
 //!
-//! ⚠ **SNAPSHOT, 2026-08-24, AND NOT ENFORCED BY ANYTHING.** Every figure below
-//! is prose. **RE-DERIVE RATHER THAN TRUST** — the citation totals move whenever
-//! anyone writes a backticked name in a comment anywhere in this package, and
-//! they moved by roughly ten per cent while this very file was being written.
+//! ⚠ **THE CITATION TOTALS ARE DELIBERATELY APPROXIMATE, AND THAT IS A FIX
+//! RATHER THAN LAZINESS. THE UNRESOLVED COUNTS ARE EXACT.**
 //!
 //! | threshold | citations | unresolved | enforced? |
 //! |---|---|---|---|
-//! | four words | 92 | 5 | no |
-//! | three words | 209 | 12 | no |
-//! | **two words (shipped)** | **450** | **19** | **floor only**, by `the_scan_is_not_vacuous` |
+//! | four words | ~90 | **5** | no |
+//! | three words | ~210 | **12** | no |
+//! | **two words (shipped)** | **~450** | **19** | **floor only**, by `the_scan_is_not_vacuous` |
 //!
-//! **The decision below rests on the RATIO and the COMPOSITION, not on any of
-//! these absolute numbers**, which is why none is pinned: a guard on a figure
-//! that moves with every comment fires constantly and gets muted.
+//! # WHY AN EXACT TOTAL IS UNPUBLISHABLE HERE, WHICH TOOK THREE TRIES TO SEE
 //!
-//! (The first published version of this table read 79/3, 183/10, 407/16. It was
-//! measured before the file it sits in had finished growing. **Same defect the
-//! `v0.2.3` line found in their own threshold table the same day: prose figures
-//! in a file where every other assertion is a test.**)
+//! **This scanner counts citations in this package, and this file is in this
+//! package.** So the record of the measurement lives inside the population the
+//! measurement counts, and **writing the number down changes the number.**
+//!
+//! Demonstrated rather than argued. The first published table read 79/3, 183/10,
+//! 407/16 — measured before the file had finished growing. It was corrected to
+//! 92/5, 209/12, 450/19, and **that correction was stale the moment it was
+//! committed**: re-derived immediately afterwards, 93, 210, 454. Not drift over
+//! days. **Invalid on publication, because publishing was the mutation.**
+//!
+//! **Re-measuring cannot converge**, since every correction adds prose and prose
+//! contains citations. Chasing the figure is the mistake; the number is not a
+//! property this file can hold.
+//!
+//! # WHAT DID NOT MOVE IS THE PART THAT MATTERS
+//!
+//! **The unresolved counts held — 5, 12, 19 — across every re-derivation**, and
+//! so did the load-bearing figure below. The totals are self-inclusive and
+//! unstable; **the FINDINGS are not**, because added prose contributes citations
+//! that resolve. So the exact numbers are kept exactly where they mean something
+//! and dropped where they cannot.
+//!
+//! The decision below rests on the **ratio and the composition**, never on an
+//! absolute total.
 //!
 //! The four-word cut found `disagrees_with_typed_verifier` and **missed its two
 //! siblings in the same list** -- `negative_depth` (two words) and
@@ -387,7 +403,21 @@ fn citations(block: &str) -> Vec<String> {
 ///
 /// **THE "IT IS INERT" CONCLUSION EXPIRED WITHIN THE HOUR, AND THIS PARAGRAPH
 /// CAUSED IT.** It read *"0 of 205 citations resolve only through that path"* and
-/// justified the decision below. Re-derived: **3 of 208.**
+/// justified the decision below. Re-derived: **3** — and the denominator is
+/// self-inclusive, so it is quoted as `~210` rather than pinned, for the reason
+/// the module header gives.
+///
+/// **THE `v0.2.3` LINE ASKED FOR A NAME FOR THIS AND IT IS WORTH ONE.** Rows one
+/// and two of that correction were **drift**: numbers that went stale with time,
+/// mechanically fixable. This one is not. **A measurement whose record lives
+/// inside its own population is invalidated by the act of recording it** — not
+/// later, at publication. The test is one question: *does writing this down
+/// change what it counts?* Here the answer is yes and unavoidably so, because
+/// the scanner reads its own file.
+///
+/// **It cost more than an inaccurate figure.** For a period this afternoon a
+/// decision both lines had endorsed — not to build a guard — rested on a premise
+/// that was already false, and neither line knew.
 ///
 /// The three are `sum_n`, `make_point` and `returns_word` — **the example names
 /// written into the paragraph above**, quoted to illustrate what the class

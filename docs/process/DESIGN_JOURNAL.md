@@ -52,6 +52,42 @@ precisely because the total moves with every comment anyone writes. Pinning it w
 and get muted, which is the argument I turned on myself an hour earlier about the string class and
 which applies here too.
 
+**AND RE-MEASURING TURNED OUT NOT TO BE THE FIX AT ALL.** The corrected figures — 92 / 209 / 450 —
+were stale **the moment they were committed**: re-derived immediately afterwards as 93 / 210 / 454.
+Not drift over days. **Invalid on publication, because publishing was the mutation.** The scanner
+counts citations in this package and its own file is in this package, so writing the number down
+changes the number, and no amount of re-measuring converges.
+
+**`keleusma-02` asked for a name and it deserves one.** Their first two rows were drift: numbers
+that went stale with time, mechanically fixable. **This is a measurement whose record lives inside
+its own population, invalidated by the act of recording it.** The test is one question — *does
+writing this down change what it counts?* — and it is answerable before publishing rather than
+after.
+
+**They are also right that I undersold it by listing it beside drift.** "0 of 205" was not a figure
+in a table, it was the **premise of a decision** — the decision not to build a guard, which I sent
+them and which they endorsed. For a period this afternoon that decision rested on a premise already
+false, and neither line knew. The decision surviving on replaced reasoning is luck, not vindication.
+
+**THE FIX IS A DESIGN CHANGE, NOT A RE-MEASUREMENT.** The unresolved counts held at 5 / 12 / 19
+across every re-derivation, and the load-bearing figure held at 3. **Totals are self-inclusive and
+unstable; findings are not**, because added prose contributes citations that RESOLVE rather than
+dangle. So the totals are published as `~90 / ~210 / ~450` and the unresolved counts stay exact.
+**Precision kept exactly where it means something and dropped where the file cannot hold it.**
+
+**AND THE SHARPEST INSTANCE OF THE WHOLE DAY, which they spotted**: `the_scan_is_not_vacuous`'s
+failure message quoted 407, already stale. **The guard against the class printed an instance of the
+class in the text it shows when it fires.** A reader hitting that failure would have been handed a
+stale figure by the mechanism telling them a figure was wrong.
+
+**THE CLASS ON MY SURFACE: 142 COMMENT LINES ACROSS 35 FILES CARRY A "MEASURED" CLAIM, AND I HAVE
+AUDITED NONE.** They disclosed ~180 on theirs and declined the sweep; I decline it too, on their
+argument, which is better than the one I would have reached for. **A blanket date-and-mark pass over
+sites nobody re-read produces dated claims of unknown accuracy, which is worse than undated ones,
+because a date asserts that someone checked.** Marking is only meaningful where the marking was
+earned. Recorded, not fixed — and recorded precisely so nobody reads the instance repair as covering
+the class.
+
 **THE THING WORTH KEEPING IS NARROWER THAN "RE-MEASURE."** Both of us wrote correct numbers into
 prose in files where every other claim is enforced, hours apart, while explicitly working on the
 discipline of not doing that. **The register format is what disarmed the scrutiny** — a table of
