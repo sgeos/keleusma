@@ -2946,41 +2946,44 @@ fn no_other_file_restates_the_shared_layout() {
     );
 }
 
-/// **THE PAYOFF: `wire.kel` PARSES.**
+/// **`wire.kel` IS REFUSED BY NAME, AND THE PARSE IT USED TO PRODUCE WAS WRONG.**
 ///
-/// `wire.kel` is the largest stage in the corpus at 486 chunks, and the 256-entry chunk
-/// table excluded it from the parser entirely. It was the last cap keeping a real stage
-/// out, and it stood while four emit-side caps fell around it.
+/// This test asserted that `wire.kel` PARSES, to 486 chunks, as the payoff for raising the
+/// chunk table from 256. That parse ran. **It was also incorrect**, and the next stage said
+/// so in as many words: `self_host_compile(wire.kel)` failed with *"the self-hosted pipeline
+/// mis-parsed a declaration boundary and produced a chunk named `acc`"*.
 ///
-/// # Raising it was three edits, and the first two did not work
+/// So the 486 was not evidence that the cap is adequate. It was a count taken from a stream
+/// whose declaration boundaries the very next stage rejected — **accept-then-misread**, the
+/// hazard this project closes elsewhere on principle, and the stated reason
+/// `BYTECODE_VERSION` moved to 2 rather than being held.
 ///
-/// The chunk index is not one array's index. Widening `toks.chunks` alone left the wall in
-/// place and moved the symptom: first to `LoopLimitExceeded`, from two
-/// `for i in 0..toks.chunk_count limit 256` loops, and then to `IndexOutOfBounds(388, 256)`,
-/// from the six `chunkret.ret_*` arrays, which are addressed by a chunk number too. **A cap
-/// is a family**, and `every_chunk_indexed_array_admits_the_chunk_cap` derives that family
-/// from the stage so the next widening cannot repeat this.
+/// # What changed and why the milestone reads differently now
+///
+/// `wire.kel` contains a bare `for v in a..b { .. }`, which `parse.kel` does not lower.
+/// Phase 4 of the loop header now says so where the fact is known, so the stage refuses by
+/// name instead of misattributing the brace and continuing.
+///
+/// **THE CHUNK-CAP QUESTION IS NOT ANSWERED HERE ANY MORE, AND WAS NOT SOUNDLY ANSWERED
+/// BEFORE.** `every_chunk_indexed_array_admits_the_chunk_cap` derives the cap family from
+/// the stage and does not depend on any parse. When the bare form is lowered, this test
+/// should return to asserting a chunk count — against a parse whose boundaries the next
+/// stage accepts.
 #[cfg(feature = "self-host")]
 #[test]
-fn wire_kel_parses_now_that_the_chunk_table_admits_it() {
+fn wire_kel_is_refused_by_name_rather_than_mis_parsed() {
     const WIRE: &str = include_str!("../src/selfhost/kel/wire.kel");
-    // THROUGH THE FUSED FEED. This test's subject is the CHUNK table, and the
-    // token feed is incidental to it. Driving the collecting feed here would pin
-    // `toks.packed` at `wire.kel`'s 24,836 tokens for a reason that has nothing to
-    // do with what the test measures.
-    let (fns, ..) = keleusma::selfhost::parse_functions_fused(WIRE);
-    assert_eq!(
-        fns.len(),
-        486,
-        "`wire.kel` parsed to {} chunks. The count is pinned because it is the corpus worst \
-         case and the thing the chunk cap is sized against: PARSE_CHUNK_CAP is {}, so a \
-         stage growing toward it is visible here rather than at the wall.",
-        fns.len(),
-        keleusma::selfhost_host::PARSE_CHUNK_CAP
+    let err = keleusma::selfhost::try_parse_functions(WIRE)
+        .expect_err("wire.kel contains a bare `for` and must be refused rather than mis-parsed");
+    let message = err.to_string();
+    assert!(
+        message.contains("bare `for") && message.contains("limit"),
+        "wire.kel is refused, but not for the bare loop form and not with the remedy: \
+         {message}"
     );
     assert!(
-        fns.len() <= keleusma::selfhost_host::PARSE_CHUNK_CAP,
-        "the corpus worst case has reached the cap it is sized against"
+        !message.contains("mis-parsed a declaration boundary"),
+        "the refusal is still the downstream mis-parse rather than the construct: {message}"
     );
 }
 

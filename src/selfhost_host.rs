@@ -194,6 +194,13 @@ pub fn describe_parse_diagnostic(code: i64, detail: i64) -> String {
             "call nesting is too deep for parse.kel: it reached {detail} and `call.call_chunk` \
              holds {PARSE_CALL_DEPTH_CAP}. Bind an inner call with `let` first."
         ),
+        12 => String::from(
+            "the bare `for v in a..b { .. }` loop form is not implemented by parse.kel. \
+             Use the counted form `for v in a..b limit N { .. }`, with N a literal static \
+             bound: that form is supported and compiles byte-identically to the reference \
+             compiler. This is an UNSUPPORTED CONSTRUCT rather than a capacity limit, so \
+             splitting the function will not help.",
+        ),
         11 => format!(
             "too many data-block fields in one program for parse.kel: it reached {detail} and \
              `fields.ffield` holds {PARSE_FIELDS_CAP}. Like the enum bound this is a TOTAL \

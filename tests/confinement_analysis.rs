@@ -36,6 +36,87 @@ fn scripts_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/scripts")
 }
 
+/// The numbered application scripts, which are the corpus these verdicts are
+/// about.
+///
+/// # Why this is not "every `.kel` in the directory"
+///
+/// **`examples/scripts/` IS GROWN BY THE `v0.3.0` LINE AND ASSERTED OVER HERE.**
+/// That line keeps an unnumbered witness corpus there — deliberately odd
+/// programs, several inadmissible or refused on purpose — and a flat scan pins a
+/// count over a population this line does not control and cannot see until it
+/// absorbs. Their tree went red on exactly that: six witness files moved the
+/// counts to 38 sites / 21 confined / 12 escapes / 5 cannot-establish while this
+/// line's gate stayed green, because the files are not here.
+///
+/// **This line had already been bitten by this and written it down.**
+/// `docs/process/TASKLOG.md` records "`examples/scripts/` is grown by `v0.3.0`
+/// and asserted over here. My size pin at eleven broke". The note existed and
+/// the author of this test did not read it before pinning a second count over
+/// the same directory.
+///
+/// The numbered prefix is the convention that separates the two corpora, and
+/// `the_pinned_corpus_is_exactly_these_scripts` names the members so the
+/// population is explicit rather than implied by a glob.
+fn corpus_scripts() -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(scripts_dir())
+        .expect("examples/scripts is readable")
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().is_some_and(|x| x == "kel"))
+        .filter(|p| {
+            let name = p.file_name().unwrap_or_default().to_string_lossy();
+            let mut cs = name.chars();
+            matches!(
+                (cs.next(), cs.next(), cs.next()),
+                (Some(a), Some(b), Some('_')) if a.is_ascii_digit() && b.is_ascii_digit()
+            )
+        })
+        .collect();
+    paths.sort();
+    paths
+}
+
+/// **THE POPULATION THE COUNTS ARE OVER, NAMED.**
+///
+/// A count is not a measurement without its population, and a population
+/// described by a glob is one another line can change. Adding a numbered script
+/// fails here first, which is the deliberate-update discipline the count pins
+/// already use; adding an unnumbered one is out of scope by rule.
+#[test]
+fn the_pinned_corpus_is_exactly_these_scripts() {
+    let got: Vec<String> = corpus_scripts()
+        .iter()
+        .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    let expected: Vec<String> = [
+        "01_arithmetic.kel",
+        "02_struct_field.kel",
+        "03_enum_match.kel",
+        "04_for_in.kel",
+        "05_pipeline.kel",
+        "06_multiheaded.kel",
+        "07_refinement.kel",
+        "08_method_dispatch.kel",
+        "09_big_numbers.kel",
+        "10_multbyte.kel",
+        "11_signed.kel",
+        "12_sensor_window.kel",
+        "13_telemetry_stream.kel",
+        "14_frame_log.kel",
+        "15_pixel_blend.kel",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    assert_eq!(
+        got, expected,
+        "the pinned corpus changed. The verdict counts below are OVER THIS LIST; \
+         update both together, or the counts describe a different population \
+         than the one they name."
+    );
+}
+
 fn compile_file(path: &PathBuf) -> Option<Module> {
     let src = std::fs::read_to_string(path).ok()?;
     let tokens = keleusma::lexer::tokenize(&src).ok()?;
@@ -149,13 +230,7 @@ fn a_yielded_per_iteration_composite_is_refused() {
 /// analysis would be answering a question nobody asked.
 #[test]
 fn dispatch_scopes_do_not_appear_as_iterations() {
-    let mut paths: Vec<PathBuf> = std::fs::read_dir(scripts_dir())
-        .expect("examples/scripts is readable")
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "kel"))
-        .collect();
-    paths.sort();
+    let paths = corpus_scripts();
 
     let mut iterating = Vec::new();
     for path in &paths {
@@ -217,13 +292,7 @@ fn dispatch_scopes_do_not_appear_as_iterations() {
 /// differs by exactly this.
 #[test]
 fn the_corpus_verdict_counts_are_recorded() {
-    let mut paths: Vec<PathBuf> = std::fs::read_dir(scripts_dir())
-        .expect("examples/scripts is readable")
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_file() && p.extension().is_some_and(|x| x == "kel"))
-        .collect();
-    paths.sort();
+    let paths = corpus_scripts();
 
     let (mut sites, mut confined, mut escapes, mut cannot) = (0, 0, 0, 0);
     let mut raw = 0usize;
@@ -280,13 +349,7 @@ fn the_corpus_verdict_counts_are_recorded() {
 /// Scanned FLAT, as its sibling above is, and for the same reason.
 #[test]
 fn the_summary_moves_four_unestablished_and_two_false_escapes() {
-    let mut paths: Vec<PathBuf> = std::fs::read_dir(scripts_dir())
-        .expect("examples/scripts is readable")
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_file() && p.extension().is_some_and(|x| x == "kel"))
-        .collect();
-    paths.sort();
+    let paths = corpus_scripts();
 
     let mut without = (0, 0, 0);
     let mut with = (0, 0, 0);

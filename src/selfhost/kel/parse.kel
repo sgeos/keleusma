@@ -642,6 +642,12 @@ fn pe_variants() -> Word { 9 }
 // `IndexOutOfBounds(8, 8)`, after `for` nesting and array-literal nesting.
 fn pe_calldepth() -> Word { 10 }
 fn pe_fields() -> Word { 11 }
+// **THE FIRST UNSUPPORTED-CONSTRUCT CODE.** Every code above is a CAPACITY limit, and a
+// capacity diagnostic tells a reader to split their function. This one tells them the
+// construct is not implemented, which is a different instruction, so it is worth the
+// distinction being visible here rather than only in the host's message. `detail` is unused:
+// there is no count to report.
+fn pe_bare_for() -> Word { 12 }
 
 fn pe_cap_op() -> Word { 64 }
 fn pe_cap_let() -> Word { 64 }
@@ -4499,7 +4505,24 @@ fn step_forheader(k: Word, v: Word) -> Word {
             ops.draining = 1;
             0
         } else {
+        // **THE BARE `for` FORM, REFUSED HERE BECAUSE HERE IS WHERE IT IS KNOWN.** Phase 4
+        // is the high bound and it ends at the contextual `limit`. A `{` instead means the
+        // header has no cap, which is unambiguously `for v in a..b { .. }` -- a form this
+        // stage does not lower.
+        //
+        // Without this, the header never leaves phase 4, the opening brace is attributed to
+        // the enclosing block, and the failure surfaces five layers downstream as a missing
+        // chunk name that names neither the construct nor the file. Seven iterations of
+        // diagnosis were spent on that message once.
+        //
+        // `perr` records the cause and `step` reports it INSTEAD of the next record, so the
+        // host stops at the next record boundary rather than consuming a stream built from
+        // a header that never completed.
+        if k == Tok::LBrace() as Word {
+            perr(pe_bare_for(), 0)
+        } else {
             step_normal(k, v)
+        }
         }
     } else {
     if forst.for_phase[fp] == 5 {
