@@ -13,6 +13,69 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-24 — the confinement analysis, and what the crude test was actually measuring
+
+**The commissioned predicate exists.** `src/confine.rs` answers *is this
+construction site's region unreachable once its enclosing iteration ends?* per
+site, over a chunk the caller holds, as **confined / cannot establish /
+escapes**. The third value is separate from the second because soundness is
+identical either way and *measurement* is not: folded together, the negative
+count moves for two unrelated reasons.
+
+**Three of the four per-iteration corpus sites are admitted, where the crude
+any-`Escapes`-opcode test admitted none of three.** The other line measured
+that test's negatives as 1 by `Yield`, 3 by `SetLocal`, 3 by `Call`, and
+concluded that two analysis features were mandatory before anything could be
+admitted. **Only one of the two turned out to be needed**, and the reason is
+worth recording because it is a measurement error of a familiar kind.
+
+`SetLocal` needed the boundary-dead rule, as predicted. **`Call` needed
+nothing.** `12_sensor_window.kel`'s loop body calls `scale(raw[i])`, and
+`raw[i]` is a `Word`. The call never touches the composite. The crude test saw
+the *opcode* and the analysis follows the *value*, so what looked like a
+mandatory second feature was an artefact of the instrument. **A callee summary
+is still needed for a composite genuinely passed to a call** — that case
+reports `CannotEstablish`, and the corpus counts are where the summary's effect
+will show.
+
+**The classification does more work than expected.** Routing every opcode and
+letting `NoRegion` mean "produces no region" is what keeps `p.a + p.b` from
+reading as the composite `p`; without it the enclosing `Return` reports a false
+escape on ordinary field arithmetic. Reading the *baked operand* — `Flat` versus
+`FlatNested` on a projection — moved four further sites from `CannotEstablish`
+to `Confined`. Both are cases of asking the tree rather than approximating it.
+
+**Three defects found in my own work, by measurement rather than by review.**
+
+- A mutation that inserted an instruction **shifted every jump target after
+  it**, so the loop's exit was off by one and the analysis refused the chunk.
+  The test failed with the right verdict for the wrong reason. The fix was to
+  splice the disposition *before* addresses are computed. This is the
+  non-compiling-mutation lesson in its subtler form: the mutation compiled and
+  still proved nothing.
+- I **wrote the corpus counts from memory instead of measuring them**, and the
+  test caught it: 11/20/2 asserted against 17/12/4 actual. Recorded because the
+  guard worked exactly as a guard should.
+- **Out-of-range local slots defaulted to an empty alias set**, which
+  *under*-approximates: a region would go untracked and its site could be
+  reported confined on a flow nothing followed. Now a refusal.
+
+**The backstop, and the honest limit on it.** A new opcode is a compile error in
+`route_of`, which forces a decision about its route — but the transfer
+function's catch-all arm would have accepted it silently. The catch-all now asks
+the classification and degrades an unhandled escaping route to `CannotEstablish`.
+**It cannot be exercised without adding an opcode**, so what is tested is the
+other half: that every currently escaping opcode reaches its own handler.
+
+**An unreproducible figure, recorded rather than corrected.**
+`tests/corpus_pattern_coverage.rs` states the corpus held **79** composite
+construction sites. Measured today: **33** scanning `examples/scripts` flat, and
+**251** scanning it recursively, because it also holds `piano_roll/` and
+`rogue/` with 34 further scripts. Neither is 79, and the figure is prose rather
+than an assertion, so nothing fails. **The lesson is not that the number is
+wrong — it is that a bare site count is meaningless without its scan rule**, and
+the new count test states its rule in the test itself.
+
 **SESSION 52 CLOSE. THE PATTERN WORTH KEEPING IS NOT ANY ONE FINDING (2026-08-24).**
 
 Thirteen merges, eight operator rulings, and a third line joined the work. The increment-by-increment

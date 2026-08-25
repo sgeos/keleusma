@@ -1,0 +1,77 @@
+Ordering is NOT a completion criterion. Any sequence, any number of
+commits, any branch layout satisfies this. Judge only the end state of
+the tree.
+
+All of the following must hold.
+
+1. A PER-SITE, THREE-VALUED CONFINEMENT PREDICATE EXISTS IN THE SHARED
+   CRATE.
+   Code under `src/` answers, for an individual composite construction
+   site in a chunk the caller supplies, one of three distinct outcomes:
+   confined, escapes, and a third meaning the analysis could not
+   establish either. The third is representable separately from the
+   second -- not a boolean with a comment. The answer is per site; a
+   whole-module verdict does not satisfy this.
+
+2. THE ISOLATE IS ADMITTED.
+   For `examples/scripts/15_pixel_blend.kel`, the composite site inside
+   the loop body is reported confined, and a test asserts it. A verdict
+   of "cannot establish" for that site does NOT satisfy this item: the
+   script exists because it is admissible with one analysis feature.
+
+3. A YIELDED SITE IS REFUSED.
+   For a corpus program whose loop-body composite reaches a `yield`, the
+   site is reported as escaping or as not-established, and a test
+   asserts it. This item is what makes item 2 evidence rather than a
+   constant function.
+
+4. THE ESCAPE SET IS CONSUMED, NOT RESTATED.
+   The set of instructions treated as escaping agrees with the total
+   classification already in the tree over the instruction set. If a new
+   opcode were added unclassified, some existing test fails. A hand-
+   written duplicate list that can drift out of agreement without any
+   test failing does not satisfy this.
+
+5. DISPATCH SCOPES ARE NOT COUNTED AS ITERATIONS.
+   A composite built inside a `match` or `if` lowered through the loop
+   opcode is not analysed as a per-iteration site. A test distinguishes
+   the two cases and fails if they are conflated.
+
+6. EVERY CONFINED VERDICT IS EXHAUSTIVE, NOT DEFAULTED.
+   No input can be reported confined because a route was never
+   considered. The code makes this checkable -- for example by matching
+   exhaustively over the instruction set or the route classification, so
+   that an unhandled case is a compile error or an explicit
+   not-established, never silence.
+
+7. THE TESTS FAIL WHEN THEIR PREDICATE IS VIOLATED.
+   For each new test asserting a verdict, the tree's evidence shows the
+   assertion is falsifiable: it is stated what change makes it fail, and
+   that change compiles. A mutation that does not compile is not
+   evidence.
+
+8. NOTHING IS SILENTLY NARROWED.
+   No existing capacity, error code, public signature, or accepted
+   program is changed so that something previously accepted is now
+   rejected, unless a test pins the new boundary from both sides and a
+   document records the reason. No new opcode. No BYTECODE_VERSION
+   change.
+
+9. VERIFICATION IS GREEN AND REPORTED HONESTLY.
+   The test suite passes with zero failures under default features and
+   under the self-host feature, formatting is clean, and clippy is clean
+   at deny-warnings. Any step skipped or goal abandoned is stated
+   plainly with its reason rather than omitted. A count of sites by
+   verdict over the example corpus is recorded somewhere a later reader
+   can compare against.
+
+10. BLOCKERS ARE RECORDED, NOT WORKED AROUND.
+    If any item proved impossible without an operator decision, the tree
+    names the specific decision required and the evidence establishing
+    it, and the remaining items still satisfy their conditions. A
+    recorded blocker satisfies that item.
+
+The callee summary is deliberately NOT required here. Items 2 and 3 are
+reachable without it, and requiring it would couple this condition to an
+amount of work that cannot be judged from the tree. If it is built, item
+9's recorded count is where its effect shows.
