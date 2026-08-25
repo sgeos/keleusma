@@ -13,6 +13,61 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-24 — the callee summary, and a delta whose interesting half was not the one aimed at
+
+**The confinement analysis is complete.** `module_confinement` summarises what
+each chunk does with each parameter before judging sites, so a call that
+provably cannot release its argument stops disqualifying it.
+
+**The target was measured before the design, and it was the whole remaining
+class.** All four `CannotEstablish` verdicts in the flat corpus were
+`PassedToCall`, all in `10_multbyte.kel`, whose `add_2` and `sub_2` read scalar
+elements of their array arguments and return a freshly built array. All four are
+now `Confined`.
+
+**THE HALF I DID NOT AIM AT IS THE MORE INTERESTING ONE.** `Escapes` also fell,
+12 to 10. Without a summary a call's return value is assumed to alias every
+argument, so a site passed to `add_2` and then reached by the enclosing `Return`
+was reported as escaping **through a route that does not exist**. Those two
+verdicts were *wrong*, not merely unestablished, and nothing in the corpus said
+so — the analysis had been confidently reporting a false escape and the count
+looked healthy. **A conservative default hides false positives as effectively as
+it hides gaps**, and the only reason this surfaced is that the summary happened
+to remove the imprecision that produced it.
+
+**Two facts per parameter, and I nearly shipped one.** The handoff priced this
+increment as "does this callee return a composite it built". That is the `leaks`
+half. Without the `returns` half a caller must assume every return aliases every
+argument, which is exactly what it already does with no summary at all — so a
+one-fact summary would have closed the four `CannotEstablish` and left both
+false escapes in place.
+
+**Sites and parameters must not share a token space, and the reason is a rule
+rather than a collision.** A site is judged against a scope with a liveness
+test. A parameter's slot is written by the CALLER during frame setup, so its
+first `GetLocal` is a read-before-write and that same liveness test would report
+every parameter as live across its boundary. Making the distinction a type
+caught this at the point of writing rather than as a wrong verdict later.
+
+**Termination is by inspection, not by appeal to the language.** The call graph
+is acyclic by construction and this does not rely on it: a chunk is summarised
+only once every chunk it calls has a summary, in at most `chunks.len()` rounds,
+and a cycle simply never becomes ready. A recursive formulation would have been
+shorter and would have rested its termination on a guarantee it could not check.
+
+**The conservative default is load-bearing and that is measured.** Flipping
+`Summaries::leaks` to answer `false` when unknown compiles and turns **five**
+tests red, including all three conservatism tests. That is the direction hardest
+to notice, because the verdict improves.
+
+**One process defect, in the documentation build.** I stripped "redundant"
+intra-doc link targets with a rule — last path segment equals the link text —
+instead of reading the compiler's actual list, and it over-applied to an enum
+variant that does not resolve bare. Caught immediately by the doc gate. **A rule
+inferred from four examples is not the same as the four examples**, which is the
+same shape as every threshold and every classification defect recorded this week.
+
+
 ## 2026-08-24 — the confinement analysis, and what the crude test was actually measuring
 
 **The commissioned predicate exists.** `src/confine.rs` answers *is this

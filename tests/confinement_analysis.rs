@@ -27,7 +27,9 @@
 //! increment, and the corpus counts below are where its effect will show.
 
 use keleusma::bytecode::{Chunk, Module, Op};
-use keleusma::confine::{Confinement, Reason, Scope, SiteVerdict, chunk_confinement};
+use keleusma::confine::{
+    Confinement, Reason, Scope, SiteVerdict, chunk_confinement, module_confinement,
+};
 use std::path::PathBuf;
 
 fn scripts_dir() -> PathBuf {
@@ -257,5 +259,100 @@ fn the_corpus_verdict_counts_are_recorded() {
         "the corpus verdict counts moved. If the analysis improved, update \
          this and say what moved; if a script changed, say that. Do not update \
          it without reading which of the three columns moved."
+    );
+}
+
+/// What the callee summary is worth, measured against the same corpus.
+///
+/// **Both halves matter and the second is the more interesting one.**
+///
+/// - Four `CannotEstablish` verdicts become `Confined`. Those were the whole
+///   remaining class: every one was a `PassedToCall` in `10_multbyte.kel`,
+///   whose `add_2` and `sub_2` read scalar elements of their array arguments
+///   and return a freshly built array.
+/// - **Two `Escapes` verdicts also become `Confined`, and those were WRONG
+///   rather than merely unestablished.** Without a summary a call's return
+///   value is assumed to alias every argument, so a site passed to `add_2` and
+///   then reached by the enclosing `Return` was reported as escaping through a
+///   route that does not exist. A summary that records `returns` separately
+///   from `leaks` is what removes it.
+///
+/// Scanned FLAT, as its sibling above is, and for the same reason.
+#[test]
+fn the_summary_moves_four_unestablished_and_two_false_escapes() {
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(scripts_dir())
+        .expect("examples/scripts is readable")
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().is_some_and(|x| x == "kel"))
+        .collect();
+    paths.sort();
+
+    let mut without = (0, 0, 0);
+    let mut with = (0, 0, 0);
+    let tally = |v: Confinement, t: &mut (u32, u32, u32)| match v {
+        Confinement::Confined => t.0 += 1,
+        Confinement::Escapes => t.1 += 1,
+        Confinement::CannotEstablish => t.2 += 1,
+    };
+    for path in &paths {
+        let Some(module) = compile_file(path) else {
+            continue;
+        };
+        for chunk in &module.chunks {
+            for v in chunk_confinement(chunk) {
+                tally(v.verdict, &mut without);
+            }
+        }
+        for per_chunk in module_confinement(&module) {
+            for v in per_chunk {
+                tally(v.verdict, &mut with);
+            }
+        }
+    }
+
+    assert_eq!(
+        without,
+        (17, 12, 4),
+        "the summary-free answer moved. It must not: summaries are an \
+         ADDITION, and this is the control that says so."
+    );
+    assert_eq!(
+        with,
+        (23, 10, 0),
+        "the summarised verdict counts moved. Say which of the three columns \
+         changed and why before updating this; `cannot-establish` falling is \
+         the direction that means the analysis improved, and `escapes` falling \
+         means a false route was removed."
+    );
+    assert_eq!(
+        without.0 + without.1 + without.2,
+        with.0 + with.1 + with.2,
+        "the two paths must judge the same number of sites; a site the \
+         summarised path drops would be silently unmeasured"
+    );
+}
+
+/// The site that the whole increment was for.
+///
+/// `10_multbyte.kel` held all four of the corpus's `CannotEstablish` verdicts.
+/// With summaries it holds none, and this asserts the specific script rather
+/// than trusting the aggregate above — an aggregate can be satisfied by the
+/// right total from the wrong places.
+#[test]
+fn the_script_that_held_every_unestablished_verdict_now_holds_none() {
+    let module = module_of("10_multbyte.kel");
+    let verdicts: Vec<SiteVerdict> = module_confinement(&module).into_iter().flatten().collect();
+    assert!(
+        !verdicts.is_empty(),
+        "10_multbyte.kel builds composites; if it stopped, this measures nothing"
+    );
+    let unestablished: Vec<&SiteVerdict> = verdicts
+        .iter()
+        .filter(|v| v.verdict == Confinement::CannotEstablish)
+        .collect();
+    assert!(
+        unestablished.is_empty(),
+        "10_multbyte.kel still holds unestablished verdicts: {unestablished:?}"
     );
 }

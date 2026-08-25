@@ -10,8 +10,8 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-24 (session 53) — the confinement analysis exists, and a census it was
-commissioned from turned out to be measuring the wrong thing
+**Date**: 2026-08-24 (session 53) — the confinement analysis is complete, and closing it surfaced
+two verdicts that were wrong rather than merely unestablished
 
 ## ONE THING IS WAITING ON YOU, AND IT IS NOT NEW
 
@@ -23,30 +23,41 @@ Nothing else needs you.
 
 ## What landed
 
-**The confinement analysis is done.** `src/confine.rs` answers *is this construction site's region
-unreachable once its enclosing iteration ends?* — per site, over a chunk the caller holds, as
-**confined / cannot establish / escapes**, exactly the interface that was settled before it was
-written. It is a library predicate for the other line's native code generation and is deliberately
-**not wired into `verify()`**: a predicate that rejects nothing has no business in the load path.
+**The confinement analysis is finished, callee summary included.** `src/confine.rs` answers *is this
+construction site's region unreachable once its enclosing iteration ends?* per site, as **confined /
+cannot establish / escapes**. `module_confinement` summarises what each chunk does with each
+parameter first; `chunk_confinement` keeps the summary-free answer. It is a library predicate for the
+other line's code generation and is deliberately **not wired into `verify()`**.
 
-**Three of the four per-iteration corpus sites come back confined.** The crude test the other line
-ran admitted none of three.
+| path | sites | confined | escapes | cannot establish |
+|---|---|---|---|---|
+| no summaries | 33 | 17 | 12 | **4** |
+| summarised | 33 | **23** | 10 | **0** |
+
+**Also repaired**, on the `v0.3.0` line's report: a `src/compiler.rs` comment asserting two
+`Op::IsStruct` routes verify and then trap `InvalidBytecode` — the class `verify()` exists to exclude
+— while the tests beside it disproved it. Under it, a citation to a test **that was never written**,
+twice. `tests/comment_citations.rs` now makes a new one fail.
 
 ## The finding I would put in front of you if you read one paragraph
 
-**A measurement I was given as a requirement was an artefact of the instrument that produced it.**
+**Closing the gap revealed that two verdicts had been wrong, not merely unestablished.**
 
-The `v0.3.0` line measured that every composite site in the corpus was disqualified by *two*
-independent things, and concluded that a confinement analysis needed two features on day one or it
-would admit nothing. I took that as the specification and wrote to it. **Only one of the two was
-real.** `12_sensor_window.kel` calls `scale(raw[i])`, and `raw[i]` is a `Word` — the call never
-touches the composite at all. Their test saw the *opcode*; a dataflow analysis follows the *value*.
+I aimed the callee summary at the four `cannot-establish` verdicts and it closed all four. It also
+moved **two `escapes` to `confined`** — and those had been *false*. Without a summary, a call's
+return value is assumed to alias every argument, so a composite passed to a helper and then reached
+by the enclosing `return` was reported as escaping **through a route that does not exist**.
 
-I want to be precise about what this does and does not say. **Their conclusion that admissibility
-needed measuring was right, and it is why the corpus was extended and why the isolate script
-exists.** What was wrong was what the measurement said, and only a better instrument settled it.
-Both lines reached this independently within the same day, and their census now reports the two
-causes separately instead of conflated.
+**Nothing in the corpus said so.** The count looked healthy and the analysis was confidently
+reporting a route that was not there. A conservative default hides false positives exactly as well as
+it hides gaps, and the only reason this surfaced is that the fix for one happened to remove the
+other. I would not have found it by reading.
+
+**The related correction, which the other line has accepted:** their census concluded two analysis
+features were mandatory on day one because 3 of 3 sites were disqualified by `Call`. Only one was
+needed — `12_sensor_window.kel` passes a `Word`, so the call never touches the composite. Their test
+saw the *opcode*; a dataflow analysis follows the *value*. Their conclusion that admissibility needed
+measuring was right; what the measurement said was not.
 
 ## The remaining ruling, and the question now attached to it
 
@@ -88,8 +99,10 @@ The file says plainly that it is silent about shorter citations.
 
 ## What I would spend the next increment on
 
-**The callee summary**, which is the one thing the confinement analysis is missing and whose effect
-is already visible as a number that should move: the 4 `cannot-establish` verdicts in the corpus
-count. The call graph is acyclic, so a bottom-up summary terminates with no fixpoint.
+**Order 1's bare-`for` in `parse.kel`**, unchanged and still the largest single win: a second
+lowering, 24 ops against 68, and closing it would let `wire.kel` self-compile for the first time and
+join the byte-identity corpus. The phase machine is located — `forst.for_phase` phase 4 waits for a
+`limit` identifier the bare form never supplies.
 
-**Then Order 1's bare-`for`**, unchanged and still the largest single win.
+**Or the three dangling citations worth triage** out of the 21 recorded: `orders_differ_somewhere`,
+`must_contain`, `head_name`. Small, and each is a claim a reader currently cannot follow.
