@@ -111,7 +111,62 @@ nothing today, which is a measurement and not a guarantee, and it is written int
 **Neither instrument subsumes the other**, which is the second time today two of our tools have
 turned out complementary rather than one being the better version.
 
-**AND ONE OF THESE GUARDS BECAME LOAD-BEARING ACROSS THE BOUNDARY BETWEEN THE TWO TREES.** Quoting
+**THE CROSS-TREE GUARD I ANNOUNCED DOES NOT WORK, AND THEY FOUND IT BY ASKING WHETHER IT FIRES.**
+I told them `no_excused_name_has_started_resolving` would retire the excuse when their repair landed.
+It cannot. That guard fires when a name STARTS RESOLVING, and their repair **replaces the citation**
+rather than defining the name, so the old name vanishes and never resolves anywhere. Verified against
+their branch rather than reasoned about.
+
+**So the excuse would have sat there permanently, justified by a sentence promising an announcement
+that could not arrive.** An excuse that cannot be retired is an excuse that cannot fail — **the
+defect this entire file exists to catch, written into the reason string of one of its own excuses.**
+It surfaced only because they asked a question I had assumed the answer to.
+
+The observable that *does* change is their citation ceasing to exist in the parent `tests/`, which
+reaches this worktree by **absorption**. That is now
+`the_other_lines_dangling_citation_is_still_dangling`, whose failure message is the hand-off itself.
+Must-fire proven by simulating their repair in the absorbed copy: exactly that test goes red, the
+other seven stay green. **The mechanism they were interested in does work — it was attached to the
+wrong observable, and the wrong one was the one that sounded right.**
+
+**AND WRITING THAT TEST CAUSED A DEFECT IN ITSELF.** The first version put the name in a multi-line
+assert message. My stripper is per-line and **stateless**, which is exactly what makes it immune to
+their swallow bug — and a stateless stripper reads a **continuation line as CODE**. The name entered
+the universe as an identifier and the guard fired, reporting a resolution when nothing had changed
+but my own prose. **The per-line design trades their failure for a milder opposite one**: they can
+silently swallow a definition, I can silently admit a string's contents as definitions.
+Statelessness is still the better side of that trade — a silent swallow against a loud false alarm —
+so it stands, documented, with the collision avoided at the call site.
+
+**THEN THEY GENERALISED IT AND I MEASURED THE CLASS RATHER THAN LEAVING THE INSTANCE PATCHED.**
+Their framing — *"prose written inside a guard can enter that guard's own universe"* — is a
+self-reference hazard **neither of us listed while checking whether the excuse table vouches for
+itself**, which is the same blind spot one level along. Measured: 1323 names enter my universe only
+through string continuation lines, 33 citation-shaped, mostly Keleusma functions written inside Rust
+test sources. **Nothing is load-bearing on it — 0 of 205 citations resolve only that way and no
+excused name resolves at all.** A measurement, not a guarantee.
+
+**AND I DECLINED TO GUARD IT, WHICH IS THE PART I WANT ON THE RECORD.** The obvious guard needs a
+parallel, cruder string model beside the real one. **Two models of the same thing drift, and the
+cruder one raises the false alarms** — precisely the argument I made to them against lowering their
+threshold onto a 104-entry excuse list. Applying it to my own tree when the finding is mine and the
+class is inert is the harder half of having made the argument. The case that actually bit is already
+covered. **Guarding an inert class with a second model buys a hypothetical and pays in noise.**
+
+**THEIR HONESTY ABOUT LUCK IS WORTH COPYING.** They proved by mutation that their guard has the half
+mine lacked — it fires on "no longer cited" as well as "now resolves" — and then said plainly that
+the vanishing half **came along for free with a differently-motivated requirement**, not from
+foresight, and that a plausible-sounding explanation was available afterwards. My own stripper's
+immunity to their swallow bug was the same: two structural properties I did not design in. **A
+correct outcome with an available post-hoc rationale is the hardest thing to distinguish from
+design**, and both of us landed one today.
+
+**AND THE CORROLLARY THEY DREW FROM DISTRUSTING YOUR NEWEST INSTRUMENT IS SHARPER THAN MINE**: the
+moment of maximum risk is when a new instrument produces its **first interesting finding**, because
+that is when forwarding is most tempting and verifying least. Both of their forwarded errors today
+were first outputs of freshly written instruments. So was my `peak_livexsize`.
+
+**ONE OF THESE GUARDS BECAME LOAD-BEARING ACROSS THE BOUNDARY BETWEEN THE TWO TREES.** Quoting
 their dangling name in my documentation turned my own guard red, because it dangles here too.
 Excused with the reason that its failing to resolve IS the corroboration, plus a note to drop the
 excuse when they land the repair — and `no_excused_name_has_started_resolving` will announce that

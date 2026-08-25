@@ -158,8 +158,10 @@ const EXCUSED: &[(&str, &str)] = &[
         "the `v0.2.3` line's one surviving dangling citation, quoted here as the \
          cross-instrument check. **Its failing to resolve IS the corroboration** \
          -- excused rather than fixed because the stale pointer is in their tree \
-         and the repair is theirs. Drop this when they land it, at which point \
-         `no_excused_name_has_started_resolving` will say so first",
+         and the repair is theirs. Retired by \
+         `the_other_lines_dangling_citation_is_still_dangling`, NOT by \
+         `no_excused_name_has_started_resolving` -- see that test for why the \
+         obvious guard cannot see this one",
     ),
     (
         "some_test_name",
@@ -341,6 +343,50 @@ fn citations(block: &str) -> Vec<String> {
 /// `run_passes`, `get_declaration`) and local bindings (`d_call`). **So the
 /// permissiveness is real and currently costs nothing**, which is a measurement
 /// and not a guarantee.
+///
+/// **A SECOND, SHARPER SOURCE OF OVER-RESOLUTION, FOUND BY IT BITING.** The
+/// string stripper is **per-line and stateless**, which is what prevents the
+/// cross-line swallow the `v0.2.3` line hit. The price is that a **continuation
+/// line of a multi-line string literal is read as CODE**, so an identifier
+/// written inside one enters this universe as though it were declared.
+///
+/// It fired for real: an excused name written into a multi-line assert message
+/// made `no_excused_name_has_started_resolving` report that the name had started
+/// resolving, when nothing had changed but this file's own prose.
+/// **Statelessness is worth more than this costs** — it guards against a silent
+/// swallow, where this is a loud false alarm — so the trade stands and the
+/// collision is avoided at the call site instead.
+///
+/// ## THE CLASS WAS MEASURED, NOT JUST THE INSTANCE
+///
+/// `keleusma-02` generalised the instance to *"prose written inside a guard can
+/// enter that guard's own universe"*, which neither line had listed while
+/// checking whether the excuse table vouches for itself. So the class was
+/// measured here rather than the one collision being patched.
+///
+/// Comparing this universe against one built with multi-line string tracking:
+/// **1323 names enter only through string continuation lines, 33 of them
+/// citation-shaped.** Mostly Keleusma functions written inside Rust test sources
+/// (`sum_n`, `make_point`, `returns_word`) — which partly cancels the opposite
+/// limitation noted above, since stripping drops those and the per-line reset
+/// re-admits some.
+///
+/// **The question that matters is whether any of it is load-bearing, and it is
+/// not: 0 of 205 citations resolve only through that path, and no `EXCUSED` name
+/// resolves at all.** A measurement, not a guarantee. Re-run it by building the
+/// universe both ways and intersecting the difference with the cited set.
+///
+/// ## AND NO SECOND MODEL IS SHIPPED TO GUARD IT, DELIBERATELY
+///
+/// The obvious guard is "assert no citation resolves only via string contents",
+/// which needs a **parallel, cruder string model** living beside the real one.
+/// **Two models of the same thing drift, and the cruder one raises the false
+/// alarms** — the argument this line made to `keleusma-02` against lowering
+/// their threshold onto a 104-entry excuse list, and it applies to itself.
+///
+/// The specific case that actually bit — an excused name entering the universe —
+/// is already caught by `no_excused_name_has_started_resolving`. **Guarding an
+/// inert class with a second model would buy a hypothetical and pay in noise.**
 ///
 /// # THE OTHER LINE'S SCANNER HAS THE OPPOSITE WEAKNESS, AND THAT IS USEFUL
 ///
@@ -666,6 +712,71 @@ fn an_unbalanced_quote_cannot_reach_beyond_its_own_line() {
     assert!(
         next.contains("survives_the_previous_line"),
         "a definition on the line AFTER an unbalanced quote was blanked. The          stripper has become stateful across lines and can now swallow code the          way the `v0.2.3` line's whole-file regex did: {next}"
+    );
+}
+
+/// **AN EXCUSE THAT REFERENCES ANOTHER LINE'S STATE NEEDS A GUARD ON THAT STATE,
+/// AND THE OBVIOUS ONE DOES NOT WORK.**
+///
+/// `orders_differ_somewhere` is excused here because it is the `v0.2.3` line's
+/// dangling citation, quoted as a cross-instrument check. The excuse originally
+/// said it would be retired by `no_excused_name_has_started_resolving`.
+///
+/// **THAT WAS WRONG, AND IT WAS THE EXACT DEFECT THIS FILE EXISTS TO CATCH.**
+/// That guard fires when an excused name STARTS RESOLVING. Their repair does not
+/// define the name — it **replaces the citation with the correct one**, so the
+/// name simply disappears from their tree and never resolves anywhere. Verified
+/// against their branch before writing this: absent from `tests/`.
+///
+/// So the excuse would have sat here permanently, justified by a sentence
+/// promising an announcement that could not arrive. **An excuse that cannot be
+/// retired is an excuse that cannot fail**, which is the whole class this file
+/// was built for, committed one level up in the file itself.
+///
+/// # The condition that DOES change, and it is checkable from this tree alone
+///
+/// Their dangling citation lives in the parent `tests/`, which reaches this
+/// worktree by absorption. **While it is there, quoting it as a live example is
+/// accurate. The moment absorption brings their repair, it is not** — and this
+/// test says so, without either line remembering to send a message.
+///
+/// That is the property that was claimed for the wrong guard, relocated to one
+/// that can actually observe it.
+#[test]
+fn the_other_lines_dangling_citation_is_still_dangling() {
+    // **BUILT FROM PIECES ON PURPOSE, AND THE REASON IS A DEFECT THIS TEST
+    // CAUSED.** Writing the name as one literal put it on a CONTINUATION LINE of
+    // a multi-line string, and the per-line stripper -- stateless by design, so
+    // an unbalanced quote cannot run away -- reads a continuation line as CODE.
+    // The name entered the universe as an identifier and
+    // `no_excused_name_has_started_resolving` fired, reporting that an excused
+    // name had started resolving when nothing had changed but this file's prose.
+    //
+    // **STATELESSNESS IS WORTH MORE THAN THE OVER-RESOLUTION COSTS**, since it is
+    // what stops the swallow bug the `v0.2.3` line hit. So the trade stands and
+    // the collision is avoided instead: the name appears nowhere as a bare token.
+    const OTHER_LINES_STALE_CITATION: &str = "orders_differ_somewhere";
+    let needle = format!("`{OTHER_LINES_STALE_CITATION}`");
+
+    let their_tests = repo_root().join("tests");
+    let mut cited_in = Vec::new();
+    for p in rust_and_kel_sources(&their_tests) {
+        let Ok(text) = std::fs::read_to_string(&p) else {
+            continue;
+        };
+        if text.contains(&needle) {
+            cited_in.push(p.display().to_string());
+        }
+    }
+
+    assert!(
+        !cited_in.is_empty(),
+        "{OTHER_LINES_STALE_CITATION} is no longer cited anywhere in the parent \
+         tests/. The v0.2.3 line's repair has been absorbed, so: (1) drop that \
+         name from EXCUSED; (2) drop it from the cross-instrument paragraph on \
+         resolvable_universe, or reword that paragraph in the past tense; (3) \
+         delete this test. Nothing is broken -- this is the hand-off arriving. \
+         The example was live when it was written and is now history"
     );
 }
 
