@@ -5,28 +5,48 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-08-25 (session 53) against `153a2d65`**, every pinned value below
-> re-measured and the check block executed on that tree. **THIS FILE HAS GONE STALE WITHIN HOURS
-> FIVE TIMES.** If the dates here disagree with the three channels, trust the channels.
+> **REFRESHED 2026-08-25 (session 53 CLOSE) against `45c83886`, THE HEAD OF AN UNMERGED BRANCH.**
+> Every pinned value below is measured on THAT tree, not on `origin/v0.2.3`. **THIS FILE HAS GONE
+> STALE WITHIN HOURS FIVE TIMES**, and this refresh has a sixth way to be wrong that the others did
+> not — see the next paragraph. If the dates here disagree with the three channels, trust the
+> channels.
+>
+> **READ THIS BEFORE THE CHECK BLOCK. ONE PULL REQUEST IS OPEN AND ITS CONTENT IS WHAT THIS FILE
+> DESCRIBES.** `#278` (`feat/bare-for-parse`, head `45c83886`) carries the bare-`for` support.
+> Continuous integration was **restarted by a force-push and had not settled** when this was written,
+> so the merge is **authorized and PENDING**, not done.
+>
+> - **If `#278` merged**: `origin/v0.2.3` moved past `153a2d65` and the merge count is 150. The check
+>   block below passes as written.
+> - **If `#278` did NOT merge**: `origin/v0.2.3` is still `153a2d65`, the merge count is 149, and
+>   **every bare-`for` value in the check block will differ** — the boundary reads 90 SOk / 2
+>   Refuses, the margin pins read 677 and 35376, and `tests/selfhost_bare_for.rs` has 6 tests. That
+>   is not a stale handoff; it is this file describing a branch. **Check out the branch or merge it
+>   before concluding anything is wrong.**
+>
+> **DO NOT MERGE `#278` ON A RED GATE.** Continuous integration is the binding signal and the local
+> gate was green on all three signals at `45c83886` — cargo's own exit status 0, 83 binaries, zero
+> failures. If CI disagrees, CI wins.
 >
 > **AS OF `153a2d65`: 149 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive it:
 > `git log --oneline origin/v0.2.3 | grep -c 'Merge pull request'`. **NOTE THE REF** -- the local
 > `v0.2.3` lags and answers a smaller number for the same tree.
 >
-> **THE OPERATOR QUEUE IS EMPTY. NO OPEN PULL REQUEST.** Both of this session's merged at 22 of 22.
+> **THE OPERATOR QUEUE IS EMPTY.**
 >
-> **OF THE EIGHT RULINGS, SEVEN ARE NOW DONE.** The confinement analysis landed in session 53 as
-> `src/confine.rs`. **THE FLOATING-POINT ENTRY ABI IS THE ONE THAT REMAINS**, and the `v0.3.0` line
-> has since attached a second question to it -- where a `Fixed` shared slot's SCALE lives, since the
-> representation is settled and the scale is not. See "WHAT A RESUMING SESSION SHOULD DO FIRST".
+> **OF THE EIGHT RULINGS, SEVEN ARE DONE.** **THE FLOATING-POINT ENTRY ABI IS THE ONE THAT REMAINS**,
+> and the `v0.3.0` line has attached a second question to it -- where a `Fixed` shared slot's SCALE
+> lives, since the representation is settled and the scale is not. It is THEIRS to bring the
+> operator; this line has not acted on it. See "WHAT A RESUMING SESSION SHOULD DO FIRST".
 >
-> **A THIRD LINE EXISTS NOW.** A proof line drafts `docs/proofs/` and merges INTO this line; the
+> **A THIRD LINE EXISTS.** A proof line drafts `docs/proofs/` and merges INTO this line; the
 > `v0.3.0` line then rebases. Its branch is not offered yet and a fresh adversarial re-audit runs
 > before it is.
 >
-> **ORDER 1 DID NOT MOVE THIS SESSION.** Item 1 DONE, item 2 at 93% produced / 56% computed, item 3
-> MOVED. **THE BARE-`for` GAP IS CLOSED**: the form self-compiles byte-identically and
-> `ctrl/for_bare` is `SOk`. `wire.kel` now parses correctly and fails on a CAPACITY BOUND.
+> **ORDER 1'S LARGEST SINGLE ITEM IS DONE.** The bare `for` form **self-compiles byte-identically**
+> and `ctrl/for_bare` is `SOk`. `wire.kel` now **parses correctly** at 486 chunks and fails on a
+> CAPACITY BOUND -- `IndexOutOfBounds(-1, 1024)` -- which is a different failure from the mis-parse
+> it replaced and is the only thing left before the byte-identity corpus.
 >
 > **Publication remains held.**
 
@@ -43,6 +63,12 @@ recorded parent is a claim that nothing else ever lands, and it has failed twice
 git merge-base --is-ancestor 5c3ba628 HEAD    # must succeed
 
 # Content. If ANY of these differ, say so rather than acting on the state below.
+#
+# **IF YOU AUTOMATE THIS BLOCK, SCOPE THE PATTERN.** A naive `path + # + number` extractor also
+# matches the MARGIN PIN line further down and reads 680 as a test count for
+# `tests/selfhost_wire.rs`, which is pinned at 178. That false DIFF has been produced three times
+# by three sessions writing the same careless one-liner. It is the checker being wrong, not the
+# tree.
 grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 16
 grep -c '^\s*#\[test\]' tests/selfhost_wire.rs              # 178
 grep -c '^\s*#\[test\]' tests/selfhost_parse.rs             # 89
@@ -62,7 +88,7 @@ grep -c '^\s*#\[test\]' tests/selfhost_region_coverage.rs   # 5
 grep -c '^\s*#\[test\]' tests/selfhost_chunk_names.rs       # 3
 grep -c '^\s*#\[test\]' tests/parse_record_trace.rs         # 2
 grep -c '^\s*#\[test\]' tests/lex_token_trace.rs            # 2
-grep -c '^\s*#\[test\]' tests/selfhost_bare_for.rs          # 7
+grep -c '^\s*#\[test\]' tests/selfhost_bare_for.rs          # 7   <-- 6 if #278 is unmerged
 # THE PROOF-SUPPORT FAMILY, all added in session 52. Several are GAP pins that
 # fail DELIBERATELY if the gap they record is closed -- read the message before
 # treating a failure as a fix.
@@ -93,6 +119,7 @@ grep -oE 'fn max_nesting\(\) -> Word \{ [0-9]+ \}' src/selfhost/kel/verify_depth
 
 # THE MARGIN PINS. Moved twice this session, both times for a NAMED reason.
 grep -oE 'assert_eq!\(worst_(names|blob), [0-9]+' tests/selfhost_wire.rs   # 680, 35698
+# <-- 677, 35376 if #278 is unmerged.
 
 # THE PARSER'S CAPS. Unchanged; the token cap now binds only the COLLECTING feed.
 grep -rhoE 'pub const PARSE_[A-Z_]+: usize = [0-9]+;' src/ | sort
@@ -100,6 +127,7 @@ grep -rhoE 'pub const PARSE_[A-Z_]+: usize = [0-9]+;' src/ | sort
 # THE CONSTRUCT-SUPPORT BOUNDARY. **THE ENUM HAS FOUR VARIANTS, NOT THREE**: `Gap`
 # split into `Refuses` and `Diverges` because it conflated an honest refusal with a
 # silent miscompile. Expect 91 SOk / 1 Refuses / 3 Diverges / 1 RefRejects.
+# <-- 90 SOk / 2 Refuses if #278 is unmerged. `ctrl/for_bare` is the case that moves.
 # The second `Refuses` is `ctrl/for_bare`, added 2026-08-25: the bare loop form
 # was absent from this table entirely, so its lack of support was unverified by
 # construction.
@@ -883,8 +911,19 @@ machine-owned copy store measured WORSE than doing nothing.
 
 ## WHAT A RESUMING SESSION SHOULD DO FIRST
 
-**Nothing is blocked and nothing is queued for the operator.** Eight rulings landed on 2026-08-24;
-six are implemented. The two that remain are WORK, and they are the two largest items on the line.
+**ZERO. SETTLE `#278`.** It is the only open pull request and it carries this file's subject.
+Continuous integration was restarted by a force-push and had not settled; the local gate was green
+on all three signals. Merge on 22 of 22, or diagnose the failure — **do not merge on red, and do not
+assume the branch is stale because the check block disagrees with `origin/v0.2.3`.**
+
+**ONE. `wire.kel`'s CAPACITY BOUND**, which is now the only thing between it and the byte-identity
+corpus. `self_host_compile(wire.kel)` fails with `IndexOutOfBounds(-1, 1024)` on the largest stage in
+the corpus at 486 chunks. The `-1` is the interesting half: that is a SENTINEL reaching an index,
+not an overflow past a bound, so "raise the cap" is the obvious reading and is probably wrong.
+**Diagnose before costing** — the last two estimates on this file were both wrong, one high and one
+low, and both were inferred from the shape of the problem rather than the state of the tree.
+
+Everything below is the standing queue, unchanged in priority.
 
 ### 1. THE FLOATING-POINT ENTRY ABI — AUTHORIZED, NOT STARTED, AND IT NEEDS THE OTHER LINE
 
@@ -953,57 +992,36 @@ conservative answer rather than recursing.
 classification and degrades an unhandled escaping route to `CannotEstablish`. It cannot be exercised
 without adding an opcode; what is tested is that every currently escaping opcode reaches its handler.
 
-### 3. ORDER 1, WHICH DID NOT MOVE THIS SESSION
+### 3. ORDER 1 — ITS LARGEST ITEM IS DONE
 
-**DONE 2026-08-25. THE BARE `for` FORM SELF-COMPILES BYTE-IDENTICALLY**, and `ctrl/for_bare`
-classifies `SOk`. What follows is kept because two of its statements were wrong in ways worth
-knowing.
+**THE BARE `for` FORM SELF-COMPILES BYTE-IDENTICALLY** (2026-08-25, `#278`). `ctrl/for_bare`
+classifies `SOk`; the boundary reads 91 SOk / 1 Refuses / 3 Diverges / 1 RefRejects.
 
-**The re-cost said the driver was DONE. It was not.** Neither the shipping driver nor this
-repository's copy read `for_parts` back OUT of `reconstruct.kel` — only INTO `codegen.kel`. The
-lowering received seven zeros and produced a correct loop with every operand at slot 0. **Checking
-that plumbing exists is not checking that it runs in both directions.**
+The design and its post-mortem are in
+[`../decisions/BARE_FOR_IMPLEMENTATION_PLAN.md`](../decisions/BARE_FOR_IMPLEMENTATION_PLAN.md),
+kept because two of its statements were wrong in ways worth having written down.
 
-**And the six-bit tag space is full.** Every value 1 to 64 is a kind, and the statement fold was a
-third legacy-packed emit path the plan did not name; kind 70 truncated to 6 and the loop vanished
-into a stray `Not`. `fold_record` now routes high kinds onto the migrated transport. **Any future
-statement kind must go that way.**
+**THREE THINGS FROM IT THAT GENERALISE, AND THEY ARE THE REASON THIS SECTION IS LONG.**
 
-**`wire.kel` PARSES CORRECTLY NOW** — 486 chunks that mean something, the mis-parse gone — and does
-NOT self-compile: a capacity limit further down, `IndexOutOfBounds(-1, 1024)`. A bound is a
-different failure from a mis-parse and is the next thing between it and the byte-identity corpus.
+**A construct can be in a corpus and still be unverified, if that corpus does not drive the stage
+that fails.** `codegen.kel` had the complete lowering throughout, exercised by four cases that drive
+the REFERENCE parser. They passed for the entire time the pipeline was broken, feeding it nodes
+`parse.kel` had never produced. **Coverage is a property of the path, not of the case list.**
 
-The original re-cost, for the record: **TWO stage sources, not three.**
-It is a SECOND LOWERING, not a relaxation; the size ratio is asserted by
-`the_bare_and_limit_forms_have_different_lowerings` rather than quoted here, because two figures for
-one claim is a defect this session recorded four times.
+**Checking that plumbing exists is not checking that it runs in both directions.** The re-cost
+marked the driver DONE because it copies `for_parts` INTO `codegen.kel`. Neither the shipping driver
+nor this repository's copy read it OUT of `reconstruct.kel`, so the lowering received seven zeros
+and produced a correct loop with every operand at slot 0. **A wire is not a circuit.**
 
-**`codegen.kel` ALREADY HAS THE LOWERING.** `push_forin` emits it in full from a seven-word
-`for_parts` entry, and four bare-`for` cases exercise it — because that corpus drives the REFERENCE
-parser, so it has always received nodes `parse.kel` never produced. **The same corpus split that hid
-the gap is why the lowering exists and was never connected.**
+**Naming a hazard is not finding every site that has it.** The plan warned that record kinds at or
+above 64 need the migrated transport. The statement fold was a third legacy-packed emit path the
+plan did not name; kind 70 truncated to 6 and the loop vanished into a stray `Not`. **THE SIX-BIT
+TAG SPACE IS NOW FULL** — every value 1 to 64 is a kind — so `fold_record` routes high kinds
+migrated, and any future statement kind must go that way. This was the last change that could have
+found the problem by accident.
 
-`reconstruct.kel` declares `for_parts` and writes it **zero** times, against sixteen mentions of the
-counted form's equivalent. `parse.kel` does not mention the node at all. Pinned by
-`the_bare_lowering_exists_in_codegen_and_is_unreached_by_the_earlier_stages`, which **fails when the
-work starts** — that is the pin doing its job, not a regression.
-
-**A BETTER ESTIMATE IS NOT A SMALL ESTIMATE.** Two stages of Keleusma, in a phase machine and a
-record stream, with the parts layout matching what `push_forin` reads position for position.
-
-**THE DESIGN IS WRITTEN DOWN**, so the next session executes rather than re-derives:
-[`../decisions/BARE_FOR_IMPLEMENTATION_PLAN.md`](../decisions/BARE_FOR_IMPLEMENTATION_PLAN.md). It
-carries the seven-word contract, the three edits, and the one real design question — the synthetic
-`i >= limit` and `i + 1` nodes, which no token corresponds to. **Finishing is `ctrl/for_bare` moving
-from `Refuses` to `SOk`**, since that case drives the whole pipeline; the four codegen-only cases
-will keep passing while `parse.kel` is wrong, because they never call it.
-
-Closing it would let `wire.kel` self-compile and join the byte-identity corpus, which covers ten
-stages and not it. **The fix and its corpus entry are ONE change.**
-
-The `parse.kel` header machine is located: `forst.for_phase` runs 1 variable, 2 `in`, 3 low bound,
-4 high bound, 5 cap, 6 `{`, 7 body, and **phase 4 waits for the `limit` identifier that the bare
-form never supplies**.
+**WHAT REMAINS OF ORDER 1.** Item 1 DONE, item 2 at 93% produced / 56% computed, item 3 MOVED.
+`wire.kel` parses correctly and is blocked on the capacity bound named at the top of this section.
 
 ### WHAT NOT TO DO
 

@@ -10,12 +10,15 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-24 (session 53) — the confinement analysis is complete, and closing it surfaced
-two verdicts that were wrong rather than merely unestablished
+**Date**: 2026-08-25 (session 53 CLOSE) — Order 1's largest item is done, and my own estimate of it
+was wrong in both directions
 
 ## ONE THING IS WAITING ON YOU, AND IT IS NOT NEW
 
-`origin/v0.2.3` is at `153a2d65`, **149 merges**. Publication remains held.
+`origin/v0.2.3` is at `153a2d65`, **149 merges**, and **one pull request is open**: `#278`, which
+carries the bare-`for` support this document describes. Its continuous integration was restarted by
+a force-push and had not settled at session close; the local gate was green on all three signals.
+**Merge on 22 of 22.** Publication remains held.
 
 **The floating-point entry ABI is the last of your eight rulings that is not implemented**, and the
 `v0.3.0` line has attached a second question to it that you have not seen. Both are described below.

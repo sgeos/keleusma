@@ -10,6 +10,28 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-25, SESSION 53 CLOSE). 149 merges at `153a2d65`, ONE OPEN PULL REQUEST.**
+>
+> **`#278` CARRIES THE BARE-`for` SUPPORT AND HAD NOT MERGED AT CLOSE.** Continuous integration was
+> restarted by a force-push and had not settled; the local gate was green on all three signals
+> (cargo exit 0, 83 binaries, zero failures). **Merge on 22 of 22.** Until it does, every bare-`for`
+> figure in the handoff describes a branch rather than `origin/v0.2.3`.
+>
+> **ORDER 1'S LARGEST SINGLE ITEM IS DONE.** The bare `for` form self-compiles byte-identically;
+> `ctrl/for_bare` is `SOk`; the boundary reads 91 SOk / 1 Refuses / 3 Diverges / 1 RefRejects.
+> `wire.kel` now PARSES correctly at 486 chunks and fails on a CAPACITY BOUND,
+> `IndexOutOfBounds(-1, 1024)` -- a different failure from the mis-parse it replaced, and the only
+> thing left before the byte-identity corpus. **The `-1` is a sentinel reaching an index, not an
+> overflow, so "raise the cap" is probably the wrong reading.**
+>
+> **SEVEN OF THE EIGHT RULINGS ARE IMPLEMENTED.** The floating-point entry ABI remains, with the
+> `v0.3.0` line's `Fixed` shared-slot SCALE question attached to it. That one is THEIRS to bring the
+> operator; this line has not acted on it.
+>
+> **TEN MERGES THIS SESSION**, covering the confinement analysis and its callee summary, a comment
+> that asserted a load-time hole its own tests disprove, the citation guard and its debt register at
+> 21 down to 13, the bare-`for` named refusal, its boundary case, and finally its support.
+
 > **Currency note (2026-08-24, session 53, third increment). THE CONFINEMENT ANALYSIS IS COMPLETE.**
 >
 > `module_confinement` summarises what each chunk does with each parameter, two facts each: whether

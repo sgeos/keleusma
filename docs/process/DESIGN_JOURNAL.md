@@ -13,6 +13,77 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-25 — SESSION 53 CLOSE. What generalises from ten merges and one that did not land
+
+Ten pull requests merged, one open at close. The increment-by-increment reasoning
+is below; what follows is only what outlives it.
+
+**EVERY SIGNIFICANT CORRECTION CAME FROM RUNNING SOMETHING, AND NONE FROM
+READING.** The zero-operand loop said *`for_parts` is empty*. The stray `Not`
+said *70 mod 64 is 6*. Two verdicts that were wrong rather than unestablished
+surfaced only because a fix for a different problem removed the imprecision
+producing them. In every case I had read the relevant code first and seen
+nothing.
+
+**FIVE INSTRUMENT FAILURES, ALL MINE, ALL FIRST OUTPUTS OF SOMETHING FRESHLY
+WRITTEN.** A doc-link regex, two forwarded parameters, a string-stripping
+measurement, a phantom name list. **The escape route that worked is cheaper than
+verification: go and touch the thing the output points at.** Re-reading six
+plausible test names tells you nothing; grepping one settles it. The two I
+forwarded to another line unchecked were both first outputs — output from an
+instrument you built feels like ground truth in a way another line's does not.
+
+**A FAMILY OF THREE, AND THEY ARE ONE GAP.** A rule recorded is not a rule
+applied. An audit covers only the population that existed when it ran. A hazard
+named in a plan does not enumerate its sites. All three are the distance between
+a statement about a system and a traversal of it — and I produced an instance of
+each, in the same file, having written the rule down first.
+
+**A MEASUREMENT WHOSE RECORD LIVES INSIDE ITS OWN POPULATION CANNOT BE EXACT.**
+Two attempts at an exact citation table were invalid at the moment of commit,
+because writing the number down changed it. The fix is not re-measuring; it is
+approximating the totals and keeping the findings exact, which held across every
+re-derivation. **The pre-publication test: does writing this down change what it
+counts?**
+
+**AND A COUNT IS NOT A MEASUREMENT WITHOUT ITS POPULATION.** A corpus pin over a
+directory another line grows went red on their tree while mine stayed green.
+Naming the fifteen members fixed it. The hazard had been written into this
+line's own TASKLOG and did not reach the person writing the test — **a hazard
+note belongs at the site where the hazard is instantiated**, not in the file
+recording that it happened.
+
+**COVERAGE IS A PROPERTY OF THE PATH, NOT OF THE CASE LIST.** The sharpest
+finding of the session, and the older sentence does not cover it: *any construct
+the corpus does not contain is unverified* is true and this construct WAS
+contained — in a corpus driving the reference parser rather than the stage that
+failed. Four cases passed for the entire time the pipeline was broken.
+
+**EXIT STATUS LIES IN BOTH DIRECTIONS.** `| tee` reports success on a red tree;
+a trailing filter reports failure on a green one. Both were hit by both lines in
+one day. Read the status of the thing you are asking about, print it last, and
+keep two independent signals.
+
+**THE SHAPE WAS ALWAYS DOWNSTREAM OF AN INSTANCE**, which corrects how I first
+wrote this. I said the cross-line diagnoses of shape were more useful than the
+bug reports; the `v0.3.0` line pointed out that **every one of them came out of a
+bug report**, and neither line produced one by thinking about the problem in the
+abstract. Prose inheriting documentation's scrutiny came from a stale threshold
+table. A record inside its own population came from a manufactured finding. The
+abstraction is only checkable against the case that produced it.
+
+**AND THE METHOD OUTPERFORMED THE FINDINGS.** Neither line accepted the other's
+report without checking it against its own tree, and **roughly half the time the
+check changed the conclusion**: a comment-line hole that did not exist there, a
+string-stripping fix that did not survive contact here, six triage names that
+were one. It cost almost nothing each time.
+
+**WHAT I WOULD TELL THE NEXT SESSION IN ONE LINE.** The estimates that were
+wrong were all inferred from the shape of a problem rather than the state of the
+tree, and every one took under ten minutes to correct by measurement. Read the
+tree before costing it.
+
+
 ## 2026-08-25 — the bare `for` self-compiles, and the estimate was wrong in both directions
 
 **Order 1's largest single item is done.** `for v in a..b { .. }` goes through
