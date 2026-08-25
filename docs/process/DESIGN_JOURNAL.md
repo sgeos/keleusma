@@ -13,6 +13,53 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-25 — the citation register, and a class I had not named
+
+**21 excused citations down to 13, reported in two categories because they are
+not the same event.** Seven repaired; one was never a defect. A register that
+falls because the scanner stopped manufacturing findings has not been paid down,
+and conflating the two would overstate it.
+
+**TWO OF THE SEVEN WERE REVERSALS.** A citation naming a test that asserts the
+OPPOSITE of what the tree does: one pointed at a rejection of a trailing
+semicolon after `for` that the tree now accepts, the other at a divergence
+between two compilers that has since been closed. **A dangling citation fails to
+inform; a reversed one misinforms, and does so with a plausible-looking
+pointer.**
+
+Both needed the surrounding PROSE rewritten, not the name swapped. Repointing
+`disagree` to `agree` while leaving a paragraph asserting the divergence — with a
+measured `Int(3)` in it — would have left the text wrong and the guard green.
+**That is the trap in a name-only repair**, and it is the same shape as
+repointing a test rather than retiring it: the pointer resolves, the claim does
+not.
+
+The eighth was a local written `let (a, b) = ...`, invisible to a scan that reads
+the identifier after `let `. **Third false positive of that family**, after
+inline parameters and the two forwarded earlier.
+
+**THE FILE CAUGHT ME TWICE WHILE I WAS REPAIRING IT.**
+
+My replacement prose for one repair named the nonexistent function in backticks —
+"the name cited here was `type_flat_scalar_kind`, which has never existed" — and
+the guard failed on my own explanation. Writing about a nonexistent name in
+backticks re-creates the citation. I had already hit this once today and did it
+again.
+
+Then I updated the threshold table's two-word row by SUBTRACTING the eight
+removals from 84, giving 76, one paragraph below a heading about measurements
+that are not measured. Derived: **74**. Two repairs resolved names a shorter cut
+counts and a four-word cut does not, so the arithmetic does not carry across
+rows. The miss stays in the file, because the alternative is a table that models
+the discipline it describes and was produced by ignoring it.
+
+**And the gate reported a green tree as exit 1 again**, from a trailing `grep`
+for failures — after I wrote the guidance about exactly that. The guidance was
+right and incomplete: capturing cargo's status is necessary and not sufficient,
+because a composite command takes its LAST member's status. Print the captured
+value last, or read the printed value rather than the command's.
+
+
 ## 2026-08-25 — a named refusal, and the milestone it cost
 
 **`parse.kel` now refuses the bare `for v in a..b { .. }` form by name**, at

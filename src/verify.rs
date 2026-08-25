@@ -5042,8 +5042,9 @@ mod tests {
     // applicable; the opcodes do not exist and closure-shaped
     // source expressions are rejected at the type checker. The
     // type-checker-stage rejection is covered by
-    // `closures_rejected_at_typecheck` and
-    // `first_class_function_rejected_at_compile` in `typecheck.rs`.
+    // `closure_rejected_at_typecheck` and
+    // `recursive_closure_rejected_at_typecheck` in `typecheck.rs`.
+    // **Both names here previously resolved to nothing.**
 
     #[test]
     fn verify_resource_bounds_skips_non_stream() {
