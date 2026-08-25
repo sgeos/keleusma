@@ -10,77 +10,69 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-24 (session 52 close) — eight rulings, six done, and a third line now exists
+**Date**: 2026-08-24 (session 53) — the confinement analysis exists, and a census it was
+commissioned from turned out to be measuring the wrong thing
 
-## NOTHING IS WAITING ON YOU
+## ONE THING IS WAITING ON YOU, AND IT IS NOT NEW
 
-`origin/v0.2.3` is at `dadbce7e`, **139 merges**, no open pull request, working tree clean, operator
-queue empty. Publication remains held.
+`origin/v0.2.3` is at `71792ecc`, **140 merges**. Publication remains held.
 
-**Eight rulings landed. Six are implemented.** The two that are not are *work*, not decisions:
+**The floating-point entry ABI is the last of your eight rulings that is not implemented**, and the
+`v0.3.0` line has attached a second question to it that you have not seen. Both are described below.
+Nothing else needs you.
 
-| ruling | state |
-|---|---|
-| floating-point entry ABI — yes, FP feature-gated, `Fixed` always available | **authorized, not started** |
-| confinement analysis — add it, useful-and-sound standard, shared crate | **commissioned, not started** |
-| Theorem B2 adoption | **unruled in either direction**, and recorded so it is not read as declined |
-| publication | held |
-| `GRAMMAR.md` cross-reference | done |
-| CI `Doc` job covering `self-host` | done |
-| merge sequence — proof line into this one, `v0.3.0` rebases | relayed; both lines took it to their own operators |
+## What landed
 
-## The two open items, and why neither is small
+**The confinement analysis is done.** `src/confine.rs` answers *is this construction site's region
+unreachable once its enclosing iteration ends?* — per site, over a chunk the caller holds, as
+**confined / cannot establish / escapes**, exactly the interface that was settled before it was
+written. It is a library predicate for the other line's native code generation and is deliberately
+**not wired into `verify()`**: a predicate that rejects nothing has no business in the load path.
 
-**The floating-point ABI has an asymmetry the other line had not seen.** Your gating maps onto
-`floats`, an existing default-on feature — but the two halves gate *differently*. The FP entry ABI
-may assume `floats`, so a `--no-default-features` build must keep the un-floated signature **valid
-rather than replaced**; while **`Fixed` is unconditional**, so their `slot_entry` cannot keep
-refusing it behind a float gate. That is the harder half and it is not feature-gated. Both lines have
-started nothing and both said so.
+**Three of the four per-iteration corpus sites come back confined.** The crude test the other line
+ran admitted none of three.
 
-**The confinement analysis has its interface settled and two day-one requirements.** Per-site,
-three-valued — *yes / no / cannot establish*, with the third distinct, because folding it into `no`
-loses the measurement that says whether the analysis is improving. And the other line measured why
-two features are mandatory rather than optional: with the corpus extended, **zero of three composite
-sites survive a crude escape test** — disqualified by `SetLocal` and by `Call`. A predicate lacking
-either admits nothing at all.
+## The finding I would put in front of you if you read one paragraph
 
-## What this session actually did
+**A measurement I was given as a requirement was an artefact of the instrument that produced it.**
 
-**Both directed items are done.** `verify()` now floors loop-body pops at the entry height, which
-cost **zero of 588 loop instances** as measured beforehand. And the corpus — which turned out to
-contain **no `loop main`, no data segment, and not one composite built inside an iterating loop** —
-now carries four scripts covering the shapes, pinned so a gap cannot silently return.
+The `v0.3.0` line measured that every composite site in the corpus was disqualified by *two*
+independent things, and concluded that a confinement analysis needed two features on day one or it
+would admit nothing. I took that as the specification and wrote to it. **Only one of the two was
+real.** `12_sensor_window.kel` calls `scale(raw[i])`, and `raw[i]` is a `Word` — the call never
+touches the composite at all. Their test saw the *opcode*; a dataflow analysis follows the *value*.
 
-**An adversarial audit of the proof arrived late and asked two questions about my surface.** Both
-answers were fine. `Op::Reset` placement is **enforced**, not emission-only. Break edges genuinely
-are never compared to the loop entry stack — and that is **load-bearing**, since 18 dispatch scopes
-carry `match` arm values across the break and comparing them to entry would refuse `match`.
+I want to be precise about what this does and does not say. **Their conclusion that admissibility
+needed measuring was right, and it is why the corpus was extended and why the isolate script
+exists.** What was wrong was what the measurement said, and only a better instrument settled it.
+Both lines reached this independently within the same day, and their census now reports the two
+causes separately instead of conflated.
 
-**Chasing the second found a defect in my own table**, which the proof cites: I had classified
-`Break` as carrying no region, when it consumes nothing and transfers control *with the whole
-operand stack*. Reclassified — and the reason it is still not an escape is not that it cannot carry
-a region but that it **ends the scope**.
+## The remaining ruling, and the question now attached to it
 
-## The thing I would flag if you read only one paragraph
+**The floating-point entry ABI.** Your ruling stands: floating-point registers gate on a feature,
+`Fixed` is always available. The asymmetry is unchanged — the FP half may assume `floats`, and the
+`Fixed` half is unconditional and is the harder one.
 
-**Three separate checks I wrote this session could not fail**, each satisfied by a different part of
-the document from the one it was about — a translation clause, a test citation, a README index.
-**Mutation caught all three; reading caught none.** I have written the rule into the handoff, because
-the individual fixes are worth less than the pattern.
+**The `v0.3.0` line has since found a second, related question and it is genuinely yours.** A
+`Fixed` value's *representation* is settled — a signed Q-format integer of the word width — but its
+**scale is not host-visible**. `Fixed<16>` and `Fixed<8>` differ by 256x and compile to byte-identical
+shared-slot layouts, so a host cannot tell them apart. That is sound inside a module, where the type
+checker already enforced compatibility, and a shared slot is not inside the module. They measured it
+rather than reasoned it, and they price three options, preferring: **refuse `Fixed` in a
+host-visible position at the source and make hosts marshal through `Word`.** That is a breaking
+source change and needs your authorization. I have not acted on it and it is theirs to bring you.
 
-## A language decision is on the record
+## A defect on my surface, reported by the other line and confirmed
 
-[`../decisions/YIELD_OWNERSHIP_MODE.md`](../decisions/YIELD_OWNERSHIP_MODE.md) — `ref`/`out` on a
-yielding declaration's return signature, accepted in principle, **not scheduled**, V0.3.0 or later,
-no new opcode. It names six open questions it does not settle, the buffer-size query and the
-`Text`/opaque depth limit being the two that would bite an implementer first.
+A comment in `src/compiler.rs` asserts that two `Op::IsStruct` routes "verify, receive a memory
+bound, load, and then trap `InvalidBytecode`" — **the exact class `verify()` exists to exclude**. My
+own repair closed both routes and the tests beside the comment prove it. An auditor reading that
+paragraph would conclude the load-time guarantee is breached while the tests disprove it. **This is
+a documentation defect, not a code defect**, and it is next.
 
 ## Next intended step
 
-**Order 1, which did not move this session.** Bare-`for` support in `parse.kel` is the largest single
-win — a second lowering at 24 ops against 68, and closing it would let `wire.kel` self-compile and
-join the byte-identity corpus for the first time. The header machine is located and the failing
-phase identified.
-
-The two commissioned items above would displace it if you would rather they came first.
+Repair that comment, with the two named routes re-measured rather than assumed closed. Then the
+callee summary, which is the one increment the confinement analysis is missing and whose effect is
+already visible as a number that should move.

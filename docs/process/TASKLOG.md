@@ -10,6 +10,32 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-24, session 53). 140 merges at `71792ecc`.**
+>
+> **SEVEN OF THE EIGHT RULINGS ARE IMPLEMENTED.** The confinement analysis landed as
+> `src/confine.rs` (feature `verify`): per-site, three-valued, a library predicate NOT wired into
+> `verify()`. **THE FLOATING-POINT ENTRY ABI IS THE ONE THAT REMAINS**, and the `v0.3.0` line has
+> attached a second question to it -- where a `Fixed` shared slot's SCALE lives, since the
+> representation is settled and the scale is not host-visible. That one is the operator's and is
+> theirs to bring. **B2 adoption remains UNRULED, not declined.**
+>
+> **THE DAY-ONE REQUIREMENT OF "BOTH FEATURES OR IT ADMITS NOTHING" WAS WRONG, AND THE OTHER LINE
+> AGREES.** Their census disqualified 3 of 3 sites by `Call` using a crude any-`Escapes`-opcode
+> test. A dataflow analysis follows the value: `12_sensor_window.kel`'s call passes a `Word`. Only
+> the boundary-dead rule was needed; **three of the four per-iteration corpus sites now come back
+> confined.** The callee summary is a second increment, not a precondition.
+>
+> **CORPUS COUNTS, WITH THEIR SCAN RULE, BECAUSE A BARE COUNT IS NOT A MEASUREMENT.**
+> `examples/scripts` FLAT: 33 sites / 17 confined / 12 escapes / 4 cannot-establish. Recursively:
+> 251, because that directory also holds `piano_roll/` and `rogue/`.
+> `tests/corpus_pattern_coverage.rs` states **79** in prose, reproducing against neither rule;
+> recorded as unreproducible rather than as wrong.
+>
+> **A DEFECT ON THIS LINE'S SURFACE, REPORTED BY THE `v0.3.0` LINE AND CONFIRMED.** A comment in
+> `src/compiler.rs` asserts two `Op::IsStruct` routes verify and then trap `InvalidBytecode` -- the
+> class `verify()` exists to exclude. The repair closed both; the tests beside the comment prove it.
+> Documentation defect, next on the list.
+
 > **Currency note (2026-08-24, session 52 CLOSE). 139 merges at `dadbce7e`, no open pull request.**
 >
 > **EIGHT OPERATOR RULINGS, SIX IMPLEMENTED.** The two outstanding are WORK: the floating-point entry

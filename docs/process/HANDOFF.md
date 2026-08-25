@@ -5,19 +5,21 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-08-24 (session 52 close) against `dadbce7e`**, every pinned value below
+> **REFRESHED 2026-08-24 (session 53) against `71792ecc`**, every pinned value below
 > re-measured and the check block executed on that tree. **THIS FILE HAS GONE STALE WITHIN HOURS
 > FIVE TIMES.** If the dates here disagree with the three channels, trust the channels.
 >
-> **AS OF `dadbce7e`: 139 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive it:
+> **AS OF `71792ecc`: 140 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive it:
 > `git log --oneline origin/v0.2.3 | grep -c 'Merge pull request'`. **NOTE THE REF** -- the local
 > `v0.2.3` lags and answers a smaller number for the same tree.
 >
-> **NO OPEN PULL REQUEST ON THIS LINE. WORKING TREE CLEAN. THE OPERATOR QUEUE IS EMPTY.**
+> **THE OPERATOR QUEUE IS EMPTY. ONE OPEN PULL REQUEST**, the confinement analysis, whose branch is
+> `feat/confinement-analysis`.
 >
-> **THE OPERATOR RULED ON EIGHT ITEMS THIS SESSION AND SIX ARE DONE.** The two that are not are
-> WORK, not decisions: the floating-point entry ABI and the confinement analysis. See "WHAT A
-> RESUMING SESSION SHOULD DO FIRST".
+> **OF THE EIGHT RULINGS, SEVEN ARE NOW DONE.** The confinement analysis landed in session 53 as
+> `src/confine.rs`. **THE FLOATING-POINT ENTRY ABI IS THE ONE THAT REMAINS**, and the `v0.3.0` line
+> has since attached a second question to it -- where a `Fixed` shared slot's SCALE lives, since the
+> representation is settled and the scale is not. See "WHAT A RESUMING SESSION SHOULD DO FIRST".
 >
 > **A THIRD LINE EXISTS NOW.** A proof line drafts `docs/proofs/` and merges INTO this line; the
 > `v0.3.0` line then rebases. Its branch is not offered yet and a fresh adversarial re-audit runs
@@ -67,11 +69,15 @@ grep -c '^\s*#\[test\]' tests/selfhost_bare_for.rs          # 4
 grep -c '^\s*#\[test\]' tests/push_order_claims.rs          # 2
 grep -c '^\s*#\[test\]' tests/selfhost_parse_refusals.rs    # 2
 grep -c '^\s*#\[test\]' tests/composite_escape_window.rs    # 3
-grep -c '^\s*#\[test\]' tests/composite_escape_routes.rs    # 8
+grep -c '^\s*#\[test\]' tests/composite_escape_routes.rs    # 9
 grep -c '^\s*#\[test\]' tests/proof_evidence_index.rs       # 3
 grep -c '^\s*#\[test\]' tests/stream_never_returns.rs       # 2
 grep -c '^\s*#\[test\]' tests/loop_entry_floor.rs           # 3
 grep -c '^\s*#\[test\]' tests/corpus_pattern_coverage.rs    # 3
+# THE CONFINEMENT ANALYSIS, session 53. `confine.rs`'s own unit tests are in
+# `src/`, so the lib count moves too.
+grep -c '^\s*#\[test\]' tests/confinement_analysis.rs        # 6
+grep -c '^\s*#\[test\]' src/confine.rs                       # 7
 
 # `tests/stage_command_reach.rs` IS in the list now: #210 merged 2026-08-21.
 
@@ -98,7 +104,7 @@ awk '/fn boundary_cases\(\)/,/^}/' tests/selfhost_codegen.rs \
   | sed 's://.*::' | grep -oE '\b(SOk|Refuses|Diverges|RefRejects)\b' | sort | uniq -c
 ```
 
-**A CHECK THAT PASSES IS NOT A CURRENT DOCUMENT.** IS NOT A CURRENT DOCUMENT.** The last one passed every check six merges after
+**A CHECK THAT PASSES IS NOT A CURRENT DOCUMENT.** The last one passed every check six merges after
 it was written. If the counts hold but the dates below are old, read the three channels first and
 trust them over this file.
 
@@ -826,37 +832,41 @@ GATING:
 This line's surface is `src/float.rs`, `src/marshall.rs` and the target descriptor. **Sequence with
 the `v0.3.0` line before writing** — both lines have started nothing and both said so.
 
-### 2. THE CONFINEMENT ANALYSIS — COMMISSIONED, WITH ITS INTERFACE ALREADY SETTLED
+### 2. THE CONFINEMENT ANALYSIS — DONE IN SESSION 53, AND ONE INCREMENT REMAINS
 
-Ruled needed, explicitly because it matters for native code generation, and with the standard set at
-**USEFUL AND SOUND, NOT COMPLETE**: a flow it cannot establish is treated as escaping.
+**`src/confine.rs` answers the commissioned question**, per site, over a chunk the caller holds, as
+**confined / cannot establish / escapes**. Feature `verify`. It is a library predicate and is
+deliberately **not wired into `verify()`** — its consumer is the other line's native code
+generation, and a predicate that rejects nothing has no business in the load path.
 
-**It lands in the shared crate on this line**, consumed by both, on the `v0.3.0` line's reasoning —
-one predicate with two consumers, sound over `verify()`'s acceptance surface which is this line's,
-and `src/` is continuous-integration-covered where `native_codegen/` is not.
+**Three of the four per-iteration corpus sites come back confined.** The crude any-`Escapes`-opcode
+test the `v0.3.0` line ran admitted none of three.
 
-**THE INTERFACE IS SETTLED AND THE THIRD VALUE IS NOT OPTIONAL:**
+**THE OTHER LINE'S CENSUS WAS RIGHT THAT ADMISSIBILITY NEEDED MEASURING AND WRONG ABOUT WHAT ITS
+MEASUREMENT SAID.** It concluded that two analysis features were mandatory on day one because 3 of 3
+sites were disqualified by `Call`. Only the boundary-dead rule was needed. `12_sensor_window.kel`
+calls `scale(raw[i])` and `raw[i]` is a `Word`; the call never touches the composite. **The crude
+test saw the opcode and a dataflow analysis follows the value.** Both lines have since converged on
+this independently, and the other line's census now prints an isolation figure rather than a
+conflated one.
 
-```
-is this NewComposite site confined?  ->  yes / no / cannot establish
-```
+**WHAT REMAINS IS THE CALLEE SUMMARY**, for a composite genuinely passed to a Keleusma call. That
+case reports `CannotEstablish` today, which is exactly the measurement the summary would move: the
+corpus counts, pinned in `the_corpus_verdict_counts_are_recorded`, are **33 sites / 17 confined /
+12 escapes / 4 cannot-establish** scanning `examples/scripts` FLAT. The call graph is acyclic, so a
+bottom-up summary terminates with no fixpoint.
 
-Per site, over a chunk the caller already holds, NOT a whole-module verdict. `cannot establish` must
-be DISTINCT from `no` — soundness is identical either way, but folding them loses the measurement
-that says whether the analysis is improving.
+**THE COUNT TEST STATES ITS SCAN RULE, AND THAT IS NOT DECORATION.** `examples/scripts` also holds
+`piano_roll/` and `rogue/` with 34 further scripts; scanned recursively the same corpus gives
+**251** sites. `tests/corpus_pattern_coverage.rs` states **79** in its prose, which reproduces
+against neither rule. It is prose rather than an assertion so nothing fails, and it is recorded as
+unreproducible rather than as wrong. **A bare site count is not a measurement.**
 
-**TWO FEATURES ARE DAY ONE, NOT OPTIMISATIONS, AND THE OTHER LINE MEASURED WHY.** With the corpus
-extended, three composite sites now sit inside iterating loops and **ZERO survive a crude
-any-Escapes-opcode test** — 1 disqualified by `Yield`, 3 by `SetLocal`, 3 by `Call`:
-
-- **`SetLocal` to a boundary-dead slot.** Without it a `let` inside a loop body disqualifies its own
-  iteration, which is the ordinary shape of every such program. This is the proof's B1r.
-- **A callee summary.** Treating any `Call` as escaping is sound and useless. The minimum is "does
-  this callee return a composite it built", and the call graph is acyclic, so a bottom-up summary
-  terminates without a fixpoint.
-
-**`examples/scripts/15_pixel_blend.kel` IS THE ISOLATE**: a per-iteration composite with NO call in
-its body, so the predicate can admit something before the callee summary exists.
+**DO NOT "FIX" THE BACKSTOP IN `apply` BY DELETING IT.** A new opcode is a compile error in
+`route_of`, which forces a decision about its route — but the transfer function's catch-all arm
+would have accepted it silently. The catch-all asks the classification and degrades an unhandled
+escaping route to `CannotEstablish`. **It cannot be exercised without adding an opcode.** What is
+tested is the other half: that every currently escaping opcode reaches its own handler.
 
 ### 3. ORDER 1, WHICH DID NOT MOVE THIS SESSION
 
