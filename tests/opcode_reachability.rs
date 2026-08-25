@@ -191,10 +191,14 @@ fn a_for_in_over_an_if_expression_reaches_op_len() {
 /// **THE MATCH-SCRUTINEE ROUTE TO `Op::IsStruct` IS A DEAD END, AND KNOWING WHY
 /// IS WHAT FOUND THE REAL ONE.**
 ///
-/// This test asserted that `Op::IsStruct` had no witness at all. It has one — see
-/// `op_is_struct_is_reachable_and_its_witness_traps_at_run_time` — so what it now
-/// pins is the narrower, still-true fact: **no `match` scrutinee reaches the
-/// opcode**, across seventeen attempts spanning two sessions and two lines.
+/// This test asserted that `Op::IsStruct` had no witness at all. A witness was then found, and
+/// the routes it named have since been closed — see `no_shape_tried_reaches_the_is_struct_trap`
+/// and `a_struct_pattern_against_a_foreign_type_is_refused_by_the_type_checker`, both of which
+/// exist. **The citation that stood here named a test that was never written**, which is the
+/// second such citation in this file and the reason the guard in
+/// `tests/comment_citations.rs` was added. What this test pins is the narrower, still-true fact:
+/// **no `match` scrutinee reaches the opcode**, across seventeen attempts spanning two sessions
+/// and two lines.
 ///
 /// Kept rather than deleted because the dead end is the informative half. The
 /// guard is `named_type_name(ty) != Some(type_name)`, and every attempt tried to
@@ -499,7 +503,8 @@ fn a_struct_pattern_against_a_foreign_type_is_refused_by_the_type_checker() {
 /// `Op::IsStruct`'s witness satisfied every load-time check and died at call time, which WAS a
 /// hole. Folding the irrefutable type test closed **that construct** — and, for about an hour, this
 /// file claimed it had closed the opcode. **It had not.** Four producers survive and two still trap;
-/// see `op_is_struct_still_has_producers_and_two_still_trap`.
+/// see `no_shape_tried_reaches_the_is_struct_trap` and
+/// `a_struct_pattern_against_a_foreign_type_is_refused_by_the_type_checker`.
 ///
 /// **The asymmetry this test asserts is therefore narrower than it first read**: `Op::Len` has a
 /// witness that cannot be ADMITTED, and `Op::IsStruct` has witnesses that are admitted and then
@@ -529,12 +534,18 @@ fn op_len_has_an_inadmissible_witness_and_op_is_struct_a_narrowed_one() {
          catching it; if it loads and then traps, the refusal merely moved later, which is worse"
     );
 
-    // **`Op::IsStruct` STILL HAS PRODUCERS.** This asserts only the narrower true thing: the
-    // construct the fold closed no longer emits it. The surviving producers, two of which still
-    // trap, are enumerated in `op_is_struct_still_has_producers_and_two_still_trap`.
+    // This asserts only the narrower true thing: the construct the fold closed no longer emits the
+    // opcode. What became of the other routes is measured elsewhere rather than claimed here --
+    // `no_shape_tried_reaches_the_is_struct_trap` for the shapes that still compile, and
+    // `a_struct_pattern_against_a_foreign_type_is_refused_by_the_type_checker` for the three that
+    // no longer do.
     //
-    // An earlier revision asserted here that the opcode had NO producer, which was wrong and was
-    // disproved by the other line within the hour.
+    // **TWO EARLIER REVISIONS OF THIS COMMENT WERE WRONG IN OPPOSITE DIRECTIONS.** One asserted the
+    // opcode had NO producer, which another line disproved within the hour. The next asserted that
+    // two producers survive and still trap, and cited a test named
+    // op_is_struct_still_has_producers_and_two_still_trap **that was never written** -- so the
+    // citation could not fail, and the claim outlived the repair that closed both routes. Cite a
+    // test that exists, or measure it here.
     const FOLDED: &str = "struct P { a: Word, b: Word }\n\
                           fn g(P { a, b }) -> Word { a + b }\n\
                           fn main() -> Word { g(P { a: 1, b: 2 }) }";

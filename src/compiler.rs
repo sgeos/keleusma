@@ -11373,26 +11373,40 @@ fn compile_pattern_test(
             // For an UNANNOTATED parameter the pattern's own type is the only
             // type there is, so the test is irrefutable and folding it is sound.
             //
-            // **THIS COMMENT PREVIOUSLY JUSTIFIED THE FOLD BY CLAIMING THE TYPE
-            // CHECKER REFUSES EVERY MISMATCH. THAT IS FALSE, AND THE `v0.3.0`
-            // LINE DISPROVED IT WITHIN THE HOUR.** `fn g(P { a, b }: Q)` compiles
-            // with two DISTINCT structs, and so does a struct pattern against a
-            // tuple- or array-typed annotation. The "known and different" state
-            // this condition treats as needing a runtime test is one the type
-            // checker admits today.
+            // **AN EARLIER REVISION OF THIS COMMENT SAID THE TYPE CHECKER
+            // ADMITS A MISMATCHED ANNOTATION AND THAT TWO ROUTES STILL VERIFY,
+            // LOAD, AND THEN TRAP `InvalidBytecode`. NEITHER IS TRUE ANY
+            // LONGER, AND THE COMMENT OUTLIVED THE STATE IT DESCRIBED.** It
+            // was written when both were true; it then asserted a live breach
+            // of the load-time guarantee while the tests beside it proved the
+            // opposite, which is worse than no comment at all, because an
+            // auditor reading it concludes the guarantee is broken.
             //
-            // So the fold NARROWS the fallback; it does not eliminate it, and
-            // `Op::IsStruct` still has producers. Four are pinned in
-            // `tests/opcode_reachability.rs`, TWO OF WHICH STILL REACH THE
-            // LOAD-TIME HOLE: a generic struct destructured in a parameter, and a
-            // pattern annotated with a different struct. Both verify, receive a
-            // memory bound, load, and then trap `InvalidBytecode`.
+            // Re-measured, with a control that compiles, on 2026-08-24:
             //
-            // The remaining holes are RECORDED rather than repaired here because
-            // they look like TYPE-CHECKER admissions rather than lowering
-            // defects: a struct pattern matched against an unrelated struct, a
-            // tuple, or an array is arguably ill-typed at the source, and closing
-            // it there would remove the emission rather than fold it.
+            // - `fn g(P { a, b }: Q)` with two distinct structs, and a struct
+            //   pattern annotated with a tuple or an array type, are all
+            //   **refused by the type checker** -- "struct pattern `P` does not
+            //   match scrutinee type ...". They never reach lowering.
+            //   Pinned by `a_struct_pattern_against_a_foreign_type_is_refused_
+            //   by_the_type_checker`, which also asserts the CAUSE, so a
+            //   refusal for an unrelated reason is a failure.
+            // - A generic struct destructured in a parameter emits no
+            //   `Op::IsStruct`, verifies, takes a bound, loads, and **runs**,
+            //   returning the right value. Pinned by
+            //   `no_shape_tried_reaches_the_is_struct_trap`, which asserts the
+            //   value rather than just the absence of a trap, because a repair
+            //   that changed the program's meaning would be worse.
+            //
+            // **`Op::IsStruct` HAS NO PRODUCER FOUND BY A BOUNDED SEARCH, AND
+            // THAT IS NOT THE SAME AS UNREACHABLE.** It is specified in
+            // `INSTRUCTION_SET.md` and `STRUCTURAL_ISA.md` with peek-not-pop
+            // semantics, the fallback below and the virtual machine's refusal
+            // both remain, and `Vm::new_unchecked` exists precisely so bytecode
+            // can reach the machine without this compiler. The first
+            // producerless claim made here was falsified by another line within
+            // the hour; the standard since is to record the search, not the
+            // conclusion.
             if ty.is_some() && named_type_name(ty) != Some(type_name.as_str()) {
                 fc.emit(Op::GetLocal(value_slot));
                 let t_const = fc.add_string_constant(type_name);
