@@ -2,10 +2,30 @@
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
 
-Written 2026-08-25 from a read of the three stage sources. It exists so the next
-session executes rather than re-derives: the previous cost was a third too high
-because it was inferred from the shape of the problem rather than the state of
-the tree.
+Written 2026-08-25 from a read of the three stage sources, and **EXECUTED the
+same day**. Kept as the record of what the work turned out to be, because two of
+its statements were wrong in ways worth having written down.
+
+**WHAT THE PLAN GOT WRONG.**
+
+**The driver was not done.** It is listed below as DONE because it copies
+`for_parts` INTO `codegen.kel`. It never read it OUT of `reconstruct.kel` —
+neither the shipping driver nor this repository's copy — so `push_forin`
+received seven zeros and produced a structurally correct loop whose every
+operand was slot 0. **The measurement checked that the plumbing existed and not
+that it ran in both directions**, which is the difference between a wire and a
+circuit.
+
+**And the tag-space warning was written and then walked into.** The plan says
+kinds at or above 64 need the migrated transport. The statement fold is a third
+emit path it did not name, still using the legacy `kind + arg * 64` packing, and
+kind 70 truncated to 6 — a unary node — so the loop vanished into a stray `Not`.
+Naming a hazard is not the same as finding every site that has it.
+
+**What it got right** was the shape: three edits, the synthetic-node question,
+and that the codegen-only corpus would keep passing throughout because it drives
+the reference parser. The recommendation to synthesise in `reconstruct.kel` was
+taken and held.
 
 ## What already exists, and what does not
 
@@ -113,9 +133,14 @@ this lands. Each should say what became of what it watched — three sibling pin
 were retired that way when the refusal landed, and one was moved from absence to
 verdict when the boundary case landed.
 
-## How to know it is finished
+## How it finished
 
-`ctrl/for_bare` classifies `SOk`; the boundary reads 91 SOk / 1 Refuses / 3
-Diverges / 1 RefRejects; and `wire.kel` reaches the byte-identity corpus, which
-is the point of the whole exercise and the thing the counted-form-only pipeline
-has never been able to do.
+`ctrl/for_bare` classifies `SOk` and the boundary reads **91 SOk / 1 Refuses / 3
+Diverges / 1 RefRejects**, as predicted.
+
+**`wire.kel` does NOT yet reach the byte-identity corpus**, and that was the last
+line's stated finish condition. It now PARSES correctly, to 486 chunks that mean
+something — the mis-parse that made the old count a wrong answer is gone — and
+`self_host_compile` reaches a capacity limit further down the pipeline. **A bound
+is a different failure from a mis-parse**, and it is the next thing between
+`wire.kel` and the corpus.

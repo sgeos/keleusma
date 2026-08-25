@@ -5,11 +5,11 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-08-25 (session 53) against `cc89fbfa`**, every pinned value below
+> **REFRESHED 2026-08-25 (session 53) against `153a2d65`**, every pinned value below
 > re-measured and the check block executed on that tree. **THIS FILE HAS GONE STALE WITHIN HOURS
 > FIVE TIMES.** If the dates here disagree with the three channels, trust the channels.
 >
-> **AS OF `cc89fbfa`: 146 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive it:
+> **AS OF `153a2d65`: 149 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive it:
 > `git log --oneline origin/v0.2.3 | grep -c 'Merge pull request'`. **NOTE THE REF** -- the local
 > `v0.2.3` lags and answers a smaller number for the same tree.
 >
@@ -25,7 +25,8 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > before it is.
 >
 > **ORDER 1 DID NOT MOVE THIS SESSION.** Item 1 DONE, item 2 at 93% produced / 56% computed, item 3
-> MOVED. The bare-`for` gap is still open and still the largest single win.
+> MOVED. **THE BARE-`for` GAP IS CLOSED**: the form self-compiles byte-identically and
+> `ctrl/for_bare` is `SOk`. `wire.kel` now parses correctly and fails on a CAPACITY BOUND.
 >
 > **Publication remains held.**
 
@@ -61,7 +62,7 @@ grep -c '^\s*#\[test\]' tests/selfhost_region_coverage.rs   # 5
 grep -c '^\s*#\[test\]' tests/selfhost_chunk_names.rs       # 3
 grep -c '^\s*#\[test\]' tests/parse_record_trace.rs         # 2
 grep -c '^\s*#\[test\]' tests/lex_token_trace.rs            # 2
-grep -c '^\s*#\[test\]' tests/selfhost_bare_for.rs          # 6
+grep -c '^\s*#\[test\]' tests/selfhost_bare_for.rs          # 7
 # THE PROOF-SUPPORT FAMILY, all added in session 52. Several are GAP pins that
 # fail DELIBERATELY if the gap they record is closed -- read the message before
 # treating a failure as a fix.
@@ -91,14 +92,14 @@ grep -oE 'fn (nm_max_names|mi_max_nodes|fl_max_nodes|ck_max|highest_command)\(\)
 grep -oE 'fn max_nesting\(\) -> Word \{ [0-9]+ \}' src/selfhost/kel/verify_depth.kel   # 32
 
 # THE MARGIN PINS. Moved twice this session, both times for a NAMED reason.
-grep -oE 'assert_eq!\(worst_(names|blob), [0-9]+' tests/selfhost_wire.rs   # 677, 35376
+grep -oE 'assert_eq!\(worst_(names|blob), [0-9]+' tests/selfhost_wire.rs   # 680, 35698
 
 # THE PARSER'S CAPS. Unchanged; the token cap now binds only the COLLECTING feed.
 grep -rhoE 'pub const PARSE_[A-Z_]+: usize = [0-9]+;' src/ | sort
 
 # THE CONSTRUCT-SUPPORT BOUNDARY. **THE ENUM HAS FOUR VARIANTS, NOT THREE**: `Gap`
 # split into `Refuses` and `Diverges` because it conflated an honest refusal with a
-# silent miscompile. Expect 90 SOk / 2 Refuses / 3 Diverges / 1 RefRejects.
+# silent miscompile. Expect 91 SOk / 1 Refuses / 3 Diverges / 1 RefRejects.
 # The second `Refuses` is `ctrl/for_bare`, added 2026-08-25: the bare loop form
 # was absent from this table entirely, so its lack of support was unverified by
 # construction.
@@ -236,7 +237,7 @@ push cancelled run `31932202253` and `31932359730` replaced it.
 | **`parse.kel` failure modes named** | **THIRTEEN**, across **ELEVEN** guarded counters |
 | shared-slot layouts | **nine copies collapsed to two definitions**, in `selfhost_host` |
 | architecture | one binary, selectable phases -- see `../decisions/PIPELINE_THEN_MONOLITH.md` |
-| construct-support boundary | **90 SOk / 2 Refuses / 3 Diverges / 1 RefRejects**, 96 cases |
+| construct-support boundary | **91 SOk / 1 Refuses / 3 Diverges / 1 RefRejects**, 96 cases |
 | **the SHIPPING compiler against that table** | **it AGREES with the boundary on every case** |
 | **chained array indexing** | **`a[0][1]` and its split form both byte-identical** |
 | operand-stack models | **agree on every one of the 66 opcodes**; the known list is EMPTY |
@@ -278,13 +279,27 @@ emitters. `the_computed_share_is_smaller_than_the_produced_share` asserts the ga
 Four of the six skipped kinds are blocked on a **name index the host does not hold**. The route
 exists -- `intern_index_of`, command 140 -- is itself undriven, and is O(n^2).
 
-## `wire.kel` IS NOT SELF-HOSTED, AND THE CAUSE IS A BARE `for` -- READ THIS BEFORE COSTING
+## `wire.kel` IS NOT SELF-HOSTED, AND THE CAUSE IS NOW A CAPACITY BOUND
 
-`self_host_compile(wire.kel)` fails. **The cause is a `for` loop written without `limit`**, which
-`parse.kel` does not support: its loop header waits for the cap's integer literal, the bare form
-never supplies one, the header machine never reaches its body phase, and the braces are attributed
-to the wrong block. Everything downstream -- the premature body close, the declaration path reading
-a trailing field access as a name, the `no chunk named X` panic -- is mechanism.
+**THE BARE-`for` CAUSE IS CLOSED (2026-08-25).** `wire.kel` PARSES CORRECTLY, to 486 chunks that
+mean something -- the mis-parse that made the old count a wrong answer is gone.
+`self_host_compile(wire.kel)` now fails with `IndexOutOfBounds(-1, 1024)`, the shape of a node-array
+bound, on the largest stage in the corpus.
+
+**A BOUND IS A DIFFERENT FAILURE FROM A MIS-PARSE.** A bound is a number; a mis-parse is a wrong
+answer wearing a number's clothes. **Diagnose it before costing it** -- the last two estimates on
+this file were both wrong, one high and one low.
+
+The history below is kept because its lessons generalise, and because the diagnosis cost seven
+iterations the first time.
+
+### WHAT THE ORIGINAL CAUSE WAS
+
+`self_host_compile(wire.kel)` failed on **a `for` loop written without `limit`**, which `parse.kel`
+did not support: its loop header waited for the cap's integer literal, the bare form never supplied
+one, the header machine never reached its body phase, and the braces were attributed to the wrong
+block. Everything downstream -- the premature body close, the declaration path reading a trailing
+field access as a name, the `no chunk named X` panic -- was mechanism.
 
 **THE FAILURE NOW NAMES ITS CAUSE**, which is what this project's thirteen named parser failure
 modes exist for. Tracing it took SEVEN increments; the message now does it in one reading.
@@ -292,29 +307,39 @@ modes exist for. Tracing it took SEVEN increments; the message now does it in on
 ### THE OBVIOUS READING OF THE SYMPTOM IS WRONG, AND IT COST A RE-COST TO FIND OUT
 
 *"Let phase 5 skip the missing cap"* is what the failure suggests. **Measured: the bare form and the
-`limit` form are TWO LOWERINGS.** For the same body the reference emits **24 ops** for the bare form
-(a plain `Loop`/`EndLoop`) against **68** for the `limit` form (counter slots, a cap, an overflow
-check). Supporting the bare form is a SECOND LOWERING `parse.kel` does not emit at all, not a
-relaxation of the existing header. Pinned by
-`the_bare_and_limit_forms_have_different_lowerings`, so a future convergence forces a re-cost.
+`limit` form are TWO LOWERINGS** -- a plain `Loop`/`EndLoop` against counter slots, a cap and an
+overflow check. `the_bare_and_limit_forms_have_different_lowerings` asserts the ratio; no figure is
+quoted here, because two numbers for one claim is a defect this line recorded four times.
 
-**A NARROWER CLAIM THAN THE ONE I KEPT MAKING.** "`codegen.kel` handles it, so only wiring remains"
-is too broad. Codegen handles the resulting NODES -- four cases in the codegen-only corpus drive
-them from reference-parsed input -- so the missing piece is the front end PRODUCING them. Real work,
-bounded to one stage.
+**That reading held and it is why the work was costed as a second lowering rather than a
+relaxation.** `parse.kel` now emits it.
 
-### WHY IT WENT UNMEASURED, AND THE CORRECTION THAT SHARPENED IT
+**"`codegen.kel` HANDLES IT, SO ONLY WIRING REMAINS" WAS TOO BROAD, AND SO WAS ITS CORRECTION.**
+Codegen handled the NODES, so the missing piece was the front end producing them -- and also, it
+turned out, the DRIVER reading the parts back out of `reconstruct.kel`, which neither it nor this
+repository's copy ever did. Both estimates inspected structure and called it behaviour.
 
-**The two corpora are not one corpus, and I asserted otherwise.**
+### WHY IT WENT UNMEASURED — READ THIS EVEN IF THE REST IS HISTORY
+
+**A CONSTRUCT CAN BE IN A CORPUS AND STILL BE UNVERIFIED, IF THAT CORPUS DOES NOT DRIVE THE STAGE
+THAT FAILS.**
+
+That is the general form and it is sharper than the sentence this project had. "Any construct the
+corpus does not contain is unverified by construction" is true and it does not cover this case,
+because the construct WAS contained — in the wrong corpus.
 
 | corpus | drives | bare `for` cases |
 |---|---|---|
-| `boundary_cases()` | the WHOLE pipeline | **none** |
-| `codegen_owns_its_constant_pool_and_matches_reference` | the REFERENCE parser, then `codegen.kel` | **four** |
+| `boundary_cases()` | the WHOLE pipeline | none until 2026-08-25; now **one, `SOk`** |
+| `codegen_owns_its_constant_pool_and_matches_reference` | the REFERENCE parser, then `codegen.kel` | **four**, and passing throughout |
 
-The construct IS covered -- just not by the corpus that exercises the stage that fails. *Any
-construct the corpus does not contain is unverified by construction*, and here the uncovered thing
-is a whole stage's worth of loop.
+**Those four cases passed for the entire time the pipeline was broken.** They fed `codegen.kel`
+nodes `parse.kel` had never produced, because they get theirs from the reference parser. A complete,
+correct, exercised lowering sat unreachable behind a front end that could not build its input, and
+every signal available said the construct was covered.
+
+**The question to ask of any corpus is not what it contains but what it DRIVES.** Coverage is a
+property of the path, not of the case list.
 
 ### FOUR HYPOTHESES ELIMINATED ON THE WAY, EACH BY MEASUREMENT
 
@@ -930,7 +955,25 @@ without adding an opcode; what is tested is that every currently escaping opcode
 
 ### 3. ORDER 1, WHICH DID NOT MOVE THIS SESSION
 
-Still the largest single win, and **RE-COSTED 2026-08-25 — it is TWO stage sources, not three.**
+**DONE 2026-08-25. THE BARE `for` FORM SELF-COMPILES BYTE-IDENTICALLY**, and `ctrl/for_bare`
+classifies `SOk`. What follows is kept because two of its statements were wrong in ways worth
+knowing.
+
+**The re-cost said the driver was DONE. It was not.** Neither the shipping driver nor this
+repository's copy read `for_parts` back OUT of `reconstruct.kel` — only INTO `codegen.kel`. The
+lowering received seven zeros and produced a correct loop with every operand at slot 0. **Checking
+that plumbing exists is not checking that it runs in both directions.**
+
+**And the six-bit tag space is full.** Every value 1 to 64 is a kind, and the statement fold was a
+third legacy-packed emit path the plan did not name; kind 70 truncated to 6 and the loop vanished
+into a stray `Not`. `fold_record` now routes high kinds onto the migrated transport. **Any future
+statement kind must go that way.**
+
+**`wire.kel` PARSES CORRECTLY NOW** — 486 chunks that mean something, the mis-parse gone — and does
+NOT self-compile: a capacity limit further down, `IndexOutOfBounds(-1, 1024)`. A bound is a
+different failure from a mis-parse and is the next thing between it and the byte-identity corpus.
+
+The original re-cost, for the record: **TWO stage sources, not three.**
 It is a SECOND LOWERING, not a relaxation; the size ratio is asserted by
 `the_bare_and_limit_forms_have_different_lowerings` rather than quoted here, because two figures for
 one claim is a defect this session recorded four times.

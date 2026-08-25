@@ -13,6 +13,61 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-25 — the bare `for` self-compiles, and the estimate was wrong in both directions
+
+**Order 1's largest single item is done.** `for v in a..b { .. }` goes through
+the whole self-hosted pipeline byte-identically. `ctrl/for_bare` moves to `SOk`;
+the boundary reads 91 SOk / 1 Refuses / 3 Diverges / 1 RefRejects.
+
+**THE THIRD EDIT WAS NOT IN THE ESTIMATE, AND THE ESTIMATE WAS MINE FROM ONE
+INCREMENT EARLIER.** The re-costing marked the driver DONE because it copies
+`for_parts` INTO `codegen.kel`. **Neither the shipping driver nor this
+repository's copy ever read it OUT of `reconstruct.kel`.** `push_forin` received
+seven zeros and produced a structurally correct loop whose every operand was slot
+0 and node 0.
+
+The measurement checked that the plumbing EXISTED and not that it ran in both
+directions. **That is the difference between a wire and a circuit**, and it is
+the same shape as every unchecked-instrument failure this session recorded — I
+looked at the thing and did not run it.
+
+**AND I WROTE THE TAG-SPACE HAZARD INTO THE PLAN AND THEN WALKED INTO IT.** The
+plan says kinds at or above 64 must use the migrated transport. The statement
+fold is a third emit path the plan did not name, still legacy-packed, so kind 70
+truncated to 6 — a unary node — and the loop vanished into a stray `Not`.
+**Naming a hazard is not finding every site that has it.** The six-bit tag space
+is now full: every value 1 to 64 is taken, so the fold has a named helper and any
+future statement kind must go migrated.
+
+**Both bugs were found by running it, and each took one measurement.** The
+zero-operand loop said "for_parts is empty" as plainly as a symptom can; the
+stray `Not` said "70 % 64 = 6". Neither was findable by reading.
+
+**Why the gap survived so long, which is the durable part.** `codegen.kel` has
+had `push_forin` throughout, exercised by four cases that drive the REFERENCE
+parser. They fed it nodes `parse.kel` has never produced and passed while the
+pipeline was broken. *Any construct the corpus does not contain is unverified by
+construction* — and here the construct WAS in a corpus, just not the one
+exercising the stage that failed.
+
+**Five gap pins fired and all five are converted rather than deleted**, each
+saying what became of what it watched. The boundary pin is on its third subject —
+absence, then verdict, now supported — **with its name moved each time**, because
+a test whose name asserts one thing and whose body checks another is how a test
+comes to measure something else.
+
+**`wire.kel` parses correctly now**, to 486 chunks that mean something: the
+mis-parse that made the old count a wrong answer is gone. It does not
+self-compile — a capacity limit further down, which is a bound rather than a
+mis-parse and a different problem.
+
+**One over-application, again.** Fixing the driver copy, I replaced all nine
+`for_parts: Vec::new()` sites when only one had the local in scope. Eight were
+accumulator initialisers. Same shape as the doc-link regex: a rule applied where
+an enumeration was available. Reverted and redone surgically, and the second
+read-back site — which had the identical bug — was then found by looking at each.
+
+
 ## 2026-08-25 — the biggest remaining item was costed a third too high
 
 **Bare-`for` support was recorded as "a second lowering across three stage
