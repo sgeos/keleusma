@@ -183,6 +183,25 @@ const EXCUSED: &[(&str, &str)] = &[
          the worked example of a finding this guard MANUFACTURED before the \
          recovery rule distinguished a line break from a space",
     ),
+    // **THE ENUMERATION OF SIBLING INSTANCES BELONGS IN A COMMENT, NOT IN THE
+    // REASON STRING, and the guard taught that the hard way.** The first draft
+    // listed the other self-inflicted names inside this multi-line literal. The
+    // per-line stateless stripper reads a CONTINUATION LINE as code, so all three
+    // entered the universe as identifiers and
+    // `no_excused_name_has_started_resolving` fired on them. Documented
+    // limitation, biting inside the excuse for an instance of the same class.
+    //
+    // The siblings, for the record and out of the literal: slot_entry, zz_touch,
+    // peak_livexsize, and the multi-line assert message.
+    (
+        "callee_returns_array",
+        "a name this line REPAIRED AWAY, quoted in the repair table above so the \
+         before-and-after stays legible. **Documenting a retired name re-creates \
+         it as a citation** -- the fifth self-inflicted instance in this file, \
+         and the pattern is now fully predictable: writing about a name that no \
+         longer exists costs an excuse, every time. That is the price of a \
+         legible record rather than a defect",
+    ),
     (
         "some_test_name",
         "a placeholder in this file's own prose, illustrating the SHAPE of a \
@@ -374,13 +393,37 @@ fn citations(block: &str) -> Vec<String> {
 /// paragraph that still asserts the divergence. **The prose has to be rewritten,
 /// not the name repointed**, and nothing here can tell the difference.
 ///
-/// **Checked on this line's four repairs of 2026-08-24**, the highest-risk being
-/// `slot_entry` → `resolve_shared_scalar`, whose surrounding prose claims the
-/// function *"admits only `SCALAR_INT`, `SCALAR_BYTE` and `SCALAR_BOOL`"*. Read
-/// back: its match arms are exactly `SCALAR_INT`, `SCALAR_BYTE | SCALAR_BOOL`,
-/// and an error on `other`. **The claim holds** — but it was verified after being
-/// prompted, not when the repair was made, which is the habit this note exists to
-/// change.
+/// # THE MILDER FORM: A CITATION CAN RESOLVE AND STILL BE WRONG
+///
+/// **The `v0.2.3` line found this in their own repair set**, one of seven:
+/// `from_expr_with_params_and_frac` exists, and the code at the citing site calls
+/// `resolve_type_with_params` — the named method is reached THROUGH that. **The
+/// guard went green on a pointer to the wrong LEVEL.**
+///
+/// The reversal misinforms by asserting the opposite; this misinforms by sending a
+/// reader to a function the code at that site does not call. Both resolve.
+///
+/// > **THE GUARD'S GREEN IS EVIDENCE ABOUT THE NAME AND SAYS NOTHING ABOUT THE
+/// > CLAIM.** Their sentence, kept verbatim, because it is the whole limitation in
+/// > one line.
+///
+/// # THIS LINE'S FOUR REPAIRS, CHECKED TWICE AND BOTH TIMES REACTIVELY
+///
+/// Checked for SUBSTANCE first, then — after their finding — for LEVEL. All four
+/// survive both:
+///
+/// | repair | level check |
+/// |---|---|
+/// | `slot_entry` → `resolve_shared_scalar` | called **directly** at the access site, `src/lib.rs:3046`; not reached through anything |
+/// | `args_for` → `args_for_seed` | both citing sentences make claims about that function itself |
+/// | `callee_returns_array` → `a_single_composite_return_is_correct` | that test asserts exactly *"a single composite return must agree"* |
+/// | `stage_seed` | reworded away; names nothing |
+///
+/// **THE RESULT IS THE LESS INTERESTING HALF.** Both checks happened because
+/// someone else described doing them. **A repair made yesterday and checked today
+/// is not the same artefact as one checked when it was made**, even where the
+/// outcome is identical, because the checking was contingent on being prompted.
+/// Recorded as a habit to change rather than as four clean repairs.
 ///
 /// Measured 2026-08-24 rather than left as a worry: of **208** distinct
 /// citations, **173** resolve via a declaration, a parameter, or a file stem, and
