@@ -356,6 +356,32 @@ fn citations(block: &str) -> Vec<String> {
 /// happens to exist somewhere unrelated.** This guard catches names that name
 /// NOTHING; it cannot catch a name that names something else.
 ///
+/// # ⚠ THE REPAIR IS WHERE THIS BITES, NOT THE DETECTION
+///
+/// **Named by the `v0.2.3` line from two real cases in their register.** A
+/// citation can name a test that asserts the **OPPOSITE** of what the tree does —
+/// theirs cited `..._is_rejected_where_after_if_it_is_accepted` against a tree
+/// whose test is `..._is_accepted_as_it_is_after_if`, and
+/// `..._disagree_on_a_string_literal` against `..._agree_on_a_string_literal`,
+/// the divergence having been closed while the comment still asserted it as
+/// present fact.
+///
+/// **A dangling citation fails to inform. A reversed one MISINFORMS, and does so
+/// behind a plausible pointer.**
+///
+/// While the name is stale this guard catches it — it dangles. **The trap is the
+/// FIX**: swapping `disagree` for `agree` turns the guard green while leaving a
+/// paragraph that still asserts the divergence. **The prose has to be rewritten,
+/// not the name repointed**, and nothing here can tell the difference.
+///
+/// **Checked on this line's four repairs of 2026-08-24**, the highest-risk being
+/// `slot_entry` → `resolve_shared_scalar`, whose surrounding prose claims the
+/// function *"admits only `SCALAR_INT`, `SCALAR_BYTE` and `SCALAR_BOOL`"*. Read
+/// back: its match arms are exactly `SCALAR_INT`, `SCALAR_BYTE | SCALAR_BOOL`,
+/// and an error on `other`. **The claim holds** — but it was verified after being
+/// prompted, not when the repair was made, which is the habit this note exists to
+/// change.
+///
 /// Measured 2026-08-24 rather than left as a worry: of **208** distinct
 /// citations, **173** resolve via a declaration, a parameter, or a file stem, and
 /// **16** resolve only through the loose token path. Sampling them, they are
