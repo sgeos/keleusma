@@ -30,13 +30,27 @@
 //! words**.
 //!
 //! **THE FIRST DRAFT SET THIS AT FOUR AND THAT WAS A GUESS. IT WAS MEASURED
-//! INSTEAD, AND THE GUESS WAS HIDING MOST OF THE FINDINGS:**
+//! INSTEAD, AND THE GUESS WAS HIDING MOST OF THE FINDINGS.**
 //!
-//! | threshold | citations | unresolved |
-//! |---|---|---|
-//! | four words | 79 | 3 |
-//! | three words | 183 | 10 |
-//! | **two words** | **407** | **16** |
+//! ⚠ **SNAPSHOT, 2026-08-24, AND NOT ENFORCED BY ANYTHING.** Every figure below
+//! is prose. **RE-DERIVE RATHER THAN TRUST** — the citation totals move whenever
+//! anyone writes a backticked name in a comment anywhere in this package, and
+//! they moved by roughly ten per cent while this very file was being written.
+//!
+//! | threshold | citations | unresolved | enforced? |
+//! |---|---|---|---|
+//! | four words | 92 | 5 | no |
+//! | three words | 209 | 12 | no |
+//! | **two words (shipped)** | **450** | **19** | **floor only**, by `the_scan_is_not_vacuous` |
+//!
+//! **The decision below rests on the RATIO and the COMPOSITION, not on any of
+//! these absolute numbers**, which is why none is pinned: a guard on a figure
+//! that moves with every comment fires constantly and gets muted.
+//!
+//! (The first published version of this table read 79/3, 183/10, 407/16. It was
+//! measured before the file it sits in had finished growing. **Same defect the
+//! `v0.2.3` line found in their own threshold table the same day: prose figures
+//! in a file where every other assertion is a test.**)
 //!
 //! The four-word cut found `disagrees_with_typed_verifier` and **missed its two
 //! siblings in the same list** -- `negative_depth` (two words) and
@@ -336,13 +350,13 @@ fn citations(block: &str) -> Vec<String> {
 /// happens to exist somewhere unrelated.** This guard catches names that name
 /// NOTHING; it cannot catch a name that names something else.
 ///
-/// Measured 2026-08-24 rather than left as a worry: of **203** distinct
-/// citations, **172** resolve via a declaration, a parameter, or a file stem, and
-/// **10** resolve only through the loose token path. Sampling those ten, they are
+/// Measured 2026-08-24 rather than left as a worry: of **208** distinct
+/// citations, **173** resolve via a declaration, a parameter, or a file stem, and
+/// **16** resolve only through the loose token path. Sampling them, they are
 /// genuine — LLVM API methods reached through `inkwell` (`add_global_mapping`,
 /// `run_passes`, `get_declaration`) and local bindings (`d_call`). **So the
 /// permissiveness is real and currently costs nothing**, which is a measurement
-/// and not a guarantee.
+/// and not a guarantee. **Snapshot, unenforced, re-derive.**
 ///
 /// **A SECOND, SHARPER SOURCE OF OVER-RESOLUTION, FOUND BY IT BITING.** The
 /// string stripper is **per-line and stateless**, which is what prevents the
@@ -371,9 +385,20 @@ fn citations(block: &str) -> Vec<String> {
 /// limitation noted above, since stripping drops those and the per-line reset
 /// re-admits some.
 ///
-/// **The question that matters is whether any of it is load-bearing, and it is
-/// not: 0 of 205 citations resolve only through that path, and no `EXCUSED` name
-/// resolves at all.** A measurement, not a guarantee. Re-run it by building the
+/// **THE "IT IS INERT" CONCLUSION EXPIRED WITHIN THE HOUR, AND THIS PARAGRAPH
+/// CAUSED IT.** It read *"0 of 205 citations resolve only through that path"* and
+/// justified the decision below. Re-derived: **3 of 208.**
+///
+/// The three are `sum_n`, `make_point` and `returns_word` — **the example names
+/// written into the paragraph above**, quoted to illustrate what the class
+/// contains. Citing them made them citations that resolve only through the path
+/// being described. **Documenting the hazard created three instances of it**,
+/// which is the third time today this file has done something to itself that it
+/// exists to detect elsewhere.
+///
+/// They are benign: each names a real Keleusma function in a test source. **But
+/// "inert" is retracted as the justification**, and the decision below now stands
+/// on the ground it should have stood on from the start. Re-run by building the
 /// universe both ways and intersecting the difference with the cited set.
 ///
 /// ## AND NO SECOND MODEL IS SHIPPED TO GUARD IT, DELIBERATELY
@@ -385,8 +410,13 @@ fn citations(block: &str) -> Vec<String> {
 /// their threshold onto a 104-entry excuse list, and it applies to itself.
 ///
 /// The specific case that actually bit — an excused name entering the universe —
-/// is already caught by `no_excused_name_has_started_resolving`. **Guarding an
-/// inert class with a second model would buy a hypothetical and pay in noise.**
+/// is already caught by `no_excused_name_has_started_resolving`.
+///
+/// **THE STANDING JUSTIFICATION, NOW THAT "INERT" IS GONE**: the instances are
+/// **benign and self-inflicted**. All three name real Keleusma functions, and all
+/// three exist because this file quoted them. A second model would fire on
+/// prose — noise, on a class whose only members are examples of itself. **The
+/// count is expected to grow with the documentation and that is not a signal.**
 ///
 /// # THE OTHER LINE'S SCANNER HAS THE OPPOSITE WEAKNESS, AND THAT IS USEFUL
 ///
@@ -791,11 +821,15 @@ fn the_scan_is_not_vacuous() {
     let cites = citations_in_package();
     assert!(
         cites.len() > 250,
-        "only {} citation(s) found across src/ and tests/; 407 were measured on \
+        "only {} citation(s) found across src/ and tests/; 450 were measured on \
          2026-08-24. The walk is not reaching this package's files, so the guard \
-         above proves nothing. **THIS FLOOR IS SET FROM A MEASUREMENT** -- the \
-         first draft guessed 100 and the real figure at the four-word threshold \
-         was 79, so the guess would have failed the suite on its first run",
+         above proves nothing.\n\
+         **THIS FLOOR IS THE ONLY ENFORCED FIGURE IN THIS FILE**, and it is a \
+         FLOOR rather than a pin on purpose: the citation total moves whenever \
+         anyone writes a backticked name in a comment, so pinning it would fire \
+         constantly and get muted. Every other number here is a dated snapshot.\n\
+         The floor is set from a measurement -- the first draft guessed 100 when \
+         the real figure was 79, and would have failed the suite on its first run",
         cites.len()
     );
     let universe = resolvable_universe();

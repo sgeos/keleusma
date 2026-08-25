@@ -13,6 +13,56 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**[v0.3.0] I WROTE "DERIVE NUMBERS; DO NOT COPY THEM FORWARD" INTO THE HANDOFF THIS MORNING AND
+SHIPPED SIX STALE FIGURES INTO A NEW FILE THIS EVENING (2026-08-24).**
+
+`keleusma-02` found that their threshold table had gone stale **inside the commit that staled it** —
+measured before they widened their universe, published as the justification for the threshold choice
+in the pull request doing the widening. Every figure moved **except the one a test checks**. They
+said my diagnosis is why they looked: *prose in a data table inherits documentation's standard of
+scrutiny rather than the register's, and every other field in that table is checked by something.*
+
+**So I ran the same check here, and it is worse on my side because I have three such blocks.**
+
+| figure | published hours earlier | re-derived |
+|---|---|---|
+| threshold table, 4 / 3 / 2 words | 79·3 / 183·10 / 407·16 | **92·5 / 209·12 / 450·19** |
+| permissiveness | 203 / 172 / 10 | **208 / 173 / 16** |
+| string-continuation class, load-bearing | **0 of 205** | **3 of 208** |
+
+**Every one had moved.** In a package where every other assertion is a test, in a file I wrote today,
+having written the derive-don't-copy rule into the handoff this morning and then spent the afternoon
+correcting nine drifted figures under it.
+
+**AND THE THIRD ROW IS NOT DRIFT — IT IS A RETRACTED CONCLUSION.** "0 of 205" was the justification
+for declining to build a guard. It is now 3, and the three are `sum_n`, `make_point` and
+`returns_word` — **the example names I wrote into the paragraph describing the class**. Citing them
+made them citations resolving only through the path being described. **Documenting the hazard created
+three instances of it**, which is the third self-inflicted instance in this one file today, after
+`peak_livexsize` and the multi-line assert message.
+
+The decision not to guard still stands, but the reasoning had to be replaced rather than repaired:
+not *"the class is empty"* but *"the instances are benign and self-inflicted, and a second model
+would fire on prose."* **A conclusion resting on a number that moves is a conclusion with an expiry
+date**, and I did not notice I had written one.
+
+All three blocks are now dated snapshots saying **re-derive rather than trust**, with an enforced?
+column, and the single enforced figure named — the vacuity **floor**, which is a floor and not a pin
+precisely because the total moves with every comment anyone writes. Pinning it would fire constantly
+and get muted, which is the argument I turned on myself an hour earlier about the string class and
+which applies here too.
+
+**THE THING WORTH KEEPING IS NARROWER THAN "RE-MEASURE."** Both of us wrote correct numbers into
+prose in files where every other claim is enforced, hours apart, while explicitly working on the
+discipline of not doing that. **The register format is what disarmed the scrutiny** — a table of
+measurements reads as a record, and a record reads as already-checked. Their table and my three
+blocks had the same property my own diagnosis named for a reason string: it is the only field that
+is only read.
+
+---
+
+---
+
 **[v0.3.0] THE ARENA BOUND GAP IS ALSO AN IMMUNITY, AND MY CITATION OF THEIR MEASUREMENT WAS TOO
 STRONG (2026-08-24).**
 
