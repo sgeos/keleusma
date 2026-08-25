@@ -91,6 +91,43 @@ cost but leaves a host that ignores the new semantics reading a plausible wrong 
 silent-misread hazard for artifacts already compiled; C picks a canonical Q format and is the worst
 failure mode of the three.
 
+**A FOURTH INSTRUMENT ERROR, AND IT LOOKED LIKE A CLEAN PASS.** Both verification runs were started
+as `cargo test … 2>&1 | tail -40`. Exit code 0, every visible line `ok`, the tail ending in
+`test result: ok` — **indistinguishable from a complete run at the point of reading.** But the
+per-binary `test result:` lines that get summed were discarded upstream of the file, so **the totals
+were unrecoverable**. Caught only by summing and getting `26 passed, 7 binaries` against an expected
+262 and 50.
+
+Same class as the ownership diff chained ahead of `git commit`: **an instrument reporting success
+while measuring something other than what was intended.** Both were found by checking a number
+against an expectation, not by anything failing. The rule is now in the handoff: capture with `tee`
+and sum afterwards, never pipe a counting run through `tail`.
+
+**AND THE STALE FIGURES WERE NINE, NOT ONE.** Having found three in one sentence I re-derived every
+instrument rather than the one that moved, and that was the right call: `bound_transfer`'s
+67/70/31 to **71/74/35**, the corpus differential's 58/11/21/10 to **59/14/22/11**, the
+`(module, seed)` pairs 588 to **607**, the four-directory corpus count 70 to **74**, and the main
+workspace suite 2397 to **2400**.
+
+**Every one sat beside a figure that HAD been updated**, which is the mechanism: a report gets
+re-derived one line at a time, the moved line takes a fresh date, and its neighbours inherit that
+freshness without being measured. Proximity reads as co-measurement. What did NOT move is now also a
+measurement rather than an assumption — 1680 Order-1 comparisons, seven seeded stages, 0
+disagreeing, 11 exceeding, 442 stepped-over ops in 141 chunks, 65 of 66 witnessed, and the 60/2/3/1
+lowering partition were each verified unchanged.
+
+**THE FIRST OF THE EIGHT, WHICH IS ACTUALLY THREE IN ONE SENTENCE.** The `bound_transfer` check
+block read *"1043 chunk comparisons ... 11 modules of 67 compared ... over 70 modules examined with
+31 carrying a non-zero demand."* Re-derived: **1044 / 71 / 74 / 35.** The 67, 70 and 31 are
+PRE-ABSORPTION-6 numbers, left untouched while the comparison count beside them was updated to 1043.
+
+**The lesson is not "update the numbers."** It is that **a figure updated in isolation makes its
+neighbours look current when they are not** — a reader sees a freshly-dated 1043 and trusts the 67
+sitting beside it, because proximity reads as co-measurement. The rule now in the handoff: when one
+figure in a report moves, re-derive the WHOLE report, which the instrument prints in one run anyway.
+The 11 EXCEEDING genuinely did not move, and that it did not is now a measurement rather than an
+assumption inherited from a sentence where everything else had drifted.
+
 **AND ABSORPTION 7 RETIRED A DESIGN CONCLUSION THIS LINE HAD DRAWN.** `15_pixel_blend.kel` is the
 call-free confined subject asked for last session. The census moved `410/39/3` to **`411/40/4`**,
 survivors still zero — but the breakdown is the point: `d_setlocal = 4`, `d_call = 3`, so **one site
