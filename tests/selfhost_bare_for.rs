@@ -335,3 +335,77 @@ fn the_counted_form_is_still_accepted_by_the_same_entry_point() {
         "the counted form parsed, but not into the two functions it declares"
     );
 }
+
+/// **WHERE THE BARE FORM'S SUPPORT ACTUALLY STANDS, MEASURED ACROSS THE STAGES.**
+///
+/// The recorded cost was "a second lowering across three stage sources". That
+/// was written from a correct observation — the two `for` forms are different
+/// lowerings, not one with an optional clause — and it inferred the WORK from
+/// the DIFFERENCE. Two lowerings means two must be written, unless one already
+/// is.
+///
+/// **`codegen.kel` already has it.** `push_forin` emits the whole bare lowering
+/// from a seven-word `for_parts` entry, and four bare-`for` cases exercise it in
+/// `codegen_owns_its_constant_pool_and_matches_reference`. It got written
+/// because that corpus drives the REFERENCE parser, so it has always received
+/// nodes `parse.kel` has never produced. **The same corpus split that hid the
+/// gap is why the lowering exists and was never connected.**
+///
+/// So the remaining work is two stages, not three, and the part that had to
+/// reproduce the reference byte for byte is done. **A better estimate is not a
+/// small estimate**: emitting the records in `parse.kel` and populating the
+/// parts in `reconstruct.kel` is real work in a phase machine.
+///
+/// # This is a GAP PIN
+///
+/// It fails when the work starts. That is not a regression — it means the state
+/// it records has changed, and its successor should say what became of it, as
+/// three sibling pins did when the refusal landed and one did when the boundary
+/// case did.
+#[test]
+fn the_bare_lowering_exists_in_codegen_and_is_unreached_by_the_earlier_stages() {
+    const CODEGEN: &str = include_str!("../src/selfhost/kel/codegen.kel");
+    const RECONSTRUCT: &str = include_str!("../src/selfhost/kel/reconstruct.kel");
+    const PARSE: &str = include_str!("../src/selfhost/kel/parse.kel");
+
+    // DONE: the lowering itself.
+    assert!(
+        CODEGEN.contains("fn push_forin("),
+        "`codegen.kel` no longer defines `push_forin`. If the bare lowering was \
+         renamed the cost recorded above needs re-deriving; if it was removed, \
+         the estimate is three stages again."
+    );
+
+    // NOT DONE: `reconstruct.kel` DECLARES the parts and never writes them.
+    // Declared-versus-written is the whole distinction — a test satisfied by the
+    // declaration would report the stage as done.
+    assert!(
+        RECONSTRUCT.contains("for_parts: [Word;"),
+        "`reconstruct.kel` no longer declares `for_parts`, so the measurement \
+         below is about a different structure than the one recorded"
+    );
+    let writes = RECONSTRUCT.matches("for_parts[").count();
+    assert_eq!(
+        writes, 0,
+        "`reconstruct.kel` now indexes `for_parts` {writes} time(s). **THE WORK \
+         HAS STARTED**, which is what this pin watches for. Retire it and record \
+         what the stage now does, the way the refusal and boundary pins were \
+         moved rather than deleted."
+    );
+
+    // NOT DONE: `parse.kel` does not know the node at all.
+    assert!(
+        !PARSE.contains("for_parts") && !PARSE.contains("forin"),
+        "`parse.kel` now mentions the bare form's node or its parts. **THE WORK \
+         HAS STARTED** — see the note above."
+    );
+
+    // THE CONTRAST THAT MAKES THE ZERO MEAN SOMETHING. The counted form's
+    // equivalent is populated, so "declared but unwritten" is a real state of
+    // this stage rather than an artefact of how the file is written.
+    assert!(
+        RECONSTRUCT.matches("limit_parts").count() > 10,
+        "`limit_parts` is barely referenced in `reconstruct.kel`, so the zero \
+         above no longer contrasts with anything and says little"
+    );
+}

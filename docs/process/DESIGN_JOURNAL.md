@@ -13,6 +13,48 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-25 — the biggest remaining item was costed a third too high
+
+**Bare-`for` support was recorded as "a second lowering across three stage
+sources". Measured, it is TWO, and the hardest is already written.**
+
+| stage | state |
+|---|---|
+| `codegen.kel` | **DONE.** `push_forin` emits the whole bare lowering from a seven-word `for_parts` entry; four cases exercise it |
+| the Rust driver | **DONE.** Reads `for_parts` out of the reconstructed body |
+| `reconstruct.kel` | **DECLARED, NEVER WRITTEN.** Zero writes, against sixteen mentions of the counted form's equivalent |
+| `parse.kel` | **ABSENT.** No mention of the node, the parts, or the kind |
+
+**Why the old estimate was reasonable and still wrong.** It came from a correct
+observation — the two forms are different lowerings, not one with an optional
+clause — and inferred the WORK from the DIFFERENCE. Two lowerings means two must
+be written, *unless one already is*.
+
+**And the reason one already is closes a loop.** `codegen.kel` got the lowering
+because the codegen-only corpus drives the REFERENCE parser, so it has always
+received nodes `parse.kel` never produced. **The same corpus split that hid the
+gap is why the lowering exists and was never connected** — the construct is in a
+corpus, just not the one exercising the stage that fails.
+
+**Pinned rather than asserted.**
+`the_bare_lowering_exists_in_codegen_and_is_unreached_by_the_earlier_stages`
+measures the stage sources and distinguishes DECLARED from WRITTEN, which is the
+whole distinction: a test satisfied by the declaration would report the stage as
+done. It fails when the work starts, and says so in its message.
+
+**The mutation proving that did not take on the first attempt.** I inserted the
+write before `fn main(`, which `reconstruct.kel` does not contain, so the file
+was unchanged and the test passed for the wrong reason — a no-op mutation
+reading as evidence. Caught by checking the write count before trusting the
+result, and redone.
+
+**Three stale claims found in the handoff while correcting the cost**, one of
+them mine from two increments ago: the state table still read "`wire.kel`
+PARSES, 486 functions" after #273 deliberately retired that milestone. **The
+increment that changes a fact is where the fact is recorded, and I missed my own
+table.**
+
+
 ## 2026-08-25 — the gap is now in the inventory, not only in its diagnosis
 
 **`ctrl/for_bare` is in the construct-support boundary, marked `Refuses`.** The

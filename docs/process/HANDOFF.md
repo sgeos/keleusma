@@ -232,12 +232,12 @@ push cancelled run `31932202253` and `31932359730` replaced it.
 | emit path | **11 of 11 stages**; every emit-side cap removed |
 | `lexer` into `parse` | **FUSED**, one-token window, byte-identical |
 | `parse` into `reconstruct` | **FUSED at function granularity, 3.4x to 41.1x residency** |
-| **`wire.kel`** | **PARSES, 486 functions.** The last excluding cap is gone |
+| **`wire.kel`** | **REFUSED BY NAME** since #273. It used to "parse" to 486 functions -- a count the NEXT stage called a mis-parse. See the `wire.kel` section below |
 | **`parse.kel` failure modes named** | **THIRTEEN**, across **ELEVEN** guarded counters |
 | shared-slot layouts | **nine copies collapsed to two definitions**, in `selfhost_host` |
 | architecture | one binary, selectable phases -- see `../decisions/PIPELINE_THEN_MONOLITH.md` |
 | construct-support boundary | **90 SOk / 2 Refuses / 3 Diverges / 1 RefRejects**, 96 cases |
-| **the SHIPPING compiler against that table** | **90 identical / 3 differs / 1 faults / 1 ref-rejects — it AGREES with the boundary on all 95** |
+| **the SHIPPING compiler against that table** | **it AGREES with the boundary on every case** |
 | **chained array indexing** | **`a[0][1]` and its split form both byte-identical** |
 | operand-stack models | **agree on every one of the 66 opcodes**; the known list is EMPTY |
 
@@ -930,10 +930,26 @@ without adding an opcode; what is tested is that every currently escaping opcode
 
 ### 3. ORDER 1, WHICH DID NOT MOVE THIS SESSION
 
-Unchanged and still correctly costed. **Bare-`for` support in `parse.kel` is the largest single
-win**: a SECOND LOWERING, not a relaxation — 24 ops against 68 — and closing it would let `wire.kel`
-self-compile for the first time and join the byte-identity corpus, which covers ten stages and not
-it. **The fix and its corpus entry are ONE change.**
+Still the largest single win, and **RE-COSTED 2026-08-25 — it is TWO stage sources, not three.**
+It is a SECOND LOWERING, not a relaxation; the size ratio is asserted by
+`the_bare_and_limit_forms_have_different_lowerings` rather than quoted here, because two figures for
+one claim is a defect this session recorded four times.
+
+**`codegen.kel` ALREADY HAS THE LOWERING.** `push_forin` emits it in full from a seven-word
+`for_parts` entry, and four bare-`for` cases exercise it — because that corpus drives the REFERENCE
+parser, so it has always received nodes `parse.kel` never produced. **The same corpus split that hid
+the gap is why the lowering exists and was never connected.**
+
+`reconstruct.kel` declares `for_parts` and writes it **zero** times, against sixteen mentions of the
+counted form's equivalent. `parse.kel` does not mention the node at all. Pinned by
+`the_bare_lowering_exists_in_codegen_and_is_unreached_by_the_earlier_stages`, which **fails when the
+work starts** — that is the pin doing its job, not a regression.
+
+**A BETTER ESTIMATE IS NOT A SMALL ESTIMATE.** Two stages of Keleusma, in a phase machine and a
+record stream, with the parts layout matching what `push_forin` reads position for position.
+
+Closing it would let `wire.kel` self-compile and join the byte-identity corpus, which covers ten
+stages and not it. **The fix and its corpus entry are ONE change.**
 
 The `parse.kel` header machine is located: `forst.for_phase` runs 1 variable, 2 `in`, 3 low bound,
 4 high bound, 5 cap, 6 `{`, 7 body, and **phase 4 waits for the `limit` identifier that the bare
