@@ -4364,10 +4364,10 @@ fn self_host_compile(src: &str) -> Module {
         // Keleusma from lexing through code generation and the host only moves data
         // between stages.
         let body = if is_multihead_group(&group) {
-            reconstruct_via_kel_multihead(&group, pc)
+            reconstruct_via_kel_multihead(&group, pc, &name)
         } else {
             let category = reconstruct_category_copy(group[0].cat);
-            reconstruct_via_kel(&group[0].body, category, pc)
+            reconstruct_via_kel(&group[0].body, category, pc, &name)
         };
         let (ops, pool, lc) = run_codegen(&body, pc);
         let idx = module
@@ -5066,6 +5066,36 @@ const RC_HEAD_GUARD_LEN: usize = RC_HEAD_COUNT + 1 + 16;
 const RC_HEAD_BODY_START: usize = RC_HEAD_COUNT + 1 + 16 * 2;
 const RC_HEAD_BODY_LEN: usize = RC_HEAD_COUNT + 1 + 16 * 3;
 
+/// The diagnostic pair `reconstruct.kel` appends after its multihead input.
+const RC_ERR_CODE: usize = RC_HEAD_COUNT + 1 + 16 * 4;
+const RC_ERR_DETAIL: usize = RC_HEAD_COUNT + 1 + 16 * 4 + 1;
+
+/// Decode `reconstruct.kel`'s yielded word into a node count, or panic naming the cause.
+///
+/// The code table lives in [`keleusma::selfhost_host::describe_reconstruct_diagnostic`], which
+/// is its single definition: a second copy is the copy-drift class that once cost five
+/// defects with one cause.
+fn reconstruct_node_count(yielded: i64, slot_code: i64, detail: i64, chunk: &str) -> usize {
+    // TWO INDEPENDENT SIGNALS. The cause travels both as the yielded tag and in the
+    // appended slot; a disagreement means the stage and this driver have drifted.
+    let code = if yielded >= 0 {
+        0
+    } else {
+        keleusma::selfhost_host::RECONSTRUCT_DIAG_TAG_BASE - yielded
+    };
+    assert_eq!(
+        code, slot_code,
+        "reconstruct.kel's yielded cause and its published cause disagree"
+    );
+    if yielded >= 0 {
+        return yielded as usize;
+    }
+    panic!(
+        "reconstruct.kel refused on chunk `{chunk}`: {}",
+        keleusma::selfhost_host::describe_reconstruct_diagnostic(yielded, detail)
+    );
+}
+
 /// Drive reconstruct.kel over one function's postorder records and read back the
 /// reconstructed forest as a `Body`. This increment reads only the node arrays and
 /// the root/category; the side arrays (call/for/match) arrive with those kinds.
@@ -5078,7 +5108,12 @@ fn reconstruct_kel_module() -> Module {
         .clone()
 }
 
-fn reconstruct_via_kel(records: &[(i64, i64)], category: i64, param_count: usize) -> Body {
+fn reconstruct_via_kel(
+    records: &[(i64, i64)],
+    category: i64,
+    param_count: usize,
+    chunk: &str,
+) -> Body {
     let m = reconstruct_kel_module();
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
@@ -5097,13 +5132,19 @@ fn reconstruct_via_kel(records: &[(i64, i64)], category: i64, param_count: usize
         vm.set_shared(&mut shared, RC_REC_ARG + i, Value::Int(a))
             .unwrap();
     }
-    let node_count = match vm
+    let yielded = match vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call")
     {
-        VmState::Yielded(Value::Int(n)) => n as usize,
+        VmState::Yielded(Value::Int(n)) => n,
         other => panic!("unexpected reconstruct.kel state: {other:?}"),
     };
+    let rd_diag = |slot: usize| match vm.get_shared(&shared, slot).unwrap() {
+        Value::Int(n) => n,
+        _ => 0,
+    };
+    let node_count =
+        reconstruct_node_count(yielded, rd_diag(RC_ERR_CODE), rd_diag(RC_ERR_DETAIL), chunk);
     let rd = |vm: &Vm<'_, '_>, shared: &[u8], slot: usize| -> i64 {
         match vm.get_shared(shared, slot).unwrap() {
             Value::Int(n) => n,
@@ -5144,7 +5185,7 @@ fn reconstruct_via_kel(records: &[(i64, i64)], category: i64, param_count: usize
 /// Assert reconstruct.kel and the Rust reconstruction agree for `src`'s body.
 fn assert_reconstruct_kel_matches(src: &str) {
     let (records, pc, cat) = parse_function_records(src);
-    let via_kel = reconstruct_via_kel(&records, cat, pc);
+    let via_kel = reconstruct_via_kel(&records, cat, pc, "<parity probe>");
     let via_rust = reconstruct_body(&records, cat);
     assert_eq!(
         via_kel.nodes.len(),
@@ -5238,7 +5279,7 @@ fn reconstruct_kel_matches_rust_for_loops_and_matches() {
 /// Drive reconstruct.kel over a group of same-named heads (a multiheaded function),
 /// feeding each head's guard and body record ranges, and read back the reconstructed
 /// multihead `Body`.
-fn reconstruct_via_kel_multihead(heads: &[&ParsedFn], pc: usize) -> Body {
+fn reconstruct_via_kel_multihead(heads: &[&ParsedFn], pc: usize, chunk: &str) -> Body {
     // Concatenate every head's guard then body records, tracking the per-head offsets.
     let mut recs: Vec<(i64, i64)> = Vec::new();
     let mut gs = Vec::new();
@@ -5277,13 +5318,19 @@ fn reconstruct_via_kel_multihead(heads: &[&ParsedFn], pc: usize) -> Body {
         set(&mut vm, &mut shared, RC_HEAD_BODY_START + h, bs[h] as i64);
         set(&mut vm, &mut shared, RC_HEAD_BODY_LEN + h, bl[h] as i64);
     }
-    let node_count = match vm
+    let yielded = match vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call")
     {
-        VmState::Yielded(Value::Int(n)) => n as usize,
+        VmState::Yielded(Value::Int(n)) => n,
         other => panic!("unexpected reconstruct.kel state: {other:?}"),
     };
+    let rd_diag = |slot: usize| match vm.get_shared(&shared, slot).unwrap() {
+        Value::Int(n) => n,
+        _ => 0,
+    };
+    let node_count =
+        reconstruct_node_count(yielded, rd_diag(RC_ERR_CODE), rd_diag(RC_ERR_DETAIL), chunk);
     let rd = |vm: &Vm<'_, '_>, shared: &[u8], slot: usize| -> i64 {
         match vm.get_shared(shared, slot).unwrap() {
             Value::Int(n) => n,
@@ -5340,7 +5387,7 @@ fn reconstruct_kel_matches_rust_for_multihead() {
             .filter(|f| names[f.name as usize] == last_name)
             .collect();
         let pc = group[0].params;
-        let via_kel = reconstruct_via_kel_multihead(&group, pc);
+        let via_kel = reconstruct_via_kel_multihead(&group, pc, "<parity probe>");
         let via_rust = build_multihead_bridge(&group, pc);
         assert_eq!(
             via_kel.nodes.len(),

@@ -19,10 +19,14 @@ Current sprint source of truth.
 >
 > **ORDER 1'S LARGEST SINGLE ITEM IS DONE.** The bare `for` form self-compiles byte-identically;
 > `ctrl/for_bare` is `SOk`; the boundary reads 91 SOk / 1 Refuses / 3 Diverges / 1 RefRejects.
-> `wire.kel` now PARSES correctly at 486 chunks and fails on a CAPACITY BOUND,
-> `IndexOutOfBounds(-1, 1024)` -- a different failure from the mis-parse it replaced, and the only
-> thing left before the byte-identity corpus. **The `-1` is a sentinel reaching an index, not an
-> overflow, so "raise the cap" is probably the wrong reading.**
+> `wire.kel` now PARSES correctly at 486 chunks.
+>
+> **THE CAUSE RECORDED HERE WAS WRONG. RETRACTED 2026-08-26.** This entry called
+> `IndexOutOfBounds(-1, 1024)` a CAPACITY BOUND. It is not one: an index of `-1` is below the
+> start. The named cause is **a record range that leaves two nodes where it must leave one**,
+> a `parse.kel` emission defect. "Raise the cap" was correctly doubted here and is definitely
+> wrong. The guess that it was a sentinel was also wrong -- the trap fired several steps
+> downstream of the defect, on state already corrupted.
 >
 > **SEVEN OF THE EIGHT RULINGS ARE IMPLEMENTED.** The floating-point entry ABI remains, with the
 > `v0.3.0` line's `Fixed` shared-slot SCALE question attached to it. That one is THEIRS to bring the
@@ -1330,6 +1334,33 @@ Active operator-decision items:
 Long-horizon work tracked in `docs/decisions/BACKLOG.md` and `PRIORITY.md`.
 
 ## Task Breakdown
+
+### Recent: `reconstruct.kel`'s failure modes named (2026-08-26, session 54)
+
+The stage had no named failure modes. Derived from the source it declares **26 arrays in six
+size classes**, so **25 of the 26 shared a failure message with at least one sibling** — the
+defect `parse.kel` carried until thirteen causes were named. Five causes now report by name
+through a single driver-side table in `src/selfhost_host.rs`.
+
+**The recorded cause of `wire.kel`'s failure was wrong and is retracted.** It was called a
+capacity bound on the strength of the `1024` in `IndexOutOfBounds(-1, 1024)`; an index of
+`-1` is below the start. The named cause is a record range leaving two nodes — a `parse.kel`
+emission defect, not a bound.
+
+| ID | Description | Status | Verification |
+| --- | --- | --- | --- |
+| RC-1 | Name the 1024-class failure causes | Complete | Five codes with distinct messages; `every_named_cause_renders_a_distinct_message`, `an_underflow_does_not_read_as_an_exhaustion`. |
+| RC-2 | Derive the array family from the source | Complete | `the_array_family_is_derived_and_non_vacuous` asserts the derivation is non-empty and measures the 25-of-26 collision claim. |
+| RC-3 | Provoke every guard that can fire | Complete | Four causes driven by crafted record streams; node exhaustion needs two multihead ranges over the same records, since one range holds at most 1024 records and each appends at most one node. |
+| RC-4 | Record the guard that cannot fire | Complete | `push` has one caller inside `emit` and the node guard fires first, so the work-stack cause is unreachable. Kept with `the_work_stack_cannot_overflow_before_the_node_array` pinning the invariant rather than deleted. |
+| RC-5 | Two silent defects found by naming | Complete | `reconstruct_range` returned a stale root for an empty range and discarded nodes silently for an over-full one; an over-long range trapped `LoopLimitExceeded`, naming no cause. Both now named. |
+| RC-6 | Keep the chunk name in the refusal | Complete | The earlier refusal broke `divergence_detail_names_the_diverging_chunk`. The name is threaded through rather than the test relaxed; that suite is green. |
+| RC-7 | Name the unguarded remainder | Complete | `the_unguarded_arrays_are_named` registers the nineteen arrays outside the 1024 class and fails if the stage grows an array without a guard or an entry. |
+| RC-8 | Retract the stale causes | Complete | HANDOFF, TASKLOG, REVERSE_PROMPT and `tests/selfhost_chunk_names.rs` all corrected; the retraction is recorded rather than the claim deleted. |
+
+**Not done, deliberately**: the `parse.kel` emission defect `wire.kel` now names. Naming a
+cause and repairing it are two claims with two evidence bars.
+
 
 ### Recent: B19 operator residuals addressed (2026-07-04, session 19)
 

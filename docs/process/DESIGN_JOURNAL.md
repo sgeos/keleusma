@@ -764,6 +764,84 @@ would find it. **The expensive part of both investigations was establishing that
 believed was undecided had in fact been decided** — once by three repairs nobody had reconciled with
 the comment above them, once by a size function nobody had connected to the refusal message.
 ---
+## 2026-08-26 — `reconstruct.kel`'s failure modes, and a diagnosis that was wrong twice
+
+**THE HEADLINE: THE RECORDED CAUSE OF `wire.kel`'s FAILURE WAS WRONG, AND SO WAS THE
+CAUSE IT REPLACED.** Three readings of one failure, two of them confident and wrong:
+
+| reading | recorded as | what it was |
+|---|---|---|
+| ``no chunk named `acc` `` | a mis-parsed declaration | real, and repaired by the bare-`for` work |
+| `IndexOutOfBounds(-1, 1024)` | "a capacity bound ... the shape of a node-array bound" | **wrong.** An index of `-1` is below the start |
+| the named message | a record range leaving **2** nodes | measured |
+
+**BOTH WRONG READINGS HAVE THE SAME SHAPE: a number in an unnamed message was read as
+if it identified a cause.** The `1024` is an array's size and says nothing about why the
+index was bad. I wrote the capacity reading into the handoff myself, in the same file
+that warns three paragraphs earlier against exactly this.
+
+**WHY THE INSTRUMENT HAD TO COME BEFORE THE DIAGNOSIS.** The old trap fired in a
+different place from the defect. A range had already returned a wrong root several steps
+earlier, and the `-1` was downstream consequence. Diagnosing `wire.kel` directly would
+have meant investigating the work stack, which was innocent.
+
+**THE STAGE HAD NO NAMED FAILURE MODES AT ALL.** `parse.kel` has thirteen across eleven
+guarded counters, and tracing one such failure there cost seven increments before the
+message named its cause. `reconstruct.kel` had none. Derived from the source it declares
+**26 arrays in six size classes**, so **25 of the 26 share a message with at least one
+sibling**. Five causes are now named, with a driver-side table in `selfhost_host.rs`
+holding the single definition.
+
+**I DERIVED "SEVEN" FROM THE FAILURE IN FRONT OF ME AND THE REAL FAMILY WAS 26.** Seventh
+recorded instance of deriving a set from the part of the system I was thinking about. The
+correction is left in the brief rather than edited away, because the brief's own
+wrong-turn list warns against it one paragraph below where I did it.
+
+**TWO GUARDS COULD NOT FIRE AS FIRST WRITTEN, AND ONLY RUNNING THEM SHOWED IT.**
+
+- The record-index guard sat *inside* a walk carrying `limit 1024`, so a longer range
+  trapped `LoopLimitExceeded` — a virtual-machine message naming no cause at all — one
+  iteration before the check could run. Moved onto the range length.
+- The work-stack-full guard is **unreachable by construction**: `push` has exactly one
+  caller, inside `emit`, and the node guard fires first, so `sp` never exceeds
+  `node_count`. Kept as defence in depth with the *invariant* pinned, so adding a second
+  `push` caller fails a test rather than silently making the guard live.
+
+**A GUARD FOUND A SILENT WRONG ANSWER THAT WAS NOT A FAULT AT ALL.**
+`reconstruct_range` read `stack[0]` unconditionally. An empty range returned a **stale**
+node index left by the previous range; an over-full one **silently discarded** every node
+but the first. Neither trapped. Both are now named, and the arity guard is what caught
+`wire.kel`.
+
+**A REGRESSION I CAUSED AND THE RIGHT REPAIR.** `divergence_detail_names_the_diverging_chunk`
+broke: the float program that used to be mis-reconstructed and caught downstream by the
+byte-comparison oracle is now refused at its source, and the refusal did not name the
+chunk. **Relaxing the test was the wrong move** — the chunk name is the operator-facing
+value of that path. The name is threaded through instead, so the earlier refusal keeps the
+later guarantee.
+
+**SCOPE, STATED SO THE GAP IS VISIBLE.** Guards cover the 1024-wide class only. The other
+nineteen arrays are listed by name in `the_unguarded_arrays_are_named`, which fails if an
+array is added to the stage without either a guard or a register entry. Node-array
+exhaustion is reachable only across the ranges of a multiheaded function, since one range
+holds at most 1024 records and each record appends at most one node; the test drives two
+heads over the same records to provoke it.
+
+**AND THE FIRST PUSH WENT RED ON FOUR JOBS WHILE MY GATE WAS GREEN ON THREE SIGNALS.** The new
+test file drives the stage and carried no feature attribute, so the three feature sets without
+`self-host` failed to COMPILE it. I ran only `--features self-host`. **Three independent signals
+over one feature set are still one feature set**, and a compile failure in a set you never built is
+invisible to all of them. The handoff warned that a default-feature run is not the gate; I made the
+mirror image of that mistake and it is the easier one, because the feature I picked was the one the
+work was about.
+
+**WHAT `wire.kel` NOW SAYS**, and it is a different problem from the one recorded:
+a record range leaves **two** nodes, so the stream carries an unfolded operand. That is a
+`parse.kel` emission defect, not a bound. **Naming it and repairing it are two claims with
+two evidence bars**, and this increment makes only the first.
+
+---
+
 ## 2026-08-25 — SESSION 53 CLOSE. What generalises from ten merges and one that did not land
 
 Ten pull requests merged, one open at close. The increment-by-increment reasoning
