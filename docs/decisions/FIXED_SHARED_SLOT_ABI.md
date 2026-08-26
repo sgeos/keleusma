@@ -112,6 +112,52 @@ E.g. every shared `Fixed` is Q(`word_bits`/2), converted at the boundary.
   an ABI exists to prevent.
 - **Recorded for completeness. Not recommended.**
 
+## ⚠ A NEW REQUIREMENT ARRIVED 2026-08-26 AND IT CUTS AGAINST THE STANDING PREFERENCE
+
+The operator asked: **does Keleusma's fixed-point format interoperate well across object files
+compiled from different languages?** That question is a requirement input this document did not
+have, and it **weakens B, which is what this document recommends.**
+
+### The measured answer to the question as asked
+
+| layer | interoperable? | evidence |
+|---|---|---|
+| **numeric representation** | **YES** | signed two's-complement Q-format integer — the ordinary Q*m.n* convention. `src/value_layout.rs:75` |
+| **size** | **BUILD-DEPENDENT** | `size_in_bytes` is `word_bytes`: 8 / 4 / 2 / 1 under `narrow-word-{8,16,32}`. `src/value_layout.rs:116` |
+| **scale (`N`)** | **NO — ABSENT** | carried only by the opcodes and the compile-time type; **nothing host-visible holds it** |
+| **reach** | **shared slot ONLY** | there is **no `KeleusmaType` impl for `Fixed`**, so it cannot cross the native-function boundary at all |
+
+**So the bits are standard and the meaning is not.** A foreign object file can read the integer
+correctly and cannot know what it is scaled by. `Fixed<16>` and `Fixed<8>` — a factor of 256 apart —
+produce **byte-identical host-visible layouts**, pinned by
+`two_scales_produce_indistinguishable_host_visible_layouts`.
+
+### Why this cuts against B
+
+**B forecloses self-describing fixed-point at the boundary by construction.** Under B the host
+receives a `Word` and applies the scale from an out-of-band contract — a header, an API document, a
+convention. **That is interoperable in the same sense C DSP code is**: agree on Q15 by convention and
+pass an `int16_t`. It works, and it is exactly as strong as the convention.
+
+**If the goal is CONVENTION-BASED interop, B is still the best option** and the recommendation below
+stands unchanged.
+
+**If the goal is SELF-DESCRIBING interop — an object file a foreign toolchain can read correctly
+without a side agreement — then B is the wrong answer**, because the property being asked for is
+precisely the one B removes. That goal argues for A, or for an A-variant.
+
+> **AND A'S FATAL OBJECTION IS NARROWER THAN A.** The objection recorded above is that reusing `len`
+> makes a `len = 0` artifact read back as Q0 — accepted and silently wrong, reinstating the hazard the
+> version bump was taken to close. **That objection is against REUSING `len` WITH A ZERO DEFAULT, not
+> against carrying the scale.** A variant that encodes the scale so that "absent" is
+> distinguishable from "Q0" — a biased encoding, or a distinct field — keeps A's benefit and drops
+> its hazard. **It is not free**: it is the `v0.2.3` line's schema, and a distinct field is a wire
+> change. **Not evaluated here, and it should be, before B is taken as settled.**
+
+**NO RECOMMENDATION IS CHANGED BY THIS SECTION.** It records that the standing preference was formed
+without a stated interop requirement, and that the requirement, if confirmed, reverses it. **The
+operator has asked the question but has not stated the goal**, and those are different things.
+
 ## What this line recommends, and the confidence attached
 
 **Preference: B, then A, then C.** Stated as a preference and not a finding — the surface-breaking
