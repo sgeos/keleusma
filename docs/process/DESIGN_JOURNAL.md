@@ -13,6 +13,77 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**[v0.3.0] THE HIGH-RISK ABSORPTION LANDED CLEAN, AND THE PROVENANCE AUDIT WAS FOUND TO HAVE
+FABRICATED A NUMBER WHILE FIXING FABRICATED NUMBERS (2026-08-26).**
+
+Absorption 11 at `1627e65b`, five commits, #278's bare-`for` support. This was the absorption the
+handoff had flagged at absorption 10 as the highest-risk of the exchange, because it is **the first
+`v0.2.3` change to touch this line's Order-1 stage sources**, `parse.kel` and `reconstruct.kel`. The
+standing instruction was *re-derive every census, carry nothing across it.*
+
+**IT LANDED CLEAN, AND THE ADVANCE PREDICTION WAS RIGHT.** One journal conflict, append/append,
+resolved by keeping both. Both suites held exactly — workspace 2430/0/83, `native_codegen` 276/0/52,
+both signals agreeing. Of the five censuses, four re-derived identically and `bound_transfer` moved
+**1045 -> 1047**, which is what I recorded as the prediction *before* running it: `parse.kel` loses
+`pe_bare_for` and gains two functions, `reconstruct.kel` gains one, net +2.
+
+**THE 1:1 MAPPING HAS NOW HELD TWICE AND IS STILL NOT A RULE.** Absorption 9's +1-function/+1-
+comparison was written up here as "a coincidence that reads as a rule." Absorption 11 did it again.
+Two confirmations make the reading more tempting and no more true: the count is per chunk AFTER
+MONOMORPHISATION, so 1:1 survives exactly as long as every added function is non-generic and singly
+specialised. **The stage sources happen to be non-generic. That is a property of the population, not
+of the instrument**, and the first generic addition ends it.
+
+**THE FLAGGED EXPOSURE DID NOT FIRE, AND KNOWING WHY MATTERS.** `fold_record` changes the emit site
+every statement flows through, so the opcode censuses were named in advance as where to look first.
+Both re-derived identically. Their claim that the encoding of existing kinds was unchanged holds
+against this line's instruments, which is a genuine cross-line confirmation rather than a repetition
+of their report.
+
+**A CENSUS THAT CANNOT MOVE IS MEASURING THE HARNESS.** The Order-1 gate's 1680 result comparisons
+did not budge even though two of its twelve stage sources changed — correct, because the figure is
+fixed by the driver's tick count, not by the subject's size. Recorded in the handoff so nobody reads
+that stability as insensitivity. **A figure that holds across a change to its own subject deserves an
+explanation, not congratulation.**
+
+### The finding that is actually about method
+
+The handoff carried "**32 commits ahead of `v0.3.0`**" in its top blocking box, as the *cost of
+holding* argument put to the operator. **No measure reproduces it.** Nine were tried at the exact
+commit that introduced it: all (61), first-parent (28), no-merges (40), merges-only (21), and five
+path-filtered (14/44/6/14/9). **None is 32.**
+
+**IT WAS INTRODUCED BY `c0aca9a9`, whose commit message is "the handoff's Validity section was stale
+where its figures were not"** — the provenance audit itself. That commit examined every stamp in the
+file, corrected five, wrote a rule about updating stamps on unmoved figures, and **inserted a fresh
+unmeasured number while doing it.**
+
+**THE MECHANISM GENERALISES AND IT IS NOT "BE MORE CAREFUL."** *A repair pass is itself a change, and
+it enters the tree unmeasured unless the check that motivated it is re-run over its own output.* An
+audit does not cover its own product. This is the second instance on this line of a measurement
+invalidated by the act of recording it — the first was an audit whose population included its own
+record — and the two are the same shape. The remedy adopted: **state the command beside any count
+offered as evidence.** The blocking box now names three commands and their three answers, so the next
+reader can refute it in one paste rather than trusting it.
+
+The error's direction is worth stating plainly: 32 **understated** the divergence, which is now 67
+all / 29 first-parent. It weakened the argument it was offered to support. **That is luck, not
+process** — an unmeasured number is equally free to inflate.
+
+### And a defect that cost a full census cycle
+
+All five census commands were run against the main workspace and all five exited 101. The handoff's
+state-table block reads `cd native_codegen && cargo test ...`, then "AND THE MAIN WORKSPACE, which CI
+does gate: ...", then lists the five censuses **with no directory re-established.** A reader carries
+forward the most recent directive, which by then said main workspace.
+
+**The failure was loud** — *no test target named `bound_transfer`* — so it could not have produced a
+wrong figure, only no figure. That is the good failure mode. But ten census commands in that file
+lacked their working directory; **all ten now carry their own `cd`.** A command in a resume document
+is executed by someone with no context, and an ambient working directory is context.
+
+---
+
 **[v0.3.0] THE CROSS-TREE HAND-OFF FIRED, AND THE SAME ABSORPTION TURNED THE TREE RED FOR A REASON
 NEITHER LINE COULD SEE FROM ITS OWN TREE (2026-08-25).**
 
