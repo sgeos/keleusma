@@ -96,6 +96,50 @@ fn align_up(n: u32) -> u32 {
 /// offsets. A `Boxed` operand is skipped, since it has no baked body size; the
 /// corpus contains none, and a lowering that meets one refuses it elsewhere
 /// rather than silently placing nothing.
+///
+/// # ⚠ NO SITE IS EVER REUSED, AND THAT IS NOT ONLY A COST
+///
+/// Every static construction site gets its own offset. Nothing here consults
+/// liveness, escape, aliasing, or confinement — the words do not appear in this
+/// file — so the region is `sites x size` where the runtime's verified figure is
+/// `peak_live x size`. **That difference is the measured arena bound gap: 11 of
+/// 71 corpus modules demand more arena than the verified heap figure, 24 to 96
+/// bytes each, and the gap is unbounded in static site count.**
+///
+/// It has always been recorded as a cost. **It is also the reason a wrong
+/// confinement verdict cannot miscompile anything on this line**, which is worth
+/// stating in the same place.
+///
+/// A planner that reuses a slot needs to be RIGHT that the previous occupant is
+/// dead. This one never reuses, so it never needs a verdict at all — not a
+/// correct one, not a conservative one, not any. **The conservatism that costs
+/// the bytes is what buys the immunity.**
+///
+/// # WHOEVER CLOSES THE GAP IS BUYING BOTH HALVES
+///
+/// That is the point of putting this here rather than in a decision document.
+/// Overlapping offsets for mutually exclusive or confined sites is the obvious
+/// win and it **takes on an exposure that does not exist today**: from that
+/// commit onward, a confinement verdict that is wrong in the unsafe direction is
+/// a miscompile rather than a wasted byte.
+///
+/// Two facts about the verdicts that would be consumed, both established by
+/// measurement on the `v0.2.3` line rather than argued here:
+///
+/// 1. **A `Confined` verdict is sound to trust; an `Escapes` verdict is only an
+///    upper bound.** Their escape count fell from 12 to 10 when callee summaries
+///    landed, and those two were **wrong rather than merely unestablished**. A
+///    conservative default hides false positives exactly as well as it hides
+///    gaps, and there is no third value to record one in.
+/// 2. **Neither line can yet say "confined to the CALLER'S iteration" about a
+///    region a helper built and returned.** Their per-chunk scoping reports such
+///    a site as escaping in the callee and the caller carries no site at all.
+///    Sound, and permanently pessimistic. A planner that overlaps on confinement
+///    gets nothing for this shape today.
+///
+/// So the gap is real and closing it is right, but **it is not free and it is not
+/// only about bytes.** See `docs/decisions/NATIVE_BOUNDS_TRANSFER.md` and the
+/// `v0.3.0` handoff's Workstream E notes.
 pub fn plan_chunk_region(chunk: &Chunk) -> RegionLayout {
     let mut sites = Vec::new();
     let mut next: u32 = 0;

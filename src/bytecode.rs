@@ -570,8 +570,10 @@ impl<W: crate::word::Word, F: crate::float::Float> PartialEq for GenericValue<W,
 /// `Float` is excluded because the flat body compares by raw bytes,
 /// which would change the `+0.0`/`-0.0` and `NaN` semantics of tuple
 /// equality. References, `None`, and composites are not flat-eligible.
-/// The compiler's `type_flat_scalar_kind` mirrors this on the type
-/// side so construction and baked access agree.
+/// `LayoutDescriptor::flat_scalar_kind`, which the compiler calls when
+/// baking a field access, mirrors this on the TYPE side so construction
+/// and baked access agree. The name cited here was
+/// type_flat_scalar_kind, which has never existed.
 pub(crate) fn flat_tuple_scalar_kind<W: crate::word::Word, F: crate::float::Float>(
     v: &GenericValue<W, F>,
 ) -> Option<crate::value_layout::ScalarKind> {

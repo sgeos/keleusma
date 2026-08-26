@@ -197,6 +197,42 @@ fn how_many_loop_body_sites_survive_a_crude_confinement_test() {
     println!("  disqualified by Call (callee may Return a composite) : {d_call}");
     println!("  disqualified by a native call          : {d_native}");
     println!("\n  Counts overlap: one site may be hit by several.");
+    // **THE TWO SIDES OF THIS REPORT ARE NOT THE SAME KIND OF FACT, and reading
+    // them as though they were is the error the `v0.2.3` line measured on their
+    // own analysis on 2026-08-24.**
+    //
+    // `confined` is SOUND to trust: a site reaches it only when the body carries
+    // none of the escaping opcodes, so no route exists to miss.
+    //
+    // **EVERY DISQUALIFIER COUNT IS AN UPPER BOUND ON ESCAPE, NOT A RESULT.**
+    // They are SYNTACTIC -- "this body contains an `Op::Call`" -- and say nothing
+    // about whether the composite ever REACHES that call. A site disqualified
+    // here may be perfectly confined.
+    //
+    // **MEASURED ON THEIR SIDE, WHICH IS WHY THIS IS NOT A HYPOTHETICAL.** Adding
+    // real callee summaries moved `examples/scripts` from 17 confined / 12
+    // escapes / 4 cannot-establish to 23 / 10 / 0. The four cannot-establish
+    // closing was the aim. **The two escapes that also went away were WRONG
+    // rather than unestablished** -- with no summary a call's return is assumed
+    // to alias every argument, so a composite passed to a callee and then
+    // returned was reported as escaping through a route that does not exist.
+    //
+    // **A CONSERVATIVE DEFAULT HIDES FALSE POSITIVES EXACTLY AS WELL AS IT HIDES
+    // GAPS, and there is no third value to record it in.** `Escapes` and
+    // `Confined` are both confident answers; one of theirs was simply wrong, and
+    // nothing in the corpus said so.
+    println!("\n  `confined` IS SOUND. Every disqualifier is an UPPER BOUND on escape,");
+    println!("  syntactic rather than a reachability result: a disqualified site may");
+    println!("  in fact be confined. `sites - d_call` is therefore a LOWER bound.");
+    // **THE ISOLATION FIGURE, AND IT IS THE ONE THE DESIGN NEEDS.** Until
+    // absorption 7 every site tripped BOTH `SetLocal` and `Call`, so the census
+    // could not say whether a confinement analysis needed a callee summary or
+    // only local-store handling -- the two requirements were never separated by
+    // any subject. `15_pixel_blend.kel` separates them.
+    println!(
+        "  sites blocked WITHOUT a call in the body : {} (of {sites})",
+        sites.saturating_sub(d_call)
+    );
     for w in confined_where.iter().take(12) {
         println!("    survivor: {w}");
     }
@@ -213,18 +249,100 @@ fn how_many_loop_body_sites_survive_a_crude_confinement_test() {
          for-in loops or the Break-attribution discriminator has broken; \
          establish WHICH before reading the site count as a result"
     );
-    // **THE ZERO IS PINNED, NOT MERELY PRINTED.** A composite appearing inside an
-    // iterating loop is NEWS: it gives Theorem B1 its first subject and gives the
-    // backend's slot-reuse unsoundness its first live instance. It must not
-    // arrive as a number quietly changing.
+    // **THE ZERO IS GONE, AND THAT WAS THE GUARD WORKING.** It fired on
+    // absorption naming the three scripts the `v0.2.3` line landed on operator
+    // direction. The verdict is REWRITTEN to the new state; the assertion is not
+    // deleted.
+    //
+    // **WHAT THE NEW STATE MEANS.** Theorem B1/B1r now has subjects, and the
+    // native planner's slot reuse is unsound for any of them that is not
+    // confined. **It is NOT yet live**: all three are refused by the backend
+    // before the differential runs — `13_telemetry_stream` on
+    // `UnsupportedOp("Stream")`, the other two on an unknown packed width. The
+    // yield route is gated behind Workstream B by construction, since `yield`
+    // exists only inside a `Stream` this backend does not lower.
+    assert!(
+        nobreak_sites > 0,
+        "THE SUBJECTS ARE GONE. Composite sites inside iterating loops went to \
+         zero, which is how this file read before 2026-08-24. Either the corpus \
+         lost 12_sensor_window/13_telemetry_stream/14_frame_log, or the \
+         Break-attribution discriminator has broken and is misreading real loops \
+         as once-executors. Establish WHICH -- the second would make every figure \
+         here an artefact."
+    );
+    // **ZERO SURVIVORS IS THE DESIGN INPUT, NOT A DISAPPOINTMENT.** A crude
+    // "any Escapes opcode in the body" predicate admits NOTHING even with
+    // subjects present. Every site trips `SetLocal`, because a `let` inside a
+    // loop body is a store.
+    //
+    // **SUPERSEDED, 2026-08-24 (absorption 7): "THE ANALYSIS NEEDS BOTH FEATURES
+    // ON DAY ONE OR IT RETURNS NOTHING" IS NO LONGER TRUE.** That conclusion was
+    // drawn when all three subjects tripped BOTH `SetLocal` and `Call`, so the
+    // two requirements were inseparable and either alone bought nothing.
+    //
+    // **`15_pixel_blend.kel` separates them.** It is the call-free confined shape
+    // this line asked the `v0.2.3` line for, and with it the counts are
+    // `sites = 4`, `d_setlocal = 4`, `d_call = 3`. **At least one site is blocked
+    // by `SetLocal` ALONE.** So an analysis implementing only Theorem B1r's
+    // boundary-dead store handling -- no callee summary at all -- would admit
+    // something rather than nothing, which makes the callee summary a SECOND
+    // increment instead of a precondition.
+    //
+    // **"AT LEAST ONE", NOT "ONE", AND THE DIFFERENCE IS THE POINT.** `d_call` is
+    // syntactic: it counts bodies CONTAINING a call, not composites that reach
+    // one. So `sites - d_call` is a LOWER bound on what B1r alone admits, and
+    // `d_call` is an UPPER bound on what needs a summary.
+    //
+    // **WHAT THE `v0.2.3` MEASUREMENT DOES AND DOES NOT SHOW, since the careless
+    // citation is tempting and they corrected it here.** Their escape count fell
+    // 12 to 10 when callee summaries landed, and those two were false rather than
+    // unestablished. That establishes the assumption "a call in the body means an
+    // escape" is LOOSE in a corpus both lines share. **It does NOT establish that
+    // any particular one of the four subjects counted here is misfiled** -- their
+    // scan is flat over `examples/scripts`, this one is over composite sites
+    // inside iterating loops across four directories. Cite it for the former.
+    //
+    // **Their analysis, not this crude test, is the authority on which sites are
+    // confined** -- subject to the shared blind spot recorded below.
+    //
+    // **THE SEQUENCING CHANGES; THE SOUNDNESS DOES NOT.** A site admitted on
+    // B1r alone is still only as sound as B1r, and the planner's reuse remains
+    // unsound for any site that is not confined.
+    //
+    // **WHEN THE ANALYSIS LANDS THIS SHOULD RISE.** A survivor count that stays
+    // at zero after the predicate exists means the predicate is not admitting
+    // anything, which is news of a different kind.
     assert_eq!(
-        nobreak_sites, 0,
-        "A COMPOSITE IS NOW BUILT INSIDE AN ITERATING LOOP, in {nobreak_bodies} \
-         real loop(s). This is NEWS and probably deliberate -- the v0.2.3 line \
-         was asked to land exactly this shape. Consequences, both of which need \
-         acting on rather than re-pinning: Theorem B1 now has a subject, and the \
-         native planner's reuse of that slot is UNSOUND if the site is not \
-         confined. Check the differential for a disagreement before changing \
-         this number."
+        confined, 0,
+        "A SITE NOW SURVIVES THE CRUDE TEST. Either the corpus gained a loop-body \
+         composite with no store and no call — the `v0.2.3` line said it was \
+         adding exactly that, to isolate the SetLocal requirement from the callee \
+         summary — or this census stopped counting a disqualifier. Check the \
+         breakdown before treating it as progress."
+    );
+
+    // **THE ISOLATION IS THE RESULT OF ABSORPTION 7 AND IT IS PINNED HERE.**
+    //
+    // Without at least one call-free site, `SetLocal` and `Call` are confounded
+    // and the census cannot tell the two requirements apart -- which is exactly
+    // the state that produced the superseded "needs both on day one" reading
+    // above. This assertion is what stops that reading from coming back
+    // unnoticed if the corpus loses `15_pixel_blend.kel`.
+    //
+    // Stated as `> 0` rather than `== 1` deliberately, and the second reason is
+    // stronger than the first. **One**: the useful property is that the
+    // requirements are SEPARATED, and pinning the exact count would make every
+    // future call-free subject a failure. **Two**: `sites - d_call` is a LOWER
+    // BOUND, not a count. Asserting equality would be asserting a syntactic
+    // over-approximation as if it were a reachability result, which is precisely
+    // the reading the `v0.2.3` line's false escapes disprove.
+    assert!(
+        sites > d_call,
+        "EVERY site in an iterating loop again has a Call in its body \
+         ({sites} sites, {d_call} with a call), so `SetLocal` and `Call` are \
+         confounded once more and this census can no longer say which \
+         requirement a confinement analysis needs first. The corpus has probably \
+         lost `15_pixel_blend.kel`. Restore a call-free subject before reading \
+         the breakdown as a design input."
     );
 }

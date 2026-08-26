@@ -642,6 +642,12 @@ fn pe_variants() -> Word { 9 }
 // `IndexOutOfBounds(8, 8)`, after `for` nesting and array-literal nesting.
 fn pe_calldepth() -> Word { 10 }
 fn pe_fields() -> Word { 11 }
+// **CODE 12 IS RETIRED AND DELIBERATELY NOT REUSED.** It named the bare `for` form as an
+// unsupported construct -- the only such code among eleven capacity limits -- and existed for
+// exactly as long as the form was unsupported, raised at phase 4 where the lowering now hooks
+// in. The number is left unassigned so a stream from an older stage cannot be read as a new
+// cause. Its identifier is spelled out nowhere here on purpose: a test asserts the stage no
+// longer mentions it, and prose about a name is the same characters as a use of it.
 
 fn pe_cap_op() -> Word { 64 }
 fn pe_cap_let() -> Word { 64 }
@@ -1104,6 +1110,12 @@ private data forst {
     for_seq: [Word; 9],
     for_sp: Word,
     forlimit_count: Word,
+    // The BARE `for i in a..b { }` form. `for_bare` marks a loop context as bare so the
+    // emission ladder takes the short path, and `forin_count` is its program-order counter,
+    // the analogue of `forlimit_count`. APPENDED, per this file's rule about slot-addressed
+    // blocks.
+    for_bare: [Word; 9],
+    forin_count: Word,
     for_emit: Word,
     for_emit_i: Word,
 }
@@ -4199,6 +4211,7 @@ fn step_op(k: Word) -> Word {
     if k == Tok::For() as Word {
         // Push a fresh loop context; a nested loop stacks above the enclosing one.
         forst.for_phase[forst.for_sp] = 1;
+        forst.for_bare[forst.for_sp] = 0;
         forst.for_sp = for_push(forst.for_sp);
         0
     } else {
@@ -4499,7 +4512,32 @@ fn step_forheader(k: Word, v: Word) -> Word {
             ops.draining = 1;
             0
         } else {
+        // **THE BARE `for` FORM, REFUSED HERE BECAUSE HERE IS WHERE IT IS KNOWN.** Phase 4
+        // is the high bound and it ends at the contextual `limit`. A `{` instead means the
+        // header has no cap, which is unambiguously `for v in a..b { .. }` -- a form this
+        // stage does not lower.
+        //
+        // Without this, the header never leaves phase 4, the opening brace is attributed to
+        // the enclosing block, and the failure surfaces five layers downstream as a missing
+        // chunk name that names neither the construct nor the file. Seven iterations of
+        // diagnosis were spent on that message once.
+        //
+        // `perr` records the cause and `step` reports it INSTEAD of the next record, so the
+        // host stops at the next record boundary rather than consuming a stream built from
+        // a header that never completed.
+        if k == Tok::LBrace() as Word {
+            // **THE BARE FORM'S ENTRY.** Phase 4 is the high bound and it ends at the
+            // contextual `limit`; a `{` here means the header has no cap, which is
+            // unambiguously `for v in a..b { .. }`. Drain the high bound with the bare
+            // reason, which reserves ONE anonymous slot and opens the body directly --
+            // there is no cap literal and so no phase 5.
+            forst.for_bare[fp] = 1;
+            ops.drain_reason = 12;
+            ops.draining = 1;
+            0
+        } else {
             step_normal(k, v)
+        }
         }
     } else {
     if forst.for_phase[fp] == 5 {
@@ -4532,6 +4570,9 @@ fn step_forheader(k: Word, v: Word) -> Word {
 // recorded for the enclosing block fold.
 fn step_for_emit() -> Word {
     let fp = forst.for_sp - 1;
+    if forst.for_bare[fp] == 1 {
+        step_forin_emit(fp)
+    } else {
     if forst.for_emit_i == 0 {
         forst.for_emit_i = 1;
         Node::Literal() as Word + forst.for_cap[fp] * 64
@@ -4582,7 +4623,48 @@ fn step_for_emit() -> Word {
         forst.for_sp = forst.for_sp - 1;
         ops.expect_operand = 1;
         0
-    } } } } } } } } } }
+    } } } } } } } } } } }
+}
+
+// The BARE form's parts emission, the short analogue of `step_for_emit`. The counted form
+// emits four literal nodes and five slot records; this emits ONE literal -- the increment's
+// `1` -- and TWO slot records, then a ForInBuild signal.
+//
+// `reconstruct.kel` synthesises `i >= limit` and `i + 1` from those two slots and the
+// literal, because no token corresponds to either: they are properties of the lowering.
+//
+// Kinds 69 and 70 are above the six-bit legacy tag, so both go out on the MIGRATED
+// transport -- `ps.emit_arg` carries a full-word payload and the yielded tag is raw. A
+// `kind + payload * 64` packing would silently truncate them.
+fn step_forin_emit(fp: Word) -> Word {
+    if forst.for_emit_i == 0 {
+        forst.for_emit_i = 1;
+        Node::Literal() as Word + 1 * 64
+    } else {
+    if forst.for_emit_i == 1 {
+        forst.for_emit_i = 2;
+        Node::SlotRecord() as Word + forst.for_vslot[fp] * 64
+    } else {
+    if forst.for_emit_i == 2 {
+        forst.for_emit_i = 3;
+        Node::SlotRecord() as Word + forst.for_end_slot[fp] * 64
+    } else {
+    if forst.for_emit_i == 3 {
+        forst.for_emit_i = 4;
+        ps.emit_arg = 0;
+        69
+    } else {
+        // The loop's parts are emitted; record its ForIn statement, pop the loop context,
+        // and let the enclosing block fold it in.
+        stmt.stmt_kind[stmt.stmt_count] = 70;
+        stmt.stmt_arg[stmt.stmt_count] = 7 * forst.forin_count;
+        stmt.stmt_count = stmt_push(stmt.stmt_count);
+        forst.forin_count = forst.forin_count + 1;
+        forst.for_emit = 0;
+        forst.for_sp = forst.for_sp - 1;
+        ops.expect_operand = 1;
+        0
+    } } } }
 }
 
 // The expression-position token dispatch: the conditional tokens route to step_if.
@@ -5309,13 +5391,37 @@ fn step_draining() -> Word {
             ops.draining = 0;
             0
         } else {
+            if ops.drain_reason == 12 {
+            // **THE BARE FORM'S HIGH BOUND.** Reserve the ONE anonymous slot the bare
+            // lowering needs -- the limit -- against the counted form's four, and then do
+            // the opening brace's own work, because the bare header has no cap literal and
+            // therefore no phase 5 or 6 to reach it. Everything below the slot reservation
+            // is the phase-6 `{` handler verbatim: bind the loop variable into scope, mark
+            // the body, and open the statement frame.
+            let bfp = forst.for_sp - 1;
+            forst.for_end_slot[bfp] = ps.pcount + stmt.slot_count;
+            stmt.slot_count = stmt.slot_count + 1;
+            stmt.let_names[stmt.let_count] = forst.for_var[bfp];
+            stmt.scope_slot[stmt.let_count] = forst.for_vslot[bfp];
+            stmt.let_count = let_push(stmt.let_count);
+            forst.for_phase[bfp] = 7;
+            forst.for_stmt_start[bfp] = stmt.stmt_count;
+            forst.for_seq[bfp] = stmt.open_seq;
+            stmt.open_seq = stmt.open_seq + 1;
+            stmt.pbase[stmt.pbase_sp] = stmt.stmt_base;
+            stmt.pbase_sp = stmt.pbase_sp + 1;
+            stmt.stmt_base = stmt.pstmt_sp;
+            ops.draining = 0;
+            ops.expect_operand = 1;
+            0
+        } else {
             // reason 11: the `when` guard expression is drained; close the guard bracket
             // (its Done) and arm the real body on the next step.
             ps.in_guard = 0;
             ps.arm_pending = 1;
             ops.draining = 0;
             Node::Done() as Word
-        } } } } } } } } } } }
+        } } } } } } } } } } } }
     }
 }
 
@@ -5333,12 +5439,32 @@ fn step_draining() -> Word {
 // parse tests pin are unchanged.
 fn tag_let_name() -> Word { 90 }
 
+// Emit one folded statement record.
+//
+// **THE SIX-BIT TAG SPACE IS FULL.** The legacy packing `kind + arg * 64` leaves the tag six
+// bits, and every value from 1 to 64 is now a node or record kind. So a statement kind added
+// from here on CANNOT ride the legacy packing: 70 truncates to 6, which is a unary node, and
+// the loop it should have built disappears into a stray `Not`. That is not hypothetical --
+// it is what the bare `for` form did on its first end-to-end run.
+//
+// A kind of 64 or above therefore goes out on the MIGRATED transport, the same one
+// `tag_let_name` already uses for a binding's name: `ps.emit_arg` carries the full-word
+// payload and the yielded tag is raw.
+fn fold_record(i: Word) -> Word {
+    if stmt.stmt_kind[i] >= 64 {
+        ps.emit_arg = stmt.stmt_arg[i];
+        stmt.stmt_kind[i]
+    } else {
+        stmt.stmt_kind[i] + stmt.stmt_arg[i] * 64
+    }
+}
+
 fn step_folding() -> Word {
     if stmt.name_pending == 1 {
         // The name went out last step; emit the binding it belongs to now, without
         // advancing the cursor a second time.
         stmt.name_pending = 0;
-        stmt.stmt_kind[stmt.fold_i] + stmt.stmt_arg[stmt.fold_i] * 64
+        fold_record(stmt.fold_i)
     } else {
     if stmt.fold_i > stmt.fold_start {
         stmt.fold_i = stmt.fold_i - 1;
@@ -5347,7 +5473,7 @@ fn step_folding() -> Word {
             ps.emit_arg = stmt.stmt_name[stmt.fold_i];
             tag_let_name()
         } else {
-            stmt.stmt_kind[stmt.fold_i] + stmt.stmt_arg[stmt.fold_i] * 64
+            fold_record(stmt.fold_i)
         }
     } else {
         stmt.stmt_count = stmt.fold_start;

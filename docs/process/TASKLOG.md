@@ -10,6 +10,140 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-25, SESSION 53 CLOSE). 149 merges at `153a2d65`, ONE OPEN PULL REQUEST.**
+>
+> **`#278` CARRIES THE BARE-`for` SUPPORT AND HAD NOT MERGED AT CLOSE.** Continuous integration was
+> restarted by a force-push and had not settled; the local gate was green on all three signals
+> (cargo exit 0, 83 binaries, zero failures). **Merge on 22 of 22.** Until it does, every bare-`for`
+> figure in the handoff describes a branch rather than `origin/v0.2.3`.
+>
+> **ORDER 1'S LARGEST SINGLE ITEM IS DONE.** The bare `for` form self-compiles byte-identically;
+> `ctrl/for_bare` is `SOk`; the boundary reads 91 SOk / 1 Refuses / 3 Diverges / 1 RefRejects.
+> `wire.kel` now PARSES correctly at 486 chunks and fails on a CAPACITY BOUND,
+> `IndexOutOfBounds(-1, 1024)` -- a different failure from the mis-parse it replaced, and the only
+> thing left before the byte-identity corpus. **The `-1` is a sentinel reaching an index, not an
+> overflow, so "raise the cap" is probably the wrong reading.**
+>
+> **SEVEN OF THE EIGHT RULINGS ARE IMPLEMENTED.** The floating-point entry ABI remains, with the
+> `v0.3.0` line's `Fixed` shared-slot SCALE question attached to it. That one is THEIRS to bring the
+> operator; this line has not acted on it.
+>
+> **TEN MERGES THIS SESSION**, covering the confinement analysis and its callee summary, a comment
+> that asserted a load-time hole its own tests disprove, the citation guard and its debt register at
+> 21 down to 13, the bare-`for` named refusal, its boundary case, and finally its support.
+
+> **Currency note (2026-08-24, session 53, third increment). THE CONFINEMENT ANALYSIS IS COMPLETE.**
+>
+> `module_confinement` summarises what each chunk does with each parameter, two facts each: whether
+> the parameter can LEAK, and whether the return value may ALIAS it. Corpus, `examples/scripts` FLAT:
+> without summaries 33 sites / 17 confined / 12 escapes / **4 cannot-establish**; with summaries
+> 33 / **23** / 10 / **0**. Both pinned.
+>
+> **THE ESCAPES COLUMN ALSO FELL, AND THAT HALF WAS NOT AIMED AT.** Two verdicts were WRONG rather
+> than unestablished: without a summary a call's return is assumed to alias every argument, so a site
+> passed to a helper and then reached by the enclosing `return` was reported as escaping through a
+> route that does not exist. Nothing in the corpus said so.
+>
+> **A MISSING SUMMARY MUST NOT READ AS A CLEAN ONE.** Flipping the accessor default compiles and
+> turns FIVE tests red. Termination is by inspection, not by appeal to the acyclicity guarantee.
+>
+> **SEVEN OF THE EIGHT RULINGS ARE IMPLEMENTED.** The confinement analysis landed as
+> `src/confine.rs` (feature `verify`): per-site, three-valued, a library predicate NOT wired into
+> `verify()`. **THE FLOATING-POINT ENTRY ABI IS THE ONE THAT REMAINS**, and the `v0.3.0` line has
+> attached a second question to it -- where a `Fixed` shared slot's SCALE lives, since the
+> representation is settled and the scale is not host-visible. That one is the operator's and is
+> theirs to bring. **B2 adoption remains UNRULED, not declined.**
+>
+> **THE DAY-ONE REQUIREMENT OF "BOTH FEATURES OR IT ADMITS NOTHING" WAS WRONG, AND THE OTHER LINE
+> AGREES.** Their census disqualified 3 of 3 sites by `Call` using a crude any-`Escapes`-opcode
+> test. A dataflow analysis follows the value: `12_sensor_window.kel`'s call passes a `Word`. Only
+> the boundary-dead rule was needed; **three of the four per-iteration corpus sites now come back
+> confined.** The callee summary is a second increment, not a precondition.
+>
+> **CORPUS COUNTS, WITH THEIR SCAN RULE, BECAUSE A BARE COUNT IS NOT A MEASUREMENT.**
+> `examples/scripts` FLAT: 33 sites / 17 confined / 12 escapes / 4 cannot-establish. Recursively:
+> 251, because that directory also holds `piano_roll/` and `rogue/`.
+> `tests/corpus_pattern_coverage.rs` states **79** in prose, reproducing against neither rule;
+> recorded as unreproducible rather than as wrong.
+>
+> **A DEFECT ON THIS LINE'S SURFACE, REPORTED BY THE `v0.3.0` LINE, CONFIRMED AND REPAIRED (#270).**
+> A comment in `src/compiler.rs` asserted two `Op::IsStruct` routes verify and then trap
+> `InvalidBytecode` -- the class `verify()` exists to exclude -- while the tests beside it disproved
+> it. Re-measured with controls: wrong on THREE counts, not the two reported.
+>
+> **UNDER IT, THE SHARPER DEFECT: THE COMMENT CITED A TEST THAT WAS NEVER WRITTEN**, twice.
+> `tests/comment_citations.rs` now requires every four-or-more-word backticked citation in a `src/`
+> or `tests/` comment to resolve. **24 did not**; three fixed, 21 a debt register guarded against
+> outliving its own justification. Threshold MEASURED, not asserted: 897/104 at two words, 453/48 at
+> three, 175/21 at four, with the 83 extra dominated by standard-library names and file stems.
+
+> **Currency note (2026-08-24, session 52 CLOSE). 139 merges at `dadbce7e`, no open pull request.**
+>
+> **EIGHT OPERATOR RULINGS, SIX IMPLEMENTED.** The two outstanding are WORK: the floating-point entry
+> ABI (authorized -- FP registers feature-gated onto the existing `floats`, `Fixed` UNCONDITIONAL,
+> which is the harder half) and the confinement analysis (commissioned -- per-site, three-valued
+> `yes`/`no`/`cannot establish`, shared crate, with `SetLocal`-to-boundary-dead and a callee summary
+> both required on day one or it admits nothing). **B2 adoption is UNRULED, not declined.**
+>
+> **ORDER 1 DID NOT MOVE.** Bare-`for` remains the largest single win and the `parse.kel` phase
+> machine is located: phase 4 waits for a `limit` the bare form never supplies.
+>
+> **A THIRD LINE EXISTS.** The proof line merges INTO this one, `v0.3.0` then rebases. Its branch is
+> not offered; a fresh adversarial re-audit runs first. **This line verified the proof's PREMISES,
+> not its PROOFS**, and that must not be read as endorsement of the mathematics.
+>
+> **THE AUDIT FOUND A DEFECT IN THIS LINE'S OWN TABLE.** `Break` was classified as carrying no
+> region; it consumes nothing and transfers control WITH THE WHOLE OPERAND STACK, and 18 dispatch
+> scopes carry `match` arm values across it. Reclassified -- not an escape because it ENDS THE SCOPE,
+> not because it cannot carry a region.
+>
+> **THREE CHECKS WRITTEN THIS SESSION COULD NOT FAIL**, each satisfied by a different part of a
+> document from the one it was about. Mutation caught all three; reading caught none.
+
+> **Currency note (2026-08-24). A LANGUAGE DECISION IS ON THE RECORD FOR V0.3.0.**
+>
+> [`docs/decisions/YIELD_OWNERSHIP_MODE.md`](../decisions/YIELD_OWNERSHIP_MODE.md). **Accepted in
+> principle by the operator**: a `yield`/`loop` declaration states `ref` or `out` in its return
+> position, choosing machine-owned storage the host borrows, or host-supplied storage the machine
+> constructs into. **Both mandatory**, so the form carrying obligations cannot be the silent one.
+>
+> **Not scheduled, not implemented, not V0.2.x.** No new opcode is required.
+>
+> The position was chosen because the signature is the caller-callee contract, and because per-site
+> placement would force a host-visible protocol change. Ada's `in`/`out` was proposed and does not
+> survive the move -- `out` transfers, `in` has no meaning on a return -- so `ref` was taken from the
+> same family. A possessive pair, `yield my`/`yield your`, was the strongest option AT A SITE and was
+> rejected once the position moved: a declaration has no speaker, and deixis has already cost this
+> project an operator escalation.
+>
+> **`out` is cheaper than the proof's Theorem B2, not merely different**: it constructs directly into
+> host storage, so there is no arena region for that site and no copy. Six open questions are named,
+> including how the host learns the buffer size and the `Text`/opaque depth limit.
+
+> **Currency note (2026-08-23, operator-directed). THE FLOOR IS ENFORCED AND THE CORPUS CAN NOW
+> EXERCISE THE MEMORY MODEL.**
+>
+> **`verify()` floors loop-body pops at the entry height.** `TypedError::LoopFloorBreach`, scoped by
+> the recursion. Zero of 588 loop instances rejected, as measured beforehand. **M6(d) is enforced
+> rather than an emission invariant.** Two deliberate consequences: the floor is skipped at depth
+> zero, where the frame guard is the apter diagnosis, and it **subsumes the equal-height shape
+> witness** for `LoopNotNeutral`, whose height case survives via `loop_neutrality`.
+>
+> **THE CORPUS COULD NOT EXERCISE WHAT IT WAS CITED FOR.** Not one script used `loop main` or a data
+> segment, so `Stream`, `Yield`, `Reset`, `SetData` and `GetData` were unexercised there, and **zero
+> composites were built inside an iterating loop** -- all 30 in-loop sites were arm results, since
+> `Op::Loop` marks dispatch as well as iteration. Three scripts now cover the three dispositions:
+> `12_sensor_window` (confined), `13_telemetry_stream` (yielded), `14_frame_log` (copied to data).
+>
+> **`tests/corpus_pattern_coverage.rs` pins them, and its first draft had the same defect** -- it
+> counted dispatch scopes as loops, the error the `v0.3.0` line made twice. Fixed with their
+> discriminator: an unconditional `Break` targeting the scope's own exit means dispatch.
+>
+> **TWO LANGUAGE FACTS ESTABLISHED WHILE WRITING THEM**: `let mut` does not parse, and **the grammar
+> has no local assignment at all** -- exactly two assignment nodes, both targeting data. So no source
+> form writes a local declared outside its loop. **But `SetLocal` still targets compile-time slots
+> that outlive iterations**, so the opcode classification stands.
+
 > **Currency note (2026-08-23, late). P6(d) IS A REAL GAP, AND A TEST OF MINE BROKE THEIR ABSORPTION.**
 >
 > **`verify()` ACCEPTS a loop body that consumes below its entry height** and pushes a same-shape

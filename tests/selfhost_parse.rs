@@ -2946,40 +2946,40 @@ fn no_other_file_restates_the_shared_layout() {
     );
 }
 
-/// **THE PAYOFF: `wire.kel` PARSES.**
+/// **`wire.kel` PARSES CORRECTLY NOW, AND THE 486 MEANS SOMETHING IT DID NOT
+/// BEFORE.**
 ///
-/// `wire.kel` is the largest stage in the corpus at 486 chunks, and the 256-entry chunk
-/// table excluded it from the parser entirely. It was the last cap keeping a real stage
-/// out, and it stood while four emit-side caps fell around it.
+/// This test has had three subjects. It first asserted `wire.kel` PARSES, to 486
+/// chunks, as the payoff for raising the chunk table from 256 — a parse that ran
+/// and was WRONG, which the next stage said in as many words: *"the self-hosted
+/// pipeline mis-parsed a declaration boundary and produced a chunk named
+/// `acc`"*. Then it asserted the refusal that replaced the mis-parse. Now the
+/// bare `for` form is supported, the mis-parse is gone, and the count is a count
+/// of correctly-bounded declarations.
 ///
-/// # Raising it was three edits, and the first two did not work
+/// # What still does NOT work, stated so the 486 is not over-read
 ///
-/// The chunk index is not one array's index. Widening `toks.chunks` alone left the wall in
-/// place and moved the symptom: first to `LoopLimitExceeded`, from two
-/// `for i in 0..toks.chunk_count limit 256` loops, and then to `IndexOutOfBounds(388, 256)`,
-/// from the six `chunkret.ret_*` arrays, which are addressed by a chunk number too. **A cap
-/// is a family**, and `every_chunk_indexed_array_admits_the_chunk_cap` derives that family
-/// from the stage so the next widening cannot repeat this.
+/// `wire.kel` parses; it does not yet self-compile. `self_host_compile` reaches
+/// a capacity limit further down the pipeline. **That is a different failure
+/// from the one this file tracked** — a bound rather than a mis-parse — and it
+/// is the next thing between `wire.kel` and the byte-identity corpus.
 #[cfg(feature = "self-host")]
 #[test]
-fn wire_kel_parses_now_that_the_chunk_table_admits_it() {
+fn wire_kel_parses_correctly_now_that_the_bare_loop_form_is_supported() {
     const WIRE: &str = include_str!("../src/selfhost/kel/wire.kel");
-    // THROUGH THE FUSED FEED. This test's subject is the CHUNK table, and the
-    // token feed is incidental to it. Driving the collecting feed here would pin
-    // `toks.packed` at `wire.kel`'s 24,836 tokens for a reason that has nothing to
-    // do with what the test measures.
-    let (fns, ..) = keleusma::selfhost::parse_functions_fused(WIRE);
+    let parsed = keleusma::selfhost::try_parse_functions(WIRE)
+        .expect("wire.kel must parse now that the bare `for` form is lowered");
     assert_eq!(
-        fns.len(),
+        parsed.functions.len(),
         486,
         "`wire.kel` parsed to {} chunks. The count is pinned because it is the corpus worst \
          case and the thing the chunk cap is sized against: PARSE_CHUNK_CAP is {}, so a \
          stage growing toward it is visible here rather than at the wall.",
-        fns.len(),
+        parsed.functions.len(),
         keleusma::selfhost_host::PARSE_CHUNK_CAP
     );
     assert!(
-        fns.len() <= keleusma::selfhost_host::PARSE_CHUNK_CAP,
+        parsed.functions.len() <= keleusma::selfhost_host::PARSE_CHUNK_CAP,
         "the corpus worst case has reached the cap it is sized against"
     );
 }

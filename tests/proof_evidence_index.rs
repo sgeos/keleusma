@@ -40,9 +40,12 @@ const CITED_TESTS: &[&str] = &[
     "nesting_a_composite_into_a_flat_one_copies_its_bytes_inline",
     "no_compiled_stream_chunk_emits_return",
     "a_stream_calling_a_stream_compiles_verifies_and_runs",
-    "a_loop_body_may_consume_from_below_its_entry_height",
+    "a_loop_body_may_not_consume_from_below_its_entry_height",
     "compiled_loops_really_do_carry_a_non_empty_entry_stack",
     "the_instruction_set_has_no_write_accessor_into_a_composite",
+    "a_dispatch_break_may_carry_a_value_past_the_loop_entry_height",
+    "composite_equality_is_content_derived_not_address_derived",
+    "a_composite_written_to_an_indexed_data_slot_is_copied_not_aliased",
 ];
 
 /// The `src/verify.rs` citations, as (line, the text that line must contain).

@@ -65,6 +65,8 @@ private data rs {
     stack: [Word; 1024],
     ca: Word,
     lp: Word,
+    // The `for_parts` write cursor, the bare form's analogue of `lp`. Appended.
+    fop: Word,
     mp: Word,
     pending: [Word; 8],
     pcount: Word,
@@ -175,6 +177,22 @@ private data rs {
 fn push(idx: Word) -> Word {
     rs.stack[rs.sp] = idx;
     rs.sp = rs.sp + 1;
+    idx
+}
+
+// Append a node WITHOUT pushing it on the work stack, and return its index.
+//
+// `emit` pushes, which is right for a node the stream asked for and wrong for one this stage
+// SYNTHESISES. The bare `for` form needs two nodes -- `i >= limit` and `i + 1` -- that no
+// record carries, because they are properties of the LOWERING rather than of the source.
+// Pushing them would leave two indices on a stack the enclosing fold then mis-pops.
+fn emit_only(k: Word, a: Word, l: Word, r: Word) -> Word {
+    let idx = rs.node_count;
+    io.kinds[idx] = k;
+    io.args[idx] = a;
+    io.lhs[idx] = l;
+    io.rhs[idx] = r;
+    rs.node_count = idx + 1;
     idx
 }
 
@@ -745,6 +763,46 @@ fn step(k: Word, a: Word) -> Word {
         rs.pcount = 0;
         0
     } else {
+    if k == 69 {
+        // ForInBuild: the BARE `for i in start..limit { body }`. Pop the three nodes the
+        // stream carried (pushed start, limit, body) plus the literal 1 the emission ladder
+        // appended for the increment, read the two frame slots out of `rs.pending`, and
+        // assemble the SEVEN-word `for_parts` entry `push_forin` reads position for position.
+        //
+        // **TWO OF THE SEVEN ARE SYNTHESISED HERE**, because no token corresponds to them:
+        // `cond` is `i >= limit` and `incr` is `i + 1`. They are properties of the lowering
+        // rather than of the source, so the stage that owns the lowering's shape builds them,
+        // through `emit_only` so the work stack is untouched.
+        //
+        // The operator codes are `push_binop`'s: 11 is GtEq -> CmpGe, and 1 is Add ->
+        // CheckedAdd plus the two-word PopN, which is what the reference emits for both.
+        let one = pop();
+        let body = pop();
+        let limit = pop();
+        let start = pop();
+        let i_slot = rs.pending[0];
+        let lim_slot = rs.pending[1];
+        let cond = emit_only(3, 11, emit_only(2, i_slot, 0, 0), emit_only(2, lim_slot, 0, 0));
+        let incr = emit_only(3, 1, emit_only(2, i_slot, 0, 0), one);
+        let base = rs.fop;
+        io.for_parts[base] = i_slot;
+        io.for_parts[base + 1] = lim_slot;
+        io.for_parts[base + 2] = start;
+        io.for_parts[base + 3] = limit;
+        io.for_parts[base + 4] = cond;
+        io.for_parts[base + 5] = body;
+        io.for_parts[base + 6] = incr;
+        rs.fop = base + 7;
+        rs.pcount = 0;
+        0
+    } else {
+    if k == 70 {
+        // ForIn statement: arg is the `for_parts` entry start. Folds like ForLimit --
+        // continuation in rhs, lhs unused -- and becomes codegen's kind 16, which
+        // `push_forin` lowers.
+        let cont = pop();
+        emit(16, a, 0, cont)
+    } else {
     if k == 23 {
         // ForLimit statement: arg is the limit_parts entry start. It folds into the
         // block popping only the continuation, held in rhs; lhs is unused.
@@ -786,7 +844,7 @@ fn step(k: Word, a: Word) -> Word {
         step_assembly(k, a)
     } else {
         0
-    } } } } } } } } } } } } } } } }
+    } } } } } } } } } } } } } } } } } }
 }
 
 // Pop the top depth-2+ struct reassembly frame (its sub-fields are fully laid into `seb`) and
@@ -1185,6 +1243,7 @@ loop main(resume: Word) -> Word {
     rs.sp = 0;
     rs.ca = 0;
     rs.lp = 0;
+    rs.fop = 0;
     rs.mp = 0;
     rs.pcount = 0;
     rs.fp_sp = 0;

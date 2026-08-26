@@ -120,6 +120,7 @@ is why these two were run rather than read.
 | claim | discriminator | test |
 |---|---|---|
 | a composite written to a **`private data`** slot is copied | it survives two resets that reclaim the region it was built in; a stored handle would fail `Stale` | `a_composite_written_to_private_data_is_copied_not_aliased` |
+| a composite written to an **indexed** data slot is copied | the same discriminator, written inside a loop | `a_composite_written_to_an_indexed_data_slot_is_copied_not_aliased` |
 | nesting into a **flat** composite copies | the parent's 24 bytes are `[11, 22, 33]` — the child's words inline | `nesting_a_composite_into_a_flat_one_copies_its_bytes_inline` |
 
 **`private` was used rather than `shared` on purpose.** A host `&mut [u8]` buffer must copy by
@@ -169,8 +170,32 @@ region, which is exempt by design.
 ### 7. Loop back-edge neutrality — **READ FROM DISPATCH**
 
 `TypedError::LoopNotNeutral`, in the `Op::Loop` arm of `src/verify_typed.rs`, requires the body's
-fall-through to restore the **exact entry operand stack, height and per-slot shape**. Break edges go
-through `join_stacks`, which errors `BranchHeightMismatch` on unequal heights.
+fall-through to restore the **exact entry operand stack, height and per-slot shape**.
+
+**BREAK EDGES ARE A DIFFERENT AND WEAKER CHECK, AND THIS SENTENCE USED TO BLUR THEM.** They go
+through `join_all` into `join_stacks`, which errors `BranchHeightMismatch` on unequal heights
+**among the break edges themselves**. The joined state becomes the post-loop state and is **never
+compared to the loop's entry stack**, so a break edge carrying a different stack than entry
+verifies.
+
+**That is load-bearing rather than a defect.** A `match` arm lowers to a `Break` carrying the arm's
+value; measured across 87 modules, **18 dispatch scopes do exactly that**, and comparing break edges
+to entry would refuse `match`. For genuinely ITERATING loops the count is **zero** — an emission
+fact, not an enforced one.
+
+**THE ITERATING/DISPATCH DISCRIMINATOR IS CIRCULAR, AND THE GRAMMAR CLOSES IT.** A scope containing
+an unconditional `Break` to its own exit is filed as dispatch — but a genuine `for` loop with a
+`break;` emits exactly that, so it is misfiled, and the zero-count could never see an iterating loop
+violating through its own early exit. **`break_stmt = 'break' ';'` has no expression form**, so such
+a break is value-free by construction and cannot be a violation. The classification is imperfect and
+the conclusion holds. An alternative discriminator was tried and **over-counts at 247 of 248**, so it
+is not offered: a second broken heuristic is not a correction.
+
+Pinned by `a_dispatch_break_may_carry_a_value_past_the_loop_entry_height` in
+`tests/composite_escape_routes.rs`, so a future check comparing break edges to entry fails with a
+message naming what it breaks. **Found by an adversarial audit of the proof, which read the code
+correctly**; the earlier wording here would have let a reader conclude the entry stack was
+involved.
 
 **NEUTRALITY IS ON SHAPES, NOT IDENTITIES.** A body that pops a composite of shape `X` and pushes a
 *different* composite of the same shape passes. Nothing of iteration `n` survives — it was popped —
@@ -188,35 +213,43 @@ assumed same-epoch by construction.
 frame's locals and the only frame that could hold one is never resumed. This is the behaviour *if*
 one were reachable. **It is not a claim that one is, nor that none can be.**
 
-### 9. A loop body MAY consume from below its entry height — **EXECUTED, and this is a gap**
+### 9. A loop body may NOT consume from below its entry height — **ENFORCED since 2026-08-23**
 
-Back-edge neutrality compares shapes, so a body that pops a below-entry operand and pushes a
-same-shape replacement is neutral. **`verify()` accepts that shape.** `interp_region`'s pops guard
-against an empty abstract stack — the frame floor — not against the enclosing loop's entry height.
+**This was a gap and is now closed.** Back-edge neutrality compares shapes, so a body that popped a
+below-entry operand and pushed a same-shape replacement was neutral, and the surviving entry had
+been constructed in the current iteration while touching none of the escaping opcodes.
+`verify()` accepted it.
 
-**The two floors are not the same**: **122 of 245** compiled `Loop` instructions in the shipped
-corpus carry a non-empty operand stack at entry, so the underflow guard does not incidentally cover
-the loop floor.
+`src/verify_typed.rs` now carries an entry-height floor: `TypedError::LoopFloorBreach`, checked
+before every operand-consuming instruction, with the floor scoped by the recursion so nested loops
+get their own and code outside any loop keeps the frame-underflow diagnosis.
 
 ```sh
 cargo test --test loop_entry_floor
 ```
 
-`a_loop_body_may_consume_from_below_its_entry_height` pins the acceptance,
-`the_control_is_accepted_too_so_acceptance_is_not_about_the_loop_shape` is its control, and
-`compiled_loops_really_do_carry_a_non_empty_entry_stack` pins the fact that makes the gap reachable.
+`a_loop_body_may_not_consume_from_below_its_entry_height` pins the refusal,
+`the_control_is_still_accepted_so_the_refusal_is_about_the_reach` is its control, and
+`compiled_loops_really_do_carry_a_non_empty_entry_stack` pins the fact that made the gap reachable.
 
-**No compiled code does it** — zero ops breach, over 588 loop instances in 23 modules, measured by
-temporarily instrumenting the typed pass's own abstract interpretation with the instrument proven to
-fire. **That instrumentation is reverted and is NOT in the tree, so the figure is a measurement at a
-commit rather than a standing guarantee.** Cite it that way or not at all.
+**Why closing it was safe, known BEFORE it was closed**: zero of 588 loop instances across 23
+shipped modules would be rejected, measured by instrumenting the typed pass's own per-path
+interpretation with the instrument proven to fire. **A linear depth scan gave the same zero and was
+exact for only 4 of the 245 loops** — the flattering number came from the broken instrument first.
 
-**A linear depth scan gives the same zero and is exact for only 4 of 245 loops**, because the rest
-have branches in the body. Reporting that number would have been a flattering figure from a broken
-instrument.
+**The frame floor never covered it**: 122 of 245 compiled `Loop` instructions carry a non-empty
+operand stack at entry, pinned by `compiled_loops_really_do_carry_a_non_empty_entry_stack`.
 
-**Closing it structurally — flooring `verify()` at loop entry — would reject none of the 588 but
-narrows what loads**, which is an operator decision on this line rather than an agent's.
+**Two consequences inside the verifier, both deliberate.** The floor is skipped at depth zero, since
+outside a loop the frame guard is the apter diagnosis and reporting a loop breach there would name a
+loop the reader is not inside. And the floor **subsumes the equal-height shape witness** for
+`LoopNotNeutral`: replacing a slot's shape at equal height necessarily reaches below entry, so that
+error now fires only on a HEIGHT difference. `LoopNotNeutral` is not dead — `loop_neutrality` covers
+the height case — and the subsumed unit test was updated rather than deleted, so the change stays
+legible.
+
+**For the proof, M6(d) is no longer an emission invariant.** It is enforced by `verify()`, and the
+scoping caveat that attached to it can be dropped for this clause.
 
 ### 10. No route writes a live ephemeral composite region — **MIXED**, and it is FALSE for persistent
 
@@ -232,6 +265,14 @@ The proof's M1 immutability axiom. Four independent grounds:
 ```sh
 cargo test --test composite_escape_routes
 ```
+
+**A CORRECTION TO §4's TABLE, 2026-08-24.** `Break` and `BreakIf` were classified `NoRegion`, whose
+stated meaning is that no region outlives anything through the instruction. **That overstated.**
+`Break` has depth effect `(0, 0)`: it consumes nothing and **transfers control with the whole
+operand stack**, so a composite on the stack crosses the edge — which 18 dispatch scopes
+demonstrably do. They are reclassified `WithinIteration`, and the reason they are not escaping is
+**not** that they cannot carry a region but that they **end the scope**, leaving no later iteration
+to alias it. The escaping set is unchanged at five.
 
 `the_instruction_set_has_no_write_accessor_into_a_composite` pins the first, mutation-tested two
 ways. **A single `SetField` opcode would refute both reuse theorems and would look like an ordinary
@@ -249,6 +290,41 @@ statement of M1 over "a region" unqualified is false here.
 (outside the safe API, undetectable here, the same trust boundary as the native escape routes); a
 host calling the arena's `pub unsafe` rewind or reset out of band (which reclaims rather than
 mutates, but breaks the epoch discipline).
+
+### 11. No instruction derives a scalar from a handle's ADDRESS — **MIXED**
+
+The proof's address-opacity axiom. If it failed, a program could observe addresses through scalar
+output and **every equivalence theorem would fall**, since the reuse plan and the baseline differ in
+exactly that observable.
+
+The comparison family is closed four independent ways:
+
+| | provenance |
+|---|---|
+| nameable composite equality is expanded **field-wise by the compiler**, so it never reaches `CmpEq` with composite operands | **EXECUTED**, at the op level |
+| two flat composites reaching `CmpEq` directly **FAULT** — the path is closed, not merely unused | read from dispatch |
+| `FlatComposite`'s `PartialEq` compares byte **lengths**, not pointers — only empty equals empty | read from dispatch |
+| strings compare **by content**, never by handle identity | read from dispatch |
+
+```sh
+cargo test --test composite_escape_routes
+```
+
+`composite_equality_is_content_derived_not_address_derived` is the executed discriminator: three
+distinct allocations, two with identical content, returning `1` for content-derived and `0` for
+address-derived. **The distinctness assertion is not decoration** — a folded pair would make the
+equality hold trivially and prove nothing. Mutation-tested both ways.
+
+**THE ORDERING FAMILY FAULTS ON COMPOSITE OPERANDS**, so it yields no observable:
+`CmpLt`/`Gt`/`Le`/`Ge` on two structs give `TypeError("cannot compare Struct and Struct")`. **That is
+a RUNTIME refusal, not a type-checker one** — the program compiles and loads first. Weaker standing
+than a static rejection, and enough for the axiom, since a faulting instruction produces no result to
+derive an address from.
+
+**PHRASE THE AXIOM AS NOT-THE-ADDRESS, NOT AS ONLY-THE-BYTES.** `Len` takes an element count and the
+shape tests take a type name — metadata rather than referenced bytes, and neither an address. Under
+an *only-the-bytes* phrasing both are counterexamples in letter; under *not-the-address* neither is,
+and both regimes agree on metadata regardless.
 
 ## What the verifier actually computes, and what a proof would change
 

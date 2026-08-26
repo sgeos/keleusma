@@ -243,6 +243,13 @@ pub mod text_size;
 /// Structural verifier plus WCET and WCMU resource-bounds pass.
 #[cfg(feature = "verify")]
 pub mod verify;
+
+/// Per-site composite confinement: does the region a construction site builds
+/// become unreachable once its enclosing iteration ends? Sound but deliberately
+/// incomplete, with a third verdict distinguishing "no" from "cannot
+/// establish" so the completeness gradient is measurable.
+#[cfg(feature = "verify")]
+pub mod confine;
 /// Phase 0 spike for the A.2.1 typed operand-stack verifier pass. Not yet
 /// wired into [`verify`]; a standalone proof of concept for the abstract
 /// operand-stack domain and baked-offset validation.

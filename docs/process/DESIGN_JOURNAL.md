@@ -13,6 +13,1506 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**[v0.3.0] THE HIGH-RISK ABSORPTION LANDED CLEAN, AND THE PROVENANCE AUDIT WAS FOUND TO HAVE
+FABRICATED A NUMBER WHILE FIXING FABRICATED NUMBERS (2026-08-26).**
+
+Absorption 11 at `1627e65b`, five commits, #278's bare-`for` support. This was the absorption the
+handoff had flagged at absorption 10 as the highest-risk of the exchange, because it is **the first
+`v0.2.3` change to touch this line's Order-1 stage sources**, `parse.kel` and `reconstruct.kel`. The
+standing instruction was *re-derive every census, carry nothing across it.*
+
+**IT LANDED CLEAN, AND THE ADVANCE PREDICTION WAS RIGHT.** One journal conflict, append/append,
+resolved by keeping both. Both suites held exactly — workspace 2430/0/83, `native_codegen` 276/0/52,
+both signals agreeing. Of the five censuses, four re-derived identically and `bound_transfer` moved
+**1045 -> 1047**, which is what I recorded as the prediction *before* running it: `parse.kel` loses
+`pe_bare_for` and gains two functions, `reconstruct.kel` gains one, net +2.
+
+**THE 1:1 MAPPING HAS NOW HELD TWICE AND IS STILL NOT A RULE.** Absorption 9's +1-function/+1-
+comparison was written up here as "a coincidence that reads as a rule." Absorption 11 did it again.
+Two confirmations make the reading more tempting and no more true: the count is per chunk AFTER
+MONOMORPHISATION, so 1:1 survives exactly as long as every added function is non-generic and singly
+specialised. **The stage sources happen to be non-generic. That is a property of the population, not
+of the instrument**, and the first generic addition ends it.
+
+**THE FLAGGED EXPOSURE DID NOT FIRE, AND KNOWING WHY MATTERS.** `fold_record` changes the emit site
+every statement flows through, so the opcode censuses were named in advance as where to look first.
+Both re-derived identically. Their claim that the encoding of existing kinds was unchanged holds
+against this line's instruments, which is a genuine cross-line confirmation rather than a repetition
+of their report.
+
+**A CENSUS THAT CANNOT MOVE IS MEASURING THE HARNESS.** The Order-1 gate's 1680 result comparisons
+did not budge even though two of its twelve stage sources changed — correct, because the figure is
+fixed by the driver's tick count, not by the subject's size. Recorded in the handoff so nobody reads
+that stability as insensitivity. **A figure that holds across a change to its own subject deserves an
+explanation, not congratulation.**
+
+### The finding that is actually about method
+
+The handoff carried "**32 commits ahead of `v0.3.0`**" in its top blocking box, as the *cost of
+holding* argument put to the operator. **No measure reproduces it.** Nine were tried at the exact
+commit that introduced it: all (61), first-parent (28), no-merges (40), merges-only (21), and five
+path-filtered (14/44/6/14/9). **None is 32.**
+
+**IT WAS INTRODUCED BY `c0aca9a9`, whose commit message is "the handoff's Validity section was stale
+where its figures were not"** — the provenance audit itself. That commit examined every stamp in the
+file, corrected five, wrote a rule about updating stamps on unmoved figures, and **inserted a fresh
+unmeasured number while doing it.**
+
+**THE MECHANISM GENERALISES AND IT IS NOT "BE MORE CAREFUL."** *A repair pass is itself a change, and
+it enters the tree unmeasured unless the check that motivated it is re-run over its own output.* An
+audit does not cover its own product. This is the second instance on this line of a measurement
+invalidated by the act of recording it — the first was an audit whose population included its own
+record — and the two are the same shape. The remedy adopted: **state the command beside any count
+offered as evidence.** The blocking box now names three commands and their three answers, so the next
+reader can refute it in one paste rather than trusting it.
+
+The error's direction is worth stating plainly: 32 **understated** the divergence, which is now 67
+all / 29 first-parent. It weakened the argument it was offered to support. **That is luck, not
+process** — an unmeasured number is equally free to inflate.
+
+### And a defect that cost a full census cycle
+
+All five census commands were run against the main workspace and all five exited 101. The handoff's
+state-table block reads `cd native_codegen && cargo test ...`, then "AND THE MAIN WORKSPACE, which CI
+does gate: ...", then lists the five censuses **with no directory re-established.** A reader carries
+forward the most recent directive, which by then said main workspace.
+
+**The failure was loud** — *no test target named `bound_transfer`* — so it could not have produced a
+wrong figure, only no figure. That is the good failure mode. But ten census commands in that file
+lacked their working directory; **all ten now carry their own `cd`.** A command in a resume document
+is executed by someone with no context, and an ambient working directory is context.
+
+---
+
+**[v0.3.0] THE CROSS-TREE HAND-OFF FIRED, AND THE SAME ABSORPTION TURNED THE TREE RED FOR A REASON
+NEITHER LINE COULD SEE FROM ITS OWN TREE (2026-08-25).**
+
+Absorption 8 at `a5905b1a`, eleven commits, one append/append journal conflict resolved by keeping
+both. Two results, and they point in opposite directions.
+
+**THE HAND-OFF WORKED.** `the_other_lines_dangling_citation_is_still_dangling` failed, alone among
+nine, on exactly the absorption that carried their repair, naming its three edits. I made all three
+and deleted the guard — sixty-five lines. Neither line designed a cross-tree hand-off and this was
+the first.
+
+**The reusable part is the inversion, and my first attempt had it backwards.** Attaching it to their
+name *starting to resolve* could never fire, because their repair REMOVES the name. **To hand
+something across a tree boundary, assert the current state PERSISTS and let its ending be the
+message.** The granularity is absorption rather than their merge, which is honest rather than a
+limitation: my universe is my worktree, and the alternative is polling their branch.
+
+**AND THE SAME ABSORPTION IS RED IN THE MAIN WORKSPACE.** Their new `confinement_analysis.rs` pins
+corpus verdict counts at `(33, 17, 12, 4)`; the merged tree measures `(38, 21, 12, 5)`.
+
+**Proven rather than inferred**: six files moved aside, both pins green, 8 passed; moved back, red.
+The cause is exactly this line's six witness scripts, because **`examples/scripts/` is grown by this
+line and asserted over on theirs** — their own TASKLOG says so. Delta +5 sites, +4 confined, +1
+cannot-establish, **escapes unmoved**: six new scripts and not one new escape.
+
+**THE PART WORTH KEEPING IS THAT NEITHER LINE COULD SEE IT.** Their gate is green because they lack
+my files; mine is red because it has both. **It is the day's defect class one level out** — a
+coverage audit satisfied by its own package's prose, a citation universe vouching for prose with
+prose, and now a pin whose population a *different line* grows. The first two were visible to
+whoever looked hard enough at one tree. This one is invisible from either.
+
+Reported, not fixed; `tests/` is theirs. The one durable thing I own is a warning in
+`examples/scripts/README.md`, at the point of contact, telling whoever writes the next such test not
+to pin a count over a directory the other line grows.
+
+**I AM HOLDING THE BRANCH RATHER THAN CALLING IT GREEN**, and the reason is worth stating: the
+native suite is entirely unaffected, so running only that — the suite I own, the one I have run
+thirteen times today — would have produced a clean report on a red tree.
+
+**AND THE `v0.2.3` LINE FOUND A DEFECT IN MY DOCUMENTED PROCEDURE, NOT A REFINEMENT TO IT.** Plain
+`cargo test` stops after the first failing binary, so on a red tree the binary count is a **lower
+bound on coverage, not a measure of it**, and the failure list is whatever ran before the stop.
+Measured on this exact tree: fail-fast gave **1337 passed / 2 failed / 10 binaries**; with
+`--no-fail-fast`, **2426 passed / 2 failed / 83 binaries.**
+
+**Twelve per cent of the binaries, and both runs report "2 failed".** The truncated run is not
+obviously truncated — plausible pass count, identical failure count — and **only the binary count
+betrays it.** The blast radius really was two, but I could not have known that from the run I made.
+
+**The property that makes it nasty: on a green tree the flag changes nothing.** So the defect is
+invisible in every run except the one where it matters, and exercising the procedure never surfaces
+it. Same shape as an excuse whose retirement condition cannot occur and a guard whose observable
+cannot change — **correct on every input except the interesting one.** Both check-block commands now
+carry the flag with the reason beside them.
+
+**THEY ALSO DISCLOSED SOMETHING WORSE THAN AN UNCHECKED INSTRUMENT, AND I DECLINED TO ABSOLVE IT.**
+Their own `TASKLOG.md` already recorded this exact hazard — same directory, same failure, in their
+words *"grown by `v0.3.0` and asserted over here. My size pin at eleven broke"* — and they pinned a
+second count over it without reading it. Not a gap in verification but **a gap between what the line
+knows and what its next author reads.**
+
+What I added instead of reassurance: **my README warning and their test doc are the same move made
+from two sides, and neither of us reached for the process file.** That is evidence about where
+warnings must live — **a hazard note belongs at the site where the hazard is instantiated, not in the
+file that records that it happened.** Their TASKLOG line was true, findable, correctly written, and
+it did not work.
+
+**AND THE THIRD `tee` EXIT-0 FAILURE WAS THE WORST OF THE THREE.** `1337 passed, 2 failed, 10
+binaries` **and exit 0**, because cargo stops after a failing binary and `tee` reports its own
+status. Ten binaries of fifty-something. **The first two cost a number; this one would have cost a
+false green on a red tree**, and only summing the per-binary lines caught it.
+
+**ONE PREDICTION, CAUTIOUS AND WRONG IN THE SAFE DIRECTION.** Before merging I predicted
+`src/selfhost/kel/` unchanged would hold the Order-1 figures and that `src/compiler.rs` changing made
+`bound_transfer` the one to watch. Measured after: **1044 / 71 / 74 / 35 / 11 and 411 / 40 / 4 / 0 /
+1, every figure unmoved.** Recorded because a prediction that did not pan out is evidence about my
+model, and I have been recording only the ones that did.
+
+---
+
+---
+
+**[v0.3.0] I WROTE "DERIVE NUMBERS; DO NOT COPY THEM FORWARD" INTO THE HANDOFF THIS MORNING AND
+SHIPPED SIX STALE FIGURES INTO A NEW FILE THIS EVENING (2026-08-24).**
+
+`keleusma-02` found that their threshold table had gone stale **inside the commit that staled it** —
+measured before they widened their universe, published as the justification for the threshold choice
+in the pull request doing the widening. Every figure moved **except the one a test checks**. They
+said my diagnosis is why they looked: *prose in a data table inherits documentation's standard of
+scrutiny rather than the register's, and every other field in that table is checked by something.*
+
+**So I ran the same check here, and it is worse on my side because I have three such blocks.**
+
+| figure | published hours earlier | re-derived |
+|---|---|---|
+| threshold table, 4 / 3 / 2 words | 79·3 / 183·10 / 407·16 | **92·5 / 209·12 / 450·19** |
+| permissiveness | 203 / 172 / 10 | **208 / 173 / 16** |
+| string-continuation class, load-bearing | **0 of 205** | **3 of 208** |
+
+**Every one had moved.** In a package where every other assertion is a test, in a file I wrote today,
+having written the derive-don't-copy rule into the handoff this morning and then spent the afternoon
+correcting nine drifted figures under it.
+
+**AND THE THIRD ROW IS NOT DRIFT — IT IS A RETRACTED CONCLUSION.** "0 of 205" was the justification
+for declining to build a guard. It is now 3, and the three are `sum_n`, `make_point` and
+`returns_word` — **the example names I wrote into the paragraph describing the class**. Citing them
+made them citations resolving only through the path being described. **Documenting the hazard created
+three instances of it**, which is the third self-inflicted instance in this one file today, after
+`peak_livexsize` and the multi-line assert message.
+
+The decision not to guard still stands, but the reasoning had to be replaced rather than repaired:
+not *"the class is empty"* but *"the instances are benign and self-inflicted, and a second model
+would fire on prose."* **A conclusion resting on a number that moves is a conclusion with an expiry
+date**, and I did not notice I had written one.
+
+All three blocks are now dated snapshots saying **re-derive rather than trust**, with an enforced?
+column, and the single enforced figure named — the vacuity **floor**, which is a floor and not a pin
+precisely because the total moves with every comment anyone writes. Pinning it would fire constantly
+and get muted, which is the argument I turned on myself an hour earlier about the string class and
+which applies here too.
+
+**AND RE-MEASURING TURNED OUT NOT TO BE THE FIX AT ALL.** The corrected figures — 92 / 209 / 450 —
+were stale **the moment they were committed**: re-derived immediately afterwards as 93 / 210 / 454.
+Not drift over days. **Invalid on publication, because publishing was the mutation.** The scanner
+counts citations in this package and its own file is in this package, so writing the number down
+changes the number, and no amount of re-measuring converges.
+
+**`keleusma-02` asked for a name and it deserves one.** Their first two rows were drift: numbers
+that went stale with time, mechanically fixable. **This is a measurement whose record lives inside
+its own population, invalidated by the act of recording it.** The test is one question — *does
+writing this down change what it counts?* — and it is answerable before publishing rather than
+after.
+
+**They are also right that I undersold it by listing it beside drift.** "0 of 205" was not a figure
+in a table, it was the **premise of a decision** — the decision not to build a guard, which I sent
+them and which they endorsed. For a period this afternoon that decision rested on a premise already
+false, and neither line knew. The decision surviving on replaced reasoning is luck, not vindication.
+
+**THE FIX IS A DESIGN CHANGE, NOT A RE-MEASUREMENT.** The unresolved counts held at 5 / 12 / 19
+across every re-derivation, and the load-bearing figure held at 3. **Totals are self-inclusive and
+unstable; findings are not**, because added prose contributes citations that RESOLVE rather than
+dangle. So the totals are published as `~90 / ~210 / ~450` and the unresolved counts stay exact.
+**Precision kept exactly where it means something and dropped where the file cannot hold it.**
+
+**AND THE SHARPEST INSTANCE OF THE WHOLE DAY, which they spotted**: `the_scan_is_not_vacuous`'s
+failure message quoted 407, already stale. **The guard against the class printed an instance of the
+class in the text it shows when it fires.** A reader hitting that failure would have been handed a
+stale figure by the mechanism telling them a figure was wrong.
+
+**AND APPLYING THE TEST TO THE WHOLE REGISTER FOUND A LIVE GUARD DEFECT, WHICH IS THE FIRST TIME
+TODAY THAT A PROCESS OBSERVATION PAID OUT IN A REAL BUG.** They generalised self-inclusion past
+scanners — *any figure counting things in a population that includes its own record* — so I audited
+every figure in my check block instead of assuming. Most count the corpus or the other line's `src/`
+with the record in `docs/`: clean.
+
+**One was not clean, and it was not a figure. It was a guard.** `corpus_differential`'s exemption
+audit verifies "another harness covers this module" by searching **every sibling `.rs` in
+`native_codegen/tests/`** for the module name — a population joined by every new test file in the
+package, whatever it is about.
+
+**`comment_citations.rs` documents its prefix rule using the `rogue_ai` family as the worked
+example**, so it names `rogue_ai_boss` and `rogue_ai_hunter`: two modules exempted on the ground that
+another harness covers them. **Their exemption was being satisfied by a paragraph about citation
+scanning.** I wrote that paragraph this evening while fixing a different instance of this same class.
+
+Measured cost: with the covering harness deleted, the pre-fix check would have named only
+`rogue_ai_tracker.kel`. **Two of three exemptions had silently lost their guard.** And the coverage
+claim stayed true the whole time — `rogue_ai_differential.rs` really does drive them — so nothing
+would have looked wrong from any angle.
+
+Repaired at the intent rather than by excluding my file: **comment lines are excluded from the
+sibling scan, because a harness DRIVES a module by naming it in code; naming it in prose proves
+nothing.** The check still passes, confirming the coverage was genuine and only the verification was
+weak. Must-fire proven by removing the covering harness — all three now named.
+
+**THE PART I WANT TO REMEMBER IS NOT THE FIX.** A guard that reads sibling sources treats this
+package's own documentation as evidence, so **every test file added here is a potential false witness
+for every other test's claim.** Nothing about writing a citation scanner suggests it could weaken a
+corpus-coverage audit, and I would never have looked without their generalisation. Process
+observations have felt like bookkeeping all day; this one found a bug.
+
+**THE RECIPROCAL CAME BACK AND THEY HAD THE SAME COUPLING ONE LAYER IN.** Their definition universe
+read comment lines, so a comment saying `fn foo` defined `foo` — **their guard could vouch for prose
+with prose**, a citation in one comment resolving against a mention in another. Mine skips comments
+and does not have it, which I had asserted in a doc paragraph and have now made a test, because the
+property is one line of code away from being lost and **nothing else would notice**: every citation
+would keep resolving, more of them than before. Must-fire proven; disabling the skip fires that test
+and the excuse guard both, since with comments in the universe every excused name resolves.
+
+**THE ESCAPE ROUTE THEY FOUND IS THE CHEAPEST CHECK EITHER OF US PRODUCED TODAY.** Their sizing
+script reported six citation-shaped names; they picked one to build a test around and **it did not
+grep. None of the six existed.** Reading the list would have taught them nothing — the names look
+exactly like test names. **They caught it by trying to USE an output rather than re-reading it.**
+
+The general form: **when an instrument's output is a name, a path, or a line number, go touch what it
+points at.** It works precisely where inspection fails, because a plausible name is
+indistinguishable from a real one by looking.
+
+**I APPLIED IT TO A CLAIM I PUBLISHED TODAY AND I HAD THE SAME EXPOSURE.** The permissiveness
+paragraph says *"sampling those ten, they are genuine — LLVM API methods and local bindings."* That
+was written from script output plus pattern-recognition; **not one of the ten had been touched.** I
+grepped all ten: all ten exist. **The claim survives, but it was true and unverified when published,
+and the difference between me and them there is outcome, not method.** That is the fifth time today a
+conclusion of mine rested on something I had not checked, and the first where checking vindicated it.
+
+**THE CLASS ON MY SURFACE: 142 COMMENT LINES ACROSS 35 FILES CARRY A "MEASURED" CLAIM, AND I HAVE
+AUDITED NONE.** They disclosed ~180 on theirs and declined the sweep; I decline it too, on their
+argument, which is better than the one I would have reached for. **A blanket date-and-mark pass over
+sites nobody re-read produces dated claims of unknown accuracy, which is worse than undated ones,
+because a date asserts that someone checked.** Marking is only meaningful where the marking was
+earned. Recorded, not fixed — and recorded precisely so nobody reads the instance repair as covering
+the class.
+
+**THE THING WORTH KEEPING IS NARROWER THAN "RE-MEASURE."** Both of us wrote correct numbers into
+prose in files where every other claim is enforced, hours apart, while explicitly working on the
+discipline of not doing that. **The register format is what disarmed the scrutiny** — a table of
+measurements reads as a record, and a record reads as already-checked. Their table and my three
+blocks had the same property my own diagnosis named for a reason string: it is the only field that
+is only read.
+
+---
+
+---
+
+**[v0.3.0] THE ARENA BOUND GAP IS ALSO AN IMMUNITY, AND MY CITATION OF THEIR MEASUREMENT WAS TOO
+STRONG (2026-08-24).**
+
+Three corrections out of one exchange with `keleusma-02`, two of them to me.
+
+**I CITED THEIR MEASUREMENT FOR MORE THAN IT SHOWS, AND THEY CAUGHT IT.** I wrote that their
+17/12/4 to 23/10/0 *"measured exactly this imprecision"* in my census. It did not. It establishes
+that *"a call in the body means an escape"* is **loose in a corpus both lines share**; it does not
+establish that any particular one of my four subjects is misfiled. Their scan is flat over
+`examples/scripts`; mine is over composite sites inside iterating loops across four directories.
+**Different populations, and the weaker claim is the true one.** Tightened in the census and the
+handoff, with the distinction spelled out so the careless version is not re-derived.
+
+That is the second time today I have had to weaken a claim about someone else's evidence, and both
+times the direction was the same: borrowing a number and inheriting a conclusion that number does
+not carry. **A measurement is scoped to its population, and citing it across populations is the same
+class as reading a stale figure beside a fresh one.**
+
+**THE PLANNER RESULT IS THE ONE WORTH KEEPING, AND IT INVERTS HOW THE GAP SHOULD BE DESCRIBED.**
+Checking whether my backend consumes escape verdicts, I found `plan_chunk_region` consumes none at
+all — no liveness, no aliasing, no confinement; the words do not appear in `region.rs`. It gives
+every static site its own offset, which is exactly the arena bound gap: `sites x size` against a
+verified `peak_live x size`, 11 of 71 modules over, unbounded in static site count.
+
+**That gap has been recorded as a cost since it was measured. It is also the reason a wrong
+confinement verdict cannot miscompile anything on this line.** A planner that reuses a slot has to be
+RIGHT that the previous occupant is dead. This one never reuses, so it never needs a verdict — not a
+correct one, not a conservative one, not any. **The conservatism that costs the bytes is what buys
+the immunity.**
+
+Their point, and the reason it went into `region.rs` rather than a decision document: **whoever
+closes the gap is buying both halves.** From that commit onward a confinement verdict wrong in the
+unsafe direction is a miscompile rather than a wasted byte, and the person writing the overlap
+optimisation is the person who needs to read that. So the doc comment on `plan_chunk_region` now
+carries the gap, the immunity, and the two facts about the verdicts it would consume — that
+`Confined` is sound while `Escapes` is only an upper bound, and that neither line can yet say
+"confined to the caller's iteration" about a region a helper built.
+
+**AND MY `Op::Return` PARAGRAPH FOUND SOMETHING ON THEIR SIDE.** I had verified that my census is not
+missing that route because `has_call` proxies it. They checked the same route against their real
+analysis and found their per-chunk scoping reports the CALLEE's site as escaping while the caller
+carries no site at all — sound, and permanently pessimistic. **So the two instruments are
+complementary rather than redundant, and neither can currently say what a planner actually wants**
+about a callee-built region. Recorded as a stated limitation on both sides rather than discovered
+later, which is the whole reason to write down what a check does not cover.
+
+**AND THE GUARD MANUFACTURED A FINDING OUT OF THE SENTENCE I WROTE ABOUT ALL THIS.** The moment
+`region.rs` gained the paragraph above, `comment_citations.rs` went red on
+**`peak_livexsize`** — the prose formula `peak_live x size`, welded into a fake identifier by the
+rule that recovers a citation wrapped across a line break. **That rule collapsed ALL whitespace**,
+and a formula separated by spaces is indistinguishable from a name split at a newline once you have
+thrown the difference away.
+
+**This is the failure mode the file's own header names as the reason its threshold was set
+carefully: a guard that manufactures findings gets switched off.** It manufactured one on the run
+that introduced the sentence.
+
+Fixed at the cause: `comment_blocks` now joins lines with `\n` rather than a space, and recovery
+rejoins **only across the newline**. The obvious alternative — reject any span containing
+whitespace — would have passed the formula case while silently losing every wrapped citation, which
+is a gap rather than noise and therefore worse. **Both directions are pinned in one test**, because
+fixing noise by creating a blind spot is the trade that looks like a fix.
+
+**THE INSTRUMENT DISCIPLINE PAID A THIRD TIME IN ONE DAY.** That run reported `27 passed, 1 failed,
+5 binaries` and **exited 0**, because `tee` returns its own status and the suite aborts after a
+failing binary. Summing the per-binary lines is what caught it; the exit code said success and the
+tail said nothing. Same lesson as the `| tail -40` truncation this morning, one layer along: **the
+signal that looks authoritative is the one that has already been transformed.**
+
+**Then the very next run inverted it.** It reported FAILED, exit 1, on a suite that was 275 passed /
+0 failed / 52 binaries. The exit code belonged to a trailing `grep -c FAILED` I had appended **as a
+safety check**: no match, grep exits 1, and a compound command reports its last command's status.
+**A check appended to a pipeline replaces the status it was meant to confirm.** Three instances in
+one day of the same thing — the authoritative-looking signal had been transformed — and the third
+was caused by guarding against the second.
+
+**AND THEN THEY RETRACTED TWO OF THE THREE FINDINGS THEY HAD HANDED ME.** `must_contain` and
+`head_name` are function parameters written inline in a single-line signature, which their
+declaration-based universe does not see; their instrument manufactured two of the three. They flagged
+it unprompted, on a number touching nothing shipped, in the direction that had flattered their own
+threshold choice. **That is harder than catching an error that breaks a test.**
+
+I had not committed the three, only quoted them back, so there was nothing to repair — but the check
+was worth running for a better reason. **My universe cannot have their blind spot**: it is built from
+every identifier token in every non-comment line, so an inline parameter is in it by construction.
+All four names through it reproduce their corrected result exactly — the two they retracted resolve,
+the one they kept does not, and the control it should have named does. **A differently-built
+instrument agreeing is corroboration; a second copy of the same method agreeing is not.**
+
+**MY OPPOSITE WEAKNESS, MEASURED RATHER THAN WAVED AT.** Token-based means permissive: a citation
+resolves if the name appears anywhere outside a comment, so this guard catches names that name
+NOTHING and cannot catch a name that names something ELSE — theirs, being stricter, would. Of 203
+distinct citations, 172 resolve via a declaration, parameter or file stem and 10 only through the
+loose path; all ten sampled are genuine, LLVM methods through `inkwell` and local bindings. Costs
+nothing today, which is a measurement and not a guarantee, and it is written into the file that way.
+**Neither instrument subsumes the other**, which is the second time today two of our tools have
+turned out complementary rather than one being the better version.
+
+**THE CROSS-TREE GUARD I ANNOUNCED DOES NOT WORK, AND THEY FOUND IT BY ASKING WHETHER IT FIRES.**
+I told them `no_excused_name_has_started_resolving` would retire the excuse when their repair landed.
+It cannot. That guard fires when a name STARTS RESOLVING, and their repair **replaces the citation**
+rather than defining the name, so the old name vanishes and never resolves anywhere. Verified against
+their branch rather than reasoned about.
+
+**So the excuse would have sat there permanently, justified by a sentence promising an announcement
+that could not arrive.** An excuse that cannot be retired is an excuse that cannot fail — **the
+defect this entire file exists to catch, written into the reason string of one of its own excuses.**
+It surfaced only because they asked a question I had assumed the answer to.
+
+The observable that *does* change is their citation ceasing to exist in the parent `tests/`, which
+reaches this worktree by **absorption**. That is now
+`the_other_lines_dangling_citation_is_still_dangling`, whose failure message is the hand-off itself.
+Must-fire proven by simulating their repair in the absorbed copy: exactly that test goes red, the
+other seven stay green. **The mechanism they were interested in does work — it was attached to the
+wrong observable, and the wrong one was the one that sounded right.**
+
+**AND WRITING THAT TEST CAUSED A DEFECT IN ITSELF.** The first version put the name in a multi-line
+assert message. My stripper is per-line and **stateless**, which is exactly what makes it immune to
+their swallow bug — and a stateless stripper reads a **continuation line as CODE**. The name entered
+the universe as an identifier and the guard fired, reporting a resolution when nothing had changed
+but my own prose. **The per-line design trades their failure for a milder opposite one**: they can
+silently swallow a definition, I can silently admit a string's contents as definitions.
+Statelessness is still the better side of that trade — a silent swallow against a loud false alarm —
+so it stands, documented, with the collision avoided at the call site.
+
+**THEN THEY GENERALISED IT AND I MEASURED THE CLASS RATHER THAN LEAVING THE INSTANCE PATCHED.**
+Their framing — *"prose written inside a guard can enter that guard's own universe"* — is a
+self-reference hazard **neither of us listed while checking whether the excuse table vouches for
+itself**, which is the same blind spot one level along. Measured: 1323 names enter my universe only
+through string continuation lines, 33 citation-shaped, mostly Keleusma functions written inside Rust
+test sources. **Nothing is load-bearing on it — 0 of 205 citations resolve only that way and no
+excused name resolves at all.** A measurement, not a guarantee.
+
+**AND I DECLINED TO GUARD IT, WHICH IS THE PART I WANT ON THE RECORD.** The obvious guard needs a
+parallel, cruder string model beside the real one. **Two models of the same thing drift, and the
+cruder one raises the false alarms** — precisely the argument I made to them against lowering their
+threshold onto a 104-entry excuse list. Applying it to my own tree when the finding is mine and the
+class is inert is the harder half of having made the argument. The case that actually bit is already
+covered. **Guarding an inert class with a second model buys a hypothetical and pays in noise.**
+
+**THEIR HONESTY ABOUT LUCK IS WORTH COPYING.** They proved by mutation that their guard has the half
+mine lacked — it fires on "no longer cited" as well as "now resolves" — and then said plainly that
+the vanishing half **came along for free with a differently-motivated requirement**, not from
+foresight, and that a plausible-sounding explanation was available afterwards. My own stripper's
+immunity to their swallow bug was the same: two structural properties I did not design in. **A
+correct outcome with an available post-hoc rationale is the hardest thing to distinguish from
+design**, and both of us landed one today.
+
+**AND THE CORROLLARY THEY DREW FROM DISTRUSTING YOUR NEWEST INSTRUMENT IS SHARPER THAN MINE**: the
+moment of maximum risk is when a new instrument produces its **first interesting finding**, because
+that is when forwarding is most tempting and verifying least. Both of their forwarded errors today
+were first outputs of freshly written instruments. So was my `peak_livexsize`.
+
+**ONE OF THESE GUARDS BECAME LOAD-BEARING ACROSS THE BOUNDARY BETWEEN THE TWO TREES.** Quoting
+their dangling name in my documentation turned my own guard red, because it dangles here too.
+Excused with the reason that its failing to resolve IS the corroboration, plus a note to drop the
+excuse when they land the repair — and `no_excused_name_has_started_resolving` will announce that
+moment **without either line having to remember to send a message.** Every other guard I have built
+today watches one tree. This one watches theirs.
+
+**THEIR NAME FOR THE PATTERN IS BETTER THAN MINE.** I had called the threshold defect "a rule
+inferred from N examples is not the N examples", and counted three instances between us in a day.
+They pointed out the shared tell: in all three the rule was **cheaper to apply than the enumeration,
+and the enumeration was available** — their compiler had printed the exact list and they wrote a
+regex; I had the measured composition and wrote a rationale. **"A cheap substitute for available
+ground truth"** names the cause rather than the symptom, and it is the version worth carrying.
+
+---
+
+---
+
+**[v0.3.0] AN `Escapes` VERDICT IS A BOUND, AND I HAD WRITTEN ONE DOWN AS A COUNT THAT MORNING
+(2026-08-24).**
+
+`keleusma-02` finished the confinement analysis and reported the half they did not aim at. Callee
+summaries closed all four cannot-establish sites, as designed. **They also moved the escape count
+from 12 to 10, and those two verdicts were wrong rather than merely unestablished** — with no
+summary a call's return is assumed to alias every argument, so a composite passed to a callee and
+then returned was reported as escaping through a route that does not exist.
+
+**Their framing is the part worth keeping: a conservative default hides false positives exactly as
+well as it hides gaps, and there is no third value to record it in.** `Escapes` and `Confined` are
+both confident answers. Nothing in the corpus said one was wrong, and it surfaced only because the
+fix for an unrelated class happened to remove the imprecision producing it. That is a different
+failure from the ones we have been trading — a `cannot-establish` announces itself; a false
+`Escapes` does not.
+
+**CHECKED AGAINST MY TREE RATHER THAN REASONED ABOUT, IN BOTH PLACES IT COULD BITE.**
+
+The backend is clean, and for a reason worth stating: `plan_chunk_region` consumes **no escape
+reasoning at all**. It walks `Op::NewComposite` and gives every static site its own monotonically
+increasing offset; `region.rs` does not mention escape, confinement, or aliasing anywhere. **The very
+conservatism that produces the arena bound gap is what removes the exposure** — a planner that never
+reuses never needs a verdict to be right. That is the first time the gap has looked like anything
+other than a cost.
+
+**The census was NOT clean, and the defect was in prose I wrote this morning.** I reported
+`d_setlocal = 4`, `d_call = 3` and concluded "**one** site is blocked by `SetLocal` alone". `d_call`
+is syntactic — it counts bodies CONTAINING a call, not composites that reach one — so the honest
+statement is **at least one**, and the two figures are bounds pointing in opposite directions:
+`sites - d_call` is a LOWER bound on what B1r alone admits, `d_call` an UPPER bound on what needs a
+summary. Their measurement makes the gap between them known to be non-zero in practice rather than
+in principle. Corrected in the census, the report it prints, the assertion's rationale, and the
+handoff.
+
+**The `> 0` assertion I chose this morning turns out to have a second and better justification than
+the one I gave it.** I wrote it as `sites > d_call` rather than `== 1` so a future call-free subject
+would not read as a regression. The stronger reason is that equality would assert a syntactic
+over-approximation as if it were a reachability result — exactly the reading their false escapes
+disprove. **The right shape for the wrong reason is still worth noticing**, because the reasoning is
+what gets reused and the reasoning was weaker than the code.
+
+**ONE THING VERIFIED THAT I EXPECTED TO BE A DEFECT.** The escape set has five routes and my census
+matches four opcodes, with no arm for `Op::Return` — which looked like an unsound omission, the bad
+direction. It is not: that route is *"a callee invoked from the loop body returning a composite it
+built"*, and a `return` in the loop itself exits the loop rather than carrying a handle into the next
+iteration. `has_call` is already its proxy. Confirmed against the proof document's route table
+instead of inferred from the opcode list, which is the same discipline that made their termination
+argument by inspection better than an appeal to acyclicity.
+
+---
+
+---
+
+**[v0.3.0] A CITATION TO A TEST THAT DOES NOT EXIST CANNOT FAIL, AND THE FLOAT GUARD HAD BEEN
+CLOSING THREE ROUTES OF FOUR (2026-08-24).**
+
+The `v0.2.3` line repaired the stale `Op::IsStruct` comment I reported and found something under it:
+the comment cited `op_is_struct_still_has_producers_and_two_still_trap`, **a test that was never
+written**. They scoped it by class, scanned `src/` and `tests/`, found 24 unresolved citations, and
+told me.
+
+**Their scanner does not reach my surface.** `native_codegen` is a detached workspace their suite
+never builds and CI never touches. So I ran the same class check here, and the first finding is
+worse than theirs.
+
+**`src/lib.rs` claimed "the list is a claim and `the_float_guard_closes_every_route_it_names` tests
+each one" about the four routes a `Float` can take into a module. That test was never written, and
+route 3 — the native return shape — had no test at all.**
+
+**Proved rather than argued**: I disabled the route-3 guard and ran the file. **Only** the
+newly-written test failed; the other six passed. So the guard could have been deleted outright and
+nothing would have gone red. That is exactly the shape the file's own module header warns about —
+*"a guard that closes three of four while reading as total"* — committed by the file that warns
+about it. The route was implemented; only its test was missing, which is the version of this that is
+invisible to every signal except a citation check.
+
+The new test uses a **declared-but-uncalled** native, and that is the discriminating choice rather
+than the simple one. Measured: `native_return_shapes` is `[Scalar { kind: 5 }]` while the only chunk
+signature is `ret: Scalar { kind: 3 }`, so no float reaches a signature or a constant and the
+refusal can only be route 3. A native that were *called* would put a float local in play and route 2
+might reach it first. It ships with a `Word`-returning control, because without one it would pass
+just as happily if the backend refused every module declaring any native at all.
+
+**SIX MORE, AND THREE OF THEM ARE INSTRUMENTS THAT WERE NEVER BUILT.** `slot_entry` is cited four
+times across two files as the function closing route 4 and does not exist; the real one is
+`resolve_shared_scalar`, so route 4's entire safety argument named something no reader could find.
+And `spike_opcode_stack_audit.rs` opens by declaring *"Three instruments, because each is blind to
+something"* — **one was built.** `verify_typed` and `Arena::bottom_peak` appear in that file only in
+prose. **The missing instrument is the one the header itself calls indispensable**, the third, *"the
+only one of the three that is not another model."* The file's ground truth is the instrument that
+does not exist. Header corrected to a built/not-built table rather than deleted; the plan is still
+the right plan and `audit_1` did its job.
+
+**MY THRESHOLD WAS A GUESS, AND THE GUESS WAS THE BLIND SPOT.** The first scan required four
+underscore-separated words, with a confident-sounding rationale about precision. Measured: four
+words gives 79 citations and 3 unresolved; three words 183 and 10; two words 407 and 16. **The
+four-word cut found `disagrees_with_typed_verifier` and missed both its siblings in the same list** —
+reporting one third of a three-part finding — **and missed `slot_entry` entirely.** A threshold that
+hides two thirds of a finding it half-reports is not precision; it is a blind spot with a rationale.
+Lowered to two words, where the extra entries are overwhelmingly mangled symbol names that excuse
+cleanly as a class.
+
+**THE GUARD CAUGHT ITSELF TWICE, AND THE FIRST IS THE BEST THING HERE.** Its universe of resolvable
+names was built from all non-comment lines — **including the excuse table's own string literals.** So
+every excused name "resolved", to the excuse list itself. **The registry would have vouched for every
+name it suppressed**, and it would have looked green forever. Fixed by stripping string literals
+before tokenizing: a name inside a string is not a definition. Second, it flagged a directory and a
+corpus family as dangling; both are things a comment may legitimately name, so directories joined the
+universe and resolution now accepts a prefix at an underscore boundary — bounded, since `slot_entry`
+still dangles and so does the deliberate truncation left in the prose to demonstrate it.
+
+Three guards, because the excuse list is the dangerous part: no excuse outlives its citation; **an
+excuse that has become false is a lie that passes**, so an excused name that starts resolving fails;
+and a vacuity floor **set from a measurement** — the first draft guessed 100 against an actual 79 and
+would have failed the suite on its first run. Must-fire proven with a deliberate dangling citation in
+`src/region.rs`, tree restored.
+
+**THEN I SUGGESTED THE STRING-STRIPPING FIX TO THE OTHER LINE AND IT BIT THEM WITHIN THE HOUR.** They
+applied a whole-file regex strip and an unbalanced quote inside a comment paired with the next quote
+elsewhere in the file, **deleting the real code between them**; their run reported two `pub fn`s as
+undefined. They caught it because those two names were ones they happened to know — *"luck rather
+than method"*, and they flagged it back rather than quietly redoing it.
+
+**Checked here rather than reasoned about, which is the only reason I can say it.** This scanner is
+structurally immune for two reasons I had not thought about when I wrote it: comment lines are
+skipped **before** stripping, so a lone quote in prose never opens a span; and the stripper is
+per-line with state reset each call, so an unbalanced quote in code cannot reach past its own line.
+Measured across the tree: every `pub fn` this package declares survives, and so do the two names
+their script lost. **Both properties are now tests rather than accidents** — making the stripper
+stateful across lines fails five of the six tests in the file.
+
+**It does drop something real, and the limitation demonstrated itself.** Keleusma sources written
+inside Rust string literals are invisible to the universe; `zz_touch` is one, and it was reported as
+dangling **on the very run that added the sentence describing the limitation.** Excused as the worked
+example. The right repair if another is ever cited is to cite the Rust test that holds it — widening
+the universe is what reintroduces the self-vouching hole.
+
+**AND THEIR THRESHOLD ANSWER CAME BACK OPPOSITE TO MINE, CORRECTLY.** They measured: two words
+897/104, three 453/48, four 175/21, and are **keeping four**, because their hidden 83 are dominated
+by standard-library items, `.kel` file stems and target names — three genuine, not eighty. Mine at
+two words cost fourteen excuses, almost all mangled symbols. **The same argument justified opposite
+thresholds on two trees, which is the right outcome**: the point was never that four is wrong, it is
+that the difference between a threshold and a blind spot is whether the number was measured. Theirs
+now carries the table and the sentence saying plainly that it is silent about shorter citations.
+
+---
+
+**[v0.3.0] TWO OPERATOR QUESTIONS ANSWERED, AND BOTH TURNED OUT TO BE ABOUT A STALE REASON RATHER
+THAN AN OPEN DECISION (2026-08-24).**
+
+Absorption 7 of `v0.2.3` at `dadbce7e`, then the two operator-requested investigations that had been
+carried as "authorized, started on neither line" for several sessions.
+
+**`Op::IsStruct` — not a removal candidate, and the interesting part is a comment.** The operator's
+test was three conjoined conditions: no documented intent, no obvious intent, no producers. **Two
+fail plainly.** It is specified in two normative documents, and its peek-not-pop semantics were
+deliberately repaired in a V0.2.x spec-conformance audit — an opcode argued over and then pinned is
+the opposite of an undocumented one. Its intent is readable from the fact that **six sites in `src/`
+handle the two in a single match arm** — `Op::IsEnum(_, _, _) | Op::IsStruct(_)` — across the stack
+model, both verifier passes, and the self-hosted driver.
+
+The third condition is where the work was. **The emission site at `src/compiler.rs:11399` exists and
+no construct known to this tree reaches it.** Three separate repairs closed the three routes: the
+un-annotated parameter is folded, the generic-parameter case now rewrites the pattern with the type,
+and the annotated-different case is refused by the type checker. `tests/opcode_reachability.rs`
+today holds **five assertions about the opcode and every one is a negative**, over fifteen source
+shapes in two loops plus three singleton controls plus three shapes refused before lowering.
+
+**I DRAFTED THAT AS "UNREACHABLE FROM SOURCE" AND THIS LINE'S OWN TEST FILE TALKED ME OUT OF IT.**
+`native_codegen/tests/miscompilation_reach.rs` had already recorded this finding, and it explicitly
+refuses the stronger claim: *"A reader who can construct a survivor should treat this as incomplete
+rather than as a boundary."* The reason it gives is specific — **this line falsified the `v0.2.3`
+line's first producerless claim within the hour**, with a generic struct that compiled, verified,
+took a bound, loaded, and died with `InvalidBytecode`. Having done that once, this line has no
+standing to make the stronger claim itself. The write-up now says *no producer found by a bounded
+search* throughout. **The lesson is narrower than "be careful": the restraint was already written
+down in my own surface, and I would have contradicted it by not looking.**
+
+It also supplied the better argument. The load-bearing half is **not** the probe enumeration but the
+emission condition: `ty` is supplied at exactly two roots, function parameters and match arms, and
+both now run the nominal check first, rejecting precisely the mismatch that would satisfy the
+condition. A probe that fails to *compile* is weaker evidence than one that compiles and does not
+reach the site, and the two are counted separately.
+
+**And `src/compiler.rs:11385` still says the opposite.** It states the opcode "still has producers.
+Four are pinned in `tests/opcode_reachability.rs`, TWO OF WHICH STILL REACH THE LOAD-TIME HOLE."
+Written at `2ada8791`; the repair that closed both named routes is `6d217f0a`, and
+`git merge-base --is-ancestor` confirms the repair came after. **The comment was true when written
+and has been stale since.** That matters more than staleness usually does, because it names a live
+breach of the load-time guarantee — a module `verify()` accepts that then traps `InvalidBytecode` —
+and an auditor reading it concludes the guarantee is broken when the tests beside it prove it is not.
+
+Recorded as **"specified, retained, no source-level producer as of 2026-08-24"**, never as
+"unreachable": the guard, both verifier arms, and the VM path all remain live, and this line's input
+domain is bytecode rather than source. `Vm::new_unchecked` exists precisely so trusted bytecode can
+skip verification. **"No producer in the reference compiler" is not "absent from the input domain",**
+and that distinction is this line's whole founding premise.
+
+**`Fixed` in a shared slot — the representation was never the open question.** The backend refuses
+the slot with *"fixed-point representation is unsettled"*. **That message is wrong about which thing
+is unsettled.** `ScalarKind::Fixed` is a signed Q-format integer of the runtime's word width;
+`size_in_bytes` returns `word_bytes`, pinned by the other line's own unit tests at both 64 and 32
+bits. A backend lowering it as a word-width signed integer would agree byte for byte.
+
+What is absent is the **scale**. `Fixed<N>` is an integer scaled by `2^N`, and `N` is carried by the
+opcodes — `WordToFixed(frac_bits)` and its family — **and by nothing in the layout descriptor**.
+`value_layout.rs` says so in as many words. **Erasing it is sound inside a module and not across a
+host boundary**: every internal producer and consumer is type-checked against the same `N`, but a
+host handed the shared buffer gets `word_bytes` of raw integer and nothing to consult.
+
+**The measurement that makes this an ABI finding rather than a struct observation**: two modules
+differing only in `N` compile to **byte-identical shared-slot layouts**. `Fixed<16>` and `Fixed<8>`
+differ by a factor of 256 and are indistinguishable to the host. A missing field is an observation
+about a struct; two programs with different meanings and identical host-visible layouts is an
+observation about the interface. Pinned in `native_codegen/tests/fixed_shared_scale.rs`, with a
+vacuity control, **because the useful assertion here is a negative and a negative decays silently**.
+If a scale ever becomes recoverable that file fails, which is how a decision landing on the other
+line reaches this one without anyone remembering to send a message.
+
+The surface **admits** the declaration today — `shared data cal { scale: Fixed<16> }` compiles — so
+the case is live. Options priced in `docs/decisions/FIXED_SHARED_SLOT_ABI.md`. Preference **B over
+A over C**, stated as a preference: B refuses `Fixed` in host-visible position and is the only option
+whose guarantee is structural rather than documentary; A reuses the unused `len` field at no wire
+cost but leaves a host that ignores the new semantics reading a plausible wrong number, and carries a
+silent-misread hazard for artifacts already compiled; C picks a canonical Q format and is the worst
+failure mode of the three.
+
+**A FOURTH INSTRUMENT ERROR, AND IT LOOKED LIKE A CLEAN PASS.** Both verification runs were started
+as `cargo test … 2>&1 | tail -40`. Exit code 0, every visible line `ok`, the tail ending in
+`test result: ok` — **indistinguishable from a complete run at the point of reading.** But the
+per-binary `test result:` lines that get summed were discarded upstream of the file, so **the totals
+were unrecoverable**. Caught only by summing and getting `26 passed, 7 binaries` against an expected
+262 and 50.
+
+Same class as the ownership diff chained ahead of `git commit`: **an instrument reporting success
+while measuring something other than what was intended.** Both were found by checking a number
+against an expectation, not by anything failing. The rule is now in the handoff: capture with `tee`
+and sum afterwards, never pipe a counting run through `tail`.
+
+**AND THE STALE FIGURES WERE NINE, NOT ONE.** Having found three in one sentence I re-derived every
+instrument rather than the one that moved, and that was the right call: `bound_transfer`'s
+67/70/31 to **71/74/35**, the corpus differential's 58/11/21/10 to **59/14/22/11**, the
+`(module, seed)` pairs 588 to **607**, the four-directory corpus count 70 to **74**, and the main
+workspace suite 2397 to **2400**.
+
+**Every one sat beside a figure that HAD been updated**, which is the mechanism: a report gets
+re-derived one line at a time, the moved line takes a fresh date, and its neighbours inherit that
+freshness without being measured. Proximity reads as co-measurement. What did NOT move is now also a
+measurement rather than an assumption — 1680 Order-1 comparisons, seven seeded stages, 0
+disagreeing, 11 exceeding, 442 stepped-over ops in 141 chunks, 65 of 66 witnessed, and the 60/2/3/1
+lowering partition were each verified unchanged.
+
+**THE FIRST OF THE EIGHT, WHICH IS ACTUALLY THREE IN ONE SENTENCE.** The `bound_transfer` check
+block read *"1043 chunk comparisons ... 11 modules of 67 compared ... over 70 modules examined with
+31 carrying a non-zero demand."* Re-derived: **1044 / 71 / 74 / 35.** The 67, 70 and 31 are
+PRE-ABSORPTION-6 numbers, left untouched while the comparison count beside them was updated to 1043.
+
+**The lesson is not "update the numbers."** It is that **a figure updated in isolation makes its
+neighbours look current when they are not** — a reader sees a freshly-dated 1043 and trusts the 67
+sitting beside it, because proximity reads as co-measurement. The rule now in the handoff: when one
+figure in a report moves, re-derive the WHOLE report, which the instrument prints in one run anyway.
+The 11 EXCEEDING genuinely did not move, and that it did not is now a measurement rather than an
+assumption inherited from a sentence where everything else had drifted.
+
+**AND ABSORPTION 7 RETIRED A DESIGN CONCLUSION THIS LINE HAD DRAWN.** `15_pixel_blend.kel` is the
+call-free confined subject asked for last session. The census moved `410/39/3` to **`411/40/4`**,
+survivors still zero — but the breakdown is the point: `d_setlocal = 4`, `d_call = 3`, so **one site
+is blocked by `SetLocal` alone.**
+
+The census existed to produce the conclusion *"a confinement analysis needs BOTH boundary-dead
+`SetLocal` and a callee summary on day one, or it returns nothing."* **That was true only because
+all three prior subjects tripped both, confounding the two requirements.** With one call-free
+subject the confound is gone and the conclusion is false: B1r alone would admit something, so **the
+callee summary is a second increment rather than a precondition.** Soundness is unchanged; only the
+sequencing is. The comment is rewritten in place and marked SUPERSEDED rather than deleted, and the
+census now prints the isolation figure and asserts `sites > d_call` — **stated as `> 0` and not
+`== 1`, because the property worth pinning is that the requirements are SEPARATED**, and an exact
+count would turn every future call-free subject into a failure.
+
+**Both findings are the same shape and it is worth naming.** Neither question was open. In each case
+a decision had already been made and a stale explanation was still sitting where the next reader
+would find it. **The expensive part of both investigations was establishing that the thing everyone
+believed was undecided had in fact been decided** — once by three repairs nobody had reconciled with
+the comment above them, once by a size function nobody had connected to the refusal message.
+---
+## 2026-08-25 — SESSION 53 CLOSE. What generalises from ten merges and one that did not land
+
+Ten pull requests merged, one open at close. The increment-by-increment reasoning
+is below; what follows is only what outlives it.
+
+**EVERY SIGNIFICANT CORRECTION CAME FROM RUNNING SOMETHING, AND NONE FROM
+READING.** The zero-operand loop said *`for_parts` is empty*. The stray `Not`
+said *70 mod 64 is 6*. Two verdicts that were wrong rather than unestablished
+surfaced only because a fix for a different problem removed the imprecision
+producing them. In every case I had read the relevant code first and seen
+nothing.
+
+**FIVE INSTRUMENT FAILURES, ALL MINE, ALL FIRST OUTPUTS OF SOMETHING FRESHLY
+WRITTEN.** A doc-link regex, two forwarded parameters, a string-stripping
+measurement, a phantom name list. **The escape route that worked is cheaper than
+verification: go and touch the thing the output points at.** Re-reading six
+plausible test names tells you nothing; grepping one settles it. The two I
+forwarded to another line unchecked were both first outputs — output from an
+instrument you built feels like ground truth in a way another line's does not.
+
+**A FAMILY OF THREE, AND THEY ARE ONE GAP.** A rule recorded is not a rule
+applied. An audit covers only the population that existed when it ran. A hazard
+named in a plan does not enumerate its sites. All three are the distance between
+a statement about a system and a traversal of it — and I produced an instance of
+each, in the same file, having written the rule down first.
+
+**A MEASUREMENT WHOSE RECORD LIVES INSIDE ITS OWN POPULATION CANNOT BE EXACT.**
+Two attempts at an exact citation table were invalid at the moment of commit,
+because writing the number down changed it. The fix is not re-measuring; it is
+approximating the totals and keeping the findings exact, which held across every
+re-derivation. **The pre-publication test: does writing this down change what it
+counts?**
+
+**AND A COUNT IS NOT A MEASUREMENT WITHOUT ITS POPULATION.** A corpus pin over a
+directory another line grows went red on their tree while mine stayed green.
+Naming the fifteen members fixed it. The hazard had been written into this
+line's own TASKLOG and did not reach the person writing the test — **a hazard
+note belongs at the site where the hazard is instantiated**, not in the file
+recording that it happened.
+
+**COVERAGE IS A PROPERTY OF THE PATH, NOT OF THE CASE LIST.** The sharpest
+finding of the session, and the older sentence does not cover it: *any construct
+the corpus does not contain is unverified* is true and this construct WAS
+contained — in a corpus driving the reference parser rather than the stage that
+failed. Four cases passed for the entire time the pipeline was broken.
+
+**EXIT STATUS LIES IN BOTH DIRECTIONS.** `| tee` reports success on a red tree;
+a trailing filter reports failure on a green one. Both were hit by both lines in
+one day. Read the status of the thing you are asking about, print it last, and
+keep two independent signals.
+
+**THE SHAPE WAS ALWAYS DOWNSTREAM OF AN INSTANCE**, which corrects how I first
+wrote this. I said the cross-line diagnoses of shape were more useful than the
+bug reports; the `v0.3.0` line pointed out that **every one of them came out of a
+bug report**, and neither line produced one by thinking about the problem in the
+abstract. Prose inheriting documentation's scrutiny came from a stale threshold
+table. A record inside its own population came from a manufactured finding. The
+abstraction is only checkable against the case that produced it.
+
+**AND THE METHOD OUTPERFORMED THE FINDINGS.** Neither line accepted the other's
+report without checking it against its own tree, and **roughly half the time the
+check changed the conclusion**: a comment-line hole that did not exist there, a
+string-stripping fix that did not survive contact here, six triage names that
+were one. It cost almost nothing each time.
+
+**WHAT I WOULD TELL THE NEXT SESSION IN ONE LINE.** The estimates that were
+wrong were all inferred from the shape of a problem rather than the state of the
+tree, and every one took under ten minutes to correct by measurement. Read the
+tree before costing it.
+
+
+## 2026-08-25 — the bare `for` self-compiles, and the estimate was wrong in both directions
+
+**Order 1's largest single item is done.** `for v in a..b { .. }` goes through
+the whole self-hosted pipeline byte-identically. `ctrl/for_bare` moves to `SOk`;
+the boundary reads 91 SOk / 1 Refuses / 3 Diverges / 1 RefRejects.
+
+**THE THIRD EDIT WAS NOT IN THE ESTIMATE, AND THE ESTIMATE WAS MINE FROM ONE
+INCREMENT EARLIER.** The re-costing marked the driver DONE because it copies
+`for_parts` INTO `codegen.kel`. **Neither the shipping driver nor this
+repository's copy ever read it OUT of `reconstruct.kel`.** `push_forin` received
+seven zeros and produced a structurally correct loop whose every operand was slot
+0 and node 0.
+
+The measurement checked that the plumbing EXISTED and not that it ran in both
+directions. **That is the difference between a wire and a circuit**, and it is
+the same shape as every unchecked-instrument failure this session recorded — I
+looked at the thing and did not run it.
+
+**AND I WROTE THE TAG-SPACE HAZARD INTO THE PLAN AND THEN WALKED INTO IT.** The
+plan says kinds at or above 64 must use the migrated transport. The statement
+fold is a third emit path the plan did not name, still legacy-packed, so kind 70
+truncated to 6 — a unary node — and the loop vanished into a stray `Not`.
+**Naming a hazard is not finding every site that has it.** The six-bit tag space
+is now full: every value 1 to 64 is taken, so the fold has a named helper and any
+future statement kind must go migrated.
+
+**Both bugs were found by running it, and each took one measurement.** The
+zero-operand loop said "for_parts is empty" as plainly as a symptom can; the
+stray `Not` said "70 % 64 = 6". Neither was findable by reading.
+
+**Why the gap survived so long, which is the durable part.** `codegen.kel` has
+had `push_forin` throughout, exercised by four cases that drive the REFERENCE
+parser. They fed it nodes `parse.kel` has never produced and passed while the
+pipeline was broken. *Any construct the corpus does not contain is unverified by
+construction* — and here the construct WAS in a corpus, just not the one
+exercising the stage that failed.
+
+**Five gap pins fired and all five are converted rather than deleted**, each
+saying what became of what it watched. The boundary pin is on its third subject —
+absence, then verdict, now supported — **with its name moved each time**, because
+a test whose name asserts one thing and whose body checks another is how a test
+comes to measure something else.
+
+**`wire.kel` parses correctly now**, to 486 chunks that mean something: the
+mis-parse that made the old count a wrong answer is gone. It does not
+self-compile — a capacity limit further down, which is a bound rather than a
+mis-parse and a different problem.
+
+**One over-application, again.** Fixing the driver copy, I replaced all nine
+`for_parts: Vec::new()` sites when only one had the local in scope. Eight were
+accumulator initialisers. Same shape as the doc-link regex: a rule applied where
+an enumeration was available. Reverted and redone surgically, and the second
+read-back site — which had the identical bug — was then found by looking at each.
+
+
+## 2026-08-25 — the biggest remaining item was costed a third too high
+
+**Bare-`for` support was recorded as "a second lowering across three stage
+sources". Measured, it is TWO, and the hardest is already written.**
+
+| stage | state |
+|---|---|
+| `codegen.kel` | **DONE.** `push_forin` emits the whole bare lowering from a seven-word `for_parts` entry; four cases exercise it |
+| the Rust driver | **DONE.** Reads `for_parts` out of the reconstructed body |
+| `reconstruct.kel` | **DECLARED, NEVER WRITTEN.** Zero writes, against sixteen mentions of the counted form's equivalent |
+| `parse.kel` | **ABSENT.** No mention of the node, the parts, or the kind |
+
+**Why the old estimate was reasonable and still wrong.** It came from a correct
+observation — the two forms are different lowerings, not one with an optional
+clause — and inferred the WORK from the DIFFERENCE. Two lowerings means two must
+be written, *unless one already is*.
+
+**And the reason one already is closes a loop.** `codegen.kel` got the lowering
+because the codegen-only corpus drives the REFERENCE parser, so it has always
+received nodes `parse.kel` never produced. **The same corpus split that hid the
+gap is why the lowering exists and was never connected** — the construct is in a
+corpus, just not the one exercising the stage that fails.
+
+**Pinned rather than asserted.**
+`the_bare_lowering_exists_in_codegen_and_is_unreached_by_the_earlier_stages`
+measures the stage sources and distinguishes DECLARED from WRITTEN, which is the
+whole distinction: a test satisfied by the declaration would report the stage as
+done. It fails when the work starts, and says so in its message.
+
+**The mutation proving that did not take on the first attempt.** I inserted the
+write before `fn main(`, which `reconstruct.kel` does not contain, so the file
+was unchanged and the test passed for the wrong reason — a no-op mutation
+reading as evidence. Caught by checking the write count before trusting the
+result, and redone.
+
+**Three stale claims found in the handoff while correcting the cost**, one of
+them mine from two increments ago: the state table still read "`wire.kel`
+PARSES, 486 functions" after #273 deliberately retired that milestone. **The
+increment that changes a fact is where the fact is recorded, and I missed my own
+table.**
+
+
+## 2026-08-25 — the gap is now in the inventory, not only in its diagnosis
+
+**`ctrl/for_bare` is in the construct-support boundary, marked `Refuses`.** The
+table went from 95 cases to 96, at **90 SOk / 2 Refuses / 3 Diverges / 1
+RefRejects** — derived by running the classifier, not by adding one to the
+previous count.
+
+**Why the inventory and not the diagnosis file.** The gap was recorded in
+`tests/selfhost_bare_for.rs`, which is the right place for a five-layer
+diagnosis and the wrong place for an inventory. A reader consulting the boundary
+to learn whether loops are supported saw one `for` case marked `SOk`. *Any
+construct the corpus does not contain is unverified by construction* — a
+sentence already in this tree, written about this construct, in the file
+recording why it went unmeasured, while the boundary still did not contain it.
+
+**`Refuses` is now truthful rather than lucky.** The classifier catches a panic
+and files it as a refusal, so before the stage named the construct this entry
+would have been counted correctly for the wrong reason — an honest gap by
+accident of a misleading abort about a missing chunk name.
+
+**THE PIN FIRED, AND ITS OWN MESSAGE SAID WHAT TO DO.** It asserted the boundary
+carried no such case: *"if the bare form is not supported, that case's verdict
+should say so rather than the table implying coverage it does not have."*
+Followed. Its subject moved from ABSENCE to VERDICT, and **its name moved with
+it** — a test called `..._carries_no_bare_for_case` that checks a verdict is
+exactly the keep-the-name-change-the-subject failure three sibling pins were
+retired for two increments ago. Renamed, and proven to fire by marking the case
+supported.
+
+**AND I ALMOST ADDED A SECOND UNENFORCED FIGURE FOR ONE CLAIM.** My boundary
+comment cited the bare form as 26 opcodes against 70; the same file's existing
+test says 24 against 68. Both are correct — mine measured a parameter bound and
+theirs a literal one — but two numbers for one claim in one file is the defect
+this session has been recording all day. **Resolved by citing the test that
+asserts the RATIO rather than restating any number**, which is strictly better
+than reconciling them: a pointer to a live assertion cannot drift.
+
+
+## 2026-08-25 — the citation register, and a class I had not named
+
+**21 excused citations down to 13, reported in two categories because they are
+not the same event.** Seven repaired; one was never a defect. A register that
+falls because the scanner stopped manufacturing findings has not been paid down,
+and conflating the two would overstate it.
+
+**TWO OF THE SEVEN WERE REVERSALS.** A citation naming a test that asserts the
+OPPOSITE of what the tree does: one pointed at a rejection of a trailing
+semicolon after `for` that the tree now accepts, the other at a divergence
+between two compilers that has since been closed. **A dangling citation fails to
+inform; a reversed one misinforms, and does so with a plausible-looking
+pointer.**
+
+Both needed the surrounding PROSE rewritten, not the name swapped. Repointing
+`disagree` to `agree` while leaving a paragraph asserting the divergence — with a
+measured `Int(3)` in it — would have left the text wrong and the guard green.
+**That is the trap in a name-only repair**, and it is the same shape as
+repointing a test rather than retiring it: the pointer resolves, the claim does
+not.
+
+The eighth was a local written `let (a, b) = ...`, invisible to a scan that reads
+the identifier after `let `. **Third false positive of that family**, after
+inline parameters and the two forwarded earlier.
+
+**THE FILE CAUGHT ME TWICE WHILE I WAS REPAIRING IT.**
+
+My replacement prose for one repair named the nonexistent function in backticks —
+"the name cited here was `type_flat_scalar_kind`, which has never existed" — and
+the guard failed on my own explanation. Writing about a nonexistent name in
+backticks re-creates the citation. I had already hit this once today and did it
+again.
+
+Then I updated the threshold table's two-word row by SUBTRACTING the eight
+removals from 84, giving 76, one paragraph below a heading about measurements
+that are not measured. Derived: **74**. Two repairs resolved names a shorter cut
+counts and a four-word cut does not, so the arithmetic does not carry across
+rows. The miss stays in the file, because the alternative is a table that models
+the discipline it describes and was produced by ignoring it.
+
+**And the gate reported a green tree as exit 1 again**, from a trailing `grep`
+for failures — after I wrote the guidance about exactly that. The guidance was
+right and incomplete: capturing cargo's status is necessary and not sufficient,
+because a composite command takes its LAST member's status. Print the captured
+value last, or read the printed value rather than the command's.
+
+
+## 2026-08-25 — a named refusal, and the milestone it cost
+
+**`parse.kel` now refuses the bare `for v in a..b { .. }` form by name**, at
+phase 4 of the loop header where the fact is known. It was previously surfacing
+five layers downstream as ``no chunk named `acc` ``, a message naming neither the
+construct nor the file, which once cost seven iterations of diagnosis. The
+diagnostic channel already existed; the bare form simply did not use it. This is
+the first UNSUPPORTED-CONSTRUCT code among eleven that are all capacity limits.
+
+**It is not support. Measured: bare is 26 opcodes, `for … limit` is 70** — a
+second lowering, not a relaxation, and a multi-file change across three stage
+sources. Saying so plainly beats starting it and leaving it half-landed.
+
+**IT COST A TRACKED MILESTONE, AND THE MEASUREMENT IS WHY IT IS STILL RIGHT.** A
+test asserted "the payoff: `wire.kel` PARSES", to 486 chunks. With the change
+stashed:
+
+    PARSE:   ok, 486 functions
+    COMPILE: panicked -> "the self-hosted pipeline mis-parsed a declaration
+             boundary and produced a chunk named `acc`"
+
+So the celebrated parse is one the very next stage calls mis-parsed, and 486 is a
+count from a stream whose declaration boundaries are wrong. **Accept-then-misread
+— the hazard `BYTECODE_VERSION` moved to 2 to close.** A milestone that reads as
+capability while being a wrong answer is worse than a refusal, because nobody
+looks at it again. The transcript is kept in the test's doc: **the regression is
+visible in the diff and the reason is only visible in a baseline measured
+before deciding.**
+
+**Three symptom pins retired rather than repointed.** They asserted specific
+wrong records in a stream no longer produced. Repointing would have kept the
+names and changed the subjects, which is how a test comes to measure something
+other than what it says. Their shared helper went too — it mirrored driver state,
+its own doc required callers to check it, and with no callers there is nothing
+to check it against.
+
+**A prediction made before measuring, and missed.** The stage-margin blob was
+predicted at 35,351 from a constant that comment had derived; observed 35,376.
+Written up as a miss with the arithmetic, because the tenth move is recorded
+there as the first whose count matched its author's prediction and that record is
+worth nothing if the next miss is quietly reconciled. The constant is now marked
+as derived from name-only changes and untested against anything else.
+
+## The two cross-line findings, both about populations
+
+**MY CORPUS PIN WAS OVER A DIRECTORY ANOTHER LINE GROWS.**
+`confinement_analysis.rs` scanned `examples/scripts/` flat. The `v0.3.0` line
+keeps an unnumbered witness corpus there, so their tree went red at 38/21/12/5
+while this gate stayed green — the files are not here. Fixed by scoping to the
+numbered application scripts and **naming the fifteen members**, so the
+population is explicit rather than implied by a glob. Verified both directions
+against a simulation of their tree.
+
+**And this line had already been bitten and written it down.**
+`TASKLOG.md` line 136: "`examples/scripts/` is grown by `v0.3.0` and asserted
+over here. My size pin at eleven broke". True, findable, correctly written, and
+it did not work. **A hazard note belongs at the site where the hazard is
+instantiated**; the file recording that it happened is the right place for the
+history and the wrong place for the warning.
+
+**A CLEAN GATE READ AS A FAILURE.** My gate reported 83 binaries green with an
+empty failure list and **exited 1** — the trailing `grep` for failures found
+none, and grep exits 1 on no match. A safety check that inverted the verdict it
+was added to protect. The other line hit the mirror image the same day:
+`cargo test | tee` exiting 0 on a red tree.
+
+**The audit did not catch it because the audit was over a population that kept
+growing.** I checked my gate invocations, reported them sound, then wrote a new
+one with the inverted defect. **An audit's conclusion stops growing the moment it
+is written; the thing it describes does not.** Both polarities and the
+two-signal remedy are now in the handoff.
+
+
+## 2026-08-25 — the guard manufactured two of the three findings it reported
+
+**A small increment with one lesson worth the space.** I forwarded three
+citations to the `v0.3.0` line as "genuinely worth triage" out of 83 that a
+lower threshold would have surfaced. **Two were artifacts of my own scanner.**
+
+`must_contain` and `head_name` are function parameters written inline in a
+single-line signature — `fn match_body(src: &str, header: &str, must_contain:
+&str)`. `defined_names` looked for `name:` only at the start of an INDENTED
+line, which covers struct fields and misses every inline signature in the tree.
+So the scanner reported two perfectly ordinary parameters as naming nothing, and
+I passed the list on without checking it.
+
+**The cause is the one both lines have been naming all day, with a new
+substitute.** "A cheap substitute for available ground truth" — and this time the
+substitute was *my own instrument's output*. I had the tree and a grep. Reading
+three lines of context would have settled it. **Output from an instrument you
+built feels like ground truth in a way another line's does not**, which is what
+makes the substitution easy to make and hard to notice.
+
+**The third was real and better than expected.** A comment in
+`tests/selfhost_wire.rs` cited a VACUITY CONTROL by a name that does not exist.
+The control is real — `the_two_walk_orders_genuinely_disagree_on_this_corpus` —
+so this was a stale pointer, not a missing guard. But a reader auditing whether
+that slice could go vacuous would have searched the cited name, found nothing,
+and concluded there was no control at all. That is the failure mode the whole
+guard exists for, found inside its own backlog.
+
+**The scanner now reaches inline parameters, and the rule is tested directly
+rather than through a citation.** Both names are below the four-word citation
+threshold, so no citation check would catch a regression; the test asserts the
+rule instead, and reverting it to the indented-line form compiles and turns that
+test red.
+
+**Independent corroboration, from an instrument built on the opposite
+principle.** The `v0.3.0` line ran all four names through a token-based universe
+— every identifier in every non-comment line — and reached the same three
+verdicts. That is worth more than agreement, because a token-based scan cannot
+have this blind spot by construction. **The two fail in opposite directions**:
+declaration-based manufactures findings, token-based misses a citation that
+names something other than what it claims. Recorded in both files as
+complementary rather than one being the better version.
+
+**And the guard's own documentation went stale within hours of shipping, in the
+commit that staled it.** The threshold table read 897/104, 453/48, 175/21 —
+measured before the universe was widened to reach inline parameters, in the very
+change that widened it. Re-measured: 905/84, 454/39, 176/21. **Every figure moved
+except the one a test checks.** A table of numbers in a guard, reading as
+evidence, answerable to nothing. The `v0.3.0` line named why it slips through:
+prose in a data table inherits documentation's standard of scrutiny rather than
+the register's, and every other field in such a table is checked by something.
+**And the corrected table was wrong at the moment it was committed, which is
+the finding under the finding.** This scanner counts citations in this
+repository and its own file is in this repository, so the record of the
+measurement lives inside the population it counts. The correction added prose;
+prose contains citations; the totals moved by one as they were published. Two
+exact tables, both invalid on publication.
+
+**Re-measuring is not the fix.** An exact total is not a property this file can
+hold. The totals are now approximate and the UNRESOLVED counts stay exact —
+84, 39, 21 — because they held across every re-derivation: added prose
+contributes citations that RESOLVE rather than dangle. Totals are
+self-inclusive and unstable; findings are not. The `v0.3.0` line found this
+property in its own file first and the split is theirs; the test it yields is
+usable before publishing rather than after — **does writing this down change
+what it counts?**
+
+**And the guard treated prose as evidence of a definition.** `defined_names`
+scanned every line including comments, so a comment containing `fn foo` put
+`foo` into the universe of things that exist — meaning a citation could resolve
+against another comment. **The guard could vouch for prose with prose.** The
+`v0.3.0` line found the same coupling in a coverage audit of theirs, where two
+modules' exemptions were being satisfied by a paragraph rather than by the
+harness that drove them. Repaired at the intent on both sides: a name is defined
+by code declaring it. **Both of us reached for excluding the offending file
+first, which fixes the instance and leaves the class.**
+
+**The sizing script for that class produced names that do not exist**, and I
+caught it only by trying to USE one. It reported six comment-only
+citation-shaped names; none of the six greps anywhere in the tree. The
+conclusion survived on better evidence — the shipped suite stays green with the
+exclusion, and one of its tests is exactly the check that would fail if a
+citation had been resolving against prose — but the figures were removed rather
+than repeated.
+
+**That is the fourth instrument failure of the day, all mine, all first outputs
+of something freshly written**, and the first caught before shipping. The escape
+route is worth more than the instance: **go and touch the thing the output
+points at.** Re-reading six plausible test names tells you nothing, because a
+plausible name is indistinguishable from a real one by inspection. Grepping one
+told me immediately. It is cheaper than verification and it terminates.
+
+**Also recorded: a limitation of the confinement analysis, measured rather than
+reasoned.** A site is judged in the chunk that BUILDS it, so a helper that
+constructs a composite and returns it has that site judged against the helper's
+invocation, where returning is an escape. Sound, and it does not answer whether
+the region is confined to the CALLER's iteration. Compiled the case and
+confirmed: the site is reported in the helper as escaping and the caller carries
+no site at all. Stated in the module rather than left to be discovered.
+
+
+## 2026-08-24 — the callee summary, and a delta whose interesting half was not the one aimed at
+
+**The confinement analysis is complete.** `module_confinement` summarises what
+each chunk does with each parameter before judging sites, so a call that
+provably cannot release its argument stops disqualifying it.
+
+**The target was measured before the design, and it was the whole remaining
+class.** All four `CannotEstablish` verdicts in the flat corpus were
+`PassedToCall`, all in `10_multbyte.kel`, whose `add_2` and `sub_2` read scalar
+elements of their array arguments and return a freshly built array. All four are
+now `Confined`.
+
+**THE HALF I DID NOT AIM AT IS THE MORE INTERESTING ONE.** `Escapes` also fell,
+12 to 10. Without a summary a call's return value is assumed to alias every
+argument, so a site passed to `add_2` and then reached by the enclosing `Return`
+was reported as escaping **through a route that does not exist**. Those two
+verdicts were *wrong*, not merely unestablished, and nothing in the corpus said
+so — the analysis had been confidently reporting a false escape and the count
+looked healthy. **A conservative default hides false positives as effectively as
+it hides gaps**, and the only reason this surfaced is that the summary happened
+to remove the imprecision that produced it.
+
+**Two facts per parameter, and I nearly shipped one.** The handoff priced this
+increment as "does this callee return a composite it built". That is the `leaks`
+half. Without the `returns` half a caller must assume every return aliases every
+argument, which is exactly what it already does with no summary at all — so a
+one-fact summary would have closed the four `CannotEstablish` and left both
+false escapes in place.
+
+**Sites and parameters must not share a token space, and the reason is a rule
+rather than a collision.** A site is judged against a scope with a liveness
+test. A parameter's slot is written by the CALLER during frame setup, so its
+first `GetLocal` is a read-before-write and that same liveness test would report
+every parameter as live across its boundary. Making the distinction a type
+caught this at the point of writing rather than as a wrong verdict later.
+
+**Termination is by inspection, not by appeal to the language.** The call graph
+is acyclic by construction and this does not rely on it: a chunk is summarised
+only once every chunk it calls has a summary, in at most `chunks.len()` rounds,
+and a cycle simply never becomes ready. A recursive formulation would have been
+shorter and would have rested its termination on a guarantee it could not check.
+
+**The conservative default is load-bearing and that is measured.** Flipping
+`Summaries::leaks` to answer `false` when unknown compiles and turns **five**
+tests red, including all three conservatism tests. That is the direction hardest
+to notice, because the verdict improves.
+
+**One process defect, in the documentation build.** I stripped "redundant"
+intra-doc link targets with a rule — last path segment equals the link text —
+instead of reading the compiler's actual list, and it over-applied to an enum
+variant that does not resolve bare. Caught immediately by the doc gate. **A rule
+inferred from four examples is not the same as the four examples**, which is the
+same shape as every threshold and every classification defect recorded this week.
+
+
+## 2026-08-24 — the confinement analysis, and what the crude test was actually measuring
+
+**The commissioned predicate exists.** `src/confine.rs` answers *is this
+construction site's region unreachable once its enclosing iteration ends?* per
+site, over a chunk the caller holds, as **confined / cannot establish /
+escapes**. The third value is separate from the second because soundness is
+identical either way and *measurement* is not: folded together, the negative
+count moves for two unrelated reasons.
+
+**Three of the four per-iteration corpus sites are admitted, where the crude
+any-`Escapes`-opcode test admitted none of three.** The other line measured
+that test's negatives as 1 by `Yield`, 3 by `SetLocal`, 3 by `Call`, and
+concluded that two analysis features were mandatory before anything could be
+admitted. **Only one of the two turned out to be needed**, and the reason is
+worth recording because it is a measurement error of a familiar kind.
+
+`SetLocal` needed the boundary-dead rule, as predicted. **`Call` needed
+nothing.** `12_sensor_window.kel`'s loop body calls `scale(raw[i])`, and
+`raw[i]` is a `Word`. The call never touches the composite. The crude test saw
+the *opcode* and the analysis follows the *value*, so what looked like a
+mandatory second feature was an artefact of the instrument. **A callee summary
+is still needed for a composite genuinely passed to a call** — that case
+reports `CannotEstablish`, and the corpus counts are where the summary's effect
+will show.
+
+**The classification does more work than expected.** Routing every opcode and
+letting `NoRegion` mean "produces no region" is what keeps `p.a + p.b` from
+reading as the composite `p`; without it the enclosing `Return` reports a false
+escape on ordinary field arithmetic. Reading the *baked operand* — `Flat` versus
+`FlatNested` on a projection — moved four further sites from `CannotEstablish`
+to `Confined`. Both are cases of asking the tree rather than approximating it.
+
+**Three defects found in my own work, by measurement rather than by review.**
+
+- A mutation that inserted an instruction **shifted every jump target after
+  it**, so the loop's exit was off by one and the analysis refused the chunk.
+  The test failed with the right verdict for the wrong reason. The fix was to
+  splice the disposition *before* addresses are computed. This is the
+  non-compiling-mutation lesson in its subtler form: the mutation compiled and
+  still proved nothing.
+- I **wrote the corpus counts from memory instead of measuring them**, and the
+  test caught it: 11/20/2 asserted against 17/12/4 actual. Recorded because the
+  guard worked exactly as a guard should.
+- **Out-of-range local slots defaulted to an empty alias set**, which
+  *under*-approximates: a region would go untracked and its site could be
+  reported confined on a flow nothing followed. Now a refusal.
+
+**The backstop, and the honest limit on it.** A new opcode is a compile error in
+`route_of`, which forces a decision about its route — but the transfer
+function's catch-all arm would have accepted it silently. The catch-all now asks
+the classification and degrades an unhandled escaping route to `CannotEstablish`.
+**It cannot be exercised without adding an opcode**, so what is tested is the
+other half: that every currently escaping opcode reaches its own handler.
+
+**An unreproducible figure, recorded rather than corrected.**
+`tests/corpus_pattern_coverage.rs` states the corpus held **79** composite
+construction sites. Measured today: **33** scanning `examples/scripts` flat, and
+**251** scanning it recursively, because it also holds `piano_roll/` and
+`rogue/` with 34 further scripts. Neither is 79, and the figure is prose rather
+than an assertion, so nothing fails. **The lesson is not that the number is
+wrong — it is that a bare site count is meaningless without its scan rule**, and
+the new count test states its rule in the test itself.
+
+**SESSION 52 CLOSE. THE PATTERN WORTH KEEPING IS NOT ANY ONE FINDING (2026-08-24).**
+
+Thirteen merges, eight operator rulings, and a third line joined the work. The increment-by-increment
+reasoning is below this entry; what follows is only what generalises.
+
+**EVERY SIGNIFICANT CORRECTION THIS SESSION CAME FROM SOMEONE ELSE RUNNING SOMETHING.** The
+`v0.3.0` line measured that my three corpus scripts never reach their planner, refuting a claim I had
+reasoned to rather than tested. Their census found that every composite site needed TWO analysis
+features, which my own walker could not see because it reported presence rather than admissibility.
+An adversarial audit read `join_all` correctly and, in chasing it, I found `Break` misclassified in
+my own table. **In none of these cases was the code wrong and the reader confused; the reader was
+right and my instrument was silent.**
+
+**THREE CHECKS I WROTE COULD NOT FAIL, ALL IN ONE DAY, ALL THE SAME SHAPE.** A translation clause
+satisfied by an unrelated catalogue entry; an evidence citation satisfied by a command name rather
+than a test name; a README guard satisfied by prose below the table rather than the table row.
+**Mutation caught all three. Reading caught none.** The rule that survives: scope a check to the
+entry it is about, never to the file, and a `contains` over a whole document is almost never the
+check you meant.
+
+**AND ONE MUTATION THAT PROVED NOTHING WHILE LOOKING LIKE PROOF.** Adding a real `SetField` variant
+broke every exhaustive match, so the test never ran and the grep for its message found nothing --
+indistinguishable from the guard not firing. **A mutation must leave the program buildable or it is
+not a mutation**, and its failure to build presents as silence.
+
+**THE MEASUREMENTS THAT MATTERED WERE THE ONES THAT REFUTED THE EASY ANSWER.** "Below entry equals
+frame underflow, which is caught" was available, plausible and false -- 122 of 245 loops carry a
+non-empty entry stack. A linear depth scan gave the right number for the wrong reason and was exact
+for **4 of 245** loops. Splitting exact from approximate was worth more than either figure.
+
+**WHAT THIS LINE SUPPLIED TO THE PROOF, AND WHAT IT DID NOT.** Premises, each with provenance,
+indexed and guarded so a renamed test or a moved line fails rather than rotting. **Not the
+mathematics.** Nobody has checked the arguments, the proof line recommends an independent review
+before merge, and the distinction is the entire basis of the involvement.
+
+**THE PROCESS LESSON WITH THE LONGEST REACH** is not about code: a shared working directory silently
+changes what a long-running command is MEASURING, and no inspection of git state afterwards reveals
+it. A green suite was killed rather than read, because a number from a tree I did not intend to test
+is worse than no number -- I would have quoted it.
+
+**AN ADVERSARIAL AUDIT ASKED TWO QUESTIONS ABOUT MY SURFACE. BOTH ANSWERS WERE FINE AND CHASING THE
+SECOND FOUND A DEFECT IN MY OWN TABLE (2026-08-24).**
+
+The proof line's operator commissioned a five-auditor adversarial audit by fresh contexts. Two
+findings reached me as read-from-dispatch, per the standing rule, for measurement.
+
+**`Op::Reset` PLACEMENT: ENFORCED, not emission-only.** Measured by mutating a real module --
+removing the `Reset`, appending a second, and inserting one mid-body -- and all three are refused by
+name: *"Stream block must contain exactly one Reset, found N"*. So the proof's M4 is structurally
+enforced and its scoping sentence does not overclaim.
+
+**THE NUANCE WORTH HAVING**: the COUNT is enforced, the POSITION is not. A single `Reset` with ops
+after it is ACCEPTED. Those ops are DEAD -- `Op::Reset` returns `VmState::Reset` and rewinds `ip` to
+just after `Stream`, so control never falls through. "At its end" is true dynamically without being
+structurally enforced.
+
+**BREAK EDGES ARE NEVER COMPARED TO THE LOOP ENTRY STACK, AND THE AUDITOR READ THAT CORRECTLY.**
+`join_all` folds the break states through `join_stacks`, which errors only on height mismatch AMONG
+THE BREAKS; the joined state becomes the post-loop state and never meets `head`.
+
+**IT IS LOAD-BEARING RATHER THAN A DEFECT.** Measured across 87 modules: **242 dispatch scopes, 18 of
+which carry a value across the break** -- `match` arm values -- against **23 iterating scopes, ZERO
+carrying**. Comparing break edges to entry would refuse `match`. So the proof's M6(b) is emission-true
+for iterating loops and not enforced, which puts it beside the stream-never-returns invariant rather
+than beside the enforced entry floor. Pinned, with a failure message naming what a future check would
+break.
+
+**AND THE ITEM THAT WAS ACTUALLY MINE.** Chasing that showed
+`tests/composite_escape_routes.rs` classified `Break` and `BreakIf` as `NoRegion`, whose stated
+meaning is that no region outlives anything through the instruction. **That overstated.**
+`op_depth_effect(Op::Break)` is `(0, 0)`: it consumes nothing and **transfers control with the whole
+operand stack**, so a composite on the stack crosses the edge -- which 18 dispatch scopes
+demonstrably do.
+
+Reclassified `WithinIteration`. **The reason they are not escaping is not that they cannot carry a
+region -- it is that they END THE SCOPE**, leaving no later iteration to alias the value. The reuse
+hazard requires a NEXT iteration and a `Break` guarantees there is none. The escaping set is
+unchanged at five.
+
+**SECOND TIME THE PER-OPCODE VERDICTS HAVE NEEDED NARROWING WHILE TOTALITY HELD.** Totality is
+mechanical and stayed true; the rows are analysis and one was wrong. That is exactly what "the table
+is the place to argue" was for, and it took an outside reader to use it.
+
+**I TOLD THE OTHER LINE THEIR DIFFERENTIAL WOULD DISAGREE. IT CANNOT. (2026-08-24)**
+
+I wrote that `13_telemetry_stream.kel` gives the `v0.3.0` backend's differential its first real
+instance of the yield-route unsoundness. **Measured on their absorbed tree: all three of my scripts
+are REFUSED before the differential runs**, so their planner never sees them.
+
+  13_telemetry_stream   UnsupportedOp("Stream")
+  12_sensor_window      UnsupportedOp("NewComposite ... operand of unknown packed width")
+  14_frame_log          same
+
+**THEIR YIELD-ROUTE GAP IS UNREACHABLE IN THEIR BACKEND BY CONSTRUCTION**, because `yield` exists
+only inside a `Stream` and they do not lower `Stream` at all -- an unattempted workstream. So no
+corpus example can exercise it until that lands. **I reasoned from the virtual machine's behaviour to
+their backend's without checking whether the module reaches their planner**, which is the error this
+project has recorded twice this week in the other direction: neither line is a reliable narrator
+about the other's code.
+
+**THE CLAIM NEVER REACHED THE TREE, AND I CHECKED RATHER THAN ASSUMED IT HAD NOT.** It lived in
+messages and pull-request bodies; `COMPOSITE_REGION_EVIDENCE.md` already states that nothing in it
+establishes anything about the native backend's lowering, and the script headers describe the virtual
+machine plus a conditional hazard. Nothing needed retracting in the repository.
+
+**THE SCOPING FACT IS WORTH MORE THAN THE INSTANCE WOULD HAVE BEEN**: the gap is real, gated behind a
+much larger piece of work, and the `SetLocal` route -- which needs no stream -- is the one that goes
+live the moment they fix an unrelated packed-width refusal.
+
+**AND THEIR CENSUS FOUND A CORPUS GAP MINE DID NOT.** With my three scripts absorbed, iterating loops
+went 36 to 39 and composite sites inside them 0 to 3 -- **and ZERO survive a crude escape test.**
+Disqualified 1 by `Yield`, 3 by `SetLocal`, 3 by `Call`. **Every subject needs two analysis features
+at once**, because `12_sensor_window.kel` calls a helper to compute a field.
+
+So a confinement predicate with only its local-store handling would admit NOTHING even now that
+subjects exist. `15_pixel_blend.kel` is the isolate: a per-iteration composite with no call in the
+body, so the only obstacle is the `let`. Pinned by
+`a_confined_candidate_exists_with_no_call_in_its_loop_body`, which fires when a call is put back.
+
+**THE INTERFACE IS SETTLED BY THEIR ARGUMENT**: a per-site predicate over a chunk they already hold,
+three-valued -- yes / no / **cannot establish** -- with the third distinct from `no`, because folding
+it in costs the measurement that says whether the analysis is improving. Soundness is identical
+either way; the third value carries the whole diagnostic.
+
+**I SHIPPED THREE CORPUS SCRIPTS AND BROKE THREE THINGS ABOUT THEIR DIRECTORY (2026-08-24).**
+
+The scripts themselves are right. What I did not check is everything AROUND them, and all three
+defects were invisible to every test that walks the corpus, because those walk the DIRECTORY and none
+of them reads the index or the CLI.
+
+| what broke | how it surfaced |
+|---|---|
+| both stream scripts carried a `Run:` line that does not work | running the documented command |
+| `README.md` indexes the scripts and I added none of mine | reading the directory listing after the merge |
+| `README.md` asserted every top-level script is `fn main`, which my two `loop main` scripts falsified | the same reading |
+
+**THE `Run:` LINES WERE THE WORST OF THE THREE**, because they instruct. `13_telemetry_stream.kel` is
+REFUSED by `keleusma run` -- the command requires a `loop main` to yield `Word` and this one yields a
+composite, which is the entire point of the example. `14_frame_log.kel` RUNS FOREVER, because a
+`loop` function is productively divergent by design; I found that out by waiting ten minutes for a
+command that was never going to return. Both headers now state what actually happens and why the
+behaviour is a property of the command rather than a defect in the script.
+
+**THE README INVARIANT IS THE INSTRUCTIVE ONE.** It said "all scripts in this directory's top level
+are atomic-total (`fn main`), so they run end to end through the CLI". That was TRUE when written and
+my additions made it FALSE, silently, in a file nothing tests. A reader takes a sentence like that at
+face value. It is corrected in place with a note saying it used to say otherwise, rather than quietly
+reworded.
+
+**AND THE GUARD I WROTE FOR IT COULD NOT FAIL.** `the_readme_indexes_every_top_level_script` asked
+whether the README CONTAINED each script's name. Deleting a script's table row left it green,
+because the prose I had just written below the table mentions the same filename. **The check was
+satisfied by a different part of the document from the one it is about** -- the THIRD instance of
+that exact shape this session, after the translation clause satisfied by an unrelated catalogue entry
+and the evidence-index citation satisfied by a command rather than a test name.
+
+Scoped to table rows, it fires on the deletion and on a row naming a file that does not exist.
+**Mutation caught all three instances of this shape and reading caught none of them.**
+
+**THE LOOP-ENTRY FLOOR IS ENFORCED, AND THE CORPUS COULD NOT EXERCISE THE THING IT WAS CITED FOR
+(2026-08-23).**
+
+Two operator-directed items. Both turned up something the plan did not predict.
+
+**THE FLOOR LANDED, AND IT BROKE TWO OF MY OWN TESTS -- ONE CORRECTLY, ONE BECAUSE MY CHANGE WAS
+WRONG.** `verify()` now refuses an instruction that consumes an operand from below its enclosing
+loop's entry height, `TypedError::LoopFloorBreach`. The predicted cost was zero rejections across
+the shipped corpus and that held. What it did NOT predict:
+
+- **`stack_underflow_rejects` failed because my check shadowed the frame guard.** At depth zero the
+  floor IS the frame, so my check fired first and reported a loop breach on code inside no loop --
+  a worse diagnosis than the one it displaced. Fixed by skipping the check at floor zero.
+- **`loop_non_neutral_by_shape_rejects` failed because the floor SUBSUMES it.** Replacing a slot's
+  shape at equal height necessarily reaches below entry, since an entry created and destroyed inside
+  the body leaves the back-edge shape untouched. So every witness for the shape case is also a
+  below-entry reach. **`LoopNotNeutral` is not dead** -- its height case survives, covered by
+  `loop_neutrality` -- but the equal-height shape witness is gone. The test was updated and renamed
+  rather than deleted, with the old assertion recorded, because a subsumption that leaves no trace
+  reads later as a check that was never there.
+
+**AND I CITED A TEST BY A NAME THAT DID NOT EXIST** in the comment explaining that subsumption. The
+surviving witness is `loop_neutrality`, not the name I invented for it. Caught by grepping my own
+citation, which is the habit the evidence-index guard was built to enforce and which I had not yet
+applied to ordinary source comments.
+
+**THE CORPUS FINDING IS LARGER THAN THE ONE I REPORTED.** I had measured that no composite was built
+inside an ITERATING loop body -- all 30 in-loop sites were arm results followed by `Break`, since
+`Op::Loop` encodes dispatch as well as iteration. Writing the replacements showed the gap is wider:
+**not one script in `examples/scripts/` used `loop main` or a data segment at all**, so `Stream`,
+`Yield`, `Reset`, `SetData` and `GetData` were unexercised by that directory entirely.
+
+Three scripts now cover the three dispositions of a per-iteration composite: consumed in the
+iteration, yielded to the host, copied to a data slot. **The yielding one is a live demonstration of
+the proof's subject** -- four composites at four distinct addresses in one epoch, then `Reset`, then
+the same addresses at the next epoch, which is the no-reuse model and the staleness rule visible at
+run time.
+
+**TWO THINGS THE LANGUAGE TAUGHT ME WHILE WRITING THEM.** `let mut` does not parse -- locals are
+immutable -- so **the program I gave the proof session to illustrate the `SetLocal` escape is not
+valid Keleusma**, and I owe them that correction. And a `loop` body must yield on EVERY path from
+`Stream` to `Reset`, so a stream that yields only inside a bounded `for` is refused for
+productivity: the zero-iteration path reaches `Reset` without yielding. Both are the totality stance
+working, and neither was in my head when I proposed the scripts.
+
 **M1: SEVEN READ ACCESSORS INTO A COMPOSITE, ZERO WRITE ACCESSORS (2026-08-23).**
 
 The proof session asked for a refutation rather than a confirmation: is there ANY opcode, host entry

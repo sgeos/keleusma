@@ -23,8 +23,19 @@ use core::ops::ControlFlow;
 /// reach DONE first).
 ///
 /// `state` is the coroutine state immediately after the caller's `call_with_shared`. This
-/// function owns the record transport: today each record is one yielded word `code + val*64`;
-/// the P11 Option E change to a two-word `(tag, payload)` pair lands here and nowhere else.
+/// function owns the record transport, which is a HYBRID and has been since P11 Option E
+/// landed:
+///
+/// - **Legacy sites** yield one word `code + val*64` and leave `emit_arg` at `-1`. The tag
+///   occupies six bits, so a legacy record kind must be **below 64**.
+/// - **Migrated sites** set `emit_arg` to a full-word payload and yield a RAW tag, which may
+///   be 64 or above. Kinds 65, 67 and 68 arrive this way today.
+///
+/// **This paragraph read "today each record is one yielded word `code + val*64`; the P11
+/// Option E change ... lands here and nowhere else" until 2026-08-25**, describing a
+/// transport that had already been replaced. The split sixty lines below was correct
+/// throughout. It matters because this is the first thing an implementer adding a record kind
+/// reads, and following it would cap them at 63 and send them renumbering.
 ///
 /// The caller keeps ownership of its accumulator state by capturing it in `on_record`; this
 /// driver borrows only `vm` and `shared`, so a callback must not itself touch them.
@@ -194,6 +205,9 @@ pub fn describe_parse_diagnostic(code: i64, detail: i64) -> String {
             "call nesting is too deep for parse.kel: it reached {detail} and `call.call_chunk` \
              holds {PARSE_CALL_DEPTH_CAP}. Bind an inner call with `let` first."
         ),
+        // Code 12 was `pe_bare_for`, retired when the bare loop form became supported. It
+        // is not reused: an unassigned code falls to the unknown arm, which is the honest
+        // reading of a stream from a stage that predates the change.
         11 => format!(
             "too many data-block fields in one program for parse.kel: it reached {detail} and \
              `fields.ffield` holds {PARSE_FIELDS_CAP}. Like the enum bound this is a TOTAL \

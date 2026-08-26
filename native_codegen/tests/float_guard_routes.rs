@@ -26,13 +26,13 @@
 //! | chunk signature | the signature scan |
 //! | chunk constant | the constant scan |
 //! | native return shape | the native-shape scan |
-//! | data-segment slot | **`slot_entry`, at the ACCESS — see below** |
+//! | data-segment slot | **`resolve_shared_scalar`, at the ACCESS — see below** |
 //!
 //! The fourth is deliberately NOT re-checked in the guard, and its boundary is
 //! not where I first assumed. A module that DECLARES a float slot and never
 //! reads it LOWERS; every access refuses. That is safe by construction rather
 //! than by refusal, since an unread slot puts no float on the operand stack.
-//! `slot_entry` predates this work, so a second check here would be a parallel
+//! `resolve_shared_scalar` predates this work, so a second check here would be a parallel
 //! model that could drift from it; this file tests the EXISTING refusal.
 use keleusma::bytecode::Module;
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
@@ -99,6 +99,92 @@ fn a_float_local_refuses_the_module_even_with_clean_signatures() {
     );
 }
 
+/// **Route 3: a native declaring a Float RETURN SHAPE.**
+///
+/// **THIS ROUTE HAD NO TEST UNTIL 2026-08-24, and the file read as though it
+/// did.** The guard's comment in `src/lib.rs` said *"the list is a claim and
+/// `the_float_guard_closes_every_route_it_names` tests each one"* -- citing a
+/// test **that was never written**. The nearest real test,
+/// `the_guard_names_exactly_the_routes_this_file_tests`, asserts something much
+/// weaker: that the four route NAMES still appear as strings in `src/lib.rs`.
+/// **It tests the comment, not the guard.**
+///
+/// So the file closed three routes of four while reading as total -- *the exact
+/// shape its own module header warns about*, committed by the file that warns
+/// about it. Found by scanning this package for backticked citations that
+/// resolve to nothing, after the `v0.2.3` line found the same class in theirs.
+///
+/// # Why a DECLARED-BUT-UNCALLED native is the right subject
+///
+/// It isolates the route. Measured on this source: `native_return_shapes` is
+/// `[Scalar { kind: 5 }]` while the only chunk signature is
+/// `params: [], ret: Scalar { kind: 3 }` -- **no float in any signature and no
+/// float constant anywhere**, so routes 1 and 2 cannot fire and the refusal can
+/// only be route 3. A native that were CALLED would put a float local in play
+/// and route 2 might reach it first, which is what makes the uncalled form the
+/// discriminating one rather than merely the simpler one.
+#[test]
+fn a_native_declaring_a_float_return_refuses_the_module() {
+    let m = build("use host::read_temp() -> Float\n\nfn main() -> Word { 0 }").expect(
+        "a native declaring a Float return must still COMPILE; the guard under \
+         test is the backend's, and a compile failure here would make this test \
+         vacuous rather than passing",
+    );
+
+    // Assert the isolation rather than trusting the prose above, so a change to
+    // how the compiler shapes natives cannot leave this test passing for the
+    // wrong reason.
+    assert!(
+        !m.signatures.iter().any(|sg| {
+            matches!(sg.ret, keleusma::bytecode::WireShape::Scalar { kind } if kind == 5)
+                || sg.params.iter().any(
+                    |p| matches!(p, keleusma::bytecode::WireShape::Scalar { kind } if *kind == 5),
+                )
+        }),
+        "a Float reached a chunk SIGNATURE, so route 1 can fire and this no \
+         longer isolates route 3. Signatures: {:?}",
+        m.signatures
+    );
+    assert!(
+        !m.chunks.iter().any(|c| {
+            c.constants
+                .iter()
+                .any(|k| matches!(k, keleusma::bytecode::ConstValue::Float(_)))
+        }),
+        "a Float CONSTANT reached the module, so route 2 can fire and this no \
+         longer isolates route 3"
+    );
+
+    let why = refused(&m).expect(
+        "a native declaring a Float return LOWERED. Route 3 is open: the native's \
+         result would arrive on the operand stack as a float this backend has no \
+         representation for",
+    );
+    assert!(
+        why.contains("RETURN SHAPE"),
+        "refused, but not by the native-shape scan ({why}), so this measures some \
+         other route and route 3 is still untested"
+    );
+}
+
+/// The control for route 3, and it is not optional.
+///
+/// Without it, `a_native_declaring_a_float_return_refuses_the_module` would pass
+/// just as happily if the backend refused **every** module that declares a
+/// native. The refusal has to be about the Float.
+#[test]
+fn a_native_declaring_a_word_return_is_not_refused_by_the_float_guard() {
+    let m = build("use host::read_count() -> Word\n\nfn main() -> Word { 0 }").expect("compiles");
+    if let Some(why) = refused(&m) {
+        assert!(
+            !why.contains("RETURN SHAPE") && !why.contains("Float"),
+            "a native returning `Word` is refused by the FLOAT guard ({why}). The \
+             route-3 test above is then passing for the wrong reason -- it would \
+             fire for any declared native at all"
+        );
+    }
+}
+
 /// **Route 4: a float data slot — and the boundary is the ACCESS, not the
 /// declaration.**
 ///
@@ -116,7 +202,7 @@ fn a_float_local_refuses_the_module_even_with_clean_signatures() {
 /// by refusal. Every ACCESS refuses, which is the point at which a float would
 /// actually reach the stack.
 ///
-/// Closed by `slot_entry`, which predates this work, so this tests the EXISTING
+/// Closed by `resolve_shared_scalar`, which predates this work, so this tests the EXISTING
 /// refusal rather than adding a parallel check that could drift from it.
 #[test]
 fn reading_a_float_data_slot_refuses_the_module() {

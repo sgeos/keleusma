@@ -7490,8 +7490,14 @@ fn the_interner_reports_an_input_it_cannot_hold() {
 //
 // THE INPUT IS DEPTH-FIRST, ON PURPOSE. Keleusma receives a preorder walk —
 // three words per node: tag, payload, child count. Handing it a breadth-first
-// input would make the test vacuous, so `orders_differ_somewhere` below asserts
-// that the two orders actually disagree on this corpus rather than assuming it.
+// input would make the test vacuous, so
+// `the_two_walk_orders_genuinely_disagree_on_this_corpus` below asserts that the
+// two orders actually disagree on this corpus rather than assuming it.
+//
+// **THAT CITATION NAMED A TEST THAT DOES NOT EXIST UNTIL 2026-08-24**, and the
+// control it points at was real the whole time. A reader auditing whether this
+// slice can go vacuous would have searched for the cited name, found nothing,
+// and reasonably concluded there was no control at all.
 //
 // THE ORACLE IS REAL, and that is a recent correction. This plan previously
 // recorded that the flattener would need hand-built constant trees, because all
@@ -12941,7 +12947,20 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     //
     // No error code and no guard, because this was a missing feature rather than a
     // named refusal -- the same shape as the eighth move.
-    assert_eq!(worst_names, 676, "the worst-case name count moved");
+    //
+    // ELEVENTH MOVE: 676 -> 677, one name. `parse.kel` gained `pe_bare_for`, the
+    // diagnostic code for the unsupported bare `for` form -- the first
+    // UNSUPPORTED-CONSTRUCT code among eleven that are all capacity limits.
+    // Predicted one and observed one.
+    //
+    // TWELFTH MOVE: 677 -> 680, three names. The bare `for` form's support added
+    // `for_bare`, `forin_count`, `step_forin_emit`, `fold_record` and a `let`, and
+    // retired the refusal code -- a net of five against an observed three, because
+    // the count is of INTERNED names and several already existed elsewhere in the
+    // stage. **NOT PREDICTED THIS TIME**: the eleventh move's miss established
+    // that the per-name constant applies to name-only changes, and this change is
+    // not one.
+    assert_eq!(worst_names, 680, "the worst-case name count moved");
     // 35,154 -> 35,213 bytes, 59 for the two field names plus the comment-free
     // identifiers the recognition introduces. Then 35,213 -> 35,233, twenty bytes
     // for `al_elem_bytes` and the locals the nested-array sizing introduced.
@@ -12955,7 +12974,37 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     //
     // Stating the arithmetic matters because this pin has moved ten times and a delta
     // nobody can decompose is indistinguishable from a delta nobody looked at.
-    assert_eq!(worst_blob, 35333, "the worst-case blob size moved");
+    // ELEVENTH MOVE: 35,333 -> 35,376, forty-three bytes.
+    //
+    // **THE PREDICTION WAS MADE BEFORE MEASURING AND IT WAS WRONG.** Applying the
+    // constant this comment established -- 11 characters plus 7 bytes of per-name
+    // overhead -- gives 35,351. The observed figure is 35,376, twenty-five bytes
+    // over.
+    //
+    // Recorded as a miss rather than re-derived into agreement, because the tenth
+    // move is written up above as the first whose count matched its author's
+    // prediction, and that record is worth nothing if a subsequent miss is quietly
+    // reconciled. The plausible residual is that this change is NOT one name: it
+    // adds a call and a branch to `step_forheader` and a literal to the constant
+    // pool, where the ninth and tenth moves added names alone. **That is a
+    // hypothesis, not a decomposition** -- the 7-byte constant was derived from
+    // name-only changes and this is the first move to test it against something
+    // else. It did not hold, and the constant should be treated as applying to
+    // name-only moves until someone decomposes this one.
+    // TWELFTH MOVE: 35,376 -> 35,698, three hundred and twenty-two bytes for three
+    // names.
+    //
+    // **DELIBERATELY NOT PREDICTED.** The eleventh move's miss established that the
+    // 7-byte per-name constant was derived from name-only changes and does not hold
+    // for a change that also adds calls, branches and literals. This change adds a
+    // phase-machine branch, two emission ladders, a drain reason and a fold helper,
+    // so applying the constant would have been the same error with a bigger number.
+    //
+    // The residual is NOT decomposed. What can be said is the direction and the
+    // reason: 107 bytes per name against the name-only figure of about 18 is
+    // consistent with the bulk being code rather than identifiers, which is what
+    // this change is.
+    assert_eq!(worst_blob, 35698, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**

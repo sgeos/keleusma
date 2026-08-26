@@ -8,7 +8,29 @@
 //!
 //! That was found by accident. This asks the question systematically.
 //!
-//! # Three instruments, because each is blind to something
+//! # Three instruments were PLANNED. **ONE WAS BUILT.**
+//!
+//! **CORRECTED 2026-08-24. This header described three instruments as though all
+//! three existed. Two of them were never written**, and the two tests that DO sit
+//! beside the first measure something other than what the plan named. Found by
+//! `comment_citations.rs`, which flags a backticked name resolving to nothing.
+//!
+//! | planned | named | built? |
+//! |---|---|---|
+//! | model self-consistency | `negative_depth` | **yes** — `audit_1_which_synthetic_cases_drive_the_model_negative` |
+//! | model against model | `disagrees_with_typed_verifier` | **NO.** `verify_typed` appears in this file only in prose. `audit_2_report_declared_net_effects_per_opcode` reports the model's OWN declared net effects; it diffs against nothing |
+//! | model against measured truth | `predicted_against_measured` | **NO.** `Arena::bottom_peak` is named here and used nowhere. `audit_3_which_opcodes_are_uncovered` reports uncovered opcodes |
+//!
+//! **THE ONE THAT WAS NOT BUILT IS THE ONE THE HEADER CALLS INDISPENSABLE** — the
+//! third, described below as *"the only one of the three that is not another
+//! model."* So this file's ground truth is the instrument that does not exist,
+//! and the two that remain are both models being checked against themselves.
+//!
+//! Kept as a spike with an honest header rather than deleted: the plan is still
+//! the right plan, and `audit_1` did its job. **What is retracted is the
+//! impression that the plan was executed.**
+//!
+//! # The three instruments as PLANNED, because each is blind to something
 //!
 //! 1. **Model self-consistency** (`negative_depth`). A chunk whose running
 //!    `growth - shrink` goes below zero proves the model wrong SOMEWHERE in that
