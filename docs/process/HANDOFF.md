@@ -256,6 +256,15 @@ real.
 **A default-feature run is not the gate.** `cargo test --workspace` and `--features compile` both miss
 `self-host`. The gate is a five-entry feature matrix.
 
+**AND THE MIRROR-IMAGE MISTAKE IS EASIER TO MAKE, met 2026-08-26.** A run of ONLY
+`--features self-host` was green on all three signals -- 84 binaries, zero failures, cargo exit
+status 0 -- and continuous integration went **red on four jobs**. A new test file driving the stage
+carried no `#![cfg(feature = "self-host")]`, so the three feature sets WITHOUT the feature failed to
+COMPILE it. **A compile failure in a feature set you did not build is invisible to every signal you
+did collect**, however many of them there are. Three independent signals over one feature set are
+still one feature set. The sibling files all carry the attribute; a new test in this family that
+omits it is red by construction.
+
 **`ci.yml` now supersedes pull-request runs.** Grouped on `github.ref` for a pull request and on the
 unique `run_id` otherwise, so branch verification runs are untouched. Verified by execution: a second
 push cancelled run `31932202253` and `31932359730` replaced it.

@@ -20,6 +20,12 @@
 //! [`the_unguarded_arrays_are_named`] lists them so the remainder is a register rather
 //! than an absence.
 
+// This file drives the self-hosted `reconstruct.kel` stage, so it exists only when the
+// stage does. Without this the three feature sets continuous integration runs that lack
+// `self-host` fail to COMPILE it, which is how the first push of this file went red on
+// four jobs while a local `--features self-host` run was green on all three signals.
+#![cfg(all(feature = "self-host", feature = "compile"))]
+
 use keleusma::bytecode::Value;
 use keleusma::selfhost::{reconstruct_kel_module, seed_reconstruct_shared};
 use keleusma::selfhost_host::{

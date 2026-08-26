@@ -76,6 +76,14 @@ exhaustion is reachable only across the ranges of a multiheaded function, since 
 holds at most 1024 records and each record appends at most one node; the test drives two
 heads over the same records to provoke it.
 
+**AND THE FIRST PUSH WENT RED ON FOUR JOBS WHILE MY GATE WAS GREEN ON THREE SIGNALS.** The new
+test file drives the stage and carried no feature attribute, so the three feature sets without
+`self-host` failed to COMPILE it. I ran only `--features self-host`. **Three independent signals
+over one feature set are still one feature set**, and a compile failure in a set you never built is
+invisible to all of them. The handoff warned that a default-feature run is not the gate; I made the
+mirror image of that mistake and it is the easier one, because the feature I picked was the one the
+work was about.
+
 **WHAT `wire.kel` NOW SAYS**, and it is a different problem from the one recorded:
 a record range leaves **two** nodes, so the stream carries an unfolded operand. That is a
 `parse.kel` emission defect, not a bound. **Naming it and repairing it are two claims with
