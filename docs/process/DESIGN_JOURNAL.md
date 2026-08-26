@@ -13,6 +13,132 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-25 — SESSION 53 CLOSE. What generalises from ten merges and one that did not land
+
+Ten pull requests merged, one open at close. The increment-by-increment reasoning
+is below; what follows is only what outlives it.
+
+**EVERY SIGNIFICANT CORRECTION CAME FROM RUNNING SOMETHING, AND NONE FROM
+READING.** The zero-operand loop said *`for_parts` is empty*. The stray `Not`
+said *70 mod 64 is 6*. Two verdicts that were wrong rather than unestablished
+surfaced only because a fix for a different problem removed the imprecision
+producing them. In every case I had read the relevant code first and seen
+nothing.
+
+**FIVE INSTRUMENT FAILURES, ALL MINE, ALL FIRST OUTPUTS OF SOMETHING FRESHLY
+WRITTEN.** A doc-link regex, two forwarded parameters, a string-stripping
+measurement, a phantom name list. **The escape route that worked is cheaper than
+verification: go and touch the thing the output points at.** Re-reading six
+plausible test names tells you nothing; grepping one settles it. The two I
+forwarded to another line unchecked were both first outputs — output from an
+instrument you built feels like ground truth in a way another line's does not.
+
+**A FAMILY OF THREE, AND THEY ARE ONE GAP.** A rule recorded is not a rule
+applied. An audit covers only the population that existed when it ran. A hazard
+named in a plan does not enumerate its sites. All three are the distance between
+a statement about a system and a traversal of it — and I produced an instance of
+each, in the same file, having written the rule down first.
+
+**A MEASUREMENT WHOSE RECORD LIVES INSIDE ITS OWN POPULATION CANNOT BE EXACT.**
+Two attempts at an exact citation table were invalid at the moment of commit,
+because writing the number down changed it. The fix is not re-measuring; it is
+approximating the totals and keeping the findings exact, which held across every
+re-derivation. **The pre-publication test: does writing this down change what it
+counts?**
+
+**AND A COUNT IS NOT A MEASUREMENT WITHOUT ITS POPULATION.** A corpus pin over a
+directory another line grows went red on their tree while mine stayed green.
+Naming the fifteen members fixed it. The hazard had been written into this
+line's own TASKLOG and did not reach the person writing the test — **a hazard
+note belongs at the site where the hazard is instantiated**, not in the file
+recording that it happened.
+
+**COVERAGE IS A PROPERTY OF THE PATH, NOT OF THE CASE LIST.** The sharpest
+finding of the session, and the older sentence does not cover it: *any construct
+the corpus does not contain is unverified* is true and this construct WAS
+contained — in a corpus driving the reference parser rather than the stage that
+failed. Four cases passed for the entire time the pipeline was broken.
+
+**EXIT STATUS LIES IN BOTH DIRECTIONS.** `| tee` reports success on a red tree;
+a trailing filter reports failure on a green one. Both were hit by both lines in
+one day. Read the status of the thing you are asking about, print it last, and
+keep two independent signals.
+
+**THE SHAPE WAS ALWAYS DOWNSTREAM OF AN INSTANCE**, which corrects how I first
+wrote this. I said the cross-line diagnoses of shape were more useful than the
+bug reports; the `v0.3.0` line pointed out that **every one of them came out of a
+bug report**, and neither line produced one by thinking about the problem in the
+abstract. Prose inheriting documentation's scrutiny came from a stale threshold
+table. A record inside its own population came from a manufactured finding. The
+abstraction is only checkable against the case that produced it.
+
+**AND THE METHOD OUTPERFORMED THE FINDINGS.** Neither line accepted the other's
+report without checking it against its own tree, and **roughly half the time the
+check changed the conclusion**: a comment-line hole that did not exist there, a
+string-stripping fix that did not survive contact here, six triage names that
+were one. It cost almost nothing each time.
+
+**WHAT I WOULD TELL THE NEXT SESSION IN ONE LINE.** The estimates that were
+wrong were all inferred from the shape of a problem rather than the state of the
+tree, and every one took under ten minutes to correct by measurement. Read the
+tree before costing it.
+
+
+## 2026-08-25 — the bare `for` self-compiles, and the estimate was wrong in both directions
+
+**Order 1's largest single item is done.** `for v in a..b { .. }` goes through
+the whole self-hosted pipeline byte-identically. `ctrl/for_bare` moves to `SOk`;
+the boundary reads 91 SOk / 1 Refuses / 3 Diverges / 1 RefRejects.
+
+**THE THIRD EDIT WAS NOT IN THE ESTIMATE, AND THE ESTIMATE WAS MINE FROM ONE
+INCREMENT EARLIER.** The re-costing marked the driver DONE because it copies
+`for_parts` INTO `codegen.kel`. **Neither the shipping driver nor this
+repository's copy ever read it OUT of `reconstruct.kel`.** `push_forin` received
+seven zeros and produced a structurally correct loop whose every operand was slot
+0 and node 0.
+
+The measurement checked that the plumbing EXISTED and not that it ran in both
+directions. **That is the difference between a wire and a circuit**, and it is
+the same shape as every unchecked-instrument failure this session recorded — I
+looked at the thing and did not run it.
+
+**AND I WROTE THE TAG-SPACE HAZARD INTO THE PLAN AND THEN WALKED INTO IT.** The
+plan says kinds at or above 64 must use the migrated transport. The statement
+fold is a third emit path the plan did not name, still legacy-packed, so kind 70
+truncated to 6 — a unary node — and the loop vanished into a stray `Not`.
+**Naming a hazard is not finding every site that has it.** The six-bit tag space
+is now full: every value 1 to 64 is taken, so the fold has a named helper and any
+future statement kind must go migrated.
+
+**Both bugs were found by running it, and each took one measurement.** The
+zero-operand loop said "for_parts is empty" as plainly as a symptom can; the
+stray `Not` said "70 % 64 = 6". Neither was findable by reading.
+
+**Why the gap survived so long, which is the durable part.** `codegen.kel` has
+had `push_forin` throughout, exercised by four cases that drive the REFERENCE
+parser. They fed it nodes `parse.kel` has never produced and passed while the
+pipeline was broken. *Any construct the corpus does not contain is unverified by
+construction* — and here the construct WAS in a corpus, just not the one
+exercising the stage that failed.
+
+**Five gap pins fired and all five are converted rather than deleted**, each
+saying what became of what it watched. The boundary pin is on its third subject —
+absence, then verdict, now supported — **with its name moved each time**, because
+a test whose name asserts one thing and whose body checks another is how a test
+comes to measure something else.
+
+**`wire.kel` parses correctly now**, to 486 chunks that mean something: the
+mis-parse that made the old count a wrong answer is gone. It does not
+self-compile — a capacity limit further down, which is a bound rather than a
+mis-parse and a different problem.
+
+**One over-application, again.** Fixing the driver copy, I replaced all nine
+`for_parts: Vec::new()` sites when only one had the local in scope. Eight were
+accumulator initialisers. Same shape as the doc-link regex: a rule applied where
+an enumeration was available. Reverted and redone surgically, and the second
+read-back site — which had the identical bug — was then found by looking at each.
+
+
 ## 2026-08-25 — the biggest remaining item was costed a third too high
 
 **Bare-`for` support was recorded as "a second lowering across three stage

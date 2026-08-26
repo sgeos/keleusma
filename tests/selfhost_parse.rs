@@ -2946,44 +2946,41 @@ fn no_other_file_restates_the_shared_layout() {
     );
 }
 
-/// **`wire.kel` IS REFUSED BY NAME, AND THE PARSE IT USED TO PRODUCE WAS WRONG.**
+/// **`wire.kel` PARSES CORRECTLY NOW, AND THE 486 MEANS SOMETHING IT DID NOT
+/// BEFORE.**
 ///
-/// This test asserted that `wire.kel` PARSES, to 486 chunks, as the payoff for raising the
-/// chunk table from 256. That parse ran. **It was also incorrect**, and the next stage said
-/// so in as many words: `self_host_compile(wire.kel)` failed with *"the self-hosted pipeline
-/// mis-parsed a declaration boundary and produced a chunk named `acc`"*.
+/// This test has had three subjects. It first asserted `wire.kel` PARSES, to 486
+/// chunks, as the payoff for raising the chunk table from 256 — a parse that ran
+/// and was WRONG, which the next stage said in as many words: *"the self-hosted
+/// pipeline mis-parsed a declaration boundary and produced a chunk named
+/// `acc`"*. Then it asserted the refusal that replaced the mis-parse. Now the
+/// bare `for` form is supported, the mis-parse is gone, and the count is a count
+/// of correctly-bounded declarations.
 ///
-/// So the 486 was not evidence that the cap is adequate. It was a count taken from a stream
-/// whose declaration boundaries the very next stage rejected — **accept-then-misread**, the
-/// hazard this project closes elsewhere on principle, and the stated reason
-/// `BYTECODE_VERSION` moved to 2 rather than being held.
+/// # What still does NOT work, stated so the 486 is not over-read
 ///
-/// # What changed and why the milestone reads differently now
-///
-/// `wire.kel` contains a bare `for v in a..b { .. }`, which `parse.kel` does not lower.
-/// Phase 4 of the loop header now says so where the fact is known, so the stage refuses by
-/// name instead of misattributing the brace and continuing.
-///
-/// **THE CHUNK-CAP QUESTION IS NOT ANSWERED HERE ANY MORE, AND WAS NOT SOUNDLY ANSWERED
-/// BEFORE.** `every_chunk_indexed_array_admits_the_chunk_cap` derives the cap family from
-/// the stage and does not depend on any parse. When the bare form is lowered, this test
-/// should return to asserting a chunk count — against a parse whose boundaries the next
-/// stage accepts.
+/// `wire.kel` parses; it does not yet self-compile. `self_host_compile` reaches
+/// a capacity limit further down the pipeline. **That is a different failure
+/// from the one this file tracked** — a bound rather than a mis-parse — and it
+/// is the next thing between `wire.kel` and the byte-identity corpus.
 #[cfg(feature = "self-host")]
 #[test]
-fn wire_kel_is_refused_by_name_rather_than_mis_parsed() {
+fn wire_kel_parses_correctly_now_that_the_bare_loop_form_is_supported() {
     const WIRE: &str = include_str!("../src/selfhost/kel/wire.kel");
-    let err = keleusma::selfhost::try_parse_functions(WIRE)
-        .expect_err("wire.kel contains a bare `for` and must be refused rather than mis-parsed");
-    let message = err.to_string();
-    assert!(
-        message.contains("bare `for") && message.contains("limit"),
-        "wire.kel is refused, but not for the bare loop form and not with the remedy: \
-         {message}"
+    let parsed = keleusma::selfhost::try_parse_functions(WIRE)
+        .expect("wire.kel must parse now that the bare `for` form is lowered");
+    assert_eq!(
+        parsed.functions.len(),
+        486,
+        "`wire.kel` parsed to {} chunks. The count is pinned because it is the corpus worst \
+         case and the thing the chunk cap is sized against: PARSE_CHUNK_CAP is {}, so a \
+         stage growing toward it is visible here rather than at the wall.",
+        parsed.functions.len(),
+        keleusma::selfhost_host::PARSE_CHUNK_CAP
     );
     assert!(
-        !message.contains("mis-parsed a declaration boundary"),
-        "the refusal is still the downstream mis-parse rather than the construct: {message}"
+        parsed.functions.len() <= keleusma::selfhost_host::PARSE_CHUNK_CAP,
+        "the corpus worst case has reached the cap it is sized against"
     );
 }
 

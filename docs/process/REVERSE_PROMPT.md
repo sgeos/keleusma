@@ -10,12 +10,15 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-24 (session 53) — the confinement analysis is complete, and closing it surfaced
-two verdicts that were wrong rather than merely unestablished
+**Date**: 2026-08-25 (session 53 CLOSE) — Order 1's largest item is done, and my own estimate of it
+was wrong in both directions
 
 ## ONE THING IS WAITING ON YOU, AND IT IS NOT NEW
 
-`origin/v0.2.3` is at `cc89fbfa`, **146 merges**. Publication remains held.
+`origin/v0.2.3` is at `153a2d65`, **149 merges**, and **one pull request is open**: `#278`, which
+carries the bare-`for` support this document describes. Its continuous integration was restarted by
+a force-push and had not settled at session close; the local gate was green on all three signals.
+**Merge on 22 of 22.** Publication remains held.
 
 **The floating-point entry ABI is the last of your eight rulings that is not implemented**, and the
 `v0.3.0` line has attached a second question to it that you have not seen. Both are described below.
@@ -123,48 +126,36 @@ claiming more than that. The rule both lines arrived at independently is worth a
 **a measurement written into a file of tests needs a date and an enforced-or-not marker at the moment
 it is written.**
 
-## THE ONE THING ON THIS INCREMENT I WOULD WANT YOU TO SEE
+## THE BARE `for` FORM SELF-COMPILES
 
-**A named refusal cost a tracked milestone, and I think that is right.** `parse.kel` now refuses the
-bare `for v in a..b { .. }` form by name instead of letting it surface five layers downstream as a
-missing chunk name. `wire.kel` contains one, and a test asserted "the payoff: `wire.kel` PARSES", to
-486 chunks.
+**Order 1's largest single item is done.** `for v in a..b { .. }` goes through the whole
+self-hosted pipeline and matches the reference byte for byte. The construct-support boundary reads
+**91 SOk / 1 Refuses / 3 Diverges / 1 RefRejects**.
 
-**Measured with the change stashed, before deciding:** that parse runs, and the very next stage
-rejects it — *"the self-hosted pipeline mis-parsed a declaration boundary and produced a chunk named
-`acc`"*. So 486 was a count from a stream whose declaration boundaries are wrong.
-**Accept-then-misread**, which is the hazard `BYTECODE_VERSION` moved to 2 to close.
+**Three edits, and the third was not in the estimate.** `parse.kel` accepts the header and emits a
+short parts ladder; `reconstruct.kel` assembles the seven-word entry and **synthesises** `i >= limit`
+and `i + 1`, since neither corresponds to any token. And **neither driver ever read `for_parts` back
+from `reconstruct.kel`** — the plumbing existed and ran in one direction only, so the lowering
+received seven zeros and produced a correct loop with every operand at slot 0.
 
-**The regression is visible in the diff and the reason is only visible in that transcript**, so it is
-kept in the test's doc. If you disagree, the decision is reversible and the measurement is there to
-argue with.
+**The six-bit tag space is full**, which the statement fold did not know. Kind 70 truncated to 6 and
+the loop vanished into a stray `Not`. I had written that hazard into the plan one increment earlier
+and walked into it anyway, because naming a hazard is not finding every site that has it.
 
-**This is not bare-`for` support**, which remains the largest single Order 1 win. The two forms are
-different lowerings rather than one with an optional clause —
-`the_bare_and_limit_forms_have_different_lowerings` asserts the size ratio.
+**Five gap pins fired and all five are converted**, each saying what became of what it watched.
 
-**RE-COSTED 2026-08-25, AND IT IS TWO STAGE SOURCES, NOT THREE.** `codegen.kel` **already has the
-bare lowering**: `push_forin` emits it in full from a seven-word `for_parts` entry, and four
-bare-`for` cases exercise it — because that corpus drives the REFERENCE parser, so it has always
-received nodes `parse.kel` never produced. **The same corpus split that hid the gap is why the
-lowering exists and was never connected.** `reconstruct.kel` declares `for_parts` and writes it zero
-times, against sixteen mentions of the counted form's equivalent. Pinned by
-`the_bare_lowering_exists_in_codegen_and_is_unreached_by_the_earlier_stages`, which fails when the
-work starts.
+## `wire.kel` IS CLOSER AND NOT THERE
 
-**A better estimate is not a small estimate.** Two stages of Keleusma, in a phase machine and a
-record stream, with the parts layout matching what `push_forin` reads position for position.
+It **parses correctly now**, to 486 chunks that mean something — the mis-parse that made the old
+count a wrong answer is gone. It does **not** self-compile: `self_host_compile` reaches a capacity
+limit further down. **A bound is a different failure from a mis-parse**, and it is the next thing
+between `wire.kel` and the byte-identity corpus.
 
 ## What I would spend the next increment on
 
-**Bare-`for` support itself.** The cost is measured rather than inferred, and the design is written
-down: [`docs/decisions/BARE_FOR_IMPLEMENTATION_PLAN.md`](../decisions/BARE_FOR_IMPLEMENTATION_PLAN.md)
-carries the seven-word contract `push_forin` reads position for position, the three edits, and the
-one real design question — where the synthetic `i >= limit` and `i + 1` nodes come from, since no
-token corresponds to them.
-
-**It is three edits across two stage sources and it is not small.** Do not start it as a fragment;
-an unfinished bare path that silently mis-parses is strictly worse than the named refusal it
-replaces.
+**`wire.kel`'s capacity limit**, which is now the only thing between it and the byte-identity
+corpus. `self_host_compile(wire.kel)` fails with `IndexOutOfBounds(-1, 1024)` — the shape of a node
+array bound, on the largest stage in the corpus at 486 chunks. Diagnose it before costing it: the
+last two estimates on this file were both wrong, one high and one low.
 Or the remaining `.kel` stages' own bare-`for` uses, which is what keeps `wire.kel` out of the
 byte-identity corpus.
