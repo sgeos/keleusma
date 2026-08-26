@@ -8128,6 +8128,27 @@ fn boundary_cases() -> &'static [(&'static str, Support, &'static str)] {
     use Support::{Diverges, Ok as SOk, RefRejects, Refuses};
     &[
         // --- scalars -------------------------------------------------------------
+        //
+        // RADIX-PREFIXED LITERALS. Absent from this table until 2026-08-26, which is why
+        // the self-hosted lexer's total lack of support for them went unmeasured: it
+        // consumed the leading `0`, stopped, and interned the prefix and digits as an
+        // IDENTIFIER. Fourth construct found this way, after the boolean literal, the
+        // `Byte` cast and the bare `for` form.
+        (
+            "scalar/hex_literal",
+            SOk,
+            "fn f() -> Word { 0xFF + 0xdeadBEEF }",
+        ),
+        (
+            "scalar/hex_literal_upper_prefix",
+            SOk,
+            "fn f() -> Word { 0XAB }",
+        ),
+        (
+            "scalar/binary_literal",
+            SOk,
+            "fn f() -> Word { 0b1010 + 0B1101 }",
+        ),
         (
             "scalar/word_arith",
             SOk,
@@ -8867,10 +8888,14 @@ fn the_fused_compile_holds_one_group_not_the_program() {
     // (stage, total records, largest group). Pinned; a stage that grows moves these.
     const EXPECT: &[(&str, &str, usize, usize)] = &[
         (
+            // MOVED 2026-08-26 when the lexer gained radix-prefixed literals: total
+            // 1415 -> 1598, peak 276 -> 423. The peak rose by more than half because the
+            // two new accumulation states join the tokenizer's largest dispatch group,
+            // which is the group this figure measures. The fusion ratio is still 3.78.
             "lexer",
             include_str!("../src/selfhost/kel/lexer.kel"),
-            1415,
-            276,
+            1598,
+            423,
         ),
         (
             "analyze",

@@ -22,11 +22,10 @@ Current sprint source of truth.
 > `wire.kel` now PARSES correctly at 486 chunks.
 >
 > **THE CAUSE RECORDED HERE WAS WRONG. RETRACTED 2026-08-26.** This entry called
-> `IndexOutOfBounds(-1, 1024)` a CAPACITY BOUND. It is not one: an index of `-1` is below the
-> start. The named cause is **a record range that leaves two nodes where it must leave one**,
-> a `parse.kel` emission defect. "Raise the cap" was correctly doubted here and is definitely
-> wrong. The guess that it was a sentinel was also wrong -- the trap fired several steps
-> downstream of the defect, on state already corrupted.
+> `IndexOutOfBounds(-1, 1024)` a CAPACITY BOUND. It is not one. The first real cause was that
+> the self-hosted lexer had **no support for hexadecimal or binary literals**, and `wire.kel`
+> uses thirty-five. Fixed. What blocks it next is bisected but its mechanism is unknown, and
+> a second inferred cause ("a cap of 256 chunks") was published and retracted the same day.
 >
 > **SEVEN OF THE EIGHT RULINGS ARE IMPLEMENTED.** The floating-point entry ABI remains, with the
 > `v0.3.0` line's `Fixed` shared-slot SCALE question attached to it. That one is THEIRS to bring the
@@ -1334,6 +1333,33 @@ Active operator-decision items:
 Long-horizon work tracked in `docs/decisions/BACKLOG.md` and `PRIORITY.md`.
 
 ## Task Breakdown
+
+### Recent: radix-prefixed literals in the self-hosted lexer (2026-08-26, session 54)
+
+`lexer.kel` had **no** support for hexadecimal or binary literals. It consumed the leading
+`0`, stopped, and interned the remainder as an IDENTIFIER, so `0xFF` was the number zero
+followed by a name `xFF`. `wire.kel` uses thirty-five of them, which is why the largest
+stage in the corpus could not self-compile.
+
+**Proportionality**: `self_hosted_compile` cross-checks against the reference and refuses on
+divergence, so a command-line user got a loud error rather than a wrong artifact. Direct
+callers of `self_host_compile` got a module with an undefined name where a constant belonged.
+
+| ID | Description | Status | Verification |
+| --- | --- | --- | --- |
+| RX-1 | Hexadecimal and binary literals in the stage lexer | Complete | Two accumulation states and a hex-digit predicate; `every_radix_form_agrees_with_the_reference` compares against the reference rather than a hand-written table. |
+| RX-2 | Match the reference's `0B` disambiguation | Complete | `0B` is binary only when a binary digit follows; otherwise the `B` begins the `Byte` suffix. Taken from `src/lexer.rs`, not guessed. Pinned by `an_uppercase_b_without_a_binary_digit_is_not_a_radix_prefix`. |
+| RX-3 | No name-table pollution | Complete | `no_part_of_a_radix_literal_is_interned_as_a_name`. An operations-only comparison would have passed while this was broken. |
+| RX-4 | Boundary cases for the construct | Complete | Three cases added; the table reads 94 SOk / 1 Refuses / 3 Diverges / 1 RefRejects over 99 cases. Their absence is why the gap was unverified by construction — fourth instance after the boolean literal, the `Byte` cast and the bare `for` form. |
+| RX-5 | Baseline for the before/after claim | Complete | Taken by stashing: eight radix forms diverged before and agree after; two numeric-suffix forms diverged before and still do, so that gap is pre-existing and untouched. |
+| RX-6 | `wire.kel` advanced, pinned in the failing direction | Complete | `wire_kel_no_longer_fails_on_a_radix_literal` asserts it no longer fails at `crc_begin`. |
+
+**Not done, and a false claim retracted.** The next blocker is bisected exactly — `wire.kel`
+at 1,673 lines self-compiles and at 1,675 it does not, one declaration apart — but the cause
+inferred from the 256/257 declaration counts was **wrong**: a synthetic program of 300
+trivial chunks compiles. The mechanism is unknown. The reported chunk name is a label from
+an interned id, not a location.
+
 
 ### Recent: `reconstruct.kel`'s failure modes named (2026-08-26, session 54)
 

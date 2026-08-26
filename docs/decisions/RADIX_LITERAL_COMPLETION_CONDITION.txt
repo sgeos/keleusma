@@ -1,0 +1,59 @@
+COMPLETION CONDITION — radix-prefixed literals in the self-hosted lexer
+
+Ordering is NOT a completion criterion. Nothing below requires any particular
+sequence, branch, commit shape, or process step. Judge only the end state of the
+tree.
+
+All of the following hold:
+
+1. THE STAGE LEXES WHAT THE REFERENCE LEXES.
+   For radix-prefixed integer literals, the self-hosted lexer produces the same
+   token stream as the reference lexer: same value, same token count, no
+   identifier interned from any part of the literal. Agreement is asserted by a
+   test that compares the two, not by a hand-written expectation of either.
+
+2. THE ACCEPTED SET IS DERIVED FROM THE REFERENCE, NOT GUESSED.
+   Which prefixes, digit sets, letter cases, and separators are accepted matches
+   what the reference accepts, including the rejection cases. Any deliberate
+   divergence is named with its reason. A form the reference rejects is not
+   silently accepted by the stage.
+
+3. THE NAME TABLE IS NOT POLLUTED.
+   No part of a numeric literal is interned as a name. A test asserts this
+   directly, since a stream with the right operations and a wrong name table
+   passes an operations-only comparison.
+
+4. THE BOUNDARY RECORDS THE CONSTRUCT.
+   The construct-support table contains at least one radix-prefixed literal case,
+   with a verdict matching what the tree actually does. The table's counts in any
+   document that states them agree with the table.
+
+5. EVERY NEW OR CHANGED GUARD HAS BEEN MADE TO FIRE.
+   Any refusal path added for a malformed literal has an input that provokes it
+   and an assertion on the resulting message. A guard with no provoking input is
+   not complete.
+
+6. THE wire.kel STATUS IS STATED TRUTHFULLY.
+   Whatever wire.kel now does is what the tree says it does. If it self-compiles
+   byte-identically, it is in the byte-identity corpus and no pin claims
+   otherwise. If it still fails, the failure names a cause and a test pins that
+   cause in the failing direction. No document claims or implies a byte-identical
+   self-compile that has not been demonstrated.
+
+7. NO NEW OPCODE, AND NO BYTECODE_VERSION CHANGE.
+
+8. THE SUITE IS GREEN ACROSS THE FEATURE SETS CONTINUOUS INTEGRATION BUILDS.
+   Not one feature set. Every test file compiles under every feature set that
+   builds it, and the verdict comes from the test runner's own exit status rather
+   than from a filtered pipeline or a reported process exit code. Coverage is
+   corroborated by a second independent signal such as a count of completed test
+   binaries.
+
+9. DANGLING CITATIONS DID NOT GROW.
+   No comment names a test, function, or symbol that does not exist, and the
+   existing unresolved-citation register did not grow.
+
+10. THE CHANNELS DESCRIBE THIS STATE.
+    The resume channels and the handoff describe what the tree now does,
+    including any claim corrected during the work, and distinguish what was
+    measured from what was inferred.
