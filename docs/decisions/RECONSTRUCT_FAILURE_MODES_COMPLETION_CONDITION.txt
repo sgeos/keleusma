@@ -1,0 +1,59 @@
+COMPLETION CONDITION — naming reconstruct.kel's failure modes
+
+Ordering is NOT a completion criterion. Nothing below requires any particular
+sequence, branch, commit shape, or process step. Judge only the end state of the
+tree.
+
+All of the following hold:
+
+1. DISTINCT CAUSES, DISTINCT MESSAGES.
+   An out-of-range index in reconstruct.kel no longer reports a message that
+   cannot be attributed to a cause. Each guarded array in that stage reports a
+   failure distinguishable from every other guarded array's, and a stack
+   underflow is distinguishable from a capacity exhaustion on the same array.
+   The distinctness is asserted by a test, not merely stated in prose.
+
+2. THE GUARD LIST IS DERIVED, NOT ENUMERATED BY HAND.
+   A test derives the set of indexed arrays in reconstruct.kel from the source
+   rather than from a hand-written list, and asserts the derivation is
+   non-vacuous (it fails if it finds nothing). Any array deliberately left
+   unguarded is named with its reason.
+
+3. EVERY GUARD HAS BEEN MADE TO FIRE.
+   For each named failure mode, the tree contains an input that provokes it and
+   an assertion on the message it produces. A guard with no provoking input is
+   not complete. Where a mode is provoked by mutation rather than by an input,
+   the tree records that the mutant compiled.
+
+4. THE wire.kel FAILURE NAMES ITS OWN CAUSE.
+   self_host_compile on wire.kel either succeeds, or fails with a message that
+   identifies which array and which direction (underflow or exhaustion). A test
+   pins the current outcome in the failing direction, so closing the gap breaks
+   the pin rather than passing silently.
+
+5. NO CLAIM OF COVERAGE THAT IS NOT TRUE.
+   No file asserts or implies that wire.kel self-compiles byte-identically, or
+   that it is in the byte-identity corpus, unless it demonstrably is. Any
+   document describing wire.kel's failure describes the cause the tree actually
+   produces, with no stale cause left standing.
+
+6. NO CAPACITY WAS RAISED TO MAKE A FAILURE GO AWAY.
+   If any array bound changed, the tree states the measurement that justified
+   it. An unexplained bound increase does not satisfy this condition.
+
+7. NO NEW OPCODE, AND NO BYTECODE_VERSION CHANGE.
+
+8. THE SUITE IS GREEN, MEASURED WITHOUT EARLY STOP.
+   The full test suite passes under the feature sets continuous integration
+   runs, and the verdict comes from the test runner's own exit status rather
+   than from a filtered pipeline. Coverage is corroborated by a second,
+   independent signal such as a count of completed test binaries.
+
+9. DANGLING CITATIONS DID NOT GROW.
+   No comment names a test, function, or symbol that does not exist. The
+   existing unresolved-citation register did not grow.
+
+10. THE CHANNELS DESCRIBE THIS STATE.
+    The resume channels and the handoff describe what the tree now does,
+    including any claim retracted or corrected during the work, and state
+    plainly which claims are measured and which are inferred.

@@ -13,6 +13,80 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**[v0.3.0] THE TOPOLOGY RULING LANDED, AND THE NEXT ABSORPTION IMMEDIATELY TURNED A GREEN TEST INTO
+AN HONEST RED (2026-08-26).**
+
+The operator ruled the topology question that had blocked this line for three sessions: **`proofs` ->
+`v0.2.X` -> `v0.3.X`, converging into one branch later.** The word is *sync*; no mechanism is
+mandated. Of the three readings this line recorded, **the third was right** — the relayed "rebase"
+concerned a different edge. **No topology change, so the ownership anchor survives intact**, which
+was the whole reason not to guess. PR #280 merged absorptions 6-11 into `v0.3.0`; divergence 0.
+
+Then `v0.2.3` had already moved again, and absorption 12 (#279) went in.
+
+### The red, and why it is the good kind
+
+`native_codegen` went **276/0/52 -> 275/1/52**. `the_single_head_reconstruct_seed_drives_the_stage`
+asserted `nodes > 0` and got **`-905`** — which decodes, via their own stated encoding
+`rc_fail_base() - code`, to **`rc_range_arity`**: *a record range did not reduce to exactly one node.*
+
+**THE DECISIVE MEASUREMENT WAS TAKEN IN A THROWAWAY WORKTREE AT `origin/v0.3.0`**, because the
+question "is this their regression or my test?" cannot be answered from their commit message:
+
+> before: `nodes reconstructed 4`   after: `-905`
+
+**The 4 was wrong.** Their own comment says the mechanism: `reconstruct_range` read `stack[0]`
+unconditionally, so a range leaving zero nodes **returned a stale index**. My probe asserted
+`nodes > 0`, received a stale stack index that happened to be positive, and **passed for weeks on
+garbage.**
+
+**A PASSING ASSERTION OVER AN UNVALIDATED VALUE IS NOT EVIDENCE.** The assertion was `> 0` when the
+property was *"is a real node count"*, and nothing in the test could tell those apart. That is the
+same shape as this line's other instrument failures: **the check was cheaper than the property it
+stood for, and the gap was invisible while the cheap check passed.**
+
+### Why it is a finding about the stage rather than about my seed
+
+The probe hand-builds nothing. It uses `parse_functions`, `reconstruct_category`, and
+`seed_reconstruct_shared` — **all reference-driver API** — over a **shipped corpus file**. Their
+driver's output, refused by their stage.
+
+### The widening, and the line I had to be careful not to cross
+
+A single-subject probe cannot distinguish "one corpus file is unreconstructible" from "the stage has
+stopped working". Different owners, same output. So the probe now drives **every** qualifying
+subject:
+
+```text
+  DROVE   11_signed.kel                3 node(s)
+  REFUSED 08_method_dispatch.kel       rc_range_arity
+  REFUSED external_native_witness.kel  rc_range_arity
+  1 of 3 qualifying subjects drive the stage
+```
+
+Not stage-wide. **Two of three real shipped single-head functions cannot be reconstructed**, and it
+took #279 naming the cause to make that visible.
+
+**WIDENING A SUBJECT SET TO RECOVER A GREEN IS SUBJECT-SHOPPING.** The only thing separating this
+from that is that **every refusal is printed with its named cause** — so the test reports the gap it
+no longer fails on. If a refusal ever leaves that output without leaving the tree, the test has
+become a liar, and that is written in the test rather than only here.
+
+### The hand-off is pinned as an EQUALITY, deliberately
+
+`refused.len() == 2`, not `<= 2`. When they repair `reconstruct_range`, the set shrinks and **the
+assertion fires and names them.** This line previously attached a cross-tree guard to an observable
+that the other line's repair would *remove*, making it unfireable; that mistake is recorded above and
+is not being repeated.
+
+### The census discipline, third time
+
+Predicted before measuring: +8 non-generic functions in `reconstruct.kel` (24 -> 32), so
+`bound_transfer` 1047 -> **1055**. Measured: **32** and **1055**. Every other census held. **The 1:1
+mapping has now held three times and is still a property of the population, not of the instrument.**
+
+---
+
 **[v0.3.0] THE HIGH-RISK ABSORPTION LANDED CLEAN, AND THE PROVENANCE AUDIT WAS FOUND TO HAVE
 FABRICATED A NUMBER WHILE FIXING FABRICATED NUMBERS (2026-08-26).**
 
@@ -764,6 +838,84 @@ would find it. **The expensive part of both investigations was establishing that
 believed was undecided had in fact been decided** — once by three repairs nobody had reconciled with
 the comment above them, once by a size function nobody had connected to the refusal message.
 ---
+## 2026-08-26 — `reconstruct.kel`'s failure modes, and a diagnosis that was wrong twice
+
+**THE HEADLINE: THE RECORDED CAUSE OF `wire.kel`'s FAILURE WAS WRONG, AND SO WAS THE
+CAUSE IT REPLACED.** Three readings of one failure, two of them confident and wrong:
+
+| reading | recorded as | what it was |
+|---|---|---|
+| ``no chunk named `acc` `` | a mis-parsed declaration | real, and repaired by the bare-`for` work |
+| `IndexOutOfBounds(-1, 1024)` | "a capacity bound ... the shape of a node-array bound" | **wrong.** An index of `-1` is below the start |
+| the named message | a record range leaving **2** nodes | measured |
+
+**BOTH WRONG READINGS HAVE THE SAME SHAPE: a number in an unnamed message was read as
+if it identified a cause.** The `1024` is an array's size and says nothing about why the
+index was bad. I wrote the capacity reading into the handoff myself, in the same file
+that warns three paragraphs earlier against exactly this.
+
+**WHY THE INSTRUMENT HAD TO COME BEFORE THE DIAGNOSIS.** The old trap fired in a
+different place from the defect. A range had already returned a wrong root several steps
+earlier, and the `-1` was downstream consequence. Diagnosing `wire.kel` directly would
+have meant investigating the work stack, which was innocent.
+
+**THE STAGE HAD NO NAMED FAILURE MODES AT ALL.** `parse.kel` has thirteen across eleven
+guarded counters, and tracing one such failure there cost seven increments before the
+message named its cause. `reconstruct.kel` had none. Derived from the source it declares
+**26 arrays in six size classes**, so **25 of the 26 share a message with at least one
+sibling**. Five causes are now named, with a driver-side table in `selfhost_host.rs`
+holding the single definition.
+
+**I DERIVED "SEVEN" FROM THE FAILURE IN FRONT OF ME AND THE REAL FAMILY WAS 26.** Seventh
+recorded instance of deriving a set from the part of the system I was thinking about. The
+correction is left in the brief rather than edited away, because the brief's own
+wrong-turn list warns against it one paragraph below where I did it.
+
+**TWO GUARDS COULD NOT FIRE AS FIRST WRITTEN, AND ONLY RUNNING THEM SHOWED IT.**
+
+- The record-index guard sat *inside* a walk carrying `limit 1024`, so a longer range
+  trapped `LoopLimitExceeded` — a virtual-machine message naming no cause at all — one
+  iteration before the check could run. Moved onto the range length.
+- The work-stack-full guard is **unreachable by construction**: `push` has exactly one
+  caller, inside `emit`, and the node guard fires first, so `sp` never exceeds
+  `node_count`. Kept as defence in depth with the *invariant* pinned, so adding a second
+  `push` caller fails a test rather than silently making the guard live.
+
+**A GUARD FOUND A SILENT WRONG ANSWER THAT WAS NOT A FAULT AT ALL.**
+`reconstruct_range` read `stack[0]` unconditionally. An empty range returned a **stale**
+node index left by the previous range; an over-full one **silently discarded** every node
+but the first. Neither trapped. Both are now named, and the arity guard is what caught
+`wire.kel`.
+
+**A REGRESSION I CAUSED AND THE RIGHT REPAIR.** `divergence_detail_names_the_diverging_chunk`
+broke: the float program that used to be mis-reconstructed and caught downstream by the
+byte-comparison oracle is now refused at its source, and the refusal did not name the
+chunk. **Relaxing the test was the wrong move** — the chunk name is the operator-facing
+value of that path. The name is threaded through instead, so the earlier refusal keeps the
+later guarantee.
+
+**SCOPE, STATED SO THE GAP IS VISIBLE.** Guards cover the 1024-wide class only. The other
+nineteen arrays are listed by name in `the_unguarded_arrays_are_named`, which fails if an
+array is added to the stage without either a guard or a register entry. Node-array
+exhaustion is reachable only across the ranges of a multiheaded function, since one range
+holds at most 1024 records and each record appends at most one node; the test drives two
+heads over the same records to provoke it.
+
+**AND THE FIRST PUSH WENT RED ON FOUR JOBS WHILE MY GATE WAS GREEN ON THREE SIGNALS.** The new
+test file drives the stage and carried no feature attribute, so the three feature sets without
+`self-host` failed to COMPILE it. I ran only `--features self-host`. **Three independent signals
+over one feature set are still one feature set**, and a compile failure in a set you never built is
+invisible to all of them. The handoff warned that a default-feature run is not the gate; I made the
+mirror image of that mistake and it is the easier one, because the feature I picked was the one the
+work was about.
+
+**WHAT `wire.kel` NOW SAYS**, and it is a different problem from the one recorded:
+a record range leaves **two** nodes, so the stream carries an unfolded operand. That is a
+`parse.kel` emission defect, not a bound. **Naming it and repairing it are two claims with
+two evidence bars**, and this increment makes only the first.
+
+---
+
 ## 2026-08-25 — SESSION 53 CLOSE. What generalises from ten merges and one that did not land
 
 Ten pull requests merged, one open at close. The increment-by-increment reasoning

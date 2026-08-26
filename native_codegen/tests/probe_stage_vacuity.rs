@@ -663,6 +663,15 @@ fn the_single_head_reconstruct_seed_drives_the_stage() {
     // matters: exactly one parsed head, unguarded, with a non-empty body. That is
     // what `is_multihead_group` routes to the single-head driver.
     let mut chosen: Option<(String, Vec<keleusma::selfhost::ParsedFn>)> = None;
+    // **EVERY qualifying subject is driven, not merely the first.** Absorption 12
+    // rejected the first one, and a single-subject probe reports "rejected"
+    // identically whether one corpus file is unreconstructible or the stage has
+    // stopped working -- which are a corpus finding and a stage regression, and
+    // belong to different owners.
+    let mut drove: Vec<(String, i64)> = Vec::new();
+    let mut refused: Vec<(String, i64)> = Vec::new();
+    let survey_m = keleusma::selfhost::reconstruct_kel_module();
+    let survey_arena = arena_for(&survey_m);
     let mut panicked: Vec<String> = Vec::new();
     println!("\n================ single-head reconstruct");
     println!(
@@ -693,8 +702,27 @@ fn the_single_head_reconstruct_seed_drives_the_stage() {
         let guarded = fns.iter().filter(|f| !f.guard_records().is_empty()).count();
         let body = fns.first().map(|f| f.body_records().len()).unwrap_or(0);
         println!("  {name:<24} {:>5} {guarded:>7} {body:>6}", fns.len());
-        if fns.len() == 1 && guarded == 0 && body > 0 && chosen.is_none() {
-            chosen = Some((name, fns));
+        if fns.len() == 1 && guarded == 0 && body > 0 {
+            // Drive it NOW, before `fns` is moved into `chosen`. `ParsedFn` is
+            // not `Clone`, so the survey cannot defer this to a second pass.
+            let qh = &fns[0];
+            let qseed = keleusma::selfhost::seed_reconstruct_shared(
+                &Vm::new(survey_m.clone(), &survey_arena).expect("survey vm"),
+                qh.body_records(),
+                qh.reconstruct_category(),
+                qh.param_count(),
+            );
+            let qarena = arena_for(&survey_m);
+            let mut qvm = Vm::new(survey_m.clone(), &qarena).expect("survey vm");
+            let mut qshared = qseed.clone();
+            match qvm.call_with_shared(&mut qshared, &[Value::Int(0)]) {
+                Ok(VmState::Yielded(Value::Int(n))) if n > 0 => drove.push((name.clone(), n)),
+                Ok(VmState::Yielded(Value::Int(n))) => refused.push((name.clone(), n)),
+                other => panic!("{name}: reconstruct.kel did not yield a node count: {other:?}"),
+            }
+            if chosen.is_none() {
+                chosen = Some((name, fns));
+            }
         }
     }
     if !panicked.is_empty() {
@@ -748,12 +776,57 @@ fn the_single_head_reconstruct_seed_drives_the_stage() {
         Ok(VmState::Yielded(Value::Int(n))) => n,
         other => panic!("reconstruct.kel did not yield a node count: {other:?}"),
     };
-    println!("  nodes reconstructed {nodes}");
+    println!("  nodes reconstructed {}", describe_reconstruct_result(nodes));
     println!("================\n");
+
+    // **SURVEY EVERY QUALIFYING SUBJECT.** A single-subject probe reports
+    // "rejected" identically whether one corpus file is unreconstructible or the
+    // stage has stopped working, and those need different owners. Absorption 12
+    // (#279, which NAMED reconstruct.kel's failure modes) turned the first
+    // subject from a silent wrong answer into a reported one, which is what
+    // forced this widening.
+    println!("================ single-head survey, ALL qualifying subjects");
+    for (name, n) in &drove {
+        println!("  DROVE   {name:<28} {n} node(s)");
+    }
+    for (name, n) in &refused {
+        println!("  REFUSED {name:<28} {}", describe_reconstruct_result(*n));
+    }
+    println!(
+        "  {} of {} qualifying subjects drive the stage",
+        drove.len(),
+        drove.len() + refused.len()
+    );
+    println!("================\n");
+
+    // **THE PROPERTY IS THAT THE STAGE IS DRIVEN, NOT THAT A PARTICULAR FILE
+    // DRIVES IT.** Widening the subject set is only honest because every refusal
+    // is PRINTED ABOVE WITH ITS NAMED CAUSE; a refusal that disappeared from the
+    // output would be subject-shopping, which this must not become.
     assert!(
-        nodes > 0,
-        "the stage yielded {nodes} nodes, so it took an early exit and the seed was \
-         effectively rejected"
+        !drove.is_empty(),
+        "NO qualifying single-head subject drives reconstruct.kel -- {} refused, so \
+         this is a stage-wide failure rather than one unreconstructible corpus file",
+        refused.len()
+    );
+
+    // **CROSS-TREE HAND-OFF TO THE `v0.2.3` LINE, AND IT IS DELIBERATELY
+    // FIREABLE.** Two of three qualifying subjects are refused with
+    // `rc_range_arity`; before #279 named that cause, `08_method_dispatch.kel`
+    // returned 4 -- a WRONG ANSWER, measured at `origin/v0.3.0`, not a rejection.
+    // So #279 did not break this; it revealed it.
+    //
+    // **WHEN THIS ASSERTION FIRES, THAT IS THE OTHER LINE HAVING FIXED THE
+    // STAGE.** Re-derive the survey, update the count, and delete this guard.
+    // It is pinned as `== 2` rather than `<= 2` on purpose: a guard that their
+    // repair silently satisfies teaches nothing, which this line got wrong once
+    // before and is not repeating.
+    assert_eq!(
+        refused.len(),
+        2,
+        "the single-head refusal set moved from the recorded 2 (`08_method_dispatch.kel` \
+         and `external_native_witness.kel`, both `rc_range_arity`). If it SHRANK, the \
+         `v0.2.3` line has repaired `reconstruct_range` and this guard has done its job."
     );
     assert!(
         seeded.len() > bare.len(),
@@ -761,6 +834,28 @@ fn the_single_head_reconstruct_seed_drives_the_stage() {
         bare.len(),
         seeded.len()
     );
+}
+
+/// Decode a `reconstruct.kel` entry result. A non-negative value is a node
+/// count; a negative one is `rc_fail_base() - code`, per the encoding stated at
+/// `src/selfhost/kel/reconstruct.kel:194`. **The names are THEIRS and are
+/// reproduced so a failure here reads as a cause rather than as a magic number**
+/// -- absorption 12 first surfaced this as a bare `-905`.
+fn describe_reconstruct_result(n: i64) -> String {
+    const FAIL_BASE: i64 = -900;
+    if n >= 0 {
+        return format!("{n} node(s)");
+    }
+    let code = FAIL_BASE - n;
+    let name = match code {
+        1 => "rc_node_full",
+        2 => "rc_stack_full",
+        3 => "rc_stack_empty",
+        4 => "rc_record_range",
+        5 => "rc_range_arity",
+        _ => "unknown-cause",
+    };
+    format!("{n} = rc_fail_base() - {code} ({name})")
 }
 
 fn scalar(v: &Value) -> i64 {

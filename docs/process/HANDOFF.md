@@ -5,30 +5,19 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-08-25 (session 53 CLOSE) against `45c83886`, THE HEAD OF AN UNMERGED BRANCH.**
-> Every pinned value below is measured on THAT tree, not on `origin/v0.2.3`. **THIS FILE HAS GONE
-> STALE WITHIN HOURS FIVE TIMES**, and this refresh has a sixth way to be wrong that the others did
-> not — see the next paragraph. If the dates here disagree with the three channels, trust the
-> channels.
+> **REFRESHED 2026-08-26 (session 54) against the head of `feat/reconstruct-failure-modes`,
+> WHICH IS NOT YET MERGED.** Every pinned value below is measured on THAT tree. **THIS FILE HAS
+> GONE STALE WITHIN HOURS FIVE TIMES.** If the dates here disagree with the three channels, trust
+> the channels.
 >
-> **READ THIS BEFORE THE CHECK BLOCK. ONE PULL REQUEST IS OPEN AND ITS CONTENT IS WHAT THIS FILE
-> DESCRIBES.** `#278` (`feat/bare-for-parse`, head `45c83886`) carries the bare-`for` support.
-> Continuous integration was **restarted by a force-push and had not settled** when this was written,
-> so the merge is **authorized and PENDING**, not done.
+> **The one pin that moves with the merge** is `tests/reconstruct_failure_modes.rs`, which does not
+> exist on `origin/v0.2.3`. Everything else in the check block is unchanged by this branch.
 >
-> - **If `#278` merged**: `origin/v0.2.3` moved past `153a2d65` and the merge count is 150. The check
->   block below passes as written.
-> - **If `#278` did NOT merge**: `origin/v0.2.3` is still `153a2d65`, the merge count is 149, and
->   **every bare-`for` value in the check block will differ** — the boundary reads 90 SOk / 2
->   Refuses, the margin pins read 677 and 35376, and `tests/selfhost_bare_for.rs` has 6 tests. That
->   is not a stale handoff; it is this file describing a branch. **Check out the branch or merge it
->   before concluding anything is wrong.**
+> **`#278` MERGED 2026-08-26 at 22 of 22 green.** The two-reading warning this banner carried is
+> resolved: `origin/v0.2.3` is at `1627e65b`, the merge count is **150**, and the check block below
+> is the single reading. No pull request is open.
 >
-> **DO NOT MERGE `#278` ON A RED GATE.** Continuous integration is the binding signal and the local
-> gate was green on all three signals at `45c83886` — cargo's own exit status 0, 83 binaries, zero
-> failures. If CI disagrees, CI wins.
->
-> **AS OF `153a2d65`: 149 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive it:
+> **AS OF `1627e65b`: 150 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive it:
 > `git log --oneline origin/v0.2.3 | grep -c 'Merge pull request'`. **NOTE THE REF** -- the local
 > `v0.2.3` lags and answers a smaller number for the same tree.
 >
@@ -44,9 +33,15 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > before it is.
 >
 > **ORDER 1'S LARGEST SINGLE ITEM IS DONE.** The bare `for` form **self-compiles byte-identically**
-> and `ctrl/for_bare` is `SOk`. `wire.kel` now **parses correctly** at 486 chunks and fails on a
-> CAPACITY BOUND -- `IndexOutOfBounds(-1, 1024)` -- which is a different failure from the mis-parse
-> it replaced and is the only thing left before the byte-identity corpus.
+> and `ctrl/for_bare` is `SOk`. `wire.kel` now **parses correctly** at 486 chunks.
+>
+> **THE CAUSE THIS FILE RECORDED FOR ITS REMAINING FAILURE WAS WRONG. RETRACTED 2026-08-26.**
+> It said "a CAPACITY BOUND -- `IndexOutOfBounds(-1, 1024)`". An index of `-1` is BELOW THE
+> START, not past the end, so the `1024` is an array's size and identifies nothing. The real
+> cause, now reported by name, is **a record range that leaves two nodes where it must leave
+> one** -- a `parse.kel` emission defect. **Raising a capacity would be the wrong repair.**
+> The old trap fired several steps DOWNSTREAM of the defect, so diagnosing it directly would
+> have sent a reader to the work stack, which is innocent.
 >
 > **Publication remains held.**
 
@@ -88,7 +83,7 @@ grep -c '^\s*#\[test\]' tests/selfhost_region_coverage.rs   # 5
 grep -c '^\s*#\[test\]' tests/selfhost_chunk_names.rs       # 3
 grep -c '^\s*#\[test\]' tests/parse_record_trace.rs         # 2
 grep -c '^\s*#\[test\]' tests/lex_token_trace.rs            # 2
-grep -c '^\s*#\[test\]' tests/selfhost_bare_for.rs          # 7   <-- 6 if #278 is unmerged
+grep -c '^\s*#\[test\]' tests/selfhost_bare_for.rs          # 7
 # THE PROOF-SUPPORT FAMILY, all added in session 52. Several are GAP pins that
 # fail DELIBERATELY if the gap they record is closed -- read the message before
 # treating a failure as a fix.
@@ -108,6 +103,10 @@ grep -c '^\s*#\[test\]' src/confine.rs                       # 13
 # cannot fail; this makes a NEW one fail. Its 21-entry excuse list is a DEBT
 # REGISTER, not a baseline -- shrink it, never grow it.
 grep -c '^\s*#\[test\]' tests/comment_citations.rs           # 5
+# THE RECONSTRUCT FAILURE MODES, session 54. Four of its five named causes have a
+# provoking input; the fifth is UNREACHABLE by construction and the file pins the
+# invariant that makes it so rather than deleting the guard.
+grep -c '^\s*#\[test\]' tests/reconstruct_failure_modes.rs   # 14
 
 # `tests/stage_command_reach.rs` IS in the list now: #210 merged 2026-08-21.
 
@@ -119,7 +118,6 @@ grep -oE 'fn max_nesting\(\) -> Word \{ [0-9]+ \}' src/selfhost/kel/verify_depth
 
 # THE MARGIN PINS. Moved twice this session, both times for a NAMED reason.
 grep -oE 'assert_eq!\(worst_(names|blob), [0-9]+' tests/selfhost_wire.rs   # 680, 35698
-# <-- 677, 35376 if #278 is unmerged.
 
 # THE PARSER'S CAPS. Unchanged; the token cap now binds only the COLLECTING feed.
 grep -rhoE 'pub const PARSE_[A-Z_]+: usize = [0-9]+;' src/ | sort
@@ -177,6 +175,15 @@ into.** `set -o pipefail` with `${PIPESTATUS[0]}`, or redirect to a file and rea
 composite command ending in `grep -E "FAILED"` exits 1 on a green tree, because the composite takes
 its last member's status. This was written down and then repeated within the hour. Print the
 captured status LAST, or read the printed value rather than the command's.
+
+**AND "PRINT THE CAPTURED STATUS LAST" HAS ITS OWN TRAP, MET 2026-08-26.** A background run of
+`cargo test ... > log; echo "CARGO_EXIT=$?" >> log` was announced by the harness as **"completed
+(exit code 0)"** while the log recorded `CARGO_EXIT=101` and two failing binaries. The trailing
+`echo` succeeded, so the composite's status was the echo's. **The advice above is still right and
+it is not sufficient**: printing the status preserves it IN THE LOG and destroys it in the command's
+own exit code, which is the value a background notification reports. Read the log, never the
+notification's exit code. Third variant of one defect -- `tee`, a trailing `grep`, and now a
+trailing `echo` -- and each was found only because someone opened the log anyway.
 
 **Keep TWO independent signals.** Cargo's status gives the verdict; counting `^test result: ok`
 lines gives the coverage. Either alone has been wrong: the status lied in both polarities, and a
@@ -249,6 +256,15 @@ real.
 **A default-feature run is not the gate.** `cargo test --workspace` and `--features compile` both miss
 `self-host`. The gate is a five-entry feature matrix.
 
+**AND THE MIRROR-IMAGE MISTAKE IS EASIER TO MAKE, met 2026-08-26.** A run of ONLY
+`--features self-host` was green on all three signals -- 84 binaries, zero failures, cargo exit
+status 0 -- and continuous integration went **red on four jobs**. A new test file driving the stage
+carried no `#![cfg(feature = "self-host")]`, so the three feature sets WITHOUT the feature failed to
+COMPILE it. **A compile failure in a feature set you did not build is invisible to every signal you
+did collect**, however many of them there are. Three independent signals over one feature set are
+still one feature set. The sibling files all carry the attribute; a new test in this family that
+omits it is red by construction.
+
 **`ci.yml` now supersedes pull-request runs.** Grouped on `github.ref` for a pull request and on the
 unique `run_id` otherwise, so branch verification runs are untouched. Verified by execution: a second
 push cancelled run `31932202253` and `31932359730` replaced it.
@@ -311,12 +327,20 @@ exists -- `intern_index_of`, command 140 -- is itself undriven, and is O(n^2).
 
 **THE BARE-`for` CAUSE IS CLOSED (2026-08-25).** `wire.kel` PARSES CORRECTLY, to 486 chunks that
 mean something -- the mis-parse that made the old count a wrong answer is gone.
-`self_host_compile(wire.kel)` now fails with `IndexOutOfBounds(-1, 1024)`, the shape of a node-array
-bound, on the largest stage in the corpus.
 
-**A BOUND IS A DIFFERENT FAILURE FROM A MIS-PARSE.** A bound is a number; a mis-parse is a wrong
-answer wearing a number's clothes. **Diagnose it before costing it** -- the last two estimates on
-this file were both wrong, one high and one low.
+**AND THE CAUSE RECORDED NEXT WAS ALSO WRONG (retracted 2026-08-26).** This section said
+`IndexOutOfBounds(-1, 1024)` was "the shape of a node-array bound". It is not a bound at all.
+`self_host_compile(wire.kel)` now reports its cause by name: **a record range did not reduce
+to exactly one node** -- two remained, so the record stream carries an unfolded operand.
+
+**THREE READINGS OF ONE FAILURE, TWO OF THEM CONFIDENT AND WRONG.** ``no chunk named `acc` ``
+(real, repaired); a capacity bound (wrong); a range arity defect (measured). **Both wrong
+readings have the same shape: a number in an unnamed message read as if it identified a
+cause.** That is why `reconstruct.kel`'s failure modes were named before the diagnosis was
+attempted -- see `tests/reconstruct_failure_modes.rs` and
+`../decisions/RECONSTRUCT_FAILURE_MODES_BRIEF.md`.
+
+**Diagnose it before costing it** -- the last three estimates on this file were wrong.
 
 The history below is kept because its lessons generalise, and because the diagnosis cost seven
 iterations the first time.
@@ -917,7 +941,8 @@ on all three signals. Merge on 22 of 22, or diagnose the failure — **do not me
 assume the branch is stale because the check block disagrees with `origin/v0.2.3`.**
 
 **ONE. `wire.kel`'s CAPACITY BOUND**, which is now the only thing between it and the byte-identity
-corpus. `self_host_compile(wire.kel)` fails with `IndexOutOfBounds(-1, 1024)` on the largest stage in
+corpus. `self_host_compile(wire.kel)` fails with a NAMED cause -- a record range leaving two
+nodes -- on the largest stage in
 the corpus at 486 chunks. The `-1` is the interesting half: that is a SENTINEL reaching an index,
 not an overflow past a bound, so "raise the cap" is the obvious reading and is probably wrong.
 **Diagnose before costing** — the last two estimates on this file were both wrong, one high and one
@@ -1021,7 +1046,8 @@ migrated, and any future statement kind must go that way. This was the last chan
 found the problem by accident.
 
 **WHAT REMAINS OF ORDER 1.** Item 1 DONE, item 2 at 93% produced / 56% computed, item 3 MOVED.
-`wire.kel` parses correctly and is blocked on the capacity bound named at the top of this section.
+`wire.kel` parses correctly and is blocked on a record range that leaves two nodes, which is a
+`parse.kel` emission defect rather than a bound.
 
 ### WHAT NOT TO DO
 
