@@ -1013,6 +1013,11 @@ fn verify_stage_seed(
 /// Each of the three ends in `yield run()`, and `run()`'s final expression is its
 /// `out_reject` slot, so the yielded value IS the verdict. Read from the stage
 /// sources rather than assumed.
+///
+/// **SENTINEL CLASS: cannot receive one.** The three `verify_*` stages carry no
+/// `pe_tag_base` / `rc_fail_base` convention -- measured across all twelve stage sources on
+/// 2026-08-26, where only `parse.kel` and `reconstruct.kel` do (and `wire.kel`,
+/// which is exempt from this gate). So a verdict here cannot be a refusal tag.
 fn verify_stage_verdict(m: &Module, seed: &[u8]) -> Result<i64, String> {
     let arena = arena_for(m);
     let mut vm = Vm::new(m.clone(), &arena).map_err(|e| format!("stage refuses to load: {e:?}"))?;

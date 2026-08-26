@@ -317,6 +317,12 @@ fn measure(m: &Module) -> Result<Depth, String> {
     })
 }
 
+/// **SENTINEL CLASS: compared, never interpreted.** A differential runs the SAME
+/// source twice -- reference-compiled and backend-compiled -- and compares the
+/// two result streams. A stage failure sentinel appears identically on both
+/// sides, so it cannot manufacture a false agreement; the value's MEANING is
+/// never consulted. Classified 2026-08-26 in the sentinel audit; see
+/// `is_stage_sentinel` in `corpus_differential.rs`.
 fn scalar_of(st: &VmState) -> i64 {
     match st {
         VmState::Yielded(Value::Int(v)) | VmState::Finished(Value::Int(v)) => *v,

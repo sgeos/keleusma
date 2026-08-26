@@ -245,6 +245,9 @@ loop main(resume: Word) -> Word {
 
     let mut got = Vec::new();
     let mut st = vm.call(&[Value::Int(7)]).expect("first call");
+    // **SENTINEL CLASS: cannot receive one.** This file compiles its own inline
+    // source and loads no self-hosted stage module, so the `pe_tag_base()` /
+    // `rc_fail_base()` convention cannot reach this value. Classified 2026-08-26.
     for reply in [11i64, 22, 33, 44] {
         match st {
             VmState::Yielded(Value::Int(v)) => got.push(v),

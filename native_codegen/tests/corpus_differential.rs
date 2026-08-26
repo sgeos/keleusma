@@ -963,6 +963,12 @@ fn lexer_tokens(lex: &Module, seeded: &[u8]) -> Result<Vec<i64>, String> {
     Ok(out)
 }
 
+/// **SENTINEL CLASS: compared, never interpreted.** A differential runs the SAME
+/// source twice -- reference-compiled and backend-compiled -- and compares the
+/// two result streams. A stage failure sentinel appears identically on both
+/// sides, so it cannot manufacture a false agreement; the value's MEANING is
+/// never consulted. Classified 2026-08-26 in the sentinel audit; see
+/// `is_stage_sentinel` in `corpus_differential.rs`.
 fn stream_scalar(st: &VmState) -> Option<i64> {
     match st {
         VmState::Yielded(Value::Int(v)) | VmState::Finished(Value::Int(v)) => Some(*v),
@@ -1431,6 +1437,12 @@ fn flat_ret_bytes(st: &VmState, arena: &keleusma_arena::Arena) -> Vec<u8> {
     fc.resolve(arena).map(|b| b.to_vec()).unwrap_or_default()
 }
 
+/// **SENTINEL CLASS: compared, never interpreted.** A differential runs the SAME
+/// source twice -- reference-compiled and backend-compiled -- and compares the
+/// two result streams. A stage failure sentinel appears identically on both
+/// sides, so it cannot manufacture a false agreement; the value's MEANING is
+/// never consulted. Classified 2026-08-26 in the sentinel audit; see
+/// `is_stage_sentinel` in `corpus_differential.rs`.
 fn scalar_of(st: &VmState) -> i64 {
     match st {
         VmState::Yielded(Value::Int(v)) | VmState::Finished(Value::Int(v)) => *v,
@@ -1759,6 +1771,25 @@ fn ret_pairs_differ(v: &Run, n: &Run) -> bool {
 /// vacuous, including `10_multbyte.kel` — the module whose execution exposed the
 /// composite-return aliasing defect, and therefore the clearest possible
 /// counterexample to its own classification.
+/// Is this yielded value a self-hosted stage's FAILURE SENTINEL rather than a
+/// measurement?
+///
+/// Two stage sources report a cause by yielding a negative tag in the same slot
+/// that otherwise carries a count or a token: `parse.kel`'s `pe_tag_base()` and
+/// `reconstruct.kel`'s `rc_fail_base()`, **both `0 - 900`**, each subtracting a
+/// positive code. So the band is `<= -901`. Measured across all twelve stage
+/// sources on 2026-08-26: those two carry the convention, `wire.kel` carries a
+/// large family of its own and is EXEMPT from this gate, and the remaining nine
+/// carry none.
+///
+/// **THE THRESHOLD IS THEIRS, NOT THIS LINE'S**, and a copied constant that
+/// drifts is worse than no constant. `the_sentinel_band_still_matches_the_stage_
+/// sources` reads both bases back out of the `.kel` text and fails if either
+/// moves.
+fn is_stage_sentinel(v: i64) -> bool {
+    v <= -901
+}
+
 fn is_vacuous(run: &Run) -> bool {
     if run.results.len() < 2 {
         return false;
@@ -2267,6 +2298,8 @@ fn every_lowering_module_executes_or_is_exempt() {
     // per module because the Order-1 gate needs it for STAGES specifically,
     // and the corpus-wide `seed_widened` cannot answer that: it is a count of
     // modules, not a map, so a stage's own figure is not recoverable from it.
+    let mut sentinels_per_module: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
     let mut vectors_per_module: std::collections::BTreeMap<String, usize> =
         std::collections::BTreeMap::new();
     // **The COMPARISON count, which is the figure that actually applies to a
@@ -2488,6 +2521,23 @@ fn every_lowering_module_executes_or_is_exempt() {
         // conflation this whole section exists to prevent. Caught by reading the
         // report after the widening landed, not by the compiler.
         vectors_per_module.insert(name.clone(), seeds);
+        // **DID THE STAGE AGREE ON A FAILURE?** `is_vacuous` catches a stage that
+        // errors and writes nothing, but a stage that errors AND RECORDS ITS
+        // CAUSE writes the shared segment, so it counts as executed-and-agreeing
+        // with nothing saying the agreement is over a refusal. Both sides refuse
+        // identically, so the AGREEMENT IS REAL -- this does not weaken it. What
+        // it weakens is the coverage reading, and that was invisible.
+        //
+        // Surfaced by absorption 12: #279 gave `reconstruct.kel` a negative
+        // sentinel band, and this line then had to ask which of its own
+        // instruments could be reading one as a measurement.
+        sentinels_per_module.insert(
+            name.clone(),
+            runs.iter()
+                .flat_map(|(_, v, _)| v.results.iter().copied())
+                .filter(|r| is_stage_sentinel(*r))
+                .count(),
+        );
         compares_per_module.insert(
             name.clone(),
             runs.iter().map(|(_, v, _)| v.results.len()).sum(),
@@ -2798,6 +2848,30 @@ fn every_lowering_module_executes_or_is_exempt() {
         println!("\n================ ORDER-1 GATE (self-hosted stages)");
         println!("  stage sources found       : {}", stage_files.len());
         println!("  EXECUTE and AGREE         : {}", ex.len());
+
+        // **AGREEING ON A REFUSAL IS STILL AGREEING, AND IS REPORTED SEPARATELY.**
+        let on_sentinel: Vec<(&String, usize)> = ex
+            .iter()
+            .map(|n| (*n, sentinels_per_module.get(*n).copied().unwrap_or(0)))
+            .filter(|(_, c)| *c > 0)
+            .collect();
+        if on_sentinel.is_empty() {
+            println!(
+                "    none of the {} agreeing stages yielded a FAILURE SENTINEL \
+                 (band <= -901)",
+                ex.len()
+            );
+        } else {
+            println!(
+                "    ⚠ {} of {} agreeing stages yielded a FAILURE SENTINEL -- the \
+                 agreement is real, the COVERAGE is not what the count suggests:",
+                on_sentinel.len(),
+                ex.len()
+            );
+            for (n, c) in &on_sentinel {
+                println!("      {n:26} {c} sentinel result(s)");
+            }
+        }
 
         // **HOW STRONG IS THAT AGREEMENT? The vector count, for STAGES only.**
         //
@@ -3273,4 +3347,103 @@ fn every_lowering_module_executes_or_is_exempt() {
          every exemption above should be read as unfinished work",
         executed.len()
     );
+}
+
+/// The sentinel band this harness uses must still be the band the stage sources
+/// actually emit.
+///
+/// **THE CONSTANT IS THE OTHER LINE'S.** `parse.kel` and `reconstruct.kel` each
+/// declare a base of `0 - 900` and subtract a positive code, so a failure lands
+/// at `<= -901`. A copy of someone else's constant that drifts silently is worse
+/// than no copy, so this reads both bases back out of the `.kel` text.
+///
+/// **AND IT PROVES THE PREDICATE CAN FIRE**, because the gate currently reports
+/// that NO agreeing stage yields a sentinel — a clean verdict, and a clean
+/// verdict is evidence about the checker before it is evidence about the tree.
+#[test]
+fn the_sentinel_band_still_matches_the_stage_sources() {
+    // Same relative form the lexer-source read above already uses; these tests
+    // run with `native_codegen/` as the working directory.
+    let mut found = Vec::new();
+    for (file, decl) in [
+        ("parse.kel", "fn pe_tag_base()"),
+        ("reconstruct.kel", "fn rc_fail_base()"),
+    ] {
+        let p = std::path::Path::new("../src/selfhost/kel").join(file);
+        let src = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("read {file}: {e}"));
+        match sentinel_base_in(&src, decl) {
+            Ok(base) => assert_eq!(
+                base, -900,
+                "{file}: `{decl}` declares base {base}, not -900. The band in \
+                 `is_stage_sentinel` was derived from -900 and must be re-derived."
+            ),
+            Err(why) => panic!("{file}: {why}"),
+        }
+        found.push(file);
+    }
+    assert_eq!(found.len(), 2, "both stage sources must be inspected");
+
+    // **THE PREDICATE ITSELF, over the values that actually occur.** -905 is the
+    // real `rc_range_arity` refusal observed on `08_method_dispatch.kel`.
+    assert!(is_stage_sentinel(-905), "a real observed refusal must classify");
+    assert!(is_stage_sentinel(-901), "the first code below the base must classify");
+    assert!(
+        !is_stage_sentinel(-900),
+        "the BASE ITSELF is not a refusal -- a cause subtracts a POSITIVE code"
+    );
+    assert!(!is_stage_sentinel(4), "a node count must not classify");
+    assert!(!is_stage_sentinel(0), "an empty result must not classify");
+    assert!(
+        !is_stage_sentinel(-1),
+        "an ordinary negative must not classify, or the band would swallow real values"
+    );
+
+    // **THE FILE-READING HALF IS PROVEN TO FIRE, and it could not be proven the
+    // obvious way.** Demonstrating it by mutating `parse.kel` is not available:
+    // `src/selfhost/` is the `v0.2.3` line's and is READ-ONLY here, and a guard
+    // temporarily "proven" by an edit that must then be reverted is a guard
+    // proven on a tree that no longer exists. So the check takes SOURCE TEXT and
+    // is exercised against text this test owns.
+    assert_eq!(
+        sentinel_base_in("fn pe_tag_base() -> Word { 0 - 900 }", "fn pe_tag_base()"),
+        Ok(-900),
+        "the real declaration form must parse"
+    );
+    assert_eq!(
+        sentinel_base_in("fn pe_tag_base() -> Word { 0 - 512 }", "fn pe_tag_base()"),
+        Ok(-512),
+        "a MOVED base must be read as moved rather than silently accepted"
+    );
+    assert!(
+        sentinel_base_in("fn something_else() -> Word { 0 - 900 }", "fn pe_tag_base()").is_err(),
+        "a REMOVED declaration must be an error, not a default"
+    );
+}
+
+/// Read `fn <decl>() -> Word { 0 - N }` out of stage source text and return `-N`.
+///
+/// Split out from its caller so the caller can exercise it on text rather than on
+/// a file, because the files it reads in production belong to the `v0.2.3` line
+/// and cannot be mutated to prove this fires.
+fn sentinel_base_in(src: &str, decl: &str) -> Result<i64, String> {
+    let line = src
+        .lines()
+        .find(|l| l.trim_start().starts_with(decl))
+        .ok_or_else(|| {
+            format!(
+                "no longer declares `{decl}`. The sentinel convention moved; re-derive \
+                 the band rather than adjusting the test to match."
+            )
+        })?;
+    let (_, rest) = line
+        .split_once("0 - ")
+        .ok_or_else(|| format!("`{decl}` no longer reads `0 - N`: {}", line.trim()))?;
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return Err(format!("`{decl}` has no numeral after `0 - `: {}", line.trim()));
+    }
+    digits
+        .parse::<i64>()
+        .map(|n| -n)
+        .map_err(|e| format!("`{decl}` base does not parse: {e}"))
 }
