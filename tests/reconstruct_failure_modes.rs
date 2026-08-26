@@ -477,9 +477,13 @@ fn wire_kel_reports_a_named_cause_rather_than_an_array_index() {
         msg.contains("reconstruct.kel refused"),
         "the failure no longer names its stage. Got: {msg}"
     );
+    // THE CAUSE MOVED, AND THIS PIN DID ITS JOB. It named the range-arity cause until
+    // 2026-08-26, when radix-prefixed literals landed in the lexer and cleared `crc_begin`.
+    // `wire.kel` now fails LATER, on an empty-stack pop. The pin is updated rather than
+    // relaxed, so the next move is visible too.
     assert!(
-        msg.contains("exactly one node"),
-        "the failure no longer names the range-arity cause. If the cause genuinely moved, \
+        msg.contains("EMPTY work stack"),
+        "the failure no longer names the empty-stack cause. If the cause genuinely moved, \
          update this pin and say which cause replaced it. Got: {msg}"
     );
     assert!(
