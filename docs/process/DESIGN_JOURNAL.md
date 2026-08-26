@@ -13,6 +13,80 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**[v0.3.0] THE TOPOLOGY RULING LANDED, AND THE NEXT ABSORPTION IMMEDIATELY TURNED A GREEN TEST INTO
+AN HONEST RED (2026-08-26).**
+
+The operator ruled the topology question that had blocked this line for three sessions: **`proofs` ->
+`v0.2.X` -> `v0.3.X`, converging into one branch later.** The word is *sync*; no mechanism is
+mandated. Of the three readings this line recorded, **the third was right** — the relayed "rebase"
+concerned a different edge. **No topology change, so the ownership anchor survives intact**, which
+was the whole reason not to guess. PR #280 merged absorptions 6-11 into `v0.3.0`; divergence 0.
+
+Then `v0.2.3` had already moved again, and absorption 12 (#279) went in.
+
+### The red, and why it is the good kind
+
+`native_codegen` went **276/0/52 -> 275/1/52**. `the_single_head_reconstruct_seed_drives_the_stage`
+asserted `nodes > 0` and got **`-905`** — which decodes, via their own stated encoding
+`rc_fail_base() - code`, to **`rc_range_arity`**: *a record range did not reduce to exactly one node.*
+
+**THE DECISIVE MEASUREMENT WAS TAKEN IN A THROWAWAY WORKTREE AT `origin/v0.3.0`**, because the
+question "is this their regression or my test?" cannot be answered from their commit message:
+
+> before: `nodes reconstructed 4`   after: `-905`
+
+**The 4 was wrong.** Their own comment says the mechanism: `reconstruct_range` read `stack[0]`
+unconditionally, so a range leaving zero nodes **returned a stale index**. My probe asserted
+`nodes > 0`, received a stale stack index that happened to be positive, and **passed for weeks on
+garbage.**
+
+**A PASSING ASSERTION OVER AN UNVALIDATED VALUE IS NOT EVIDENCE.** The assertion was `> 0` when the
+property was *"is a real node count"*, and nothing in the test could tell those apart. That is the
+same shape as this line's other instrument failures: **the check was cheaper than the property it
+stood for, and the gap was invisible while the cheap check passed.**
+
+### Why it is a finding about the stage rather than about my seed
+
+The probe hand-builds nothing. It uses `parse_functions`, `reconstruct_category`, and
+`seed_reconstruct_shared` — **all reference-driver API** — over a **shipped corpus file**. Their
+driver's output, refused by their stage.
+
+### The widening, and the line I had to be careful not to cross
+
+A single-subject probe cannot distinguish "one corpus file is unreconstructible" from "the stage has
+stopped working". Different owners, same output. So the probe now drives **every** qualifying
+subject:
+
+```text
+  DROVE   11_signed.kel                3 node(s)
+  REFUSED 08_method_dispatch.kel       rc_range_arity
+  REFUSED external_native_witness.kel  rc_range_arity
+  1 of 3 qualifying subjects drive the stage
+```
+
+Not stage-wide. **Two of three real shipped single-head functions cannot be reconstructed**, and it
+took #279 naming the cause to make that visible.
+
+**WIDENING A SUBJECT SET TO RECOVER A GREEN IS SUBJECT-SHOPPING.** The only thing separating this
+from that is that **every refusal is printed with its named cause** — so the test reports the gap it
+no longer fails on. If a refusal ever leaves that output without leaving the tree, the test has
+become a liar, and that is written in the test rather than only here.
+
+### The hand-off is pinned as an EQUALITY, deliberately
+
+`refused.len() == 2`, not `<= 2`. When they repair `reconstruct_range`, the set shrinks and **the
+assertion fires and names them.** This line previously attached a cross-tree guard to an observable
+that the other line's repair would *remove*, making it unfireable; that mistake is recorded above and
+is not being repeated.
+
+### The census discipline, third time
+
+Predicted before measuring: +8 non-generic functions in `reconstruct.kel` (24 -> 32), so
+`bound_transfer` 1047 -> **1055**. Measured: **32** and **1055**. Every other census held. **The 1:1
+mapping has now held three times and is still a property of the population, not of the instrument.**
+
+---
+
 **[v0.3.0] THE HIGH-RISK ABSORPTION LANDED CLEAN, AND THE PROVENANCE AUDIT WAS FOUND TO HAVE
 FABRICATED A NUMBER WHILE FIXING FABRICATED NUMBERS (2026-08-26).**
 
