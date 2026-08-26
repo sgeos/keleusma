@@ -10,72 +10,92 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-25 (session 53 CLOSE) — Order 1's largest item is done, and my own estimate of it
-was wrong in both directions
+**Date**: 2026-08-26 (session 54) — I recorded the wrong cause for `wire.kel`, and the tree
+now names the right one
 
-## ONE THING IS WAITING ON YOU, AND IT IS NOT NEW
+## NOTHING IS WAITING ON YOU EXCEPT THE RULING YOU ALREADY HAVE
 
-`origin/v0.2.3` is at `153a2d65`, **149 merges**, and **one pull request is open**: `#278`, which
-carries the bare-`for` support this document describes. Its continuous integration was restarted by
-a force-push and had not settled at session close; the local gate was green on all three signals.
-**Merge on 22 of 22.** Publication remains held.
+`#278` merged: `origin/v0.2.3` is at `1627e65b`, **150 merges**. The bare-`for` support is in.
+Publication remains held.
 
-**The floating-point entry ABI is the last of your eight rulings that is not implemented**, and the
-`v0.3.0` line has attached a second question to it that you have not seen. Both are described below.
-Nothing else needs you.
+**The floating-point entry ABI is still the last of your eight rulings that is not
+implemented**, and the `v0.3.0` line still has a second question attached to it — where a
+`Fixed` shared slot's SCALE lives, since `Fixed<16>` and `Fixed<8>` differ by 256x and compile
+to byte-identical host-visible layouts. **It is theirs to bring you and I have not acted on
+it.** Nothing else needs you.
+
+## The correction I would put in front of you
+
+**I recorded `wire.kel`'s failure as a capacity bound. It was not, and the reading was wrong
+in the way the handoff warns against three paragraphs above where I wrote it.**
+
+The failure was `IndexOutOfBounds(-1, 1024)`. I read the `1024` and inferred a node-array
+bound. But `-1` is *below the start*, not past the end — the number in an unnamed message
+identifies an array's size and says nothing about why the index was bad.
+
+**The true cause is a third thing, in a third place.** A record range leaves **two** nodes
+where it must leave one, so the record stream carries an unfolded operand. The `-1` trap
+fired several steps downstream of that, on state that was already wrong. Diagnosing the
+failure directly would have sent me to investigate the work stack, which was innocent.
+
+**That is why the instrument came before the diagnosis**, and it is the argument for the
+whole increment.
 
 ## What landed
 
-**The confinement analysis is finished, callee summary included.** `src/confine.rs` answers *is this
-construction site's region unreachable once its enclosing iteration ends?* per site, as **confined /
-cannot establish / escapes**. `module_confinement` summarises what each chunk does with each
-parameter first; `chunk_confinement` keeps the summary-free answer. It is a library predicate for the
-other line's code generation and is deliberately **not wired into `verify()`**.
+**`reconstruct.kel`'s failure modes are named.** The stage had none. Derived from the source
+it declares **26 arrays in six size classes**, so **25 of the 26 shared a failure message
+with at least one sibling** — the same defect `parse.kel` carried until thirteen causes were
+named, where tracing one such failure cost seven increments.
 
-| path | sites | confined | escapes | cannot establish |
-|---|---|---|---|---|
-| no summaries | 33 | 17 | 12 | **4** |
-| summarised | 33 | **23** | 10 | **0** |
+Five causes now report by name. `tests/reconstruct_failure_modes.rs` provokes four of them
+with real inputs and pins the fifth's unreachability.
 
-**Also repaired**, on the `v0.3.0` line's report: a `src/compiler.rs` comment asserting two
-`Op::IsStruct` routes verify and then trap `InvalidBytecode` — the class `verify()` exists to exclude
-— while the tests beside it disproved it. Under it, a citation to a test **that was never written**,
-twice. `tests/comment_citations.rs` now makes a new one fail.
+**Two things surfaced that were not failures at all before they were named:**
 
-## The finding I would put in front of you if you read one paragraph
+- `reconstruct_range` read slot zero unconditionally. An **empty** range returned a *stale*
+  node index left behind by the previous range; an **over-full** one *silently discarded*
+  every node but the first. Neither trapped. This is what caught `wire.kel`.
+- A record range longer than the input arrays trapped `LoopLimitExceeded`, a
+  virtual-machine message naming no cause whatsoever.
 
-**Closing the gap revealed that two verdicts had been wrong, not merely unestablished.**
+**Two of my own guards could not fire as first written, and only running them showed it.**
+One sat inside a walk whose `limit` aborted a full iteration before the check; the other is
+unreachable by construction because `push` has one caller and the node guard fires first. The
+second is kept with its *invariant* pinned rather than deleted, so a future second caller
+fails a test instead of silently making the guard live.
 
-I aimed the callee summary at the four `cannot-establish` verdicts and it closed all four. It also
-moved **two `escapes` to `confined`** — and those had been *false*. Without a summary, a call's
-return value is assumed to alias every argument, so a composite passed to a helper and then reached
-by the enclosing `return` was reported as escaping **through a route that does not exist**.
+**A regression I caused, and why I did not relax the test for it.** The float program that
+used to be mis-reconstructed and caught downstream by the byte-comparison oracle is now
+refused at source — but the refusal did not name the chunk, which is the operator-facing
+value of that path. The chunk name is threaded through instead, so the earlier refusal keeps
+the later guarantee.
 
-**Nothing in the corpus said so.** The count looked healthy and the analysis was confidently
-reporting a route that was not there. A conservative default hides false positives exactly as well as
-it hides gaps, and the only reason this surfaced is that the fix for one happened to remove the
-other. I would not have found it by reading.
+## What I got wrong inside this increment
 
-**The related correction, which the other line has accepted:** their census concluded two analysis
-features were mandatory on day one because 3 of 3 sites were disqualified by `Call`. Only one was
-needed — `12_sensor_window.kel` passes a `Word`, so the call never touches the composite. Their test
-saw the *opcode*; a dataflow analysis follows the *value*. Their conclusion that admissibility needed
-measuring was right; what the measurement said was not.
+**I wrote "seven arrays" when the family was 26.** Seven is what the failure in front of me
+pointed at. Seventh recorded instance of deriving a set from the part of the system I was
+thinking about rather than from the system. The correction is left standing in the brief.
 
-## The remaining ruling, and the question now attached to it
+**The citation guard caught me citing two tests before they existed** — third time it has
+done so, and it was right each time.
 
-**The floating-point entry ABI.** Your ruling stands: floating-point registers gate on a feature,
-`Fixed` is always available. The asymmetry is unchanged — the FP half may assume `floats`, and the
-`Fixed` half is unconditional and is the harder one.
+## What is next, and what it is NOT
 
-**The `v0.3.0` line has since found a second, related question and it is genuinely yours.** A
-`Fixed` value's *representation* is settled — a signed Q-format integer of the word width — but its
-**scale is not host-visible**. `Fixed<16>` and `Fixed<8>` differ by 256x and compile to byte-identical
-shared-slot layouts, so a host cannot tell them apart. That is sound inside a module, where the type
-checker already enforced compatibility, and a shared slot is not inside the module. They measured it
-rather than reasoned it, and they price three options, preferring: **refuse `Fixed` in a
-host-visible position at the source and make hosts marshal through `Word`.** That is a breaking
-source change and needs your authorization. I have not acted on it and it is theirs to bring you.
+`wire.kel` now fails with a named cause: a range leaving two nodes. **That is a `parse.kel`
+emission defect, not a bound**, so raising a capacity would be the wrong repair.
+
+**Naming a cause and repairing it are two claims with two evidence bars**, and this increment
+makes only the first. The repair is the next increment and it is deliberately not attempted
+here.
+
+**Scope stated so the gap is visible**: guards cover the 1024-wide class only. The other
+nineteen arrays are named in a register that fails if the stage grows an array without either
+a guard or an entry.
+
+---
+
+# Previous session (53)
 
 ## The second thing that landed, and why it was worth the detour
 
