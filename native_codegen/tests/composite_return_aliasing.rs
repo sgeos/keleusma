@@ -60,6 +60,9 @@ fn both(src: &str, a: i64, b: i64) -> (i64, i64) {
     let mut arena = keleusma_arena::Arena::with_capacity(cap);
     arena.resize_persistent(need).expect("persistent");
     let mut vm = Vm::new(m.clone(), &arena).expect("vm");
+    // **SENTINEL CLASS: cannot receive one.** This file compiles its own inline
+    // source and loads no self-hosted stage module, so the `pe_tag_base()` /
+    // `rc_fail_base()` convention cannot reach this value. Classified 2026-08-26.
     let vv = match vm.call(&[Value::Int(a), Value::Int(b)]).expect("vm run") {
         VmState::Finished(Value::Int(v)) | VmState::Yielded(Value::Int(v)) => v,
         other => panic!("unexpected VM outcome: {other:?}"),

@@ -104,6 +104,10 @@ fn run_vm(m: &Module) -> Vec<i64> {
     out
 }
 
+/// **SENTINEL CLASS: cannot receive one.** The only stage source this file loads
+/// is `verify_depth.kel`, and the sentinel convention lives in `parse.kel` and
+/// `reconstruct.kel` alone -- measured across all twelve sources on 2026-08-26.
+/// Classified in the sentinel audit; see `is_stage_sentinel`.
 fn scalar_of(st: &VmState) -> i64 {
     match st {
         VmState::Yielded(Value::Int(v)) | VmState::Finished(Value::Int(v)) => *v,

@@ -148,6 +148,10 @@ fn run_vm(m: &Module, floor: i64) -> (i64, Vec<String>, Vec<u8>) {
     let mut shared = vec![0u8; shared_data_bytes_for(m)];
     let out = match vm
         .call_with_shared(&mut shared, &[Value::Int(floor)])
+    // **SENTINEL CLASS: compared, never interpreted.** A differential runs the
+    // same source reference-compiled and backend-compiled and compares the two
+    // streams; a sentinel appears identically on both sides and cannot
+    // manufacture agreement. Classified 2026-08-26.
         .expect("vm run")
     {
         VmState::Finished(Value::Int(v)) | VmState::Yielded(Value::Int(v)) => v,

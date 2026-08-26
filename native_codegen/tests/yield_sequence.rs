@@ -78,6 +78,9 @@ fn vm_sequence(src: &str, args: &[i64], replies: &[i64]) -> (Vec<i64>, i64) {
     let vals: Vec<Value> = args.iter().map(|&x| Value::Int(x)).collect();
     let mut yielded = Vec::new();
     let mut st = vm.call(&vals).expect("vm run");
+    // **SENTINEL CLASS: cannot receive one.** This file compiles its own inline
+    // source and loads no self-hosted stage module, so the `pe_tag_base()` /
+    // `rc_fail_base()` convention cannot reach this value. Classified 2026-08-26.
     loop {
         match st {
             VmState::Yielded(Value::Int(v)) => {
@@ -258,6 +261,9 @@ fn vm_stream_sequence(src: &str, args: &[i64], replies: &[i64]) -> Vec<i64> {
     // Bounded by construction: a divergent loop would otherwise spin forever, and
     // a hang is a far worse failure than a wrong answer because it reports
     // nothing. The bound is the reply count, so the caller sets it.
+    // **SENTINEL CLASS: cannot receive one.** This file compiles its own inline
+    // source and loads no self-hosted stage module, so the `pe_tag_base()` /
+    // `rc_fail_base()` convention cannot reach this value. Classified 2026-08-26.
     while yielded.len() < replies.len() {
         match st {
             VmState::Yielded(Value::Int(v)) => {
