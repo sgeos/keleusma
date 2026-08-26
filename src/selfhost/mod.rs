@@ -2261,6 +2261,14 @@ const RC_AST_ARGS: usize = RC_AST_BASE + 1 + 1024;
 const RC_AST_LHS: usize = RC_AST_BASE + 1 + 1024 * 2;
 const RC_AST_RHS: usize = RC_AST_BASE + 1 + 1024 * 3;
 const RC_AST_CALL_ARGS: usize = RC_AST_BASE + 1 + 1024 * 4;
+/// `for_parts`, the BARE loop form's seven-word entries. One 256-slot stride after
+/// `call_args`, matching the output block's declaration order.
+///
+/// **This constant did not exist until 2026-08-25**, and `for_parts` was read back as an
+/// empty vector while the driver dutifully copied that emptiness into `codegen.kel`. The
+/// symptom was a structurally correct loop whose every operand was slot 0 and node 0,
+/// because `push_forin` read seven zeros.
+const RC_AST_FOR_PARTS: usize = RC_AST_BASE + 1 + 1024 * 4 + 256;
 const RC_AST_MATCH_PARTS: usize = RC_AST_BASE + 1 + 1024 * 4 + 256 * 2;
 const RC_AST_LIMIT_PARTS: usize = RC_AST_BASE + 1 + 1024 * 4 + 256 * 3;
 const RC_AST_HEAD_PARTS: usize = RC_AST_BASE + 1 + 1024 * 4 + 256 * 4;
@@ -2356,11 +2364,12 @@ fn reconstruct_via_kel(records: &[(i64, i64)], category: i64, param_count: usize
     };
     let call_args = read_side(&vm, &shared, RC_AST_CALL_ARGS);
     let match_parts = read_side(&vm, &shared, RC_AST_MATCH_PARTS);
+    let for_parts = read_side(&vm, &shared, RC_AST_FOR_PARTS);
     let limit_parts = read_side(&vm, &shared, RC_AST_LIMIT_PARTS);
     Body {
         nodes,
         call_args,
-        for_parts: Vec::new(),
+        for_parts,
         match_parts,
         limit_parts,
         head_parts: Vec::new(),
@@ -2461,7 +2470,7 @@ fn reconstruct_via_kel_multihead(heads: &[&ParsedFn], pc: usize) -> Body {
     Body {
         nodes,
         call_args: read_side(&vm, &shared, RC_AST_CALL_ARGS),
-        for_parts: Vec::new(),
+        for_parts: read_side(&vm, &shared, RC_AST_FOR_PARTS),
         match_parts: read_side(&vm, &shared, RC_AST_MATCH_PARTS),
         limit_parts: read_side(&vm, &shared, RC_AST_LIMIT_PARTS),
         head_parts: read_side(&vm, &shared, RC_AST_HEAD_PARTS),

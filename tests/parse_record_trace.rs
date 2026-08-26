@@ -26,41 +26,43 @@ const REPRO: &str = "private data d { a: Word, b: Word }\n\
                      fn z() -> Word { 9 }\n\
                      fn main() -> Word { y() + z() }\n";
 
-/// **THE INVESTIGATION IS CLOSED: THE STREAM NO LONGER GETS FAR ENOUGH TO MISNAME.**
+/// **THE REPRODUCTION COMPILES, AND IT NAMES EVERY DECLARATION CORRECTLY.**
 ///
-/// This test replaces three that pinned SYMPTOMS of the mis-naming defect — a
-/// declaration header for `z` carrying the field name `a`, the mis-name
-/// following a trailing field read, and the function body closing at the loop's
-/// brace. All three were true, all three were consequences of one cause, and
-/// **the cause is now refused at the point where it is known**: `parse.kel`
-/// phase 4 of the loop header sees `{` where the counted form's `limit` would
-/// be, and reports an unsupported-construct diagnostic.
+/// This test has had three subjects, one per state of the defect. It first
+/// pinned the SYMPTOMS — a header for `z` carrying the field name `a`, the
+/// mis-name following a trailing field read, the body closing at the loop's
+/// brace. Then, when `parse.kel` learned to refuse the bare `for` by name, it
+/// pinned that the stream stopped at a named diagnostic instead of misnaming.
+/// Now the form is supported, so it pins the thing all of that was in aid of:
+/// **the reproduction parses, and the names are right.**
 ///
-/// The three symptom pins are gone rather than repointed. Each asserted a
-/// specific wrong record in a stream that is no longer produced, so repointing
-/// them at a source the parser accepts would have kept the names and changed the
-/// subjects — which is how a test comes to measure something other than what it
-/// says.
-///
-/// # What this asserts instead, and why it is the right successor
-///
-/// That the stream stops at the diagnostic, with no declaration header emitted
-/// carrying a wrong name. The control below is what keeps this from being
-/// satisfied by a parser that refuses everything.
+/// The control below is what keeps this from being satisfied by a parser that
+/// names everything `y`.
 #[test]
-fn the_loop_reproduction_stops_at_a_named_diagnostic_rather_than_misnaming() {
-    let err = keleusma::selfhost::try_parse_functions(REPRO)
-        .expect_err("the reproduction contains a bare `for` and must now be refused");
-    let message = err.to_string();
+fn the_loop_reproduction_now_names_every_declaration_correctly() {
+    let (names, records) = keleusma::selfhost::parse_record_trace(REPRO);
+    let id_of = |n: &str| -> i64 { names.iter().position(|s| s == n).expect("interned") as i64 };
+    let headers: Vec<i64> = records
+        .iter()
+        .filter(|(c, _, _)| (1..=3).contains(c))
+        .map(|(_, v, _)| *v)
+        .collect();
+    // CONTAINMENT, matching the control below. The 1..=3 filter also admits data
+    // and body records, so an exact sequence would be a claim about the filter
+    // rather than about the names. The defect was that `z`'s header carried the
+    // data field `a`; its presence here is what refutes that.
     assert!(
-        message.contains("bare `for") && message.contains("not implemented"),
-        "the reproduction is refused, but not for the construct that causes it: {message}"
+        records.len() > 20,
+        "only {} records traced; the instrument is broken",
+        records.len()
     );
-    assert!(
-        !message.contains("chunk named"),
-        "the refusal is still the downstream symptom the three retired tests pinned: \
-         {message}"
-    );
+    for n in ["y", "z", "main"] {
+        assert!(
+            headers.contains(&id_of(n)),
+            "the bare-`for` reproduction's stream has no header for `{n}`. That \
+             is the original mis-naming defect returning."
+        );
+    }
 }
 
 /// **THE CONTROL: THE SAME PROGRAM WITHOUT THE LOOP HAS A CORRECT STREAM.**

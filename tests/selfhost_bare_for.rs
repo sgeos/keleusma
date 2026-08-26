@@ -1,38 +1,51 @@
-//! The bare `for` form, which the self-hosted pipeline does not support — and
-//! which fails without saying so.
+//! The bare `for` form, from an unnamed five-layer failure to a byte-identical
+//! self-compile.
 //!
-//! # What seven iterations of diagnosis actually found
+//! # What this file was
 //!
-//! `self_host_compile(wire.kel)` panics with ``no chunk named `acc` ``. That was
-//! traced through five layers: the wrong name is in `parse.kel`'s own record
+//! `self_host_compile(wire.kel)` panicked with ``no chunk named `acc` ``. That
+//! was traced through five layers: the wrong name is in `parse.kel`'s own record
 //! stream; the cursor never rewinds; the tokens are correct; the function body
 //! closes at the `for` loop's brace rather than the function's; and the
 //! declaration path then reads the trailing field access as a declaration name.
 //!
-//! **All of that is the mechanism. This file is the cause.** `parse.kel`'s loop
-//! header expects `for v in lo..hi limit CAP { … }` — phase 5 waits for the cap's
-//! integer literal. A bare `for v in lo..hi { … }` never supplies one, so the
-//! header machine does not reach its body phase and the braces are attributed to
-//! the wrong block.
+//! **All of that was mechanism. The cause was that `parse.kel`'s loop header
+//! expected `for v in lo..hi limit CAP { … }`** — phase 4 waited for the
+//! contextual `limit`, a bare `for v in lo..hi { … }` never supplied one, and
+//! the braces were attributed to the wrong block.
 //!
-//! # Why this went unmeasured
+//! # What it is now
 //!
-//! **The construct-support boundary contained exactly one `for` case, and it was
-//! the `limit` form.** There was no bare-`for` case, so its support was never
-//! measured. That is the same shape as the boolean-literal and `Byte`-cast
-//! miscompiles: *any construct the corpus does not contain is unverified by
-//! construction*.
+//! **The bare form self-compiles byte-identically.** The gap closed in three
+//! places, and the third was not in the estimate:
 //!
-//! **CLOSED 2026-08-25.** `ctrl/for_bare` is in the table, marked `Refuses`,
-//! taking it to 96 cases at 90 SOk / 2 Refuses / 3 Diverges / 1 RefRejects. The
-//! gap is now MEASURED rather than only diagnosed here.
+//! 1. `parse.kel` accepts the header, reserves TWO frame slots against the
+//!    counted form's five, and emits a short parts ladder.
+//! 2. `reconstruct.kel` assembles the seven-word `for_parts` entry, SYNTHESISING
+//!    `i >= limit` and `i + 1` — neither corresponds to any token, because both
+//!    are properties of the lowering rather than of the source.
+//! 3. **Neither the shipping driver nor this repository's copy of it ever read
+//!    `for_parts` back from `reconstruct.kel`.** `codegen.kel` had the lowering
+//!    all along and received seven zeros. The recorded cost said that stage was
+//!    done; it was, and the wire to it was not.
 //!
-//! # The failure is loud, which is the one piece of good news
+//! # Why it went unmeasured for so long, which is the durable part
 //!
-//! It panics rather than emitting a wrong module, so no caller receives a silent
-//! miscompile. **A panic is still a poor refusal**: this project's parser names
-//! thirteen failure modes with their own causes precisely so a user learns what
-//! happened. ``no chunk named `acc` `` names neither the construct nor the file.
+//! `codegen.kel` has had `push_forin` throughout, exercised by four cases in
+//! `codegen_owns_its_constant_pool_and_matches_reference`. **That corpus drives
+//! the REFERENCE parser**, so it fed `codegen.kel` nodes `parse.kel` has never
+//! produced, and it passed while the pipeline was broken.
+//!
+//! *Any construct the corpus does not contain is unverified by construction* —
+//! and here the construct WAS in a corpus, just not the one exercising the stage
+//! that failed. The construct-support boundary, which drives the whole pipeline,
+//! carried no bare-`for` case until one was added days later.
+//!
+//! # What the tests below now hold
+//!
+//! Each of them was a GAP PIN and each fired when the gap closed, which is what
+//! a gap pin is for. They are converted rather than deleted, so a reader learns
+//! what became of what they watched.
 
 #![cfg(all(feature = "self-host", feature = "compile"))]
 
@@ -44,161 +57,87 @@ const WITH_LIMIT: &str = "private data acc { s: Word }\n\
                           fn f(n: Word) -> Word { acc.s = 0; for i in 0..n limit 8 { acc.s = acc.s + i; } acc.s }\n\
                           fn main() -> Word { f(3) }";
 
-/// **THE `limit` FORM IS SUPPORTED AND BYTE-IDENTICAL. THE BARE FORM IS NOT
-/// SUPPORTED AT ALL.**
+/// **BOTH FORMS SELF-COMPILE BYTE-IDENTICALLY.**
 ///
-/// The control comes first and carries the weight: without it, "the bare form
-/// fails" would be a claim about the compiler rather than about the construct.
+/// This asserted that the counted form worked and the bare form did not. The
+/// counted form is the CONTROL and still carries the weight: without it, "the
+/// bare form compiles" would be a claim about the harness.
 #[test]
-fn the_limit_form_self_compiles_and_the_bare_form_does_not() {
-    // THE CONTROL. Byte-identical, which is the boundary's own verdict for
-    // `ctrl/for_limit` and the reason that case is marked supported.
-    let reference = keleusma::compiler::compile(
-        &keleusma::parser::parse(&keleusma::lexer::tokenize(WITH_LIMIT).expect("lex"))
-            .expect("parse"),
-    )
-    .expect("the reference accepts the limit form");
-    let mine = keleusma::selfhost::self_host_compile(WITH_LIMIT);
-    assert_eq!(
-        keleusma::wire_format::module_to_wire_bytes(&mine).expect("mine"),
-        keleusma::wire_format::module_to_wire_bytes(&reference).expect("reference"),
-        "the `limit` form is no longer byte-identical, so the bare form's failure below \
-         says nothing about the bare form specifically"
-    );
+fn both_for_forms_self_compile_byte_identically() {
+    for (label, src) in [("counted", WITH_LIMIT), ("bare", BARE)] {
+        let reference = keleusma::compiler::compile(
+            &keleusma::parser::parse(&keleusma::lexer::tokenize(src).expect("lex")).expect("parse"),
+        )
+        .expect("the reference accepts both forms");
+        let mine = keleusma::selfhost::self_host_compile(src);
+        assert_eq!(
+            keleusma::wire_format::module_to_wire_bytes(&mine).expect("mine"),
+            keleusma::wire_format::module_to_wire_bytes(&reference).expect("reference"),
+            "the {label} `for` form no longer self-compiles byte-identically"
+        );
+    }
+}
 
-    // THE REFERENCE ACCEPTS THE BARE FORM, so this is a pipeline gap and not an
-    // ill-formed program.
-    keleusma::compiler::compile(
-        &keleusma::parser::parse(&keleusma::lexer::tokenize(BARE).expect("lex")).expect("parse"),
-    )
-    .expect("the reference accepts the bare form; if it stopped, this file is obsolete");
-
-    let prev = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-    let attempt = std::panic::catch_unwind(|| keleusma::selfhost::self_host_compile(BARE));
-    std::panic::set_hook(prev);
-
+/// **THE BARE FORM YIELDS A MODULE**, which is what it never did.
+///
+/// It used to panic five layers downstream with a missing chunk name, then --
+/// once `parse.kel` learned to say so -- refuse by name. Now it produces a
+/// module, and the assertion is on its SHAPE rather than merely on its
+/// existence: a loop with a `BreakIf` exit and two frame slots.
+#[test]
+fn the_bare_form_yields_a_module_with_the_plain_loop_shape() {
+    use keleusma::bytecode::Op;
+    let m = keleusma::selfhost::self_host_compile(BARE);
+    let f = m
+        .chunks
+        .iter()
+        .find(|c| c.name == "f")
+        .expect("the bare form's function is present");
     assert!(
-        attempt.is_err(),
-        "the bare `for` form now self-compiles. That closes a real gap: add a bare-`for` \
-         case to the construct-support boundary, re-check `self_host_compile(wire.kel)`, \
-         and delete this pin rather than relaxing it"
+        f.ops.iter().any(|o| matches!(o, Op::Loop(_)))
+            && f.ops.iter().any(|o| matches!(o, Op::BreakIf(_))),
+        "the bare form no longer lowers to a plain Loop with a BreakIf exit: {:?}",
+        f.ops
+    );
+    assert!(
+        !f.ops.iter().any(|o| matches!(o, Op::Trap(_))),
+        "the bare form emitted a Trap. That is the COUNTED form's outcome check, \
+         which the bare lowering has no counter for: {:?}",
+        f.ops
     );
 }
 
-/// **IT FAILS LOUDLY, NOT SILENTLY — AND THAT IS THE ONLY REASON THIS IS NOT A
-/// MISCOMPILE.**
+/// **THE BOUNDARY MARKS THE BARE FORM SUPPORTED, AND ITS SUBJECT HAS MOVED
+/// TWICE.**
 ///
-/// Pinned separately because the two can come apart, and the direction matters
-/// more than the failure. A future change that made the bare form *emit* a module
-/// instead of panicking would satisfy the test above — `is_err` would go false
-/// and it would read as the gap being closed — while actually producing a wrong
-/// artifact.
+/// It first asserted the boundary carried NO bare-`for` case, which was the
+/// defect: a construct absent from that table is unverified by construction, and
+/// a reader consulting it to learn whether loops work saw one `for` case marked
+/// supported. A case was added marked `Refuses`, and the pin moved from ABSENCE
+/// to VERDICT. The gap is now closed, so it moves again — to SUPPORTED.
 ///
-/// So this asserts the shape of the failure, not merely that there is one.
+/// **The name moved with the subject each time**, because a test whose name
+/// asserts one thing and whose body checks another is how a test comes to
+/// measure something other than what it says.
 #[test]
-fn the_bare_form_never_yields_a_module() {
-    let prev = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-    let attempt = std::panic::catch_unwind(|| {
-        let m = keleusma::selfhost::self_host_compile(BARE);
-        // Reached only if the pipeline returns. Render it, so a module that is
-        // wrong rather than absent is still caught here.
-        keleusma::wire_format::module_to_wire_bytes(&m).map(|b| b.len())
-    });
-    std::panic::set_hook(prev);
-
-    assert!(
-        attempt.is_err(),
-        "the bare `for` form produced a module. If it is CORRECT, this gap is closed and \
-         the boundary needs the case; if it is WRONG, this is a silent miscompile and is \
-         the most serious class of defect this tree tracks"
-    );
-}
-
-/// **THE FULL-PIPELINE BOUNDARY HAS NO BARE-`for` CASE, AND THE CODEGEN-ONLY
-/// CORPUS HAS FOUR.**
-///
-/// That difference is the whole explanation, and the first version of this test
-/// got it wrong by scanning the file instead of the table.
-///
-/// | corpus | drives | bare `for` cases |
-/// |---|---|---|
-/// | `boundary_cases()` | the **whole** self-hosted pipeline, `parse.kel` included | **none until 2026-08-25; now one, marked `Refuses`** |
-/// | `codegen_owns_its_constant_pool_and_matches_reference` | the REFERENCE parser, then `codegen.kel` | four |
-///
-/// So **`codegen.kel` handles the bare `for` perfectly well** — those four cases
-/// pass — and `parse.kel` does not. Only a corpus that runs the whole pipeline
-/// could have caught that, and the one that does has no case for it.
-///
-/// *Any construct the corpus does not contain is unverified by construction* —
-/// and here the construct IS in a corpus, just not in the one that exercises the
-/// stage that fails.
-///
-/// # The reader is scoped to the table, and it was not at first
-///
-/// The first version searched the whole file for `for … in 0..`, which matched
-/// the four codegen-only cases and a Rust `for _ in 0..65536` in a helper. It
-/// failed, and the failure is what surfaced the distinction above — so the
-/// scoping is recorded rather than quietly corrected.
-#[test]
-fn the_boundary_marks_the_bare_for_case_refused_rather_than_supported() {
+fn the_boundary_marks_the_bare_for_case_supported() {
     const BOUNDARY: &str = include_str!("selfhost_codegen.rs");
-
-    // THE TABLE ONLY. `boundary_cases()` is what drives the whole pipeline; the
-    // rest of the file drives individual stages against reference-parsed input.
     let table: String = BOUNDARY
         .lines()
         .skip_while(|l| !l.contains("fn boundary_cases()"))
         .take_while(|l| !l.starts_with('}'))
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(
-        table.contains("ctrl/for_limit"),
-        "the boundary table was not located, so the absence below means nothing"
-    );
-
-    let for_cases: Vec<&str> = table
-        .lines()
-        .filter(|l| l.contains("for ") && l.contains("in 0.."))
-        .collect();
-    assert!(
-        !for_cases.is_empty(),
-        "no `for` case at all in the boundary table; the reader is broken"
-    );
-    // **THIS PIN'S OWN INSTRUCTION, FOLLOWED.** It used to require that every
-    // `for` case carry `limit`, and its failure message said: if the bare form
-    // is not supported, that case's verdict should say so rather than the table
-    // implying coverage it does not have. A `ctrl/for_bare` case marked
-    // `Refuses` was added on 2026-08-25 and does exactly that, so the pin's
-    // subject moves from ABSENCE to VERDICT.
-    //
-    // The table now implies no coverage it does not have, which is the property
-    // the original was protecting. What must not happen is the bare case
-    // appearing as supported while `parse.kel` refuses it.
-    let bare: Vec<&str> = for_cases
-        .iter()
-        .filter(|l| !l.contains("limit"))
-        .copied()
-        .collect();
-    assert_eq!(
-        bare.len(),
-        1,
-        "expected exactly one bare `for` case in the boundary table, found \
-         {}: {bare:?}. If the bare form became supported, this file's subject \
-         is gone and it should be retired rather than adjusted.",
-        bare.len()
-    );
     let case_start = table
         .find("\"ctrl/for_bare\"")
-        .expect("the bare case is labelled `ctrl/for_bare`");
+        .expect("the boundary carries a bare `for` case labelled `ctrl/for_bare`");
     let verdict = &table[case_start..case_start + 200];
     assert!(
-        verdict.contains("Refuses"),
-        "the boundary's bare `for` case is no longer marked as refused. If \
-         `parse.kel` now lowers the bare form, retire this file; if it does \
-         not, the table is claiming coverage it does not have -- which is the \
-         defect this test was written for."
+        verdict.contains("SOk"),
+        "the boundary's bare `for` case is no longer marked supported. If the \
+         pipeline regressed, fix it; if the case was removed, the construct is \
+         unverified by construction again -- which is the defect this pin has \
+         been following since it recorded the case's ABSENCE."
     );
 }
 
@@ -272,52 +211,30 @@ fn the_bare_and_limit_forms_have_different_lowerings() {
     );
 }
 
-/// **THE REFUSAL NAMES THE CONSTRUCT AND THE REMEDY.**
+/// **THE REFUSAL IS RETIRED, AND ITS DIAGNOSTIC CODE IS GONE FROM THE STAGE.**
 ///
-/// Before this, `parse.kel` never left phase 4 of the loop header, the opening
-/// brace was attributed to the enclosing block, and the failure surfaced five
-/// layers downstream as ``no chunk named `acc` `` — naming neither the
-/// construct nor the file. Seven iterations of diagnosis were spent on that
-/// message once.
+/// `parse.kel` briefly refused the bare form by name at phase 4, which was a
+/// large improvement on the missing-chunk-name panic it replaced and was always
+/// meant to be temporary: the refusal sat exactly where the lowering now hooks
+/// in.
 ///
-/// The refusal is now raised where the fact is known: phase 4 ends at the
-/// contextual `limit` identifier, so a `{` there is unambiguously the bare
-/// form.
-///
-/// To see this fail, delete the `Tok::LBrace()` arm from phase 4 of
-/// `step_forheader` in `src/selfhost/kel/parse.kel`. The stage then returns to
-/// the downstream panic and this test reports a message naming neither thing.
+/// This asserts the refusal is not merely unreachable but ABSENT. A dead
+/// diagnostic that no input can produce is the same shape as a citation naming
+/// a test that does not exist -- it reads as a capability and is not one.
 #[test]
-fn the_bare_form_is_refused_by_a_message_naming_the_construct_and_the_remedy() {
-    let err = keleusma::selfhost::try_parse_functions(BARE)
-        .expect_err("the bare form must be refused, not accepted");
-    let message = err.to_string();
-
-    // ITEM 1: the construct, not an unrelated symbol.
+fn the_bare_form_refusal_is_gone_from_the_stage() {
+    const PARSE: &str = include_str!("../src/selfhost/kel/parse.kel");
     assert!(
-        message.contains("bare `for") && message.contains("not implemented"),
-        "the refusal does not name the construct as unimplemented: {message}"
+        !PARSE.contains("pe_bare_for"),
+        "`parse.kel` still defines or raises the bare-`for` refusal. The form is \
+         supported now, so a reachable refusal would be a contradiction and an \
+         unreachable one would be a diagnostic no input can produce."
     );
-    assert!(
-        !message.contains("no chunk named"),
-        "the refusal is still the downstream symptom rather than the cause: \
-         {message}"
-    );
-
-    // ITEM 2: the remedy, because that is what a reader needs next.
-    assert!(
-        message.contains("limit"),
-        "the refusal does not name the counted form as the supported \
-         alternative: {message}"
-    );
-
-    // A capacity diagnostic tells a reader to split the function, and that
-    // advice is wrong here. The message says so.
-    assert!(
-        message.contains("UNSUPPORTED CONSTRUCT"),
-        "the refusal does not distinguish itself from a capacity limit: \
-         {message}"
-    );
+    // AND THE CONSTRUCT ACTUALLY GOES THROUGH, so this is not satisfied by
+    // deleting the code that used to say why it did not.
+    let parsed = keleusma::selfhost::try_parse_functions(BARE)
+        .expect("the bare form must parse now that the refusal is gone");
+    assert_eq!(parsed.functions.len(), 2);
 }
 
 /// THE CONTROL, and it carries the weight for the test above.
@@ -336,76 +253,48 @@ fn the_counted_form_is_still_accepted_by_the_same_entry_point() {
     );
 }
 
-/// **WHERE THE BARE FORM'S SUPPORT ACTUALLY STANDS, MEASURED ACROSS THE STAGES.**
+/// **THE LOWERING IS REACHED BY EVERY STAGE NOW, AND THE ESTIMATE THAT SAID SO
+/// WAS WRONG BY ONE SITE.**
 ///
-/// The recorded cost was "a second lowering across three stage sources". That
-/// was written from a correct observation — the two `for` forms are different
-/// lowerings, not one with an optional clause — and it inferred the WORK from
-/// the DIFFERENCE. Two lowerings means two must be written, unless one already
-/// is.
+/// This recorded a measured division of labour: `codegen.kel` DONE, the driver
+/// DONE, `reconstruct.kel` declared-but-never-written, `parse.kel` absent. It
+/// was written to fail when the work started, and it did.
 ///
-/// **`codegen.kel` already has it.** `push_forin` emits the whole bare lowering
-/// from a seven-word `for_parts` entry, and four bare-`for` cases exercise it in
-/// `codegen_owns_its_constant_pool_and_matches_reference`. It got written
-/// because that corpus drives the REFERENCE parser, so it has always received
-/// nodes `parse.kel` has never produced. **The same corpus split that hid the
-/// gap is why the lowering exists and was never connected.**
+/// **The row it got wrong was the driver's.** It read `for_parts` INTO
+/// `codegen.kel` and never OUT of `reconstruct.kel`, in the shipping driver and
+/// in this repository's copy of it — so `push_forin` received seven zeros and
+/// produced a structurally correct loop whose every operand was slot 0. The
+/// measurement checked that the plumbing existed and not that it ran in both
+/// directions.
 ///
-/// So the remaining work is two stages, not three, and the part that had to
-/// reproduce the reference byte for byte is done. **A better estimate is not a
-/// small estimate**: emitting the records in `parse.kel` and populating the
-/// parts in `reconstruct.kel` is real work in a phase machine.
-///
-/// # This is a GAP PIN
-///
-/// It fails when the work starts. That is not a regression — it means the state
-/// it records has changed, and its successor should say what became of it, as
-/// three sibling pins did when the refusal landed and one did when the boundary
-/// case did.
+/// What it now pins is the completed wiring, in the direction that was missing.
 #[test]
-fn the_bare_lowering_exists_in_codegen_and_is_unreached_by_the_earlier_stages() {
+fn every_stage_reaches_the_bare_lowering() {
     const CODEGEN: &str = include_str!("../src/selfhost/kel/codegen.kel");
     const RECONSTRUCT: &str = include_str!("../src/selfhost/kel/reconstruct.kel");
     const PARSE: &str = include_str!("../src/selfhost/kel/parse.kel");
+    const DRIVER: &str = include_str!("../src/selfhost/mod.rs");
 
-    // DONE: the lowering itself.
     assert!(
         CODEGEN.contains("fn push_forin("),
-        "`codegen.kel` no longer defines `push_forin`. If the bare lowering was \
-         renamed the cost recorded above needs re-deriving; if it was removed, \
-         the estimate is three stages again."
+        "`codegen.kel` no longer defines the bare lowering"
     );
-
-    // NOT DONE: `reconstruct.kel` DECLARES the parts and never writes them.
-    // Declared-versus-written is the whole distinction — a test satisfied by the
-    // declaration would report the stage as done.
     assert!(
-        RECONSTRUCT.contains("for_parts: [Word;"),
-        "`reconstruct.kel` no longer declares `for_parts`, so the measurement \
-         below is about a different structure than the one recorded"
+        RECONSTRUCT.matches("for_parts[").count() > 0,
+        "`reconstruct.kel` no longer writes `for_parts`, so the seven-word entry \
+         `push_forin` reads is never assembled"
     );
-    let writes = RECONSTRUCT.matches("for_parts[").count();
-    assert_eq!(
-        writes, 0,
-        "`reconstruct.kel` now indexes `for_parts` {writes} time(s). **THE WORK \
-         HAS STARTED**, which is what this pin watches for. Retire it and record \
-         what the stage now does, the way the refusal and boundary pins were \
-         moved rather than deleted."
-    );
-
-    // NOT DONE: `parse.kel` does not know the node at all.
     assert!(
-        !PARSE.contains("for_parts") && !PARSE.contains("forin"),
-        "`parse.kel` now mentions the bare form's node or its parts. **THE WORK \
-         HAS STARTED** — see the note above."
+        PARSE.contains("step_forin_emit"),
+        "`parse.kel` no longer emits the bare form's parts"
     );
-
-    // THE CONTRAST THAT MAKES THE ZERO MEAN SOMETHING. The counted form's
-    // equivalent is populated, so "declared but unwritten" is a real state of
-    // this stage rather than an artefact of how the file is written.
+    // **THE ROW THE ESTIMATE GOT WRONG.** Reading it out of `reconstruct.kel` is
+    // a different thing from writing it into `codegen.kel`, and only the second
+    // existed.
     assert!(
-        RECONSTRUCT.matches("limit_parts").count() > 10,
-        "`limit_parts` is barely referenced in `reconstruct.kel`, so the zero \
-         above no longer contrasts with anything and says little"
+        DRIVER.contains("RC_AST_FOR_PARTS"),
+        "the driver no longer reads `for_parts` back from `reconstruct.kel`. \
+         That omission produced a correct loop whose every operand was zero, and \
+         it is the failure this assertion exists for."
     );
 }
