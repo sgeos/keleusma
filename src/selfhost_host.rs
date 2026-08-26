@@ -147,6 +147,67 @@ pub fn drive_parse_records_with<F, B>(
 /// had already mis-read.
 pub const PARSE_LET_NAME_TAG: i64 = 90;
 
+/// The tag at or below which a word yielded by `reconstruct.kel` is a diagnostic rather
+/// than a node count. Node counts are non-negative, so no legitimate count can collide.
+///
+/// Restated here from `rc_fail_base()` in the stage;
+/// `the_reconstruct_diagnostic_tag_base_matches` checks the two agree.
+pub const RECONSTRUCT_DIAG_TAG_BASE: i64 = -900;
+
+/// The node, work-stack and record capacity of `reconstruct.kel`, restated from
+/// `rc_cap_node()`. `the_reconstruct_guard_caps_match_their_arrays` checks it against the
+/// array declarations it guards.
+pub const RECONSTRUCT_NODE_CAP: usize = 1024;
+
+/// Render a diagnostic yielded by `reconstruct.kel` as a message that names its cause.
+///
+/// **This exists because the stage's arrays fall into six size classes, so an unguarded
+/// out-of-range index named a size class rather than a cause.** Twenty-five of the
+/// stage's twenty-six arrays share a message with at least one sibling. The worst of them
+/// reads as a capacity bound and means the opposite: `IndexOutOfBounds(-1, 1024)` on a
+/// pop is an *underflow*, and a reader who sees the 1024 concludes an array was too small
+/// when in fact the record stream consumed more operands than it produced.
+///
+/// An unknown code is reported as unknown rather than guessed at, for the same reason
+/// [`describe_parse_diagnostic`] does so.
+pub fn describe_reconstruct_diagnostic(code: i64, detail: i64) -> String {
+    match RECONSTRUCT_DIAG_TAG_BASE - code {
+        1 => format!(
+            "too many nodes in one function for reconstruct.kel: it reached {detail} and \
+             `io.kinds`/`args`/`lhs`/`rhs` hold {RECONSTRUCT_NODE_CAP}. Split the function."
+        ),
+        2 => format!(
+            "the reconstruct.kel work stack is full: it reached {detail} and `rs.stack` \
+             holds {RECONSTRUCT_NODE_CAP}. This cause is UNREACHABLE while `push` is \
+             called only from `emit`, because the node guard fires first; \
+             `the_work_stack_cannot_overflow_before_the_node_array` pins that."
+        ),
+        3 => "reconstruct.kel popped an EMPTY work stack. This is an UNDERFLOW, and it is \
+              not a capacity bound: the record stream consumed more operands than it \
+              produced, so the fault is in what `parse.kel` emitted, not in any array's \
+              size."
+            .into(),
+        4 => format!(
+            "a record index past reconstruct.kel's input arrays: it reached {detail} and \
+             `io.rec_kind`/`rec_arg` hold {RECONSTRUCT_NODE_CAP}. Split the function."
+        ),
+        5 => format!(
+            "a record range did not reduce to exactly one node: {detail} remained on the \
+             work stack. A range is one function body or one head of a multiheaded \
+             function and must leave its single root. More than one means the record \
+             stream carries an unfolded operand; zero means it carries none. Before this \
+             cause was named, `reconstruct_range` read slot zero unconditionally and \
+             returned a STALE index for an empty range, or SILENTLY DISCARDED the \
+             remainder for an over-full one."
+        ),
+        other => format!(
+            "reconstruct.kel reported diagnostic code {other} (detail {detail}), which \
+             this driver does not know. The stage has grown a cause that \
+             `describe_reconstruct_diagnostic` was not taught."
+        ),
+    }
+}
+
 /// The tag at or below which a record from `parse.kel` is a diagnostic rather than a parse
 /// record. Record tags are non-negative, so no legitimate record can collide.
 ///

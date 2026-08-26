@@ -127,9 +127,18 @@ fn consecutive_same_named_heads_collapse_into_one_chunk() {
 
 /// **THE SELF-HOSTED COMPILER CANNOT COMPILE `wire.kel`, AND NOTHING SAID SO.**
 ///
-/// `self_host_compile(wire.kel)` panics with ``no chunk named `acc` ``: the
-/// declaration that should be `crc_end` is named after a private-data field, and
-/// no chunk carries that name.
+/// **THE CAUSE HAS MOVED TWICE SINCE THIS WAS WRITTEN, AND THE STALE READING IS
+/// INSTRUCTIVE.** It was first recorded here as ``no chunk named `acc` ``, a
+/// mis-parse of a declaration. That was repaired when the bare `for` form landed.
+/// The failure then presented as `IndexOutOfBounds(-1, 1024)` and was recorded as a
+/// capacity bound on the strength of the `1024` — **which was wrong**: an index of
+/// `-1` is below the start, not past the end.
+///
+/// The cause the tree actually produces is a **record range that does not reduce to
+/// exactly one node**, reported by name since `reconstruct.kel`'s failure modes were
+/// named. See `tests/reconstruct_failure_modes.rs`, which pins the current message.
+/// Two of the three readings above were confident and wrong, both times because a
+/// number in an unnamed message was read as if it identified a cause.
 ///
 /// # Why this was invisible
 ///
