@@ -1,0 +1,74 @@
+COMPLETION CONDITION — the last unproven opcode
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, in any number of commits, on any branch. Judge the end state of the tree,
+never the sequence that produced it.
+
+TREE-CHECKABLE END STATE
+
+1. The tree records the backend status of the one opcode that neither census
+   could previously classify, or states specifically why it cannot be
+   classified.
+
+2. No opcode is reported as supported on the strength of no refusal having been
+   raised. Where a probe-driven verdict is given, the opcode is shown to have
+   been reached by the lowering, not merely present in a module that compiled.
+
+3. If the probe-driven census could previously report an opcode as supported
+   without it having been visited, that gap is either closed or recorded where
+   the census is defined, so a future opcode of the same shape does not land in
+   the flattering column silently.
+
+4. Any probe added is shown to emit the opcode it names, and its verdict
+   distinguishes reached-and-accepted from never-reached.
+
+5. The two censuses are left reading their own populations. Neither is adjusted
+   to agree with the other, and any remaining difference between them is
+   explained rather than removed.
+
+6. The figure that guards the lowering census against an unsound chunk-level
+   inference is re-derived and still non-zero, so nothing done here silently
+   disabled it.
+
+7. Every census and gate figure quoted as current was re-derived against the
+   present tree after the last change capable of moving it, and any prediction
+   recorded in advance is reported against whether or not it held.
+
+8. No file under src/, and none of src/selfhost/, src/confine.rs, src/verify.rs,
+   src/bytecode.rs, src/vm.rs, src/wire_schema.rs, or .github/workflows/,
+   differs from the v0.2.3 commit the branch has absorbed.
+
+9. Both suites are green, each verified by BOTH cargo's own exit status AND the
+   summed per-binary counts, with the two agreeing:
+     - the main workspace, run so a failure does not truncate the run
+     - native_codegen, which continuous integration does not build and whose
+       local run is therefore its only gate
+   The two are not run concurrently with each other, because the workspace
+   carries a wall-clock guard that concurrent load makes fail.
+
+10. The handoff validates against the tree: its ancestry checks pass, and its
+    stated suite and census figures match a fresh run.
+
+11. No count is presented as evidence without the command producing it being
+    recoverable from the surrounding text.
+
+NOT REQUIRED
+
+- Resolving the opcode to "lowers". Establishing that it is emitted but never
+  reached, and that this is why no verdict is available, is a result.
+- Making the two censuses report the same partition.
+- Lowering any currently refused opcode.
+- Resolving the Fixed shared-slot ABI or the float entry ABI; both are held by
+  the operator.
+- Any particular branch name, pull request, merge, or commit count.
+
+DISQUALIFYING
+
+- Reporting an opcode as supported because no refusal was raised, when it was
+  never visited.
+- Adding a probe that lands an unvisited opcode in the supported column.
+- Weakening either census's unproven or refused column so the two agree.
+- Disabling or hollowing the stepped-over figure that guards the lowering
+  census.
+- A guard that cannot fail, or whose ability to fail was never shown.
+- A suite result read from a pipeline's exit status rather than the command's.
