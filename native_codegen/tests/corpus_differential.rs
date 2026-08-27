@@ -845,6 +845,74 @@ const STAGE_SUBJECTS: &[&str] = &[
 /// different subject does not merely change the input; it fails the shape check,
 /// which is the assertion doing its job. Widening it needs more corpus files
 /// containing a multiheaded group, and the corpus has one.
+/// Single-head subjects for `reconstruct.kel`, chosen for a spread of node
+/// counts and of source constructs.
+///
+/// **CHOSEN BY STATED PROPERTY, NOT BY TRYING CANDIDATES UNTIL ONE PASSED**: each
+/// is a head that a survey across every head of every corpus file found
+/// `reconstruct.kel` accepts, and they are spread across arithmetic, enum match,
+/// pipeline and signed-integer sources rather than clustered.
+///
+/// **A REFUSAL IS A DECLINE, NOT A SUBJECT.** `seed_reconstruct_single` returns
+/// `Err` on a negative yield, so a refused subject appears in the gate's
+/// `declined` column with its tag rather than being counted as coverage. Two of
+/// three qualifying single-head FILES are refused with `rc_range_arity`; that is
+/// a fact about single-head files, not a general acceptance rate, and it is why
+/// these are named by head index rather than by file alone.
+const RECONSTRUCT_SINGLE_HEADS: &[(&str, &str, usize)] = &[
+    ("signed", "11_signed.kel", 0),
+    ("enum-match", "03_enum_match.kel", 0),
+    ("arithmetic-main", "01_arithmetic.kel", 1),
+    ("pipeline-main", "05_pipeline.kel", 3),
+];
+
+/// Seed `reconstruct.kel` from one parsed head, via the single-head entry point.
+///
+/// **`ParsedFn::body_records()` is what unblocked this.** A note in this file
+/// said the single-head form "stays blocked ... cannot be built without the field
+/// accessors"; that was true when written and stopped being true. The stage is
+/// DRIVEN here, not merely seeded: a non-positive yield is returned as an error
+/// so the gate reports it as a decline.
+fn seed_reconstruct_single(m: &Module, file: &str, head: usize) -> Result<Vec<u8>, String> {
+    let path = sources()
+        .into_iter()
+        .find(|p| p.file_name().unwrap_or_default().to_string_lossy() == file)
+        .ok_or(format!("{file} is not in the corpus"))?;
+    let src = std::fs::read_to_string(&path).map_err(|e| format!("read subject: {e}"))?;
+    let parsed = keleusma::selfhost::try_parse_functions(&src)
+        .map_err(|e| format!("{file} does not parse: {e:?}"))?;
+    let h = parsed
+        .functions
+        .get(head)
+        .ok_or(format!("{file} has {} heads; no head {head}", parsed.functions.len()))?;
+    if h.body_records().is_empty() {
+        return Err(format!("{file} head {head} has an empty body"));
+    }
+
+    let arena = arena_for(m);
+    let vm = Vm::new(m.clone(), &arena).map_err(|e| format!("stage vm: {e:?}"))?;
+    let seed = keleusma::selfhost::seed_reconstruct_shared(
+        &vm,
+        h.body_records(),
+        h.reconstruct_category(),
+        h.param_count(),
+    );
+    drop(vm);
+
+    // **DRIVE IT, then decide whether it is a subject.** "APPLIED, N bytes" says
+    // the bytes were written, not that the stage consumed them.
+    let arena2 = arena_for(m);
+    let mut vm2 = Vm::new(m.clone(), &arena2).map_err(|e| format!("stage vm: {e:?}"))?;
+    let mut shared = seed.clone();
+    match vm2.call_with_shared(&mut shared, &[Value::Int(0)]) {
+        Ok(VmState::Yielded(Value::Int(n))) if n > 0 => Ok(seed),
+        Ok(VmState::Yielded(Value::Int(n))) => Err(format!(
+            "reconstruct refused {file} head {head}: {n} (a value at or below -901 is              `rc_fail_base() - code`)"
+        )),
+        other => Err(format!("{file} head {head}: no node count: {other:?}")),
+    }
+}
+
 /// `(label, file, head index)` triples whose reconstructed AST drives
 /// `codegen.kel`, chosen for a spread of node counts: 3, 13, 15 and 21.
 ///
@@ -1069,10 +1137,22 @@ fn stage_seeds(m: &Module, name: &str) -> Vec<(&'static str, Result<Vec<u8>, Str
         return vec![("-", Err("no arm for this stage".into()))];
     }
     if name == "reconstruct.kel" {
-        return vec![(
+        // **BOTH ENTRY POINTS, not one at the expense of the other.** The
+        // multi-head subject is the ONLY exercise of
+        // `seed_reconstruct_multihead_shared` and its "exactly four heads"
+        // assertion is deliberate -- the handoff says do not delete it. The
+        // single-head subjects reach `seed_reconstruct_shared`, which this file
+        // recorded as blocked until 2026-08-26.
+        let mut out = vec![(
             "06_multiheaded.kel",
             stage_seed_for(m, name, "06_multiheaded.kel"),
         )];
+        out.extend(
+            RECONSTRUCT_SINGLE_HEADS
+                .iter()
+                .map(|(label, file, head)| (*label, seed_reconstruct_single(m, file, *head))),
+        );
+        return out;
     }
     if name == "codegen.kel" {
         return CODEGEN_SUBJECTS
@@ -3203,9 +3283,33 @@ fn every_lowering_module_executes_or_is_exempt() {
             let d = subjects_declined.get(*st).copied().unwrap_or(0);
             println!("      {st:26} {b} subject(s) seeded, {d} declined");
         }
-        println!("    RESIDUAL: `reconstruct.kel` still sees ONE subject, and the obstacle");
-        println!("    is real -- its seed is a parsed multiheaded group and it asserts the");
-        println!("    subject declares exactly four heads. The corpus has one such file.");
+        // **THE OLD RESIDUAL IS CLOSED AND IS NOT LEFT PRINTING.** It read
+        // "`reconstruct.kel` still sees ONE subject, and the obstacle is real --
+        // its seed is a parsed multiheaded group and it asserts the subject
+        // declares exactly four heads." **That was true of the MULTIHEAD path
+        // only.** The single-head entry point takes `body_records()`, which is
+        // public; this file's note calling it blocked was true when written and
+        // had stopped being true. Reconstruct now carries five subjects across
+        // BOTH entry points.
+        //
+        // **A residual that has been addressed must stop being printed**, or the
+        // report describes a gate that no longer exists -- which is the stale-count
+        // class this line triaged on 2026-08-27.
+        let weakest = STAGE_SEEDED
+            .iter()
+            .map(|st| subjects_built.get(*st).copied().unwrap_or(0))
+            .filter(|n| *n > 0)
+            .min()
+            .unwrap_or(0);
+        println!(
+            "    RESIDUAL: the thinnest seeded stage now carries {weakest} subject(s). \
+             The subject axis is no longer any stage's binding constraint."
+        );
+        println!("    What remains is NOT a subject count: `verify_datalayout.kel` cannot");
+        println!("    be driven at all (its verdict accumulates across three differently-");
+        println!("    encoded phases, blocked BY DESIGN), and `wire.kel` is exempt as");
+        println!("    fault-comparable rather than uncompared. Both are documented as");
+        println!("    correct rather than as gaps.");
         // **NAME the unseeded stages, do not merely count them.** A count tells
         // the next reader how much is left; a list tells them where to start.
         let unseeded: Vec<&String> = ex
