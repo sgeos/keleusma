@@ -115,6 +115,14 @@ fn align_up(n: u32) -> u32 {
 /// correct one, not a conservative one, not any. **The conservatism that costs
 /// the bytes is what buys the immunity.**
 ///
+/// **AND THAT NON-REUSE IS NOW ENFORCED, not merely stated here.**
+/// `region_nonreuse.rs` fails if any chunk plans two sites into overlapping
+/// storage — on RANGES, not offsets, since distinct offsets can still overlap.
+/// It was prose in four places and asserted in none until 2026-08-27, in a
+/// codebase where this line had spent three iterations arguing for a reusing
+/// planner. **The guard covers WITHIN-chunk reuse only**; cross-chunk collision
+/// is the separate recorded defect in `composite_return_aliasing.rs`.
+///
 /// # WHOEVER CLOSES THE GAP IS BUYING BOTH HALVES
 ///
 /// That is the point of putting this here rather than in a decision document.

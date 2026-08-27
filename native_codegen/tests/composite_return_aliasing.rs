@@ -14,6 +14,9 @@
 //! # The mechanism
 //!
 //! `plan_chunk_region` gives every flat site in a chunk a distinct offset, and
+//! (**Within-chunk non-reuse is enforced by `region_nonreuse.rs`.** The
+//! cross-chunk collision this file documents is NOT covered by that guard and
+//! remains open — the two are orthogonal.)
 //! offsets are planned **per chunk from zero**. `mk` therefore writes its result
 //! at the same region offset on every call, while the caller holds two of those
 //! results live at once. One buffer, one offset, two live values.

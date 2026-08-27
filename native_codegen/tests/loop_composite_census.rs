@@ -19,6 +19,7 @@
 //! dispatch. Counting every `Loop` scope as a loop body gave **196 of 208 sites
 //! surviving a confinement test — 94%, flattering and wrong.** A `match` body
 //! runs ONCE, so its sites are never reused and confinement cannot apply.
+//! (That non-reuse is enforced by `region_nonreuse.rs` as of 2026-08-27.)
 //!
 //! What gave it away was not the 94%: it was **zero of 407 bodies containing a
 //! call**, which is implausible and meant the population was not what it claimed.
