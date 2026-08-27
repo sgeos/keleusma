@@ -378,3 +378,119 @@ fn is_the_low_confinement_a_property_of_exceeding_or_of_the_rogue_family() {
         "no module fell into any cell, so the table describes nothing"
     );
 }
+
+/// How common is the un-lowered composite form, and is it what the refused
+/// modules use?
+#[test]
+fn how_common_is_the_boxed_composite_form() {
+    use keleusma::bytecode::NewCompositeOperand as N;
+    let corpus = all_compiling_modules();
+    let (mut flat, mut boxed) = (0usize, 0usize);
+    let mut boxed_modules: Vec<String> = Vec::new();
+    for (name, m) in &corpus {
+        let mut b = 0usize;
+        for c in &m.chunks {
+            for op in &c.ops {
+                if let keleusma::bytecode::Op::NewComposite(v) = op {
+                    match v {
+                        N::Flat { .. } => flat += 1,
+                        _ => {
+                            boxed += 1;
+                            b += 1;
+                        }
+                    }
+                }
+            }
+        }
+        if b > 0 {
+            boxed_modules.push(format!("{name} ({b})"));
+        }
+    }
+    println!("\n================ COMPOSITE FORMS CORPUS-WIDE");
+    println!("  Flat  (lowered)      : {flat}");
+    println!("  non-Flat (NOT lowered): {boxed}");
+    println!("  modules using non-Flat: {:?}", boxed_modules);
+    println!("================\n");
+}
+
+/// **WHICH refusal condition blocks the last composite modules?**
+///
+/// The `Flat` arm refuses for exactly three reasons: the region pointer is
+/// absent, no region placement exists for the site, or **an operand has unknown
+/// packed width**. Naming which one fires is the difference between a finding and
+/// a count.
+///
+/// # The prediction being tested, which is NOT its own evidence
+///
+/// `spike_composite_split` argued the composite class is two blockers, not one:
+/// every composite READ bakes what a lowering needs, and **only
+/// `NewComposite::Flat` is short** — it carries the total body size, not the
+/// per-field breakdown, so packing requires each operand's width. *"That, and
+/// only that, is what type recovery buys."*
+///
+/// **If the observed cause is the width condition, the split is confirmed on the
+/// residue it predicted.** If it is either of the other two, the prediction does
+/// not explain what is left.
+///
+/// # A candidate ruled out by measurement first
+///
+/// The obvious guess was the `Boxed` form, which the backend does not lower.
+/// **The corpus contains ZERO non-`Flat` composites** — all 256 sites are `Flat`
+/// — so that guess was wrong before anything was built on it.
+#[test]
+fn which_condition_refuses_the_last_composite_modules() {
+    let corpus = all_compiling_modules();
+    let mut hits: Vec<(String, String)> = Vec::new();
+
+    for (name, m) in &corpus {
+        for (chunk, err) in keleusma_native::module_refusals(m, keleusma_native::LowerOptions::default()) {
+            let text = format!("{err:?}");
+            if text.contains("NewComposite") {
+                hits.push((format!("{name}::{chunk}"), text));
+            }
+        }
+    }
+
+    println!("\n================ WHICH CONDITION REFUSES THE COMPOSITE MODULES?");
+    if hits.is_empty() {
+        println!("  NONE. No module refuses on NewComposite any more.");
+        println!("  That is NEWS: the recorded residue of two has closed, and the");
+        println!("  coverage figures quoted elsewhere need re-deriving.");
+    }
+    for (where_, text) in &hits {
+        // Name the condition, not merely the opcode.
+        let cause = if text.contains("unknown packed width") {
+            "UNKNOWN OPERAND WIDTH  <- the condition spike_composite_split predicted"
+        } else if text.contains("needs the region pointer") {
+            "REGION POINTER ABSENT  <- not the predicted condition"
+        } else if text.contains("no region placement") {
+            "NO REGION PLACEMENT    <- not the predicted condition"
+        } else {
+            "OTHER / not one of the three Flat conditions"
+        };
+        println!("  {where_}");
+        println!("      cause: {cause}");
+        println!("      text : {}", &text[..text.len().min(150)]);
+    }
+    println!("  ------------------------------------------------");
+    let width = hits.iter().filter(|(_, t)| t.contains("unknown packed width")).count();
+    println!("  {} of {} composite refusals are the WIDTH condition.", width, hits.len());
+    if !hits.is_empty() && width == hits.len() {
+        println!("  => spike_composite_split's split is CONFIRMED on the residue: what");
+        println!("     remains is construction needing operand-width recovery, exactly");
+        println!("     the half it said reads do not need.");
+    }
+    println!("  NOTHING WAS LOWERED HERE. Establishing the cause is the increment.");
+    println!("================\n");
+
+    // **NON-VACUITY: a cause read from no refusal is not a cause.** If this
+    // number is zero the report above says so explicitly rather than passing
+    // quietly, and the assertion below keeps that from being mistaken for a
+    // clean result.
+    assert!(
+        !hits.is_empty(),
+        "no module refuses on NewComposite, so no cause could be read. If the \
+         residue has genuinely closed, the coverage figures elsewhere are stale \
+         and this test should be re-pointed rather than deleted."
+    );
+}
