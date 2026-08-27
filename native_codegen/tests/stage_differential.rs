@@ -380,3 +380,146 @@ fn parser_agrees_with_the_vm_on_the_lexers_own_output() {
     // vacuous baseline. Three is the minimum that proves the seed arrived.
     compare("parse.kel", &m, &seeded, 3);
 }
+
+// ================= `verify_yield.kel`, the fourth stage seeded through this route
+//
+// **THE ONE-ARRAY `seed` HELPER WAS NOT WIDENED, DELIBERATELY.** It writes one
+// length slot and one array slot, and `lexer.kel` and `parse.kel` depend on it;
+// changing it would put their figures back in question for no gain. This stage
+// needs four PARALLEL tables against a single `op_count`, so the writers below are
+// ADDITIVE and nothing existing is touched.
+
+/// Write one scalar shared slot by name.
+fn seed_scalar(m: &Module, buf: &mut [u8], slot: &str, v: i64) {
+    let off = shared_offset(m, slot).unwrap_or_else(|| panic!("no shared slot `{slot}`")) as usize;
+    assert!(off + 8 <= buf.len(), "slot `{slot}` does not fit the shared segment");
+    buf[off..off + 8].copy_from_slice(&v.to_le_bytes());
+}
+
+/// Read one scalar shared slot by name, so a verdict can be compared before and
+/// after seeding rather than asserted from the yield sequence alone.
+fn read_scalar(m: &Module, buf: &[u8], slot: &str) -> i64 {
+    let off = shared_offset(m, slot).unwrap_or_else(|| panic!("no shared slot `{slot}`")) as usize;
+    let mut b = [0u8; 8];
+    b.copy_from_slice(&buf[off..off + 8]);
+    i64::from_le_bytes(b)
+}
+
+/// Write one `[Word; N]` shared table by name. No length slot: this stage bounds
+/// every table with the single `op_count`.
+fn seed_table(m: &Module, buf: &mut [u8], slot: &str, body: &[i64]) {
+    let off = shared_offset(m, slot).unwrap_or_else(|| panic!("no shared slot `{slot}`")) as usize;
+    assert!(
+        off + body.len() * 8 <= buf.len(),
+        "table `{slot}` does not fit the shared segment"
+    );
+    for (i, v) in body.iter().enumerate() {
+        buf[off + i * 8..off + i * 8 + 8].copy_from_slice(&v.to_le_bytes());
+    }
+}
+
+/// Seed `verify_yield.kel` with a straight-line op region.
+///
+/// The `class` encoding is `analyze.kel`'s, stated in that file's header: `0`
+/// plain, `1` If, `2` Else, `3` EndIf, `4` Loop, `5` EndLoop, `6` Break, `7`
+/// BreakIf, `8` Trap. `verify_yield.kel` documents its own `class` as "as in
+/// `analyze_class`", `mark` as 1 for a Yield, and `cay` as the
+/// already-always-yielding fixpoint variable. **Read out of their sources, not
+/// assumed from the other stages.**
+fn seed_verify_yield(m: &Module, marks: &[i64]) -> Vec<u8> {
+    let n = marks.len() as i64;
+    let mut buf = vec![0u8; shared_data_bytes_for(m)];
+    seed_scalar(m, &mut buf, "op_count", n);
+    seed_scalar(m, &mut buf, "region_start", 0);
+    seed_scalar(m, &mut buf, "region_end", n);
+    seed_table(m, &mut buf, "class", &vec![0i64; marks.len()]);
+    seed_table(m, &mut buf, "arg", &vec![0i64; marks.len()]);
+    seed_table(m, &mut buf, "mark", marks);
+    seed_table(m, &mut buf, "cay", &vec![0i64; marks.len()]);
+    buf
+}
+
+/// **The unseeded baseline, measured rather than assumed.**
+///
+/// A verdict that the empty buffer already holds cannot demonstrate anything —
+/// this is the trap the three `verify_*` stages fell into, where each wrote a
+/// verdict the buffer already contained and was credited as seeded while its
+/// observable never moved. So the baseline is READ, and the seeded run must
+/// differ from it.
+#[test]
+fn the_unseeded_verify_yield_verdict_is_the_baseline_a_seed_must_move() {
+    let m = module_of("../src/selfhost/kel/verify_yield.kel");
+    let empty = vec![0u8; shared_data_bytes_for(&m)];
+    let out = run_vm(&m, &empty).shared;
+    assert_eq!(
+        read_scalar(&m, &out, "out_hy"),
+        0,
+        "an all-zero segment describes an EMPTY region, which cannot contain a Yield. \
+         If this is no longer 0, the baseline moved and the seeded assertion below is \
+         measuring something else."
+    );
+}
+
+#[test]
+fn verify_yield_agrees_with_the_vm_on_a_region_containing_a_yield() {
+    let m = module_of("../src/selfhost/kel/verify_yield.kel");
+    assert!(
+        keleusma_native::module_refusals(&m, LowerOptions::default()).is_empty(),
+        "verify_yield.kel must lower for this differential to mean anything"
+    );
+
+    // Three plain ops, the middle one a Yield.
+    let seeded = seed_verify_yield(&m, &[0, 1, 0]);
+    let vm = run_vm(&m, &seeded);
+    let nat = run_native(&m, &seeded);
+
+    // **THE VERDICT MOVED.** This is the guard, not the distinct-yield count:
+    // this stage's `main` is `loop main(resume) { yield run() }`, so it yields the
+    // SAME fall-through flag every tick BY DESIGN. A distinct-yield criterion
+    // would be measuring the harness, which is why `compare` is not used here.
+    let hy = read_scalar(&m, &vm.shared, "out_hy");
+    assert_eq!(
+        hy, 1,
+        "the seeded region carries a Yield (`mark` = 1) and `out_hy` is still {hy}. \
+         Either the seed did not reach the stage or it exited before its fixpoint."
+    );
+
+    // **AND THE STAGE REACHED A VERDICT rather than stopping early.** `run()`
+    // returns `yf.child_fell`, initialised to 1 and published to `out_fell`; a run
+    // that never folded a frame would leave the two disagreeing.
+    assert_eq!(
+        vm.yields.first().copied(),
+        Some(read_scalar(&m, &vm.shared, "out_fell")),
+        "the yielded value must be the published `out_fell`; a disagreement means the \
+         fixpoint loop did not complete"
+    );
+
+    assert_eq!(
+        vm.yields, nat.yields,
+        "verify_yield.kel: the yield sequences diverge\n  vm={:?}\n  native={:?}",
+        vm.yields, nat.yields
+    );
+    assert_eq!(
+        vm.shared, nat.shared,
+        "verify_yield.kel: the shared segment disagrees. A slot written at the wrong \
+         offset still yields the right sequence, so only this comparison sees it."
+    );
+}
+
+/// The control: the same region WITHOUT a Yield must leave the verdict unmoved.
+///
+/// **The accepting direction belongs in a control, never in the driven set** —
+/// recorded for the `verify_*` trio and applying unchanged here. Without this,
+/// `out_hy == 1` above could be a constant rather than a response to the input.
+#[test]
+fn without_a_yield_mark_the_verify_yield_verdict_does_not_move() {
+    let m = module_of("../src/selfhost/kel/verify_yield.kel");
+    let seeded = seed_verify_yield(&m, &[0, 0, 0]);
+    let hy = read_scalar(&m, &run_vm(&m, &seeded).shared, "out_hy");
+    assert_eq!(
+        hy, 0,
+        "a region with no Yield reports out_hy = {hy}. If this is 1, the seeded \
+         assertion above proves nothing, because the verdict would not be reading \
+         `mark` at all."
+    );
+}

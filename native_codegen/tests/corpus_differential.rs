@@ -582,6 +582,13 @@ const PAYLOAD: &[u8] = b"keleusma wire payload: 0123456789 ABCDEF \x01\x02\x7f\x
 /// Stages the seeding switch has an arm for. Named so the applied/not-applied line is
 /// printed for exactly those, rather than for every module in the corpus.
 const STAGE_SEEDED: &[&str] = &[
+    // **Seeded WITHOUT an accessor, 2026-08-26.** `src/selfhost/mod.rs` exposes
+    // five seed accessors and none of them covers this stage; it is the other
+    // line's file and read-only here, so this stage stayed unseeded for as long
+    // as the accessor route was assumed to be the only one. It needs four PARALLEL
+    // tables against one `op_count`, which is why the one-array `seed_named_slots`
+    // did not reach it and `seed_verify_yield_subject` exists.
+    "verify_yield.kel",
     "verify_depth.kel",
     "verify_typed.kel",
     "verify_structural.kel",
@@ -829,6 +836,62 @@ const STAGE_SUBJECTS: &[&str] = &[
 /// different subject does not merely change the input; it fails the shape check,
 /// which is the assertion doing its job. Widening it needs more corpus files
 /// containing a multiheaded group, and the corpus has one.
+/// Op regions for `verify_yield.kel`, each a straight-line run of plain ops with
+/// `mark` = 1 marking a Yield.
+///
+/// **EVERY SUBJECT CARRIES A YIELD.** A region without one leaves `out_hy` at the
+/// 0 the buffer already holds, and a verdict the buffer already contains is
+/// exactly how the three `verify_*` stages were once credited as seeded while
+/// their observable never moved. The accepting direction is a CONTROL and lives
+/// in `stage_differential.rs`, not in the driven set.
+const VERIFY_YIELD_SUBJECTS: &[(&str, &[i64])] = &[
+    ("yield-mid", &[0, 1, 0]),
+    ("yield-first", &[1, 0, 0]),
+    ("yield-only", &[1]),
+    ("yield-twice", &[1, 0, 1, 0]),
+];
+
+/// Seed `verify_yield.kel`: `op_count`, the region bounds, and four parallel
+/// tables.
+///
+/// The `class` encoding is `analyze.kel`'s, stated in that file's header (`0`
+/// plain … `8` Trap); `verify_yield.kel` documents its own as "as in
+/// `analyze_class`", `mark` as 1 for a Yield, `cay` as the fixpoint variable.
+/// **Read out of their sources rather than inferred from the other stages.**
+///
+/// **THE 8192 STEP CAP IS NOT A TICK REQUIREMENT.** It bounds a loop INSIDE
+/// `run()`, so the whole fixpoint completes within a single tick and this stage
+/// is reachable at this harness's 60 ticks. That correction matters: the
+/// requirements note first read the cap as a per-tick budget and recommended the
+/// 400-tick harness on that basis.
+fn seed_verify_yield_subject(m: &Module, marks: &[i64]) -> Result<Vec<u8>, String> {
+    let n = marks.len();
+    let mut buf = vec![0u8; shared_data_bytes_for(m)];
+    let zeros = vec![0i64; n];
+    for (slot, v) in [("op_count", n as i64), ("region_start", 0), ("region_end", n as i64)] {
+        let off = shared_slot_offset(m, slot).ok_or(format!("no `{slot}` slot"))? as usize;
+        if off + 8 > buf.len() {
+            return Err(format!("`{slot}` does not fit the shared segment"));
+        }
+        buf[off..off + 8].copy_from_slice(&v.to_le_bytes());
+    }
+    for (slot, body) in [
+        ("class", &zeros[..]),
+        ("arg", &zeros[..]),
+        ("mark", marks),
+        ("cay", &zeros[..]),
+    ] {
+        let off = shared_slot_offset(m, slot).ok_or(format!("no `{slot}` table"))? as usize;
+        if off + body.len() * 8 > buf.len() {
+            return Err(format!("table `{slot}` does not fit the shared segment"));
+        }
+        for (i, v) in body.iter().enumerate() {
+            buf[off + i * 8..off + i * 8 + 8].copy_from_slice(&v.to_le_bytes());
+        }
+    }
+    Ok(buf)
+}
+
 fn stage_seeds(m: &Module, name: &str) -> Vec<(&'static str, Result<Vec<u8>, String>)> {
     if !STAGE_SEEDED.contains(&name) {
         return vec![("-", Err("no arm for this stage".into()))];
@@ -838,6 +901,12 @@ fn stage_seeds(m: &Module, name: &str) -> Vec<(&'static str, Result<Vec<u8>, Str
             "06_multiheaded.kel",
             stage_seed_for(m, name, "06_multiheaded.kel"),
         )];
+    }
+    if name == "verify_yield.kel" {
+        return VERIFY_YIELD_SUBJECTS
+            .iter()
+            .map(|(label, marks)| (*label, seed_verify_yield_subject(m, marks)))
+            .collect();
     }
     if name == "verify_types.kel" {
         return TYPE_PAIR_SUBJECTS

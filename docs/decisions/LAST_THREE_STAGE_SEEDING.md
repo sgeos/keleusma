@@ -59,7 +59,33 @@ Carries its op encoding **inline**, in a `const data wire { konst: Word = 1, ret
 block, with the header stating the tags **match the reference bytecode's opcodes**. So its encoding
 is readable as text and cross-checkable against `keleusma::Op` rather than taken on trust.
 
-## THE REAL CONSTRAINT IS THE STEP BUDGET, AND IT IS NOT THE SLOT ROUTE
+## ⚠ CORRECTION (2026-08-26, same day): THE STEP CAP IS NOT A TICK BUDGET
+
+**`verify_yield.kel` IS NOW SEEDED, and seeding it disproved the constraint stated below.**
+
+The section that follows read `for step in 0..8192 limit 8192` as a per-tick budget and concluded
+subjects must be small enough to converge within the harness's 60 ticks, recommending
+`stage_differential` for its 400. **That reading is wrong.** The loop is **inside `run()`**, and
+`main` is `loop main(resume) -> Word { yield run() }` — so the entire fixpoint completes **within a
+single tick**, and the tick count is irrelevant to whether the stage reaches its verdict.
+
+**Measured**: `verify_yield.kel` seeded at **60** ticks in `corpus_differential`, four subjects, none
+declined. The Order-1 gate's unseeded set went **3 → 2** and its result comparisons **1680 → 1860**.
+
+> **THE ERROR IS WORTH KEEPING BECAUSE IT IS A READING ERROR, NOT A MEASUREMENT ERROR.** The cap was
+> measured correctly; what it bounds was assumed. **A number read out of a source still needs its
+> scope established** — `8192` is a true fact about that file and says nothing about ticks. The
+> `verify_types` precedent (cap 1801, folds finishing in about `k + 9`) was applied by analogy
+> without checking that the two loops sit at the same level, and they do not.
+
+**What survives**: the requirement that the seed builder REQUIRE the verdict, and that the verdict
+OBSERVABLY MOVE. Those are unaffected and are what the seeding actually rests on.
+
+**For `analyze.kel` and `codegen.kel`, establish the loop's LEVEL before pricing its cap.**
+`analyze.kel`'s `for step in 0..16384` should be checked the same way; if it too sits inside a
+once-per-tick entry, the tick budget is a non-issue there as well.
+
+## (SUPERSEDED BY THE CORRECTION ABOVE) THE STEP BUDGET AS FIRST READ
 
 **Measured caps against measured harness budgets:**
 
@@ -120,7 +146,9 @@ The check needs either `decode_op` reachable, or the assertion written on their 
 
 ## What is NOT established here
 
-- **That any seed actually drives any of the three to a non-trivial verdict.** No stage was seeded.
+- ~~That any seed actually drives any of the three to a non-trivial verdict.~~ **DONE for
+  `verify_yield.kel`**: four subjects, verdict `out_hy` moves 0 → 1 on a region carrying a Yield,
+  with a control proving it stays 0 without one. `analyze.kel` and `codegen.kel` remain unseeded.
 - **Whether the 1536-entry tables fit the harness's shared-segment handling in practice.** The
   shared ceiling is 16 MB and nine tables of 1536 words is far below it, so no obstacle is expected
   — but expected is not measured.
