@@ -523,3 +523,135 @@ fn without_a_yield_mark_the_verify_yield_verdict_does_not_move() {
          `mark` at all."
     );
 }
+
+// ================= `analyze.kel`
+//
+// `shared data wa` carries EIGHT input scalars, TWELVE parallel `[Word; 1536]`
+// tables, and FIVE outputs. The `class`/`opk` encodings are stated in that file's
+// own header. `out_wcet` is `cost[stream_pos] + cost[reset_pos] + region_cost`,
+// where the region is the frame pushed at `[region_start, region_end)`.
+
+/// Seed `analyze.kel` with a straight-line region between a Stream and a Reset op.
+fn seed_analyze(m: &Module, costs: &[i64], local_count: i64, slot_bytes: i64) -> Vec<u8> {
+    let n = costs.len();
+    assert!(n >= 3, "need a Stream op, at least one body op, and a Reset op");
+    let mut buf = vec![0u8; shared_data_bytes_for(m)];
+    let zeros = vec![0i64; n];
+    for (slot, v) in [
+        ("op_count", n as i64),
+        ("stream_pos", 0),
+        ("reset_pos", n as i64 - 1),
+        ("region_start", 1),
+        ("region_end", n as i64 - 1),
+        ("local_count", local_count),
+        ("value_slot_bytes", slot_bytes),
+        ("arena_capacity", 4096),
+    ] {
+        seed_scalar(m, &mut buf, slot, v);
+    }
+    seed_table(m, &mut buf, "cost", costs);
+    for t in [
+        "class",
+        "arg",
+        "growth",
+        "shrink",
+        "heap",
+        "opk",
+        "slot",
+        "cval",
+        "cint",
+        "callee_slots",
+        "callee_heap",
+    ] {
+        seed_table(m, &mut buf, t, &zeros);
+    }
+    buf
+}
+
+/// **THE BASELINE, MEASURED — and it disqualifies the obvious observable.**
+///
+/// On an all-zero segment `analyze.kel` publishes **`out_valid = 1`**, not 0: an
+/// empty region is trivially bounded. **So `out_valid` is a verdict the buffer
+/// already holds**, and asserting it would be the exact trap the three `verify_*`
+/// stages fell into — credited as seeded while the observable never moved.
+///
+/// `out_wcet` is the observable that moves, and it moves because it READS `cost`.
+#[test]
+fn the_unseeded_analyze_verdict_shows_which_observable_can_move() {
+    let m = module_of("../src/selfhost/kel/analyze.kel");
+    let base = run_vm(&m, &vec![0u8; shared_data_bytes_for(&m)]).shared;
+    assert_eq!(
+        read_scalar(&m, &base, "out_valid"),
+        1,
+        "an empty region is trivially bounded, so out_valid is expected to be 1 \
+         ALREADY. If this is 0, out_valid became a usable observable and the \
+         reasoning below should be revisited rather than left stale."
+    );
+    assert_eq!(
+        read_scalar(&m, &base, "out_wcet"),
+        0,
+        "with every cost zero and an empty region the bound must be 0; this is the \
+         baseline the seeded run has to move"
+    );
+}
+
+#[test]
+fn analyze_agrees_with_the_vm_on_a_bounded_straight_line_region() {
+    let m = module_of("../src/selfhost/kel/analyze.kel");
+    assert!(
+        keleusma_native::module_refusals(&m, LowerOptions::default()).is_empty(),
+        "analyze.kel must lower for this differential to mean anything"
+    );
+
+    // Stream at 0, Reset at 5, body [1, 5). `out_wcet` is
+    // `cost[stream_pos] + cost[reset_pos] + region_cost`.
+    let costs = [2i64, 3, 5, 7, 11, 13];
+    let seeded = seed_analyze(&m, &costs, 2, 8);
+    let vm = run_vm(&m, &seeded);
+    let nat = run_native(&m, &seeded);
+
+    // **THE ARITHMETIC IS CHECKED, NOT JUST THE MOVEMENT.** A non-zero bound would
+    // prove the stage ran; the exact sum proves it read the table it claims to.
+    assert_eq!(
+        read_scalar(&m, &vm.shared, "out_wcet"),
+        2 + 13 + (3 + 5 + 7 + 11),
+        "out_wcet must be cost[stream_pos] + cost[reset_pos] + the region cost"
+    );
+    // `(local_count + region peak) * value_slot_bytes` = (2 + 0) * 8.
+    assert_eq!(
+        read_scalar(&m, &vm.shared, "out_stack_bytes"),
+        16,
+        "out_stack_bytes must be (local_count + peak) * value_slot_bytes"
+    );
+    assert_eq!(read_scalar(&m, &vm.shared, "out_reject"), 0, "this region is bounded");
+
+    assert_eq!(
+        vm.yields, nat.yields,
+        "analyze.kel: the yield sequences diverge\n  vm={:?}\n  native={:?}",
+        vm.yields, nat.yields
+    );
+    assert_eq!(
+        vm.shared, nat.shared,
+        "analyze.kel: the shared segment disagrees. A slot written at the wrong \
+         offset still yields the right sequence, so only this comparison sees it."
+    );
+}
+
+/// The control: the same region shape with every cost zero must leave `out_wcet`
+/// at 0.
+///
+/// Without this, the seeded assertion could be satisfied by a stage that returns a
+/// constant, or by a seed landing at the wrong offset and being read back from the
+/// same wrong offset.
+#[test]
+fn with_zero_costs_the_analyze_bound_stays_zero() {
+    let m = module_of("../src/selfhost/kel/analyze.kel");
+    let seeded = seed_analyze(&m, &[0, 0, 0, 0, 0, 0], 2, 8);
+    let out = run_vm(&m, &seeded).shared;
+    assert_eq!(
+        read_scalar(&m, &out, "out_wcet"),
+        0,
+        "a region whose every op costs zero must bound to zero; a non-zero result \
+         here would mean out_wcet is not reading `cost`"
+    );
+}

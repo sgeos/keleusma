@@ -582,6 +582,9 @@ const PAYLOAD: &[u8] = b"keleusma wire payload: 0123456789 ABCDEF \x01\x02\x7f\x
 /// Stages the seeding switch has an arm for. Named so the applied/not-applied line is
 /// printed for exactly those, rather than for every module in the corpus.
 const STAGE_SEEDED: &[&str] = &[
+    // **Seeded WITHOUT an accessor, 2026-08-26**, same route as `verify_yield.kel`
+    // below. Twelve parallel tables and eight input scalars.
+    "analyze.kel",
     // **Seeded WITHOUT an accessor, 2026-08-26.** `src/selfhost/mod.rs` exposes
     // five seed accessors and none of them covers this stage; it is the other
     // line's file and read-only here, so this stage stayed unseeded for as long
@@ -836,6 +839,79 @@ const STAGE_SUBJECTS: &[&str] = &[
 /// different subject does not merely change the input; it fails the shape check,
 /// which is the assertion doing its job. Widening it needs more corpus files
 /// containing a multiheaded group, and the corpus has one.
+/// Straight-line op-cost profiles for `analyze.kel`. Index 0 is the Stream op and
+/// the last is the Reset op; the body between them is the walked region.
+///
+/// **EVERY SUBJECT HAS A NON-ZERO COST.** `out_wcet` is the only output that moves
+/// here: an all-zero segment already publishes `out_valid = 1`, because an empty
+/// region is trivially bounded — so `out_valid` is a verdict the buffer ALREADY
+/// HOLDS and asserting it would prove nothing. Measured, not assumed; the
+/// zero-cost control lives in `stage_differential.rs`.
+const ANALYZE_SUBJECTS: &[(&str, &[i64])] = &[
+    ("primes", &[2, 3, 5, 7, 11, 13]),
+    ("flat", &[1, 1, 1, 1]),
+    ("heavy-body", &[1, 100, 200, 1]),
+    ("minimal", &[1, 1, 1]),
+];
+
+/// Seed `analyze.kel`: eight input scalars and twelve parallel tables.
+///
+/// `out_wcet` is `cost[stream_pos] + cost[reset_pos] + region_cost`, and
+/// `out_stack_bytes` is `(local_count + region peak) * value_slot_bytes`.
+///
+/// **THE 16384 STEP CAP IS NOT A TICK REQUIREMENT** — the loop sits inside
+/// `run()` and `main` is `loop main(resume) { yield run() }`, so the whole walk
+/// completes within a single tick. Checked directly against this file rather than
+/// carried by analogy from `verify_yield.kel`, because reading a cap without
+/// establishing its level is how the previous estimate went wrong.
+fn seed_analyze_subject(m: &Module, costs: &[i64]) -> Result<Vec<u8>, String> {
+    let n = costs.len();
+    if n < 3 {
+        return Err("need a Stream op, a body op, and a Reset op".into());
+    }
+    let mut buf = vec![0u8; shared_data_bytes_for(m)];
+    let zeros = vec![0i64; n];
+    for (slot, v) in [
+        ("op_count", n as i64),
+        ("stream_pos", 0),
+        ("reset_pos", n as i64 - 1),
+        ("region_start", 1),
+        ("region_end", n as i64 - 1),
+        ("local_count", 2),
+        ("value_slot_bytes", 8),
+        ("arena_capacity", 4096),
+    ] {
+        let off = shared_slot_offset(m, slot).ok_or(format!("no `{slot}` slot"))? as usize;
+        if off + 8 > buf.len() {
+            return Err(format!("`{slot}` does not fit the shared segment"));
+        }
+        buf[off..off + 8].copy_from_slice(&v.to_le_bytes());
+    }
+    for (slot, body) in [
+        ("cost", costs),
+        ("class", &zeros[..]),
+        ("arg", &zeros[..]),
+        ("growth", &zeros[..]),
+        ("shrink", &zeros[..]),
+        ("heap", &zeros[..]),
+        ("opk", &zeros[..]),
+        ("slot", &zeros[..]),
+        ("cval", &zeros[..]),
+        ("cint", &zeros[..]),
+        ("callee_slots", &zeros[..]),
+        ("callee_heap", &zeros[..]),
+    ] {
+        let off = shared_slot_offset(m, slot).ok_or(format!("no `{slot}` table"))? as usize;
+        if off + body.len() * 8 > buf.len() {
+            return Err(format!("table `{slot}` does not fit the shared segment"));
+        }
+        for (i, v) in body.iter().enumerate() {
+            buf[off + i * 8..off + i * 8 + 8].copy_from_slice(&v.to_le_bytes());
+        }
+    }
+    Ok(buf)
+}
+
 /// Op regions for `verify_yield.kel`, each a straight-line run of plain ops with
 /// `mark` = 1 marking a Yield.
 ///
@@ -901,6 +977,12 @@ fn stage_seeds(m: &Module, name: &str) -> Vec<(&'static str, Result<Vec<u8>, Str
             "06_multiheaded.kel",
             stage_seed_for(m, name, "06_multiheaded.kel"),
         )];
+    }
+    if name == "analyze.kel" {
+        return ANALYZE_SUBJECTS
+            .iter()
+            .map(|(label, costs)| (*label, seed_analyze_subject(m, costs)))
+            .collect();
     }
     if name == "verify_yield.kel" {
         return VERIFY_YIELD_SUBJECTS

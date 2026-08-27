@@ -27,10 +27,18 @@ generic route already writes for `lexer.kel` and `parse.kel`.
 
 ### `analyze.kel`
 
-`shared data wa`: eight scalars (`op_count`, `stream_pos`, `reset_pos`, `local_count`,
-`value_slot_bytes`, `arena_capacity`, `region_start`, `region_end`) and nine parallel
+`shared data wa`: eight input scalars (`op_count`, `stream_pos`, `reset_pos`, `local_count`,
+`value_slot_bytes`, `arena_capacity`, `region_start`, `region_end`), **TWELVE** parallel
 `[Word; 1536]` op tables (`cost`, `class`, `arg`, `growth`, `shrink`, `heap`, `opk`, `slot`,
-`cval`).
+`cval`, `cint`, `callee_slots`, `callee_heap`), and five outputs (`out_wcet`, `out_stack_bytes`,
+`out_heap`, `out_reject`, `out_valid`).
+
+> ⚠ **THIS SAID "NINE" UNTIL 2026-08-26, AND THE CAUSE IS WORTH MORE THAN THE CORRECTION.** The
+> block was inspected with a line window that ended at `cval`, and `cint`, `callee_slots` and
+> `callee_heap` were never seen. **A truncated read was reported as a complete list, and nothing in
+> the output said it was truncated** — which is precisely why the count looked whole. The same shape
+> as this line's other errors today: the observation was accurate about what it covered and silent
+> about what it did not.
 
 **THE ENCODING IS DOCUMENTED IN THE FILE'S OWN HEADER**, not in the accessors:
 
