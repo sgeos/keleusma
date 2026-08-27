@@ -13,6 +13,43 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-27 — Two of five type-channel extractions are moved
+
+**`decl_call_rows` HAS A PIPELINE ANALOGUE.** The second of the five Rust extractions that
+feed the type channel to move off the reference parser's abstract syntax tree. `binding_rows`
+was the first; three remain.
+
+**THE FIGURE IS DERIVED, NOT RESTATED.** `the_moved_extraction_count_is_two_of_five` counts
+the analogues in the driver rather than asserting a number, because a hand-written count is a
+second definition that goes stale — which is exactly how a handoff came to assert a closed gap
+was still open.
+
+**THE COMPARISON IS BY NAME ON BOTH SIDES, AND THAT IS LOAD-BEARING.** The reference numbers
+functions in DECLARATION order; the pipeline numbers chunks by SORTED name. Comparing indices
+would compare two unrelated numberings and pass or fail for reasons having nothing to do with
+the rows. The previous slice hit the same trap with a name id, and its recorded escape —
+"carrying a string removes the question rather than answering it" — applies unchanged.
+
+**A VACUITY THE OBVIOUS TEST WOULD HAVE MISSED.** If declaration order and sorted order
+coincided for every corpus source, comparing by name would be indistinguishable from comparing
+by index, and the property under test would go untested WHILE THE TEST PASSED. The test now
+asserts at least one source declares a function out of sorted order. **Guarding the guard's
+distinguishing property, not just its output.**
+
+Mutation-tested besides: replacing the callee's name with its index makes it fail.
+
+**THE BRIEF WAS WRONG IN MY FAVOUR, AND THAT IS WORTH RECORDING TOO.** It reasoned that
+comparing names avoids re-implementing `type_tag`'s casing rule, where `bool` is the primitive
+and `Bool` an ordinary named type and an earlier revision got it backwards. **The driver
+already had `tag_of` implementing it correctly**, with that mistake documented in place. So
+the mapping was reused rather than avoided. **Read the tree before designing around a hazard
+it has already handled.**
+
+**WHAT IS NOT MOVED, SAID PLAINLY.** `decl_call_rows` also returns a per-argument pair of
+(declared parameter tag, ACTUAL ARGUMENT tag). The actual-argument tag needs an expression
+classifier — new work, not a re-projection of data the driver already holds — so it stays in
+Rust and the test says so rather than implying the extraction is fully moved.
+
 ## 2026-08-27 — The handoff was never scanned, and it had carried a false claim
 
 **THE CITATION GUARD COVERED `src/` AND `tests/` AND NOT THE MOST-READ DOCUMENT IN THE

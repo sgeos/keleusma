@@ -2707,3 +2707,159 @@ fn a_named_type_called_bool_is_not_the_boolean_primitive() {
         );
     }
 }
+
+/// **THE DECLARATION AND CALL-SITE ROWS AGREE BETWEEN THE PIPELINE AND THE REFERENCE.**
+///
+/// The second of the five type-channel extractions to gain a pipeline analogue, after
+/// `binding_rows`. Two of five are now moved; the remaining three still walk the reference
+/// parser's abstract syntax tree.
+///
+/// # The comparison is by NAME on both sides, and that is load-bearing
+///
+/// The reference numbers functions in DECLARATION order; the pipeline numbers chunks by
+/// SORTED name. Comparing indices would compare two unrelated numberings and pass or fail for
+/// reasons unrelated to the rows. The previous slice hit the same trap with a name id, and
+/// the escape recorded there was that "carrying a string removes the question rather than
+/// answering it".
+///
+/// # What is NOT moved, said plainly
+///
+/// `decl_call_rows` also returns a per-argument pair of (declared parameter tag, ACTUAL
+/// ARGUMENT tag). The actual-argument tag needs an expression classifier, which is a new
+/// piece of work rather than a re-projection of data the driver already holds. It stays in
+/// Rust and this test does not pretend otherwise.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_declaration_and_call_rows_agree_between_the_pipeline_and_the_reference() {
+    const SOURCES: &[&str] = &[
+        "fn g(alpha: Word, beta: bool) -> Word { 1 }\nfn main() -> Word { g(1, true) }",
+        "fn one() -> Word { 1 }\nfn two(x: Byte) -> Byte { x }\nfn main() -> Word { one() }",
+        "fn main(p: Word, q: Word) -> Word { p + q }",
+        // A callee declared AFTER its caller, so declaration order and sorted order differ.
+        // Without this the two numberings could coincide and the test would prove nothing.
+        "fn zzz(a: Word) -> Word { a }\nfn aaa() -> Word { zzz(1) }\nfn main() -> Word { aaa() }",
+        // Two calls to one callee, and a call with no arguments.
+        "fn g(a: Word) -> Word { a }\nfn h() -> Word { 0 }\nfn main() -> Word { g(1) + g(2) + h() }",
+    ];
+
+    let mut total_decls = 0usize;
+    let mut total_sites = 0usize;
+
+    for src in SOURCES {
+        let ast = keleusma::parser::parse(&keleusma::lexer::tokenize(src).expect("lex"))
+            .expect("the reference must parse a probe before it says anything about the stage");
+
+        // The reference's rows, re-expressed by NAME so neither numbering is compared.
+        let mut want_decls: Vec<(String, i64, Vec<i64>)> = ast
+            .functions
+            .iter()
+            .map(|f| {
+                (
+                    f.name.clone(),
+                    f.params.len() as i64,
+                    f.params
+                        .iter()
+                        .map(|p| p.type_expr.as_ref().map_or(0, type_tag))
+                        .collect(),
+                )
+            })
+            .collect();
+
+        let (params, sites, _args) = decl_call_rows(&ast);
+        let order: Vec<String> = ast.functions.iter().map(|f| f.name.clone()).collect();
+        let mut want_sites: Vec<(String, i64)> = sites
+            .iter()
+            .map(|(i, argc)| (order[*i as usize].clone(), *argc))
+            .collect();
+        assert_eq!(
+            params.len(),
+            want_decls.len(),
+            "{src:?}: the reference's own two views of its declarations disagree"
+        );
+
+        let (mut got_decls, mut got_sites) = keleusma::selfhost::decl_call_rows_from_pipeline(src);
+
+        want_decls.sort();
+        got_decls.sort();
+        want_sites.sort();
+        got_sites.sort();
+
+        assert_eq!(
+            got_decls, want_decls,
+            "{src:?}: the pipeline disagrees with the reference on the declaration rows"
+        );
+        assert_eq!(
+            got_sites, want_sites,
+            "{src:?}: the pipeline disagrees with the reference on the call sites"
+        );
+
+        total_decls += got_decls.len();
+        total_sites += got_sites.len();
+    }
+
+    // **AND THE CORPUS MUST SEPARATE THE TWO NUMBERINGS.** If declaration order and sorted
+    // order coincided for every source, comparing by name would be indistinguishable from
+    // comparing by index, and the property this test exists to establish would go untested
+    // while the test passed. At least one source must declare a function out of sorted order.
+    let separates = SOURCES.iter().any(|src| {
+        let ast =
+            keleusma::parser::parse(&keleusma::lexer::tokenize(src).expect("lex")).expect("parse");
+        let declared: Vec<String> = ast.functions.iter().map(|f| f.name.clone()).collect();
+        let mut sorted = declared.clone();
+        sorted.sort();
+        sorted.dedup();
+        let mut seen = declared.clone();
+        seen.dedup();
+        seen != sorted
+    });
+    assert!(
+        separates,
+        "no source in this corpus declares a function out of sorted order, so comparing by \
+         name is indistinguishable from comparing by index here and the test establishes \
+         nothing about the numbering"
+    );
+
+    // NON-VACUOUS. An empty-versus-empty match is not agreement, and two derivations in this
+    // repository have passed while comparing nothing at all.
+    assert!(
+        total_decls >= 10,
+        "only {total_decls} declaration rows were compared across the corpus, so this \
+         measures far less than it appears to"
+    );
+    assert!(
+        total_sites >= 5,
+        "only {total_sites} call sites were compared, so the call half of this test is \
+         close to vacuous"
+    );
+}
+
+/// **TWO OF THE FIVE TYPE-CHANNEL EXTRACTIONS ARE MOVED, AND THE FIGURE IS DERIVED.**
+///
+/// The file header names all five. This counts how many have a pipeline analogue rather than
+/// restating a number, because a hand-written count is a second definition that goes stale —
+/// which is how a handoff came to assert a closed gap was open.
+// NOT gated on `self-host`: this reads the driver's source as text and calls nothing from
+// it, so it can run under every feature set that builds this file. Its sibling above is
+// gated because it invokes the analogue.
+#[test]
+fn the_moved_extraction_count_is_two_of_five() {
+    const DRIVER: &str = include_str!("../src/selfhost/mod.rs");
+    let named = [
+        "decl_call_rows",
+        "expression_nodes_resolvable",
+        "field_sets",
+        "occurrence_rows",
+        "binding_rows",
+    ];
+    let moved: Vec<&str> = named
+        .iter()
+        .copied()
+        .filter(|n| DRIVER.contains(&format!("pub fn {n}_from_pipeline")))
+        .collect();
+    assert_eq!(
+        moved.len(),
+        2,
+        "the count of moved extractions changed. Moved: {moved:?}. Up is the point — update \
+         this number and say which one moved. Down means an analogue was removed."
+    );
+}
