@@ -95,7 +95,7 @@ its current content, which by M9 can occur only for handle and view values thems
 **Definition 5, plans, observations, and soundness.** A **plan** designates a subset
 $R \subseteq \mathcal{S}$ of reused sites and assigns each a fixed slot inside the ephemeral
 region, of at least the site's size, and may form **arm groups**, an arm group being a set of
-sites, **each lying lexically in an arm of one conditional per Definition 6 and no two in the
+sites, **each lying lexically in an arm of one and the same conditional per Definition 6 and no two in the
 same arm**, sharing one slot of at least the largest member's size, the two-site once-per-cycle case
 governed by Theorem A2 and the in-loop case by Corollary A3. A plan's **elements** are its
 single sites and its arm groups. A plan is
