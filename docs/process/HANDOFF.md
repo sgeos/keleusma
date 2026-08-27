@@ -90,7 +90,7 @@ git merge-base --is-ancestor 5c3ba628 HEAD    # must succeed
 # `tests/selfhost_wire.rs`, which is pinned at 178. That false DIFF has been produced three times
 # by three sessions writing the same careless one-liner. It is the checker being wrong, not the
 # tree.
-grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 16
+grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 18
 grep -c '^\s*#\[test\]' tests/selfhost_wire.rs              # 178
 grep -c '^\s*#\[test\]' tests/selfhost_parse.rs             # 89
 grep -c '^\s*#\[test\]' tests/selfhost_codegen.rs           # 141
@@ -747,9 +747,20 @@ are asserted**.
    and `ENUM_AUX` are EMPTY in all eleven stages** — a byte identity for either passes while emitting
    nothing, and the reason is the same census as item 1: both are written only for `Struct` and `Enum`
    constants, and there are none.
-3. **The type checker's INPUT.** Its rules are complete and its resolution is now in the stage, but
-   the extraction is still Rust walking the REFERENCE parser's AST. Structure is available from
-   `parse.kel` plus `reconstruct.kel`; **do not invent a second encoding.**
+3. **The type checker's INPUT. TWO OF FIVE EXTRACTIONS ARE MOVED**, and the figure is derived by
+   `the_moved_extraction_count_is_two_of_five` rather than restated here. `binding_rows` moved
+   first, `decl_call_rows` second; `field_sets`, `occurrence_rows` and the largest,
+   `expression_nodes_and_derived` behind its thin wrapper, still walk the REFERENCE parser's AST.
+   Structure is available from `parse.kel` plus `reconstruct.kel`; **do not invent a second
+   encoding.**
+
+   **COMPARE BY NAME, NEVER BY INDEX.** The reference numbers functions in DECLARATION order and
+   the pipeline numbers chunks by SORTED name. Both moved slices hit that trap, and the escape is
+   the same each time: carry a string.
+
+   **AND CHECK THE CORPUS SEPARATES THE TWO ORDERS.** If every source declares its functions in
+   sorted order, a name comparison is indistinguishable from an index comparison and the test
+   passes while establishing nothing.
 
 ## OPEN CORRECTNESS ITEMS
 
