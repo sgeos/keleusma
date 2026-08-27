@@ -56,14 +56,36 @@ ever been compiled. The predicate that did land was wrong twice before it was
 right — once unsound, once uncompilable — both caught by reading rather than by
 running, so treat anything still in that directory as reasoned, not verified.
 
-### The standing hazard
+### The standing hazard — ⚠ ITS PREMISE EXPIRED, AND THE CONCLUSION SURVIVES FOR A DIFFERENT REASON
 
-**The ephemeral arena region has no native analogue.** Harmless only because a
-body allocating ephemeral composites needs composite lowering, which does not
-exist, so such a chunk is refused before the question arises. When composites
-land, a degenerate `step` that allocates without reclaiming leaks once per
-iteration — a worst-case-memory unsoundness, not a performance issue. **This is a
-precondition on composite lowering, not a note.**
+**This paragraph read, until 2026-08-27:**
+
+> *"The ephemeral arena region has no native analogue. **Harmless only because** a body allocating
+> ephemeral composites needs composite lowering, **which does not exist**, so such a chunk is refused
+> before the question arises. When composites land, a degenerate `step` that allocates without
+> reclaiming leaks once per iteration — a worst-case-memory unsoundness, not a performance issue.
+> This is a precondition on composite lowering, not a note."*
+
+**COMPOSITES NOW LOWER.** `NewComposite` appears in the lowering census's *lowers* column, and
+`region::plan_chunk_region` plans a region for them. **So the stated harmlessness precondition is
+gone.**
+
+**The conclusion nevertheless still holds, on a footing the paragraph never mentions.**
+`plan_chunk_region` assigns **one fixed offset per static site** and **never reuses** — its own
+documentation says so, and that non-reuse is what buys the backend immunity from wrong confinement
+verdicts. A loop body allocating at one site therefore writes **the same offset every iteration**,
+in a region sized once per chunk. **There is no per-iteration growth, so the degenerate `step`
+cannot leak.**
+
+> **THE CORRECTION MATTERS EVEN THOUGH THE ANSWER DID NOT CHANGE.** A reader trusting the stated
+> reason would conclude *"we are safe because composites do not lower"* — which is now false, and
+> would license exactly the wrong decision the moment someone reached for a reusing planner. **The
+> safety is a property of the ALLOCATION STRATEGY, not of an absent feature**, and a strategy can be
+> changed by someone who thinks they are only optimising bytes.
+>
+> **Found by a sweep of recorded blockers, after three separate blockers expired unnoticed in a
+> single session.** This one is the most consequential of the four: the others stopped work that
+> could have proceeded; this one stated a safety argument that had quietly become untrue.
 
 ---
 
