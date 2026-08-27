@@ -211,33 +211,42 @@ fn evidence_from(
 #[test]
 fn the_query_reports_a_known_refusal() {
     let isa = declared_isa();
-    // **THIS SUBJECT CHANGED, AND THE CONTROL FAILING IS WHY IT WAS CAUGHT.**
-    // It used to be `Byte + Byte`, which refused. `Op::Add` now LOWERS for a
-    // matched Byte pair, so that probe stopped being a refusal and this control
-    // went red rather than quietly passing on a fact that had expired. Replaced
-    // with `FixedDiv`, which is refused for an unrelated and still-current
-    // reason: runtime-fault lowering is deferred to V0.4.0.
-    let m = compiled(
-        "fn p(a: Fixed<16>, b: Fixed<16>) -> Fixed<16> { a / b }\nfn main() -> Word { 0 }",
-    )
-    .expect("the probe must compile");
+    // **THIS SUBJECT HAS NOW EXPIRED TWICE, AND THE THIRD CHOICE IS DIFFERENT IN
+    // KIND.** It was `Byte + Byte` until `Op::Add` began lowering for a matched
+    // Byte pair. It was then `FixedDiv`, "refused for an unrelated and
+    // still-current reason: runtime-fault lowering is deferred to V0.4.0" -- and
+    // `FixedDiv` now LOWERS, because that reason was stale: `Op::Div` had already
+    // built the fault path.
+    //
+    // **A SOURCE-CONSTRUCTIBLE REFUSAL IS NO LONGER A STABLE THING TO DEPEND ON.**
+    // The backend has widened until almost every remaining refusal is conditional
+    // on an operand the verifier already rejects, so no ordinary program produces
+    // one. Picking a fourth opcode would just schedule a fourth expiry.
+    //
+    // **So the subject is now INJECTED rather than compiled**: an out-of-range
+    // fraction count on `FixedMul`. That refusal is not a gap waiting to be
+    // closed -- the VM fails closed there and the count is static, so the backend
+    // MUST refuse it. **It cannot be lowered away, which is exactly the property
+    // the previous two subjects lacked.**
+    let mut m = compiled("fn main() -> Word { 0 }").expect("the probe must compile");
+    // Far above any supported word width, so this is out of range under every
+    // narrow-word configuration rather than only the default one.
+    let refusing = keleusma::bytecode::Op::FixedMul(200);
+    m.chunks[0].ops.insert(0, refusing.clone());
     assert!(
-        m.chunks.iter().any(|c| c
-            .ops
-            .iter()
-            .any(|o| format!("{o:?}").starts_with("FixedDiv"))),
-        "the probe does not emit FixedDiv, so it is a BROKEN PROBE and this \
-         control would pass without testing anything"
+        m.chunks.iter().any(|c| c.ops.iter().any(|o| format!("{o:?}") == format!("{refusing:?}"))),
+        "the injected op is not in the module, so this control would pass without \
+         testing anything"
     );
     let (lowered, named, _) = evidence_from(&m, &isa);
     assert!(
-        named.contains("FixedDiv"),
-        "no refusal named FixedDiv, so the NAMED REFUSED column built from this \
+        named.contains("FixedMul"),
+        "no refusal named FixedMul, so the NAMED REFUSED column built from this \
          query means nothing. Named: {named:?}"
     );
     assert!(
-        !lowered.contains("FixedDiv"),
-        "FixedDiv was reported as LOWERED by a module whose only FixedDiv is the \
+        !lowered.contains("FixedMul"),
+        "FixedMul was reported as LOWERED by a module whose only FixedMul is the \
          refused one, so the positive column credits ops the lowering never \
          reached"
     );
@@ -277,14 +286,24 @@ fn the_query_reports_no_refusal_for_a_module_that_lowers() {
 /// positional, which needs no assumption about which opcode a source form emits.
 #[test]
 fn a_clean_chunk_still_counts_inside_a_module_that_has_a_refusing_chunk() {
-    // The refusing half was `Byte + Byte` until `Op::Add` began lowering for a
-    // matched Byte pair; `FixedDiv` is refused for a reason that still holds.
-    let m = compiled(
-        "fn bad(a: Fixed<16>, b: Fixed<16>) -> Fixed<16> { a / b }\n\
+    // **THE REFUSING HALF HAS EXPIRED TWICE.** It was `Byte + Byte` until
+    // `Op::Add` began lowering for a matched Byte pair, then `FixedDiv` "for a
+    // reason that still holds" -- and `FixedDiv` now lowers. The refusal is now
+    // INJECTED, for the reason spelled out in `the_query_reports_a_known_refusal`:
+    // an out-of-range fraction count is a fail-closed the VM REQUIRES, so unlike
+    // the previous two subjects it cannot be lowered away.
+    let mut m = compiled(
+        "fn bad(a: Word, b: Word) -> Word { a + b }\n\
          fn good(a: Word, b: Word) -> Word { a + b }\n\
          fn main() -> Word { 0 }",
     )
     .expect("compiles");
+    let bad_ix = m
+        .chunks
+        .iter()
+        .position(|c| c.name == "bad")
+        .expect("the probe declares `bad`");
+    m.chunks[bad_ix].ops.insert(0, keleusma::bytecode::Op::FixedMul(200));
     let (_, visits) = module_lowered_op_indices(&m, LowerOptions::default());
     assert_eq!(
         visits.len(),

@@ -2691,3 +2691,112 @@ fn fixed_arithmetic_is_covered_by_the_corpus_and_not_by_this_harness() {
          it after all and the corpus program is no longer the only route"
     );
 }
+
+/// `FixedDiv` agrees with the VM, including the saturating case.
+///
+/// **THIS OPCODE WAS REFUSED UNTIL 2026-08-27**, on the recorded ground that
+/// reproducing the VM's unconditional `DivisionByZero` "needs the runtime-fault
+/// lowering, which `RUNTIME_FAULTS.md` defers to V0.4.0". **`Op::Div` had already
+/// built that path** — a zero-compare branching to `trap_bb`, with no policy gate
+/// — so the blocker had stopped being true and nobody had revisited it.
+///
+/// # Why the values are these values
+///
+/// The VM widens the dividend to `i128`, shifts it LEFT by the fraction count,
+/// divides, and **saturates** at the word bounds. Three distinct behaviours, and
+/// a lowering can get any one of them wrong while looking right:
+///
+/// - an **ordinary** quotient exercises the shift direction. Copying `FixedMul`'s
+///   RIGHT shift would still agree on `x / x`, so a case with a non-unit result
+///   is required;
+/// - a **saturating** case exercises the clamp. Without it a lowering that
+///   truncates instead of clamping passes everything else;
+/// - `x / x` is included as the degenerate control.
+#[test]
+fn fixed_division_agrees_with_the_vm_including_saturation() {
+    // **The entry takes `Word`s and converts**, because the harness passes
+    // `Value::Int` and a `Fixed` parameter is a type error at the boundary.
+    // Both sides traverse the identical conversions, so the comparison is
+    // unaffected.
+    // **ONE function**: the harness lowers `chunks[0]` and calls the VM's entry,
+    // which coincide only for a single-function program.
+    let q16 =
+        "fn main(a: Word, b: Word) -> Word { ((a as Fixed<16>) / (b as Fixed<16>)) as Word }";
+    for (a, b) in [
+        (6i64, 3),   // ordinary: a wrong shift DIRECTION shows up here
+        (7, 2),      // truncating quotient
+        (-7, 2),     // negative dividend
+        (7, -2),     // negative divisor
+        (5, 5),      // degenerate control
+        (1, 4),      // quotient below one
+    ] {
+        assert_agrees(q16, &[a, b]);
+    }
+
+    // **THE SATURATING CASE, and reaching it needed `Fixed<0>`.** At Q16 the
+    // `Word -> Fixed` conversion scales by 2^16, so any dividend large enough to
+    // saturate the DIVIDE has already saturated the CONVERSION -- the case cannot
+    // be reached through that entry shape, and pretending otherwise would leave
+    // the clamp untested while looking covered.
+    //
+    // At Q0 the conversion is identity, and `i64::MIN / -1` overflows: the true
+    // quotient is 2^63, one past `i64::MAX`. **That is precisely the case the
+    // integer forms handle with `guard_min_div_neg_one` and this lowering does
+    // NOT** -- both operands are widened to `i128` first, so the quotient is
+    // representable and the clamp carries it back. If that reasoning were wrong,
+    // this case is where it breaks.
+    let q0 =
+        "fn main(a: Word, b: Word) -> Word { ((a as Fixed<0>) / (b as Fixed<0>)) as Word }";
+    // **THE SATURATION IS PROVEN TO HAPPEN before agreement is read.** Agreement
+    // on a case that quietly never reaches the clamp is agreement about nothing,
+    // and this line has repeatedly found guards that could not fire. If the
+    // `Word -> Fixed<0>` conversion clamped first, or the divide wrapped instead
+    // of clamping, this value would not be `i64::MAX`.
+    assert_eq!(
+        vm_result(q0, &[i64::MIN, -1]),
+        i64::MAX,
+        "i64::MIN / -1 at Q0 must SATURATE to i64::MAX in the VM. If it does not, \
+         the case below is not exercising the clamp and the agreement it reports \
+         is about some other path."
+    );
+
+    for (a, b) in [
+        (i64::MIN, -1i64), // SATURATES: true quotient 2^63 clamps to i64::MAX
+        (i64::MAX, -1),    // negates without saturating
+        (i64::MIN, 1),     // passes through unchanged
+        (9, 4),            // ordinary control at Q0
+    ] {
+        assert_agrees(q0, &[a, b]);
+    }
+}
+
+/// A `Fixed` divide by a NON-zero divisor never reaches the trap block.
+///
+/// The zero-divisor case faults on both sides — the VM returns
+/// `DivisionByZero`, the native side raises `SIGTRAP` — and this harness runs
+/// the VM first, so a faulting subject would abort the comparison rather than
+/// compare it. **That case is covered by the fault-agreement observable, not
+/// here**, and saying so is the point: this test does NOT establish that the
+/// zero divisor agrees, only that the ordinary path does not spuriously trap.
+#[test]
+fn a_nonzero_fixed_divisor_does_not_reach_the_trap() {
+    let ir = lowered_ir("fn main(a: Fixed<16>, b: Fixed<16>) -> Fixed<16> { a / b }");
+    assert!(
+        ir.contains("fxd.nonzerodivisor"),
+        "the lowering emits no zero-divisor guard for FixedDiv, so the \
+         unconditional fault the VM raises is not reproduced"
+    );
+    assert!(
+        ir.contains("fxd.sh"),
+        "the lowering emits no left shift for FixedDiv, so the Q-format \
+         precision the VM preserves is not reproduced"
+    );
+    // **The clamp, asserted structurally as well as behaviourally.** The
+    // saturating case above reaches it at Q0; this makes its absence a failure
+    // even if a future entry shape stops reaching it.
+    assert!(
+        ir.contains("fxd.selhi") && ir.contains("fxd.sello"),
+        "the lowering emits no saturating select for FixedDiv, so a quotient past \
+         the word bounds would truncate where the VM clamps"
+    );
+}
