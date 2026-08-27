@@ -95,8 +95,8 @@ its current content, which by M9 can occur only for handle and view values thems
 **Definition 5, plans, observations, and soundness.** A **plan** designates a subset
 $R \subseteq \mathcal{S}$ of reused sites and assigns each a fixed slot inside the ephemeral
 region, of at least the site's size, and may form **arm groups**, an arm group being a set of
-sites, at most one lying lexically in each distinct arm of one conditional per Definition 6,
-sharing one slot of at least the largest member's size, the two-site once-per-cycle case
+sites, **each lying lexically in an arm of one conditional per Definition 6 and no two in the
+same arm**, sharing one slot of at least the largest member's size, the two-site once-per-cycle case
 governed by Theorem A2 and the in-loop case by Corollary A3. A plan's **elements** are its
 single sites and its arm groups. A plan is
 **well-formed** when its slots are pairwise disjoint and disjoint from the bump range, the
@@ -342,8 +342,8 @@ within cycles. The epoch case and byte-equality arguments are as in Theorem B1.
 $\blacksquare$
 
 **Corollary A3, arm overlap inside loops. Requires M1 through M9.** Let a conditional sit
-inside a loop and instantiate at most once per scope of that loop, let each arm contain, in
-the lexical sense of Definition 6, **at most one** site among those sharing the slot, each
+inside a loop and instantiate at most once per scope of that loop, let the sharing sites form one arm group of the plan per Definition 5, each lying lexically
+in an arm of the conditional with no two in the same arm, each
 such site confined or confined relative to a suitable $D$ and satisfying the separation
 hypothesis, and let the shared slot's size be at least the maximum of the sites' sizes, the
 plan otherwise well-formed. The plan sharing that one slot across the arms' sites and reusing
@@ -513,7 +513,7 @@ soundness for a planner that already reuses slots.
 designated elements.** A well-formed plan whose confined or refined-confined elements each
 satisfy the hypotheses of Theorem B1 or B1r, and whose designated elements each satisfy the
 separation hypothesis under the selective discipline for them, is sound. *Proof.* This is
-Lemma 4 restricted to three of its four element kinds, the A2 route unused, its ordered
+Lemma 4 restricted to three of its five element kinds, the A2 and A3 routes unused, its ordered
 induction and per-link arguments applying verbatim, Lemma 5 applying over the common
 instruction sequences the induction provides.
 $\blacksquare$
@@ -535,8 +535,8 @@ $\blacksquare$
    Setting's frame locality and cross-frame channel restriction.
 6. **The discipline machine's relation to any present machine is not a theorem here.**
 7. **Hypothesis H carries the static structure**, caps over the call closure, acyclicity, the
-   unit-per-cycle alignment, and the confinement of all allocation to the unit's traversal,
-   and every accounting result assumes it.
+unit-per-cycle alignment, and the confinement of all allocation and all `Escapes` executions
+to the unit's traversal, and every accounting result assumes it.
 8. **The comparison method's correspondence is argued at the level of the stated invariant**,
    location-by-location with address and handle-value differences, not as a fully formal
    bisimulation, which mechanization would supply.
@@ -615,9 +615,9 @@ None of the theorems holds for arbitrary bytecode that merely passes `verify()`.
    the per-slot write-before-read discipline being dataflow properties, unestablished flows
    escaping.
 10. **Hypothesis H's discharge is read, not pinned**, the capped loop forms, the analyses'
-   call-graph traversal, and the stream body as the unit, with the allocation-confinement
-   clause resting on the compiler emitting no allocation outside the stream body's
-   traversal, a code-generation reading.
+   call-graph traversal, and the stream body as the unit, with the allocation-and-escape-confinement
+clause resting on the compiler emitting no allocation and no escaping instruction outside
+the stream body's traversal, a code-generation reading.
 
 ## Appendix C. B2 in Keleusma, and instruction-set remedies
 
@@ -688,8 +688,16 @@ content in Definition 5, Lemma 1's third clause scoped to the baseline, Lemma 2'
 callee-return and unwinding cases argued correctly, Lemma 4 rewritten as an ordered
 induction with element-level hypotheses and the copy-chain analysis in its enumeration,
 Theorem B1's box asserting soundness only, Theorem C and Corollary B2a carrying full axiom
-lists and proofs over plan elements, Corollary B2b restricted to three of Lemma 4's four
-routes, the scrutinee and cap-counting conventions in the Setting and H, and the Part II
+lists and proofs over plan elements, Corollary B2b restricted to three of Lemma 4's routes, the scrutinee and cap-counting conventions in the Setting and H, and the Part II
 corrections, Corollary A3's label, the composition qualifier, the B1r attribution, and
 Appendix B's new items on M7's no-derivation clause and H's read discharge. Rows keep their
 labels under the standing rule that nothing is promoted without execution.
+
+**The delta check, 2026-08-27.** On the operator's release path, a single auditor adversarially
+checked the round-three repair diff alone, finding the two soundness holes genuinely closed and
+the ordered induction sound, together with nine findings on the repair text, two of them
+weakening, an uncensused-escape gap in Corollary B2a and an element-grammar inconsistency with
+Corollary A3, all nine repaired and then verified closed by the same auditor, whose
+verification surfaced one further membership gap in the widened arm-group grammar, repaired
+with its consistency residues in this final state. The delta-check reports live in the session
+task record, and this paragraph is their in-document provenance.
