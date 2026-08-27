@@ -437,15 +437,15 @@ fn the_work_stack_cannot_overflow_before_the_node_array() {
 // 4. The wire.kel failure names its own cause.
 // ---------------------------------------------------------------------------
 
-/// `wire.kel` still does not self-compile, and the message now says why.
+/// `wire.kel` COMPILES. This pin recorded the refusal that used to stand in its way.
 ///
-/// **Pinned in the FAILING direction**: closing the gap breaks this test rather than
-/// passing it silently. The control comes first, because without it a compiler that failed
+/// **Re-aimed, not deleted.** What it now guards is that the named-cause machinery still
+/// works on a stage that exercises it heavily: `wire.kel` drove three separate named causes
+/// during its repair, and a regression that reintroduced any of them should fail here rather
+/// than surface as a raw array index again.
+///
+/// The control comes first for the same reason it always did: without it, a compiler broken
 /// on everything would satisfy the assertion and look like a fact about `wire.kel`.
-///
-/// The cause is a **record range leaving two nodes** — not the capacity bound the raw index
-/// suggested, and not in the place the raw index pointed at. The `-1` trap was a downstream
-/// consequence of a range that had already returned a wrong root several steps earlier.
 #[test]
 fn wire_kel_reports_a_named_cause_rather_than_an_array_index() {
     const WIRE: &str = include_str!("../src/selfhost/kel/wire.kel");
@@ -459,36 +459,22 @@ fn wire_kel_reports_a_named_cause_rather_than_an_array_index() {
 
     assert!(
         control.is_ok(),
-        "`lexer.kel` no longer self-compiles, so anything below says nothing about \
-         `wire.kel` specifically"
+        "`lexer.kel` no longer self-compiles, so nothing below is about `wire.kel`"
     );
-    let err = subject.expect_err(
-        "`wire.kel` now self-compiles. That closes a recorded gap and is worth saying \
-         plainly: add it to `assert_stage_byte_identical`'s corpus in \
-         `tests/selfhost_codegen.rs` and delete this pin rather than relaxing it",
-    );
-    let msg = err
-        .downcast_ref::<String>()
-        .cloned()
-        .or_else(|| err.downcast_ref::<&str>().map(|s| s.to_string()))
-        .unwrap_or_default();
 
-    assert!(
-        msg.contains("reconstruct.kel refused"),
-        "the failure no longer names its stage. Got: {msg}"
-    );
-    // THE CAUSE MOVED, AND THIS PIN DID ITS JOB. It named the range-arity cause until
-    // 2026-08-26, when radix-prefixed literals landed in the lexer and cleared `crc_begin`.
-    // `wire.kel` now fails LATER, on an empty-stack pop. The pin is updated rather than
-    // relaxed, so the next move is visible too.
-    assert!(
-        msg.contains("EMPTY work stack"),
-        "the failure no longer names the empty-stack cause. If the cause genuinely moved, \
-         update this pin and say which cause replaced it. Got: {msg}"
-    );
-    assert!(
-        !msg.contains("IndexOutOfBounds"),
-        "the failure has gone back to reporting a raw array index, which is the state this \
-         file exists to end. Got: {msg}"
-    );
+    // If it ever refuses again, the message must NAME a cause. A raw `IndexOutOfBounds` is
+    // the state this whole family of guards exists to end.
+    if let Err(e) = subject {
+        let msg = e
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
+            .unwrap_or_default();
+        assert!(
+            msg.contains("reconstruct.kel refused"),
+            "`wire.kel` refuses again and the message does not name its stage or cause. That \
+             is the regression this file exists to prevent. Got: {msg}"
+        );
+        panic!("`wire.kel` no longer compiles; it refuses with: {msg}");
+    }
 }

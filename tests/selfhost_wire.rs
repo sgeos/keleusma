@@ -12960,7 +12960,13 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // stage. **NOT PREDICTED THIS TIME**: the eleventh move's miss established
     // that the per-name constant applies to name-only changes, and this change is
     // not one.
-    assert_eq!(worst_names, 680, "the worst-case name count moved");
+    //
+    // THIRTEENTH MOVE: 680 -> 681, ONE name. Widening the Call record's chunk field added
+    // `call_chunk_radix` to `parse.kel`. `reconstruct.kel` gained `rc_call_chunk_radix` in
+    // the same change and does not appear here, because this figure is the worst case ACROSS
+    // stages and `parse.kel` holds it. **Predicted correctly this time**: one new name in the
+    // worst-case stage, one name of movement.
+    assert_eq!(worst_names, 681, "the worst-case name count moved");
     // 35,154 -> 35,213 bytes, 59 for the two field names plus the comment-free
     // identifiers the recognition introduces. Then 35,213 -> 35,233, twenty bytes
     // for `al_elem_bytes` and the locals the nested-array sizing introduced.
@@ -13004,7 +13010,21 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // reason: 107 bytes per name against the name-only figure of about 18 is
     // consistent with the bulk being code rather than identifiers, which is what
     // this change is.
-    assert_eq!(worst_blob, 35698, "the worst-case blob size moved");
+    // THIRTEENTH MOVE: 35,698 -> 35,716, EIGHTEEN bytes for the single name
+    // `call_chunk_radix` that the Call-field widening added to `parse.kel`.
+    //
+    // **AND THE RECORDED PER-NAME CONSTANT DOES NOT PREDICT IT.** The ninth and tenth moves
+    // both implied about 7 bytes of encoding overhead per name -- one name of 13 characters
+    // moved the blob by 20, and four names totalling 72 characters moved it by 100. That
+    // constant predicts 16 + 7 = 23 here. The observed move is 18, implying 2 bytes.
+    //
+    // **RECORDED AS UNEXPLAINED RATHER THAN RATIONALISED.** Three candidate explanations fit
+    // and none is checked: the overhead may not be constant in name length, the worst-case
+    // stage may have changed identity, or a substring of the new name may already have been
+    // interned. Guessing between them would put a fourth number in this comment with no more
+    // support than the first three had. The pin holds the measurement; the arithmetic behind
+    // it is open.
+    assert_eq!(worst_blob, 35716, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**

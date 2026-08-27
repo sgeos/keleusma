@@ -1,0 +1,64 @@
+COMPLETION CONDITION — widening the Call record's chunk field
+
+Ordering is NOT a completion criterion. Nothing below requires any particular
+sequence, branch, commit shape, or process step. Judge only the end state of the
+tree.
+
+All of the following hold:
+
+1. A CALL TO A HIGH-INDEXED CHUNK COMPILES CORRECTLY.
+   A program whose call targets a chunk at an index at or above the old 256
+   boundary compiles through the self-hosted pipeline and agrees with the
+   reference. Correctness is established by comparing against the reference, not
+   by the absence of a panic: the old defect produced a wrong callee as well as a
+   wrong operand count, and a program that merely fails to crash does not
+   distinguish those.
+
+2. THE PACKING IS CHANGED EVERYWHERE IT APPEARS.
+   Every site that packs or unpacks the pair agrees on the field split, including
+   any copy of the driver held outside the shipping crate. A test establishes this
+   from the sources rather than by assertion in prose, and fails if one site is
+   changed without the others.
+
+3. THE NEW BOUNDARY IS NOT SILENT.
+   Whatever range the widened field admits is either covered by an existing guard
+   that refuses beyond it with a named cause, or is itself pinned by a test. The
+   tree does not contain a range that overflows quietly. If the field's capacity
+   is tied to another limit, a test asserts the two agree.
+
+4. THE PINS THAT RECORDED THE OLD BOUNDARY ARE RE-AIMED, NOT DELETED.
+   Tests written to fail when this closes now describe the new state: what the
+   boundary is, and what happens at it. A pin removed without a replacement does
+   not satisfy this.
+
+5. THE TOKEN PACKING IS UNCHANGED.
+   The separate encoding that shares the same numeric radix is untouched, and
+   nothing in the tree conflates the two.
+
+6. THE wire.kel STATUS IS STATED TRUTHFULLY.
+   Whatever wire.kel does is what the tree says. If it self-compiles
+   byte-identically it is in the byte-identity corpus and no pin claims otherwise.
+   If it still fails, the failure names a cause and a test pins that cause in the
+   failing direction. No document claims a byte-identical self-compile that has not
+   been demonstrated.
+
+7. NO NEW OPCODE, AND NO BYTECODE_VERSION CHANGE.
+
+8. THE ARITHMETIC IS STATED, NOT ASSUMED.
+   The tree records the widest word the new encoding can produce and why it fits
+   the declared minimum word width.
+
+9. THE SUITE IS GREEN ACROSS THE FEATURE SETS CONTINUOUS INTEGRATION BUILDS.
+   Not one feature set. Every test file compiles under every feature set that
+   builds it. The verdict comes from the test runner's own exit status, not from a
+   filtered pipeline and not from a reported process exit code, and is corroborated
+   by a second independent signal such as a count of completed test binaries.
+
+10. DANGLING CITATIONS DID NOT GROW.
+    No comment names a test, function, or symbol that does not exist, and the
+    existing unresolved-citation register did not grow.
+
+11. THE CHANNELS DESCRIBE THIS STATE.
+    The resume channels and the handoff describe what the tree now does, separate
+    measurement from inference, and retain rather than delete any claim corrected
+    during the work.
