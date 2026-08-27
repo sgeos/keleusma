@@ -149,48 +149,30 @@ fn a_hex_literal_survives_the_whole_self_hosted_pipeline() {
     );
 }
 
-/// `wire.kel` still does not self-compile, and the cause has MOVED.
+/// `wire.kel` COMPILES, and the radix repair is why it got past `crc_begin`.
 ///
-/// **Pinned in the failing direction**, so closing the gap breaks this rather than passing
-/// silently. The control comes first: without it, a compiler broken on everything would
-/// satisfy the assertion and look like a fact about `wire.kel`.
+/// **This pin recorded a failure and the failure is gone.** It is re-aimed rather than
+/// deleted: the property worth keeping is that the *radix* cause specifically does not
+/// return, which a test asserting only "it compiles" would not distinguish from a
+/// regression that reintroduced it alongside some other repair.
 ///
-/// The radix repair advanced it past `crc_begin`. What remains is a different named cause
-/// in a different place, and it is **not** a property of any single construct: bisected,
-/// `wire.kel` truncated to 1,673 lines self-compiles and truncated to 1,675 lines does not,
-/// the difference being one added declaration. A synthetic program of 300 trivial chunks
-/// compiles, so the chunk count alone is not the trigger and the mechanism is open.
+/// `wire.kel` is **not** byte-identical -- two chunks still diverge. That is pinned in
+/// `tests/wire_self_compile_status.rs`, which owns the whole-file claim; this test owns only
+/// the radix half of it.
 #[test]
 fn wire_kel_no_longer_fails_on_a_radix_literal() {
     const WIRE: &str = include_str!("../src/selfhost/kel/wire.kel");
-    const LEXER: &str = include_str!("../src/selfhost/kel/lexer.kel");
 
-    let prev = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-    let control = std::panic::catch_unwind(|| keleusma::selfhost::self_host_compile(LEXER));
-    let subject = std::panic::catch_unwind(|| keleusma::selfhost::self_host_compile(WIRE));
-    std::panic::set_hook(prev);
+    // The literals themselves must still lex correctly in the file that needed them.
+    let (names, _) = keleusma::selfhost::lex_token_trace(WIRE);
+    for fragment in ["xFFFFFFFF", "xEDB88320"] {
+        assert!(
+            !names.iter().any(|n| n == fragment),
+            "`{fragment}` is interned as a name again, so the radix repair regressed in the \
+             file that motivated it"
+        );
+    }
 
-    assert!(
-        control.is_ok(),
-        "`lexer.kel` no longer self-compiles, so nothing below is about `wire.kel`"
-    );
-    let err = subject.expect_err(
-        "`wire.kel` now self-compiles. Add it to `assert_stage_byte_identical`'s corpus in \
-         `tests/selfhost_codegen.rs` and delete this pin rather than relaxing it",
-    );
-    let msg = err
-        .downcast_ref::<String>()
-        .cloned()
-        .or_else(|| err.downcast_ref::<&str>().map(|s| s.to_string()))
-        .unwrap_or_default();
-
-    assert!(
-        !msg.contains("crc_begin"),
-        "`wire.kel` still fails on the chunk the radix repair was meant to clear. Got: {msg}"
-    );
-    assert!(
-        msg.contains("reconstruct.kel refused"),
-        "the failure no longer names its stage. Got: {msg}"
-    );
+    // And it compiles, which it could not before the repair.
+    keleusma::selfhost::self_host_compile(WIRE);
 }

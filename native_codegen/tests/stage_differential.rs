@@ -655,3 +655,188 @@ fn with_zero_costs_the_analyze_bound_stays_zero() {
          here would mean out_wcet is not reading `cost`"
     );
 }
+
+// ================= `codegen.kel`, seeded by CHAINING reconstruct's output
+//
+// **THIS STAGE IS NOT MORE OF THE SAME, and the difference is the point.**
+//
+// | | analyze / verify_yield | codegen |
+// |---|---|---|
+// | entry | `loop main(resume) { yield run() }` | `loop main(resume) { yield emit_next(resume) }` |
+// | per tick | the WHOLE fixpoint, once | ONE emission, resume-driven |
+// | input | flat parallel op tables | an AST |
+//
+// So the tick budget is **load-bearing here** where it was irrelevant twice.
+//
+// **AND THE AST DOES NOT NEED TO BE HAND-BUILT.** Measured 2026-08-26:
+// `reconstruct.kel`'s shared block contains exactly the ten AST slots
+// `codegen.kel` consumes -- `root`, `kinds`, `args`, `lhs`, `rhs`, `call_args`,
+// `for_parts`, `match_parts`, `limit_parts`, `head_parts` -- at identical widths,
+// plus `out_param_count`/`out_category` answering to codegen's
+// `param_count`/`category`. **So the natural seed for codegen is reconstruct's
+// OUTPUT**, chained exactly as `parse.kel` is driven from the lexer's own tokens.
+// Hand-building a structure with invariants was the risk this avoids entirely.
+
+/// Copy one shared slot of `words` words from one module's segment to another's,
+/// resolving the name independently on each side.
+fn copy_slot(
+    src_m: &Module,
+    src: &[u8],
+    src_slot: &str,
+    dst_m: &Module,
+    dst: &mut [u8],
+    dst_slot: &str,
+    words: usize,
+) {
+    let s = shared_offset(src_m, src_slot).unwrap_or_else(|| panic!("src `{src_slot}`")) as usize;
+    let d = shared_offset(dst_m, dst_slot).unwrap_or_else(|| panic!("dst `{dst_slot}`")) as usize;
+    let n = words * 8;
+    assert!(s + n <= src.len() && d + n <= dst.len(), "slot `{src_slot}` out of range");
+    dst[d..d + n].copy_from_slice(&src[s..s + n]);
+}
+
+/// The ten AST tables plus the two scalars, with their widths and their names on
+/// each side. Widths read from both `shared data` blocks and verified equal.
+const AST_BRIDGE: &[(&str, &str, usize)] = &[
+    ("root", "root", 1),
+    ("kinds", "kinds", 1024),
+    ("args", "args", 1024),
+    ("lhs", "lhs", 1024),
+    ("rhs", "rhs", 1024),
+    ("call_args", "call_args", 256),
+    ("for_parts", "for_parts", 256),
+    ("match_parts", "match_parts", 256),
+    ("limit_parts", "limit_parts", 256),
+    ("head_parts", "head_parts", 256),
+    ("out_param_count", "param_count", 1),
+    ("out_category", "category", 1),
+];
+
+#[test]
+fn codegen_agrees_with_the_vm_on_reconstructs_own_output() {
+    // --- Stage 1: drive reconstruct.kel on a real parsed head ---
+    let src = std::fs::read_to_string("../examples/scripts/11_signed.kel")
+        .expect("read 11_signed.kel");
+    let (fns, _names, _, _) = keleusma::selfhost::parse_functions(&src);
+    assert_eq!(
+        fns.len(),
+        1,
+        "11_signed.kel is expected to parse to exactly one head; it parsed to {}. \
+         If the parser's view of this file changed, pick a subject by PROPERTY and \
+         report it rather than adjusting this number.",
+        fns.len()
+    );
+    let h = &fns[0];
+
+    let rec = keleusma::selfhost::reconstruct_kel_module();
+    let rec_arena = arena_for(&rec);
+    let rec_vm = Vm::new(rec.clone(), &rec_arena).expect("reconstruct vm");
+    let rec_seed = keleusma::selfhost::seed_reconstruct_shared(
+        &rec_vm,
+        h.body_records(),
+        h.reconstruct_category(),
+        h.param_count(),
+    );
+    drop(rec_vm);
+
+    let rec_out = run_vm(&rec, &rec_seed);
+    let nodes = rec_out.yields.first().copied().unwrap_or(i64::MIN);
+    assert!(
+        nodes > 0,
+        "reconstruct.kel did not reconstruct 11_signed.kel: it yielded {nodes}. A \
+         value at or below -901 is a refusal tag, `rc_fail_base() - code`; the \
+         decoder lives in probe_stage_vacuity and is deliberately NOT duplicated \
+         here. Two of three qualifying single-head subjects are already refused \
+         with rc_range_arity; if this one joined them, this chain has no subject \
+         and that is the finding."
+    );
+
+    // --- Stage 2: bridge the AST into codegen.kel ---
+    let cg = module_of("../src/selfhost/kel/codegen.kel");
+    assert!(
+        keleusma_native::module_refusals(&cg, LowerOptions::default()).is_empty(),
+        "codegen.kel must lower for this differential to mean anything"
+    );
+    let mut cg_seed = vec![0u8; shared_data_bytes_for(&cg)];
+    for (from, to, words) in AST_BRIDGE {
+        copy_slot(&rec, &rec_out.shared, from, &cg, &mut cg_seed, to, *words);
+    }
+
+    // **THE BRIDGE MUST HAVE CARRIED SOMETHING.** An all-zero AST is an empty
+    // program, which codegen would traverse to no effect while agreeing perfectly.
+    assert!(
+        cg_seed.iter().any(|&b| b != 0),
+        "the bridged AST is entirely zero, so driving codegen on it would assert \
+         nothing"
+    );
+
+    // --- Stage 3: the differential ---
+    let vm = run_vm(&cg, &cg_seed);
+    let nat = run_native(&cg, &cg_seed);
+
+    // **THE VACUITY GUARD, and it is the distinct-yield kind here** -- unlike the
+    // two stages seeded before this one, `codegen.kel` IS a stream: it emits one
+    // thing per tick, so a constant sequence means it is not emitting.
+    let mut d: Vec<i64> = vm.yields.clone();
+    d.sort_unstable();
+    d.dedup();
+    println!("\n================ codegen.kel on reconstruct's AST");
+    println!("  reconstruct yielded {nodes} node(s)");
+    println!("  codegen ticks       {}", vm.yields.len());
+    println!("  distinct yields     {}", d.len());
+    println!("================\n");
+    // **THREE, NOT TWO, AND THE CONTROL BELOW IS WHY.** An all-zero AST already
+    // produces TWO distinct values, so a `>= 2` guard is satisfied by the empty
+    // program. That is not a hypothetical: this test was first written with `>= 2`
+    // and the control failed on the first run, which is exactly what a control is
+    // for. Same shape as the `parse.kel` guard above, whose unseeded baseline is
+    // also two. Seeded, this run yields SIX.
+    assert!(
+        d.len() >= 3,
+        "codegen.kel produced only {} distinct value(s) across {} ticks ({d:?}). \
+         TWO is the vacuous baseline an all-zero AST reaches, so three is the \
+         minimum that proves the bridged AST arrived. Either it did not reach the \
+         stage or the stage exited before emitting.",
+        d.len(),
+        vm.yields.len()
+    );
+
+    assert_eq!(
+        vm.yields, nat.yields,
+        "codegen.kel: the yield sequences diverge\n  vm={:?}\n  native={:?}",
+        vm.yields, nat.yields
+    );
+    assert_eq!(
+        vm.shared, nat.shared,
+        "codegen.kel: the shared segment disagrees. A slot written at the wrong \
+         offset still yields the right sequence, so only this comparison sees it."
+    );
+}
+
+/// The control that pins the vacuous baseline the seeded guard must clear.
+///
+/// **THIS FAILED ON ITS FIRST RUN AND THAT IS WHY IT EXISTS.** The seeded test was
+/// written asserting `>= 2` distinct yields; this control measured the unseeded
+/// stage at **exactly 2**, proving the seeded assertion was satisfiable by an
+/// empty program. The seeded threshold is now 3.
+///
+/// **Pinned as an EQUALITY.** If codegen's unseeded behaviour changes, the seeded
+/// threshold is no longer known to clear it, and this must fail and say so rather
+/// than quietly still passing at some lower count.
+#[test]
+fn the_unseeded_codegen_baseline_is_what_the_seeded_guard_must_clear() {
+    let cg = module_of("../src/selfhost/kel/codegen.kel");
+    let empty = vec![0u8; shared_data_bytes_for(&cg)];
+    let mut d: Vec<i64> = run_vm(&cg, &empty).yields;
+    d.sort_unstable();
+    d.dedup();
+    assert_eq!(
+        d.len(),
+        2,
+        "on an all-zero AST codegen.kel produces {} distinct values ({d:?}), not the \
+         2 the seeded guard's threshold of 3 was derived from. Re-derive that \
+         threshold rather than adjusting this number to match.",
+        d.len()
+    );
+}
+

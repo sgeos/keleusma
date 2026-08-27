@@ -582,6 +582,12 @@ const PAYLOAD: &[u8] = b"keleusma wire payload: 0123456789 ABCDEF \x01\x02\x7f\x
 /// Stages the seeding switch has an arm for. Named so the applied/not-applied line is
 /// printed for exactly those, rather than for every module in the corpus.
 const STAGE_SEEDED: &[&str] = &[
+    // **Seeded by CHAINING, 2026-08-26.** Not more of the same: this stage is a
+    // real stream (`loop main(resume) { yield emit_next(resume) }`, one emission
+    // per tick) and it consumes an AST rather than flat op tables. Measured, that
+    // AST is exactly what `reconstruct.kel` publishes -- ten slots at identical
+    // widths -- so it is bridged from reconstruct's output rather than hand-built.
+    "codegen.kel",
     // **Seeded WITHOUT an accessor, 2026-08-26**, same route as `verify_yield.kel`
     // below. Twelve parallel tables and eight input scalars.
     "analyze.kel",
@@ -839,6 +845,96 @@ const STAGE_SUBJECTS: &[&str] = &[
 /// different subject does not merely change the input; it fails the shape check,
 /// which is the assertion doing its job. Widening it needs more corpus files
 /// containing a multiheaded group, and the corpus has one.
+/// `(label, file, head index)` triples whose reconstructed AST drives
+/// `codegen.kel`, chosen for a spread of node counts: 3, 13, 15 and 21.
+///
+/// **THE HEAD INDEX IS WHAT MADE THIS WIDENABLE.** A first attempt drew only from
+/// files parsing to exactly ONE head and found a single usable subject, which the
+/// harness's own widening guard rejected — correctly. Surveyed across EVERY head
+/// of every corpus file, `reconstruct.kel` accepts many.
+///
+/// **So the recorded "two of three single-head subjects are refused" is a fact
+/// about SINGLE-HEAD FILES, not about the stage.** That framing is accurate where
+/// it appears in `probe_stage_vacuity` and would be wrong if read as a general
+/// acceptance rate. The `rc_range_arity` refusals are per head.
+const CODEGEN_SUBJECTS: &[(&str, &str, usize)] = &[
+    ("11_signed", "11_signed.kel", 0),
+    ("enum_match", "03_enum_match.kel", 0),
+    ("arithmetic-main", "01_arithmetic.kel", 1),
+    ("multiheaded-main", "06_multiheaded.kel", 3),
+];
+
+/// The ten AST tables and two scalars `reconstruct.kel` publishes and
+/// `codegen.kel` consumes, with the name on each side and the width.
+const AST_BRIDGE: &[(&str, &str, usize)] = &[
+    ("root", "root", 1),
+    ("kinds", "kinds", 1024),
+    ("args", "args", 1024),
+    ("lhs", "lhs", 1024),
+    ("rhs", "rhs", 1024),
+    ("call_args", "call_args", 256),
+    ("for_parts", "for_parts", 256),
+    ("match_parts", "match_parts", 256),
+    ("limit_parts", "limit_parts", 256),
+    ("head_parts", "head_parts", 256),
+    ("out_param_count", "param_count", 1),
+    ("out_category", "category", 1),
+];
+
+/// Seed `codegen.kel` by running `reconstruct.kel` and bridging its AST across.
+fn seed_codegen_subject(m: &Module, file: &str, head: usize) -> Result<Vec<u8>, String> {
+    let path = sources()
+        .into_iter()
+        .find(|p| p.file_name().unwrap_or_default().to_string_lossy() == file)
+        .ok_or(format!("{file} is not in the corpus"))?;
+    let src = std::fs::read_to_string(&path).map_err(|e| format!("read subject: {e}"))?;
+    let (fns, _names, _, _) = keleusma::selfhost::parse_functions(&src);
+    let h = fns
+        .get(head)
+        .ok_or(format!("{file} parses to {} heads; no head {head}", fns.len()))?;
+    if h.body_records().is_empty() {
+        return Err(format!("{file} head {head} has an empty body"));
+    }
+
+    let rec = keleusma::selfhost::reconstruct_kel_module();
+    let rec_arena = arena_for(&rec);
+    let rec_vm = Vm::new(rec.clone(), &rec_arena).map_err(|e| format!("reconstruct vm: {e:?}"))?;
+    let rec_seed = keleusma::selfhost::seed_reconstruct_shared(
+        &rec_vm,
+        h.body_records(),
+        h.reconstruct_category(),
+        h.param_count(),
+    );
+    drop(rec_vm);
+
+    let arena2 = arena_for(&rec);
+    let mut vm2 = Vm::new(rec.clone(), &arena2).map_err(|e| format!("reconstruct vm: {e:?}"))?;
+    let mut rec_shared = rec_seed.clone();
+    let nodes = match vm2.call_with_shared(&mut rec_shared, &[Value::Int(0)]) {
+        Ok(VmState::Yielded(Value::Int(n))) => n,
+        other => return Err(format!("reconstruct did not yield a node count: {other:?}")),
+    };
+    if nodes <= 0 {
+        // A refusal tag is `rc_fail_base() - code`, band `<= -901`.
+        return Err(format!("reconstruct refused {file}: {nodes}"));
+    }
+
+    let mut buf = vec![0u8; shared_data_bytes_for(m)];
+    for (from, to, words) in AST_BRIDGE {
+        let s = shared_slot_offset(&rec, from).ok_or(format!("no reconstruct `{from}`"))? as usize;
+        let d = shared_slot_offset(m, to).ok_or(format!("no codegen `{to}`"))? as usize;
+        let n = words * 8;
+        if s + n > rec_shared.len() || d + n > buf.len() {
+            return Err(format!("slot `{from}` out of range"));
+        }
+        buf[d..d + n].copy_from_slice(&rec_shared[s..s + n]);
+    }
+    if !buf.iter().any(|&b| b != 0) {
+        return Err("the bridged AST is entirely zero".into());
+    }
+    Ok(buf)
+}
+
 /// Straight-line op-cost profiles for `analyze.kel`. Index 0 is the Stream op and
 /// the last is the Reset op; the body between them is the walked region.
 ///
@@ -977,6 +1073,12 @@ fn stage_seeds(m: &Module, name: &str) -> Vec<(&'static str, Result<Vec<u8>, Str
             "06_multiheaded.kel",
             stage_seed_for(m, name, "06_multiheaded.kel"),
         )];
+    }
+    if name == "codegen.kel" {
+        return CODEGEN_SUBJECTS
+            .iter()
+            .map(|(label, file, head)| (*label, seed_codegen_subject(m, file, *head)))
+            .collect();
     }
     if name == "analyze.kel" {
         return ANALYZE_SUBJECTS
@@ -1207,10 +1309,17 @@ fn stage_seed_for(m: &Module, name: &str, subject_file: &str) -> Result<Vec<u8>,
         // because a subject that quietly stops containing the construct it is
         // named for is this harness's own recorded failure mode.
         //
-        // **`seed_reconstruct_shared`, the single-head form, stays blocked.** It
-        // wants `records: &[(i64, i64)]`, which cannot be built without the field
-        // accessors. Those are on the `v0.2.3` line's open work and are not on this
-        // tree, so exactly one of the two reconstruct paths is exercised here.
+        // **THE SINGLE-HEAD FORM IS NO LONGER BLOCKED. This note said it was, and
+        // that was true when written and stopped being true without anyone
+        // noticing.** It reads: "wants `records: &[(i64, i64)]`, which cannot be
+        // built without the field accessors". `ParsedFn::body_records()` returns
+        // exactly those records and is public, which
+        // `codegen_agrees_with_the_vm_on_reconstructs_own_output` in
+        // `stage_differential.rs` now relies on end to end.
+        //
+        // **The multi-head subject below is KEPT** -- it exercises a path the
+        // single-head form does not, so this is a correction to the REASON, not a
+        // reason to change the subject.
         "reconstruct.kel" => {
             let path = sources()
                 .into_iter()

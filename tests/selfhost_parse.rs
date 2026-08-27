@@ -780,7 +780,8 @@ fn flatten(
         }
         Expr::Call { name, args, .. } => {
             // A call flattens its arguments left to right, then a Call (kind 7) packing the
-            // callee chunk index and the argument count as chunk + count*256. The chunk is
+            // callee chunk index and the argument count as chunk + count*CALL_CHUNK_RADIX.
+            // The chunk is
             // the callee's position in the function declaration order (the last, matching
             // the stage's scan, so a repeated name resolves identically).
             for arg in args {
@@ -800,7 +801,10 @@ fn flatten(
                 .rposition(|n| n == name)
                 .unwrap_or_else(|| panic!("no chunk named `{name}`"))
                 as i64;
-            out.push((7, chunk + args.len() as i64 * 256));
+            out.push((
+                7,
+                chunk + args.len() as i64 * keleusma::selfhost_host::CALL_CHUNK_RADIX as i64,
+            ));
         }
         Expr::StructInit { fields, .. } => {
             // A struct construction flattens its field values in source order (which equals
@@ -1609,7 +1613,12 @@ fn a_call_with_arguments_parses() {
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
     // args n(0), n(0); Call(chunk 0 + count 2*256).
-    assert_eq!(got.funcs[1].3, vec![(2, 0), (2, 0), (7, 2 * 256)]);
+    // The Call record packs `chunk + count * CALL_CHUNK_RADIX`. Derived from the constant
+    // rather than restated: this expectation carried a literal 256 and broke when the radix
+    // widened, which is the wrong way round -- a hard-coded copy of a field width is a second
+    // definition of it.
+    let radix = keleusma::selfhost_host::CALL_CHUNK_RADIX as i64;
+    assert_eq!(got.funcs[1].3, vec![(2, 0), (2, 0), (7, 2 * radix)]);
 }
 
 // A zero-argument call and an argument that is an expression.
@@ -1621,9 +1630,11 @@ fn calls_with_zero_and_expression_arguments() {
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
     // z() [Call chunk 0, 0 args]; n, 1, Add [h's arg]; h(...) [Call chunk 1, 1 arg]; Add.
+    // The Call payload is `chunk + count * CALL_CHUNK_RADIX`, derived from the constant.
+    let radix = keleusma::selfhost_host::CALL_CHUNK_RADIX as i64;
     assert_eq!(
         got.funcs[2].3,
-        vec![(7, 0), (2, 0), (1, 1), (3, 1), (7, 1 + 256), (3, 1)]
+        vec![(7, 0), (2, 0), (1, 1), (3, 1), (7, 1 + radix), (3, 1)]
     );
 }
 

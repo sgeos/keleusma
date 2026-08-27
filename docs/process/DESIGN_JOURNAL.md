@@ -838,6 +838,63 @@ would find it. **The expensive part of both investigations was establishing that
 believed was undecided had in fact been decided** — once by three repairs nobody had reconciled with
 the comment above them, once by a size function nobody had connected to the refusal message.
 ---
+## 2026-08-26 — `wire.kel` COMPILES, is NOT byte-identical, and the cause took three tries
+
+**THE LARGEST STAGE IN THE CORPUS COMPILES THROUGH THE SELF-HOSTED PIPELINE FOR THE FIRST
+TIME.** 486 chunks, matching the reference. **It is NOT byte-identical**: two chunks diverge,
+`emit_prologue` (40 operations against 59) and `prologue_disagreed` (16 against 50). Both
+halves are pinned in one file, because the claim "`wire.kel` self-compiles byte-identically"
+was once invented here and reached a doc comment, a pull-request body and three channels.
+
+**THREE CAUSES CLEARED, AND I FIRST DIAGNOSED TWO OF THEM WRONGLY.**
+
+| recorded cause | verdict |
+|---|---|
+| a capacity bound, read off the `1024` in `IndexOutOfBounds(-1, 1024)` | **wrong** |
+| the lexer having no hexadecimal or binary literal support | correct |
+| a cap of 256 on the DECLARATION COUNT | **wrong** |
+| a `Call` record whose chunk field overflows at index 256 | correct |
+
+**BOTH WRONG READINGS WERE A NUMBER IN A MESSAGE TAKEN FOR A CAUSE**, and the second was the
+more instructive: the number 256 was right and the quantity it applied to was not. What
+refuted it was the experiment that should have come first — a synthetic program of 300 chunks
+compiles when its callee sorts low.
+
+**THE MECHANISM, ONCE FOUND, EXPLAINED EVERY EARLIER CONFUSION.** A `Call` record packs
+`chunk + count * 256`; at index 256 the callee field carries into the count, so the callee
+becomes chunk ZERO and the call pops one operand too many. The symptom therefore appears in
+the CALLER, and chunk indices are assigned by **sorted name**, so one declaration added
+anywhere alphabetically earlier shifts a block of indices across the boundary — which is how
+a line 1,400 lines away changed the compilation of a function near the file's start.
+
+**THE ISOLATING EXPERIMENT IS WHAT SETTLED IT.** Two `wire.kel` prefixes with identical line
+and declaration counts, differing only in where one name sorts, flip the verdict. Then a
+synthetic callee at index 255 compiles and at 256 does not, entirely outside `wire.kel`.
+
+**THE FAMILY WAS FOUR AND I DERIVED THREE.** The missed site was a fourth implementation of
+the packing in `tests/selfhost_parse.rs`. Eighth instance of deriving a set from the part in
+view. The guard now walks the tree and asserts its walk is non-vacuous — **and then flagged
+itself**, its pattern list being what it searches for, which is the third time a guard here
+has done that.
+
+**A DESIGN DECISION WORTH DEFENDING.** The new radix EQUALS the chunk capacity rather than
+something roomier. A radix of 65536 against a cap of 1024 would leave a 64-fold span no guard
+covers and no test reaches — recreating this defect one power of two higher. A test asserts
+the two stay equal.
+
+**WHAT I STOPPED DOING, AND WHY.** The two remaining divergent chunks compile byte-identically
+when extracted verbatim, so the gap is context-dependent and unexplained. I probed the
+construct they share four ways and all came back identical. **That is guessing, and guessing
+failed eleven times on this file today.** The finding is recorded with its direction — fewer
+operations, so a dropped construct rather than a mistranslated one — and the increment stops
+there rather than expanding until it succeeds.
+
+**A PROCESS DEFECT WORTH THE SAME ATTENTION.** Three test runs were killed before I noticed
+the test itself compiled four whole programs where two sufficed: `attempt()` compiled once to
+check for a panic and the comparison compiled again. At a minute per compile that was the
+entire cost. I found it after the third kill, by reading a test I had written twenty minutes
+earlier.
+
 ## 2026-08-26 — radix literals, and a false finding I published and retracted within the hour
 
 **THE SELF-HOSTED LEXER NEVER SUPPORTED HEXADECIMAL OR BINARY LITERALS.** It consumed the

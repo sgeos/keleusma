@@ -2283,7 +2283,7 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
 /// The root is the one node left on the stack. The data-access kinds fit the same
 /// groups: a scalar DataRead (11) is a leaf carrying its slot; a DataAssign (12)
 /// folds like a LetIn carrying its slot; and an IndexRead (13) is unary over the
-/// index, carrying `base + len*2^24` in `arg`. A Call (7) packs `chunk + count*256`
+/// index, carrying `base + len*2^24` in `arg`. A Call (7) packs `chunk + count*RADIX`
 /// in its record `arg`; it pops its `count` argument nodes, reverses them to source
 /// order into the `call_args` side array, and takes that slice's start as `lhs` and
 /// the count as `rhs`. An indexed write pairs an IndexStore signal (36), which
@@ -2504,12 +2504,13 @@ fn reconstruct_into(
                 (nodes.len() - 1) as i64
             }
             7 => {
-                // Call: arg packs `chunk + count*256`. Pop the count argument node
+                // Call: arg packs `chunk + count * CALL_CHUNK_RADIX`. Pop the count node
                 // indices (last-pushed is the last argument), reverse them to source
                 // order, and append them to the packed call_args side array. The Call
                 // node's lhs is that slice's start and rhs the argument count.
-                let chunk = arg.rem_euclid(256);
-                let count = arg.div_euclid(256);
+                let radix = keleusma::selfhost_host::CALL_CHUNK_RADIX as i64;
+                let chunk = arg.rem_euclid(radix);
+                let count = arg.div_euclid(radix);
                 let mut popped: Vec<i64> =
                     (0..count).map(|_| stack.pop().expect("call arg")).collect();
                 popped.reverse();
