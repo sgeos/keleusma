@@ -52,8 +52,17 @@ replaces the plan inequality with a footprint-and-occupancy theorem. Two pins ar
 the V0.2.X line, the address-opacity discriminator and the Break row correction. The re-audit gate is
 **satisfied**: a targeted third round found two single-stipulation holes, and a converging
 delta-check sequence, nine findings, then four, then one non-governing ambiguity, ended CLEAN at
-`f779be7d`, records in `docs/proofs/AUDIT_*`. The proof merged into this branch at `613a2b98`
-and the pull request toward `v0.2.3` follows.
+`f779be7d`, records in `docs/proofs/AUDIT_*`. The proof merged into this branch at `613a2b98`,
+and #303 **merged into `v0.2.3` at `8414a1a1`** on a 22-of-22 run with conclusion success at
+the commit CI ran, `cbd78613`. The merged proof is the audited proof, the V0.2.X session
+verifying `COMPOSITE_REGION_REUSE_PROOF.md` byte-unchanged between the CLEAN verdict at
+`f779be7d` and the merge head, only this mailbox moving after the verdict. Five files landed,
+the four under `docs/proofs/` and this mailbox. Every pin the appendices cite is now runnable
+from the merged tree. The V0.2.X session merged on its own standing authorization and its own
+verification, not on any relayed authority, which is the correct basis and is recorded as
+such. **The proof line's first proof is complete.** The V0.3.X line rebases onto the result
+per the ruling, and mechanization is the recorded follow-on that upgrades the document's
+standing.
 
 ## Merge readiness
 
