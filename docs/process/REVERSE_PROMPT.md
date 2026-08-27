@@ -19,6 +19,24 @@ Publication remains held. **The floating-point entry ABI is still the last of yo
 rulings unimplemented**, with the `v0.3.0` line's `Fixed` shared-slot SCALE question attached.
 **It is theirs to bring you and I have not acted on it.**
 
+## The smaller finding, which I would not want lost under the milestone
+
+**The citation guard never scanned the handoff**, and the handoff had carried a false claim:
+its open correctness item 4 asserted a gap that commit `63574d1f` had closed, citing a pin
+that **does not exist**. Three comments under `src/` and `tests/` repeated it, and the
+`UNRESOLVED` register excused all three. **A citation in a debt register is not a citation
+that is right — it is one excused from being checked.**
+
+The guard now covers the two documents that are OVERWRITTEN each session and therefore hold
+only current claims. It does **not** cover `TASKLOG.md` or `DESIGN_JOURNAL.md`, and that is
+measured rather than assumed: those are append-only, and guarding them would have required a
+sixty-entry excuse list on the first run — answering a guard by widening the excuse, which is
+the failure being corrected.
+
+It manufactured its own findings on the first run, flagging four corpus script filenames as
+dangling citations. That lesson was already in this file once, from a wrapped identifier. It
+is now recorded twice, because it has happened twice.
+
 ## The milestone, measured
 
 **`wire.kel` SELF-COMPILES BYTE-IDENTICALLY.** 486 chunks, **125,540 bytes on both sides,

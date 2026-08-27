@@ -557,3 +557,112 @@ fn the_unresolved_backlog_is_recorded() {
          Up needs a reason in the commit message."
     );
 }
+
+// ---------------------------------------------------------------------------
+// THE PROCESS DOCUMENTS, WHICH THIS GUARD DID NOT COVER UNTIL 2026-08-27
+// ---------------------------------------------------------------------------
+
+/// Identifiers cited by the handoff that belong to the OTHER line's tree.
+///
+/// A test cannot consult another branch, so a cross-line reference is
+/// indistinguishable from a dead one here. This list is the escape, and it is
+/// deliberately tiny: one entry.
+///
+/// **Do not grow it to silence a failure.** A name that belongs to this tree and
+/// does not resolve is a stale claim, which is exactly what this guard exists to
+/// catch.
+const CROSS_LINE: &[&str] = &[
+    // Verified present on `origin/v0.3.0` when this list was written. The handoff
+    // cites it as "their `alloc_format_kind`", and the possessive is load-bearing.
+    "alloc_format_kind",
+];
+
+/// **THE HANDOFF CARRIED A DEAD CITATION FOR AT LEAST A SESSION AND NOTHING SAID SO.**
+///
+/// It named a type-rejection test that no test file defines, asserting an open gap that
+/// commit `63574d1f` had already closed. Three comments under `src/` and `tests/` repeated
+/// the claim; those the guard above would have caught, except that the name sat in the
+/// excuse register. **The handoff itself was never scanned at all.**
+///
+/// # Why only these two documents
+///
+/// Measured across `docs/process/` before choosing, because the obvious scope is wrong:
+///
+/// | document | cited | unresolved |
+/// |---|---|---|
+/// | `HANDOFF.md` | 28 | 1, the cross-line entry |
+/// | `REVERSE_PROMPT.md` | 1 | 0 |
+/// | `TASKLOG.md` | 317 | 63 |
+/// | `DESIGN_JOURNAL.md` and the rest | — | brings the total to 113 |
+///
+/// **`TASKLOG.md` and `DESIGN_JOURNAL.md` are APPEND-ONLY.** They record what was true at
+/// the time and legitimately name things that no longer exist; that is what a historical
+/// record is for. Guarding them would need a sixty-entry excuse list on the first run, which
+/// is answering a guard by widening the excuse rather than by fixing the claim.
+///
+/// The two documents here are **overwritten each session**, so everything in them is a
+/// CURRENT claim. That is the property that makes a dead citation in them a defect.
+///
+/// # The threshold is measured, not guessed
+///
+/// Two underscores or more. At one underscore the scan reports 382 unresolved names across
+/// the process directory, almost all of them ordinary prose and foreign symbols; at two it
+/// reports what is above. **A guard that manufactures its own findings is worse than no
+/// guard**, which this file already learned once from a wrapped identifier.
+#[test]
+fn the_current_claim_documents_cite_nothing_that_does_not_exist() {
+    let defined = defined_names();
+    let mut checked = 0usize;
+    let mut dead: Vec<String> = Vec::new();
+
+    for doc in ["docs/process/HANDOFF.md", "docs/process/REVERSE_PROMPT.md"] {
+        let path = root().join(doc);
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {doc}: {e}"));
+        for (i, piece) in text.split('`').enumerate() {
+            // Odd indices are inside a backtick pair.
+            if i % 2 == 0 {
+                continue;
+            }
+            let name: String = piece.chars().filter(|c| !c.is_whitespace()).collect();
+            // Function-shaped: snake_case with at least two underscores. Below that the
+            // scan is dominated by prose words and foreign identifiers.
+            // A LEADING DIGIT DISQUALIFIES IT, because an identifier cannot start with
+            // one. The first draft omitted this and flagged four corpus SCRIPT FILENAMES --
+            // `12_sensor_window` and its siblings, which exist under `examples/scripts/` --
+            // as dangling citations. **A guard that manufactures its own findings is worse
+            // than no guard**, and this file has now learned that twice: once from a
+            // wrapped identifier, once from a filename.
+            let starts_ok = name
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_lowercase() || c == '_');
+            if name.len() < 3
+                || !starts_ok
+                || name.matches('_').count() < 2
+                || !name
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+            {
+                continue;
+            }
+            checked += 1;
+            if !defined.contains(&name) && !CROSS_LINE.contains(&name.as_str()) {
+                dead.push(format!("{doc}: `{name}`"));
+            }
+        }
+    }
+
+    // NON-VACUOUS. A scan that matched nothing would pass while checking nothing, and two
+    // derivations in this repository have already done exactly that.
+    assert!(
+        checked >= 20,
+        "the scan examined only {checked} citations, so it is not reading the documents it          claims to check"
+    );
+    assert!(
+        dead.is_empty(),
+        "these CURRENT-claim documents cite identifiers that exist nowhere in the tree:\n           {}\n\nA handoff that names a test which does not exist asserts something no one can \
+         check. Fix the claim, or — if the name belongs to the other line — add it to \
+         `CROSS_LINE` with the evidence.",
+        dead.join("\n  ")
+    );
+}

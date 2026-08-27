@@ -838,6 +838,49 @@ would find it. **The expensive part of both investigations was establishing that
 believed was undecided had in fact been decided** — once by three repairs nobody had reconciled with
 the comment above them, once by a size function nobody had connected to the refusal message.
 ---
+## 2026-08-27 — The handoff was never scanned, and it had carried a false claim
+
+**THE CITATION GUARD COVERED `src/` AND `tests/` AND NOT THE MOST-READ DOCUMENT IN THE
+REPOSITORY.** The handoff's open correctness item 4 asserted that an arithmetic result is
+still unknown to the type-rejection rules and cited a pin as evidence. **That test does not
+exist**; commit `63574d1f` had already closed that half with a bounded fixpoint.
+
+Three comments under `src/` and `tests/` repeated the claim. The guard would have caught
+those — **except the name sat in the `UNRESOLVED` register**, which excuses a citation from
+being checked, not from being wrong. **A citation in a debt register is not a citation that is
+right.** Four places asserted something untrue and nothing failed.
+
+**THE SCOPING DECISION IS THE SUBSTANCE, AND MEASUREMENT OVERTURNED THE OBVIOUS CHOICE.**
+Guarding all of `docs/process/` flags **113** unresolved names at a two-underscore threshold.
+Broken down: `HANDOFF.md` 28 cited and 1 unresolved, `REVERSE_PROMPT.md` 1 and 0,
+**`TASKLOG.md` 317 and 63**.
+
+`TASKLOG.md` and this journal are **APPEND-ONLY**. They record what was true at the time and
+legitimately name things that no longer exist — that is what a historical record is for.
+Guarding them would have needed a sixty-entry excuse list on the first run, which is
+**answering a guard by widening the excuse**: precisely the failure the increment exists to
+correct. The two documents that are OVERWRITTEN each session carry only current claims, and
+that property is what makes a dead citation in them a defect.
+
+**THE THRESHOLD IS MEASURED TOO.** At one underscore the scan reports 382 unresolved names
+across the process directory, almost all prose and foreign symbols. A guard drowning in false
+positives gets ignored.
+
+**AND THE GUARD MANUFACTURED ITS OWN FINDINGS ON THE FIRST RUN.** It flagged four corpus
+SCRIPT FILENAMES — `12_sensor_window` and its siblings under `examples/scripts/` — because the
+filter allowed a leading digit and an identifier cannot start with one. **This file had
+already learned that lesson once**, from an identifier wrapped across two comment lines. Both
+instances are now in the guard's comment, because it has happened twice and will happen again.
+
+**MUTATION-TESTED**: a dead citation added to a current-claim document makes it fail and names
+both the document and the identifier.
+
+**THE CROSS-LINE ESCAPE IS ONE ENTRY.** `alloc_format_kind` exists only on `origin/v0.3.0`,
+and a test cannot consult another branch, so a cross-line reference is indistinguishable from
+a dead one. The allowlist carries the evidence and a note not to grow it. **The possessive in
+"their `alloc_format_kind`" is load-bearing** — this repository has already escalated once on
+an inverted reading of exactly that indexical.
+
 ## 2026-08-27 — `wire.kel` SELF-COMPILES BYTE-IDENTICALLY. The corpus is eleven stages.
 
 **THE LAST STAGE OUTSIDE THE ORACLE IS IN IT.** 486 chunks, 125,540 bytes on both sides, zero
