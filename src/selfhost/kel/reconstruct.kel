@@ -217,6 +217,10 @@ fn rc_range_arity() -> Word { 5 }
 // The node and stack capacity. Both arrays are declared at this width.
 fn rc_cap_node() -> Word { 1024 }
 
+// The radix separating a Call record's two packed fields. Equal to `parse.kel`'s
+// `call_chunk_radix` and to the chunk capacity; a disagreement mis-reads every call.
+fn rc_call_chunk_radix() -> Word { 1024 }
+
 // Record the FIRST cause and its detail. Returns zero; callers use it for effect.
 fn rerr(code: Word, detail: Word) -> Word {
     if rs.rerr_code == 0 {
@@ -722,12 +726,12 @@ fn step(k: Word, a: Word) -> Word {
         emit(15, 0, value, index)
     } else {
     if k == 7 {
-        // Call: arg packs `chunk + count*256`. Pop the `count` argument node indices
+        // Call: arg packs `chunk + count * rc_call_chunk_radix()`. Pop the `count` node indices
         // (last-pushed is the last argument) and store them in source order into the
         // `call_args` side array. The Call node's lhs is that slice's start and its
         // rhs the argument count.
-        let chunk = a % 256;
-        let count = a / 256;
+        let chunk = a % rc_call_chunk_radix();
+        let count = a / rc_call_chunk_radix();
         let args_start = rs.ca;
         for j in 0..count limit 64 {
             let node = pop();

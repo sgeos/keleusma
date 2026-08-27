@@ -1947,7 +1947,7 @@ pub fn self_host_compile(src: &str) -> Module {
 /// # Why this has to be derived rather than read off a record
 ///
 /// A `Call` node carries the callee's CHUNK INDEX, not its name -- `reconstruct.kel`
-/// packs `chunk + count * 256` into the node's `arg`. The type channel is keyed by
+/// packs `chunk + count * CALL_CHUNK_RADIX` into the node's `arg`. The type channel is keyed by
 /// NAMES, so an alias row for `let a = g()` needs the index turned back into `g`.
 ///
 /// **IT DELEGATES, BECAUSE THE TABLE ALREADY EXISTED.** `first_pass` computes

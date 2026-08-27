@@ -272,7 +272,18 @@ was left unnoticed through two pull requests.
 
 Re-targeting the base is not enough on its own -- a base change emits `edited`, which is not one of
 the default `pull_request` types -- so the run must be provoked, by closing and reopening the pull
-request (`reopened` IS a default type) or by pushing to it. **Prefer basing on the version branch
+request (`reopened` IS a default type) or by pushing to it.
+
+**AND A FRESHLY CREATED PULL REQUEST WITH A CORRECT BASE CAN ALSO GET NO RUN. Measured
+2026-08-26 on `#282`.** Base `v0.2.3`, workflow `active`, triggers matching -- and twenty minutes
+later `gh run list --branch <branch>` reported **zero runs** and `gh pr checks` reported nothing at
+all. Closing and reopening produced all 22 checks within seconds. So the `opened` event is not
+reliable on its own, and the symptom is the same indistinguishable "no checks reported".
+
+**THE DISAMBIGUATION IS TO COUNT RUNS, NOT CHECKS.** `gh pr checks` says nothing in both the
+slow-queue case and the no-run case; `gh run list --branch <branch>` says **zero** only in the
+second. Poll both, and treat zero runs after a few minutes as the no-run case rather than waiting
+it out. **Prefer basing on the version branch
 from the start** and describing the stack in the body; the diff is noisier and the verification is
 real.
 

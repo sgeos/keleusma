@@ -780,7 +780,8 @@ fn flatten(
         }
         Expr::Call { name, args, .. } => {
             // A call flattens its arguments left to right, then a Call (kind 7) packing the
-            // callee chunk index and the argument count as chunk + count*256. The chunk is
+            // callee chunk index and the argument count as chunk + count*CALL_CHUNK_RADIX.
+            // The chunk is
             // the callee's position in the function declaration order (the last, matching
             // the stage's scan, so a repeated name resolves identically).
             for arg in args {
@@ -800,7 +801,10 @@ fn flatten(
                 .rposition(|n| n == name)
                 .unwrap_or_else(|| panic!("no chunk named `{name}`"))
                 as i64;
-            out.push((7, chunk + args.len() as i64 * 256));
+            out.push((
+                7,
+                chunk + args.len() as i64 * keleusma::selfhost_host::CALL_CHUNK_RADIX as i64,
+            ));
         }
         Expr::StructInit { fields, .. } => {
             // A struct construction flattens its field values in source order (which equals

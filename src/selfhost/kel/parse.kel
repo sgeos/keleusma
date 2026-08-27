@@ -663,6 +663,14 @@ fn pe_cap_variant() -> Word { 256 }
 fn pe_cap_calldepth() -> Word { 8 }
 fn pe_cap_field() -> Word { 512 }
 
+// The radix separating a Call record's two packed fields, `chunk + count * RADIX`.
+// NOT a `pe_cap_*` capacity guard, and named apart from that family deliberately: it is a
+// field width, and nothing refuses on it. EQUAL TO THE CHUNK CAPACITY so the chunk-cap guard
+// is the only bound -- at 256, a chunk index of 256 carried into the count field and the call
+// popped an operand that was never pushed. `reconstruct.kel` and the driver copy split on the
+// same number.
+fn call_chunk_radix() -> Word { 1024 }
+
 // Record the FIRST cause and its count. A clamped pointer provokes cascades, and the first
 // cause is the one that names the real limit. Returns zero; callers use it for effect.
 fn perr(code: Word, detail: Word) -> Word {
@@ -4037,7 +4045,7 @@ fn step_closing() -> Word {
             stmt.pending_carray_struct = chunkret.ret_array_struct[call.call_chunk[call.call_sp]];
             stmt.pending_carray_size = chunkret.ret_array_size[call.call_chunk[call.call_sp]];
             stmt.pending_cenum = chunkret.ret_enum[call.call_chunk[call.call_sp]];
-            Node::Call() as Word + (call.call_chunk[call.call_sp] + call.call_count[call.call_sp] * 256) * 64
+            Node::Call() as Word + (call.call_chunk[call.call_sp] + call.call_count[call.call_sp] * call_chunk_radix()) * 64
         } else {
         if top == OpCode::EnumMark() as Word {
             // A `)` closing an enum payload construction: pop the mark, count the last payload

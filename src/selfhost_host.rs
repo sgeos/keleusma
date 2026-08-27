@@ -549,6 +549,22 @@ pub const PARSE_TOKEN_CAP: usize = 40960;
 /// of margin, which one increment can consume.
 pub const PARSE_CHUNK_CAP: usize = 1024;
 
+/// The radix that separates a `Call` record's two packed fields, `chunk + count * RADIX`.
+///
+/// **IT EQUALS [`PARSE_CHUNK_CAP`] DELIBERATELY.** At 256 a chunk index of 256 carried into
+/// the count field: the callee became chunk zero and the argument count became one too many,
+/// so the call popped an operand that was never pushed. `wire.kel` has 486 chunks, and the
+/// symptom surfaced in the CALLER — often a thousand lines from anything that changed, since
+/// chunk indices are assigned by sorted name.
+///
+/// Tying the radix to the chunk capacity means the existing chunk-cap guard is the single
+/// authority on the bound, so **no range exists that overflows silently**. A larger radix
+/// would leave an unguarded span and recreate the same defect one power of two higher.
+///
+/// Widest emitted word: `7 + ((RADIX - 1) + 64 * RADIX) * 64` = 4,259,783, which fits the
+/// `require word >= 32` both stages declare, with roughly 504x headroom.
+pub const CALL_CHUNK_RADIX: usize = PARSE_CHUNK_CAP;
+
 // THE LEXER'S SHARED BLOCK, ON THE SAME TERMS AS THE PARSER'S.
 //
 // `lexer.kel`'s `src` block was restated in FOUR places -- this driver, two test
