@@ -1,0 +1,62 @@
+COMPLETION CONDITION — the two chunks where wire.kel diverges
+
+Ordering is NOT a completion criterion. Nothing below requires any particular
+sequence, branch, commit shape, or process step. Judge only the end state of the
+tree.
+
+All of the following hold:
+
+1. THE MECHANISM IS NAMED AND DEMONSTRATED, OR RECORDED AS UNKNOWN.
+   Either the tree identifies what causes the divergence, with a test that fails if
+   that explanation is wrong, or it states plainly that the mechanism is still
+   unknown and lists what has been eliminated. An explanation asserted without a
+   demonstration does not satisfy this.
+
+2. NO CAUSE IS CLAIMED FROM A COINCIDENCE ALONE.
+   Any claim that some quantity, threshold, or construct causes the divergence is
+   accompanied by an input that isolates it: something that changes that factor and
+   nothing else relevant, and flips the outcome. Two numbers matching is not
+   sufficient and the tree does not contain such a claim.
+
+3. WHETHER THE TWO CHUNKS SHARE A CAUSE IS ANSWERED.
+   The tree says whether they are one defect or two, on evidence rather than
+   assumption.
+
+4. ELIMINATIONS ARE RECORDED WITH THEIR MEASUREMENTS.
+   Anything ruled out is written down with what ruled it out, so it is not
+   re-derived. The probes already known to be negative are not silently repeated as
+   though new.
+
+5. THE wire.kel STATUS IS STATED TRUTHFULLY EVERYWHERE.
+   Whatever the tree does is what the tree says. Compiling and being byte-identical
+   are treated as two separate claims, and no document asserts or implies the second
+   without a demonstration. wire.kel is in the byte-identity corpus only if it is
+   byte-identical; if it is not, a test pins the current state in the failing
+   direction, naming what diverges, so a later change that closes or moves the gap
+   breaks the pin rather than passing silently.
+
+6. NO CAPACITY WAS RAISED WITHOUT EVIDENCE IT WAS TOO SMALL.
+   If any bound changed, the tree states the measurement that justified it.
+
+7. EVERY NEW OR CHANGED GUARD HAS BEEN MADE TO FIRE.
+   Each has an input that provokes it and an assertion on what it reports. A guard
+   unreachable by construction is identified as such, with the invariant that makes
+   it so pinned.
+
+8. NO NEW OPCODE, AND NO BYTECODE_VERSION CHANGE.
+
+9. THE SUITE IS GREEN ACROSS THE FEATURE SETS CONTINUOUS INTEGRATION BUILDS.
+   Not one feature set. Every test file compiles under every feature set that builds
+   it. The verdict comes from the test runner's own exit status read from its output,
+   not from a filtered pipeline and not from a reported process exit code, and is
+   corroborated by a second independent signal such as a count of completed test
+   binaries. A truncated or killed run is not a pass.
+
+10. DANGLING CITATIONS DID NOT GROW.
+    No comment names a test, function, or symbol that does not exist, and the
+    existing unresolved-citation register did not grow.
+
+11. THE CHANNELS DESCRIBE THIS STATE.
+    The resume channels and the handoff describe what the tree now does, separate
+    measurement from inference, and retain rather than delete any claim corrected
+    during the work.

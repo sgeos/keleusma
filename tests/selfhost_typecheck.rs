@@ -45,9 +45,11 @@
 //!   and one of them was this corpus.
 //! - **Tags reach only what the source declares or literally initialises**, plus
 //!   one alias hop for a `let` bound to a call. An operand whose type is DERIVED
-//!   — a field read, an index, an arithmetic result — is still unknown and still
-//!   accepted. `the_rules_still_do_not_reach_a_derived_operand` pins one, and the
-//!   hop bound is a decision rather than a limit of the approach.
+//!   from a FIELD READ or an INDEX is still unknown and still accepted;
+//!   `a_derived_operand_from_a_field_read_is_still_unreached` pins that edge.
+//!   **An ARITHMETIC result is no longer among them** — a bounded fixpoint reaches
+//!   it, per `a_derived_operand_is_now_reached_and_the_chain_has_no_depth_limit`.
+//!   The hop bound is a decision rather than a limit of the approach.
 //! - **Unknown never rejects, by design.** A stage that cannot type an operand
 //!   accepts it, because rejecting a valid program is a language change rather
 //!   than a conservative choice. The well-typed controls are the half that can
@@ -1988,7 +1990,7 @@ fn the_stage_agrees_with_the_reference_on_the_whole_corpus() {
 // above, and the whole-corpus test drives them through the resolving path.
 //
 // The limit it recorded has not vanished, it has MOVED, and
-// `the_rules_still_do_not_reach_a_derived_operand` holds the new edge.
+// `a_derived_operand_from_a_field_read_is_still_unreached` holds the new edge.
 
 // ---------------------------------------------------------------------------
 // SIZING SPIKE: what would it take to reach a non-literal operand?
@@ -2234,9 +2236,10 @@ fn stage_verdict_resolving(src: &str) -> bool {
 /// # What this does NOT establish
 ///
 /// Four cases are a case list, and the tags reach only what the source declares
-/// or literally initialises. An operand whose type comes from anywhere else — a
-/// field read, an index, an arithmetic result — is still UNKNOWN and still
-/// accepted. `the_rules_still_do_not_reach_a_derived_operand` pins one.
+/// or literally initialises. An operand whose type comes from a FIELD READ or an
+/// INDEX is still UNKNOWN and still accepted, pinned by
+/// `a_derived_operand_from_a_field_read_is_still_unreached`. **An ARITHMETIC
+/// result is no longer in that set**: a bounded fixpoint reaches it.
 #[test]
 fn resolution_reaches_an_operand_that_is_not_a_literal() {
     let cases: &[(&str, &str)] = &[

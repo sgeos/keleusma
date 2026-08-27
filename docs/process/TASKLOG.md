@@ -1334,6 +1334,36 @@ Long-horizon work tracked in `docs/decisions/BACKLOG.md` and `PRIORITY.md`.
 
 ## Task Breakdown
 
+### Recent: `wire.kel` self-compiles byte-identically (2026-08-27, session 55)
+
+**The last stage outside the byte-identity oracle is in it.** 486 chunks, 125,540 bytes on
+both sides, zero chunks differing. The corpus goes from ten stages to eleven.
+
+**The cause was one line: a symmetry gap.** `forin_count`, the bare `for` form's program-order
+counter, was never added to the per-function reset that already cleared its documented
+analogue `forlimit_count`. It indexes a record as `7 * forin_count`, so every function after
+the first containing a bare `for` emitted a record pointing past its own parts — which is why
+the stage emitted FEWER operations rather than different ones.
+
+| ID | Description | Status | Verification |
+| --- | --- | --- | --- |
+| WP-1 | Diagnose the two divergent chunks | Complete | Prefix bisection with the predicate *do these chunks match* — not *does it compile*, which passes everywhere once the file compiles. |
+| WP-2 | Reproduce outside `wire.kel` | Complete | The REAL dependency chain reproduces at 40 against 59, the exact stage figures; an earlier extract with simplified callees came back identical, which is why it had been missed. |
+| WP-3 | Isolate the variable | Complete | Delta-debugging to the loop alone (14 against 33), then a five-line synthetic separating one bare loop from two in separate functions. |
+| WP-4 | Predict before repairing | Complete | The rule names every bare-`for` function after the first; `wire.kel` has three and the two after the first are exactly the pair that diverged. |
+| WP-5 | Repair | Complete | One line, beside the analogue it was omitted from, with the omission recorded in the comment. |
+| WP-6 | Add `wire.kel` to the corpus | Complete | `self_host_compiles_wire_kel_byte_identically`; the corpus is eleven stages. |
+| WP-7 | Retire the pins that said otherwise | Complete | Four pins and three doc comments corrected. The status file was rewritten rather than deleted: it now pins the five-line reproduction, which the corpus oracle cannot express. |
+
+**A near-miss worth recording.** The detector used to check the prediction matched a COMMENT
+reading `for k in 0..3`, reported four diverging functions against an observed two, and nearly
+produced the conclusion that the rule was too strong. The instrument was broken, not the
+finding.
+
+**The tally across all four `wire.kel` causes: guessing failed seventeen times; prefix
+bisection succeeded three out of three.**
+
+
 ### Recent: `wire.kel` compiles, and is not byte-identical (2026-08-26, session 54)
 
 **The largest stage in the corpus, at 486 chunks, had never compiled through the self-hosted

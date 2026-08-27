@@ -4697,6 +4697,38 @@ fn self_host_compiles_verify_structural_kel_byte_identically() {
     );
 }
 
+/// **`wire.kel` JOINS THE CORPUS, 2026-08-27.** The largest stage at 486 chunks, and the
+/// last one outside this oracle.
+///
+/// # Why it took three sessions
+///
+/// Four causes, and two of the four were first diagnosed WRONGLY -- both times by reading a
+/// number in a failure message as if it named a cause:
+///
+/// | recorded cause | verdict |
+/// |---|---|
+/// | a capacity bound, read off the `1024` in `IndexOutOfBounds(-1, 1024)` | **wrong** |
+/// | the lexer having no hexadecimal or binary literal support | correct |
+/// | a cap of 256 on the declaration count | **wrong** |
+/// | a `Call` record whose chunk field overflowed at index 256 | correct |
+/// | `forin_count` not reset between functions | correct |
+///
+/// The last was a one-line symmetry gap: the bare `for` form's program-order counter was
+/// never added to the per-function reset that already cleared its own documented analogue,
+/// `forlimit_count`. It indexes a record as `7 * forin_count`, so the SECOND and every later
+/// function containing a bare `for` emitted a record pointing past its own parts -- which is
+/// why the stage emitted FEWER operations rather than different ones.
+///
+/// # The claim this test replaces was once invented
+///
+/// "`wire.kel` self-compiles byte-identically" was written into a doc comment, a pull-request
+/// body and all three resume channels while the compile still panicked. **This test is why
+/// the sentence is now safe to write**: it is the measurement, not a recollection of one.
+#[test]
+fn self_host_compiles_wire_kel_byte_identically() {
+    assert_stage_byte_identical("self_host_compiles_wire_kel_byte_identically", "wire.kel");
+}
+
 #[test]
 fn self_host_compiles_verify_typed_kel_byte_identically() {
     assert_stage_byte_identical(

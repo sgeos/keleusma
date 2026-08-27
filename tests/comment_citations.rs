@@ -186,7 +186,6 @@ const UNRESOLVED: &[&str] = &[
     "the_pipeline_rows_are_the_declared_subset",
     "the_reserved_kinds_are_not_emitted_by_any_encoder",
     "the_rules_reach_only_literal_direct_occurrences",
-    "the_rules_still_do_not_reach_a_derived_operand",
     "the_token_cap_binds_only_the_collecting_feed",
     "yield_dynamic_string_fails",
     "yield_tuple_with_dynamic_string_fails",
@@ -523,16 +522,36 @@ fn no_allow_list_entry_is_stale() {
     );
 }
 
-/// The debt is 21 and the direction that matters is down.
+/// The debt is 12 and the direction that matters is down.
 ///
 /// **This is a MEASUREMENT, not an invariant.** It is pinned so that a change
 /// is deliberate: shrinking it is the point, and growing it means the guard
 /// above was answered by widening the excuse rather than by fixing the comment.
+///
+/// # History, so the direction is visible
+///
+/// 21 at introduction, then 13, then **12 on 2026-08-27**.
+///
+/// The entry retired was the one naming a type-rejection test for derived operands. **Its
+/// identifier is deliberately not spelled here**: backticking a dead name re-creates the very
+/// citation this file exists to catch, and doing so in the comment explaining the retirement
+/// has now tripped this guard three times. Prose about a name is the same characters as a use
+/// of it.
+///
+/// That entry named a test that no longer exists — commit `63574d1f` closed the arithmetic
+/// half of the gap with a bounded fixpoint — and **three live comments cited it**, all
+/// asserting that an arithmetic result is still unreachable. The register excused all three,
+/// so nothing failed while three comments and one handoff entry said something untrue.
+///
+/// **A citation in this register is not a citation that is right.** It is one that has been
+/// excused from being checked. The three comments now name
+/// `a_derived_operand_from_a_field_read_is_still_unreached`, which holds the edge that
+/// genuinely remains.
 #[test]
 fn the_unresolved_backlog_is_recorded() {
     assert_eq!(
         UNRESOLVED.len(),
-        13,
+        12,
         "the recorded backlog of unresolved citations changed. Down is the \
          whole point — update this number and say which citation you resolved. \
          Up needs a reason in the commit message."
