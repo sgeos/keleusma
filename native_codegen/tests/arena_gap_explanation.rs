@@ -81,6 +81,29 @@
 //! whether two regions are ever live at once. **A site can escape its scope and
 //! still never coexist with its sibling in the other arm.**
 //!
+//! # ⚠ CORRECTION (2026-08-27, same day): THE LABEL WAS NOT EARNED
+//!
+//! **`planner_verifier_axis` refutes this file's claim that `path-max >=
+//! peak_live` holds BY CONSTRUCTION.** Three comparable modules violate it, and
+//! on seven more the quotient exceeds the site count and is therefore not a count
+//! at all.
+//!
+//! **The derivation `peak_live = max_heap_bytes / (demand / sites)` is this
+//! line's, not the verifier's.** `bound_transfer` compares the two figures as an
+//! inequality and never divides. `max_heap_bytes` is peak per-iteration heap OVER
+//! EVERY CHUNK; `region_total_bytes` is an entry-rooted total across the call
+//! tree. **Different axes; their ratio is not a population count.**
+//!
+//! **WHAT STILL STANDS**: `path-max` equals `max_heap / size` **exactly on all 11**
+//! exceeding modules. That measurement is real and re-derivable.
+//!
+//! **WHAT DOES NOT**: calling the right-hand side "the verifier's peak live
+//! count", and the claim that the inequality is structural. **Whether the equality
+//! reflects branch exclusivity or an unrelated alignment is NOT resolved** — and
+//! is deliberately not replaced with a second guess.
+//!
+//! Read the verdict below with that correction applied.
+//!
 //! # Nothing here changes code generation
 //!
 //! No planner is modified and no remedy is adopted. `plan_chunk_region` still
