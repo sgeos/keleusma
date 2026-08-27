@@ -10,172 +10,81 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-26 (session 54) — I recorded the wrong cause for `wire.kel`, and the tree
-now names the right one
+**Date**: 2026-08-26 (session 54) — the largest stage was blocked on hexadecimal literals,
+and I published a false cause for what blocks it next
 
 ## NOTHING IS WAITING ON YOU EXCEPT THE RULING YOU ALREADY HAVE
 
-`#278` merged: `origin/v0.2.3` is at `1627e65b`, **150 merges**. The bare-`for` support is in.
-Publication remains held.
+`#278` and `#279` merged: `origin/v0.2.3` is at `823f0894`, **151 merges**. Publication
+remains held.
 
-**The floating-point entry ABI is still the last of your eight rulings that is not
-implemented**, and the `v0.3.0` line still has a second question attached to it — where a
-`Fixed` shared slot's SCALE lives, since `Fixed<16>` and `Fixed<8>` differ by 256x and compile
-to byte-identical host-visible layouts. **It is theirs to bring you and I have not acted on
-it.** Nothing else needs you.
+**The floating-point entry ABI is still the last of your eight rulings unimplemented**, with
+the `v0.3.0` line's `Fixed` shared-slot SCALE question attached. **It is theirs to bring you
+and I have not acted on it.**
 
-## The correction I would put in front of you
+## The two findings, and one of them is a retraction
 
-**I recorded `wire.kel`'s failure as a capacity bound. It was not, and the reading was wrong
-in the way the handoff warns against three paragraphs above where I wrote it.**
+**1. The self-hosted lexer never supported hexadecimal or binary literals.** It consumed the
+leading `0`, stopped, and interned the rest as an IDENTIFIER — `0xFF` was the number *zero*
+followed by a name `xFF`. `wire.kel` uses thirty-five of them. That is why the largest stage
+in the corpus could not self-compile, and it is a far smaller thing than the "capacity
+bound" this line recorded for two sessions.
 
-The failure was `IndexOutOfBounds(-1, 1024)`. I read the `1024` and inferred a node-array
-bound. But `-1` is *below the start*, not past the end — the number in an unnamed message
-identifies an array's size and says nothing about why the index was bad.
+**2. I then published a false cause for the NEXT blocker and retracted it within the hour.**
+Bisected to one line: `wire.kel` at 1,673 lines self-compiles, at 1,675 it does not, one
+declaration apart. I counted declarations, got 256 and 257, and wrote *"a cap of 256 on the
+chunk count"* into the brief as a finding. **A synthetic program of 300 trivial chunks
+compiles**, so that is false. The measurement was true; the cause inferred from it was not.
 
-**The true cause is a third thing, in a third place.** A record range leaves **two** nodes
-where it must leave one, so the record stream carries an unfolded operand. The `-1` trap
-fired several steps downstream of that, on state that was already wrong. Diagnosing the
-failure directly would have sent me to investigate the work stack, which was innocent.
+**Third time in two increments that a number in a message was read as if it identified a
+cause**, and this one happened while I was writing the document about that error. The number
+was in the right place, which made it more convincing rather than less.
 
-**That is why the instrument came before the diagnosis**, and it is the argument for the
-whole increment.
+## Proportionality, which must be stated every time
 
-## What landed
+`self_hosted_compile` cross-checks against the reference and refuses on divergence, so a
+command-line user got a loud error, never a wrong artifact. Direct callers of
+`self_host_compile` got a module with an undefined name where a constant belonged.
 
-**`reconstruct.kel`'s failure modes are named.** The stage had none. Derived from the source
-it declares **26 arrays in six size classes**, so **25 of the 26 shared a failure message
-with at least one sibling** — the same defect `parse.kel` carried until thirteen causes were
-named, where tracing one such failure cost seven increments.
+## What made the difference, in case it generalises
 
-Five causes now report by name. `tests/reconstruct_failure_modes.rs` provokes four of them
-with real inputs and pins the fifth's unreachability.
+**Reading the reference rather than guessing.** I would have written `0B` as an
+unconditional binary prefix. It is not: `0B` is binary only when a binary digit follows,
+since otherwise the `B` begins the `Byte` suffix and `0Byte` is the byte literal zero.
 
-**Two things surfaced that were not failures at all before they were named:**
+**Taking a baseline by stashing the change.** Eight radix forms diverged before and agree
+after; two numeric-suffix forms diverged before and still do, so that gap is demonstrably
+**pre-existing and untouched**. Without the baseline the second clause would be an
+assumption.
 
-- `reconstruct_range` read slot zero unconditionally. An **empty** range returned a *stale*
-  node index left behind by the previous range; an **over-full** one *silently discarded*
-  every node but the first. Neither trapped. This is what caught `wire.kel`.
-- A record range longer than the input arrays trapped `LoopLimitExceeded`, a
-  virtual-machine message naming no cause whatsoever.
+**The named failure modes from the previous increment.** They gave the chunk in one reading.
+The equivalent trace before they existed cost seven increments.
 
-**Two of my own guards could not fire as first written, and only running them showed it.**
-One sat inside a walk whose `limit` aborted a full iteration before the check; the other is
-unreachable by construction because `push` has one caller and the node guard fires first. The
-second is kept with its *invariant* pinned rather than deleted, so a future second caller
-fails a test instead of silently making the guard live.
+## What is established about the remaining blocker, and nothing more
 
-**A regression I caused, and why I did not relax the test for it.** The float program that
-used to be mis-reconstructed and caught downstream by the byte-comparison oracle is now
-refused at source — but the refusal did not name the chunk, which is the operator-facing
-value of that path. The chunk name is threaded through instead, so the earlier refusal keeps
-the later guarantee.
+- The bisect boundary is exact and reproducible.
+- The chunk count alone is **not** the trigger.
+- The reported chunk name (`put_u64`, line 270) **cannot** be the location, since a
+  declaration 1,400 lines later cannot affect it. It is a label from an interned id.
+- The mechanism is **unknown**. Naming it is the next increment.
 
-## What I got wrong inside this increment
-
-**I wrote "seven arrays" when the family was 26.** Seven is what the failure in front of me
-pointed at. Seventh recorded instance of deriving a set from the part of the system I was
-thinking about rather than from the system. The correction is left standing in the brief.
-
-**The citation guard caught me citing two tests before they existed** — third time it has
-done so, and it was right each time.
-
-## What is next, and what it is NOT
-
-`wire.kel` now fails with a named cause: a range leaving two nodes. **That is a `parse.kel`
-emission defect, not a bound**, so raising a capacity would be the wrong repair.
-
-**Naming a cause and repairing it are two claims with two evidence bars**, and this increment
-makes only the first. The repair is the next increment and it is deliberately not attempted
-here.
-
-**Scope stated so the gap is visible**: guards cover the 1024-wide class only. The other
-nineteen arrays are named in a register that fails if the stage grows an array without either
-a guard or an entry.
+**A guard worth strengthening regardless.** `every_chunk_indexed_array_admits_the_chunk_cap`
+exists because widening one array did not admit `wire.kel` — its own doc says a cap is a
+FAMILY — yet it derives that family from a hand-written list of two index expressions in one
+file. Whether or not it relates to this defect, that is the recorded meta-defect in pure
+form.
 
 ---
 
-# Previous session (53)
+# Previous entry (session 53)
 
-## The second thing that landed, and why it was worth the detour
+**Trimmed 2026-08-26.** The retained text below described `wire.kel`'s blocker as a capacity
+bound, `IndexOutOfBounds(-1, 1024)`. **That reading is retracted** — an index of `-1` is
+below the start, not past the end. Rather than leave a superseded cause standing in a
+channel a resuming session reads, the stale section is removed; the full history is in
+[DESIGN_JOURNAL.md](./DESIGN_JOURNAL.md), which is append-only and keeps both the claim and
+its correction.
 
-The `v0.3.0` line reported a comment in `src/compiler.rs` asserting that two `Op::IsStruct` routes
-"verify, receive a memory bound, load, and then trap `InvalidBytecode`" — **the exact class
-`verify()` exists to exclude** — while the tests beside it disproved it. Re-measured with controls
-rather than taken on trust: it was wrong on **three** counts, not the two reported.
-
-**Under it was the sharper defect. The comment cited a test that was never written**, twice, and the
-same file held a second dangling citation of the same kind. **A citation to a test that does not
-exist cannot fail** — the shape of the three could-not-fail checks this line paid for in session 52,
-one level up.
-
-So it is scoped by class rather than by where I looked. `tests/comment_citations.rs` requires every
-four-or-more-word backticked citation in a `src/` or `tests/` comment to resolve somewhere in the
-repository. **24 did not.** Three verified and fixed, 21 recorded as a debt register with a guard
-against the excuse list outliving its own justification in either direction.
-
-**The threshold is measured rather than asserted**, on the other line's fair point that a cut
-defended by rationale is a blind spot with a story attached: two words gives 897 citations and 104
-unresolved, three gives 453 and 48, four gives 175 and 21. The 83 extra at two words are dominated
-by standard-library names, `.kel` file stems, and prose — **three** would repay triage, not eighty.
-The file says plainly that it is silent about shorter citations.
-
-## The smaller thing, because it is the one I would want told
-
-**My citation guard manufactured two of the three findings I forwarded to the other line.**
-`must_contain` and `head_name` are ordinary function parameters written inline in a single-line
-signature, which the scan did not reach. I passed the list on without checking it, and the substitute
-for ground truth this time was **my own instrument's output** — which feels like ground truth in a way
-another line's does not. The scanner now reaches inline parameters and the rule is tested directly.
-
-**The one that was real is the best find in it.** A comment cited a *vacuity control* by a name that
-does not exist. The control is real under another name, so the guard was never missing — but a reader
-checking whether that test could go vacuous would have found nothing and concluded there was none.
-
-## A class I measured and did NOT fix, recorded so it is not mistaken for done
-
-**A measurement written into prose, in a file where every other claim is enforced, reads as a record
-and therefore as already-checked.** My own threshold table went stale within hours — in the very
-commit that staled it — and every figure moved except the one a test pins. The `v0.3.0` line found
-the same in three blocks of one file, including one where the drifted number was the *justification*
-for a decision.
-
-**The class is large here: about 180 comment lines across `src/` and `tests/` carry a "measured"
-claim.** Most are probably fine and I have not audited them. I fixed my instance and I am not
-claiming more than that. The rule both lines arrived at independently is worth applying to new ones:
-**a measurement written into a file of tests needs a date and an enforced-or-not marker at the moment
-it is written.**
-
-## THE BARE `for` FORM SELF-COMPILES
-
-**Order 1's largest single item is done.** `for v in a..b { .. }` goes through the whole
-self-hosted pipeline and matches the reference byte for byte. The construct-support boundary reads
-**91 SOk / 1 Refuses / 3 Diverges / 1 RefRejects**.
-
-**Three edits, and the third was not in the estimate.** `parse.kel` accepts the header and emits a
-short parts ladder; `reconstruct.kel` assembles the seven-word entry and **synthesises** `i >= limit`
-and `i + 1`, since neither corresponds to any token. And **neither driver ever read `for_parts` back
-from `reconstruct.kel`** — the plumbing existed and ran in one direction only, so the lowering
-received seven zeros and produced a correct loop with every operand at slot 0.
-
-**The six-bit tag space is full**, which the statement fold did not know. Kind 70 truncated to 6 and
-the loop vanished into a stray `Not`. I had written that hazard into the plan one increment earlier
-and walked into it anyway, because naming a hazard is not finding every site that has it.
-
-**Five gap pins fired and all five are converted**, each saying what became of what it watched.
-
-## `wire.kel` IS CLOSER AND NOT THERE
-
-It **parses correctly now**, to 486 chunks that mean something — the mis-parse that made the old
-count a wrong answer is gone. It does **not** self-compile: `self_host_compile` reaches a capacity
-limit further down. **A bound is a different failure from a mis-parse**, and it is the next thing
-between `wire.kel` and the byte-identity corpus.
-
-## What I would spend the next increment on
-
-**`wire.kel`'s capacity limit**, which is now the only thing between it and the byte-identity
-corpus. `self_host_compile(wire.kel)` fails with `IndexOutOfBounds(-1, 1024)` — the shape of a node
-array bound, on the largest stage in the corpus at 486 chunks. Diagnose it before costing it: the
-last two estimates on this file were both wrong, one high and one low.
-Or the remaining `.kel` stages' own bare-`for` uses, which is what keeps `wire.kel` out of the
-byte-identity corpus.
+What session 53 delivered, accurately: the confinement analysis in `src/confine.rs` with
+callee summaries, the comment-citation guard, and bare-`for` support that self-compiles
+byte-identically.
