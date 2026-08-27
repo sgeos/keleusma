@@ -2,8 +2,13 @@
 //!
 //! # Scope
 //!
-//! This is an early subset: 46 of the instruction set's 66 opcodes. Everything
-//! else is refused rather than lowered to something plausible and wrong.
+//! This is a subset of the instruction set: **60 of 66 opcodes lower**, 2 are
+//! named refusals and 3 are unproven (re-derived 2026-08-27; the subset was
+//! **46** when this note was written). Everything outside it is refused rather
+//! than lowered to something plausible and wrong.
+//!
+//! **Re-derive rather than trusting the figure**, since it moves as the subset
+//! widens: `cd native_codegen && cargo test --test isa_lowering_census -- --nocapture`.
 //! Widening the subset is the work of subsequent increments, tracked in
 //! `docs/decisions/NATIVE_LOWERING_INVENTORY.md`.
 //!

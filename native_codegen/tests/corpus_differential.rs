@@ -2241,8 +2241,9 @@ enum TrapKind {
 
 /// **WHY a module is exempt, attached AT THE SITE that exempts it.**
 ///
-/// "19 exempt" reads as 19 modules this line fails to cover, and that is wrong
-/// in both directions. Some cannot be compared by anything — a prelude has no
+/// A bare exempt count -- **14** as re-derived 2026-08-27, **19** when this note
+/// was written -- reads as that many modules this line fails to cover, and that
+/// is wrong in both directions. Some cannot be compared by anything — a prelude has no
 /// entry to run. Others are compared perfectly well by a DIFFERENT observable:
 /// `wire.kel` faults on both sides at the same tick, which is agreement the
 /// value differential is structurally unable to see, because a faulting module

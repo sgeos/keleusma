@@ -1,8 +1,14 @@
 //! **Do the nine self-hosted stages inside `corpus_differential` actually run?**
 //!
-//! `corpus_differential` reports 40 modules executed and agreeing, and nine of
-//! the ten stage sources under `src/selfhost/kel` are inside that number. It
-//! drives every module with an **all-zero shared data segment**.
+//! `corpus_differential` reports **59** modules executed and agreeing
+//! (re-derived 2026-08-27; **40** when this note was written), and the stage
+//! sources under `src/selfhost/kel` are inside that number.
+//!
+//! **THE "ALL-ZERO SHARED SEGMENT" PREMISE BELOW IS ITSELF NOW PARTLY HISTORICAL.**
+//! It described a harness that drove every module unseeded, which is what made
+//! the vacuity finding visible. **As of 2026-08-26 every stage source is seeded**,
+//! so the unseeded run is the BASELINE a seed must move rather than the only
+//! thing measured. The finding stands; the sentence describes how it was found.
 //!
 //! `lexer.kel`'s own header states the input convention:
 //!
@@ -690,15 +696,25 @@ fn the_single_head_reconstruct_seed_drives_the_stage() {
         // **`parse_functions` PANICS on part of the shipped corpus**, so this
         // survey cannot simply call it. See the assertion below: the panic is a
         // finding about a public API, not an obstacle to route around silently.
-        let prev = std::panic::take_hook();
-        std::panic::set_hook(Box::new(|_| {}));
-        let parsed = std::panic::catch_unwind(|| keleusma::selfhost::parse_functions(&src));
-        std::panic::set_hook(prev);
-        let Ok((fns, _names, _, _)) = parsed else {
+        //
+        // **`try_parse_functions` REPLACES A LOCAL `catch_unwind` HERE**, and that
+        // entry point exists BECAUSE of this survey -- its own documentation says
+        // this line "had to wrap every call in `catch_unwind` and print which
+        // sources aborted", and that it makes the behaviour a `Result` "rather
+        // than each caller reinventing the workaround."
+        //
+        // **WHAT THIS REMOVES IS THE SILENCING HOOK, NOT THE UNWIND.** The old
+        // code installed `set_hook(Box::new(|_| {}))` for the duration, which
+        // swallowed the message of ANY panic raised in that window, not only the
+        // expected one. The recovery is still by unwinding, so a build with
+        // `panic = "abort"` still aborts -- a limit their documentation states
+        // rather than hides, and one this call does not pretend to fix.
+        let Ok(parsed) = keleusma::selfhost::try_parse_functions(&src) else {
             println!("  {name:<24} {:>5}", "PANIC");
             panicked.push(name);
             continue;
         };
+        let fns = parsed.functions;
         let guarded = fns.iter().filter(|f| !f.guard_records().is_empty()).count();
         let body = fns.first().map(|f| f.body_records().len()).unwrap_or(0);
         println!("  {name:<24} {:>5} {guarded:>7} {body:>6}", fns.len());
