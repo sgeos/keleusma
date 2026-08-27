@@ -1,0 +1,80 @@
+COMPLETION CONDITION — explaining the arena-bound gap
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, in any number of commits, on any branch. Judge the end state of the tree,
+never the sequence that produced it.
+
+TREE-CHECKABLE END STATE
+
+1. Something in the tree reports, for each module whose backend arena demand
+   exceeds its verified figure, how many construction sites can be
+   simultaneously live along a single control-flow path, alongside the raw
+   static site count and the verified figure.
+
+2. That per-path figure is labelled as an upper or a lower bound on true
+   simultaneity, and the approximation it makes is stated. It is not presented
+   as exact unless it is exact.
+
+3. A verdict is recorded on whether mutually exclusive branching explains the
+   gap: fully, partly with the residue named, or not at all. The verdict is one
+   the reported numbers support rather than one they merely suggest.
+
+4. The verdict rests on the whole exceeding set, not on the single module that
+   motivated the hypothesis. If one module is quoted as an illustration, it is
+   distinguished from the evidence.
+
+5. Loop-carried liveness is not counted as branch exclusivity. A site inside a
+   loop body is treated as a separate question, or the report says why it need
+   not be.
+
+6. Any instrument used is demonstrated to discriminate: it is shown to report a
+   different answer for a module whose sites are sequential than for one whose
+   sites are exclusive.
+
+7. No remedy is implemented and none is presented as decided. If a candidate fix
+   is named, it is named as a candidate, with what would have to be established
+   before it could be adopted.
+
+8. Nothing in the code-generation path changed. The region planner still assigns
+   per static site.
+
+9. No file under src/, and none of src/selfhost/, src/confine.rs, src/verify.rs,
+   src/bytecode.rs, src/vm.rs, src/wire_schema.rs, or .github/workflows/,
+   differs from the v0.2.3 commit the branch has absorbed.
+
+10. Both suites are green, each verified by BOTH cargo's own exit status AND the
+    summed per-binary counts, with the two agreeing:
+      - the main workspace, run so a failure does not truncate the run
+      - native_codegen, which continuous integration does not build and whose
+        local run is therefore its only gate
+    The two are not run concurrently with each other, because the workspace
+    carries a wall-clock guard that concurrent load makes fail.
+
+11. Every census and gate figure quoted as current was re-derived against the
+    present tree after the last change capable of moving it.
+
+12. The handoff validates against the tree: its ancestry checks pass, and its
+    stated suite and census figures match a fresh run.
+
+13. No count is presented as evidence without the command producing it being
+    recoverable from the surrounding text.
+
+NOT REQUIRED
+
+- Closing the gap, changing the region planner, or proposing a bound as decided.
+- Explaining the gap completely. A partial explanation with the residue named is
+  a result.
+- Resolving the Fixed shared-slot ABI or the float entry ABI; both are held by
+  the operator.
+- Any particular branch name, pull request, merge, or commit count.
+
+DISQUALIFYING
+
+- A conclusion drawn from the module that motivated the hypothesis without the
+  rest of the population measured.
+- An approximation presented as an exact count.
+- A guard that cannot fail, or whose ability to fail was never shown.
+- Counting loop-carried liveness as branch exclusivity.
+- A green reached by narrowing a population or relaxing an assertion, unless
+  what was excluded is still reported with its cause.
+- A suite result read from a pipeline's exit status rather than the command's.
