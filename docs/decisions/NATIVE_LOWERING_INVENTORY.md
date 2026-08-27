@@ -847,10 +847,16 @@ That says nothing about what each one BLOCKS, and the two orderings are not the
 same. Measured over the shipped corpus, fifty-eight compilable programs, 496
 chunks, 73,434 opcode instances:
 
-| Measure | Value |
-|---|---|
-| Opcode instances lowered | **87.3 percent** |
-| Chunks **fully** lowerable | **33.9 percent** |
+| Measure | Value | re-derived 2026-08-27 |
+|---|---|---|
+| Opcode instances lowered | **87.3 percent** | — |
+| Chunks **fully** lowerable | **33.9 percent** | **99.6 percent** (1070 of 1074) |
+
+> **The 33.9 figure is retained as written and is no longer current.** See the correction below the
+> workstream table: chunks fully lowerable is now **99.6 percent** over a corpus that roughly
+> doubled. **The argument this section makes is unaffected** — that instance coverage is not a
+> capability measure, and that a chunk with one unsupported opcode is refused entirely, remain
+> exactly as true at 99.6 percent as at 33.9.
 
 The divergence is the whole point. A chunk with one unsupported opcode is
 refused entirely, so instance-level coverage is not a capability measure. Eighty
@@ -867,6 +873,59 @@ seven percent is a number no consumer of this backend can use.
 
 **The data segment is 81 percent of blocked chunks.** It is the next increment,
 and it was not previously identified as such anywhere in this document.
+
+> ## ⚠ THAT RECOMMENDATION IS OBSOLETE. RE-DERIVED 2026-08-27.
+>
+> **The table above, and the recommendation under it, name the ONE workstream that now blocks
+> nothing.** Re-derived with `cd native_codegen && cargo test --test spike_corpus_coverage --
+> --nocapture`:
+>
+> | | this section, as written | re-derived 2026-08-27 |
+> |---|---|---|
+> | corpus | 58 programs, 496 chunks | **69 modules, 1074 chunks** |
+> | chunks **fully** lowerable | **33.9 percent** | **1070 of 1074, 99.6 percent** |
+> | D, data segment — blocking instances | 7832 | **5** |
+> | D, data segment — chunks blocked as FIRST blocker | **267** | **ZERO; it does not appear** |
+>
+> **Both percentages measure the same thing** — chunks fully lowerable — so the comparison is
+> like for like. **The corpus roughly doubled in the interval**, which is why the absolute counts
+> are not comparable even though the percentages are.
+>
+> **Current first blockers**: sub-coroutines (2 chunks) and "other" (2). **Four blocked chunks in
+> total.**
+>
+> ### At module granularity, which answers a different question
+>
+> A chunk refused makes its whole module refused, so module coverage is lower than chunk
+> coverage and both are true:
+>
+> ```text
+>   compiled by the front end : 69
+>   LOWER END TO END          : 64
+>   refused by the backend    : 5
+>   module-level coverage     : 92.8%
+>
+>   refusal reasons:
+>       2  NewComposite
+>       1  Len
+>       1  Stream
+>       1  chunk 0
+> ```
+>
+> **So "the next increment" is not a workstream. It is FIVE NAMED MODULES**, two of them on
+> `NewComposite` and one each on `Len` and `Stream` — the last two having established reasons of
+> their own recorded elsewhere.
+>
+> ### What this does NOT say
+>
+> **The backend is not complete.** 99.6 percent of chunks is not 100, five modules are refused,
+> and `Len`'s refusal was re-checked on 2026-08-27 against `for .. limit` and **holds**.
+>
+> **These figures are DATED, not pinned.** The corpus grows on every absorption, so an equality
+> here would fail on ordinary growth. Re-derive rather than trusting them.
+>
+> **And no replacement recommendation is made here.** That one recorded increment is obsolete is
+> a measurement; what to do instead is a decision, and this note does not take it.
 
 **The native ABI shows the instance-count trap in its clearest form**: second by
 instances, fourth by blocked chunks, because its instances concentrate in large
