@@ -2425,13 +2425,18 @@ fn lower_chunk_body<'ctx>(
             // fraction count is static and refused below, and every product
             // saturates rather than faulting.
             //
-            // `FixedDiv` returns `VmError::DivisionByZero` on a zero divisor,
-            // unconditionally and with no construct to catch it. Reproducing
-            // that natively needs the runtime-fault lowering, which
-            // `RUNTIME_FAULTS.md` defers to V0.4.0 — and the existing trap
-            // branch here is gated on `OverflowPolicy::Trap`, so it is a policy,
-            // not the unconditional fault the VM raises. Refusing is the honest
-            // answer until that path exists.
+            // **`FixedDiv` NOW LOWERS, and the reason it did not was STALE.**
+            // The note here read: reproducing the VM's unconditional
+            // `DivisionByZero` "needs the runtime-fault lowering, which
+            // `RUNTIME_FAULTS.md` defers to V0.4.0 — and the existing trap branch
+            // here is gated on `OverflowPolicy::Trap`, so it is a policy, not the
+            // unconditional fault the VM raises."
+            //
+            // **`Op::Div | Op::Mod` above already emits exactly that fault**,
+            // ungated: it compares the divisor to zero and branches to `trap_bb`.
+            // That path was built for the integer forms and this refusal was
+            // never revisited. **A stale blocker costs more than a stale figure:
+            // a wrong number misleads a reader, a wrong blocker stops work.**
             Op::FixedMul(frac_bits) => {
                 if u32::from(*frac_bits) >= WORD_BITS as u32 {
                     return Err(LowerError::UnsupportedOp(format!(
@@ -2466,6 +2471,69 @@ fn lower_chunk_body<'ctx>(
                         .unwrap()
                         .into_int_value();
                 st.push(st.b.build_int_truncate(clamped, i64t, "fxm").unwrap());
+            }
+            // Reproduces `src/vm.rs` `Op::FixedDiv` in all three of its
+            // behaviours. **Read from that arm, not pattern-matched from
+            // `FixedMul` above** -- the two shift in OPPOSITE directions, and
+            // copying the neighbour would produce a plausible wrong answer that
+            // still agrees on zero.
+            Op::FixedDiv(frac_bits) => {
+                // (1) The VM fails closed on an out-of-range fraction count. The
+                // count is a static operand, so this is a lowering-time refusal,
+                // exactly as `FixedMul` and `FixedToWord` already do.
+                if u32::from(*frac_bits) >= WORD_BITS as u32 {
+                    return Err(LowerError::UnsupportedOp(format!(
+                        "FixedDiv({frac_bits}) has a fraction count at or beyond the \
+                         {WORD_BITS}-bit word width; the VM fails closed here and the \
+                         count is static, so the lowering refuses"
+                    )));
+                }
+                let rhs = st.pop();
+                let lhs = st.pop();
+
+                // (2) A zero divisor faults UNCONDITIONALLY -- the VM returns
+                // `VmError::DivisionByZero` with no construct to catch it. Same
+                // shape as `Op::Div` above, and it must come first so the divide
+                // below may assume a non-zero divisor.
+                let cont = ctx.append_basic_block(func, "fxd.nonzerodivisor");
+                let zero =
+                    st.b.build_int_compare(IntPredicate::EQ, rhs, i64t.const_zero(), "fxd.zero")
+                        .unwrap();
+                st.b.build_conditional_branch(zero, trap_bb, cont).unwrap();
+                st.b.position_at_end(cont);
+
+                // (3) Widen, shift the DIVIDEND LEFT by the fraction count, then
+                // divide and SATURATE. `FixedMul` shifts its PRODUCT RIGHT; this
+                // is the asymmetry the VM specifies and the one place a copied
+                // idiom would be silently wrong.
+                let a = st.widen(lhs, i128t, "fxd.a");
+                let c = st.widen(rhs, i128t, "fxd.b");
+                let sh = i128t.const_int(u64::from(*frac_bits), false);
+                let dividend = st.b.build_left_shift(a, sh, "fxd.sh").unwrap();
+                // **NO `guard_min_div_neg_one` HERE, and its absence is
+                // deliberate.** That guard exists for the WRAPPING integer forms,
+                // where `i64::MIN / -1` overflows the result type. Here both
+                // operands are widened to `i128` first, so the quotient cannot
+                // overflow the wide type, and the clamp below carries the value
+                // back into range. Copying the guard in would be inert at best.
+                let quotient = st.b.build_int_signed_div(dividend, c, "fxd.q").unwrap();
+                let max = st.widen(i64t.const_int(i64::MAX as u64, false), i128t, "fxd.max");
+                let min = st.widen(i64t.const_int(i64::MIN as u64, true), i128t, "fxd.min");
+                let over =
+                    st.b.build_int_compare(IntPredicate::SGT, quotient, max, "fxd.over")
+                        .unwrap();
+                let under =
+                    st.b.build_int_compare(IntPredicate::SLT, quotient, min, "fxd.under")
+                        .unwrap();
+                let hi =
+                    st.b.build_select(over, max, quotient, "fxd.selhi")
+                        .unwrap()
+                        .into_int_value();
+                let clamped =
+                    st.b.build_select(under, min, hi, "fxd.sello")
+                        .unwrap()
+                        .into_int_value();
+                st.push(st.b.build_int_truncate(clamped, i64t, "fxd").unwrap());
             }
             Op::FixedToWord(frac_bits) => {
                 if u32::from(*frac_bits) >= WORD_BITS as u32 {
