@@ -349,3 +349,120 @@ fn the_is_struct_witness_runs_and_the_load_time_hole_is_closed() {
          why this is asserted by value and not by absence of a fault"
     );
 }
+
+/// **THE FIFTH BLOCKER CHECK: does `limit` decouple what the argument says
+/// cannot be decoupled?**
+///
+/// This file's structural claim is that `Op::Len` fires exactly when the for-in
+/// source has no statically known length, and that such a loop is exactly what
+/// the bound extractor refuses — "not two independent limitations that might be
+/// lifted separately."
+///
+/// **`for .. limit <const>` is precisely a mechanism for lifting them
+/// separately.** `GRAMMAR.md`: *"A range over runtime endpoints is admitted by
+/// supplying the bound explicitly with a `limit` clause."* **This file predates
+/// that form and does not mention it**, so the argument has never been tested
+/// against the one thing designed to defeat it.
+///
+/// Four recorded blockers expired in this session. This is the fifth check, and
+/// its value does not depend on which way it goes.
+///
+/// # ANSWER, MEASURED 2026-08-27: THE BLOCKER HOLDS
+///
+/// The program is **refused at COMPILATION, as a type error**: *"a `limit`
+/// clause requires a range `for` loop."*
+///
+/// **The `limit` form reaches RANGES only; `Op::Len` fires on SOURCES.** So the
+/// mechanism designed to supply a cap where none can be inferred does not apply
+/// to the construct that emits the opcode, and the two limitations really are
+/// not liftable separately — **as this file argued before that form existed.**
+///
+/// **This is the one blocker of five that survived a specific attack**, and it
+/// survived on the merits rather than by going unchallenged. Four expiring did
+/// not make a fifth expire; the sweep found four specific failures, not a
+/// universal rot.
+#[test]
+fn does_a_limit_clause_admit_a_source_with_no_static_length() {
+    // The same shape as IF_SOURCE, with a limit clause supplying the cap.
+    const WITH_LIMIT: &str = "\
+fn f(c: bool) -> Word {
+  let a = [1, 2];
+  let b = [3, 4];
+  for x in if c { a } else { b } limit 2 { let _d = x; }
+  0
+}
+fn main() -> Word { f(true) }
+";
+    println!("\n================ DOES `limit` ADMIT A NO-STATIC-LENGTH SOURCE?");
+
+    // **NAME THE STAGE.** "Refused" without saying which stage refused is not a
+    // result: parse, typecheck, verify and the bound extractor are different
+    // answers with different implications.
+    let toks = match tokenize(WITH_LIMIT) {
+        Ok(t) => t,
+        Err(e) => {
+            println!("  REFUSED AT: lexing -- {e:?}");
+            println!("  VERDICT: the limit clause does not attach to this source form at all.");
+            println!("================\n");
+            return;
+        }
+    };
+    let ast = match parse(&toks) {
+        Ok(a) => a,
+        Err(e) => {
+            println!("  REFUSED AT: parsing -- {e:?}");
+            println!("  VERDICT: the grammar does not accept `limit` on a non-range source.");
+            println!("  So the structural argument HOLDS: the form that lifts the bound");
+            println!("  requirement applies to RANGES, and the opcode fires on SOURCES.");
+            println!("================\n");
+            return;
+        }
+    };
+    let m = match compile(&ast) {
+        Ok(m) => m,
+        Err(e) => {
+            println!("  REFUSED AT: compilation, as a TYPE ERROR -- {e:?}");
+            println!("  VERDICT: **THE BLOCKER HOLDS.** The `limit` clause requires a RANGE");
+            println!("  `for` loop, and `Op::Len` fires on a for-in over a SOURCE. The one");
+            println!("  mechanism that lifts the static-bound requirement does not reach the");
+            println!("  case where the opcode is emitted, so the two limitations really are");
+            println!("  not liftable separately -- as this file argued before the form even");
+            println!("  existed.");
+            println!("  Checked 2026-08-27 against `for .. limit <const>`, NOT assumed.");
+            println!("================\n");
+            return;
+        }
+    };
+
+    // **NON-VACUITY: the program must actually emit the opcode.** Reading an
+    // admission verdict from a program that never reaches `Op::Len` settles
+    // nothing, and this line has broken eleven guards this session by skipping
+    // exactly this step.
+    let emits = m
+        .chunks
+        .iter()
+        .any(|c| c.ops.iter().any(|o| matches!(o, keleusma::bytecode::Op::Len)));
+    println!("  compiles: yes.  emits Op::Len: {emits}");
+    if !emits {
+        println!("  VERDICT: INCONCLUSIVE -- the limit form compiles but the opcode is");
+        println!("  not emitted, so this program cannot answer the question. The limit");
+        println!("  clause evidently supplies a static trip count, which is the very");
+        println!("  condition under which `Op::Len` does NOT fire.");
+        println!("================\n");
+        return;
+    }
+
+    match auto_arena_capacity_for(&m, &[]) {
+        Ok(cap) => {
+            println!("  ADMITTED by the bound extractor, arena capacity {cap}.");
+            println!("  VERDICT: THE BLOCKER HAS EXPIRED. A program emitting Op::Len is");
+            println!("  admissible, so lowering it is now testable and worth an increment.");
+        }
+        Err(e) => {
+            println!("  REFUSED AT: the resource-bound analysis -- {e:?}");
+            println!("  VERDICT: THE BLOCKER HOLDS against the one mechanism designed to");
+            println!("  defeat it. Not an assumption carried forward -- a checked result.");
+        }
+    }
+    println!("================\n");
+}
