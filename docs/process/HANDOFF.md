@@ -13,11 +13,10 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > **The one pin that moves with the merge** is `tests/reconstruct_failure_modes.rs`, which does not
 > exist on `origin/v0.2.3`. Everything else in the check block is unchanged by this branch.
 >
-> **`#278` MERGED 2026-08-26 at 22 of 22 green.** The two-reading warning this banner carried is
-> resolved: `origin/v0.2.3` is at `1627e65b`, the merge count is **150**, and the check block below
-> is the single reading. No pull request is open.
+> **`#278` AND `#279` MERGED 2026-08-26, each at 22 of 22 green.** `origin/v0.2.3` is at
+> `823f0894` and the merge count is **151**.
 >
-> **AS OF `1627e65b`: 150 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive it:
+> **AS OF `823f0894`: 151 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive it:
 > `git log --oneline origin/v0.2.3 | grep -c 'Merge pull request'`. **NOTE THE REF** -- the local
 > `v0.2.3` lags and answers a smaller number for the same tree.
 >
@@ -37,11 +36,21 @@ always-current, so it must be able to report itself stale rather than mislead a 
 >
 > **THE CAUSE THIS FILE RECORDED FOR ITS REMAINING FAILURE WAS WRONG. RETRACTED 2026-08-26.**
 > It said "a CAPACITY BOUND -- `IndexOutOfBounds(-1, 1024)`". An index of `-1` is BELOW THE
-> START, not past the end, so the `1024` is an array's size and identifies nothing. The real
-> cause, now reported by name, is **a record range that leaves two nodes where it must leave
-> one** -- a `parse.kel` emission defect. **Raising a capacity would be the wrong repair.**
-> The old trap fired several steps DOWNSTREAM of the defect, so diagnosing it directly would
-> have sent a reader to the work stack, which is innocent.
+> START, not past the end. **The real first cause was that the self-hosted lexer had no
+> support for hexadecimal or binary literals at all**: it consumed the leading `0` and
+> interned the rest as an IDENTIFIER, and `wire.kel` uses thirty-five of them. Fixed.
+>
+> **AND THE CAUSE RECORDED FOR WHAT BLOCKS IT NEXT WAS ALSO WRONG, WITHIN THE HOUR.** It is
+> bisected exactly -- `wire.kel` at 1,673 lines self-compiles, at 1,675 it does not, one
+> declaration apart -- and the declaration counts are 256 and 257. I wrote "a cap of 256 on
+> the chunk count". **A synthetic program of 300 trivial chunks compiles, so that is false.**
+> The mechanism is UNKNOWN. What is established: the boundary, and that the chunk count alone
+> is not the trigger.
+>
+> **THE REPORTED CHUNK NAME IS A LABEL, NOT A LOCATION.** The failure names `put_u64` at line
+> 270, which a declaration 1,400 lines later cannot affect. The driver derives that name from
+> an interned id. **Three times in two increments a number or name in a message has been read
+> as if it identified a cause. Do not do it a fourth time.**
 >
 > **Publication remains held.**
 
@@ -107,6 +116,9 @@ grep -c '^\s*#\[test\]' tests/comment_citations.rs           # 5
 # provoking input; the fifth is UNREACHABLE by construction and the file pins the
 # invariant that makes it so rather than deleting the guard.
 grep -c '^\s*#\[test\]' tests/reconstruct_failure_modes.rs   # 14
+# RADIX LITERALS, session 54. The self-hosted lexer had no support for them; the
+# boundary table had no case for one, which is why it went unmeasured.
+grep -c '^\s*#\[test\]' tests/radix_literals.rs               # 5
 
 # `tests/stage_command_reach.rs` IS in the list now: #210 merged 2026-08-21.
 
@@ -184,6 +196,17 @@ it is not sufficient**: printing the status preserves it IN THE LOG and destroys
 own exit code, which is the value a background notification reports. Read the log, never the
 notification's exit code. Third variant of one defect -- `tee`, a trailing `grep`, and now a
 trailing `echo` -- and each was found only because someone opened the log anyway.
+
+**THE FIX, rather than one more warning.** End the command with `exit $S` after recording the
+status, so the composite's own status IS cargo's:
+
+```
+cargo test ... > log 2>&1; S=$?; echo "CARGO_EXIT=$S" >> log; exit $S
+```
+
+The log keeps the number for a reader and the process carries it for the harness, so the
+notification and the log cannot disagree. Every earlier form preserved one and destroyed the
+other.
 
 **Keep TWO independent signals.** Cargo's status gives the verdict; counting `^test result: ok`
 lines gives the coverage. Either alone has been wrong: the status lied in both polarities, and a
@@ -281,7 +304,7 @@ push cancelled run `31932202253` and `31932359730` replaced it.
 | **`parse.kel` failure modes named** | **THIRTEEN**, across **ELEVEN** guarded counters |
 | shared-slot layouts | **nine copies collapsed to two definitions**, in `selfhost_host` |
 | architecture | one binary, selectable phases -- see `../decisions/PIPELINE_THEN_MONOLITH.md` |
-| construct-support boundary | **91 SOk / 1 Refuses / 3 Diverges / 1 RefRejects**, 96 cases |
+| construct-support boundary | **94 SOk / 1 Refuses / 3 Diverges / 1 RefRejects**, 99 cases |
 | **the SHIPPING compiler against that table** | **it AGREES with the boundary on every case** |
 | **chained array indexing** | **`a[0][1]` and its split form both byte-identical** |
 | operand-stack models | **agree on every one of the 66 opcodes**; the known list is EMPTY |

@@ -838,6 +838,51 @@ would find it. **The expensive part of both investigations was establishing that
 believed was undecided had in fact been decided** — once by three repairs nobody had reconciled with
 the comment above them, once by a size function nobody had connected to the refusal message.
 ---
+## 2026-08-26 — radix literals, and a false finding I published and retracted within the hour
+
+**THE SELF-HOSTED LEXER NEVER SUPPORTED HEXADECIMAL OR BINARY LITERALS.** It consumed the
+leading `0`, stopped, and interned the remainder as an IDENTIFIER: `0xFF` was the number
+**zero** followed by a name `xFF`. Measured with `lex_token_trace`, not inferred. `wire.kel`
+uses thirty-five of them, which is why the largest stage could not self-compile.
+
+**THE INSTRUMENT FROM THE PREVIOUS INCREMENT PAID FOR ITSELF IMMEDIATELY.** The named
+refusal gave the chunk (`crc_begin`) in one reading; five probes narrowed it to the radix
+prefix. Tracing the equivalent failure before the modes were named cost seven increments.
+
+**READING THE REFERENCE INSTEAD OF GUESSING CHANGED THE IMPLEMENTATION.** I would have
+written `0B` as an unconditional binary prefix. It is not: `0B` is binary only when a binary
+digit follows, because otherwise the `B` begins the `Byte` suffix and `0Byte` is the byte
+literal zero. Guessing would have turned a mild pre-existing divergence into a malformed
+literal.
+
+**THE BASELINE IS WHAT MAKES THE CLAIM CHECKABLE.** Taken by stashing the change: eight
+radix forms diverged from the reference before and all agree after; `0Byte` and `100Word`
+diverged before and still do, so the numeric-suffix gap is **pre-existing and untouched**.
+Without the baseline the second half of that sentence would have been an assumption.
+
+**AND THEN I DID THE THING THIS WHOLE INCREMENT IS ABOUT.** `wire.kel` moved on to a new
+named cause, bisected to a single line: 1,673 lines self-compiles, 1,675 does not, one
+declaration apart. I counted declarations, got **256 and 257**, and wrote *"a cap of 256 on
+the chunk count"* into the brief as a finding. **A synthetic program of 300 trivial chunks
+compiles.** The measurement was true and the cause inferred from it was false.
+
+**A number in a message read as if it identified a cause — for the third time in two
+increments, and this time while documenting that exact error.** The number was in the right
+place, which made it more convincing rather than less. The retraction is left in the brief
+beside the claim.
+
+**WHAT THE EXISTING GUARD SHOWS ANYWAY.** `every_chunk_indexed_array_admits_the_chunk_cap`
+exists because widening `toks.chunks` alone did not admit `wire.kel`; its own doc says a cap
+is a FAMILY. It derives that family from a hand-written list of **two** index expressions in
+**one** file. That is the recorded meta-defect in pure form — coverage that is a property of
+the case list — and it is worth strengthening regardless of whether it relates to this
+defect, which is now unknown.
+
+**WHAT IS ESTABLISHED, AND NOTHING MORE**: the bisect boundary, and that the chunk count
+alone is not the trigger. The reported chunk name (`put_u64`, line 270) cannot be the
+location, since a declaration 1,400 lines later cannot affect it; the name is a label
+produced from an interned id. **Naming the mechanism is the next increment's work.**
+
 ## 2026-08-26 — `reconstruct.kel`'s failure modes, and a diagnosis that was wrong twice
 
 **THE HEADLINE: THE RECORDED CAUSE OF `wire.kel`'s FAILURE WAS WRONG, AND SO WAS THE

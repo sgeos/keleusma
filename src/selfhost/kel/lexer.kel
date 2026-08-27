@@ -79,6 +79,9 @@ private data st {
     kind: Word,
     start: Word,
     val: Word,
+    // Digits consumed since a radix prefix. `0x` with no digit following is an error in
+    // the reference, and without a count it is indistinguishable from the literal zero.
+    ndig: Word,
 }
 
 // Scratch accumulators for the interning content comparison (increment 4), which
@@ -94,6 +97,23 @@ private data intern {
 // Byte-class predicates. Atomic total `fn`, so bounded by construction.
 fn is_digit(b: Word) -> Word {
     if b >= 48 { if b <= 57 { 1 } else { 0 } } else { 0 }
+}
+
+// The value of a hexadecimal digit byte, or -1 for a byte that is not one. Both letter
+// cases are accepted, matching the reference. Returning the VALUE rather than a boolean
+// keeps the accumulation branch-free at the call site.
+fn hex_val(b: Word) -> Word {
+    if b >= 48 andalso b <= 57 {
+        b - 48
+    } else {
+    if b >= 97 andalso b <= 102 {
+        b - 87
+    } else {
+    if b >= 65 andalso b <= 70 {
+        b - 55
+    } else {
+        0 - 1
+    } } }
 }
 
 fn is_alpha(b: Word) -> Word {
@@ -395,6 +415,36 @@ loop main(resume: Word) -> Word {
                 yield 12 + v * 256
             }
         } else {
+        if st.kind == 6 {
+            // Extending a hexadecimal integer, or ending it at a non-hex-digit byte.
+            let d = hex_val(b);
+            if d >= 0 {
+                st.cursor = st.cursor + 1;
+                st.val = st.val * 16 + d;
+                st.ndig = st.ndig + 1;
+                yield 63
+            } else {
+                // `0x` with no digit after it. The reference rejects this outright; the
+                // stage has no diagnostic channel, so it yields the literal zero and the
+                // reference cross-check refuses the program. Recorded rather than hidden.
+                let v = st.val;
+                st.kind = 0;
+                yield 12 + v * 256
+            }
+        } else {
+        if st.kind == 7 {
+            // Extending a binary integer, or ending it at a non-binary-digit byte.
+            if b == 48 orelse b == 49 {
+                st.cursor = st.cursor + 1;
+                st.val = st.val * 2 + (b - 48);
+                st.ndig = st.ndig + 1;
+                yield 63
+            } else {
+                let v = st.val;
+                st.kind = 0;
+                yield 12 + v * 256
+            }
+        } else {
         if st.kind == 5 {
             // Inside a `//` line comment: skip bytes until the newline that ends it
             // (or end of source), then resume normal tokenizing.
@@ -447,11 +497,36 @@ loop main(resume: Word) -> Word {
                 yield 63
             } else {
             if is_digit(b) == 1 {
+                // A RADIX PREFIX, and the third arm is the one a reasonable guess gets
+                // wrong. `0x`/`0X` is always hexadecimal and `0b` is always binary, but
+                // `0B` is binary ONLY when a binary digit follows: otherwise the `B`
+                // begins the `Byte` numeric suffix, so `0Byte` is the byte literal zero
+                // rather than a malformed binary literal. Taken from the reference lexer,
+                // not inferred from the corpus, which uses `0x` exclusively.
+                let p1 = peek_at(st.cursor + 1);
+                let p2 = peek_at(st.cursor + 2);
+                if b == 48 andalso (p1 == 120 orelse p1 == 88) {
+                    st.kind = 6;
+                    st.start = st.cursor;
+                    st.val = 0;
+                    st.ndig = 0;
+                    st.cursor = st.cursor + 2;
+                    yield 63
+                } else {
+                if b == 48 andalso (p1 == 98 orelse (p1 == 66 andalso (p2 == 48 orelse p2 == 49))) {
+                    st.kind = 7;
+                    st.start = st.cursor;
+                    st.val = 0;
+                    st.ndig = 0;
+                    st.cursor = st.cursor + 2;
+                    yield 63
+                } else {
                 st.kind = 3;
                 st.start = st.cursor;
                 st.val = b - 48;
                 st.cursor = st.cursor + 1;
                 yield 63
+                } }
             } else {
             if b == 47 andalso peek_at(st.cursor + 1) == 47 {
                 // A `//` line comment: skip both slashes and read the rest in kind 5.
@@ -470,6 +545,6 @@ loop main(resume: Word) -> Word {
                     yield punct_tok(b)
                 }
             } } } } }
-        } } } }
+        } } } } } }
     }
 }
