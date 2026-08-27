@@ -5615,6 +5615,14 @@ fn arm_body() -> Word {
     forst.for_sp = 0;
     forst.for_emit = 0;
     forst.forlimit_count = 0;
+    // A SYMMETRY GAP, closed 2026-08-27. `forin_count` is the bare form's program-order
+    // counter and the stage's own comment calls it "the analogue of `forlimit_count`" -- but
+    // the analogue was reset here and it was not. It indexes the emitted record's argument as
+    // `7 * forin_count`, so leaving it running meant the SECOND and every later function
+    // containing a bare `for` emitted a record pointing past its own parts. The loop's parts
+    // were then absent, which is why the stage emitted FEWER operations than the reference
+    // rather than different ones.
+    forst.forin_count = 0;
     mat.match_sp = 0;
     mat.match_build = 0;
     mat.enum_phase = 0;

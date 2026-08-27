@@ -838,6 +838,65 @@ would find it. **The expensive part of both investigations was establishing that
 believed was undecided had in fact been decided** — once by three repairs nobody had reconciled with
 the comment above them, once by a size function nobody had connected to the refusal message.
 ---
+## 2026-08-27 — `wire.kel` SELF-COMPILES BYTE-IDENTICALLY. The corpus is eleven stages.
+
+**THE LAST STAGE OUTSIDE THE ORACLE IS IN IT.** 486 chunks, 125,540 bytes on both sides, zero
+chunks differing. The byte-identity corpus goes from ten stages to eleven, and the largest is
+now one of them.
+
+**THE CAUSE WAS ONE LINE, AND IT WAS A SYMMETRY GAP.** `forin_count` — the bare `for` form's
+program-order counter — was never added to the per-function reset that already cleared its own
+documented analogue, `forlimit_count`. The stage's own comment calls it "the analogue of
+`forlimit_count`"; the analogue was reset and it was not. It indexes an emitted record as
+`7 * forin_count`, so the SECOND and every later function containing a bare `for` emitted a
+record pointing past its own parts. **That is why the stage emitted FEWER operations rather
+than different ones**, and the direction was the most useful fact in the whole diagnosis.
+
+**FOUR CAUSES OVER THREE SESSIONS, AND I FIRST DIAGNOSED TWO OF THEM WRONGLY.**
+
+| recorded cause | verdict |
+|---|---|
+| a capacity bound, read off the `1024` in an index message | **wrong** |
+| the lexer having no hexadecimal or binary literal support | correct |
+| a cap of 256 on the DECLARATION COUNT | **wrong** |
+| a `Call` record whose chunk field overflowed at index 256 | correct |
+| `forin_count` not reset between functions | correct |
+
+**Both wrong readings took a number in a message for a cause.** The nearer miss was the
+third: 256 was the right number attached to the wrong quantity.
+
+**THE METHOD, WHICH IS THE TRANSFERABLE PART.**
+
+1. **Prefix bisection with the RIGHT predicate.** Not "does it compile" — `wire.kel` compiles,
+   so that predicate reports every prefix as passing. The predicate had to be *do these chunks
+   match the reference*. Choosing it wrongly would have wasted the run and looked like data.
+2. **The real dependency chain, not a simplified one.** An earlier extract of the same
+   function came back IDENTICAL because I had substituted simple stand-ins for its callees.
+   Rebuilt verbatim, it reproduced at 40 against 59 — the exact `wire.kel` numbers.
+3. **Delta-debugging the body**, which put it on the loop alone: 14 against 33, the same
+   19-operation delta as the whole function.
+4. **A five-line synthetic** separating one bare loop from two in separate functions.
+
+**THEN IT PREDICTED THE FILE BEFORE I LOOKED.** The rule says every bare-`for` function after
+the first diverges. `wire.kel` has three such functions; the two after the first are exactly
+`emit_prologue` and `prologue_disagreed`. A real prediction, not a fit.
+
+**AND THE PREDICTION NEARLY FAILED FOR THE WRONG REASON.** My first detector matched a
+COMMENT reading `for k in 0..3`, reported four functions, and I was a step from concluding the
+rule was too strong. **The instrument was broken, not the finding.** Strip comments before
+scanning source, and check the instrument before doubting the result.
+
+**GUESSING FAILED SEVENTEEN TIMES ACROSS THESE FOUR CAUSES; BISECTION SUCCEEDED THREE TIMES
+OUT OF THREE.** The brief for this increment listed the six probes already known negative
+precisely so they would not be run again, and that list was worth more than any hypothesis in
+it.
+
+**A PIN WHOSE OWN INSTRUCTION WAS PREMATURE, VINDICATED.** Last session a pin told its reader
+to add `wire.kel` to the corpus and delete the test; byte-identity did not hold, so obeying it
+would have corrupted the oracle. The claim was held in a separate file until it was true.
+**It is true now**, and the file that held it was rewritten rather than deleted — what it pins
+now is the five-line reproduction, which the corpus oracle cannot express.
+
 ## 2026-08-26 — `wire.kel` COMPILES, is NOT byte-identical, and the cause took three tries
 
 **THE LARGEST STAGE IN THE CORPUS COMPILES THROUGH THE SELF-HOSTED PIPELINE FOR THE FIRST

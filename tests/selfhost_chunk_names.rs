@@ -130,13 +130,15 @@ fn consecutive_same_named_heads_collapse_into_one_chunk() {
 /// # Why it is retired rather than followed to the letter
 ///
 /// The pin's own instruction was to add `wire.kel` to `assert_stage_byte_identical`'s corpus
-/// and delete this test. **That instruction assumed byte-identity, and byte-identity does not
-/// hold**: two of 486 chunks still diverge. Following it literally would have put a
-/// non-identical stage into the oracle and broken it, or forced the oracle to be relaxed —
-/// which is how a corpus quietly stops meaning anything.
+/// and delete this test. **When it first fired, that instruction was premature**: `wire.kel`
+/// compiled but two of 486 chunks still diverged, so obeying it would have put a
+/// non-identical stage into the oracle, or forced the oracle to be relaxed — which is how a
+/// corpus quietly stops meaning anything. The claim was held in a separate file until it was
+/// true.
 ///
-/// So the claim moved to `tests/wire_self_compile_status.rs`, which pins BOTH halves: that it
-/// compiles, and that it is not yet byte-identical, with the two diverging chunks named.
+/// **It is true now.** `wire.kel` self-compiles byte-identically and
+/// `self_host_compiles_wire_kel_byte_identically` owns that claim. What survives here is only
+/// the chunk-count figure, which the channels quote.
 ///
 /// # What the original recorded, kept because the lesson outlived the defect
 ///

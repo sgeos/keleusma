@@ -10,78 +10,67 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-26 (session 54) — `wire.kel` compiles for the first time, and it is not
-byte-identical
+**Date**: 2026-08-27 (session 55) — `wire.kel` self-compiles byte-identically. The corpus is
+eleven stages.
 
 ## NOTHING IS WAITING ON YOU EXCEPT THE RULING YOU ALREADY HAVE
 
-`#278`, `#279` and `#282` merged: `origin/v0.2.3` is at `f196a49c`, **152 merges**.
 Publication remains held. **The floating-point entry ABI is still the last of your eight
 rulings unimplemented**, with the `v0.3.0` line's `Fixed` shared-slot SCALE question attached.
 **It is theirs to bring you and I have not acted on it.**
 
-## The headline, with both halves stated together
+## The milestone, measured
 
-**`wire.kel` COMPILES THROUGH THE SELF-HOSTED PIPELINE — 486 chunks, matching the reference.**
-The largest stage in the corpus had never compiled at all.
+**`wire.kel` SELF-COMPILES BYTE-IDENTICALLY.** 486 chunks, **125,540 bytes on both sides,
+zero chunks differing.** The largest stage in the corpus, and the last one outside the
+byte-identity oracle, is now in it — ten stages become eleven.
 
-**IT IS NOT BYTE-IDENTICAL.** Two chunks diverge: `emit_prologue` (40 operations against 59)
-and `prologue_disagreed` (16 against 50). Both facts are pinned in one test file, because the
-claim "`wire.kel` self-compiles byte-identically" was once invented on this line and reached a
-doc comment, a pull-request body and all three channels before anyone checked it.
+**That sentence was once invented on this line** and reached a doc comment, a pull-request
+body and all three channels while the compile still panicked. It is now the output of
+`self_host_compiles_wire_kel_byte_identically`, not a recollection.
 
-## Three causes cleared, and I first diagnosed two of them wrongly
+## The cause was one line
+
+`forin_count` — the bare `for` form's program-order counter — was never added to the
+per-function reset that already cleared its own documented analogue, `forlimit_count`. It
+indexes a record as `7 * forin_count`, so the **second and every later function** containing a
+bare `for` emitted a record pointing past its own parts. **That is why the stage emitted FEWER
+operations rather than different ones.**
+
+## Four causes over three sessions, and I first diagnosed two wrongly
 
 | recorded cause | verdict |
 |---|---|
 | a capacity bound, read off the `1024` in an index message | **wrong** |
-| the lexer having no hexadecimal or binary literal support | correct, fixed |
+| the lexer having no hexadecimal or binary literal support | correct |
 | a cap of 256 on the declaration count | **wrong** |
-| a `Call` record whose chunk field overflows at index 256 | correct, fixed |
+| a `Call` record whose chunk field overflowed at index 256 | correct |
+| `forin_count` not reset between functions | correct |
 
-**Both wrong readings were a number in a message taken for a cause.** The second is the more
-instructive: 256 was the right number and the wrong quantity. What refuted it was the
-experiment that should have come first.
+Both wrong readings took **a number in a message for a cause**. The nearer miss was the third:
+256 was the right number attached to the wrong quantity.
 
-## The mechanism, because it explains every earlier confusion
+## What actually worked, since the tally is stark
 
-A `Call` record packed `chunk + count * 256`. At index 256 the callee field carried into the
-count: **the callee became chunk zero and the call popped one operand too many.** So the
-symptom surfaced in the CALLER — and since chunk indices are assigned by **sorted name**, one
-declaration added anywhere alphabetically earlier shifted a block of indices across the
-boundary. That is how a line 1,400 lines away changed a function near the file's start.
+**Guessing failed seventeen times across these four causes. Bisection succeeded three times
+out of three.** The method that closed this one: prefix bisection with the predicate *do these
+chunks match* (not *does it compile*, which passes everywhere); rebuilding the function with
+its REAL callees rather than simplified stand-ins, which is why an earlier extract came back
+clean; delta-debugging to the loop alone; then a five-line synthetic isolating one bare loop
+from two.
 
-The radix now **equals the chunk capacity**. That is the point rather than an incidental
-choice: a roomier radix would leave a span no guard covers, recreating this defect one power
-of two higher.
+**Then the rule predicted the file before I looked at it.** `wire.kel` has three bare-`for`
+functions; the rule says every one after the first diverges; those are exactly the two that
+did.
 
-## What I deliberately did not do
+## The near-miss worth your attention
 
-The two divergent chunks compile byte-identically **when extracted verbatim**, so the gap is
-context-dependent and its mechanism is unknown. I probed the construct they share four ways;
-all identical. **That is guessing, and guessing failed eleven times on this file today.** The
-finding is recorded with its direction — fewer operations, so a dropped construct rather than
-a mistranslated one — and the increment stops there rather than expanding until it succeeds.
+**My detector matched a COMMENT** reading `for k in 0..3`, predicted four diverging functions
+against an observed two, and I was a step from concluding the rule was too strong. The
+instrument was broken, not the finding. **Check the instrument before doubting the result.**
 
-## Two process defects worth as much as the code
+## What is next
 
-**The family was four sites and I derived three.** The missed one was a fourth implementation
-of the packing in a test. The guard now walks the tree instead of naming files — **and then
-flagged itself**, its pattern list being what it searches for, the third time a guard here has
-done that.
-
-**Three test runs were killed before I noticed the test was doing double work.** It compiled
-four whole programs where two sufficed, at a minute each. I found it by reading a test I had
-written twenty minutes earlier, after the third kill.
-
-## What the next increment should take up
-
-The two divergent chunks, with the context-dependence as the starting fact rather than a
-surprise. Everything else in Order 1 is unchanged.
-
----
-
-# Previous entry (session 54, earlier)
-
-See [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.md) for the full increment-by-increment record,
-which is append-only and keeps corrected claims beside their corrections.
+Order 1's remaining items, unchanged: the region kinds at 93% produced / 56% computed, and the
+type checker's input, whose extraction is still Rust walking the reference AST. The structural
+blocker that stood behind both is gone.

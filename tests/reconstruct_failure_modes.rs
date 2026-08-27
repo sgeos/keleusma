@@ -440,9 +440,10 @@ fn the_work_stack_cannot_overflow_before_the_node_array() {
 /// `wire.kel` COMPILES. This pin recorded the refusal that used to stand in its way.
 ///
 /// **Re-aimed, not deleted.** What it now guards is that the named-cause machinery still
-/// works on a stage that exercises it heavily: `wire.kel` drove three separate named causes
+/// works on a stage that exercises it heavily: `wire.kel` drove four separate named causes
 /// during its repair, and a regression that reintroduced any of them should fail here rather
-/// than surface as a raw array index again.
+/// than surface as a raw array index again. It now self-compiles byte-identically, so this
+/// guards the diagnostic machinery rather than a known gap.
 ///
 /// The control comes first for the same reason it always did: without it, a compiler broken
 /// on everything would satisfy the assertion and look like a fact about `wire.kel`.
