@@ -49,8 +49,11 @@ as literally written. Every verified finding is repaired in the post-audit revis
 `15532455`, with the full record in `docs/proofs/AUDIT_2026-08-24.md` on the feature branch. The
 revision adds two axioms, makes references provenance-based, proves composition as a lemma, and
 replaces the plan inequality with a footprint-and-occupancy theorem. Two pins are awaited from
-the V0.2.X line, the address-opacity discriminator and the Break row correction. **A fresh
-adversarial re-audit of the revision is required before the merge sequence starts.**
+the V0.2.X line, the address-opacity discriminator and the Break row correction. The re-audit gate is
+**satisfied**: a targeted third round found two single-stipulation holes, and a converging
+delta-check sequence, nine findings, then four, then one non-governing ambiguity, ended CLEAN at
+`f779be7d`, records in `docs/proofs/AUDIT_*`. The proof merged into this branch at `613a2b98`
+and the pull request toward `v0.2.3` follows.
 
 ## Merge readiness
 
