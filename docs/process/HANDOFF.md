@@ -141,6 +141,10 @@ grep -c '^\s*#\[test\]' tests/call_chunk_index_limit.rs      # 5
 grep -c '^\s*#\[test\]' tests/wire_self_compile_status.rs    # 3
 # THE BYTE-IDENTITY CORPUS IS ELEVEN STAGES NOW, not ten. `wire.kel` joined 2026-08-27.
 grep -c 'fn self_host_compiles_.*_kel_byte_identically' tests/selfhost_codegen.rs   # 11
+# THE CITATION GUARD NOW SCANS THIS FILE. A dangling citation in HANDOFF.md or
+# REVERSE_PROMPT.md fails `the_current_claim_documents_cite_nothing_that_does_not_exist`.
+# The append-only documents are deliberately NOT scanned: their dead names are history.
+grep -c '^\s*#\[test\]' tests/comment_citations.rs           # 6
 
 # `tests/stage_command_reach.rs` IS in the list now: #210 merged 2026-08-21.
 
