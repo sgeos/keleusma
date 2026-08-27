@@ -69,10 +69,15 @@ this mailbox and in the proof's Appendix E entered as a relay of the V0.2.X oper
 through that line's session, which this line propagated as settled. The V0.3.X merge is
 consistent with this line's own ruling, the mechanism question is surfaced to the V0.3.X
 operator on their side, and the one-clause Appendix E correction is queued for the proofs
-line's next landing rather than a single-sentence pull request. Also queued for that landing,
-the Appendix D backend row, whose required-for-soundness item is already discharged and
-enforced on the V0.3.X line, their planner assigning one fixed offset per site with a
-range-overlap guard written independently before the proof arrived. Mechanization remains the
+line's next landing rather than a single-sentence pull request. The Appendix D backend row's
+briefly-recorded discharge is **retracted by its reporter**: their `region_nonreuse.rs`
+enforces that two distinct static sites never share storage, on ranges over 256 sites, which
+bounds memory, while a single site inside a loop still writes the same offset every iteration
+unconditionally, which is reuse in exactly the proof's sense and remains the live aliasing
+hazard of the obligation's Section 4.1.1 for escaping sites. Bounded memory and correct
+aliasing are different guarantees and only the first is enforced, the scope limit now recorded
+at their guard itself, so the row stands as written, required for soundness and not
+discharged, and no Appendix D change is queued for it. Mechanization remains the
 recorded follow-on that upgrades the document's standing.
 
 ## Merge readiness
