@@ -32,9 +32,35 @@ use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 use keleusma_native::{LowerOptions, module_refusals};
 use std::collections::BTreeSet;
 
+/// Does the lowering actually REACH `opcode` in this module?
+///
+/// The difference between "accepted" and "never seen" is invisible to a refusal
+/// check, and collapsing them puts unvisited opcodes in the supported column.
+fn visits_opcode(m: &Module, opcode: &str) -> bool {
+    let (_, visits) = keleusma_native::module_lowered_op_indices(m, LowerOptions::default());
+    m.chunks.iter().enumerate().any(|(ci, c)| {
+        let Some(seen) = visits.get(ci).and_then(|v| v.as_ref()) else {
+            return false;
+        };
+        c.ops
+            .iter()
+            .enumerate()
+            .any(|(i, o)| format!("{o:?}").starts_with(opcode) && seen.contains(&i))
+    })
+}
+
 /// `(opcode, probe function name, source)`. The probe function isolates the
 /// opcode; `main` exists only so the module has an entry.
 const PROBES: &[(&str, &str, &str)] = &[
+    // **The last opcode neither census could classify.** It lands in NEVER
+    // VISITED rather than in either verdict column, which is the honest answer:
+    // the corpus emits it only inside chunks that refuse on something else, and
+    // a probe emits it in a position the lowering steps over.
+    (
+        "Reset",
+        "p",
+        "loop p(resume: Word) -> Word { yield 1 }\nfn main() -> Word { 0 }",
+    ),
     (
         "Add",
         "p",
@@ -138,6 +164,7 @@ fn which_opcodes_does_the_backend_refuse() {
     let mut refused: Vec<String> = Vec::new();
     let mut broken: Vec<String> = Vec::new();
 
+    let mut never_visited: Vec<&str> = Vec::new();
     for (opcode, func, src) in PROBES {
         let m = match module_of(src) {
             Ok(m) => m,
@@ -167,12 +194,34 @@ fn which_opcodes_does_the_backend_refuse() {
             .find(|(chunk, _)| chunk == func || chunk == keleusma_native::MODULE_LEVEL_REFUSAL);
         match hit {
             Some((where_, err)) => refused.push(format!("{opcode}  ({where_}: {err:?})")),
+            // **NO REFUSAL IS NOT SUPPORT.** An opcode the lowering never VISITS
+            // raises no refusal either, and under the old rule landed here having
+            // proved nothing. `Op::Reset` is exactly that shape: the
+            // degenerate-stream transform reaches `Stream` and steps over
+            // `Reset`, so a stream probe emits it and the backend never sees it.
+            //
+            // **This file had already been burned in the same direction**: its
+            // comment above records `IntToFloat` and `FloatToInt` moving "from
+            // refused to lowers while the backend had gained no float support
+            // whatever". Different cause, same flattering column.
+            None if !visits_opcode(&m, opcode) => never_visited.push(*opcode),
             None => supported.push(opcode),
         }
     }
 
     println!("\n================ BACKEND OPCODE SUPPORT");
     println!("  probes            : {}", PROBES.len());
+    if !never_visited.is_empty() {
+        println!(
+            "  NEVER VISITED     : {}  <- emitted by the probe, never reached by",
+            never_visited.len()
+        );
+        println!("                       the lowering, so NO verdict is available. These");
+        println!("                       are NOT supported and NOT refused.");
+        for o in &never_visited {
+            println!("     {o}");
+        }
+    }
     println!("  LOWERS            : {}", supported.len());
     for s in &supported {
         println!("     {s}");
@@ -274,5 +323,74 @@ fn a_module_level_refusal_is_visible_to_module_refusals() {
         "a module-level refusal is not reported by `module_refusals`, so callers \
          reading its emptiness will treat an unlowerable module as accepted: \
          {reported:?}"
+    );
+}
+
+/// **THE HAZARD, DEMONSTRATED BEFORE IT IS FIXED.**
+///
+/// This census decides by asking *"was there a refusal?"*. Emission is checked
+/// first, so a probe that does not emit its opcode is caught. **But an opcode the
+/// lowering never VISITS raises no refusal either**, and would land in the
+/// supported column having proved nothing.
+///
+/// `Op::Reset` is exactly that shape: `isa_lowering_census` records it as
+/// appearing ONLY in skipped positions, and the degenerate-stream transform
+/// reaches `Stream` and steps over `Reset`.
+///
+/// **This is not hypothetical for this file.** Its own comment records
+/// `IntToFloat` and `FloatToInt` moving *"from refused to lowers while the
+/// backend had gained no float support whatever"*, because module-level refusals
+/// were not being matched. **Same flattering direction, different cause.**
+#[test]
+fn an_emitted_but_never_visited_opcode_would_land_in_the_supported_column() {
+    const STREAM: &str = "loop p(resume: Word) -> Word { yield 1 }\nfn main() -> Word { 0 }";
+    let m = module_of(STREAM).expect("the stream probe must compile");
+
+    // The probe really does emit it -- the check this census already makes.
+    assert!(
+        ops_in(&m).contains("Reset"),
+        "the stream probe does not emit Reset, so it cannot demonstrate anything; \
+         emitted {:?}",
+        ops_in(&m)
+    );
+
+    // No refusal is raised for it...
+    let refusals = module_refusals(&m, LowerOptions::default());
+    let named = refusals
+        .iter()
+        .any(|(_, e)| format!("{e:?}").contains("Reset"));
+
+    // ...and the lowering never VISITS it. Those two facts together are the
+    // hazard: the existing verdict rule reads the first and cannot see the
+    // second.
+    let (_, visits) = keleusma_native::module_lowered_op_indices(&m, LowerOptions::default());
+    let visited_reset = m.chunks.iter().enumerate().any(|(ci, c)| {
+        let Some(seen) = visits.get(ci).and_then(|v| v.as_ref()) else {
+            return false;
+        };
+        c.ops
+            .iter()
+            .enumerate()
+            .any(|(i, o)| matches!(o, keleusma::bytecode::Op::Reset) && seen.contains(&i))
+    });
+
+    println!("\n================ THE FALSE-SUPPORTED HAZARD, MEASURED");
+    println!("  probe emits Reset      : true");
+    println!("  a refusal names Reset  : {named}");
+    println!("  the lowering VISITS it : {visited_reset}");
+    if !named && !visited_reset {
+        println!("  => Under the rule 'no refusal means supported', this probe would");
+        println!("     report Reset as SUPPORTED while the backend never saw the opcode.");
+        println!("     THE HAZARD IS REAL, not hypothetical.");
+    } else if visited_reset {
+        println!("  => The lowering DOES visit Reset, so a probe verdict is meaningful");
+        println!("     and the opcode's status can be read directly.");
+    }
+    println!("================\n");
+
+    assert!(
+        !named,
+        "a refusal now names Reset, so the opcode has a verdict and this \
+         demonstration is describing a state that no longer exists -- re-derive it"
     );
 }
