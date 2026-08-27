@@ -104,6 +104,41 @@
 //!
 //! Read the verdict below with that correction applied.
 //!
+//! # ⚠ THE PROOF LINE HAS RULED ON THE CANDIDATE REMEDY (absorbed 2026-08-27)
+//!
+//! `docs/proofs/COMPOSITE_REGION_REUSE_PROOF.md` is now in this tree, and its
+//! change-control appendix carries two rows **owned by this line**:
+//!
+//! | consequence | decision |
+//! |---|---|
+//! | backend stops reusing slots of unconfined or unseparated sites | *"required for soundness independent of this proof"* |
+//! | backend may overlap exclusive arms | licensed *"only for a runtime discharging M1 through M9 itself… so the license is conditional on that discharge plus Appendix A's scoping"* |
+//!
+//! **The first is already discharged and now ENFORCED** — `plan_chunk_region`
+//! never reuses, and `region_nonreuse.rs` fails if it starts.
+//!
+//! **The second adds a FOURTH precondition to the max-over-arms candidate named
+//! below**, alongside the three already recorded. The proof line's own message
+//! states that nothing yet discharges M1–M9.
+//!
+//! ## And a caution that lands on exactly this population
+//!
+//! The proof's comparison remark: *"For a reused site inside a conditional arm,
+//! the slot is provisioned statically outside the arm maximum, and extracting a
+//! term from under a maximum can exceed the maximum, so the footprint can be
+//! larger … on branch-dominated shapes. A planner should compute both figures and
+//! adopt reuse per site only where it helps."*
+//!
+//! **Every exceeding module here is branch-dominated** — 33 exclusivity sites in
+//! bare conditionals, zero in loops, measured by `max_over_arms_precondition.rs`.
+//! **So the shapes this file's remedy targets are the shapes that remark warns
+//! about.**
+//!
+//! **Stated at its real strength**: the remark concerns *reuse provisioning*,
+//! which is adjacent to rather than identical with the max-over-arms rule.
+//! **It does not refute the remedy; it removes "obviously beneficial" from it**
+//! and prescribes per-site comparison of both bounds instead of a blanket rule.
+//!
 //! # Nothing here changes code generation
 //!
 //! No planner is modified and no remedy is adopted. `plan_chunk_region` still
