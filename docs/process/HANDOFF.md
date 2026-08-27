@@ -13,10 +13,14 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > **The one pin that moves with the merge** is `tests/reconstruct_failure_modes.rs`, which does not
 > exist on `origin/v0.2.3`. Everything else in the check block is unchanged by this branch.
 >
-> **`#278` AND `#279` MERGED 2026-08-26, each at 22 of 22 green.** `origin/v0.2.3` is at
-> `823f0894` and the merge count is **151**.
+> **`#278`, `#279` AND `#282` MERGED 2026-08-26, each at 22 of 22 green.** `origin/v0.2.3` is
+> at `f196a49c` and the merge count is **152**.
 >
-> **AS OF `823f0894`: 151 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive it:
+> **`wire.kel` COMPILES THROUGH THE SELF-HOSTED PIPELINE — 486 chunks. IT IS NOT
+> BYTE-IDENTICAL.** Two chunks diverge, `emit_prologue` and `prologue_disagreed`, and the
+> stage emits FEWER operations for both. Say both halves whenever you say either.
+>
+> **AS OF `f196a49c`: 152 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive it:
 > `git log --oneline origin/v0.2.3 | grep -c 'Merge pull request'`. **NOTE THE REF** -- the local
 > `v0.2.3` lags and answers a smaller number for the same tree.
 >
@@ -33,6 +37,12 @@ always-current, so it must be able to report itself stale rather than mislead a 
 >
 > **ORDER 1'S LARGEST SINGLE ITEM IS DONE.** The bare `for` form **self-compiles byte-identically**
 > and `ctrl/for_bare` is `SOk`. `wire.kel` now **parses correctly** at 486 chunks.
+>
+> **THREE CAUSES WERE CLEARED AND THIS FILE RECORDED TWO OF THEM WRONGLY.** A capacity bound
+> (wrong); the lexer's missing radix literals (correct); a cap of 256 on the DECLARATION COUNT
+> (wrong); a `Call` record whose chunk field overflows at index 256 (correct). **Both wrong
+> readings were a number in a message taken for a cause**, and the second had the right number
+> attached to the wrong quantity. Assume a fourth is available.
 >
 > **THE CAUSE THIS FILE RECORDED FOR ITS REMAINING FAILURE WAS WRONG. RETRACTED 2026-08-26.**
 > It said "a CAPACITY BOUND -- `IndexOutOfBounds(-1, 1024)`". An index of `-1` is BELOW THE
@@ -119,6 +129,9 @@ grep -c '^\s*#\[test\]' tests/reconstruct_failure_modes.rs   # 14
 # RADIX LITERALS, session 54. The self-hosted lexer had no support for them; the
 # boundary table had no case for one, which is why it went unmeasured.
 grep -c '^\s*#\[test\]' tests/radix_literals.rs               # 5
+# THE CALL-PACKING REPAIR, session 54. `wire.kel` compiles because of these two.
+grep -c '^\s*#\[test\]' tests/call_chunk_index_limit.rs      # 5
+grep -c '^\s*#\[test\]' tests/wire_self_compile_status.rs    # 3
 
 # `tests/stage_command_reach.rs` IS in the list now: #210 merged 2026-08-21.
 
@@ -272,7 +285,18 @@ was left unnoticed through two pull requests.
 
 Re-targeting the base is not enough on its own -- a base change emits `edited`, which is not one of
 the default `pull_request` types -- so the run must be provoked, by closing and reopening the pull
-request (`reopened` IS a default type) or by pushing to it. **Prefer basing on the version branch
+request (`reopened` IS a default type) or by pushing to it.
+
+**AND A FRESHLY CREATED PULL REQUEST WITH A CORRECT BASE CAN ALSO GET NO RUN. Measured
+2026-08-26 on `#282`.** Base `v0.2.3`, workflow `active`, triggers matching -- and twenty minutes
+later `gh run list --branch <branch>` reported **zero runs** and `gh pr checks` reported nothing at
+all. Closing and reopening produced all 22 checks within seconds. So the `opened` event is not
+reliable on its own, and the symptom is the same indistinguishable "no checks reported".
+
+**THE DISAMBIGUATION IS TO COUNT RUNS, NOT CHECKS.** `gh pr checks` says nothing in both the
+slow-queue case and the no-run case; `gh run list --branch <branch>` says **zero** only in the
+second. Poll both, and treat zero runs after a few minutes as the no-run case rather than waiting
+it out. **Prefer basing on the version branch
 from the start** and describing the stack in the body; the diff is noisier and the verification is
 real.
 

@@ -125,65 +125,39 @@ fn consecutive_same_named_heads_collapse_into_one_chunk() {
     );
 }
 
-/// **THE SELF-HOSTED COMPILER CANNOT COMPILE `wire.kel`, AND NOTHING SAID SO.**
+/// **`wire.kel` COMPILES NOW.** This pin recorded that it could not, and is retired here.
 ///
-/// **THE CAUSE HAS MOVED TWICE SINCE THIS WAS WRITTEN, AND THE STALE READING IS
-/// INSTRUCTIVE.** It was first recorded here as ``no chunk named `acc` ``, a
-/// mis-parse of a declaration. That was repaired when the bare `for` form landed.
-/// The failure then presented as `IndexOutOfBounds(-1, 1024)` and was recorded as a
-/// capacity bound on the strength of the `1024` — **which was wrong**: an index of
-/// `-1` is below the start, not past the end.
+/// # Why it is retired rather than followed to the letter
 ///
-/// The cause the tree actually produces is a **record range that does not reduce to
-/// exactly one node**, reported by name since `reconstruct.kel`'s failure modes were
-/// named. See `tests/reconstruct_failure_modes.rs`, which pins the current message.
-/// Two of the three readings above were confident and wrong, both times because a
-/// number in an unnamed message was read as if it identified a cause.
+/// The pin's own instruction was to add `wire.kel` to `assert_stage_byte_identical`'s corpus
+/// and delete this test. **That instruction assumed byte-identity, and byte-identity does not
+/// hold**: two of 486 chunks still diverge. Following it literally would have put a
+/// non-identical stage into the oracle and broken it, or forced the oracle to be relaxed —
+/// which is how a corpus quietly stops meaning anything.
 ///
-/// # Why this was invisible
+/// So the claim moved to `tests/wire_self_compile_status.rs`, which pins BOTH halves: that it
+/// compiles, and that it is not yet byte-identical, with the two diverging chunks named.
 ///
-/// **`wire.kel` is not in the byte-identity corpus.** That oracle covers ten
-/// stages — `lexer`, `parse`, `reconstruct`, `codegen`, `analyze`, and the five
-/// `verify_*` — via `assert_stage_byte_identical` in
-/// `tests/selfhost_codegen.rs`. `wire.kel` appears in the wire-format tests only
-/// as a **reference-compiled input**, which never runs the self-hosted compiler
-/// over it.
+/// # What the original recorded, kept because the lesson outlived the defect
 ///
-/// So the largest stage in the corpus, at 486 chunks, has never been self-hosted
-/// and nothing recorded the gap. *Any construct the corpus does not contain is
-/// unverified by construction* — the lesson that produced the boolean-literal and
-/// `Byte`-cast miscompiles — and here the uncovered thing is an entire stage.
+/// `wire.kel` was never in the byte-identity corpus, so the largest stage at 486 chunks had
+/// never been self-hosted and nothing said so. *Any construct the corpus does not contain is
+/// unverified by construction* — the lesson that produced the boolean-literal and `Byte`-cast
+/// miscompiles, and here the uncovered thing was an entire stage.
 ///
-/// # This is a REPORT, not a regression
-///
-/// Nothing broke. `wire.kel` was never self-compiled, so no capability was lost;
-/// what changed is that the tree now says so. A reader must not read this as
-/// "self-hosting regressed".
-///
-/// Pinned in the firing direction, and the control is what makes it a statement
-/// about `wire.kel` rather than about the compiler.
+/// Three causes stood in the way and **two were first diagnosed wrongly**: a capacity bound
+/// read off an index message (wrong), the lexer's missing radix literals (correct), a cap of
+/// 256 on the declaration count (wrong), and a `Call` record whose chunk field overflowed at
+/// index 256 (correct).
 #[test]
-fn the_self_hosted_compiler_cannot_yet_compile_wire_kel() {
+fn the_self_hosted_compiler_can_now_compile_wire_kel() {
     const WIRE: &str = include_str!("../src/selfhost/kel/wire.kel");
-    const LEXER: &str = include_str!("../src/selfhost/kel/lexer.kel");
 
-    // THE CONTROL FIRST. Without it a compiler that failed on everything would
-    // satisfy the assertion below and look like a fact about `wire.kel`.
-    let prev = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-    let control = std::panic::catch_unwind(|| keleusma::selfhost::self_host_compile(LEXER));
-    let subject = std::panic::catch_unwind(|| keleusma::selfhost::self_host_compile(WIRE));
-    std::panic::set_hook(prev);
-
-    assert!(
-        control.is_ok(),
-        "`lexer.kel` no longer self-compiles, so the failure on `wire.kel` below says \
-         nothing about `wire.kel` specifically"
-    );
-    assert!(
-        subject.is_err(),
-        "`wire.kel` now self-compiles. That closes a recorded gap and is worth saying \
-         plainly: add it to `assert_stage_byte_identical`'s corpus in \
-         `tests/selfhost_codegen.rs` and delete this pin rather than relaxing it"
+    let module = keleusma::selfhost::self_host_compile(WIRE);
+    assert_eq!(
+        module.chunks.len(),
+        486,
+        "`wire.kel`'s chunk count moved; the figure this file has quoted for three sessions \
+         is stale"
     );
 }
