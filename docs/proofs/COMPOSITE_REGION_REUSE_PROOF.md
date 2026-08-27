@@ -94,9 +94,11 @@ its current content, which by M9 can occur only for handle and view values thems
 
 **Definition 5, plans, observations, and soundness.** A **plan** designates a subset
 $R \subseteq \mathcal{S}$ of reused sites and assigns each a fixed slot inside the ephemeral
-region, of at least the site's size, and may pair **exactly two sites lying lexically in
-distinct arms of one conditional** on one shared slot of at least the larger size, the pairing
-Theorem A2 governs. A plan's **elements** are its single sites and its pairs. A plan is
+region, of at least the site's size, and may form **arm groups**, an arm group being a set of
+sites, at most one lying lexically in each distinct arm of one conditional per Definition 6,
+sharing one slot of at least the largest member's size, the two-site once-per-cycle case
+governed by Theorem A2 and the in-loop case by Corollary A3. A plan's **elements** are its
+single sites and its arm groups. A plan is
 **well-formed** when its slots are pairwise disjoint and disjoint from the bump range, the
 persistent storage, and any copy store. The **baseline** is the empty plan. The
 **observations** of a run are, in order, the outcome of every dereference, success with
@@ -144,9 +146,8 @@ Clause M3(v) is the engine of every confinement argument. Wherever a proof shows
 outlives the executing scope, the placing execution is `Escapes`-classified in any conforming
 machine, so confinement applies to any reference reaching it. Environment storage outlives
 every scope, so every transfer of a **reference** to the environment, through yields or
-otherwise, is `Escapes`-classified by (v), and under Definition 3's dynamic-enclosure scoping a
-store into an ancestor frame's slot from within a loop likewise outlives the storing
-execution's scope and is `Escapes`.
+otherwise, is `Escapes`-classified by (v), and cross-frame slot stores do not exist at all, the
+Setting's cross-frame channels being arguments and returns only.
 
 ## 4. The comparison method, and the lemmas
 
@@ -165,7 +166,7 @@ no such first divergence exists, which also forces the runs to equal length.
 **Lemma 1, provenance closure. Requires M3, M7, M9.** At every moment, the references to a
 region $r$ are exactly the transitive transport-and-view closure of the handle pushed by $r$'s
 allocation, and the environment holds only references it received from the machine. In the
-baseline machine, additionally, no value outside that closure dereferences $r$'s interval
+baseline machine, additionally, no value outside that closure successfully dereferences $r$'s interval
 within $r$'s epoch, and under a plan that clause is exactly what the reuse theorems manage
 rather than a given.
 
@@ -195,13 +196,13 @@ reference to $r_n$, transfers to it being `Escapes` by M3(v), and by Lemma 1 wit
 resume reply cannot carry or conceal one. A `WithinScope` execution in $L$'s frame transports
 references only into locations with scope-contained lifetime, which by frame locality and
 M6(d) are entries above the entry height. A `WithinScope` execution in a frame created during
-scope $n$ has, by Definition 3's dynamic enclosure, scope $n$ itself, its stack effects are
+scope $n$ has, by Definition 3's dynamic enclosure, scope $n$ or an iteration of a loop
+nested within it, either way its stack effects are
 confined to its own frame by frame locality, its own locations lie in the second invariant
 class, and a `Return` result it produces crosses to the calling frame's stack, which is either
 $L$'s frame above the entry height, class one by M6(d), or an intermediate frame created
 during scope $n$, class two, the Setting's cross-frame channels being arguments and returns
-only. A store into an ancestor frame's slot would target a location outliving scope $n$, is
-`Escapes` by M3(v), and is excluded by confinement. A `CopiesOut` execution writes bytes,
+only, so no cross-frame slot store exists to consider. A `CopiesOut` execution writes bytes,
 referenceless by M9. A `NoRegion` execution derives and transports nothing. An allocation
 consuming a reference to $r_n$ copies bytes inline by M3(vi) and produces a reference to its
 own fresh region. Control transfers are classified like every instruction, and unwinding
@@ -235,8 +236,8 @@ over instances preserves the inequality. $\blacksquare$
 iteration cap dominating the number of body entries per activation, the call graph of the
 closure is acyclic with every callee's structure available, the unit is the body of the
 outermost cycle construct, executed at most once per cycle with no epoch advance strictly
-inside its constructs, and **every allocation of every cycle, the startup interval included,
-occurs within the unit's traversal**. Totality yields termination, not caps, so H is a genuine
+inside its constructs, and **every allocation and every `Escapes` execution of every cycle,
+the startup interval included, occurs within the unit's traversal**. Totality yields termination, not caps, so H is a genuine
 hypothesis, discharged in the instantiation as Appendix A records.
 
 **Corollary A1s, the static bound.** Under H, define $B$ over the unit's call-closed structure
@@ -353,7 +354,9 @@ that site's innermost scope, by its separation hypothesis, which for a site whos
 loop is nested inside its arm means the inner iteration boundaries, and the last such write
 is separated from a sibling arm's write by the inner loop's exit edge together with the
 enclosing instance hypothesis, at most one arm executing per scope of the enclosing loop with
-at most one lexical site per arm. At each separating boundary Lemma 2 empties references to
+at most one lexical site per arm, while for a sharing site whose innermost dynamically
+enclosing loop is the enclosing loop itself the separating boundary is that loop's own back
+edge or exit edge directly. At each separating boundary Lemma 2 empties references to
 the written region or Lemma 3 bars their dereference, so by the comparison method no
 within-epoch dereference sees overwritten bytes, the slot's size covering every site's region
 in full. The cross-cycle case is as in Theorem A2, post-boundary derivations included.
@@ -370,9 +373,9 @@ properties, so the gate on Theorem B1r is an analysis.
 
 **Lemma 4, composition. Requires M1 through M9, and the selective discipline for any
 designated elements.** Let $P$ be a well-formed plan whose elements each satisfy the
-**element-level** hypotheses of Theorem B1, Theorem B1r, Theorem A2, or Theorem B2, that is,
-confinement or refined confinement with separation, the A2 lexical-pair and instance
-hypotheses with sizing, or designation with separation under the selective discipline, the
+**element-level** hypotheses of Theorem B1, Theorem B1r, Theorem A2, Corollary A3, or Theorem
+B2, that is, confinement or refined confinement with separation, the A2 or A3 arm-group and
+instance hypotheses with sizing, or designation with separation under the selective discipline, the
 sole-reuse clauses of the cited statements being plan-level and replaced here by $P$'s
 well-formedness. Then $P$ is sound. This statement uses Definition 9, Lemma 5, and Theorem B2
 of Section 8, forward references deliberate.
@@ -400,7 +403,7 @@ $$
 \mathrm{footprint}(P) \;=\; \sum_{e \in E(P)} \mathrm{slot}(e) \;+\; B_{\mathrm{bump}}
 $$
 
-over $P$'s **elements** $E(P)$, a pair contributing its one shared slot once, with
+over $P$'s **elements** $E(P)$, an arm group contributing its one shared slot once, with
 $B_{\mathrm{bump}}$ the Corollary A1s bound instantiated with reused sites' sizes at zero.
 Then the machine under $P$ never occupies more than $\mathrm{footprint}(P)$ within any cycle.
 
@@ -485,14 +488,17 @@ Under Theorem B2's hypotheses, with the copy store reclaimed at each cycle bound
 per-cycle occupancy, the slots plus the cycle's bump allocations plus the cycle's live
 copies, is bounded by $\sum_{e} \mathrm{slot}(e) + B_{\mathrm{bump}} + B_{\mathrm{copy}}$,
 where $B_{\mathrm{copy}}$ is the Corollary A1s style bound over the unit in which each
-`Escapes` execution of a reference contributes its operand's **site size**, a static
-per-occurrence bound covering every transported extent by Definition 9, re-escapes of copies
-included as their own occurrences.
+`Escapes` execution of a reference contributes a **static per-occurrence bound, the maximum
+site size over the sites its operand can reference**, which an analysis must supply and which
+the unit's largest site size coarsely bounds, covering every transported extent by
+Definition 9, re-escapes of copies included as their own occurrences.
 
-*Proof.* As Theorem C for the slot and bump terms, Lemma 4 giving the common instruction
-sequence and H confining allocation to the unit's traversal. Each copying escape of the cycle
-contributes at most its operand's site size, a view's extent being bounded by its region's
-size per Definition 9, the occurrences are censused by the same structural recursion as
+*Proof.* As Theorem C for the slot and bump terms, Theorem B2's comparison-method argument
+giving the common instruction sequence and H confining allocation and escapes to the unit's
+traversal, so every copying occurrence is censused. Each copying escape of the cycle
+contributes at most the site size of the region its operand references, hence at most its
+occurrence's static bound, a view's extent being bounded by its region's size per
+Definition 9, the occurrences are censused by the same structural recursion as
 Corollary A1s with each escape occurrence contributing its static bound, and the copy store
 is reclaimed at the boundary by assumption, its usage within a cycle monotone. Without
 boundary reclamation the copy term accumulates and no per-cycle bound follows. $\blacksquare$
@@ -508,7 +514,8 @@ designated elements.** A well-formed plan whose confined or refined-confined ele
 satisfy the hypotheses of Theorem B1 or B1r, and whose designated elements each satisfy the
 separation hypothesis under the selective discipline for them, is sound. *Proof.* This is
 Lemma 4 restricted to three of its four element kinds, the A2 route unused, its ordered
-induction and per-link arguments applying verbatim, Lemma 5's plan-invariance included.
+induction and per-link arguments applying verbatim, Lemma 5 applying over the common
+instruction sequences the induction provides.
 $\blacksquare$
 
 ## 9. Limits of the general theory
