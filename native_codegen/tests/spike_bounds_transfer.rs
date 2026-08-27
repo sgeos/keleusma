@@ -18,17 +18,23 @@ use keleusma_native::{LowerOptions, lower_module};
 /// The directories this file's corpus is built from.
 ///
 /// **NAMED AND PRINTED BECAUSE AN UNLABELLED COUNT STARTED A FALSE MYSTERY.**
-/// This file reports 1027 chunks and `probe_nesting_and_breaks` reports 1032,
-/// and the gap was carried in the handoff as unresolved -- "the gap narrowed
-/// from 14 to 5 and I do not know why" -- with a standing decision not to write
-/// a third walker to adjudicate it.
+/// This file reports **1074** chunks over **67** modules and
+/// `probe_nesting_and_breaks` reports **1079** over **74** (re-derived
+/// 2026-08-27; they read 1027/57 and 1032/64 when this note was written
+/// 2026-08-20). The gap was carried in the handoff as unresolved -- "the gap
+/// narrowed from 14 to 5 and I do not know why" -- with a standing decision not
+/// to write a third walker to adjudicate it.
 ///
 /// **There was nothing to adjudicate.** Measured 2026-08-20 by restricting THAT
-/// walker to THESE two directories: it reports **exactly 1027**. The two
-/// instruments never disagreed about any chunk. They walk different corpora:
-/// this one takes two directories and 57 modules, the other takes four
-/// directories and 64 modules, adding `examples/rtos/scripts` and
-/// `compiler/kel`.
+/// walker to THESE two directories: it reported **exactly** this file's figure.
+/// The two instruments never disagreed about any chunk. They walk different
+/// corpora: this one takes two directories, the other takes four, adding
+/// `examples/rtos/scripts` and `compiler/kel`.
+///
+/// **THE GAP IS THE INVARIANT, NOT THE TOTALS.** It was 5 chunks in August and
+/// is **5 chunks now**, across a corpus that grew both figures by roughly fifty.
+/// **The numbers being stale never made the finding stale**, which is why they
+/// are dated here rather than pinned.
 ///
 /// So both numbers were always right and neither said what it counted. Printing
 /// the directory list beside the count is the whole fix.

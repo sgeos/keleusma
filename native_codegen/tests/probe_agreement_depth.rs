@@ -1,8 +1,14 @@
 //! **How much is each agreeing module actually agreeing about?**
 //!
-//! `corpus_differential` counts 34 modules as executed and agreeing. Six more are
-//! pinned as vacuous, all of them self-hosted stages found by
-//! `probe_stage_vacuity`. That search had a blind spot, and this file measures it.
+//! `corpus_differential` counts **59** modules as executed and agreeing
+//! (re-derived 2026-08-27; **34** when this note was written, and the corpus and
+//! the seeding have both grown since). Others are pinned as vacuous, self-hosted
+//! stages found by `probe_stage_vacuity`. That search had a blind spot, and this
+//! file measures it.
+//!
+//! **THE BLIND SPOT IS WHAT THIS FILE IS ABOUT AND IT DOES NOT MOVE WITH THE
+//! COUNT.** Re-derive the denominator rather than trusting it:
+//! `cd native_codegen && cargo test --test corpus_differential -- --nocapture`.
 //!
 //! `is_vacuous` returns false immediately for any module with fewer than two
 //! results. That is right for a single call site — one result is not evidence

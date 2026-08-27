@@ -178,6 +178,8 @@ fn probe_what_the_piano_roll_family_actually_needs() {
     // deliberately NOT a coverage percentage: a number target is satisfied by
     // picking whichever modules are cheapest, which is the behaviour that
     // produced one slice worth zero of 239 sites and another worth one module
+    // (the 239 is the same dated, un-re-derivable corpus total annotated in
+    // `region.rs`; it motivates the slicing and is not pinned)
     // where eleven were claimed.
     //
     // `refusals.is_empty()` is a weaker claim than "the family is correct" and

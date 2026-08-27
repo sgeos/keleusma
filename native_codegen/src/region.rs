@@ -196,7 +196,14 @@ mod tests {
         assert_eq!(l.bytes, 0);
     }
 
-    /// The single-site case, which is 80 of the corpus's 239 sites at 8 bytes.
+    /// The single-site case, which was 80 of the corpus's 239 sites at 8 bytes
+    /// when this test was written.
+    ///
+    /// **DATED, NOT PINNED, and deliberately not re-derived.** No instrument
+    /// reports a corpus-wide site total, so this figure has no cheap re-derivation
+    /// path. **Its role is motivation** -- it says why the single-site case is
+    /// worth a test -- and the test is correct at any denominator. A reader who
+    /// needs a current number must count, and should not assume this one is it.
     #[test]
     fn one_site_is_placed_at_the_base() {
         let l = plan_chunk_region(&chunk_with(vec![flat(8, 1), Op::Return]));

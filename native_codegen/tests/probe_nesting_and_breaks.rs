@@ -45,15 +45,24 @@ fn source_for(p: &std::path::Path) -> Option<String> {
 /// The directories this file's corpus is built from.
 ///
 /// **NAMED AND PRINTED BECAUSE AN UNLABELLED COUNT STARTED A FALSE MYSTERY.**
-/// This file reports 1032 chunks and `spike_bounds_transfer` reports 1027, and
-/// the handoff carried that gap as unresolved with a standing decision not to
-/// write a third walker to adjudicate it.
+/// This file reports **1079** chunks over **74** modules and
+/// `spike_bounds_transfer` reports **1074** over **67** (re-derived 2026-08-27;
+/// they read 1032/64 and 1027/57 when this note was written 2026-08-20). The
+/// handoff carried the gap as unresolved with a standing decision not to write a
+/// third walker to adjudicate it.
 ///
 /// **There was nothing to adjudicate.** Measured 2026-08-20 by restricting THIS
-/// walker to that file's two directories: it reports **exactly 1027**. The two
-/// instruments never disagreed about a single chunk. This one takes FOUR
-/// directories and 64 modules; that one takes two and 57, lacking
-/// `examples/rtos/scripts` and `compiler/kel`.
+/// walker to that file's two directories: it reported **exactly** the other's
+/// figure. The two instruments never disagreed about a single chunk. This one
+/// takes FOUR directories; that one takes two, lacking `examples/rtos/scripts`
+/// and `compiler/kel`.
+///
+/// **THE DENOMINATORS MOVED AND THE CLAIM DID NOT.** The gap was 5 chunks then
+/// (1032 - 1027) and is **5 chunks now** (1079 - 1074), which is the difference
+/// the two extra directories account for. **A corpus that grows moves both
+/// figures and leaves the finding intact** -- so a reader meeting the new numbers
+/// is not meeting a new defect. Re-derive with the two commands below rather than
+/// trusting either figure.
 ///
 /// Both numbers were always right and neither said what it counted.
 const CORPUS_DIRS: [&str; 4] = [
