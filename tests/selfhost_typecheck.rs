@@ -2728,6 +2728,7 @@ fn a_named_type_called_bool_is_not_the_boolean_primitive() {
 /// ARGUMENT tag). The actual-argument tag needs an expression classifier, which is a new
 /// piece of work rather than a re-projection of data the driver already holds. It stays in
 /// Rust and this test does not pretend otherwise.
+#[cfg(feature = "self-host")]
 #[test]
 fn the_declaration_and_call_rows_agree_between_the_pipeline_and_the_reference() {
     const SOURCES: &[&str] = &[
@@ -2837,6 +2838,9 @@ fn the_declaration_and_call_rows_agree_between_the_pipeline_and_the_reference() 
 /// The file header names all five. This counts how many have a pipeline analogue rather than
 /// restating a number, because a hand-written count is a second definition that goes stale —
 /// which is how a handoff came to assert a closed gap was open.
+// NOT gated on `self-host`: this reads the driver's source as text and calls nothing from
+// it, so it can run under every feature set that builds this file. Its sibling above is
+// gated because it invokes the analogue.
 #[test]
 fn the_moved_extraction_count_is_two_of_five() {
     const DRIVER: &str = include_str!("../src/selfhost/mod.rs");
