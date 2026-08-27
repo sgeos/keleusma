@@ -1334,6 +1334,32 @@ Long-horizon work tracked in `docs/decisions/BACKLOG.md` and `PRIORITY.md`.
 
 ## Task Breakdown
 
+### Recent: `wire.kel` compiles, and is not byte-identical (2026-08-26, session 54)
+
+**The largest stage in the corpus, at 486 chunks, had never compiled through the self-hosted
+pipeline. It does now. It is NOT byte-identical**: two chunks diverge, `emit_prologue` and
+`prologue_disagreed`, and the stage emits fewer operations for both.
+
+**Three causes cleared, two of them first diagnosed wrongly.** A capacity bound (wrong); the
+lexer's missing radix literals (correct); a cap of 256 on the declaration count (wrong); a
+`Call` record whose chunk field overflows at index 256 (correct).
+
+| ID | Description | Status | Verification |
+| --- | --- | --- | --- |
+| CR-1 | Widen the Call record's chunk field | Complete | Radix equals the chunk capacity, so the chunk-cap guard is the single bound; a roomier radix would leave a span no guard covers. |
+| CR-2 | Change every site in the family | Complete | Four code sites; the guard WALKS THE TREE rather than naming files, after a hand-derived family of three missed a fourth implementation in `tests/selfhost_parse.rs`. |
+| CR-3 | Make the family guard fire | Complete | Mutation-tested by reverting `reconstruct.kel` to the eight-bit split: it fails and names the exact file and line. It also flagged itself on first run and now excludes its own source. |
+| CR-4 | Establish correctness, not absence of a panic | Complete | A call to chunk index 256 compiles AND matches the reference byte for byte. The old defect produced a wrong callee as well as a wrong count, so non-crashing proves nothing. |
+| CR-5 | State the arithmetic | Complete | Widest emitted word 4,259,783 against a 32-bit minimum, roughly 504x headroom. |
+| CR-6 | Re-aim the old boundary pins | Complete | Both re-aimed rather than deleted; the token packing, a different family sharing the same radix, is untouched. |
+| CR-7 | Pin `wire.kel`'s actual state | Complete | Both halves in one file, the diverging pair named so a different pair is a failure, and the direction asserted because "fewer operations" narrows where to look. |
+
+**Not done, and deliberately not guessed at.** The two divergent chunks compile
+byte-identically when extracted verbatim, so the gap is context-dependent and its mechanism is
+unknown. Four probes of the construct they share all came back identical. That is the next
+increment.
+
+
 ### Recent: radix-prefixed literals in the self-hosted lexer (2026-08-26, session 54)
 
 `lexer.kel` had **no** support for hexadecimal or binary literals. It consumed the leading
