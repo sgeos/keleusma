@@ -156,9 +156,9 @@ fn a_hex_literal_survives_the_whole_self_hosted_pipeline() {
 /// return, which a test asserting only "it compiles" would not distinguish from a
 /// regression that reintroduced it alongside some other repair.
 ///
-/// `wire.kel` is **not** byte-identical -- two chunks still diverge. That is pinned in
-/// `tests/wire_self_compile_status.rs`, which owns the whole-file claim; this test owns only
-/// the radix half of it.
+/// `wire.kel` now self-compiles **byte-identically** and is in the byte-identity corpus; that
+/// claim is owned by `self_host_compiles_wire_kel_byte_identically`. This test owns only the
+/// radix half: that the literals themselves still lex correctly in the file that needed them.
 #[test]
 fn wire_kel_no_longer_fails_on_a_radix_literal() {
     const WIRE: &str = include_str!("../src/selfhost/kel/wire.kel");

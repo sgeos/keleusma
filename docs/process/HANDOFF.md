@@ -13,14 +13,15 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > **The one pin that moves with the merge** is `tests/reconstruct_failure_modes.rs`, which does not
 > exist on `origin/v0.2.3`. Everything else in the check block is unchanged by this branch.
 >
-> **`#278`, `#279` AND `#282` MERGED 2026-08-26, each at 22 of 22 green.** `origin/v0.2.3` is
-> at `f196a49c` and the merge count is **152**.
+> **`#278`, `#279`, `#282` AND `#284` MERGED, each at 22 of 22 green.** `origin/v0.2.3` is at
+> `66246f01` and the merge count is **153**.
 >
-> **`wire.kel` COMPILES THROUGH THE SELF-HOSTED PIPELINE — 486 chunks. IT IS NOT
-> BYTE-IDENTICAL.** Two chunks diverge, `emit_prologue` and `prologue_disagreed`, and the
-> stage emits FEWER operations for both. Say both halves whenever you say either.
+> **`wire.kel` SELF-COMPILES BYTE-IDENTICALLY (2026-08-27).** 486 chunks, 125,540 bytes on
+> both sides, zero chunks differing. **THE BYTE-IDENTITY CORPUS IS ELEVEN STAGES**, up from
+> ten, and the largest stage is finally one of them. This sentence was once INVENTED on this
+> line; it is now the output of `self_host_compiles_wire_kel_byte_identically`.
 >
-> **AS OF `f196a49c`: 152 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive it:
+> **AS OF `66246f01`: 153 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive it:
 > `git log --oneline origin/v0.2.3 | grep -c 'Merge pull request'`. **NOTE THE REF** -- the local
 > `v0.2.3` lags and answers a smaller number for the same tree.
 >
@@ -38,11 +39,17 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > **ORDER 1'S LARGEST SINGLE ITEM IS DONE.** The bare `for` form **self-compiles byte-identically**
 > and `ctrl/for_bare` is `SOk`. `wire.kel` now **parses correctly** at 486 chunks.
 >
-> **THREE CAUSES WERE CLEARED AND THIS FILE RECORDED TWO OF THEM WRONGLY.** A capacity bound
+> **FOUR CAUSES WERE CLEARED AND THIS FILE RECORDED TWO OF THEM WRONGLY.** A capacity bound
 > (wrong); the lexer's missing radix literals (correct); a cap of 256 on the DECLARATION COUNT
-> (wrong); a `Call` record whose chunk field overflows at index 256 (correct). **Both wrong
-> readings were a number in a message taken for a cause**, and the second had the right number
-> attached to the wrong quantity. Assume a fourth is available.
+> (wrong); a `Call` record whose chunk field overflows at index 256 (correct); `forin_count`
+> not reset between functions (correct). **Both wrong readings were a number in a message
+> taken for a cause**, and the nearer miss had the right number attached to the wrong quantity.
+> Assume a fifth is available.
+>
+> **THE TALLY IS STARK AND WORTH ACTING ON: guessing failed SEVENTEEN times across those four
+> causes; prefix bisection succeeded THREE times out of three.** Reach for the bisect earlier
+> than feels natural, and choose its predicate deliberately — "does it compile" passes
+> everywhere once the file compiles at all.
 >
 > **THE CAUSE THIS FILE RECORDED FOR ITS REMAINING FAILURE WAS WRONG. RETRACTED 2026-08-26.**
 > It said "a CAPACITY BOUND -- `IndexOutOfBounds(-1, 1024)`". An index of `-1` is BELOW THE
@@ -132,6 +139,8 @@ grep -c '^\s*#\[test\]' tests/radix_literals.rs               # 5
 # THE CALL-PACKING REPAIR, session 54. `wire.kel` compiles because of these two.
 grep -c '^\s*#\[test\]' tests/call_chunk_index_limit.rs      # 5
 grep -c '^\s*#\[test\]' tests/wire_self_compile_status.rs    # 3
+# THE BYTE-IDENTITY CORPUS IS ELEVEN STAGES NOW, not ten. `wire.kel` joined 2026-08-27.
+grep -c 'fn self_host_compiles_.*_kel_byte_identically' tests/selfhost_codegen.rs   # 11
 
 # `tests/stage_command_reach.rs` IS in the list now: #210 merged 2026-08-21.
 
@@ -754,8 +763,16 @@ opcodes of 66**, so 50 carry estimates. Worst-case execution time is the project
 this is the largest gap between what is asserted and what is measured. **Operator's ruling: close it
 sometime after Order 1.**
 
-**4. Derived operands in type rejection.** A field read, an index or an arithmetic result is still
-UNKNOWN and therefore accepted. Pinned by `the_rules_still_do_not_reach_a_derived_operand`.
+**4. Derived operands in type rejection. PARTLY CLOSED, and this entry was stale.** It claimed an
+ARITHMETIC result is still unknown and cited a pin that **no longer exists**. Commit `63574d1f`
+reached arithmetic operands with a bounded fixpoint; `a_derived_operand_is_now_reached_and_the_chain_has_no_depth_limit`
+holds that. What remains unknown is a **field read or an index**, pinned by
+`a_derived_operand_from_a_field_read_is_still_unreached`.
+
+**The stale citation had survived in the debt register**, which is why nothing failed: three live
+comments named the dead test and the register excused all three. Corrected 2026-08-27 and the
+register shrank from 13 entries to 12. **A citation in the register is not a citation that is
+right** -- it is one that has been excused from being checked.
 Reaching them is a fixpoint, not a lookup.
 
 ## THE ONE DEFECT THIS SESSION KEPT FINDING
