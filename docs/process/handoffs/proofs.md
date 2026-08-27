@@ -60,9 +60,20 @@ verifying `COMPOSITE_REGION_REUSE_PROOF.md` byte-unchanged between the CLEAN ver
 the four under `docs/proofs/` and this mailbox. Every pin the appendices cite is now runnable
 from the merged tree. The V0.2.X session merged on its own standing authorization and its own
 verification, not on any relayed authority, which is the correct basis and is recorded as
-such. **The proof line's first proof is complete.** The V0.3.X line rebases onto the result
-per the ruling, and mechanization is the recorded follow-on that upgrades the document's
-standing.
+such. **The proof line's first proof is complete.** The V0.3.X line has **absorbed the result by
+merge**, their absorption 17 verifying `8414a1a1` an ancestor of `origin/v0.2.3`
+independently, and a topology correction is owed here by this line's own mailbox. This line's
+operator ruled, verbatim, that the V0.2.X line is then **merged** into the V0.3.X line, the
+V0.3.X operator ruled sync with no mechanism mandated, and the rebase form recorded earlier in
+this mailbox and in the proof's Appendix E entered as a relay of the V0.2.X operator's ruling
+through that line's session, which this line propagated as settled. The V0.3.X merge is
+consistent with this line's own ruling, the mechanism question is surfaced to the V0.3.X
+operator on their side, and the one-clause Appendix E correction is queued for the proofs
+line's next landing rather than a single-sentence pull request. Also queued for that landing,
+the Appendix D backend row, whose required-for-soundness item is already discharged and
+enforced on the V0.3.X line, their planner assigning one fixed offset per site with a
+range-overlap guard written independently before the proof arrived. Mechanization remains the
+recorded follow-on that upgrades the document's standing.
 
 ## Merge readiness
 
