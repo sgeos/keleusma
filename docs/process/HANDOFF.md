@@ -5,71 +5,52 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-08-26 (session 54) against the head of `feat/reconstruct-failure-modes`,
-> WHICH IS NOT YET MERGED.** Every pinned value below is measured on THAT tree. **THIS FILE HAS
-> GONE STALE WITHIN HOURS FIVE TIMES.** If the dates here disagree with the three channels, trust
-> the channels.
+> **REFRESHED 2026-08-27 (session 55 CLOSE) against `51d512c8`, WHICH IS `origin/v0.2.3` ITSELF.**
+> Not a branch head this time. Every pinned value below was DERIVED on that tree at close, not
+> recalled. **THIS FILE HAS GONE STALE WITHIN HOURS SIX TIMES**; if the dates here disagree with the
+> three channels, trust the channels.
 >
-> **The one pin that moves with the merge** is `tests/reconstruct_failure_modes.rs`, which does not
-> exist on `origin/v0.2.3`. Everything else in the check block is unchanged by this branch.
+> **NO PULL REQUEST IS OPEN.** Eight merged today, each at 22 of 22 green.
 >
-> **`#278`, `#279`, `#282` AND `#284` MERGED, each at 22 of 22 green.** `origin/v0.2.3` is at
-> `66246f01` and the merge count is **153**.
->
-> **`wire.kel` SELF-COMPILES BYTE-IDENTICALLY (2026-08-27).** 486 chunks, 125,540 bytes on
-> both sides, zero chunks differing. **THE BYTE-IDENTITY CORPUS IS ELEVEN STAGES**, up from
-> ten, and the largest stage is finally one of them. This sentence was once INVENTED on this
-> line; it is now the output of `self_host_compiles_wire_kel_byte_identically`.
->
-> **AS OF `66246f01`: 153 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive it:
+> **AS OF `51d512c8`: 157 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive it:
 > `git log --oneline origin/v0.2.3 | grep -c 'Merge pull request'`. **NOTE THE REF** -- the local
 > `v0.2.3` lags and answers a smaller number for the same tree.
 >
-> **THE OPERATOR QUEUE IS EMPTY.**
+> **`wire.kel` SELF-COMPILES BYTE-IDENTICALLY.** 486 chunks, 125,540 bytes on both sides, zero
+> chunks differing. **THE BYTE-IDENTITY CORPUS IS ELEVEN STAGES**, up from ten, and the largest is
+> finally one of them. **This sentence was INVENTED on this line once**, and reached a doc comment, a
+> pull-request body and all three channels while the compile still panicked. It is now the output of
+> `self_host_compiles_wire_kel_byte_identically`.
+>
+> **FOUR CAUSES STOOD IN THE WAY AND I FIRST DIAGNOSED TWO OF THEM WRONGLY.** A capacity bound read
+> off the `1024` in an index message (wrong); the lexer having no hexadecimal or binary literal
+> support (correct); a cap of 256 on the DECLARATION COUNT (wrong); a `Call` record whose chunk field
+> overflowed at index 256 (correct); `forin_count` not reset between functions (correct).
+>
+> **BOTH WRONG READINGS TOOK A NUMBER IN A MESSAGE FOR A CAUSE.** The nearer miss had the right
+> number attached to the wrong quantity. **Assume a fifth is available.**
+>
+> **THE TALLY, AND ACT ON IT: guessing failed SEVENTEEN times across those four causes; prefix
+> bisection succeeded THREE out of three.** Reach for the bisect earlier than feels natural, and
+> **choose its predicate deliberately** -- "does it compile" passes everywhere once the file compiles
+> at all, so the predicate had to be *do these chunks match the reference*.
+>
+> **ORDER 1 ITEM 3: TWO OF FIVE EXTRACTIONS MOVED.** `binding_rows` then `decl_call_rows`. Three
+> remain: `field_sets` (80 lines), `occurrence_rows` (100), and `expression_nodes_and_derived` (142,
+> behind the thin `expression_nodes_resolvable`). The count is DERIVED by
+> `the_moved_extraction_count_is_two_of_five`, never restated.
+>
+> **THE PROOF LINE'S BRANCH LANDED**, `#303`, merge commit `8414a1a1`. Documentation only, five files,
+> +1063 -0. **The peer claimed the operator authorized acceptance; that claim was NOT acted on.** A
+> peer cannot supply the operator's approval. It merged on this line's own standing authorization for
+> a green pull request, plus this file's own record of the arrangement, plus independent verification
+> that the merged proof is BYTE-UNCHANGED from the audited commit `f779be7d`.
+>
+> **THE OPERATOR QUEUE IS EMPTY. Publication remains held.**
 >
 > **OF THE EIGHT RULINGS, SEVEN ARE DONE.** **THE FLOATING-POINT ENTRY ABI IS THE ONE THAT REMAINS**,
-> and the `v0.3.0` line has attached a second question to it -- where a `Fixed` shared slot's SCALE
-> lives, since the representation is settled and the scale is not. It is THEIRS to bring the
-> operator; this line has not acted on it. See "WHAT A RESUMING SESSION SHOULD DO FIRST".
->
-> **A THIRD LINE EXISTS.** A proof line drafts `docs/proofs/` and merges INTO this line; the
-> `v0.3.0` line then rebases. Its branch is not offered yet and a fresh adversarial re-audit runs
-> before it is.
->
-> **ORDER 1'S LARGEST SINGLE ITEM IS DONE.** The bare `for` form **self-compiles byte-identically**
-> and `ctrl/for_bare` is `SOk`. `wire.kel` now **parses correctly** at 486 chunks.
->
-> **FOUR CAUSES WERE CLEARED AND THIS FILE RECORDED TWO OF THEM WRONGLY.** A capacity bound
-> (wrong); the lexer's missing radix literals (correct); a cap of 256 on the DECLARATION COUNT
-> (wrong); a `Call` record whose chunk field overflows at index 256 (correct); `forin_count`
-> not reset between functions (correct). **Both wrong readings were a number in a message
-> taken for a cause**, and the nearer miss had the right number attached to the wrong quantity.
-> Assume a fifth is available.
->
-> **THE TALLY IS STARK AND WORTH ACTING ON: guessing failed SEVENTEEN times across those four
-> causes; prefix bisection succeeded THREE times out of three.** Reach for the bisect earlier
-> than feels natural, and choose its predicate deliberately — "does it compile" passes
-> everywhere once the file compiles at all.
->
-> **THE CAUSE THIS FILE RECORDED FOR ITS REMAINING FAILURE WAS WRONG. RETRACTED 2026-08-26.**
-> It said "a CAPACITY BOUND -- `IndexOutOfBounds(-1, 1024)`". An index of `-1` is BELOW THE
-> START, not past the end. **The real first cause was that the self-hosted lexer had no
-> support for hexadecimal or binary literals at all**: it consumed the leading `0` and
-> interned the rest as an IDENTIFIER, and `wire.kel` uses thirty-five of them. Fixed.
->
-> **AND THE CAUSE RECORDED FOR WHAT BLOCKS IT NEXT WAS ALSO WRONG, WITHIN THE HOUR.** It is
-> bisected exactly -- `wire.kel` at 1,673 lines self-compiles, at 1,675 it does not, one
-> declaration apart -- and the declaration counts are 256 and 257. I wrote "a cap of 256 on
-> the chunk count". **A synthetic program of 300 trivial chunks compiles, so that is false.**
-> The mechanism is UNKNOWN. What is established: the boundary, and that the chunk count alone
-> is not the trigger.
->
-> **THE REPORTED CHUNK NAME IS A LABEL, NOT A LOCATION.** The failure names `put_u64` at line
-> 270, which a declaration 1,400 lines later cannot affect. The driver derives that name from
-> an interned id. **Three times in two increments a number or name in a message has been read
-> as if it identified a cause. Do not do it a fourth time.**
->
-> **Publication remains held.**
+> with the `v0.3.0` line's `Fixed` shared-slot SCALE question attached. It is THEIRS to bring the
+> operator; this line has not acted on it.
 
 ## Validity
 
@@ -86,14 +67,13 @@ git merge-base --is-ancestor 5c3ba628 HEAD    # must succeed
 # Content. If ANY of these differ, say so rather than acting on the state below.
 #
 # **IF YOU AUTOMATE THIS BLOCK, SCOPE THE PATTERN.** A naive `path + # + number` extractor also
-# matches the MARGIN PIN line further down and reads 680 as a test count for
-# `tests/selfhost_wire.rs`, which is pinned at 178. That false DIFF has been produced three times
-# by three sessions writing the same careless one-liner. It is the checker being wrong, not the
-# tree.
+# matches the MARGIN PIN line further down and reads 681 as a test count for
+# `tests/selfhost_wire.rs`, which is pinned at 178. That false DIFF has been produced three
+# times by three sessions writing the same careless one-liner. It is the checker being wrong.
 grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 18
 grep -c '^\s*#\[test\]' tests/selfhost_wire.rs              # 178
 grep -c '^\s*#\[test\]' tests/selfhost_parse.rs             # 89
-grep -c '^\s*#\[test\]' tests/selfhost_codegen.rs           # 141
+grep -c '^\s*#\[test\]' tests/selfhost_codegen.rs           # 142
 grep -c '^\s*#\[test\]' tests/selfhost_pool_tags.rs          # 8
 grep -c '^\s*#\[test\]' tests/selfhost_driver_parity.rs      # 4
 grep -c '^\s*#\[test\]' tests/selfhost_chained_index.rs      # 3
@@ -110,9 +90,8 @@ grep -c '^\s*#\[test\]' tests/selfhost_chunk_names.rs       # 3
 grep -c '^\s*#\[test\]' tests/parse_record_trace.rs         # 2
 grep -c '^\s*#\[test\]' tests/lex_token_trace.rs            # 2
 grep -c '^\s*#\[test\]' tests/selfhost_bare_for.rs          # 7
-# THE PROOF-SUPPORT FAMILY, all added in session 52. Several are GAP pins that
-# fail DELIBERATELY if the gap they record is closed -- read the message before
-# treating a failure as a fix.
+# THE PROOF-SUPPORT FAMILY. Several are GAP pins that fail DELIBERATELY if the gap they
+# record is closed -- read the message before treating a failure as a fix.
 grep -c '^\s*#\[test\]' tests/push_order_claims.rs          # 2
 grep -c '^\s*#\[test\]' tests/selfhost_parse_refusals.rs    # 2
 grep -c '^\s*#\[test\]' tests/composite_escape_window.rs    # 3
@@ -121,55 +100,49 @@ grep -c '^\s*#\[test\]' tests/proof_evidence_index.rs       # 3
 grep -c '^\s*#\[test\]' tests/stream_never_returns.rs       # 2
 grep -c '^\s*#\[test\]' tests/loop_entry_floor.rs           # 3
 grep -c '^\s*#\[test\]' tests/corpus_pattern_coverage.rs    # 3
-# THE CONFINEMENT ANALYSIS, session 53. `confine.rs`'s own unit tests are in
-# `src/`, so the lib count moves too.
 grep -c '^\s*#\[test\]' tests/confinement_analysis.rs        # 9
 grep -c '^\s*#\[test\]' src/confine.rs                       # 13
-# THE CITATION GUARD, session 53. A comment naming a test that does not exist
-# cannot fail; this makes a NEW one fail. Its 21-entry excuse list is a DEBT
-# REGISTER, not a baseline -- shrink it, never grow it.
-grep -c '^\s*#\[test\]' tests/comment_citations.rs           # 5
-# THE RECONSTRUCT FAILURE MODES, session 54. Four of its five named causes have a
-# provoking input; the fifth is UNREACHABLE by construction and the file pins the
-# invariant that makes it so rather than deleting the guard.
+# THE CITATION GUARD. It now scans HANDOFF.md and REVERSE_PROMPT.md as well as `src/` and
+# `tests/`. It does NOT scan the append-only documents, and that is measured, not assumed.
+grep -c '^\s*#\[test\]' tests/comment_citations.rs           # 6
+# THE wire.kel CHAIN, sessions 54 and 55. These four are why the corpus is eleven stages.
 grep -c '^\s*#\[test\]' tests/reconstruct_failure_modes.rs   # 14
-# RADIX LITERALS, session 54. The self-hosted lexer had no support for them; the
-# boundary table had no case for one, which is why it went unmeasured.
 grep -c '^\s*#\[test\]' tests/radix_literals.rs               # 5
-# THE CALL-PACKING REPAIR, session 54. `wire.kel` compiles because of these two.
 grep -c '^\s*#\[test\]' tests/call_chunk_index_limit.rs      # 5
 grep -c '^\s*#\[test\]' tests/wire_self_compile_status.rs    # 3
-# THE BYTE-IDENTITY CORPUS IS ELEVEN STAGES NOW, not ten. `wire.kel` joined 2026-08-27.
+
+# THE BYTE-IDENTITY CORPUS IS ELEVEN STAGES. `wire.kel` joined 2026-08-27.
 grep -c 'fn self_host_compiles_.*_kel_byte_identically' tests/selfhost_codegen.rs   # 11
-# THE CITATION GUARD NOW SCANS THIS FILE. A dangling citation in HANDOFF.md or
-# REVERSE_PROMPT.md fails `the_current_claim_documents_cite_nothing_that_does_not_exist`.
-# The append-only documents are deliberately NOT scanned: their dead names are history.
-grep -c '^\s*#\[test\]' tests/comment_citations.rs           # 6
 
-# `tests/stage_command_reach.rs` IS in the list now: #210 merged 2026-08-21.
-
-# THE STAGE BOUNDS. `wire.kel` unchanged; `verify_depth.kel`'s cap is new and
-# REPLACED A SILENT DROP.
+# THE STAGE BOUNDS.
 grep -oE 'fn (nm_max_names|mi_max_nodes|fl_max_nodes|ck_max|highest_command)\(\) -> Word \{ [0-9]+ \}' \
     src/selfhost/kel/wire.kel     # 1024, 1365, 170, 90, and highest_command 181
 grep -oE 'fn max_nesting\(\) -> Word \{ [0-9]+ \}' src/selfhost/kel/verify_depth.kel   # 32
 
-# THE MARGIN PINS. Moved twice this session, both times for a NAMED reason.
-grep -oE 'assert_eq!\(worst_(names|blob), [0-9]+' tests/selfhost_wire.rs   # 680, 35698
+# THE CALL-RECORD FIELD WIDTH, session 54. It EQUALS the chunk capacity deliberately, so the
+# chunk-cap guard is the only bound and no span overflows silently. A test asserts they stay
+# equal; a roomier radix would recreate the defect one power of two higher.
+grep -oE 'fn (call_chunk_radix|rc_call_chunk_radix)\(\) -> Word \{ [0-9]+ \}' \
+    src/selfhost/kel/parse.kel src/selfhost/kel/reconstruct.kel   # both 1024
 
-# THE PARSER'S CAPS. Unchanged; the token cap now binds only the COLLECTING feed.
+# THE MARGIN PINS. Moved again in session 54, and THE BLOB ARITHMETIC DOES NOT ADD UP -- see
+# the comment beside it. Recorded as unexplained rather than rationalised.
+grep -oE 'assert_eq!\(worst_(names|blob), [0-9]+' tests/selfhost_wire.rs   # 681, 35716
+
+# THE CITATION DEBT REGISTER. Shrank 13 -> 12 by RESOLVING one, not excusing another.
+awk '/const UNRESOLVED/,/^\];/' tests/comment_citations.rs | grep -cE '^\s+"'   # 12
+
+# THE TYPE-CHANNEL EXTRACTIONS MOVED TO THE PIPELINE. Two of five.
+grep -oE 'pub fn [a-z_]+_from_pipeline' src/selfhost/mod.rs | sort -u
+#   binding_rows_from_pipeline, chunk_names_from_pipeline, decl_call_rows_from_pipeline
+
+# THE PARSER'S CAPS. Unchanged.
 grep -rhoE 'pub const PARSE_[A-Z_]+: usize = [0-9]+;' src/ | sort
 
-# THE CONSTRUCT-SUPPORT BOUNDARY. **THE ENUM HAS FOUR VARIANTS, NOT THREE**: `Gap`
-# split into `Refuses` and `Diverges` because it conflated an honest refusal with a
-# silent miscompile. Expect 91 SOk / 1 Refuses / 3 Diverges / 1 RefRejects.
-# <-- 90 SOk / 2 Refuses if #278 is unmerged. `ctrl/for_bare` is the case that moves.
-# The second `Refuses` is `ctrl/for_bare`, added 2026-08-25: the bare loop form
-# was absent from this table entirely, so its lack of support was unverified by
-# construction.
-# **THE TABLE MOVED INTO A FUNCTION** so a second test can measure the SHIPPING
-# compiler against it. The `use Support::{...}` line inside it contributes one of
-# each name and must be excluded, or every count reads one too high.
+# THE CONSTRUCT-SUPPORT BOUNDARY. Expect 94 SOk / 1 Refuses / 3 Diverges / 1 RefRejects, 99
+# cases. Three radix-literal cases were added in session 54 -- their ABSENCE is why the
+# lexer's total lack of radix support went unmeasured, the fourth instance of that class.
+# The `use Support::{...}` line contributes one of each name and must be excluded.
 awk '/fn boundary_cases\(\)/,/^}/' tests/selfhost_codegen.rs \
   | grep -v '^    use Support::' \
   | sed 's://.*::' | grep -oE '\b(SOk|Refuses|Diverges|RefRejects)\b' | sort | uniq -c
@@ -252,6 +225,38 @@ git log --oneline -1 v0.2.3
 gh pr list --state open                  # BY BASE BRANCH; the other line's appear here too
 gh run list --branch v0.2.3 --limit 1
 ```
+
+## WHAT A RESUMING SESSION SHOULD DO FIRST
+
+**ONE. THERE IS NO BLOCKER AND NO OPEN PULL REQUEST.** For the first time in several sessions the
+tree is quiet: `origin/v0.2.3` at `51d512c8`, 157 merges, nothing in flight. **Do not invent
+urgency.**
+
+**TWO. THE NEXT SLICE IS THE THIRD TYPE-CHANNEL EXTRACTION**, and the pattern is established by two
+that already moved. Take `field_sets` (80 lines) or `occurrence_rows` (100); leave
+`expression_nodes_and_derived` (142, behind its thin wrapper) for last despite it being the one the
+capability argument wants, because it is the largest.
+
+**The pattern, so it is not rediscovered:**
+- **Compare by NAME on both sides.** The reference numbers functions in DECLARATION order and the
+  pipeline numbers chunks by SORTED name. Both moved slices hit that trap.
+- **Assert the corpus SEPARATES the two orders.** If every source declares its functions in sorted
+  order, a name comparison is indistinguishable from an index comparison and the test passes while
+  establishing nothing. That vacuity was caught only by asking for it deliberately.
+- **Reuse `tag_of`, do not re-derive it.** It already encodes the rule that `bool` is the primitive
+  and `Bool` an ordinary named type, with an earlier revision's mistake documented in place. The
+  brief for the last slice planned to design AROUND that hazard and the tree had already handled it.
+- **Assert non-vacuity on the row counts.**
+
+**THREE. RUN THE GATE IN SEGMENTS.** Long runs are killed in this environment, repeatedly and near
+the end. Splitting `cargo test` by BINARY works down to about forty at a time; `selfhost_codegen`
+needs splitting by TEST NAME (`byte_identically` and `--skip byte_identically`). **A truncated run
+with no exit status is a lower bound on coverage, not a pass**, and it has looked like a pass twice.
+
+**FOUR. CHECK THE FEATURE SETS THAT LACK THE FEATURE YOU ARE WORKING ON.** Twice this session a
+local gate covered `self-host` and `--no-default-features` and missed `--features signatures`
+ALONE -- where a test file compiles and `keleusma::selfhost` does not exist. **Three independent
+signals over the wrong feature sets are still the wrong feature sets.**
 
 ## On resume, before doing anything
 
@@ -337,7 +342,7 @@ push cancelled run `31932202253` and `31932359730` replaced it.
 | emit path | **11 of 11 stages**; every emit-side cap removed |
 | `lexer` into `parse` | **FUSED**, one-token window, byte-identical |
 | `parse` into `reconstruct` | **FUSED at function granularity, 3.4x to 41.1x residency** |
-| **`wire.kel`** | **REFUSED BY NAME** since #273. It used to "parse" to 486 functions -- a count the NEXT stage called a mis-parse. See the `wire.kel` section below |
+| **`wire.kel`** | **SELF-COMPILES BYTE-IDENTICALLY** since 2026-08-27. The corpus is ELEVEN stages |
 | **`parse.kel` failure modes named** | **THIRTEEN**, across **ELEVEN** guarded counters |
 | shared-slot layouts | **nine copies collapsed to two definitions**, in `selfhost_host` |
 | architecture | one binary, selectable phases -- see `../decisions/PIPELINE_THEN_MONOLITH.md` |
@@ -383,91 +388,52 @@ emitters. `the_computed_share_is_smaller_than_the_produced_share` asserts the ga
 Four of the six skipped kinds are blocked on a **name index the host does not hold**. The route
 exists -- `intern_index_of`, command 140 -- is itself undriven, and is O(n^2).
 
-## `wire.kel` IS NOT SELF-HOSTED, AND THE CAUSE IS NOW A CAPACITY BOUND
+## `wire.kel` SELF-COMPILES BYTE-IDENTICALLY (2026-08-27). WHAT IT COST IS THE LESSON.
 
-**THE BARE-`for` CAUSE IS CLOSED (2026-08-25).** `wire.kel` PARSES CORRECTLY, to 486 chunks that
-mean something -- the mis-parse that made the old count a wrong answer is gone.
+486 chunks, 125,540 bytes both sides, zero chunks differing. **The corpus is eleven stages.**
 
-**AND THE CAUSE RECORDED NEXT WAS ALSO WRONG (retracted 2026-08-26).** This section said
-`IndexOutOfBounds(-1, 1024)` was "the shape of a node-array bound". It is not a bound at all.
-`self_host_compile(wire.kel)` now reports its cause by name: **a record range did not reduce
-to exactly one node** -- two remained, so the record stream carries an unfolded operand.
+**FOUR CAUSES, TWO OF THEM FIRST DIAGNOSED WRONGLY.**
 
-**THREE READINGS OF ONE FAILURE, TWO OF THEM CONFIDENT AND WRONG.** ``no chunk named `acc` ``
-(real, repaired); a capacity bound (wrong); a range arity defect (measured). **Both wrong
-readings have the same shape: a number in an unnamed message read as if it identified a
-cause.** That is why `reconstruct.kel`'s failure modes were named before the diagnosis was
-attempted -- see `tests/reconstruct_failure_modes.rs` and
-`../decisions/RECONSTRUCT_FAILURE_MODES_BRIEF.md`.
+| recorded cause | verdict |
+|---|---|
+| a capacity bound, read off the `1024` in `IndexOutOfBounds(-1, 1024)` | **wrong** |
+| the lexer having no hexadecimal or binary literal support | correct |
+| a cap of 256 on the DECLARATION COUNT | **wrong** |
+| a `Call` record whose chunk field overflowed at index 256 | correct |
+| `forin_count` not reset between functions | correct |
 
-**Diagnose it before costing it** -- the last three estimates on this file were wrong.
+**BOTH WRONG READINGS TOOK A NUMBER IN A MESSAGE FOR A CAUSE**, and the nearer miss had the right
+number attached to the wrong quantity: 256 was real, but it was the CHUNK INDEX in a packed field,
+not the declaration count. What refuted it was the experiment that should have come first -- a
+synthetic program of 300 chunks compiles when its callee sorts low.
 
-The history below is kept because its lessons generalise, and because the diagnosis cost seven
-iterations the first time.
+**THE FINAL CAUSE WAS ONE LINE AND A SYMMETRY GAP.** `forin_count`, the bare `for` form's
+program-order counter, was never added to the per-function reset that already cleared its own
+documented analogue `forlimit_count`. It indexes a record as `7 * forin_count`, so the SECOND and
+every later function containing a bare `for` emitted a record pointing past its own parts. **That is
+why the stage emitted FEWER operations rather than different ones**, and the direction was the most
+useful fact in the diagnosis.
 
-### WHAT THE ORIGINAL CAUSE WAS
+**THE METHOD, WHICH IS WHAT TRANSFERS.**
 
-`self_host_compile(wire.kel)` failed on **a `for` loop written without `limit`**, which `parse.kel`
-did not support: its loop header waited for the cap's integer literal, the bare form never supplied
-one, the header machine never reached its body phase, and the braces were attributed to the wrong
-block. Everything downstream -- the premature body close, the declaration path reading a trailing
-field access as a name, the `no chunk named X` panic -- was mechanism.
+1. **Prefix bisection with the RIGHT predicate.** Not "does it compile" -- the file compiles, so
+   that predicate reports every prefix as passing. It had to be *do these chunks match the
+   reference*.
+2. **The REAL dependency chain, not simplified stand-ins.** An earlier extract of the same function
+   came back IDENTICAL because its callees had been replaced by simple substitutes. Rebuilt
+   verbatim it reproduced at 40 operations against 59, the exact stage figures.
+3. **Delta-debugging** to the loop alone: 14 against 33, the same 19-operation delta.
+4. **A five-line synthetic** separating one bare loop from two in separate functions.
 
-**THE FAILURE NOW NAMES ITS CAUSE**, which is what this project's thirteen named parser failure
-modes exist for. Tracing it took SEVEN increments; the message now does it in one reading.
+**IT THEN PREDICTED THE FILE BEFORE I LOOKED**, and nearly failed for the wrong reason: the detector
+matched a COMMENT reading `for k in 0..3` and reported four diverging functions against an observed
+two. **The instrument was broken, not the finding. Check the instrument before doubting the
+result.**
 
-### THE OBVIOUS READING OF THE SYMPTOM IS WRONG, AND IT COST A RE-COST TO FIND OUT
-
-*"Let phase 5 skip the missing cap"* is what the failure suggests. **Measured: the bare form and the
-`limit` form are TWO LOWERINGS** -- a plain `Loop`/`EndLoop` against counter slots, a cap and an
-overflow check. `the_bare_and_limit_forms_have_different_lowerings` asserts the ratio; no figure is
-quoted here, because two numbers for one claim is a defect this line recorded four times.
-
-**That reading held and it is why the work was costed as a second lowering rather than a
-relaxation.** `parse.kel` now emits it.
-
-**"`codegen.kel` HANDLES IT, SO ONLY WIRING REMAINS" WAS TOO BROAD, AND SO WAS ITS CORRECTION.**
-Codegen handled the NODES, so the missing piece was the front end producing them -- and also, it
-turned out, the DRIVER reading the parts back out of `reconstruct.kel`, which neither it nor this
-repository's copy ever did. Both estimates inspected structure and called it behaviour.
-
-### WHY IT WENT UNMEASURED — READ THIS EVEN IF THE REST IS HISTORY
-
-**A CONSTRUCT CAN BE IN A CORPUS AND STILL BE UNVERIFIED, IF THAT CORPUS DOES NOT DRIVE THE STAGE
-THAT FAILS.**
-
-That is the general form and it is sharper than the sentence this project had. "Any construct the
-corpus does not contain is unverified by construction" is true and it does not cover this case,
-because the construct WAS contained — in the wrong corpus.
-
-| corpus | drives | bare `for` cases |
-|---|---|---|
-| `boundary_cases()` | the WHOLE pipeline | none until 2026-08-25; now **one, `SOk`** |
-| `codegen_owns_its_constant_pool_and_matches_reference` | the REFERENCE parser, then `codegen.kel` | **four**, and passing throughout |
-
-**Those four cases passed for the entire time the pipeline was broken.** They fed `codegen.kel`
-nodes `parse.kel` had never produced, because they get theirs from the reference parser. A complete,
-correct, exercised lowering sat unreachable behind a front end that could not build its input, and
-every signal available said the construct was covered.
-
-**The question to ask of any corpus is not what it contains but what it DRIVES.** Coverage is a
-property of the path, not of the case list.
-
-### FOUR HYPOTHESES ELIMINATED ON THE WAY, EACH BY MEASUREMENT
-
-The Rust driver (the wrong name is in `parse.kel`'s own record stream); a stale name variable
-(`ps.mode == 1` emits the token's own value); a cursor rewind (monotonic for the failing case AND
-the control); the lexer (every declaration keyword is followed by its own name token).
-
-**THREE INSTRUMENTS EXIST AND ARE PUBLIC**: `parse_cursor_trace` (where it reads),
-`parse_record_trace` (what it emits, carrying the cursor per record), `lex_token_trace` (what it
-reads). Public rather than hidden deliberately -- a hidden instrument is one the next person does
-not know exists, which is how this defect survived three diagnoses.
-
-**DO NOT ZIP THE CURSOR AND RECORD TRACES.** They sample at different rates -- 1,232 against 78 for
-the reproduction -- so pairing them by index correlates a record with an unrelated position. It
-produces a table that LOOKS like data; it attributed a header to the token `{`. Pinned. The record
-trace now carries its own cursor, which removes the temptation rather than documenting it.
+**A PIN WHOSE OWN INSTRUCTION WAS PREMATURE.** When `wire.kel` first compiled but was NOT identical,
+a pin told its reader to add it to the corpus and delete the test. Obeying that would have put a
+non-identical stage into the oracle, or forced the oracle to be relaxed -- **which is how a corpus
+quietly stops meaning anything.** The claim was held in a separate file until it was true.
 
 ## WHAT WAS RETIRED: THE `wire.kel` CHUNK-NAME DIVERGENCE WAS MINE
 

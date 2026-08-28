@@ -71,71 +71,28 @@ formally unruled but no longer contested.
 
 ## Last Updated (v0.2.3 line)
 
-**Date**: 2026-08-27 (session 55) — `wire.kel` self-compiles byte-identically. The corpus is
-eleven stages.
+**Date**: 2026-08-27 (session 55 CLOSE) — `wire.kel` is byte-identical, the corpus is eleven
+stages, and nothing is open
 
 ## NOTHING IS WAITING ON YOU EXCEPT THE RULING YOU ALREADY HAVE
 
-Publication remains held. **The floating-point entry ABI is still the last of your eight
-rulings unimplemented**, with the `v0.3.0` line's `Fixed` shared-slot SCALE question attached.
-**It is theirs to bring you and I have not acted on it.**
+`origin/v0.2.3` is at `51d512c8`, **157 merges**, **no open pull request**. Eight merged today,
+each at 22 of 22 green. Publication remains held.
 
-## Order 1 item 3 moved: two of five extractions
+**The floating-point entry ABI is still the last of your eight rulings unimplemented**, with the
+`v0.3.0` line's `Fixed` shared-slot SCALE question attached. **It is theirs to bring you and I
+have not acted on it.**
 
-`decl_call_rows` has a pipeline analogue, the second of five to leave the reference parser's
-abstract syntax tree. **The count is derived by a test rather than restated**, because a
-hand-written count is a second definition that goes stale — which is how the handoff came to
-assert a closed gap was still open.
+## The milestone
 
-**Both moved slices hit the same trap**: the reference numbers functions in declaration order,
-the pipeline numbers chunks by sorted name. Comparing indices compares two unrelated
-numberings. The escape both times was to carry a string.
+**`wire.kel` self-compiles byte-identically** — 486 chunks, **125,540 bytes on both sides, zero
+chunks differing.** The largest stage in the corpus, and the last one outside the byte-identity
+oracle, is in it. Ten stages become eleven.
 
-**And a vacuity the obvious test would have missed.** If every corpus source declared its
-functions in sorted order, comparing by name would be indistinguishable from comparing by
-index — the property under test would go untested while the test passed. The corpus is now
-asserted to separate the two orders.
+That sentence was **invented on this line once** and reached a doc comment, a pull-request body
+and all three channels while the compile still panicked. It is now a test's output.
 
-**Not moved, and the test says so**: the per-argument ACTUAL-argument tag needs an expression
-classifier, which is new work rather than a re-projection.
-
-## The smaller finding, which I would not want lost under the milestone
-
-**The citation guard never scanned the handoff**, and the handoff had carried a false claim:
-its open correctness item 4 asserted a gap that commit `63574d1f` had closed, citing a pin
-that **does not exist**. Three comments under `src/` and `tests/` repeated it, and the
-`UNRESOLVED` register excused all three. **A citation in a debt register is not a citation
-that is right — it is one excused from being checked.**
-
-The guard now covers the two documents that are OVERWRITTEN each session and therefore hold
-only current claims. It does **not** cover `TASKLOG.md` or `DESIGN_JOURNAL.md`, and that is
-measured rather than assumed: those are append-only, and guarding them would have required a
-sixty-entry excuse list on the first run — answering a guard by widening the excuse, which is
-the failure being corrected.
-
-It manufactured its own findings on the first run, flagging four corpus script filenames as
-dangling citations. That lesson was already in this file once, from a wrapped identifier. It
-is now recorded twice, because it has happened twice.
-
-## The milestone, measured
-
-**`wire.kel` SELF-COMPILES BYTE-IDENTICALLY.** 486 chunks, **125,540 bytes on both sides,
-zero chunks differing.** The largest stage in the corpus, and the last one outside the
-byte-identity oracle, is now in it — ten stages become eleven.
-
-**That sentence was once invented on this line** and reached a doc comment, a pull-request
-body and all three channels while the compile still panicked. It is now the output of
-`self_host_compiles_wire_kel_byte_identically`, not a recollection.
-
-## The cause was one line
-
-`forin_count` — the bare `for` form's program-order counter — was never added to the
-per-function reset that already cleared its own documented analogue, `forlimit_count`. It
-indexes a record as `7 * forin_count`, so the **second and every later function** containing a
-bare `for` emitted a record pointing past its own parts. **That is why the stage emitted FEWER
-operations rather than different ones.**
-
-## Four causes over three sessions, and I first diagnosed two wrongly
+## Four causes, and I first diagnosed two of them wrongly
 
 | recorded cause | verdict |
 |---|---|
@@ -145,30 +102,50 @@ operations rather than different ones.**
 | a `Call` record whose chunk field overflowed at index 256 | correct |
 | `forin_count` not reset between functions | correct |
 
-Both wrong readings took **a number in a message for a cause**. The nearer miss was the third:
-256 was the right number attached to the wrong quantity.
+Both wrong readings took **a number in a message for a cause**. The nearer miss had the right
+number attached to the wrong quantity.
 
-## What actually worked, since the tally is stark
+**The tally is stark and it is now guidance rather than history: guessing failed seventeen times
+across those four causes; prefix bisection succeeded three out of three.**
 
-**Guessing failed seventeen times across these four causes. Bisection succeeded three times
-out of three.** The method that closed this one: prefix bisection with the predicate *do these
-chunks match* (not *does it compile*, which passes everywhere); rebuilding the function with
-its REAL callees rather than simplified stand-ins, which is why an earlier extract came back
-clean; delta-debugging to the loop alone; then a five-line synthetic isolating one bare loop
-from two.
+## What else landed
 
-**Then the rule predicted the file before I looked at it.** `wire.kel` has three bare-`for`
-functions; the rule says every one after the first diverges; those are exactly the two that
-did.
+**Order 1 item 3 moved from one of five extractions to two of five.** The count is derived by a
+test, never restated — because a hand-written count is a second definition that goes stale, which
+is exactly how this handoff came to assert an already-closed gap was open.
 
-## The near-miss worth your attention
+**The citation guard now scans the documents that make current claims.** It had never scanned the
+handoff, which had carried a false claim for at least a session. It does **not** scan the
+append-only documents, and that scope was measured rather than assumed: guarding them would have
+needed a sixty-entry excuse list on the first run.
 
-**My detector matched a COMMENT** reading `for k in 0..3`, predicted four diverging functions
-against an observed two, and I was a step from concluding the rule was too strong. The
-instrument was broken, not the finding. **Check the instrument before doubting the result.**
+**The proof line's branch merged**, `#303`, merge commit `8414a1a1`, documentation only.
 
-## What is next
+## The one thing I want to flag about that merge
 
-Order 1's remaining items, unchanged: the region kinds at 93% produced / 56% computed, and the
-type checker's input, whose extraction is still Rust walking the reference AST. The structural
-blocker that stood behind both is gone.
+**The peer stated that you had authorized acceptance. I did not act on that**, and could not — a
+peer cannot supply your approval. It merged on my own standing authorization for a green pull
+request, plus this line's own recorded arrangement, plus my own verification that the merged proof
+is **byte-unchanged** from the audited commit. The peer accepted the correction without
+qualification.
+
+They also said an earlier message from this line had told them acceptance was authorized. **I
+cannot verify that.** The closest thing in our mailbox is the opposite — this line telling them a
+relayed ruling is not authorization it can act on. If such a message existed it was never
+persisted, and I am not treating it as fact.
+
+## What almost every defect this session had in common
+
+**They were in my verification, not in the code.** I derived a family of three that was four and
+one of seven that was 26. I wrote guards that could not fire, one that flagged itself, and one
+that reported four filenames as dangling citations. Two mutation attempts silently failed to
+COMPILE, which looks exactly like a guard not firing. Twice a local gate covered the feature the
+work was about and missed the feature sets that lack it.
+
+**Every one surfaced by running something. None by reading.**
+
+## What I would take up next
+
+The third type-channel extraction. `field_sets` at 80 lines or `occurrence_rows` at 100; leave
+`expression_nodes_and_derived` at 142 for last despite the capability argument favouring it. The
+pattern is established and written into the handoff so it is not rediscovered.
