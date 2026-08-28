@@ -237,6 +237,36 @@ pub struct LowerOptions {
     pub delegated_suspension: bool,
 }
 
+/// Packed width implied by a DECLARED boundary shape, or [`Width::Unknown`].
+///
+/// One definition serving both call paths. A native's declared return shape and
+/// a chunk's declared return shape answer the same question — how many bytes
+/// this value occupies inside a composite body — and a second copy of the
+/// mapping would be a second opinion about packing, which is exactly the class
+/// of defect the operand-width machinery exists to prevent.
+///
+/// # Fails closed, and that is the whole contract
+///
+/// **`Top`, an absent entry, and a scalar kind this backend cannot size all
+/// yield `Unknown`, never a default.** A default here would convert a missing
+/// table entry into a silent mispack: a `Byte` and a `Word` are
+/// indistinguishable on the operand stack, so a guessed width writes the wrong
+/// number of bytes and the body reads back as a plausible wrong value rather
+/// than as an error. `Unknown` instead fails at the USE, which is the existing
+/// refusal.
+fn width_of_declared_shape(shape: Option<&keleusma::bytecode::WireShape>) -> Width {
+    match shape {
+        Some(keleusma::bytecode::WireShape::Scalar { kind }) => {
+            match keleusma::value_layout::ScalarKind::from_tag(*kind) {
+                Some(k) => Width::Scalar(u32::try_from(k.size_in_bytes(8, 8)).unwrap_or(0)),
+                None => Width::Unknown,
+            }
+        }
+        Some(keleusma::bytecode::WireShape::Flat { size, .. }) => Width::Body(*size),
+        _ => Width::Unknown,
+    }
+}
+
 /// Error cases the lowering refuses rather than guesses at.
 #[derive(Debug)]
 pub enum LowerError {
@@ -2823,6 +2853,26 @@ fn lower_chunk_body<'ctx>(
                 if delegated_call == Some(i) {
                     st.b.build_return(Some(&ret)).unwrap();
                 } else {
+                    // # Why this result is pushed at an UNKNOWN width
+                    //
+                    // `Module::signatures` declares each chunk's return shape,
+                    // and seeding from it here — the exact analogue of what the
+                    // native arm does with `native_shapes` — is sound and was
+                    // written and then REVERTED, deliberately.
+                    //
+                    // **It changed no corpus chunk**, so nothing executes it:
+                    // measured, coverage stayed at 1070 of 1074 with the seeding
+                    // in place. And nothing can execute it, because the only
+                    // source-string differential lowers a single chunk and
+                    // therefore refuses `Op::Call` outright, while the
+                    // whole-module differentials are driven from files with
+                    // per-file sizing helpers.
+                    //
+                    // **A behaviour-widening change to a compiler with no
+                    // execution-backed check is how a silent mispack ships.**
+                    // The prerequisite is a source-string whole-module
+                    // differential; with that in hand this is a one-line change.
+                    // See `docs/decisions/OPERAND_WIDTH_RECOVERY_BRIEF.md`.
                     st.push(ret);
                 }
             }
@@ -2924,18 +2974,7 @@ fn lower_chunk_body<'ctx>(
                 // a USE rather than here — the behaviour every unsignatured
                 // native still gets, and that is all of them in the shipped
                 // corpus today.
-                let w = match native_shapes.get(usize::from(*idx)) {
-                    Some(keleusma::bytecode::WireShape::Scalar { kind }) => {
-                        match keleusma::value_layout::ScalarKind::from_tag(*kind) {
-                            Some(k) => {
-                                Width::Scalar(u32::try_from(k.size_in_bytes(8, 8)).unwrap_or(0))
-                            }
-                            None => Width::Unknown,
-                        }
-                    }
-                    Some(keleusma::bytecode::WireShape::Flat { size, .. }) => Width::Body(*size),
-                    _ => Width::Unknown,
-                };
+                let w = width_of_declared_shape(native_shapes.get(usize::from(*idx)));
                 st.push_w(ret, w);
             }
             // `Byte` occupies a full `i64` slot holding a value in `0..=255`.
@@ -3310,7 +3349,10 @@ fn lower_chunk_body<'ctx>(
                     let w = st.width_at(back);
                     if w.bytes().is_none() {
                         return Err(LowerError::UnsupportedOp(format!(
-                            "NewComposite at op {i} has an operand of unknown packed width"
+                            "NewComposite at op {i} has an operand of unknown packed \
+                             width: operand {} of {n} counting from the first, \
+                             which is {back} back from the top of the stack",
+                            n - back
                         )));
                     }
                     widths.push(w);

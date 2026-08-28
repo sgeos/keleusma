@@ -13,6 +13,63 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-28 — [v0.3.0] Adjacency is not provenance: the Call was innocent
+
+**THE INSTRUCTION IMMEDIATELY BEFORE BOTH REFUSED COMPOSITE SITES WAS A `Call`, AND IT WAS NOT THE
+CAUSE.** `12_sensor_window.kel::main` op 23 and `14_frame_log.kel::main` op 24 are refused for an
+unknown operand width. The op before each is a `Call` whose callee declares `ret = Scalar`, and the
+backend seeds NATIVE result widths from `native_return_shapes` while never consulting
+`Module::signatures` for chunk calls — a real, unexplained asymmetry sitting one instruction from the
+crime scene.
+
+**Seeding it was implemented, and the refusal did not move.** Coverage stayed at 1070 of 1074. The
+adjacent instruction was not the producer of the offending operand.
+
+### What the operand actually is, derived rather than guessed
+
+The refusal was first made to name WHICH operand is unknown: **the first of three**. Then the
+operand stack was simulated from the instruction set's own published `stack_growth`/`stack_shrink`,
+which identifies the producer exactly:
+
+| module | operand 1 produced at | by | writes to that local |
+|---|---|---|---|
+| `12_sensor_window.kel` | op 15 | `GetLocal(1)` | **2** |
+| `14_frame_log.kel` | op 15 | `GetLocal(2)` | **2** |
+
+Both are the `for` loop's induction variable. **A local's width is trusted only when the chunk writes
+it at most once**, and an induction variable is written twice — initialisation and increment. The
+rule is deliberate and sound: a linear scan cannot see a back edge, so trusting it would read the
+local at the width of whichever write appears earlier in the text and mispack every iteration after
+the first.
+
+**THE FIRST WALK WAS A HEURISTIC AND IT PRODUCED A CONFIDENT WRONG ANSWER.** "Take the nearest
+preceding `GetLocal`" picked the loop CONDITION's read and reported a write count for the wrong
+local, which would have made this entry claim the cause is a singly-written local. **The published
+stack-effect tables were right there.** Prefer a published table to a plausible walk — the walk fails
+silently and looks like an answer.
+
+### A sound change, reverted on purpose
+
+The call-result seeding is correct and closes a genuine asymmetry. It was reverted anyway:
+
+- **It changed no corpus chunk**, so nothing executes it.
+- **Nothing CAN execute it.** The only source-string differential lowers a single chunk and therefore
+  refuses `Op::Call` outright; the whole-module differentials are file-driven through per-file sizing
+  helpers.
+- **A behaviour-widening change to a compiler with no execution-backed check is how a silent mispack
+  ships.**
+
+The reasoning is recorded at the instruction arm itself rather than only in a document, so the next
+reader meets it where the decision is made. **The prerequisite is a source-string whole-module
+differential harness**, and that is now the named next capability rather than a vague wish.
+
+### What would actually lift it
+
+A fixpoint over local widths. The increment's width depends on the very local being analysed, so one
+pass cannot settle it; a monotone analysis can, since each local moves at most from undefined to a
+concrete width to unknown. **Not attempted** — it is a real analysis with real mispack risk and
+deserves its own increment with its own differential evidence.
+
 ## 2026-08-28 — The op-tag tables agree, and now something checks that they do
 
 **AN INBOUND FINDING FROM THE `v0.3.0` LINE, CLOSED BY MEASUREMENT.** They observed that

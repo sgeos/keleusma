@@ -80,8 +80,23 @@ residual **zero**. I deliberately did not refuse it: that refusal would rest on 
 over-approximations with no data flow and no instance to justify the cost, and the whole class sits
 behind the `Stream` refusal anyway. The census asserts zero, so an instance would fail loudly.
 
-**Absorptions 18 and 19 are complete**, the second documentation-only with zero predicted and zero
-observed movement.
+**The last two composite refusals are now explained to the cause.** The unknown operand is the first
+of three, produced by a read of the `for` loop's induction variable, which each chunk writes twice —
+and a local's width is trusted only when written at most once, because the width pass is a linear
+scan and cannot see a back edge. I derived that by simulating the stack from the instruction set's
+own published effects, after a heuristic walk gave me a confident wrong answer.
+
+**I implemented a sound fix and then reverted it, which I want to flag rather than bury.** The
+backend seeds native call results from their declared shapes but never consults the equivalent table
+for chunk calls. Closing that asymmetry was correct and it changed nothing: the refusal did not move
+and coverage stayed at 1070 of 1074. Since no harness here can execute a source-string program
+containing a call, keeping it would have meant widening a compiler's accepted set with no
+execution-backed check, so it is out, with the reasoning recorded at the instruction itself. **The
+named prerequisite is a source-string whole-module differential harness.** Lifting the refusal itself
+needs a fixpoint over local widths, which is its own increment.
+
+**Absorptions 18, 19 and 20 are complete**, every prediction recorded before merging and every one
+hitting exactly.
 
 **Still blocked on you, all three unactionable here**: the `Fixed` shared-slot ABI, where the
 recommendation splits on whether cross-language interop should be convention-based or

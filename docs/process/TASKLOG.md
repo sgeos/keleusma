@@ -131,6 +131,23 @@ Current sprint source of truth.
 > **THREE CHECKS WRITTEN THIS SESSION COULD NOT FAIL**, each satisfied by a different part of a
 > document from the one it was about. Mutation caught all three; reading caught none.
 
+> **Currency note (2026-08-28, V0.3.X line). THE LAST TWO COMPOSITE REFUSALS ARE EXPLAINED TO THE
+> CAUSE, AND A SOUND FIX WAS REVERTED FOR WANT OF EVIDENCE.**
+>
+> The unknown operand at `12_sensor_window.kel` op 23 and `14_frame_log.kel` op 24 is **operand 1 of
+> 3**, produced by a `GetLocal` of the `for` loop's induction variable, which each chunk writes
+> **twice**. A local's width is trusted only when written at most once, because a linear scan cannot
+> see a back edge. Derived by simulating the stack from the instruction set's published effects; a
+> heuristic walk gave a confident wrong answer first. **Two hypotheses refuted**, the `Boxed` form and
+> the adjacent `Call` — seeding chunk-call widths from `Module::signatures` was implemented and the
+> refusal did not move. That seeding was then **reverted**: it changed no corpus chunk and no harness
+> can execute a source-string program containing a call, and widening a compiler's accepted set
+> without execution-backed evidence is how a silent mispack ships. **The named prerequisite is a
+> source-string whole-module differential harness.** Lifting the refusal itself needs a fixpoint over
+> local widths. Absorption 20 complete, prediction hit exactly. `native_codegen` **319/0/61**,
+> workspace **2467/0/88**, coverage re-derived and unchanged at 1070 of 1074.
+> See [`../decisions/OPERAND_WIDTH_RECOVERY.md`](../decisions/OPERAND_WIDTH_RECOVERY.md).
+
 > **Currency note (2026-08-27, V0.3.X line, third entry). THE RELEASE GATE COVERS
 > `native_codegen` AND WAS NEVER RUN; THE INTERPROCEDURAL RESIDUAL IS MEASURED AND EMPTY.**
 >
