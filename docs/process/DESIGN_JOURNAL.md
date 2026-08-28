@@ -277,6 +277,51 @@ two-segment form, which genuinely differs, and it fired with its own message.
 kinds is missing from its probes, and removing the structs makes it fail with that message. The
 previous slice learned this the hard way: a guard whose corpus lacks a construct is a guard for a
 different question.
+## 2026-08-28 — [v0.3.0] The same defect a third time, and a corroboration that was not one
+
+**THE GUARD BUILT LAST INCREMENT WATCHED A NARROWER POPULATION THAN THE FIGURES IT PROTECTS.** It
+covered three roots; the censuses producing the published numbers read **four**, adding
+`examples/rtos/scripts` and `compiler/kel` — **seven files read and unguarded**.
+
+**That is one defect at three granularities in three consecutive increments:**
+
+1. The `v0.2.3` line pinned a value whose input was a **directory scan**.
+2. This line scanned **three named directories where the loaders recurse** — 57 files against 67,
+   missing the `piano_roll` family.
+3. This guard, **built from that lesson**, covered **three roots where its consumers read four**.
+
+**Each time the watched population was narrower than the one that mattered, and each time the narrow
+scan returned a well-formed answer.** That is what makes the class invisible: nothing errors, a
+plausible number arrives, and the number is about the wrong set. **Derive the scope from what the
+consumers read, not from a list that looks right.**
+
+### A corroboration claim that did not survive being checked
+
+The previous entry recorded that the fix "produced a cross-check that did not exist — two independent
+censuses now report the same chunk total, 1074". **The two censuses read different root sets.** Two
+measurements over different populations agreeing is not corroboration until the difference is shown
+to contribute nothing.
+
+**The first explanation offered for it was also wrong**, and the test asserting it failed, which is
+the only reason the second one is right rather than merely plausible:
+
+- **Claimed**: the extra files are not standalone programs, so they do not compile.
+- **Measured**: two of the seven *do* compile, both named `prelude.kel`.
+- **Actual**: they compile to **zero chunks**. A prelude declares; it has no bodies to emit.
+
+So a four-root census sees **two more modules and the same chunk count**. The agreement is real and
+**weaker than claimed**, and the module counts genuinely differ: **67 against 69**.
+
+**Quote the population with the number.** A bare "67 modules" was never wrong so much as
+underspecified, and underspecified is how two figures come to be compared that were never measuring
+the same thing.
+
+### What the guard is now
+
+Seventy-four files across four roots, pinned by path and content digest, **covering what the loaders
+READ rather than what compiles** — a change that made a skipped file usable would move every figure,
+which is exactly the change most worth catching.
+
 ## 2026-08-28 — [v0.3.0] Building a guard for one thing found the population was wrong
 
 **THE INTENDED WORK WAS SMALL**: turn the "corpus inputs touched?" habit into a check, because

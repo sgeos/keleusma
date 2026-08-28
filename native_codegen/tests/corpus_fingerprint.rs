@@ -21,19 +21,44 @@
 //!
 //! # What this does NOT cover, said plainly
 //!
-//! Only the two directories named below. A figure derived from anything else —
-//! the instruction set, the reference compiler's behaviour, the arena — is
-//! outside this guard, and describing it as protecting those would be the same
-//! overclaim this file exists to prevent.
+//! Only the roots named below. A figure derived from anything else — the
+//! instruction set, the reference compiler's behaviour, the arena — is outside
+//! this guard, and describing it as protecting those would be the same overclaim
+//! this file exists to prevent.
+//!
+//! **It covers what the loaders READ, not only what compiles.** Several of these
+//! files are skipped because they are not standalone programs; a change that made
+//! one compile would move every figure, so watching only the compiling subset
+//! would miss exactly the change most worth catching.
 
 use std::collections::BTreeMap;
 
 /// The corpus roots this line's figures are derived from, relative to
 /// `native_codegen/`.
-const CORPUS_DIRS: [&str; 3] = [
+///
+/// # ⚠ DERIVED FROM WHAT THE CONSUMERS READ, AFTER GETTING IT WRONG
+///
+/// The first version listed three roots. **The censuses that produce the
+/// published figures read four** — `spike_corpus_coverage`, `isa_lowering_census`
+/// and `bound_transfer` all include `examples/rtos/scripts` and `compiler/kel`,
+/// seven further files that were read and unguarded.
+///
+/// **That was the third occurrence of one defect at three granularities**: the
+/// `v0.2.3` line pinned a value whose input was a directory scan; this line then
+/// scanned three named directories where the loaders recurse, finding 57 files
+/// against 67; and then this guard, built from that lesson, covered three roots
+/// where the consumers read four. **Each time the watched population was
+/// narrower than the one that mattered, and each time the narrow scan returned a
+/// well-formed answer**, which is what made it invisible.
+///
+/// `examples/scripts/rogue` is deliberately absent: it is reached by recursion
+/// from its parent, and listing it as well is what made three other tests count
+/// that directory twice.
+const CORPUS_DIRS: [&str; 4] = [
     "../examples/scripts",
-    "../examples/scripts/rogue",
     "../src/selfhost/kel",
+    "../examples/rtos/scripts",
+    "../compiler/kel",
 ];
 
 /// FNV-1a, 64-bit.
@@ -191,6 +216,16 @@ fn the_corpus_is_what_the_pinned_figures_were_measured_against() {
 /// Name and content digest of every corpus file, as measured when the figures
 /// recorded in `docs/process/handoffs/v0.3.0.md` were last re-derived.
 const PINNED: &[(&str, u64)] = &[
+    ("compiler/kel/prelude.kel", 0x07c8e691e07a309e),
+    (
+        "examples/rtos/scripts/event_listener.kel",
+        0xcdf3885366c16d9c,
+    ),
+    ("examples/rtos/scripts/faulty.kel", 0x7e4a2f5eb8bd4428),
+    ("examples/rtos/scripts/heartbeat.kel", 0x0432d77ccc9ead65),
+    ("examples/rtos/scripts/led.kel", 0xec5852a463777501),
+    ("examples/rtos/scripts/prelude.kel", 0xb11ce5cf74544397),
+    ("examples/rtos/scripts/sensor.kel", 0xf4e298fe169921d2),
     ("examples/scripts/01_arithmetic.kel", 0x1492d4e670de0e64),
     ("examples/scripts/02_struct_field.kel", 0x5228c096fbca5168),
     ("examples/scripts/03_enum_match.kel", 0x9e40886c7db29964),
@@ -364,3 +399,101 @@ const PINNED: &[(&str, u64)] = &[
     ("src/selfhost/kel/verify_yield.kel", 0x1c55b51d5809ae0f),
     ("src/selfhost/kel/wire.kel", 0x80f6fe6dc89c9112),
 ];
+
+/// **WHY TWO CENSUSES OVER DIFFERENT POPULATIONS REPORT THE SAME TOTAL.**
+///
+/// `spike_corpus_coverage` reads four roots; `interproc_yield_escape` reads the
+/// three under `examples/` and `src/`. Both report **1074 chunks**, and an
+/// earlier increment recorded that agreement as "a cross-check that had not
+/// existed". **That was overstated**: two measurements over different populations
+/// agreeing is not corroboration until the difference is shown to contribute
+/// nothing.
+///
+/// # The first explanation offered here was also wrong
+///
+/// It said the extra files are "not standalone programs, so they do not
+/// compile". **Two of the seven do compile**, both named `prelude.kel`. The test
+/// asserting otherwise failed, which is the only reason this paragraph is right
+/// rather than plausible.
+///
+/// **The actual reason is that they compile to ZERO CHUNKS.** A prelude declares;
+/// it has no function bodies to emit. So they enter the module list and add
+/// nothing to any chunk total, and the two censuses agree because the extra roots
+/// contribute no chunks — **not** because they contribute no modules, and **not**
+/// because the populations coincide.
+///
+/// **The module counts do differ**, and any figure quoted as "modules" from a
+/// four-root census is two higher than one from a three-root census. That is a
+/// real difference and it is stated rather than smoothed over.
+#[test]
+fn the_extra_roots_add_modules_but_no_chunks() {
+    use keleusma::compiler::compile;
+    use keleusma::lexer::tokenize;
+    use keleusma::parser::parse;
+
+    let extra = ["../examples/rtos/scripts", "../compiler/kel"];
+    let mut read = 0usize;
+    let mut compiled: Vec<(String, usize)> = Vec::new();
+    for d in extra {
+        let Ok(rd) = std::fs::read_dir(d) else {
+            continue;
+        };
+        for e in rd.filter_map(|e| e.ok()) {
+            let p = e.path();
+            if !p.extension().is_some_and(|x| x == "kel") {
+                continue;
+            }
+            read += 1;
+            let Ok(src) = std::fs::read_to_string(&p) else {
+                continue;
+            };
+            if let Some(m) = tokenize(&src)
+                .ok()
+                .and_then(|t| parse(&t).ok())
+                .and_then(|a| compile(&a).ok())
+            {
+                compiled.push((
+                    format!(
+                        "{}/{}",
+                        d.trim_start_matches("../"),
+                        p.file_name().unwrap().to_string_lossy()
+                    ),
+                    m.chunks.len(),
+                ));
+            }
+        }
+    }
+
+    println!("\n================ WHAT THE EXTRA ROOTS CONTRIBUTE");
+    println!("  files read only by the four-root loaders : {read}");
+    println!(
+        "  of those, compiling standalone           : {}",
+        compiled.len()
+    );
+    for (n, c) in &compiled {
+        println!("    {n} -> {c} chunk(s)");
+    }
+    println!(
+        "\n  So a four-root census sees {} MORE MODULES than a three-root one and\n  \
+         the SAME number of chunks. That is why both report 1074, and it is a\n  \
+         weaker fact than the corroboration an earlier increment claimed.\n================\n",
+        compiled.len()
+    );
+
+    assert!(
+        read > 0,
+        "the extra roots hold no files at all, so this explains nothing"
+    );
+    assert!(
+        !compiled.is_empty(),
+        "nothing in the extra roots compiles, which would be a different \
+         explanation from the one recorded here"
+    );
+    let total_chunks: usize = compiled.iter().map(|(_, c)| *c).sum();
+    assert_eq!(
+        total_chunks, 0,
+        "the extra roots now contribute {total_chunks} chunk(s), so a four-root \
+         and a three-root census can no longer report the same chunk total and \
+         every such figure needs re-deriving with its population named"
+    );
+}

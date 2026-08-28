@@ -239,6 +239,24 @@ Current sprint source of truth.
 > **THREE CHECKS WRITTEN THIS SESSION COULD NOT FAIL**, each satisfied by a different part of a
 > document from the one it was about. Mutation caught all three; reading caught none.
 
+> **Currency note (2026-08-28, V0.3.X line, eleventh entry). THE SAME DEFECT A THIRD TIME, AND A
+> CORROBORATION THAT WAS NOT ONE.**
+>
+> The corpus guard shipped last entry covered **three roots where its consumers read four**, leaving
+> seven files unwatched. That is one defect at three granularities in three consecutive increments: a
+> pin whose input was a directory scan; a scan of three named directories where the loaders recurse;
+> and a guard whose roots were narrower than its consumers'. **Each time the watched population was
+> narrower than the one that mattered, and each time the narrow scan returned a well-formed answer.**
+>
+> The tenth entry's claim that the fix "produced a cross-check" is **corrected**: the two censuses
+> read different root sets, so their agreement was not corroboration. The first explanation offered
+> here — that the extra files do not compile — was **also wrong**, and its test failed: two of the
+> seven do compile, both preludes, and they compile to **zero chunks**. So a four-root census sees two
+> more modules and the same chunk total. **Quote the population with the number**: three-root loaders
+> see 67 modules, four-root censuses 69, and both see 1074 chunks. The guard now pins **74 files
+> across four roots**, covering what the loaders read rather than what compiles. `native_codegen`
+> **347/0/67** clean; censuses unchanged at **61 of 66**, **1070 of 1074**, **89841 of 89940**.
+
 > **Currency note (2026-08-28, V0.3.X line, tenth entry). THE CORPUS POPULATION WAS NEVER 91; IT IS
 > 67, AND A CORPUS CHANGE NOW ANNOUNCES ITSELF.**
 >

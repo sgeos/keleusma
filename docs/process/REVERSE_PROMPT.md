@@ -147,6 +147,22 @@ soundness item: **the yield-escape refusal is still shadowed**, because the esca
 refused — now asserted by a test rather than inferred. One gap named and not fixed: a tail-yielded
 composite lowers and nothing in the tree executes it.
 
+**The guard I built last time was itself too narrow, which makes three in a row.** It watched three
+source roots; the censuses that produce the figures read four, so seven files were read and unguarded.
+The same defect has now appeared at three granularities in three increments — a pin whose input was a
+directory scan, a scan of three directories where the loaders recurse, and a guard whose roots were
+narrower than its consumers'. **Each time the narrow scan returned a well-formed answer**, which is
+what makes it invisible. The rule I take from it is to derive the scope from what the consumers read,
+never from a list that looks right.
+
+**And a claim I made last time did not survive checking.** I told you the fix produced a cross-check,
+two censuses agreeing at 1074 chunks. They read different root sets, so that was not corroboration.
+My first explanation for the agreement was wrong too, and its test failed: I said the extra files do
+not compile, and two of them do — both preludes, which compile to **zero chunks**. So a four-root
+census sees two more modules and the same chunk total. The agreement is real and weaker than I said,
+and the module counts do differ: 67 against 69. **Quote the population with the number** is the
+correction that generalises.
+
 **I set out to build a small guard and found one of my own numbers was wrong.** Thirty-six test files
 here read directories the other line owns, so I wanted the habit of checking them turned into a check.
 While doing it I found that three test files I wrote this session listed the rogue directory
