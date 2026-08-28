@@ -147,6 +147,22 @@ soundness item: **the yield-escape refusal is still shadowed**, because the esca
 refused — now asserted by a test rather than inferred. One gap named and not fixed: a tail-yielded
 composite lowers and nothing in the tree executes it.
 
+**I tested a claim I had made rather than trading on it, and it was half wrong.** Last time I observed
+that three investigations converged on one instruction and wrote that the corpus's awkward cases
+cluster. That went into two documents as a finding before anyone counted. Counting over all 69 modules
+and six properties: **42 hold none**, and only two modules hold three or more.
+
+**One module is a genuine outlier** — `14_frame_log.kel`, four of six properties, more than any other,
+and measured rather than inferred from how often I looked at it. **The other one is not.**
+`12_sensor_window.kel` holds two, tied with five more, and pairing them was selection by attention:
+they appeared together in my notes because I investigated them together. One of the six properties
+turned out not to be a marker at all — *returns a composite* is held by 17 of 69, so weighting it
+would have sent work at a seventh of the corpus while feeling selective.
+
+**The reusable part**: "these keep showing up in my notes" is evidence about the notes. Only counting
+over everything, including what was never examined, separates attention from structure — and 42
+modules holding nothing is a fact no amount of re-reading would have produced.
+
 **The half I deliberately left unverified last time was not merely stale — it was false.** The claim
 was that no composite in the corpus is slot-homed. One is: `14_frame_log.kel` constructs a composite
 and stores it into a private data slot. Two independent methods agree on it, and a must-fire control

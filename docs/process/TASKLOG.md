@@ -239,6 +239,25 @@ Current sprint source of truth.
 > **THREE CHECKS WRITTEN THIS SESSION COULD NOT FAIL**, each satisfied by a different part of a
 > document from the one it was about. Mutation caught all three; reading caught none.
 
+> **Currency note (2026-08-28, V0.3.X line, fourteenth entry). THE CLUSTERING CLAIM WAS HALF RIGHT,
+> AND THE HALF THAT WAS WRONG CAME FROM SELECTION BY ATTENTION.**
+>
+> The thirteenth entry ended by observing that three investigations converged on one instruction,
+> "which suggests the corpus's awkward cases cluster" — a hypothesis stated as a finding, in two
+> documents, before anyone counted. Measured over the four-root corpus's **69 modules** and six
+> properties the backend cares about for independent reasons: **42 hold none**, 19 hold one, 6 hold
+> two, one holds three, and one holds four.
+>
+> **`14_frame_log.kel` is a genuine outlier**, four of six, more than any other module, and that is
+> measured rather than an artefact of how often it was examined. **`12_sensor_window.kel` is not** —
+> it holds two, tied with five others, and pairing the two was selection by attention. **One property
+> is not a marker at all**: *returns a composite* is held by 17 of 69, so weighting it would have
+> pointed work at a seventh of the corpus while feeling selective. The reusable lesson is that "these
+> keep showing up in my notes" is evidence about the notes, and only counting over everything —
+> including what was never looked at — separates attention from structure. `native_codegen`
+> **353/0/70** clean; censuses unchanged at **61 of 66**, **1070 of 1074**, **89841 of 89940**.
+> See [`../decisions/AWKWARD_CLUSTERING_BRIEF.md`](../decisions/AWKWARD_CLUSTERING_BRIEF.md).
+
 > **Currency note (2026-08-28, V0.3.X line, thirteenth entry). THE HALF LEFT UNVERIFIED WAS FALSE,
 > AND THE MODEL IT SUPPORTED SURVIVES ANYWAY.**
 >
