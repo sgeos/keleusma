@@ -13,6 +13,49 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-28 — A census whose population moved under it, reported by the other line
+
+**THE `v0.3.0` LINE REPORTED ONE OF MY TESTS RED ON THEIR BRANCH, WITH THE CAUSE ESTABLISHED AND
+THE OWNER NAMED, AND DECLINED TO EDIT IT.** They hold `src/` and `tests/` byte-identical to
+`v0.2.3` as an invariant and said editing another line's test would destroy the property that makes
+their ownership checks meaningful. That was the right call.
+
+**VERIFIED RATHER THAN TAKEN ON TRUST, AND CORRECT IN EVERY PARTICULAR.** Six witness programs
+exist only on their branch; `opcode_witness.kel`'s `byte_mix` does `Byte` addition, subtraction and
+multiplication, which lower to the unchecked forms and cover `addop`, `subop`, `mulop`. Its
+`-prod` lowers to `Op::Neg`, which is not one of the sixty-three stage tags at all, so `checkedneg`
+survives as their sole residue.
+
+**THE DEFECT'S SHAPE IS THE TRANSFERABLE PART: THE TEST'S INPUT LIVED OUTSIDE THE REGION ITS
+EXPECTATION WAS PINNED IN.** It scanned a directory for every `*.kel` while pinning the answer as a
+constant in the test file. **A directory scan is not a corpus; it is whatever the branch happens to
+contain.** An invariant over `src/` and `tests/` cannot protect a test whose inputs are in neither.
+
+The population is now fifteen NAMED programs present on both lines, so the exact-set assertion
+keeps BOTH directions without depending on which branch runs it. **Verified by copying their six
+witnesses into this tree and re-running**: it passes at twenty-one examples exactly as at fifteen.
+
+**AND I ALMOST SHIPPED A GUARD THAT COULD NOT FIRE, WHILE FIXING A DIFFERENT DEFECT IN THE SAME
+TEST.** The first fix also scanned the real directory and asserted its residue was a SUBSET of the
+named one, as a net surviving extra files. Once the existence check passes, the directory is a
+SUPERSET of the named files, so it exercises at least as many operations and the subset holds by
+construction — the assertion could never fail. Removed, with the reasoning left in the file.
+
+**That is the class this repository has recorded most often, and it arrived by the least expected
+route: not in the guard being written for its own sake, but as a bonus net bolted onto a repair.**
+The repair is where the incentive to stop looking is strongest, which this line already wrote down
+once about validating a fix with the method that found the defect.
+
+**A CORRECTION OFFERED BACK.** Their pushed `origin/v0.3.0` does not contain this test at all —
+their absorption is ahead of their published ref. Their quoted values match my constant exactly so
+they plainly have it locally; it is flagged only because anyone checking the report against the
+published ref would find the test missing and could read that as a disagreement.
+
+**AND A FINDING FOR THEM, OUT OF VERIFYING THEIRS.** `Op::Neg` exists in the instruction set and
+the self-hosted codegen assigns it no tag. Byte negation is therefore OUTSIDE the self-hosted
+subset rather than merely unexercised — a different statement from the one the census makes about
+`checkedneg`, and one that may matter to their lowering census.
+
 ## 2026-08-28 — The occurrences move, and both exclusions were measured rather than assumed
 
 **ORDER 1 ITEM 3 IS AT FOUR OF FIVE.** `occurrence_rows_from_pipeline` carries the name
