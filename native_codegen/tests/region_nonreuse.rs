@@ -28,6 +28,50 @@
 //! manufactured.** A safety property whose only enforcement is a comment, in a
 //! codebase being pushed toward violating it, is worth an increment.
 //!
+//! # ⚠⚠ SCOPE, SECOND AND MORE IMPORTANT AXIS: STATIC SITES, NOT ITERATIONS
+//!
+//! **This guard checks that two DISTINCT STATIC SITES never share storage. It
+//! does NOT establish that the backend "never reuses", and describing it that way
+//! is wrong.**
+//!
+//! A single site inside a loop writes **the same offset on every iteration** —
+//! stated in this file's own header above as the reason the memory hazard cannot
+//! fire, and true. **That IS reuse**, in the sense the composite-region-reuse
+//! proof and this line's own obligation document mean by the word.
+//!
+//! `docs/proofs/COMPOSITE_REGION_REUSE.md` §4.1.1, established against the
+//! runtime by the `v0.2.3` line:
+//!
+//! > *"**So slot reuse across iterations is UNSOUND TODAY for any composite that
+//! > leaves its iteration by `yield`.** This is the live-defect branch, not the
+//! > benign one. It is not caught by the epoch guard…"* — a yielded composite is
+//! > a handle, an overwrite in place advances no epoch, so `resolve` **succeeds**
+//! > and returns iteration n+1's bytes to a host that asked for iteration n's. **A
+//! > silent wrong value, not a `Stale` error.**
+//!
+//! **So the proof's Appendix D row "backend stops reusing slots of unconfined or
+//! unseparated sites" is NOT discharged by this guard.** Two different properties:
+//!
+//! | property | status |
+//! |---|---|
+//! | distinct static sites never share storage | **TRUE, enforced here** |
+//! | a loop site does not reuse across iterations when its value escapes | **FALSE — it reuses unconditionally** |
+//!
+//! **This line asserted the row was discharged, on 2026-08-27, and that was
+//! wrong.** The claim conflated the two axes. Corrected here and to the proof
+//! line.
+//!
+//! **What IS still true**: the memory bound. Same offset every iteration means no
+//! per-iteration growth, so the ephemeral-arena leak cannot occur. **Bounded
+//! memory and correct aliasing are different guarantees**, and only the first
+//! follows from same-offset reuse.
+//!
+//! **No corpus module is known to have the escaping shape** — the obligation
+//! document says so, and the loop census's "disqualified by `Yield`: 1" is an
+//! UPPER BOUND on escape ("cannot rule out"), not a demonstration that a value
+//! escapes. Those are consistent, and the difference is exactly the bound
+//! direction this line keeps having to restate.
+//!
 //! # ⚠ SCOPE: WITHIN a chunk, and NOT across chunks
 //!
 //! Offsets are planned **per chunk from zero**, so two chunks' regions can
