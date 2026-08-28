@@ -8,7 +8,61 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ---
 
-## Last Updated
+## ⚠ TWO LINES SHARE THIS FILE — READ BOTH SECTIONS
+
+The protocol says overwrite this file each session. **I did not.** The report below the V0.3.X
+section is the `v0.2.3` line's, written at `b725c1f2`, and it is current for that line. Overwriting
+it would have destroyed a channel this line does not own. **This choice is stated rather than made
+silently**, so the next reader knows the deviation is deliberate.
+
+The V0.3.X line's full resume prompt is [`handoffs/v0.3.0.md`](./handoffs/v0.3.0.md), which is
+self-contained and carries the ancestry check. What follows is only the bounded summary.
+
+---
+
+## V0.3.X — native code generation, 2026-08-27, `origin/v0.3.0` at `9c87f24e`
+
+**Verification.** `native_codegen` **306 passed, 0 failed, 58 binaries**; the main workspace
+**2459 passed, 0 failed, 87 binaries**. Both figures read cargo's own exit status **and** the summed
+per-binary counts, and the two agree. `native_codegen/` is a detached workspace **not built by CI**,
+so this local suite is its only gate. Measured at `1a228270`, whose tree hash is identical to the
+stamped commit's, so the figures transfer by construction.
+
+> **Run the two suites SEQUENTIALLY.** In parallel they invalidate the workspace perf canary —
+> 69.04s under concurrent load against a 30s tripwire, 1.20s alone. A 57x false red.
+
+**The increment.** The Order-1 differential gate now seeds **12 of 12 stage sources, 0 unseeded**
+(was 3 unseeded), at **2460 comparisons**; the last three seeded without the read-only accessors
+previously assumed to be the only route. `FixedDiv` lowers, taking the backend to **61 of 66
+opcodes** and **1070 of 1074 corpus chunks, 99.6%**. Every remaining opcode is accounted for by
+name. Static-site region non-reuse is now **enforced by a test on ranges**, not merely documented.
+
+**One concern, stated plainly, and it is the reason to read the handoff before touching the
+planner.** The backend reuses a loop site's slot across iterations **unconditionally**, with no
+reference to whether the previous value escaped. For a composite that leaves its iteration by
+`yield`, that is **unsound**: the value is a handle, an in-place overwrite advances no epoch,
+`resolve` succeeds, and the host silently receives the wrong iteration's bytes. **This is required
+for soundness and is NOT discharged.** It is latent only because no corpus module has the shape —
+a fact about the corpus, not about the backend. I earlier told the proof line this obligation was
+discharged, having conflated static-site disjointness (true) with cross-iteration reuse (false);
+that was retracted and their record stands as written.
+
+**The design tension worth the operator's attention**: discharging it requires the region planner to
+consume a confinement verdict, and consuming no verdict is exactly why a wrong verdict cannot
+miscompile anything today. Both properties cannot be had for free.
+
+**Three items are blocked on the operator and none is actionable here**: the `Fixed` shared-slot ABI
+(preference B > A > C, but the recommendation now splits on whether cross-language interop should be
+convention-based or self-describing — the measured facts are that the scale `N` is absent from every
+host-visible surface and the width is build-dependent); the float entry ABI, which was ruled to
+settle alongside it; and the git-topology mechanism, which is formally unruled here but no longer
+contested, since both operators' actual words were a merge and seventeen absorptions have used one.
+
+**Next**: absorption 18, three commits from `v0.2.3` (#304), measured alone.
+
+---
+
+## Last Updated (v0.2.3 line)
 
 **Date**: 2026-08-27 (session 55) — `wire.kel` self-compiles byte-identically. The corpus is
 eleven stages.

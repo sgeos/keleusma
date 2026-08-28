@@ -103,6 +103,38 @@ Current sprint source of truth.
 > **THREE CHECKS WRITTEN THIS SESSION COULD NOT FAIL**, each satisfied by a different part of a
 > document from the one it was about. Mutation caught all three; reading caught none.
 
+> **Currency note (2026-08-27, V0.3.X line). NATIVE CODE GENERATION REACHES 61 OF 66 OPCODES, AND
+> ONE SOUNDNESS OBLIGATION IS OPEN.**
+>
+> The `native_codegen/` backend lowers **61 of 66 opcodes**, covering **1070 of 1074 corpus chunks
+> (99.6%)**. Every remaining opcode is accounted for by name: 1 refused (`Len`, whose blocker was
+> re-checked against `for .. limit` and **holds**), 2 float-refused pending the operator's float
+> entry ABI, 1 never visited (`Reset`), 1 without a corpus witness. The Order-1 differential gate
+> seeds **12 of 12 stage sources, 0 unseeded**, at 2460 comparisons. `native_codegen` is a detached
+> workspace **not built by CI**; its local suite (306 passed, 0 failed, 58 binaries, alongside the
+> workspace's 2459/0/87) is its only gate, and the two suites must be run **sequentially** or the
+> workspace perf canary reports a 57x false red.
+>
+> **OPEN AND NOT DISCHARGED: cross-iteration slot reuse is unsound for composites that escape by
+> `yield`.** The backend reuses a loop site's slot every iteration unconditionally, with no reference
+> to escape. An in-place overwrite advances no epoch, so `resolve` succeeds and the host silently
+> receives the wrong iteration's bytes -- a wrong value, not a `Stale` error. It is latent only
+> because no corpus module has the shape, which is a fact about the corpus rather than the backend;
+> `docs/proofs/COMPOSITE_REGION_REUSE.md` §4.1 holds a triggering program in full. **This line
+> earlier reported the obligation discharged, having conflated static-site disjointness (true, and
+> now enforced by a test on ranges) with cross-iteration reuse (false). Retracted.**
+>
+> **The tension, which is the real decision**: discharging it requires the region planner to consume
+> a confinement verdict, and consuming none is precisely why a wrong verdict cannot miscompile
+> anything today.
+>
+> **Blocked on the operator, all three unactionable here**: the `Fixed` shared-slot ABI, where the
+> recorded preference B > A > C now splits on whether cross-language interop should be
+> convention-based or self-describing -- measured, the scale `N` is absent from every host-visible
+> surface (`Fixed<16>` and `Fixed<8>` are byte-identical) and the width is build-dependent; the float
+> entry ABI, ruled to settle alongside it; and the git-topology mechanism, formally unruled but no
+> longer contested. Full detail in [`handoffs/v0.3.0.md`](./handoffs/v0.3.0.md).
+
 > **Currency note (2026-08-24). A LANGUAGE DECISION IS ON THE RECORD FOR V0.3.0.**
 >
 > [`docs/decisions/YIELD_OWNERSHIP_MODE.md`](../decisions/YIELD_OWNERSHIP_MODE.md). **Accepted in
