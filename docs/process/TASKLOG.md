@@ -239,6 +239,26 @@ Current sprint source of truth.
 > **THREE CHECKS WRITTEN THIS SESSION COULD NOT FAIL**, each satisfied by a different part of a
 > document from the one it was about. Mutation caught all three; reading caught none.
 
+> **Currency note (2026-08-28, V0.3.X line, sixteenth entry). NAMES AUDITED AGAINST BODIES: 2 OF 11
+> OVERCLAIMED, AND THE RATE IS A LOWER BOUND.**
+>
+> The same defect had appeared three increments running — a name asserting more than its body checks.
+> The audited set was **defined by rule before being audited**, so it could not be the tests that came
+> to mind: `#[test]` functions whose name opens with a universal or negative quantifier, **11 of 325**.
+> **Two overclaimed, nine were sound**, the nine iterating their full population or a complete operator
+> set with several carrying non-vacuity guards.
+>
+> Both repairs chose a direction rather than defaulting to the cheap one, since weakening a name
+> silently reduces what the suite proves. *"Every coroutine intrinsic is declarable"* became **the
+> intrinsics this backend would need**, the narrower claim being the useful one. *"Each float
+> conversion is refused by name"* became **the pair is refused at the first of the two**, and the body
+> was deliberately not strengthened: a program emitting `FloatToInt` alone needs a float arriving
+> without a signature or a constant, and both routes are guarded, so **the strong claim is unreachable
+> rather than unproven**. **The rate is a lower bound** — the rule sees leading quantifiers only, and
+> the canary defect fixed earlier today would not have been caught by it. `native_codegen`
+> **353/0/70** clean; censuses unchanged at **61 of 66**, **1070 of 1074**, **89841 of 89940**.
+> See [`../decisions/NAME_VERSUS_BODY_BRIEF.md`](../decisions/NAME_VERSUS_BODY_BRIEF.md).
+
 > **Currency note (2026-08-28, V0.3.X line, fifteenth entry). THE INSTRUMENT THAT REPLACED A BELIEF
 > HAD A PROXY THAT OVERCLAIMED, AND THERE IS NO UNIQUE OUTLIER.**
 >

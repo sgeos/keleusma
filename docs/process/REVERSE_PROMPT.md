@@ -147,6 +147,23 @@ soundness item: **the yield-escape refusal is still shadowed**, because the esca
 refused — now asserted by a test rather than inferred. One gap named and not fixed: a tail-yielded
 composite lowers and nothing in the tree executes it.
 
+**I stopped meeting the same defect by accident and measured how often it occurs.** Three increments
+running, the finding was a name asserting more than its body checks. So I defined a set by rule before
+auditing it — test functions whose name opens with a universal or negative quantifier, **11 of 325** —
+and read every one. **Two overclaimed; nine were sound.**
+
+Both repairs picked a direction rather than defaulting to the cheap one, because weakening a name
+quietly reduces what the suite proves. One became a narrower claim that is also the more useful one.
+The other I deliberately did **not** strengthen: a program reaching the second float conversion alone
+would need a float arriving without a signature or a constant, and both routes are guarded, so the
+strong claim is **unreachable rather than unproven** — and the honest name now records that fact about
+the guard.
+
+**The rate is a lower bound and I would rather say so**: the rule sees leading quantifiers only, and
+the canary defect I fixed earlier today would not have been caught by it. Two of eleven measures one
+recognisable shape of the habit, not the habit — but that is worth considerably more than "I keep
+finding these", which is what this claim amounted to an hour ago.
+
 **The instrument I built last time to replace a belief with counting was itself wrong about the module
 it singled out.** I reported `14_frame_log.kel` as a unique outlier holding four of six properties.
 Reading it shows its entry is `loop main(tick: Word) -> Word` — **it yields a Word**. The property I

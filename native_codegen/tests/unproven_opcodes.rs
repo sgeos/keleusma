@@ -114,7 +114,18 @@ fn reset_is_reachable_and_its_module_lowers() {
 /// Each float conversion, asked separately, so one refusal does not stand in for
 /// the other.
 #[test]
-fn each_float_conversion_is_refused_by_name() {
+fn the_float_conversion_pair_is_refused_at_the_first_of_the_two() {
+    // **RENAMED from "each float conversion is refused BY NAME".** The body runs
+    // one program, which emits both conversions, and the backend names only
+    // `IntToFloat` because lowering stops at the first refusal. `FloatToInt` is
+    // **unreached behind it**, which is a different fact.
+    //
+    // **The body was not strengthened instead, and that is the finding.** A
+    // program emitting `FloatToInt` alone would need a float to arrive without
+    // one appearing in a signature or a constant, and both routes are guarded —
+    // measured in `whether_a_float_conversion_reaches_the_backend`. So the strong
+    // claim is not merely unproven here; it is unreachable while the float guard
+    // stands.
     let cases = [(
         "IntToFloat",
         "fn main(x: Word) -> Word { (x as Float) as Word }",

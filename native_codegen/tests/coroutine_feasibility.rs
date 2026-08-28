@@ -36,7 +36,13 @@ fn host_machine() -> TargetMachine {
 }
 
 #[test]
-fn every_coroutine_intrinsic_is_declarable_through_the_bindings() {
+fn the_coroutine_intrinsics_this_backend_would_need_are_declarable() {
+    // **RENAMED from a claim about EVERY coroutine intrinsic.** The body iterates
+    // nine named ones; LLVM defines more (`coro.alloc`, `coro.promise`,
+    // `coro.save`, `coro.noop` among them), so "every" asserted more than a fixed
+    // list can show. **The narrower claim is also the useful one** — what matters
+    // is whether the intrinsics a suspension lowering would need are reachable
+    // through the bindings, not whether the list is exhaustive.
     // The concern this settles. Every intrinsic that opens or closes a coroutine
     // traffics in LLVM's `token` type: `llvm.coro.id` RETURNS one, and
     // `llvm.coro.suspend` and `llvm.coro.end` CONSUME one. inkwell has no

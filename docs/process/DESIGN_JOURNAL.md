@@ -277,6 +277,43 @@ two-segment form, which genuinely differs, and it fired with its own message.
 kinds is missing from its probes, and removing the structs makes it fail with that message. The
 previous slice learned this the hard way: a guard whose corpus lacks a construct is a guard for a
 different question.
+## 2026-08-28 — [v0.3.0] Two of eleven: the habit measured instead of met again
+
+**THE SAME DEFECT HAD APPEARED THREE INCREMENTS RUNNING** — a test named for a canary firing whose
+body never fired it, a guard whose watched population was narrower than its subject at three
+granularities, and a property named *"yields a composite"* that tested co-occurrence. Three
+occurrences is enough to stop discovering it by accident.
+
+**The set was defined by rule before being audited**, so it could not be the tests that came to mind:
+`#[test]` functions whose name opens with a universal or negative quantifier. **11 of 325.**
+
+**Result: 2 overclaimed, 9 sound.** The nine iterate their full population or a complete operator set,
+several carrying explicit non-vacuity guards.
+
+### Both repairs chose a direction
+
+**Weakening a name is the cheap repair and it silently reduces what the suite proves**, so each was
+decided on its own terms.
+
+- *"every coroutine intrinsic is declarable"* iterates nine; LLVM defines more. Renamed to **the
+  intrinsics this backend would need** — the narrower claim is also the one worth having, since what
+  matters is reachability of what a suspension lowering needs, not exhaustiveness of a list.
+- *"each float conversion is refused by name"* runs one program that emits both, and only
+  `IntToFloat` is named because lowering stops at the first refusal. **The body was not strengthened,
+  and the reason is the finding**: a program emitting `FloatToInt` alone would need a float arriving
+  without a signature or a constant, and both routes are guarded. **The strong claim is unreachable
+  while the float guard stands** — so the honest name records a fact about the guard, not a gap in
+  the test.
+
+### The rate is a lower bound, and saying so matters
+
+The rule catches leading quantifiers. **The canary defect fixed earlier this session would not have
+been caught by it** — that name began with "the". So 2 of 11 measures one recognisable shape of the
+habit, not the habit.
+
+**A rate with a stated blind spot is still worth far more than "I keep finding these"**, which was the
+standing of this claim an hour ago.
+
 ## 2026-08-28 — [v0.3.0] The instrument built to replace a belief had a proxy that overclaimed
 
 **THE PREVIOUS ENTRY BUILT A DISTRIBUTION TO REPLACE AN ATTENTION-DRIVEN CLAIM WITH COUNTING.**
