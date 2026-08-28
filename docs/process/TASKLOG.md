@@ -239,6 +239,25 @@ Current sprint source of truth.
 > **THREE CHECKS WRITTEN THIS SESSION COULD NOT FAIL**, each satisfied by a different part of a
 > document from the one it was about. Mutation caught all three; reading caught none.
 
+> **Currency note (2026-08-28, V0.3.X line, thirteenth entry). THE HALF LEFT UNVERIFIED WAS FALSE,
+> AND THE MODEL IT SUPPORTED SURVIVES ANYWAY.**
+>
+> The twelfth entry corrected a stale denominator and deliberately left the numerator — the claim that
+> no corpus composite is slot-homed. **Measured, it is false.** `14_frame_log.kel::main` constructs at
+> op 24 and stores into a private data slot at op 25, and **two independent methods agree**: a
+> producer walk over the instruction stream, and the module's own `private_composite_layout` and
+> `persistent_composite_bytes`. A must-fire control proves neither method is blind. **The prediction
+> written before measuring was zero.**
+>
+> **`region.rs`'s placement model survives for a specific reason**: the planner does place op 24, so
+> the construction is a temporary whose value is subsequently copied into the slot. No body lives only
+> in a slot. "Constructed as a temporary" and "copied into persistent storage" are compatible, and the
+> old sentence conflated them — a false sentence and a sound model in one paragraph. Leaving the half
+> would have been worse than leaving the whole sentence stale, because a freshly verified half reads
+> as verifying the rest. `native_codegen` **352/0/69** clean; censuses unchanged at **61 of 66**,
+> **1070 of 1074**, **89841 of 89940**.
+> See [`../decisions/SLOT_HOMED_BRIEF.md`](../decisions/SLOT_HOMED_BRIEF.md).
+
 > **Currency note (2026-08-28, V0.3.X line, twelfth entry). 239 WAS A CARRIED NUMBER, AND WHAT MAKES
 > A CROSS-CHECK VALID IS NOW STATED.**
 >

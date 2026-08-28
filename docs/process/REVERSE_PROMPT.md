@@ -147,6 +147,21 @@ soundness item: **the yield-escape refusal is still shadowed**, because the esca
 refused — now asserted by a test rather than inferred. One gap named and not fixed: a tail-yielded
 composite lowers and nothing in the tree executes it.
 
+**The half I deliberately left unverified last time was not merely stale — it was false.** The claim
+was that no composite in the corpus is slot-homed. One is: `14_frame_log.kel` constructs a composite
+and stores it into a private data slot. Two independent methods agree on it, and a must-fire control
+shows neither is blind. **I wrote the prediction down first and it was wrong**, which is the only
+reason being wrong was cheap.
+
+**The model it supported survives, for a reason I had to check rather than hope.** The planner does
+place that construction in the chunk region, so it is a temporary whose value is *copied* into the
+slot afterwards — no body lives only in a slot. "Constructed as a temporary" and "copied into
+persistent storage" are compatible, and the old sentence conflated them: a false sentence and a sound
+model in the same paragraph.
+
+**Finishing it mattered more than leaving it would have.** A claim with one freshly verified half
+reads as verified throughout, and the half I left behind was the false one.
+
 **I now have a clean statement of what a cross-check is, and I got there by building a bad one first.**
 The tree carried two numbers for one quantity — composite construction sites as 239 in one file and
 256 in another — and a count over 35 chunks cannot exceed a corpus-wide count. **239 turned out to

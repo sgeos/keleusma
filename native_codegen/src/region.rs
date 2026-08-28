@@ -27,9 +27,23 @@
 //! and by a raw scan of the instruction stream (`site_count_agreement.rs`). A
 //! three-root walk reports a different number about a different set.
 //!
-//! **The "0 slot-homed" half is NOT re-derived here and is not restated as
-//! fact.** It needs its own walk, and asserting it on the strength of the stale
-//! sentence it came from would be the same error one level down.
+//! # The "0 slot-homed" half, now measured — and it was FALSE
+//!
+//! **One corpus composite does reach a private data slot**: `14_frame_log.kel`,
+//! whose `main` constructs at op 24 and stores at op 25. Two independent methods
+//! agree — a producer walk over the instruction stream, and the module's own
+//! `private_composite_layout` and `persistent_composite_bytes`. The expectation
+//! written before measuring was zero.
+//!
+//! **THE MODEL BELOW SURVIVES, AND THE REASON IS SPECIFIC.** The planner DOES
+//! place op 24 in the chunk region, so the construction is a **temporary whose
+//! value is subsequently copied** into the slot. No body lives only in a slot, so
+//! a chunk-relative placement remains the right model for every one of the 256
+//! sites. **"Constructed as a temporary" and "copied into persistent storage
+//! afterwards" are compatible; the old sentence conflated them.**
+//!
+//! Measured by `slot_homed_composites.rs`, which carries a must-fire control that
+//! really does bake a composite into a private slot.
 //!
 //! # What it deliberately does not do
 //!

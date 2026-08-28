@@ -277,6 +277,43 @@ two-segment form, which genuinely differs, and it fired with its own message.
 kinds is missing from its probes, and removing the structs makes it fail with that message. The
 previous slice learned this the hard way: a guard whose corpus lacks a construct is a guard for a
 different question.
+## 2026-08-28 — [v0.3.0] The half I left unverified was not merely stale; it was false
+
+**THE PREDICTION WAS WRITTEN DOWN AND IT WAS WRONG.** The expectation recorded before measuring was
+that no corpus composite is slot-homed. **One is**: `14_frame_log.kel::main` constructs at op 24 and
+stores into a private data slot at op 25.
+
+**Two independent methods agree**, which is the shape established last increment — different methods
+over the same population. A producer walk over the instruction stream, driven by `op_depth_effect`
+rather than the peak model, and the module's own `private_composite_layout` and
+`persistent_composite_bytes`. **They name the same module.** A must-fire control that really does bake
+a composite into a private slot proves neither method is simply blind.
+
+### The model survives, and the reason is specific rather than lucky
+
+`region.rs` places every construction at a fixed offset from the CHUNK's region, on the premise that
+composites are temporaries. **The planner does place op 24.** So the construction is a temporary whose
+value is *subsequently copied* into the slot — no body lives only in a slot, and a chunk-relative
+placement remains right for all 256 sites.
+
+**"Constructed as a temporary" and "copied into persistent storage afterwards" are compatible.** The
+old sentence conflated them, which is why it read as a claim about storage when it was really about
+construction. **A false sentence and a sound model, in the same paragraph.**
+
+### Why finishing the half mattered
+
+The previous increment corrected the denominator and deliberately left the numerator, on the grounds
+that correcting one does not license the other. **That was right, and leaving it would have been
+worse than leaving the whole sentence stale**: a claim with one freshly verified half reads as
+verified throughout. The half left behind turned out to be the false one.
+
+### A site examined from three directions in one session
+
+Op 24 of `14_frame_log.kel::main` is the same site whose width refusal was lifted earlier today by
+certifying a multiply-written local, and the same module that anchors the composite-refusal record.
+**Three independent questions converged on one instruction**, which is worth noticing: the corpus's
+awkward cases cluster.
+
 ## 2026-08-28 — [v0.3.0] What makes a cross-check valid, learned by getting one wrong first
 
 **THE TREE CARRIED TWO NUMBERS FOR ONE QUANTITY.** Composite construction sites were **239** in
