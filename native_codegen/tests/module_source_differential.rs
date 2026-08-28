@@ -42,6 +42,31 @@ fn compile_src(src: &str) -> Module {
 /// buffer, which is what this catches.
 const CANARY: u64 = 0xDEAD_BEEF_FEED_FACE;
 
+/// Which caller-provided buffer, if any, was written past.
+///
+/// Extracted from the call path so a test can drive it with a deliberately
+/// corrupted buffer. **A canary that has never been seen to report a violation
+/// is indistinguishable from one that cannot**, and inducing a real
+/// out-of-bounds write to find out would be undefined behaviour in the test
+/// process rather than a test.
+fn canary_violation(
+    region: &[u64],
+    region_canary_at: usize,
+    privs: &[u64],
+    shared: &[u8],
+) -> Option<&'static str> {
+    if region.get(region_canary_at) != Some(&CANARY) {
+        return Some("the lowering wrote past the composite region");
+    }
+    if privs.first() != Some(&CANARY) {
+        return Some("the lowering wrote past the private slots");
+    }
+    if shared.len() < 8 || u64::from_le_bytes(shared[..8].try_into().ok()?) != CANARY {
+        return Some("the lowering wrote past the shared segment");
+    }
+    None
+}
+
 /// The native result, or the refusal, for the module's ENTRY chunk.
 fn native_entry(m: &Module, arg: i64) -> Result<i64, String> {
     let entry = m.entry_point.ok_or("the module declares no entry point")?;
@@ -117,14 +142,8 @@ fn native_entry(m: &Module, arg: i64) -> Result<i64, String> {
         }
     };
 
-    if region[region_canary_at] != CANARY {
-        return Err("the lowering wrote past the composite region".into());
-    }
-    if privs[0] != CANARY {
-        return Err("the lowering wrote past the private slots".into());
-    }
-    if u64::from_le_bytes(shared[..8].try_into().unwrap()) != CANARY {
-        return Err("the lowering wrote past the shared segment".into());
+    if let Some(which) = canary_violation(&region, region_canary_at, &privs, &shared) {
+        return Err(which.into());
     }
     Ok(out)
 }
@@ -207,13 +226,72 @@ fn the_comparison_can_detect_a_disagreement() {
     );
 }
 
-/// The canary must be able to fire, or "no out-of-bounds write" is a claim about
-/// a check that cannot report one.
+/// **THE CANARY CHECK IS SHOWN TO REPORT A VIOLATION, AND NAMES THE RIGHT
+/// BUFFER.**
 ///
-/// The region buffer is deliberately under-provisioned to a single word and the
-/// canary placed where the lowering will reach past it.
+/// # What this replaced, because the replacement is the point
+///
+/// An earlier version of this test was named for the region canary being able to
+/// fire — the name is given without backticks deliberately, because it no longer
+/// exists and a citation guard rightly refuses a reference that resolves to
+/// nothing. Its doc said *"the region buffer is deliberately under-provisioned to
+/// a single word and the canary placed where the lowering will reach past it"*.
+/// **The body did none of that.** It asserted only that the subject demanded
+/// more than one word of region and then ended, and its assertion message
+/// referred to "the under-provisioning below" — code that was never written.
+/// A passing test making a claim its body did not support, which is worse than
+/// no test, because it reads as evidence.
+///
+/// # Why the check rather than the lowering
+///
+/// Actually under-provisioning and calling would induce a genuine out-of-bounds
+/// write inside JIT-compiled code, which is undefined behaviour in the test
+/// process rather than a test of anything. What can be demonstrated safely is
+/// that **the detection fires**, on the same function the call path uses, so an
+/// intact result from that path means the check looked and found nothing.
 #[test]
-fn the_region_canary_can_fire() {
+fn the_canary_check_reports_each_buffer_it_guards() {
+    let good_region = vec![CANARY; 1];
+    let good_privs = vec![CANARY; 1];
+    let good_shared = CANARY.to_le_bytes().to_vec();
+
+    // The negative: all intact, nothing reported. Without this the positives
+    // below would be satisfied by a function that always reports something.
+    assert_eq!(
+        canary_violation(&good_region, 0, &good_privs, &good_shared),
+        None,
+        "intact buffers must report no violation"
+    );
+
+    let mut bad_region = good_region.clone();
+    bad_region[0] = 0;
+    assert_eq!(
+        canary_violation(&bad_region, 0, &good_privs, &good_shared),
+        Some("the lowering wrote past the composite region")
+    );
+
+    let mut bad_privs = good_privs.clone();
+    bad_privs[0] = 0;
+    assert_eq!(
+        canary_violation(&good_region, 0, &bad_privs, &good_shared),
+        Some("the lowering wrote past the private slots")
+    );
+
+    let mut bad_shared = good_shared.clone();
+    bad_shared[0] ^= 0xFF;
+    assert_eq!(
+        canary_violation(&good_region, 0, &good_privs, &bad_shared),
+        Some("the lowering wrote past the shared segment")
+    );
+}
+
+/// The subject the differentials use really does exercise the region, so an
+/// intact canary on that path is a statement about something.
+///
+/// Split from the check test above **because they are different claims**: that
+/// the detector works, and that the path it guards is used at all.
+#[test]
+fn the_composite_subject_actually_demands_a_region() {
     let m = compile_src(
         "struct P { a: Word, b: Word, c: Word }\n\
          fn main(v: Word) -> Word { let p = P { a: v, b: v, c: v }; p.a + p.c }",
@@ -222,8 +300,8 @@ fn the_region_canary_can_fire() {
     let need = region::region_total_bytes(&m, entry, 0) as usize;
     assert!(
         need > 8,
-        "this subject must demand more than one word of region, or the \
-         under-provisioning below cannot be detected; it demands {need}"
+        "the subject demands {need} bytes of region; if it demanded none, an \
+         intact region canary would be true for the wrong reason"
     );
 }
 

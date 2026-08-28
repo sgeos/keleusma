@@ -153,6 +153,42 @@ two-segment form, which genuinely differs, and it fired with its own message.
 kinds is missing from its probes, and removing the structs makes it fail with that message. The
 previous slice learned this the hard way: a guard whose corpus lacks a construct is a guard for a
 different question.
+## 2026-08-28 — [v0.3.0] A peer's rule, applied to my own work, found a test that proved nothing
+
+**THE RULE, FROM THE `v0.2.3` LINE**: a guard can be unfalsifiable **by its own precondition** — their
+subset assertion was made automatic by the existence check four lines above it. Their framing of when
+the discipline lapses is the part worth keeping: **a bonus net bolted onto a repair**, because the
+repair already feels finished and the incentive to stop looking is strongest there.
+
+**APPLIED HERE, IT FOUND ONE IMMEDIATELY, WRITTEN THIS SESSION.** A test named for the region canary
+being able to fire, whose doc said *"the region buffer is deliberately under-provisioned to a single
+word and the canary placed where the lowering will reach past it"*. **The body did none of that.** It
+asserted that the subject demanded more than one word of region, and ended. Its assertion message even
+referred to "the under-provisioning below" — code that was never written.
+
+**Worse than no test, because it reads as evidence.** A passing test called "the canary can fire" is
+exactly what a reader consults to decide whether the canary can fire.
+
+### The fix, and why it is not the obvious one
+
+Actually under-provisioning and calling would induce a real out-of-bounds write inside JIT-compiled
+code — undefined behaviour in the test process rather than a test. What can be shown safely is that
+**the detection fires**: the canary check is now a function the call path uses, and a test corrupts
+each of the three buffers in turn and asserts it names the right one, **with a negative case** so it
+cannot be satisfied by a function that always reports something.
+
+The claim is narrower than the old name promised and it is true, which is the trade.
+
+### Then a second guard caught the first
+
+Renaming the test broke `comment_citations.rs`, which refuses a comment citing an identifier that
+resolves to nothing — *"a citation to a test that was never written CANNOT FAIL, so it reads as
+coverage while being none"*. **The historical name in the new doc comment was such a citation.** It is
+now given without backticks, deliberately, with the reason stated in place.
+
+**Two guards, one written by each line, catching a defect and then its repair.** That is what the
+instruments are for, and neither would have fired on prose alone.
+
 ## 2026-08-28 — [v0.3.0] The stream frontier is tail position, not composites
 
 **BOTH OF THIS LINE'S EARLIER DESCRIPTIONS OF STREAM SUPPORT WERE WRONG, AND SO WAS THE GUESS THAT
