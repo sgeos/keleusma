@@ -218,6 +218,26 @@ Current sprint source of truth.
 > **THREE CHECKS WRITTEN THIS SESSION COULD NOT FAIL**, each satisfied by a different part of a
 > document from the one it was about. Mutation caught all three; reading caught none.
 
+> **Currency note (2026-08-28, V0.3.X line, seventh entry). A TAIL YIELD IS LOWERED AS A RETURN,
+> SO THE GAP NAMED LAST ENTRY DID NOT EXIST AS DESCRIBED.**
+>
+> The sixth entry recorded that a tail-yielded composite lowers with nothing executing it, and called
+> the untested code "a composite crossing the yield boundary". **There is no yield boundary in that
+> lowering.** Measured: the lowered module declares **no host yield hook**, containing only the entry
+> chunk and `llvm.trap`, and the entry **returns a pointer into the caller-provided region** — checked
+> against the base and length of the buffer the host passed rather than assumed. So the marshalling is
+> the composite-RETURN ABI, already covered by `composite_return_aliasing.rs`.
+>
+> The shape is now witnessed **byte-for-byte**: the native body and the reference's resolved arena
+> body are identical. A first attempt compared the reference's `Debug` text, which shows the handle
+> and not the body, and failed for the right reason. **Comparing an address to an address would have
+> proved nothing about marshalling.** Worth carrying: **the reference SUSPENDS where the native side
+> RETURNS**, agreeing on the value, which is what the degenerate-yield path means. What remains
+> uncovered is **sequence semantics** for a composite-yielding stream, which is blocked rather than
+> unwritten — it needs a non-tail yield, which is refused. `native_codegen` **344/0/66** clean.
+> The workspace remains red on the `v0.2.3` line's pin, fixed upstream as PR #314 and not yet merged,
+> so this branch still cannot push.
+
 > **Currency note (2026-08-28, V0.3.X line, sixth entry). THE STREAM FRONTIER IS TAIL POSITION, AND
 > THE WORKSPACE SUITE IS RED FOR A REASON THAT IS NOT A DEFECT.**
 >

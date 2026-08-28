@@ -210,41 +210,48 @@ fn the_discriminator_is_tail_position_and_not_the_yielded_type() {
     );
 }
 
-/// **A SHAPE THAT LOWERS WITHOUT EXECUTION EVIDENCE, NAMED RATHER THAN
-/// GLOSSED.**
+/// **CORRECTED: THE SHAPE NOW HAS A WITNESS, AND THE ORIGINAL FRAMING WAS
+/// WRONG.**
 ///
-/// `yield a composite, tail` lowers. The suspension differential's subjects all
-/// yield `Word`, so **nothing in the tree executes a composite across the yield
-/// boundary and compares it against the reference.** A composite handed to the
-/// host from a tail yield is marshalled by code no test has run.
+/// This test previously claimed that `yield a composite, tail` lowers with
+/// nothing executing it, and described the untested code as "a composite
+/// crossing the yield boundary". **There is no yield boundary in that
+/// lowering.** Measured in `what_the_native_side_yields_for_a_composite`: the
+/// module declares no host yield hook at all and the entry RETURNS a pointer
+/// into the caller's region. A single yield in tail position, with nothing after
+/// it, is lowered as a return.
 ///
-/// This is not the cross-iteration escape hazard — a tail-yielded composite is
-/// built once and no later iteration overwrites it — but it is untested
-/// lowering, which is the same class this line has been closing elsewhere.
+/// So the marshalling is the composite-RETURN ABI, and the shape is now
+/// witnessed byte-for-byte against the reference.
 ///
-/// Recorded as a gap rather than fixed: a witness needs a suspension harness
-/// that drives composite yields, which the existing one does not.
+/// What remains true, and is what this test still checks: **the suspension
+/// differential drives no composite-yielding subject.** That matters for
+/// SEQUENCE semantics — the order and count of yields for a composite-yielding
+/// stream — which is a different property from the value comparison now covered.
 #[test]
-fn a_tail_yielded_composite_lowers_with_no_execution_witness() {
-    let src = "struct P { a: Word, b: Word }\nloop main(t: Word) -> P { yield P { a: t, b: t } }";
-    assert!(
-        matches!(status(src), Ok(None)),
-        "the subject must lower, or there is no untested lowering to report"
-    );
+fn the_suspension_differential_drives_no_composite_yielding_subject() {
     let harness = std::fs::read_to_string("tests/yield_sequence.rs")
         .expect("the suspension differential is a sibling of this file");
-    // Its subjects are `loop main(a: Word) -> Word`; a composite-returning loop
-    // would have to name a struct in the signature.
     let composite_subjects = harness.matches("loop main(a: Word) -> P").count();
-    println!("\n================ UNTESTED: TAIL-YIELDED COMPOSITE");
-    println!("  composite-yielding subjects in the suspension differential: {composite_subjects}");
+    let word_subjects = harness.matches("loop main(a: Word) -> Word").count();
+    println!("\n================ SUSPENSION DIFFERENTIAL SUBJECTS");
+    println!("  Word-yielding      : {word_subjects}");
+    println!("  composite-yielding : {composite_subjects}");
     println!(
-        "  => the shape LOWERS and nothing executes it. Named, not fixed: a witness\n  \
-         needs a suspension harness that drives composite yields.\n================\n"
+        "  => value marshalling for a tail composite IS witnessed, in\n  \
+         `what_the_native_side_yields_for_a_composite`. SEQUENCE semantics for a\n  \
+         composite-yielding stream are not, and cannot be until such a stream\n  \
+         lowers at all -- it needs a yield that is not in tail position, which is\n  \
+         refused.\n================\n"
+    );
+    assert!(
+        word_subjects > 0,
+        "the differential drives no Word subject either, so this count says \
+         nothing about a composite gap specifically"
     );
     assert_eq!(
         composite_subjects, 0,
-        "the suspension differential now drives a composite-yielding stream, so this \
-         gap has closed and this test should be re-pointed rather than deleted"
+        "the suspension differential now drives a composite-yielding stream, so \
+         re-point this rather than delete it"
     );
 }

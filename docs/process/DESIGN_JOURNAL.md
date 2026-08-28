@@ -153,6 +153,48 @@ two-segment form, which genuinely differs, and it fired with its own message.
 kinds is missing from its probes, and removing the structs makes it fail with that message. The
 previous slice learned this the hard way: a guard whose corpus lacks a construct is a guard for a
 different question.
+## 2026-08-28 — [v0.3.0] There is no yield boundary: a tail yield is lowered as a return
+
+**LAST INCREMENT NAMED A GAP THAT DOES NOT EXIST AS DESCRIBED.** It recorded that *"`yield a
+composite, tail` lowers and nothing executes it"* and called the untested code *"a composite crossing
+the yield boundary"*. **There is no yield boundary in that lowering**, and the probe written to
+examine it failed on its own `expect` message, which had anticipated exactly this: *"if it does not,
+the lowering suspends some other way and this probe is aimed wrongly"*.
+
+**Measured**: the lowered module contains only `kel_chunk_0` and `llvm.trap`. **No host yield hook is
+declared.** The entry **returns a pointer into the caller-provided region** — classified rather than
+assumed, by checking the returned address against the base and length of the buffer the host itself
+passed. A single yield in tail position, with nothing after it, is lowered as a **return**.
+
+### The witness, on bodies rather than handles
+
+The first comparison attempt read the reference's `Debug` text for the field values. That text shows
+the **arena handle**, not the body, so the check failed — for the right reason. Resolving the handle
+through the arena gives the bytes:
+
+```
+reference body: [6, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0]
+native body   : [6, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0]
+```
+
+**Comparing an address to an address would have proved nothing about marshalling.** The gap is closed
+on the property that matters, and the marshalling exercised is the composite-RETURN ABI, which
+`composite_return_aliasing.rs` already covers — so the "untested arm" was smaller than claimed.
+
+### The semantic difference worth carrying
+
+**The reference SUSPENDS where the native side RETURNS**, and they agree on the value. That is what
+the degenerate-yield path means, and it is a fact to know before reasoning about suspension: the two
+sides differ in control flow while agreeing on what the host observes, which is sound for a stream
+the host drives tick by tick.
+
+### What is genuinely still uncovered, narrowed
+
+**Sequence semantics for a composite-yielding stream** — the order and count of its yields. That
+cannot be covered until such a stream lowers at all, which needs a yield that is not in tail position,
+which is refused. So it is blocked rather than merely unwritten, and the test that used to overclaim
+now says exactly this.
+
 ## 2026-08-28 — [v0.3.0] A peer's rule, applied to my own work, found a test that proved nothing
 
 **THE RULE, FROM THE `v0.2.3` LINE**: a guard can be unfalsifiable **by its own precondition** — their

@@ -117,6 +117,25 @@ That prerequisite is what this increment built, so the change is back rather tha
 stands from it**: lifting the two composite refusals needs a fixpoint over local widths, which is its
 own increment, and coverage is still 1070 of 1074.
 
+**I closed a gap I had described wrongly, and the correction is the interesting part.** Last time I
+told you a tail-yielded composite lowers with nothing executing it, and called the untested code a
+composite crossing the yield boundary. **There is no yield boundary there.** The lowered module
+declares no host yield hook at all and the entry returns a pointer into the region the caller
+provides, so a single yield in tail position is compiled as a return. The probe I wrote to examine the
+boundary failed on its own message, which had said in advance that if no hook were declared then the
+probe was aimed wrongly.
+
+The shape is now witnessed properly: the native body and the reference's body, resolved through the
+arena, are identical byte for byte. My first attempt compared the reference's debug text, which prints
+the handle rather than the contents, and failed — comparing an address to an address would have proved
+nothing about marshalling.
+
+One fact worth your attention: **the reference suspends where the native side returns**, and they
+agree on the value. That is what the degenerate-yield path means, and it is a thing to know before
+reasoning about suspension. What is genuinely still uncovered is sequence semantics for a
+composite-yielding stream, and that is blocked rather than merely unwritten, because it needs a
+non-tail yield and those are refused.
+
 **Two things this iteration, and one of them is a red I am not going to fix.**
 
 **The stream frontier is tail position, not composites.** A single `yield` in tail position lowers —
