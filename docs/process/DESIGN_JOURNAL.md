@@ -277,6 +277,39 @@ two-segment form, which genuinely differs, and it fired with its own message.
 kinds is missing from its probes, and removing the structs makes it fail with that message. The
 previous slice learned this the hard way: a guard whose corpus lacks a construct is a guard for a
 different question.
+## 2026-08-28 — [v0.3.0] The widest-input rule names an exposure this line was already managing
+
+**THE RULE, DERIVED BY THE `v0.2.3` LINE FROM THEIR OWN DEFECT**: *before pinning a value, ask what
+the widest input to it is and whether that input is pinned too.* An invariant protects a **region**;
+it was never going to protect an expectation whose widest input lay outside one.
+
+**APPLIED HERE IT NAMES A REAL EXPOSURE.** Many pinned figures on this line take their input from a
+directory scan of `src/selfhost/kel/` and `examples/scripts/`, and **those directories are shared
+with `v0.2.3`**. Their commits are therefore an input to this line's pinned numbers — the same
+cross-branch shape that broke their test, pointing the other way.
+
+**It has never bitten, and the reason is the absorption discipline rather than luck.** Every
+absorption here asks *"corpus inputs touched?"* before predicting anything, and **that question IS the
+widest-input question**. It is why every corpus-derived prediction has held across twenty-six
+absorptions: when the answer is "none touched", the pins are known safe **before** the merge rather
+than found safe after it.
+
+**What the rule adds is the reason.** The check was already being run; it was being run as a habit
+rather than as an argument, and a habit does not tell you when it stops applying. Now it does: the day
+a stage source or example script moves, every corpus-derived figure in the handoff is a prediction
+again.
+
+### Absorption 26: three predictions, all agreeing
+
+The other line forecast the delta before merging. **This line measured the incoming diff
+independently rather than adopting it** — no source change, no corpus input, one new test in an
+existing file, gated on a default feature — and formed the same figures. Outcome: **workspace
+2480/0/89, exit 0**, as both said.
+
+**Agreement is worth recording precisely because a divergence would have been a finding about one of
+us.** A forecast supplied by the party who wrote the change is evidence about intent; only the
+measurement is evidence about what arrived.
+
 ## 2026-08-28 — [v0.3.0] The red cleared, and what closed it was a run rather than a merge
 
 **PR #314 LANDED AND THE BLOCKAGE ENDED, BUT NOT BECAUSE THE FIX EXISTED.** Absorption 25 brought it

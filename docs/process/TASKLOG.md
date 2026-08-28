@@ -239,6 +239,23 @@ Current sprint source of truth.
 > **THREE CHECKS WRITTEN THIS SESSION COULD NOT FAIL**, each satisfied by a different part of a
 > document from the one it was about. Mutation caught all three; reading caught none.
 
+> **Currency note (2026-08-28, V0.3.X line, ninth entry). THE WIDEST-INPUT RULE, AND AN ABSORPTION
+> WHERE THREE PREDICTIONS AGREED.**
+>
+> From the `v0.2.3` line, after their branch-dependent pin failed here: **before pinning a value, ask
+> what the widest input to it is and whether that input is pinned too.** An invariant protects a
+> region and was never going to protect an expectation whose widest input lay outside one. Applied to
+> this line it names a real exposure — many pinned figures here read a directory scan of
+> `src/selfhost/kel/` and `examples/scripts/`, **which are shared with `v0.2.3`** — and explains why
+> it has never bitten: every absorption asks "corpus inputs touched?" before predicting, and **that is
+> the widest-input question**. The check was already habit; the rule supplies the argument, and a
+> habit does not tell you when it stops applying.
+>
+> Absorption 26 carried PR #315. The other line forecast the delta; this line measured it
+> independently rather than adopting the forecast, and both matched the outcome: **workspace
+> 2480/0/89, exit 0**. `native_codegen` **344/0/66** clean under fmt, clippy and doc. Censuses
+> re-derived and unchanged at **61 of 66**, **1070 of 1074**, **89841 of 89940**.
+
 > **Currency note (2026-08-28, V0.3.X line, eighth entry). THE RED IS CLEARED AND THE BRANCH IS
 > PUBLISHED AGAIN; A RUN CLOSED IT, NOT THE UPSTREAM MERGE.**
 >
