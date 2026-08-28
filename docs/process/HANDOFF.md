@@ -5,17 +5,34 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-08-28 (session 56 CLOSE) against `7ae01f74`, WHICH IS `origin/v0.2.3` ITSELF.**
+> **REFRESHED 2026-08-28 (session 56 CLOSE) against `64d7d87e`, WHICH IS `origin/v0.2.3` ITSELF.**
 > Not a branch head. Every pinned value below was DERIVED on that tree, not recalled, and the
 > whole check block was executed against it: **37 test-count pins, all matching.**
 > **THIS FILE HAS GONE STALE WITHIN HOURS SIX TIMES**; if the dates here disagree with the three
 > channels, trust the channels.
 >
-> **NO PULL REQUEST IS OPEN.** Six merged in session 56, each at 22 of 22 green.
+> **NO PULL REQUEST IS OPEN.** Eight merged in session 56, each at 22 of 22 green. The last two
+> came from a CROSS-LINE EXCHANGE rather than from the plan: the `v0.3.0` line reported one of this
+> line's tests red on their branch with the cause named, and declined to fix it.
 >
-> **AS OF `7ae01f74`: 163 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive
+> **AS OF `64d7d87e`: 165 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive
 > it: `git log --oneline origin/v0.2.3 | grep -c 'Merge pull request'`. **NOTE THE REF** -- the
 > local `v0.2.3` lags and answers a smaller number for the same tree.
+>
+> ## A TEST WHOSE ANSWER DEPENDS ON A DIRECTORY IS NOT PINNED. LEARNED THE HARD WAY, 2026-08-28.
+>
+> `the_shipped_examples_narrow_the_unexercised_tags_and_the_residue_is_named` scanned
+> `examples/scripts` for every `*.kel` while pinning the answer as a constant in the test file. The
+> `v0.3.0` line carries six further witness programs, so it was **wrong on their branch** -- wrong
+> in the direction its own message calls "a coverage gain".
+>
+> **THE GENERALISATION IS THEIRS AND IT IS BETTER THAN MINE: AN INVARIANT PROTECTS A REGION, AND IT
+> WAS NEVER GOING TO PROTECT AN EXPECTATION WHOSE WIDEST INPUT LAY OUTSIDE ONE.** Their
+> `src/`-plus-`tests/` byte-identity invariant could not cover a test reading `examples/`. **Before
+> pinning a value, ask what the widest input to it is and whether that input is pinned too.**
+>
+> The population is now NAMED in the test. Verified branch-independent by copying their six
+> witnesses in and re-running.
 >
 > ## THE ONE MISTAKE SESSION 56 MADE THREE TIMES. READ THIS BEFORE SIZING ANY SLICE.
 >
@@ -282,7 +299,7 @@ gh run list --branch v0.2.3 --limit 1
 
 ## WHAT A RESUMING SESSION SHOULD DO FIRST
 
-**ONE. THERE IS NO BLOCKER AND NO OPEN PULL REQUEST.** `origin/v0.2.3` at `7ae01f74`, 163 merges,
+**ONE. THERE IS NO BLOCKER AND NO OPEN PULL REQUEST.** `origin/v0.2.3` at `64d7d87e`, 165 merges,
 nothing in flight. **Do not invent urgency.**
 
 **TWO. THE LAST TYPE-CHANNEL EXTRACTION IS `expression_nodes_resolvable`**, and it is the largest
