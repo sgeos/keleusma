@@ -290,6 +290,36 @@ at 142 lines behind its thin wrapper. Four of five have moved; this is the one t
 1 item 3. **Read the record stream first** -- see the rule at the top of this file, which two of the
 four slices proved the hard way.
 
+**IT IS SIZED, SO DO NOT RE-DERIVE THAT. IT EMITS EIGHT NODE KINDS**, and each needs its own
+forest mapping plus operand classification:
+
+| kind | note |
+|---|---|
+| `BINOP` | |
+| `ARRAY_ELEM` | |
+| `CONDITION` | |
+| `BRANCH_PAIR` | |
+| `FIELD_ON_VALUE` | **composite** |
+| `INDEX_ON_VALUE` | **composite** |
+| `STRUCT_LIT` | **composite** |
+| `TAIL_VS_RETURN` | |
+
+Each operand is reported as `(value, form)` where form 0 is a TAG and form 1 a NAME. The
+name-resolution half is already available: `occurrence_rows_from_pipeline` builds a slot-to-name
+map from parameter names and `let_names` looked up BY SLOT, and that is the piece the previous
+four slices had to invent each time.
+
+**THE THREE COMPOSITE KINDS ARE THE RISK, AND THERE IS EVIDENCE FOR THAT RATHER THAN A HUNCH.**
+The occurrences slice established that the reference and the pipeline **disagree about what an
+occurrence IS** for a composite: `d.q` is a field access over an `Ident` on one side and a single
+data-read node on the other. Expect the same class of representational mismatch on
+`FIELD_ON_VALUE`, `INDEX_ON_VALUE` and `STRUCT_LIT`, and settle it with a probe against the
+reference BEFORE designing the mapping.
+
+**SESSION 56 DECLINED TO START THIS** rather than risk a partial migration counted as a whole one,
+which is the failure the count pin exists to prevent. That is a scope judgement, not a blocker: the
+work is well defined and the sizing above is the measurement it was declined on.
+
 **AND THE OTHER LARGE ITEM IS THE OPERATOR'S TO CALL, NOT YOURS TO START.** Making
 `verify_types.kel` self-compile means collecting `data` declarations before parsing bodies: a
 two-pass restructuring of a single-pass streaming parser. Session 56 flagged it to the operator in
