@@ -815,3 +815,94 @@ const CENSUS_EXAMPLES: &[&str] = &[
 /// four is the deliverable. Closing it means a program exercising byte arithmetic and `-x` in
 /// one of these corpora, not a change to any guard here.
 const SHIPPED_EXAMPLES_ALSO_MISS: &[&str] = &["addop", "checkedneg", "mulop", "subop"];
+
+/// **`Op::Neg` IS OUTSIDE THE SELF-HOSTED SUBSET, WHICH IS STRONGER THAN BEING UNTAGGED.**
+///
+/// The `v0.3.0` line sharpened a finding this file's census produced, and the sharpening is
+/// recorded here as a CHECK rather than as prose, because it is exactly the kind of claim that
+/// goes stale silently.
+///
+/// The census reports `checkedneg` among the tags no corpus reaches. Investigating why their
+/// witness program covered the other three but not that one turned up the real statement:
+/// **`codegen.kel` emits `checkedneg` for source-level unary negation and the decoder has no arm
+/// producing `Op::Neg` at all.** So the self-hosted compiler cannot emit `Neg` from any source,
+/// and that is a property of the SUBSET rather than of any corpus.
+///
+/// # The three halves, because two of them alone would mislead
+///
+/// - The reference compiler **does** emit `Op::Neg`, for `Byte` negation. Without this the claim
+///   would read as "a dead opcode", and this project has called an unwitnessed opcode unreachable
+///   and been wrong before.
+/// - The stage emits `checkedneg` where the reference emits `Neg` for the same construct.
+/// - No decoder arm produces `Neg`, so nothing the stage emits could decode to it either.
+///
+/// **What this does NOT say.** It says nothing about whether a native backend can lower `Neg` —
+/// the `v0.3.0` line checked their own lowering census and it is unaffected, because that census
+/// counts what the backend can lower over the corpus it has. Two different populations, and an
+/// earlier version of this note conflated them.
+#[test]
+#[cfg(feature = "compile")]
+fn the_unchecked_negation_is_outside_the_self_hosted_subset() {
+    use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
+
+    const CODEGEN_SRC: &str = include_str!("../src/selfhost/kel/codegen.kel");
+
+    // ONE: the reference emits `Neg` for Byte negation, so the opcode is live.
+    let ops_of = |src: &str| -> BTreeSet<String> {
+        compile(&parse(&tokenize(src).expect("lex")).expect("parse"))
+            .expect("the reference must compile the witness")
+            .chunks
+            .iter()
+            .flat_map(|c| c.ops.iter())
+            .map(|op| {
+                format!("{op:?}")
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric())
+                    .collect::<String>()
+            })
+            .collect()
+    };
+    let byte_neg =
+        ops_of("fn f(a: Byte, b: Byte) -> Byte { let p = a * b; -p }\nfn main() -> Word { 0 }");
+    assert!(
+        byte_neg.contains("Neg"),
+        "the reference no longer emits the unchecked Neg for byte negation, so the claim below \
+         would be about a dead opcode rather than about the self-hosted subset: {byte_neg:?}"
+    );
+
+    // TWO: the stage emits `checkedneg` for source-level unary negation.
+    let push_neg = CODEGEN_SRC
+        .find("fn push_neg(")
+        .expect("codegen.kel lowers unary negation");
+    let body_end = CODEGEN_SRC[push_neg..]
+        .find("\n}")
+        .expect("push_neg has a body");
+    let body = &CODEGEN_SRC[push_neg..push_neg + body_end];
+    assert!(
+        body.contains("wire.checkedneg"),
+        "the stage's unary-negation lowering no longer emits the checked tag, so this note's \
+         account of why `checkedneg` is the residue may be wrong: {body}"
+    );
+
+    // THREE: no decoder arm produces `Neg`, so nothing the stage emits can decode to it.
+    let arms = decoder_arms(DRIVER);
+    let producing_neg: Vec<i64> = arms
+        .iter()
+        .filter(|(_, arm)| arm_variant(arm) == "Neg")
+        .map(|(tag, _)| *tag)
+        .collect();
+    assert!(
+        producing_neg.is_empty(),
+        "a decoder arm now produces Op::Neg (tags {producing_neg:?}). THIS IS THE SUBSET WIDENING: \
+         the self-hosted compiler can reach an operation it could not before, which is a gain and \
+         should be recorded rather than absorbed silently"
+    );
+
+    // NON-VACUITY on the extraction, since an empty arm table would satisfy the check above.
+    assert_eq!(
+        arms.len(),
+        ASSIGNED_TAGS as usize,
+        "the arm extraction returned {} arms, so the emptiness check above establishes nothing",
+        arms.len()
+    );
+}
