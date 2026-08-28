@@ -13,6 +13,52 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-28 — The occurrences move, and both exclusions were measured rather than assumed
+
+**ORDER 1 ITEM 3 IS AT FOUR OF FIVE.** `occurrence_rows_from_pipeline` carries the name
+occurrences; the declared half moved separately three increments earlier under a name the count pin
+deliberately does not match. **One extraction remains**, `expression_nodes_resolvable`.
+
+**THE PIN'S DOCUMENTATION NOW CARRIES A TABLE OF WHAT DID NOT MOVE**, for each of the four,
+because a count of four of five would otherwise read as completeness. `decl_call_rows` left its
+actual-argument tag; `field_sets` left its field accesses; `occurrence_rows` leaves two shapes.
+Every residual is stated where its function is defined and pinned by its own test.
+
+**THE TWO EXCLUSIONS ARE DIFFERENT IN KIND, AND THE DIFFERENCE IS THE FINDING.**
+
+A `data` block identifier is **representational**: the reference sees `d.q` as a field access whose
+object is an `Ident` and records `d`; the pipeline sees one data-read node carrying a block index
+and has no ident node at all. Nothing is missing from the wire — the two representations disagree
+about what an occurrence is.
+
+A `for` loop variable is **a wire gap**: its read reaches the forest as an ordinary local node, and
+**nothing binds its slot to its name**. Only `let` bindings emit a name record, the one added under
+the operator's ruling on that fork. So the slot resolves to nothing and the occurrence is DROPPED
+rather than reported under a wrong name, which is the better of the two failures and worth saying.
+Closing it is the same shape of change as the record that already exists.
+
+**BOTH WERE FOUND BY PROBING, NOT BY READING.** A throwaway comparison over nine shapes reported
+seven matches and two differences, and the two were then explained by tracing the record stream.
+Had I written the agreement test against the shapes I expected to work, the corpus would have
+excluded exactly the cases that reveal the boundary, and the test would have passed while saying
+nothing about it.
+
+**A DEFECT THE PROBE CAUGHT BEFORE ANY TEST EXISTED.** `let_names` carries `(slot, name)`. My first
+revision paired it positionally against the `LetIn` nodes and read the tuple backwards, so every
+`let` occurrence came back under the ENCLOSING FUNCTION'S name — `main` where `a` belonged. The
+driver already had the right convention in `binding_rows_from_pipeline`: look up BY SLOT. **Seventh
+occasion this line has written something the tree already had**, and the cheapest to catch, because
+the probe compared against the reference rather than against my expectation.
+
+**MUTATION-TESTED, EACH MUTANT CONFIRMED TO COMPILE.** Restoring the backwards tuple read fires the
+agreement test, and so does dropping the call arm. The exclusions' pins fire in the FAILING
+direction when their gaps close, so neither can quietly become permanent.
+
+**THE COMPARISON IS A MULTISET, AND THAT IS DELIBERATE.** The reference walks a syntax tree and the
+pipeline walks a reconstructed forest; the two visit orders have no reason to coincide, and
+requiring them to would test the traversal rather than the occurrences. Names are carried as
+strings on both sides, for the third slice running.
+
 ## 2026-08-28 — A second corpus, and the op-tag residue narrows from sixteen to four
 
 **A CAVEAT I WROTE THIS SESSION IS NOW PARTLY ANSWERED, BY MEASUREMENT.** The first op-tag census
