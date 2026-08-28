@@ -107,6 +107,23 @@ That prerequisite is what this increment built, so the change is back rather tha
 stands from it**: lifting the two composite refusals needs a fixpoint over local widths, which is its
 own increment, and coverage is still 1070 of 1074.
 
+**A coverage figure I gave you last increment was wrong, and I found it by naming things.** I set out
+to name the last chunks the backend will not lower, because "other" is a bucket and not a cause. There
+are three refusals — `Stream` in the telemetry stream, a float constant in the float witness, and
+`Len` in the refused witness — where the coverage figure implied two. That gap was the finding: the
+census marks a chunk unlowerable by matching a refusal's symbol to a chunk name, and **a module
+refused as a whole names no chunk**, so both chunks of the float witness were counted as lowerable
+while the backend emitted nothing for them. Corrected, **1072 of 1074 becomes 1070 of 1074**.
+
+**What survives of the previous claim, precisely**: the delta was right and the level was not. The
+width certification did lift exactly two chunks, so the honest movement is **1068 → 1070**, and the
+execution evidence — 59 to 61 modules running and agreeing with the reference — never depended on the
+census at all.
+
+**One process note.** A gate run was killed by a signal partway through and reported 51 tests passed,
+which is a plausible-looking number and not a result. I re-ran it rather than record it; the clean run
+is 332 passed, 0 failed, 63 binaries.
+
 **The last two composite refusals are closed.** A local written more than once is now trusted when
 every write's producer fixes its width by the instruction itself. **Coverage 1070 → 1072 of 1074**,
 and — the part that actually matters — the corpus differential goes from 59 to **61 modules executed

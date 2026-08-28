@@ -73,6 +73,55 @@ two-segment form, which genuinely differs, and it fired with its own message.
 kinds is missing from its probes, and removing the structs makes it fail with that message. The
 previous slice learned this the hard way: a guard whose corpus lacks a construct is a guard for a
 different question.
+## 2026-08-28 — [v0.3.0] The coverage figure I published last increment was two chunks high
+
+**THE SURVIVORS ARE NAMED, AND NAMING THEM EXPOSED A DEFECT IN THE INSTRUMENT THAT COUNTS THEM.**
+The coverage census reported the remaining frontier as one "B (sub-coroutines)" and one "other".
+**"Other" is not a cause.** Asked directly, the backend names all three refusals:
+
+| where | reason |
+|---|---|
+| `13_telemetry_stream.kel::main` | `Stream` unsupported |
+| `float_witness.kel::<module>` | a float constant reaches the module without appearing in any signature |
+| `refused_witness.kel::len_witness` | `Len` unsupported |
+
+**Three refusals, where the coverage figure implied two.** That discrepancy was the finding.
+
+### A module-level refusal marked no chunk at all
+
+`module_refusals` reports a per-chunk refusal against the CHUNK NAME and a whole-module refusal
+against a symbol that is no chunk's name. `spike_corpus_coverage` marked a chunk unlowerable by
+matching that symbol against the chunk name — so **a module the backend cannot lower at all
+contributed every one of its chunks to the LOWERABLE count.**
+
+Measured: `float_witness.kel` has two chunks, both counted as lowerable while the module produces no
+code whatsoever.
+
+$$
+\textbf{1072 of 1074 was two chunks high. The honest figure is 1070 of 1074.}
+$$
+
+### What survives of last increment's claim, stated precisely
+
+**The delta was right; the level was wrong.** The float refusal is unrelated to the width
+certification, so the two-chunk overstatement applies equally to the before and after figures. The
+certification genuinely lifted exactly two chunks — **1068 → 1070**, not 1070 → 1072. The execution
+evidence is untouched: the corpus differential still moved 59 → 61 modules executed and agreeing,
+and that figure never depended on this census.
+
+**I published the overstated level in a commit message and in four documents.** Corrected forward,
+with the superseded figures quoted rather than deleted.
+
+### Why this class keeps appearing
+
+The census asks one instrument (`module_refusals`) a question and interprets the answer with an
+assumption it never checked — that every refusal names a chunk. **The assumption was invisible
+because the answer was well-formed.** The same shape as a `Const` index read as a value, or the peak
+model read as pop counts: the data arrives, it parses, and it means something else.
+
+**The cross-check that found it was asking two instruments the same question and comparing.** The
+refusal sweep says three; the coverage census implied two. Neither alone was suspicious.
+
 ## 2026-08-28 — [v0.3.0] I made the mistake this repository had already recorded
 
 **`Op::stack_growth` AND `Op::stack_shrink` ARE NOT POP AND PUSH COUNTS**, and their own documentation

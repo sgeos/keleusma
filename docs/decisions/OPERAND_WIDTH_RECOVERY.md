@@ -2,9 +2,17 @@
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
 
-**Status**: cause established and **FIXED**, 2026-08-28. Corpus coverage **1070 → 1072 of 1074**,
-opcode instances **89741 → 89854 of 89940**. Both modules now execute and agree with the reference:
-the corpus differential reports **61 executed and agreeing, up from 59, with exempt down to 12**.
+**Status**: cause established and **FIXED**, 2026-08-28. Both modules now execute and agree with the
+reference: the corpus differential reports **61 executed and agreeing, up from 59, with exempt down
+to 12**.
+
+> **⚠ THE COVERAGE LEVEL QUOTED HERE WAS CORRECTED THE SAME DAY.** The superseded text read
+> *"Corpus coverage 1070 → 1072 of 1074, opcode instances 89741 → 89854 of 89940."* The census was
+> overstating by two chunks, because a module refused as a WHOLE named no chunk and so marked none —
+> `float_witness.kel`'s two chunks were counted as lowerable while the backend emitted nothing for
+> them. **The delta was right and the level was not**: the certification lifted exactly two chunks,
+> **1068 → 1070 of 1074**. The float refusal is unrelated to this change, so the two-chunk offset
+> applies equally before and after. The execution figure never depended on the census.
 
 ## The condition, and why that was not yet a finding
 

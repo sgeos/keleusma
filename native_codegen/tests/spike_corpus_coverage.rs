@@ -26,11 +26,34 @@ use std::collections::BTreeMap;
 /// per OPCODE; `module_refusals` knows per CHUNK. Per-chunk truth beats per-op
 /// fiction, and the refusal message names the blocking construct anyway — which
 /// is better attribution than the model ever gave.
+/// Chunk names this module's lowering refuses.
+///
+/// # ⚠ A MODULE-LEVEL REFUSAL USED TO LEAVE EVERY CHUNK COUNTED AS LOWERABLE
+///
+/// `module_refusals` reports a per-chunk refusal against the chunk's NAME and a
+/// whole-module refusal against a symbol that is no chunk's name. The caller
+/// marks a chunk unlowerable by matching that symbol against the chunk name, so
+/// a module the backend **cannot lower at all** contributed all of its chunks to
+/// the lowerable count.
+///
+/// **Measured: `float_witness.kel` is refused as a module for carrying a float
+/// constant, and both of its chunks were being counted as lowerable.** The
+/// published figure was therefore two chunks high — `1072 of 1074` where the
+/// honest figure is `1070 of 1074`.
+///
+/// A refusal naming no chunk of this module now marks EVERY chunk of it, which
+/// is what "the backend produces no code for this module" means.
 fn refused_chunks(m: &keleusma::bytecode::Module) -> std::collections::BTreeSet<String> {
-    keleusma_native::module_refusals(m, keleusma_native::LowerOptions::default())
-        .into_iter()
-        .map(|(name, _)| name)
-        .collect()
+    let refusals = keleusma_native::module_refusals(m, keleusma_native::LowerOptions::default());
+    let chunk_names: std::collections::BTreeSet<String> =
+        m.chunks.iter().map(|c| c.name.clone()).collect();
+    let module_level = refusals
+        .iter()
+        .any(|(sym, _)| !chunk_names.contains(sym.as_str()));
+    if module_level {
+        return chunk_names;
+    }
+    refusals.into_iter().map(|(name, _)| name).collect()
 }
 
 /// Which workstream owns an unsupported opcode, per the inventory.

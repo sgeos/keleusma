@@ -181,6 +181,23 @@ Current sprint source of truth.
 > **THREE CHECKS WRITTEN THIS SESSION COULD NOT FAIL**, each satisfied by a different part of a
 > document from the one it was about. Mutation caught all three; reading caught none.
 
+> **Currency note (2026-08-28, V0.3.X line, fourth entry). THE COVERAGE CENSUS WAS OVERSTATING BY
+> TWO CHUNKS, AND THIS LINE PUBLISHED THE OVERSTATED FIGURE.**
+>
+> Naming the remaining refusals exposed a defect in the instrument that counts them. There are
+> **three**: `13_telemetry_stream.kel::main` (`Stream`), `float_witness.kel::<module>` (a float
+> constant), `refused_witness.kel::len_witness` (`Len`) — where the coverage figure implied two.
+> `module_refusals` reports a whole-module refusal against a symbol that is no chunk's name, and the
+> census marked chunks unlowerable by matching that symbol to a chunk name, so **a module the backend
+> cannot lower at all contributed every chunk to the lowerable count**. `float_witness.kel`'s two
+> chunks were counted as lowerable while nothing was emitted for them. Corrected: **1072 → 1070 of
+> 1074**, instances **89854 → 89841 of 89940**. The previous entry's *delta* stands — the width
+> certification lifted exactly two chunks — but the level was wrong, so the true movement was
+> **1068 → 1070**. The execution evidence never depended on the census. Found by asking two
+> instruments the same question and comparing; neither number looked wrong alone. Absorption 22
+> complete, prediction hit exactly. `native_codegen` **332/0/63**, workspace **2471/0/88**.
+> See [`../decisions/LAST_TWO_CHUNKS_BRIEF.md`](../decisions/LAST_TWO_CHUNKS_BRIEF.md).
+
 > **Currency note (2026-08-28, V0.3.X line, third entry). THE LAST TWO COMPOSITE REFUSALS ARE
 > CLOSED, AND A METHOD ERROR THIS REPOSITORY HAD ALREADY RECORDED WAS REPEATED AND CAUGHT.**
 >
