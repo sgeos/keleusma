@@ -20,8 +20,8 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-28 (session 56) — an inbound finding closed, and Order 1 item 3 moved to three of
-five
+**Date**: 2026-08-28 (session 56 CLOSE) — five merges, Order 1 item 3 at three of five, and the
+twelfth stage's silence explained
 
 ## NOTHING IS WAITING ON YOU EXCEPT THE RULING YOU ALREADY HAVE
 
@@ -31,98 +31,61 @@ not acted on it.** Their own record now says the recommendation *splits* on a qu
 answered — whether the fixed-point format must interoperate across object files from different
 languages. Publication remains held.
 
-## What this increment did
+## Five increments merged, each at 22 of 22
 
-Two things landed. The first closed a finding the `v0.3.0` line handed over and could not close
-themselves; the second is the roadmap item.
+`origin/v0.2.3` at `93e66b24`, **162 merges**, **no open pull request**. Publication remains held.
 
-**ORDER 1 ITEM 3 IS AT THREE OF FIVE.** `field_sets` joins `binding_rows` and `decl_call_rows`.
-Two remain, and only the DECLARED half of `field_sets` moved — its field accesses still walk the
-reference syntax tree, which the function and the test both say in their own words rather than
-letting the headline imply more.
-
-## The part worth your attention: my brief was wrong, cheaply
-
-I wrote a brief saying the work meant surfacing a table held inside `parse.kel`, which would have
-required new emission from a stage that is itself in the byte-identity corpus — a much larger and
-riskier increment.
-
-**`parse.kel` was already emitting all of it.** The struct's name and every field name were on the
-record stream, in declaration order, and the driver mapped the whole run to skip state and threw it
-away. The increment touched no stage source.
-
-**The lesson is not "read more".** I did read — I read the producer's internal data structures and
-reasoned about what the host could not see. The record stream is the interface, and it already
-carried the answer. Reading the producer's internals told me about the producer, not about what
-crosses the boundary. The correction is recorded beside the original claim rather than edited away.
-
-## What mutation testing caught that reasoning did not
-
-The driver had one skip state covering struct, trait and impl declarations, and that state exists
-because those three once faulted the driver on 29 boundary cases. Collecting structs meant
-splitting it.
-
-**Re-admitting trait and impl into the collect leaves the agreement test PASSING**, because its
-probes contain neither. A guard whose corpus lacks the construct is a guard for a different
-question. A second test now carries that case, with its spelling taken from a shipped example
-rather than invented, because five of this line's probes have measured a malformed input and
-reported the result as a finding about the stage.
-
-## The earlier increment, briefly
-
-The `v0.3.0` line observed that the self-hosted codegen's 63 op tags and the driver's decoder are
-two hand-maintained tables whose only guard asserts that decoding does not panic — **a
-transposition passed it**. There were **three** tables, not two; the third is the decoder copy the
-differential oracle actually runs, which the shipping decoder claims lockstep with and nothing
-checked. **They agree**, now measured rather than inferred.
-
-And a measurement that bears on coverage generally: **sixteen of the sixty-three tags are exercised
-by no stage source**, so the self-hosting oracle cannot see a transposition among them. Scoped
-deliberately — the per-construct tests do cover composites, so these are invisible to that oracle,
-not unchecked.
+| | |
+|---|---|
+| #308 | the op-tag tables agree, and something now checks that they do |
+| #309 | `field_sets` reaches the type channel — Order 1 item 3 at **three of five** |
+| #310 | the declared names reach it too, and the wildcard-import gap is located |
+| #311 | the twelfth stage does not self-compile, and the tree now says why |
+| #312 | a second corpus narrows the unexercised op tags from sixteen to four |
 
 ## Nothing is waiting on you except the ruling you already have
 
 **The floating-point entry ABI is still the last of your eight rulings unimplemented**, with the
 `v0.3.0` line's `Fixed` shared-slot SCALE question attached. **It is theirs to bring you and I have
-not acted on it.** Publication remains held.
+not acted on it.** Their record says the recommendation now splits on a question you have not
+answered: whether the fixed-point format must interoperate across object files from different
+languages.
 
-## One observation, attributed rather than assumed
+## The one mistake I made three times
 
-`cargo clippy --tests --no-default-features -- -D warnings` fails with seven diagnostics, and fails
-**identically on a clean tree** — established by stashing, not inferred. Pre-existing, not a
-combination continuous integration runs, and not fixed here because it is outside what these
-increments were about.
+**I reasoned from a component's internals about what crosses its boundary.** Twice I read the
+parser's data structures, concluded the host could not see something, and sized a large increment —
+and the record stream already carried it, so both slices needed no stage change at all. Once I
+inspected a function's constructs to explain a refusal and named three plausible culprits;
+declaration order was the cause and none of the three mentioned it.
 
-## The twelfth stage, which I would want you to know about
+I measured before acting on the second and third occasions, which is the only reason they cost
+nothing. Both handoffs now carry the rule and name the two instruments.
 
-`verify_types.kel` is the only stage source with no byte-identity test, and nothing in the tree
-recorded why, so the absence read as an oversight. **It is refused, reproducibly.**
+## The decision I want visible rather than taken quietly
 
-A function reads a `data` block declared **later in the file**, and the self-hosted parser resolves
-`block.field` against a table it builds as it meets each block, so the reference resolves to
-nothing. Four-line witness, with a control that differs only in declaration order.
+**`verify_types.kel`, the twelfth stage, does not self-compile.** A function reads a `data` block
+declared later in the file, and the parser builds its field table as it meets each block, so the
+reference resolves to nothing. Four-line witness, with a control differing only in declaration
+order.
 
-**I did not attempt the repair.** It means collecting data declarations before parsing bodies,
-which is a two-pass restructuring of a single-pass streaming parser rather than a defect fix. That
-is a decision I would rather you saw than have me take quietly inside a session. What landed is the
-reproduction, the control, and a derived pin that the corpus is eleven of twelve with the missing
-stage named — so the absence is now a documented gap instead of folklore.
+**I did not attempt the repair.** It means collecting data declarations before parsing bodies — a
+two-pass restructuring of a single-pass streaming parser, not a defect fix. What landed converts an
+unexplained absence into a documented, reproducible gap whose pins fire when it closes. If you want
+the corpus at twelve, that is the next large item and it is your call whether it is worth the
+restructuring.
 
-Three plausible hypotheses failed before the structural one succeeded, and none of them mentioned
-declaration order.
+## Two things I corrected in my own work
+
+A guard I wrote earlier in the session compared arm **spellings** where its own message described
+which **codes** were handled; splitting a range made that visible and it now compares coverage.
+
+And a mutation harness reported "zero compile errors" for three mutants while running **nothing** —
+a shell variable escaped inside a quoted heredoc. Zero errors from a command that never ran looks
+exactly like a clean mutant. Re-run properly, two of three fired.
 
 ## What I would take up next
 
-Either the two-pass data resolution above — which would take the corpus to twelve and is the
-largest single remaining item I can see — or the occurrences half of `occurrence_rows`. Local reads
-are body record code 2 carrying a SLOT, and the driver holds parameter and `let` names, so a
-slot-to-name map is available.
-
-## A postscript on the session's most repeated mistake
-
-I predicted three times that a slice would be harder or differently shaped than it was, each time by
-reasoning from a component's internals rather than from the interface. Twice the record stream
-already carried the answer; once the culprit was declaration order rather than any of the three
-constructs I suspected. The instrument for the first kind is `parse_record_trace`; for the second it
-is bisecting against the real file with a control. Both handoffs now say so.
+Either the two-pass data resolution above, which would take the byte-identity corpus to twelve and
+is the largest single item I can see; or the occurrences half of `occurrence_rows`, where local
+reads are body record code 2 carrying a slot and the driver already holds parameter and `let` names.
