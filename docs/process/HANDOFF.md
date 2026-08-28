@@ -5,15 +5,15 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-08-28 (session 56) against `93e66b24`, WHICH IS `origin/v0.2.3` ITSELF.**
+> **REFRESHED 2026-08-28 (session 56 CLOSE) against `7ae01f74`, WHICH IS `origin/v0.2.3` ITSELF.**
 > Not a branch head. Every pinned value below was DERIVED on that tree, not recalled, and the
 > whole check block was executed against it: **37 test-count pins, all matching.**
 > **THIS FILE HAS GONE STALE WITHIN HOURS SIX TIMES**; if the dates here disagree with the three
 > channels, trust the channels.
 >
-> **NO PULL REQUEST IS OPEN.** Five merged in session 56, each at 22 of 22 green.
+> **NO PULL REQUEST IS OPEN.** Six merged in session 56, each at 22 of 22 green.
 >
-> **AS OF `93e66b24`: 162 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive
+> **AS OF `7ae01f74`: 163 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive
 > it: `git log --oneline origin/v0.2.3 | grep -c 'Merge pull request'`. **NOTE THE REF** -- the
 > local `v0.2.3` lags and answers a smaller number for the same tree.
 >
@@ -67,9 +67,10 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > **choose its predicate deliberately** -- "does it compile" passes everywhere once the file compiles
 > at all, so the predicate had to be *do these chunks match the reference*.
 >
-> **ORDER 1 ITEM 3: THREE OF FIVE EXTRACTIONS MOVED**, and part of a fourth. `binding_rows`,
+> **ORDER 1 ITEM 3: FOUR OF FIVE EXTRACTIONS MOVED.** One remains,
+> `expression_nodes_resolvable`. `binding_rows`,
 > `decl_call_rows`, then `field_sets` on 2026-08-28. The count is DERIVED by
-> `the_moved_extraction_count_is_three_of_five`, never restated.
+> `the_moved_extraction_count_is_four_of_five`, never restated.
 >
 > **TWO OF THE MOVES ARE PARTIAL AND THE TREE SAYS SO RATHER THAN ROUNDING UP.** Only the DECLARED
 > half of `field_sets` moved; its field accesses still walk the reference tree. And
@@ -118,7 +119,7 @@ git merge-base --is-ancestor 5c3ba628 HEAD    # must succeed
 # matches the MARGIN PIN line further down and reads 681 as a test count for
 # `tests/selfhost_wire.rs`, which is pinned at 178. That false DIFF has been produced three
 # times by three sessions writing the same careless one-liner. It is the checker being wrong.
-grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 22
+grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 25
 grep -c '^\s*#\[test\]' tests/selfhost_wire.rs              # 178
 grep -c '^\s*#\[test\]' tests/selfhost_parse.rs             # 89
 grep -c '^\s*#\[test\]' tests/selfhost_codegen.rs           # 142
@@ -187,7 +188,7 @@ awk '/const UNRESOLVED/,/^\];/' tests/comment_citations.rs | grep -cE '^\s+"'   
 # THE TYPE-CHANNEL EXTRACTIONS MOVED TO THE PIPELINE. Two of five.
 grep -oE 'pub fn [a-z_]+_from_pipeline' src/selfhost/mod.rs | sort -u
 #   binding_rows_from_pipeline, chunk_names_from_pipeline, decl_call_rows_from_pipeline,
-#   declared_names_from_pipeline, field_sets_from_pipeline
+#   declared_names_from_pipeline, field_sets_from_pipeline, occurrence_rows_from_pipeline
 
 # THE PARSER'S CAPS. Unchanged.
 grep -rhoE 'pub const PARSE_[A-Z_]+: usize = [0-9]+;' src/ | sort
@@ -281,10 +282,51 @@ gh run list --branch v0.2.3 --limit 1
 
 ## WHAT A RESUMING SESSION SHOULD DO FIRST
 
-**ONE. THERE IS NO BLOCKER AND NO OPEN PULL REQUEST.** `origin/v0.2.3` at `93e66b24`, 162 merges,
+**ONE. THERE IS NO BLOCKER AND NO OPEN PULL REQUEST.** `origin/v0.2.3` at `7ae01f74`, 163 merges,
 nothing in flight. **Do not invent urgency.**
 
-**TWO. THE NEXT SLICE IS THE FOURTH TYPE-CHANNEL EXTRACTION**, `occurrence_rows`, leaving
+**TWO. THE LAST TYPE-CHANNEL EXTRACTION IS `expression_nodes_resolvable`**, and it is the largest
+at 142 lines behind its thin wrapper. Four of five have moved; this is the one that completes Order
+1 item 3. **Read the record stream first** -- see the rule at the top of this file, which two of the
+four slices proved the hard way.
+
+**IT IS SIZED, SO DO NOT RE-DERIVE THAT. IT EMITS EIGHT NODE KINDS**, and each needs its own
+forest mapping plus operand classification:
+
+| kind | note |
+|---|---|
+| `BINOP` | |
+| `ARRAY_ELEM` | |
+| `CONDITION` | |
+| `BRANCH_PAIR` | |
+| `FIELD_ON_VALUE` | **composite** |
+| `INDEX_ON_VALUE` | **composite** |
+| `STRUCT_LIT` | **composite** |
+| `TAIL_VS_RETURN` | |
+
+Each operand is reported as `(value, form)` where form 0 is a TAG and form 1 a NAME. The
+name-resolution half is already available: `occurrence_rows_from_pipeline` builds a slot-to-name
+map from parameter names and `let_names` looked up BY SLOT, and that is the piece the previous
+four slices had to invent each time.
+
+**THE THREE COMPOSITE KINDS ARE THE RISK, AND THERE IS EVIDENCE FOR THAT RATHER THAN A HUNCH.**
+The occurrences slice established that the reference and the pipeline **disagree about what an
+occurrence IS** for a composite: `d.q` is a field access over an `Ident` on one side and a single
+data-read node on the other. Expect the same class of representational mismatch on
+`FIELD_ON_VALUE`, `INDEX_ON_VALUE` and `STRUCT_LIT`, and settle it with a probe against the
+reference BEFORE designing the mapping.
+
+**SESSION 56 DECLINED TO START THIS** rather than risk a partial migration counted as a whole one,
+which is the failure the count pin exists to prevent. That is a scope judgement, not a blocker: the
+work is well defined and the sizing above is the measurement it was declined on.
+
+**AND THE OTHER LARGE ITEM IS THE OPERATOR'S TO CALL, NOT YOURS TO START.** Making
+`verify_types.kel` self-compile means collecting `data` declarations before parsing bodies: a
+two-pass restructuring of a single-pass streaming parser. Session 56 flagged it to the operator in
+`REVERSE_PROMPT.md` as their decision rather than beginning it. **Do not quietly start it.**
+
+**THE SUPERSEDED GUIDANCE, kept because the reasoning still applies:** the fourth extraction was
+`occurrence_rows`, leaving
 `expression_nodes_and_derived` (142 lines, behind its thin wrapper) for last despite it being the
 one the capability argument wants, because it is the largest.
 
@@ -781,7 +823,7 @@ are asserted**.
    nothing, and the reason is the same census as item 1: both are written only for `Struct` and `Enum`
    constants, and there are none.
 3. **The type checker's INPUT. THREE OF FIVE EXTRACTIONS ARE MOVED**, and the figure is derived by
-   `the_moved_extraction_count_is_three_of_five` rather than restated here. `binding_rows` moved
+   `the_moved_extraction_count_is_four_of_five` rather than restated here. `binding_rows` moved
    first, `decl_call_rows` second, `field_sets` third; `occurrence_rows` and the largest,
    `expression_nodes_and_derived` behind its thin wrapper, still walk the REFERENCE parser's AST.
    **`field_sets` moved only its DECLARED half** -- the field ACCESSES need a classifier over the

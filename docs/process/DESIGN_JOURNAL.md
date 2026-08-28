@@ -13,6 +13,95 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-28 — A census whose population moved under it, reported by the other line
+
+**THE `v0.3.0` LINE REPORTED ONE OF MY TESTS RED ON THEIR BRANCH, WITH THE CAUSE ESTABLISHED AND
+THE OWNER NAMED, AND DECLINED TO EDIT IT.** They hold `src/` and `tests/` byte-identical to
+`v0.2.3` as an invariant and said editing another line's test would destroy the property that makes
+their ownership checks meaningful. That was the right call.
+
+**VERIFIED RATHER THAN TAKEN ON TRUST, AND CORRECT IN EVERY PARTICULAR.** Six witness programs
+exist only on their branch; `opcode_witness.kel`'s `byte_mix` does `Byte` addition, subtraction and
+multiplication, which lower to the unchecked forms and cover `addop`, `subop`, `mulop`. Its
+`-prod` lowers to `Op::Neg`, which is not one of the sixty-three stage tags at all, so `checkedneg`
+survives as their sole residue.
+
+**THE DEFECT'S SHAPE IS THE TRANSFERABLE PART: THE TEST'S INPUT LIVED OUTSIDE THE REGION ITS
+EXPECTATION WAS PINNED IN.** It scanned a directory for every `*.kel` while pinning the answer as a
+constant in the test file. **A directory scan is not a corpus; it is whatever the branch happens to
+contain.** An invariant over `src/` and `tests/` cannot protect a test whose inputs are in neither.
+
+The population is now fifteen NAMED programs present on both lines, so the exact-set assertion
+keeps BOTH directions without depending on which branch runs it. **Verified by copying their six
+witnesses into this tree and re-running**: it passes at twenty-one examples exactly as at fifteen.
+
+**AND I ALMOST SHIPPED A GUARD THAT COULD NOT FIRE, WHILE FIXING A DIFFERENT DEFECT IN THE SAME
+TEST.** The first fix also scanned the real directory and asserted its residue was a SUBSET of the
+named one, as a net surviving extra files. Once the existence check passes, the directory is a
+SUPERSET of the named files, so it exercises at least as many operations and the subset holds by
+construction — the assertion could never fail. Removed, with the reasoning left in the file.
+
+**That is the class this repository has recorded most often, and it arrived by the least expected
+route: not in the guard being written for its own sake, but as a bonus net bolted onto a repair.**
+The repair is where the incentive to stop looking is strongest, which this line already wrote down
+once about validating a fix with the method that found the defect.
+
+**A CORRECTION OFFERED BACK.** Their pushed `origin/v0.3.0` does not contain this test at all —
+their absorption is ahead of their published ref. Their quoted values match my constant exactly so
+they plainly have it locally; it is flagged only because anyone checking the report against the
+published ref would find the test missing and could read that as a disagreement.
+
+**AND A FINDING FOR THEM, OUT OF VERIFYING THEIRS.** `Op::Neg` exists in the instruction set and
+the self-hosted codegen assigns it no tag. Byte negation is therefore OUTSIDE the self-hosted
+subset rather than merely unexercised — a different statement from the one the census makes about
+`checkedneg`, and one that may matter to their lowering census.
+
+## 2026-08-28 — The occurrences move, and both exclusions were measured rather than assumed
+
+**ORDER 1 ITEM 3 IS AT FOUR OF FIVE.** `occurrence_rows_from_pipeline` carries the name
+occurrences; the declared half moved separately three increments earlier under a name the count pin
+deliberately does not match. **One extraction remains**, `expression_nodes_resolvable`.
+
+**THE PIN'S DOCUMENTATION NOW CARRIES A TABLE OF WHAT DID NOT MOVE**, for each of the four,
+because a count of four of five would otherwise read as completeness. `decl_call_rows` left its
+actual-argument tag; `field_sets` left its field accesses; `occurrence_rows` leaves two shapes.
+Every residual is stated where its function is defined and pinned by its own test.
+
+**THE TWO EXCLUSIONS ARE DIFFERENT IN KIND, AND THE DIFFERENCE IS THE FINDING.**
+
+A `data` block identifier is **representational**: the reference sees `d.q` as a field access whose
+object is an `Ident` and records `d`; the pipeline sees one data-read node carrying a block index
+and has no ident node at all. Nothing is missing from the wire — the two representations disagree
+about what an occurrence is.
+
+A `for` loop variable is **a wire gap**: its read reaches the forest as an ordinary local node, and
+**nothing binds its slot to its name**. Only `let` bindings emit a name record, the one added under
+the operator's ruling on that fork. So the slot resolves to nothing and the occurrence is DROPPED
+rather than reported under a wrong name, which is the better of the two failures and worth saying.
+Closing it is the same shape of change as the record that already exists.
+
+**BOTH WERE FOUND BY PROBING, NOT BY READING.** A throwaway comparison over nine shapes reported
+seven matches and two differences, and the two were then explained by tracing the record stream.
+Had I written the agreement test against the shapes I expected to work, the corpus would have
+excluded exactly the cases that reveal the boundary, and the test would have passed while saying
+nothing about it.
+
+**A DEFECT THE PROBE CAUGHT BEFORE ANY TEST EXISTED.** `let_names` carries `(slot, name)`. My first
+revision paired it positionally against the `LetIn` nodes and read the tuple backwards, so every
+`let` occurrence came back under the ENCLOSING FUNCTION'S name — `main` where `a` belonged. The
+driver already had the right convention in `binding_rows_from_pipeline`: look up BY SLOT. **Seventh
+occasion this line has written something the tree already had**, and the cheapest to catch, because
+the probe compared against the reference rather than against my expectation.
+
+**MUTATION-TESTED, EACH MUTANT CONFIRMED TO COMPILE.** Restoring the backwards tuple read fires the
+agreement test, and so does dropping the call arm. The exclusions' pins fire in the FAILING
+direction when their gaps close, so neither can quietly become permanent.
+
+**THE COMPARISON IS A MULTISET, AND THAT IS DELIBERATE.** The reference walks a syntax tree and the
+pipeline walks a reconstructed forest; the two visit orders have no reason to coincide, and
+requiring them to would test the traversal rather than the occurrences. Names are carried as
+strings on both sides, for the third slice running.
+
 ## 2026-08-28 — A second corpus, and the op-tag residue narrows from sixteen to four
 
 **A CAVEAT I WROTE THIS SESSION IS NOW PARTLY ANSWERED, BY MEASUREMENT.** The first op-tag census

@@ -2186,6 +2186,110 @@ pub fn declared_names_from_pipeline(src: &str) -> Vec<String> {
     out
 }
 
+/// One name occurrence in a function body: the NAME, whether it is a local, and whether the
+/// occurrence is a call.
+pub type OccurrenceRow = (String, i64, i64);
+
+/// Name occurrences in function bodies, from the PIPELINE.
+///
+/// # What is covered and what is not, measured rather than claimed
+///
+/// The reference's `occurrence_rows` records every `Call` and every `Ident` expression. This
+/// covers the two the forest represents directly: a `Local` node, whose slot resolves to a
+/// parameter or `let` name, and a `Call` node, whose chunk index resolves to the callee's name.
+///
+/// **TWO KINDS OF OCCURRENCE ARE NOT COVERED, AND BOTH WERE MEASURED RATHER THAN GUESSED.**
+///
+/// 1. **An identifier naming a `data` block.** The reference sees `d.q` as a field access whose
+///    object is an `Ident`, and records `d` as a non-local occurrence. The pipeline sees a single
+///    data-read node carrying a block index, with no ident node at all. A difference in
+///    REPRESENTATION, not missing plumbing.
+/// 2. **A `for` loop variable.** Its READ appears in the forest as an ordinary local node, but
+///    **nothing on the wire binds its slot to its name**: only `let` bindings emit a name record,
+///    the one added under the operator's ruling on that fork. So the slot resolves to nothing and
+///    the occurrence is dropped rather than reported under a wrong name.
+///
+/// Both are pinned by tests that fire when they close, so the exclusions cannot quietly become
+/// permanent. Closing the second is the same shape of change as the `let` name record that
+/// already exists.
+///
+/// # A defect this function had before it worked
+///
+/// `let_names` carries `(slot, name)`. An earlier revision paired it positionally against the
+/// `LetIn` nodes and read the tuple backwards, so every `let` occurrence came back under the
+/// ENCLOSING FUNCTION'S name — `main` where `a` was meant. It is now looked up BY SLOT, the way
+/// `binding_rows_from_pipeline` already does it. **Two extractions, one convention.**
+#[must_use]
+pub fn occurrence_rows_from_pipeline(src: &str) -> Vec<OccurrenceRow> {
+    let (fns, names, ..) = parse_functions_fused(src);
+    let name_of = |id: i64| -> Option<String> { names.get(id as usize).cloned() };
+    let chunk_names = chunk_names_from_pipeline(src);
+
+    let mut out: Vec<OccurrenceRow> = Vec::new();
+    let mut i = 0usize;
+    while i < fns.len() {
+        let Some(group_name) = name_of(fns[i].name) else {
+            i += 1;
+            continue;
+        };
+        let mut group: Vec<&ParsedFn> = vec![&fns[i]];
+        let mut j = i + 1;
+        while j < fns.len() && name_of(fns[j].name).as_deref() == Some(group_name.as_str()) {
+            group.push(&fns[j]);
+            j += 1;
+        }
+        i = j;
+        let pc = group[0].params;
+        let body = if is_multihead_group(&group) {
+            reconstruct_via_kel_multihead(&group, pc, &group_name)
+        } else {
+            let category = reconstruct_category(group[0].cat);
+            reconstruct_via_kel(&group[0].body, category, pc, &group_name)
+        };
+
+        // SLOT TO NAME. Parameters take the low slots in declaration order; each `let` takes the
+        // slot its `LetIn` node carries, paired with the names the record stream reported in
+        // program order. Pairing by ORDER rather than guessing an allocation rule: the stage
+        // reports both sequences and the driver already keeps them.
+        let mut slot_name: alloc::collections::BTreeMap<i64, String> =
+            alloc::collections::BTreeMap::new();
+        for (slot, &pid) in group[0].param_names.iter().enumerate() {
+            if let Some(n) = name_of(pid) {
+                slot_name.insert(slot as i64, n);
+            }
+        }
+        // `let_names` carries `(slot, name)` -- the slot is filled in from the `LetIn` record
+        // that follows the name record. Looked up BY SLOT, the same way `binding_rows_from_pipeline`
+        // does it, rather than by pairing two sequences in order: an earlier revision of this
+        // function paired them positionally and read the tuple backwards, reporting the enclosing
+        // function's own name where a binding's should have been.
+        for &(slot, nid) in &group[0].let_names {
+            if let Some(n) = name_of(nid) {
+                slot_name.insert(slot, n);
+            }
+        }
+
+        for node in &body.nodes {
+            match node.kind {
+                // A local read. Its slot names a parameter or a `let` binding.
+                2 => {
+                    if let Some(n) = slot_name.get(&node.arg) {
+                        out.push((n.clone(), 1, 0));
+                    }
+                }
+                NODE_CALL => {
+                    if let Some(callee) = chunk_names.get(node.arg as usize) {
+                        let local = i64::from(slot_name.values().any(|n| n == callee));
+                        out.push((callee.clone(), local, 1));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
 /// One struct's declared field set: the type's name and its field names, in declaration order.
 ///
 /// **Names, not indices, and that is load-bearing.** `field_sets` in
