@@ -438,10 +438,11 @@ fn main() -> Word { f(true) }
     // admission verdict from a program that never reaches `Op::Len` settles
     // nothing, and this line has broken eleven guards this session by skipping
     // exactly this step.
-    let emits = m
-        .chunks
-        .iter()
-        .any(|c| c.ops.iter().any(|o| matches!(o, keleusma::bytecode::Op::Len)));
+    let emits = m.chunks.iter().any(|c| {
+        c.ops
+            .iter()
+            .any(|o| matches!(o, keleusma::bytecode::Op::Len))
+    });
     println!("  compiles: yes.  emits Op::Len: {emits}");
     if !emits {
         println!("  VERDICT: INCONCLUSIVE -- the limit form compiles but the opcode is");

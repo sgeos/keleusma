@@ -221,6 +221,19 @@ $$
 `yield`.** This is the live-defect branch, not the benign one. It is not caught by the epoch guard,
 and it is not caught by the differential — no corpus module has the shape.
 
+> **⚠ NOTE ADDED BY THE V0.3.X LINE, 2026-08-27, ON THE LAST CLAUSE ONLY.** The argument above is
+> untouched and this note disputes none of it. **The clause "no corpus module has the shape" is
+> false**: `examples/scripts/13_telemetry_stream.kel` was written to carry it and says so in its
+> header, at chunk 0, built at op 24 and yielded at op 25. The reason the differential does not
+> catch it is different and worse — **the native backend refuses that module for a missing opcode**
+> (`native lowering does not yet support opcode Stream`), so the safety is accidental and expires
+> when `Stream` lowers. The V0.3.X backend now refuses the shape explicitly
+> (`LowerError::YieldEscapingLoopComposite`) at a measured cost of zero newly-refused chunks. That
+> **narrows the obligation and does not discharge it**: slot reuse is unchanged and the
+> interprocedural case is still open, so **Appendix D's row stands as written**. Recorded here
+> rather than edited into the proof, because the proof is the `proofs` line's document.
+> See `docs/decisions/YIELD_ESCAPE_REFUSAL.md`.
+
 Their independent measurement of the §4.1 program: stack $320$, heap $112$, where
 $112 = 2\times24$ (loop-body site, two iterations) $+\;24 + 24$ (the straight-line sites)
 $+\;16$ (the array) — **exactly $k \times \mathrm{sz}$.** The backend's $\mathrm{sites} \times

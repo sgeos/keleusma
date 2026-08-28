@@ -166,6 +166,117 @@ pub fn plan_chunk_region(chunk: &Chunk) -> RegionLayout {
     RegionLayout { sites, bytes: next }
 }
 
+/// One `NewComposite` site that this pass places at a fixed offset, together
+/// with a `Yield` that can carry the value it builds out to the host while a
+/// later iteration overwrites that offset in place.
+///
+/// See [`yield_escape_hazards`] for what is and is not detected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct YieldEscapeHazard {
+    /// Index into the chunk's `ops` of the construction site.
+    pub site_op: usize,
+    /// Index into the chunk's `ops` of a `Yield` in the same scope.
+    pub yield_op: usize,
+    /// The enclosing `Loop` scope, as a half-open `[lo, hi)` range over `ops`.
+    pub scope: (usize, usize),
+}
+
+/// Half-open `[lo, hi)` bodies of every `Loop` scope, innermost and outermost
+/// alike, paired with the scope's exit label.
+///
+/// Nesting is handled with a stack, so a site inside a `match` inside a `for`
+/// appears in BOTH scopes. That is what makes the enclosing-loop question
+/// answerable without a separate nesting walk.
+fn loop_scopes(ops: &[Op]) -> Vec<(usize, usize, u16)> {
+    let mut open: Vec<(usize, u16)> = Vec::new();
+    let mut out = Vec::new();
+    for (i, op) in ops.iter().enumerate() {
+        match op {
+            Op::Loop(a) => open.push((i, *a)),
+            Op::EndLoop(_) => {
+                if let Some((s, a)) = open.pop() {
+                    out.push((s + 1, i, a));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Sites whose fixed offset can be overwritten while the host still holds the
+/// value built there.
+///
+/// # The defect this detects
+///
+/// [`plan_chunk_region`] gives each site ONE offset for the life of the chunk,
+/// so a site in a loop body writes the same bytes on every iteration. After
+/// B28 a composite is `FlatComposite::Arena(ArenaHandle<[u8]>)` — a pointer and
+/// length, not a copy — and the epoch it carries is advanced only by a `RESET`.
+/// **An overwrite in place advances nothing**, so a host holding iteration `n`'s
+/// handle calls `resolve`, succeeds, and reads iteration `n+1`'s bytes. The
+/// failure is a silently wrong value rather than a `Stale` error, which is why
+/// it must be refused at compile time instead of caught at run time.
+///
+/// Established against the runtime by the `v0.2.3` line and recorded in
+/// `docs/proofs/COMPOSITE_REGION_REUSE.md` §4.1.1.
+///
+/// # What this over-approximates, and in which direction
+///
+/// Every relaxation here reports MORE hazards than exist, never fewer, so a
+/// caller that refuses on a non-empty result cannot be argued into emitting the
+/// defect:
+///
+/// - **Every `Loop` scope counts as iterating.** `Op::Loop` is a break-scope
+///   marker that the compiler also emits for `match` and for multi-clause
+///   dispatch, and those run once. Excluding them would be the natural
+///   precision win and it is NOT taken: a real loop containing `break` is
+///   indistinguishable from a `match` by that test, and excluding it would drop
+///   a genuinely iterating scope.
+/// - **Any `Yield` in the scope counts**, including one textually before the
+///   site, because control returns to the top of the body and reaches it on the
+///   next iteration.
+/// - **No data flow is traced** from the site to the `Yield`. A site whose value
+///   demonstrably never reaches the yield is still reported.
+///
+/// # What it does NOT detect, stated rather than implied
+///
+/// **The interprocedural case is open.** A composite built in a loop body,
+/// returned to a caller, and yielded THERE is a hazard this function cannot
+/// see, because it reads one chunk. Callers must not read an empty result as
+/// "this module is free of the defect"; it means "no single-chunk instance".
+/// Bounding the residual is the `Call` disqualifier in
+/// `tests/loop_composite_census.rs`.
+pub fn yield_escape_hazards(chunk: &Chunk) -> Vec<YieldEscapeHazard> {
+    let mut out: Vec<YieldEscapeHazard> = Vec::new();
+    // `loop_scopes` completes an inner scope before the outer one that contains
+    // it, so the FIRST report for a site is its innermost enclosing scope. One
+    // site enclosed by several scopes is ONE hazard, not one per scope; without
+    // this a cost census would count the same defect twice and overstate what
+    // refusing costs.
+    for (lo, hi, _exit) in loop_scopes(&chunk.ops) {
+        let body = &chunk.ops[lo..hi];
+        let Some(yield_at) = body.iter().position(|o| matches!(o, Op::Yield)) else {
+            continue;
+        };
+        for (k, op) in body.iter().enumerate() {
+            if !matches!(op, Op::NewComposite(NewCompositeOperand::Flat { .. })) {
+                continue;
+            }
+            let site_op = lo + k;
+            if out.iter().any(|h| h.site_op == site_op) {
+                continue;
+            }
+            out.push(YieldEscapeHazard {
+                site_op,
+                yield_op: lo + yield_at,
+                scope: (lo, hi),
+            });
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,6 +304,42 @@ mod tests {
         let mut c = m.chunks.into_iter().next().expect("one chunk");
         c.ops = ops;
         c
+    }
+
+    /// A site enclosed by BOTH an inner `match` scope and an outer loop that
+    /// yields is one defect, and must be reported once.
+    ///
+    /// Built from ops directly because the shape needed -- a construction inside
+    /// a nested scope, with the `Yield` in the outer one -- is awkward to
+    /// provoke from source, and the property under test is about the walk rather
+    /// than about the compiler.
+    #[test]
+    fn a_site_under_nested_scopes_is_one_hazard_not_one_per_scope() {
+        let c = chunk_with(vec![
+            Op::Loop(1),    // 0  outer, iterating
+            Op::Loop(2),    // 1  inner, match-like
+            flat(8, 1),     // 2  the site
+            Op::EndLoop(2), // 3
+            Op::Yield,      // 4  reached on the next iteration
+            Op::EndLoop(1), // 5
+            Op::Return,     // 6
+        ]);
+        let h = yield_escape_hazards(&c);
+        assert_eq!(h.len(), 1, "one site, one hazard, got {h:?}");
+        assert_eq!(h[0].site_op, 2);
+        assert_eq!(h[0].yield_op, 4);
+        // The INNER scope has no `Yield`, so the hazard must be attributed to
+        // the outer one. Attributing it inward would name a scope in which the
+        // value cannot escape.
+        assert_eq!(h[0].scope, (1, 5));
+    }
+
+    /// The predicate must be able to return nothing, or the dedupe test above
+    /// proves only that it returns one of something.
+    #[test]
+    fn a_loop_without_a_yield_reports_no_hazard() {
+        let c = chunk_with(vec![Op::Loop(1), flat(8, 1), Op::EndLoop(1), Op::Return]);
+        assert!(yield_escape_hazards(&c).is_empty());
     }
 
     /// A chunk that constructs nothing reserves nothing, and must be

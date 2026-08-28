@@ -103,6 +103,21 @@ Current sprint source of truth.
 > **THREE CHECKS WRITTEN THIS SESSION COULD NOT FAIL**, each satisfied by a different part of a
 > document from the one it was about. Mutation caught all three; reading caught none.
 
+> **Currency note (2026-08-27, V0.3.X line, second entry). THE REASON THE SLOT-REUSE DEFECT STAYED
+> QUIET WAS NOT THE RECORDED ONE, AND THE SHAPE IS NOW REFUSED.**
+>
+> The premise "no corpus module has the escaping shape", restated in two documents, is **false**.
+> `examples/scripts/13_telemetry_stream.kel` carries it deliberately and says so in its header.
+> Latency came from the backend refusing that module for a **missing opcode** (`Stream`), so the
+> safety was accidental and expires when `Stream` lowers. The backend now refuses the shape at the
+> placement (`LowerError::YieldEscapingLoopComposite`), at a measured cost of **zero newly-refused
+> chunks**, with `61 of 66` and `1070 of 1074` both holding. **The obligation is narrowed, not
+> discharged**: slot reuse is unchanged and the interprocedural case is still invisible. The refusal
+> is shadowed by the `Stream` refusal today; fireability was proven by bytecode mutation and a
+> tripwire test fails when `Stream` lands. Absorption 18 is complete, both pre-recorded predictions
+> hit exactly, and `native_codegen` is **314/0/59** and clean under `clippy -D warnings` for the
+> first time. See [`../decisions/YIELD_ESCAPE_REFUSAL.md`](../decisions/YIELD_ESCAPE_REFUSAL.md).
+
 > **Currency note (2026-08-27, V0.3.X line). NATIVE CODE GENERATION REACHES 61 OF 66 OPCODES, AND
 > ONE SOUNDNESS OBLIGATION IS OPEN.**
 >

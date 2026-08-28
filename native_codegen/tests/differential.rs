@@ -2720,15 +2720,14 @@ fn fixed_division_agrees_with_the_vm_including_saturation() {
     // unaffected.
     // **ONE function**: the harness lowers `chunks[0]` and calls the VM's entry,
     // which coincide only for a single-function program.
-    let q16 =
-        "fn main(a: Word, b: Word) -> Word { ((a as Fixed<16>) / (b as Fixed<16>)) as Word }";
+    let q16 = "fn main(a: Word, b: Word) -> Word { ((a as Fixed<16>) / (b as Fixed<16>)) as Word }";
     for (a, b) in [
-        (6i64, 3),   // ordinary: a wrong shift DIRECTION shows up here
-        (7, 2),      // truncating quotient
-        (-7, 2),     // negative dividend
-        (7, -2),     // negative divisor
-        (5, 5),      // degenerate control
-        (1, 4),      // quotient below one
+        (6i64, 3), // ordinary: a wrong shift DIRECTION shows up here
+        (7, 2),    // truncating quotient
+        (-7, 2),   // negative dividend
+        (7, -2),   // negative divisor
+        (5, 5),    // degenerate control
+        (1, 4),    // quotient below one
     ] {
         assert_agrees(q16, &[a, b]);
     }
@@ -2745,8 +2744,7 @@ fn fixed_division_agrees_with_the_vm_including_saturation() {
     // NOT** -- both operands are widened to `i128` first, so the quotient is
     // representable and the clamp carries it back. If that reasoning were wrong,
     // this case is where it breaks.
-    let q0 =
-        "fn main(a: Word, b: Word) -> Word { ((a as Fixed<0>) / (b as Fixed<0>)) as Word }";
+    let q0 = "fn main(a: Word, b: Word) -> Word { ((a as Fixed<0>) / (b as Fixed<0>)) as Word }";
     // **THE SATURATION IS PROVEN TO HAPPEN before agreement is read.** Agreement
     // on a case that quietly never reaches the clamp is agreement about nothing,
     // and this line has repeatedly found guards that could not fire. If the

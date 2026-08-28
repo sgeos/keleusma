@@ -162,7 +162,9 @@ fn all_compiling_modules() -> Vec<(String, Module)> {
     let mut stack: Vec<std::path::PathBuf> = CORPUS_DIRS.iter().map(|d| root.join(d)).collect();
     let mut paths = Vec::new();
     while let Some(p) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&p) else { continue };
+        let Ok(rd) = std::fs::read_dir(&p) else {
+            continue;
+        };
         for e in rd.flatten() {
             let q = e.path();
             if q.is_dir() {
@@ -182,7 +184,10 @@ fn all_compiling_modules() -> Vec<(String, Module)> {
         let Ok(ast) = parse(&toks) else { continue };
         let Ok(m) = compile(&ast) else { continue };
         out.push((
-            p.file_name().unwrap_or_default().to_string_lossy().to_string(),
+            p.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string(),
             m,
         ));
     }
@@ -234,11 +239,18 @@ fn max_sites_on_a_path(ops: &[Op]) -> usize {
 }
 
 fn module_sites(m: &Module) -> usize {
-    m.chunks.iter().map(|c| c.ops.iter().filter(|o| is_site(o)).count()).sum()
+    m.chunks
+        .iter()
+        .map(|c| c.ops.iter().filter(|o| is_site(o)).count())
+        .sum()
 }
 
 fn module_path_max(m: &Module) -> usize {
-    m.chunks.iter().map(|c| max_sites_on_a_path(&c.ops)).max().unwrap_or(0)
+    m.chunks
+        .iter()
+        .map(|c| max_sites_on_a_path(&c.ops))
+        .max()
+        .unwrap_or(0)
 }
 
 /// **THE WALK DISCRIMINATES, shown before its output is believed.**
@@ -257,7 +269,11 @@ fn the_path_walk_separates_sequential_sites_from_exclusive_ones() {
     };
 
     // Two sites in sequence: both live.
-    assert_eq!(max_sites_on_a_path(&[site(), site()]), 2, "sequential sites accumulate");
+    assert_eq!(
+        max_sites_on_a_path(&[site(), site()]),
+        2,
+        "sequential sites accumulate"
+    );
 
     // Two sites in opposite arms: one live.
     assert_eq!(
@@ -287,7 +303,11 @@ fn the_path_walk_separates_sequential_sites_from_exclusive_ones() {
         "a loop body is NOT a branch; its sites accumulate"
     );
 
-    assert_eq!(max_sites_on_a_path(&[]), 0, "an empty stream carries no sites");
+    assert_eq!(
+        max_sites_on_a_path(&[]),
+        0,
+        "an empty stream carries no sites"
+    );
 }
 
 #[test]

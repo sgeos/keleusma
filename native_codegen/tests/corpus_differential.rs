@@ -881,10 +881,10 @@ fn seed_reconstruct_single(m: &Module, file: &str, head: usize) -> Result<Vec<u8
     let src = std::fs::read_to_string(&path).map_err(|e| format!("read subject: {e}"))?;
     let parsed = keleusma::selfhost::try_parse_functions(&src)
         .map_err(|e| format!("{file} does not parse: {e:?}"))?;
-    let h = parsed
-        .functions
-        .get(head)
-        .ok_or(format!("{file} has {} heads; no head {head}", parsed.functions.len()))?;
+    let h = parsed.functions.get(head).ok_or(format!(
+        "{file} has {} heads; no head {head}",
+        parsed.functions.len()
+    ))?;
     if h.body_records().is_empty() {
         return Err(format!("{file} head {head} has an empty body"));
     }
@@ -957,9 +957,10 @@ fn seed_codegen_subject(m: &Module, file: &str, head: usize) -> Result<Vec<u8>, 
         .ok_or(format!("{file} is not in the corpus"))?;
     let src = std::fs::read_to_string(&path).map_err(|e| format!("read subject: {e}"))?;
     let (fns, _names, _, _) = keleusma::selfhost::parse_functions(&src);
-    let h = fns
-        .get(head)
-        .ok_or(format!("{file} parses to {} heads; no head {head}", fns.len()))?;
+    let h = fns.get(head).ok_or(format!(
+        "{file} parses to {} heads; no head {head}",
+        fns.len()
+    ))?;
     if h.body_records().is_empty() {
         return Err(format!("{file} head {head} has an empty body"));
     }
@@ -1108,7 +1109,11 @@ fn seed_verify_yield_subject(m: &Module, marks: &[i64]) -> Result<Vec<u8>, Strin
     let n = marks.len();
     let mut buf = vec![0u8; shared_data_bytes_for(m)];
     let zeros = vec![0i64; n];
-    for (slot, v) in [("op_count", n as i64), ("region_start", 0), ("region_end", n as i64)] {
+    for (slot, v) in [
+        ("op_count", n as i64),
+        ("region_start", 0),
+        ("region_end", n as i64),
+    ] {
         let off = shared_slot_offset(m, slot).ok_or(format!("no `{slot}` slot"))? as usize;
         if off + 8 > buf.len() {
             return Err(format!("`{slot}` does not fit the shared segment"));
@@ -3750,8 +3755,14 @@ fn the_sentinel_band_still_matches_the_stage_sources() {
 
     // **THE PREDICATE ITSELF, over the values that actually occur.** -905 is the
     // real `rc_range_arity` refusal observed on `08_method_dispatch.kel`.
-    assert!(is_stage_sentinel(-905), "a real observed refusal must classify");
-    assert!(is_stage_sentinel(-901), "the first code below the base must classify");
+    assert!(
+        is_stage_sentinel(-905),
+        "a real observed refusal must classify"
+    );
+    assert!(
+        is_stage_sentinel(-901),
+        "the first code below the base must classify"
+    );
     assert!(
         !is_stage_sentinel(-900),
         "the BASE ITSELF is not a refusal -- a cause subtracts a POSITIVE code"
@@ -3780,7 +3791,11 @@ fn the_sentinel_band_still_matches_the_stage_sources() {
         "a MOVED base must be read as moved rather than silently accepted"
     );
     assert!(
-        sentinel_base_in("fn something_else() -> Word { 0 - 900 }", "fn pe_tag_base()").is_err(),
+        sentinel_base_in(
+            "fn something_else() -> Word { 0 - 900 }",
+            "fn pe_tag_base()"
+        )
+        .is_err(),
         "a REMOVED declaration must be an error, not a default"
     );
 }
@@ -3805,7 +3820,10 @@ fn sentinel_base_in(src: &str, decl: &str) -> Result<i64, String> {
         .ok_or_else(|| format!("`{decl}` no longer reads `0 - N`: {}", line.trim()))?;
     let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
     if digits.is_empty() {
-        return Err(format!("`{decl}` has no numeral after `0 - `: {}", line.trim()));
+        return Err(format!(
+            "`{decl}` has no numeral after `0 - `: {}",
+            line.trim()
+        ));
     }
     digits
         .parse::<i64>()

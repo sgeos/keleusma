@@ -103,7 +103,9 @@ fn all_compiling_modules() -> Vec<(String, Module)> {
     let mut stack: Vec<std::path::PathBuf> = CORPUS_DIRS.iter().map(|d| root.join(d)).collect();
     let mut paths = Vec::new();
     while let Some(p) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&p) else { continue };
+        let Ok(rd) = std::fs::read_dir(&p) else {
+            continue;
+        };
         for e in rd.flatten() {
             let q = e.path();
             if q.is_dir() {
@@ -123,7 +125,10 @@ fn all_compiling_modules() -> Vec<(String, Module)> {
         let Ok(ast) = parse(&toks) else { continue };
         let Ok(m) = compile(&ast) else { continue };
         out.push((
-            p.file_name().unwrap_or_default().to_string_lossy().to_string(),
+            p.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string(),
             m,
         ));
     }
@@ -184,11 +189,18 @@ fn sites_in_loops(m: &Module) -> usize {
 }
 
 fn module_sites(m: &Module) -> usize {
-    m.chunks.iter().map(|c| c.ops.iter().filter(|o| is_site(o)).count()).sum()
+    m.chunks
+        .iter()
+        .map(|c| c.ops.iter().filter(|o| is_site(o)).count())
+        .sum()
 }
 
 fn module_path_max(m: &Module) -> usize {
-    m.chunks.iter().map(|c| max_sites_on_a_path(&c.ops)).max().unwrap_or(0)
+    m.chunks
+        .iter()
+        .map(|c| max_sites_on_a_path(&c.ops))
+        .max()
+        .unwrap_or(0)
 }
 
 /// **THE WALK DISCRIMINATES**, shown before its output is believed — and it is
@@ -202,7 +214,11 @@ fn the_walk_is_unchanged_and_still_separates_arms_from_sequence() {
             byte_size: 8,
         })
     };
-    assert_eq!(max_sites_on_a_path(&[site(), site()]), 2, "sequence accumulates");
+    assert_eq!(
+        max_sites_on_a_path(&[site(), site()]),
+        2,
+        "sequence accumulates"
+    );
     assert_eq!(
         max_sites_on_a_path(&[Op::If(0), site(), Op::Else(0), site(), Op::EndIf]),
         1,
@@ -244,7 +260,13 @@ fn does_the_path_walk_reproduce_the_verifier_across_the_whole_corpus() {
             continue;
         }
         let peak_live = fp.max_heap_bytes / size;
-        rows.push((name.clone(), sites, sites_in_loops(m), module_path_max(m), peak_live));
+        rows.push((
+            name.clone(),
+            sites,
+            sites_in_loops(m),
+            module_path_max(m),
+            peak_live,
+        ));
     }
 
     // **THE DERIVATION IS ONLY VALID WHERE IT PRODUCES A POSSIBLE COUNT.**
@@ -275,7 +297,10 @@ fn does_the_path_walk_reproduce_the_verifier_across_the_whole_corpus() {
     }
 
     println!("\n================ DOES THE PATH WALK REPRODUCE THE VERIFIER?");
-    println!("  modules with a site and a non-zero demand : {}", rows.len() + invalid.len());
+    println!(
+        "  modules with a site and a non-zero demand : {}",
+        rows.len() + invalid.len()
+    );
     println!("  modules EXCLUDED for having no site        : {no_sites}");
     println!("  ------------------------------------------------");
     println!(
@@ -295,12 +320,21 @@ fn does_the_path_walk_reproduce_the_verifier_across_the_whole_corpus() {
         );
     }
     println!("  ------------------------------------------------");
-    println!("  COMPARABLE (quotient is a possible count) : {}", rows.len());
+    println!(
+        "  COMPARABLE (quotient is a possible count) : {}",
+        rows.len()
+    );
     println!("  ------------------------------------------------");
     println!("  AGREE  (path-max == peak_live) : {}", agree.len());
-    println!("  OVER   (path-max >  peak_live) : {}  <- conservative walk, a modelling", over.len());
+    println!(
+        "  OVER   (path-max >  peak_live) : {}  <- conservative walk, a modelling",
+        over.len()
+    );
     println!("                                       difference rather than a defect");
-    println!("  UNDER  (path-max <  peak_live) : {}  <- would be a DEFECT IN THE WALK", under.len());
+    println!(
+        "  UNDER  (path-max <  peak_live) : {}  <- would be a DEFECT IN THE WALK",
+        under.len()
+    );
     println!("  ------------------------------------------------");
     println!("  module                       sites  in-loop  path-max  peak_live");
     for r in &over {
@@ -368,7 +402,11 @@ fn are_the_disagreeing_modules_mixed_size() {
         d.sort_unstable();
         d.dedup();
         if !uniform {
-            println!("  MIXED   {name:<26} {} site(s), sizes {:?}", sizes.len(), d);
+            println!(
+                "  MIXED   {name:<26} {} site(s), sizes {:?}",
+                sizes.len(),
+                d
+            );
         }
     }
     println!("================\n");

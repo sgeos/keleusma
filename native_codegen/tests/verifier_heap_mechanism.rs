@@ -83,7 +83,9 @@ fn all_compiling_modules() -> Vec<(String, Module)> {
     let mut stack: Vec<std::path::PathBuf> = CORPUS_DIRS.iter().map(|d| root.join(d)).collect();
     let mut paths = Vec::new();
     while let Some(p) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&p) else { continue };
+        let Ok(rd) = std::fs::read_dir(&p) else {
+            continue;
+        };
         for e in rd.flatten() {
             let q = e.path();
             if q.is_dir() {
@@ -103,7 +105,10 @@ fn all_compiling_modules() -> Vec<(String, Module)> {
         let Ok(ast) = parse(&toks) else { continue };
         let Ok(m) = compile(&ast) else { continue };
         out.push((
-            p.file_name().unwrap_or_default().to_string_lossy().to_string(),
+            p.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string(),
             m,
         ));
     }
@@ -129,10 +134,10 @@ fn has_allocating_callee(m: &Module) -> bool {
     let allocates: Vec<bool> = m.chunks.iter().map(|c| chunk_sites(c) > 0).collect();
     for c in &m.chunks {
         for op in &c.ops {
-            if let Op::Call(ix, _) = op {
-                if allocates.get(*ix as usize).copied().unwrap_or(false) {
-                    return true;
-                }
+            if let Op::Call(ix, _) = op
+                && allocates.get(*ix as usize).copied().unwrap_or(false)
+            {
+                return true;
             }
         }
     }
@@ -178,7 +183,11 @@ fn do_allocating_callees_explain_where_the_walk_falls_short() {
     // The three the corpus-wide comparison reported as UNDER, and the eleven
     // that exceed. Named rather than recomputed, because this test is about
     // whether ONE property separates those two known sets.
-    const UNDER: &[&str] = &["09_big_numbers.kel", "10_multbyte.kel", "fixed_arithmetic.kel"];
+    const UNDER: &[&str] = &[
+        "09_big_numbers.kel",
+        "10_multbyte.kel",
+        "fixed_arithmetic.kel",
+    ];
     const EXCEEDING: &[&str] = &[
         "rogue_ai_boss.kel",
         "rogue_ai_chaser.kel",
@@ -194,7 +203,10 @@ fn do_allocating_callees_explain_where_the_walk_falls_short() {
     ];
 
     let look = |want: &str| -> Option<bool> {
-        corpus.iter().find(|(n, _)| n == want).map(|(_, m)| has_allocating_callee(m))
+        corpus
+            .iter()
+            .find(|(n, _)| n == want)
+            .map(|(_, m)| has_allocating_callee(m))
     };
 
     println!("\n================ DO ALLOCATING CALLEES EXPLAIN THE SHORTFALL?");
@@ -217,6 +229,10 @@ fn do_allocating_callees_explain_where_the_walk_falls_short() {
             None => println!("  UNDER     {n:<26} not in corpus"),
         }
     }
+    println!(
+        "  UNDER with an allocating callee    : {under_with} of {}",
+        UNDER.len()
+    );
     println!("  ------------------------------------------------");
     let mut exc_with: Vec<&str> = Vec::new();
     let mut exc_without = 0usize;
@@ -230,7 +246,10 @@ fn do_allocating_callees_explain_where_the_walk_falls_short() {
             None => println!("  EXCEEDING {n:<26} not in corpus"),
         }
     }
-    println!("  EXCEEDING with NO allocating callee: {exc_without} of {}", EXCEEDING.len());
+    println!(
+        "  EXCEEDING with NO allocating callee: {exc_without} of {}",
+        EXCEEDING.len()
+    );
     println!("  ------------------------------------------------");
     if under_without.is_empty() && exc_with.is_empty() {
         println!("  VERDICT: the property SEPARATES the two sets cleanly. Every module");
@@ -252,7 +271,10 @@ fn do_allocating_callees_explain_where_the_walk_falls_short() {
     println!("================\n");
 
     assert!(
-        UNDER.iter().chain(EXCEEDING.iter()).any(|n| look(n).is_some()),
+        UNDER
+            .iter()
+            .chain(EXCEEDING.iter())
+            .any(|n| look(n).is_some()),
         "none of the named modules is in the corpus, so this report describes nothing"
     );
 }

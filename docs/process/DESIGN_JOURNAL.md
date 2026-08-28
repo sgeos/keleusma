@@ -13,6 +13,69 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-27 — [v0.3.0] The reason the composite-reuse defect stayed quiet was not the recorded one
+
+**THE PREMISE WAS FALSE AND HAD BEEN RESTATED IN TWO DOCUMENTS.** Both this line's handoff and the
+obligation section said the cross-iteration slot-reuse defect was latent because **no corpus module
+has the escaping shape**. `examples/scripts/13_telemetry_stream.kel` has it, was written to have it,
+and says so in its own header: *"the value LEAVES the iteration through `yield`, so the host may
+still be holding it when the next iteration builds its successor."* Chunk 0, built at op 24, yielded
+at op 25.
+
+**Found by measuring rather than by reading.** A predicate written to over-approximate the shape was
+run over the corpus expecting zero, and returned one. The expectation was the recorded claim; the
+measurement contradicted it. **Had the census asserted nothing and merely printed, the contradiction
+would have been a line of output nobody read.**
+
+### The real reason, asked of the backend instead of assumed
+
+```
+main: native lowering does not yet support opcode Stream
+```
+
+Every chunk that can carry the shape is a `loop` chunk, and a `loop` chunk opens with `Op::Stream`,
+which this backend refuses. **The safety is accidental: it rests on an unimplemented opcode, not on
+escape reasoning, and it expires the day `Stream` lowers.** That is a materially worse position than
+the one recorded, because the recorded one would have been repaired by a corpus change while this one
+is repaired by a *feature landing on the roadmap*.
+
+### The disposition, and why it does not reopen the design tension
+
+`LowerError::YieldEscapingLoopComposite`, returned at the placement itself rather than in a
+preflight, so the next reader of that arm meets the constraint where the decision is made.
+
+**The recorded objection to a confinement verdict reaching the planner is that a wrong verdict would
+miscompile. It does not reach this gate.** The predicate over-approximates in one direction and its
+result is used to REFUSE, never to place. A verdict wrong in the permissive direction rejects a sound
+program loudly; placement still consumes nothing. **The immunity and the guard act at different
+points, so both are available** — which is a narrower answer than the tension implied, and worth
+recording as such rather than as a resolution of it.
+
+**Cost, measured over 91 modules and 1117 chunks: 1 chunk carries the shape, 1 was already refused,
+0 newly refused.** The gate is free today.
+
+### A guard that cannot fire, caught before it was believed
+
+The refusal is **shadowed**: `Stream` is refused first, so it cannot fire through `lower_module` on
+unmutated input. Rather than leave that in a comment, two tests were written. One asserts the
+shadowing and is a **tripwire that fails the day `Stream` lands**, forcing whoever lands it to
+confirm this refusal fires in its place. The other **removes the `Stream` op from compiled bytecode**
+and observes `lower_module` return the yield-escape refusal — because a guard whose only evidence is
+a non-empty predicate result says nothing about whether the lowering consults it.
+
+**NOT A DISCHARGE.** Slot reuse is unchanged, and the interprocedural case — built in a loop,
+returned, yielded by the caller — is still invisible to a single-chunk predicate. The obligation is
+narrowed and guarded, not closed, and the handoff says so.
+
+### `native_codegen` was never clippy-clean and nothing checked it
+
+Running `clippy -D warnings` over the subproject for the first time found four warnings, all from
+this line's own earlier work. One was substantive: `under_with` in `verifier_heap_mechanism.rs` was
+counted and never reported, so a census printed one half of a symmetric comparison. **Fixed by
+printing it, not by deleting the variable** — the count was the intent and the missing line was the
+defect. The local gate script does not run clippy over `native_codegen`, which is why four warnings
+accumulated unseen.
+
 ## 2026-08-27 — Two of five type-channel extractions are moved
 
 **`decl_call_rows` HAS A PIPELINE ANALOGUE.** The second of the five Rust extractions that

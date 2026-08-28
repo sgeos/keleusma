@@ -20,45 +20,52 @@ self-contained and carries the ancestry check. What follows is only the bounded 
 
 ---
 
-## V0.3.X — native code generation, 2026-08-27, `origin/v0.3.0` at `9c87f24e`
+## V0.3.X — native code generation, 2026-08-27, after absorption 18
 
-**Verification.** `native_codegen` **306 passed, 0 failed, 58 binaries**; the main workspace
-**2459 passed, 0 failed, 87 binaries**. Both figures read cargo's own exit status **and** the summed
-per-binary counts, and the two agree. `native_codegen/` is a detached workspace **not built by CI**,
-so this local suite is its only gate. Measured at `1a228270`, whose tree hash is identical to the
-stamped commit's, so the figures transfer by construction.
+**Verification.** `native_codegen` **314 passed, 0 failed, 59 binaries**, and clean under
+`clippy -D warnings` and `fmt --check`. The main workspace **2461 passed, 0 failed, 87 binaries**.
+Both figures read cargo's own exit status **and** the summed per-binary counts, and the two agree.
+`native_codegen/` is a detached workspace **not built by CI**, so this local suite is its only gate.
 
 > **Run the two suites SEQUENTIALLY.** In parallel they invalidate the workspace perf canary —
 > 69.04s under concurrent load against a 30s tripwire, 1.20s alone. A 57x false red.
 
-**The increment.** The Order-1 differential gate now seeds **12 of 12 stage sources, 0 unseeded**
-(was 3 unseeded), at **2460 comparisons**; the last three seeded without the read-only accessors
-previously assumed to be the only route. `FixedDiv` lowers, taking the backend to **61 of 66
-opcodes** and **1070 of 1074 corpus chunks, 99.6%**. Every remaining opcode is accounted for by
-name. Static-site region non-reuse is now **enforced by a test on ranges**, not merely documented.
+**Absorption 18 landed, and both predictions were recorded before merging and hit exactly**:
+`native_codegen` unchanged, because no stage source or example script was touched; the workspace up
+by exactly two, being the incoming tests. The ownership check is empty and was shown non-vacuous
+against the previous absorption point.
 
-**One concern, stated plainly, and it is the reason to read the handoff before touching the
-planner.** The backend reuses a loop site's slot across iterations **unconditionally**, with no
-reference to whether the previous value escaped. For a composite that leaves its iteration by
-`yield`, that is **unsound**: the value is a handle, an in-place overwrite advances no epoch,
-`resolve` succeeds, and the host silently receives the wrong iteration's bytes. **This is required
-for soundness and is NOT discharged.** It is latent only because no corpus module has the shape —
-a fact about the corpus, not about the backend. I earlier told the proof line this obligation was
-discharged, having conflated static-site disjointness (true) with cross-iteration reuse (false);
-that was retracted and their record stands as written.
+**The finding, and it corrects something I told you before.** I reported the composite slot-reuse
+defect as latent because no corpus module had the escaping shape. **That was wrong, and it was
+wrong in two documents.** `examples/scripts/13_telemetry_stream.kel` carries the shape deliberately
+and says so in its own header. What actually keeps the defect quiet is the backend: it refuses that
+module with *"native lowering does not yet support opcode `Stream`"*, and every chunk that can carry
+the shape is a `loop` chunk opening with `Stream`. **The safety is accidental — it rests on an
+unimplemented opcode rather than on any escape reasoning, and it expires the day `Stream` lowers.**
+I found this by measuring where I expected zero and getting one, not by re-reading.
 
-**The design tension worth the operator's attention**: discharging it requires the region planner to
-consume a confinement verdict, and consuming no verdict is exactly why a wrong verdict cannot
-miscompile anything today. Both properties cannot be had for free.
+**What I did about it.** The backend now refuses the shape at the placement itself
+(`LowerError::YieldEscapingLoopComposite`). Measured cost over 91 modules and 1117 chunks: one chunk
+carries the shape, that one was already refused, and **zero are newly refused** — the coverage
+censuses `61 of 66` and `1070 of 1074` both held. Refusing is sound even if the underlying verdict
+is wrong, because the result is only ever used to refuse and never to place, so the recorded reason
+a wrong verdict cannot miscompile stays intact.
 
-**Three items are blocked on the operator and none is actionable here**: the `Fixed` shared-slot ABI
-(preference B > A > C, but the recommendation now splits on whether cross-language interop should be
-convention-based or self-describing — the measured facts are that the scale `N` is absent from every
-host-visible surface and the width is build-dependent); the float entry ABI, which was ruled to
-settle alongside it; and the git-topology mechanism, which is formally unruled here but no longer
-contested, since both operators' actual words were a merge and seventeen absorptions have used one.
+**Two things I want stated plainly rather than left implied.** The refusal is **shadowed** by the
+`Stream` refusal today, so it cannot fire on unmutated input; I proved it fires by removing `Stream`
+from compiled bytecode, and left a tripwire test that fails the day `Stream` lands so whoever lands
+it must confirm this guard takes over. And **the obligation is narrowed, not discharged**: slot reuse
+is unchanged, and a composite built in a loop, returned, and yielded by the caller is still invisible
+to a single-chunk predicate.
 
-**Next**: absorption 18, three commits from `v0.2.3` (#304), measured alone.
+**A gap in our own gate.** `native_codegen` had never been linted; the first `clippy -D warnings` run
+found four warnings, all from this line's earlier work, one substantive — a census counted a figure
+and never printed it. Neither `scripts/release-gate.sh` nor CI covers this subproject.
+
+**Still blocked on you, all three unactionable here**: the `Fixed` shared-slot ABI, where the
+recommendation splits on whether cross-language interop should be convention-based or
+self-describing; the float entry ABI, ruled to settle alongside it; and the git-topology mechanism,
+formally unruled but no longer contested.
 
 ---
 

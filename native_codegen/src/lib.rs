@@ -269,6 +269,29 @@ pub enum LowerError {
     /// to lower such a chunk can raise the provisioning deliberately instead of
     /// discovering the ceiling through a crash.
     OperandStackTooDeep { needed: usize, provisioned: usize },
+    /// A loop-body composite the host can still be holding when the next
+    /// iteration overwrites it.
+    ///
+    /// [`region::plan_chunk_region`] gives each site ONE offset for the life of
+    /// the chunk, so a site inside a loop rewrites the same bytes every
+    /// iteration. A composite is an arena handle rather than a copy, and an
+    /// overwrite in place advances no epoch, so a host holding iteration `n`'s
+    /// value calls `resolve`, SUCCEEDS, and reads iteration `n+1`'s bytes.
+    ///
+    /// **The failure is a silently wrong value, not a `Stale` error**, which is
+    /// why it is refused here instead of left to a runtime guard: there is no
+    /// runtime guard it trips. `docs/proofs/COMPOSITE_REGION_REUSE.md` §4.1.1.
+    ///
+    /// Not reusing the slot instead would mean one region per iteration, which
+    /// is unbounded in the iteration count and gives up the bounded-memory
+    /// property this backend exists to provide. Refusal is the disposition that
+    /// keeps the bound and loses the defect.
+    YieldEscapingLoopComposite {
+        /// Index into the chunk's `ops` of the construction site.
+        site_op: usize,
+        /// Index into the chunk's `ops` of the `Yield` that can carry it out.
+        yield_op: usize,
+    },
     /// The lowering produced a module LLVM's own verifier rejects.
     ///
     /// A postcondition on [`lower_module`], not a diagnostic for the caller's
@@ -293,6 +316,13 @@ impl core::fmt::Display for LowerError {
             LowerError::UnsupportedDataSlot { slot, why } => {
                 write!(f, "data slot {slot} is not lowerable: {why}")
             }
+            LowerError::YieldEscapingLoopComposite { site_op, yield_op } => write!(
+                f,
+                "the composite built at op {site_op} is yielded at op {yield_op} from inside \
+                 a loop, so reusing its fixed offset would hand the host the next \
+                 iteration's bytes with no Stale error; refused rather than \
+                 miscompiled"
+            ),
             LowerError::OperandStackTooDeep {
                 needed,
                 provisioned,
@@ -3241,6 +3271,32 @@ fn lower_chunk_body<'ctx>(
                         "no region placement for the NewComposite at op {i}"
                     ))
                 })?;
+
+                // **THE ONE PLACEMENT THIS PASS MAKES THAT FAILS SILENTLY.**
+                // The offset just chosen is fixed for the life of the chunk, so
+                // a site inside a loop rewrites it every iteration. That is
+                // sound for a value confined to its iteration and UNSOUND for
+                // one the host receives by `yield`, because the host holds a
+                // handle and an overwrite advances no epoch.
+                //
+                // Refused HERE, at the placement, rather than in a preflight, so
+                // the next reader of this arm meets the constraint where the
+                // decision is actually made.
+                //
+                // The refusal consumes an over-approximation and only ever
+                // REFUSES on it. That is what keeps the recorded objection to
+                // verdict-consuming placement intact: a wrong verdict here
+                // rejects a sound program loudly, and never places a value
+                // where the defect can occur.
+                if let Some(h) = crate::region::yield_escape_hazards(chunk)
+                    .into_iter()
+                    .find(|h| h.site_op == i)
+                {
+                    return Err(LowerError::YieldEscapingLoopComposite {
+                        site_op: h.site_op,
+                        yield_op: h.yield_op,
+                    });
+                }
 
                 // Widths, in OPERAND order. `width_at(0)` is the top of the
                 // stack, which is the LAST operand, so the run is reversed.

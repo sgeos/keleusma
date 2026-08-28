@@ -792,7 +792,10 @@ fn the_single_head_reconstruct_seed_drives_the_stage() {
         Ok(VmState::Yielded(Value::Int(n))) => n,
         other => panic!("reconstruct.kel did not yield a node count: {other:?}"),
     };
-    println!("  nodes reconstructed {}", describe_reconstruct_result(nodes));
+    println!(
+        "  nodes reconstructed {}",
+        describe_reconstruct_result(nodes)
+    );
     println!("================\n");
 
     // **SURVEY EVERY QUALIFYING SUBJECT.** A single-subject probe reports

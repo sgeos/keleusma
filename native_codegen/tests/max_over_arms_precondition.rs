@@ -89,7 +89,9 @@ fn all_compiling_modules() -> Vec<(String, Module)> {
     let mut stack: Vec<std::path::PathBuf> = CORPUS_DIRS.iter().map(|d| root.join(d)).collect();
     let mut paths = Vec::new();
     while let Some(p) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&p) else { continue };
+        let Ok(rd) = std::fs::read_dir(&p) else {
+            continue;
+        };
         for e in rd.flatten() {
             let q = e.path();
             if q.is_dir() {
@@ -109,7 +111,10 @@ fn all_compiling_modules() -> Vec<(String, Module)> {
         let Ok(ast) = parse(&toks) else { continue };
         let Ok(m) = compile(&ast) else { continue };
         out.push((
-            p.file_name().unwrap_or_default().to_string_lossy().to_string(),
+            p.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string(),
             m,
         ));
     }
@@ -210,18 +215,36 @@ fn the_classifier_separates_a_loop_wrapped_conditional_from_a_bare_one() {
     };
 
     let plain = placements(&[site()]);
-    assert_eq!((plain.plain, plain.bare_if, plain.bare_loop, plain.if_in_loop), (1, 0, 0, 0));
+    assert_eq!(
+        (
+            plain.plain,
+            plain.bare_if,
+            plain.bare_loop,
+            plain.if_in_loop
+        ),
+        (1, 0, 0, 0)
+    );
 
     let bare_if = placements(&[Op::If(0), site(), Op::Else(0), site(), Op::EndIf]);
     assert_eq!(
-        (bare_if.plain, bare_if.bare_if, bare_if.bare_loop, bare_if.if_in_loop),
+        (
+            bare_if.plain,
+            bare_if.bare_if,
+            bare_if.bare_loop,
+            bare_if.if_in_loop
+        ),
         (0, 2, 0, 0),
         "a conditional with no loop around it is NOT the hazard"
     );
 
     let bare_loop = placements(&[Op::Loop(0), site(), Op::EndLoop(0)]);
     assert_eq!(
-        (bare_loop.plain, bare_loop.bare_if, bare_loop.bare_loop, bare_loop.if_in_loop),
+        (
+            bare_loop.plain,
+            bare_loop.bare_if,
+            bare_loop.bare_loop,
+            bare_loop.if_in_loop
+        ),
         (0, 0, 1, 0),
         "a loop with no conditional inside it shares nothing across arms"
     );
@@ -236,7 +259,12 @@ fn the_classifier_separates_a_loop_wrapped_conditional_from_a_bare_one() {
         Op::EndLoop(0),
     ]);
     assert_eq!(
-        (hazard.plain, hazard.bare_if, hazard.bare_loop, hazard.if_in_loop),
+        (
+            hazard.plain,
+            hazard.bare_if,
+            hazard.bare_loop,
+            hazard.if_in_loop
+        ),
         (0, 0, 0, 2),
         "a conditional INSIDE a loop is the hazard and must be counted apart"
     );
@@ -252,7 +280,12 @@ fn the_classifier_separates_a_loop_wrapped_conditional_from_a_bare_one() {
         Op::EndLoop(0),
     ]);
     assert_eq!(
-        (after.plain, after.bare_if, after.bare_loop, after.if_in_loop),
+        (
+            after.plain,
+            after.bare_if,
+            after.bare_loop,
+            after.if_in_loop
+        ),
         (0, 1, 1, 0),
         "a loop that opens after the conditional closed cannot wrap it"
     );

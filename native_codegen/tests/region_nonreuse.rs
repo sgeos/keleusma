@@ -66,11 +66,23 @@
 //! memory and correct aliasing are different guarantees**, and only the first
 //! follows from same-offset reuse.
 //!
-//! **No corpus module is known to have the escaping shape** — the obligation
-//! document says so, and the loop census's "disqualified by `Yield`: 1" is an
-//! UPPER BOUND on escape ("cannot rule out"), not a demonstration that a value
-//! escapes. Those are consistent, and the difference is exactly the bound
-//! direction this line keeps having to restate.
+//! **⚠ CORRECTED 2026-08-27. The superseded text read: "No corpus module is
+//! known to have the escaping shape — the obligation document says so".** A
+//! corpus module DOES have it. `examples/scripts/13_telemetry_stream.kel` was
+//! written to carry it and says so in its header; chunk 0 builds at op 24 and
+//! yields at op 25. The loop census's "disqualified by `Yield`: 1" was read as
+//! an upper bound that might be vacuous, and it is not — it is that module.
+//!
+//! **The bound-direction reasoning stands; the conclusion drawn from it did
+//! not.** An upper bound cannot establish that a module HAS the shape, so it
+//! was correct not to conclude one from the census. It was wrong to then carry
+//! a claim that no module has it, which the census could not establish either.
+//! **Neither direction was checkable from that number, and the module had to be
+//! read.**
+//!
+//! What actually keeps the defect quiet is the BACKEND: it refuses that module
+//! for a missing opcode (`Stream`). See `tests/yield_escape_gate.rs` and
+//! `docs/decisions/YIELD_ESCAPE_REFUSAL.md`.
 //!
 //! # ⚠ SCOPE: WITHIN a chunk, and NOT across chunks
 //!
@@ -100,7 +112,9 @@ fn all_compiling_modules() -> Vec<(String, Module)> {
     let mut stack: Vec<std::path::PathBuf> = CORPUS_DIRS.iter().map(|d| root.join(d)).collect();
     let mut paths = Vec::new();
     while let Some(p) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&p) else { continue };
+        let Ok(rd) = std::fs::read_dir(&p) else {
+            continue;
+        };
         for e in rd.flatten() {
             let q = e.path();
             if q.is_dir() {
@@ -120,7 +134,10 @@ fn all_compiling_modules() -> Vec<(String, Module)> {
         let Ok(ast) = parse(&toks) else { continue };
         let Ok(m) = compile(&ast) else { continue };
         out.push((
-            p.file_name().unwrap_or_default().to_string_lossy().to_string(),
+            p.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string(),
             m,
         ));
     }
@@ -153,7 +170,11 @@ fn first_overlap(sites: &[SitePlacement]) -> Option<(SitePlacement, SitePlacemen
 /// about the input, not about the check.
 #[test]
 fn the_overlap_detector_detects_an_overlapping_layout() {
-    let site = |op_index, offset, size| SitePlacement { op_index, offset, size };
+    let site = |op_index, offset, size| SitePlacement {
+        op_index,
+        offset,
+        size,
+    };
 
     // Disjoint, adjacent: the shape the planner actually produces.
     assert!(
@@ -182,7 +203,10 @@ fn the_overlap_detector_detects_an_overlapping_layout() {
     );
 
     assert!(first_overlap(&[]).is_none(), "an empty layout has no pairs");
-    assert!(first_overlap(&[site(0, 0, 8)]).is_none(), "one site cannot overlap itself");
+    assert!(
+        first_overlap(&[site(0, 0, 8)]).is_none(),
+        "one site cannot overlap itself"
+    );
 }
 
 /// No chunk in the corpus has two construction sites sharing storage.

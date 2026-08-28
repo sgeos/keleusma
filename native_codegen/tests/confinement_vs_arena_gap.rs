@@ -90,7 +90,9 @@ fn all_compiling_modules() -> Vec<(String, Module)> {
     let mut stack: Vec<std::path::PathBuf> = CORPUS_DIRS.iter().map(|d| root.join(d)).collect();
     let mut paths = Vec::new();
     while let Some(p) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&p) else { continue };
+        let Ok(rd) = std::fs::read_dir(&p) else {
+            continue;
+        };
         for e in rd.flatten() {
             let q = e.path();
             if q.is_dir() {
@@ -110,7 +112,10 @@ fn all_compiling_modules() -> Vec<(String, Module)> {
         let Ok(ast) = parse(&toks) else { continue };
         let Ok(m) = compile(&ast) else { continue };
         out.push((
-            p.file_name().unwrap_or_default().to_string_lossy().to_string(),
+            p.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string(),
             m,
         ));
     }
@@ -169,8 +174,10 @@ fn the_tally_reports_different_answers_for_different_modules() {
         "fewer than two modules have any construction site, so this instrument \
          cannot be shown to discriminate over this corpus"
     );
-    let distinct: std::collections::BTreeSet<_> =
-        seen.iter().map(|(_, t)| (t.confined, t.cannot, t.escapes)).collect();
+    let distinct: std::collections::BTreeSet<_> = seen
+        .iter()
+        .map(|(_, t)| (t.confined, t.cannot, t.escapes))
+        .collect();
     assert!(
         distinct.len() >= 2,
         "every module with sites reports the SAME tally {:?}. A distribution that \
@@ -184,7 +191,11 @@ fn the_tally_reports_different_answers_for_different_modules() {
         a
     });
     assert!(
-        [all.confined, all.cannot, all.escapes].iter().filter(|n| **n > 0).count() >= 2,
+        [all.confined, all.cannot, all.escapes]
+            .iter()
+            .filter(|n| **n > 0)
+            .count()
+            >= 2,
         "every site corpus-wide lands in ONE verdict ({all:?}); the three-way split \
          asserts nothing on this population"
     );
@@ -218,9 +229,7 @@ fn how_are_the_exceeding_modules_sites_confined() {
 
     println!("\n================ CONFINEMENT vs THE ARENA-BOUND GAP");
     println!("  modules compared                    : {compared}");
-    println!(
-        "  CORPUS-WIDE, over the {corpus_modules_with_sites} module(s) with any site:"
-    );
+    println!("  CORPUS-WIDE, over the {corpus_modules_with_sites} module(s) with any site:");
     println!(
         "    confined {} / cannot-establish {} / escapes {}  (total {})",
         corpus_wide.confined,
@@ -443,7 +452,9 @@ fn which_condition_refuses_the_last_composite_modules() {
     let mut hits: Vec<(String, String)> = Vec::new();
 
     for (name, m) in &corpus {
-        for (chunk, err) in keleusma_native::module_refusals(m, keleusma_native::LowerOptions::default()) {
+        for (chunk, err) in
+            keleusma_native::module_refusals(m, keleusma_native::LowerOptions::default())
+        {
             let text = format!("{err:?}");
             if text.contains("NewComposite") {
                 hits.push((format!("{name}::{chunk}"), text));
@@ -473,8 +484,15 @@ fn which_condition_refuses_the_last_composite_modules() {
         println!("      text : {}", &text[..text.len().min(150)]);
     }
     println!("  ------------------------------------------------");
-    let width = hits.iter().filter(|(_, t)| t.contains("unknown packed width")).count();
-    println!("  {} of {} composite refusals are the WIDTH condition.", width, hits.len());
+    let width = hits
+        .iter()
+        .filter(|(_, t)| t.contains("unknown packed width"))
+        .count();
+    println!(
+        "  {} of {} composite refusals are the WIDTH condition.",
+        width,
+        hits.len()
+    );
     if !hits.is_empty() && width == hits.len() {
         println!("  => spike_composite_split's split is CONFIRMED on the residue: what");
         println!("     remains is construction needing operand-width recovery, exactly");

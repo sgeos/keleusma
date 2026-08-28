@@ -392,7 +392,10 @@ fn parser_agrees_with_the_vm_on_the_lexers_own_output() {
 /// Write one scalar shared slot by name.
 fn seed_scalar(m: &Module, buf: &mut [u8], slot: &str, v: i64) {
     let off = shared_offset(m, slot).unwrap_or_else(|| panic!("no shared slot `{slot}`")) as usize;
-    assert!(off + 8 <= buf.len(), "slot `{slot}` does not fit the shared segment");
+    assert!(
+        off + 8 <= buf.len(),
+        "slot `{slot}` does not fit the shared segment"
+    );
     buf[off..off + 8].copy_from_slice(&v.to_le_bytes());
 }
 
@@ -534,7 +537,10 @@ fn without_a_yield_mark_the_verify_yield_verdict_does_not_move() {
 /// Seed `analyze.kel` with a straight-line region between a Stream and a Reset op.
 fn seed_analyze(m: &Module, costs: &[i64], local_count: i64, slot_bytes: i64) -> Vec<u8> {
     let n = costs.len();
-    assert!(n >= 3, "need a Stream op, at least one body op, and a Reset op");
+    assert!(
+        n >= 3,
+        "need a Stream op, at least one body op, and a Reset op"
+    );
     let mut buf = vec![0u8; shared_data_bytes_for(m)];
     let zeros = vec![0i64; n];
     for (slot, v) in [
@@ -623,7 +629,11 @@ fn analyze_agrees_with_the_vm_on_a_bounded_straight_line_region() {
         16,
         "out_stack_bytes must be (local_count + peak) * value_slot_bytes"
     );
-    assert_eq!(read_scalar(&m, &vm.shared, "out_reject"), 0, "this region is bounded");
+    assert_eq!(
+        read_scalar(&m, &vm.shared, "out_reject"),
+        0,
+        "this region is bounded"
+    );
 
     assert_eq!(
         vm.yields, nat.yields,
@@ -691,7 +701,10 @@ fn copy_slot(
     let s = shared_offset(src_m, src_slot).unwrap_or_else(|| panic!("src `{src_slot}`")) as usize;
     let d = shared_offset(dst_m, dst_slot).unwrap_or_else(|| panic!("dst `{dst_slot}`")) as usize;
     let n = words * 8;
-    assert!(s + n <= src.len() && d + n <= dst.len(), "slot `{src_slot}` out of range");
+    assert!(
+        s + n <= src.len() && d + n <= dst.len(),
+        "slot `{src_slot}` out of range"
+    );
     dst[d..d + n].copy_from_slice(&src[s..s + n]);
 }
 
@@ -715,8 +728,8 @@ const AST_BRIDGE: &[(&str, &str, usize)] = &[
 #[test]
 fn codegen_agrees_with_the_vm_on_reconstructs_own_output() {
     // --- Stage 1: drive reconstruct.kel on a real parsed head ---
-    let src = std::fs::read_to_string("../examples/scripts/11_signed.kel")
-        .expect("read 11_signed.kel");
+    let src =
+        std::fs::read_to_string("../examples/scripts/11_signed.kel").expect("read 11_signed.kel");
     let (fns, _names, _, _) = keleusma::selfhost::parse_functions(&src);
     assert_eq!(
         fns.len(),
@@ -839,4 +852,3 @@ fn the_unseeded_codegen_baseline_is_what_the_seeded_guard_must_clear() {
         d.len()
     );
 }
-

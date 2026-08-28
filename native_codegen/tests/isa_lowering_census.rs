@@ -232,9 +232,12 @@ fn the_query_reports_a_known_refusal() {
     // Far above any supported word width, so this is out of range under every
     // narrow-word configuration rather than only the default one.
     let refusing = keleusma::bytecode::Op::FixedMul(200);
-    m.chunks[0].ops.insert(0, refusing.clone());
+    m.chunks[0].ops.insert(0, refusing);
     assert!(
-        m.chunks.iter().any(|c| c.ops.iter().any(|o| format!("{o:?}") == format!("{refusing:?}"))),
+        m.chunks.iter().any(|c| c
+            .ops
+            .iter()
+            .any(|o| format!("{o:?}") == format!("{refusing:?}"))),
         "the injected op is not in the module, so this control would pass without \
          testing anything"
     );
@@ -303,7 +306,9 @@ fn a_clean_chunk_still_counts_inside_a_module_that_has_a_refusing_chunk() {
         .iter()
         .position(|c| c.name == "bad")
         .expect("the probe declares `bad`");
-    m.chunks[bad_ix].ops.insert(0, keleusma::bytecode::Op::FixedMul(200));
+    m.chunks[bad_ix]
+        .ops
+        .insert(0, keleusma::bytecode::Op::FixedMul(200));
     let (_, visits) = module_lowered_op_indices(&m, LowerOptions::default());
     assert_eq!(
         visits.len(),
