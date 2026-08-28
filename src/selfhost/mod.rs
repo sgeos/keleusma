@@ -6216,6 +6216,23 @@ mod decoder_drift_guard {
     /// extend the upper bound here when codegen first assigns an op tag >= 64. A future GAP in the
     /// assigned set would make this test slightly over-strict, which fails safe (it prompts a look
     /// rather than letting an undecoded op ship).
+    ///
+    /// # WHAT THIS TEST DOES NOT CHECK, RAISED BY THE `v0.3.0` LINE
+    ///
+    /// It discards the decoded value, so it distinguishes a correct table from a PERMUTED one not
+    /// at all: **a transposition passes it.** That is a statement about coverage, not a defect --
+    /// no disagreement has ever been observed here.
+    ///
+    /// `tests/op_tag_tables.rs` covers the rest, and the pieces are separate because each catches
+    /// something the others cannot. `the_stage_tag_table_assigns_each_number_once_and_leaves_no_gap`
+    /// rejects a duplicate or a gap but NOT a swap, since a swap leaves a bijection.
+    /// `the_two_decoders_agree_on_every_op_tag` compares this decoder against the copy in
+    /// `tests/selfhost_codegen.rs` that the comment above claims is kept in lockstep with it --
+    /// which nothing checked -- but a swap applied to both would still agree.
+    /// `every_stage_tag_name_matches_the_operation_its_number_decodes_to` is the one that catches a
+    /// one-sided transposition, and mutation testing confirms it is the ONLY one that does.
+    /// `the_stage_corpus_leaves_sixteen_op_tags_unexercised_and_names_them` measures where such a
+    /// defect could hide from the byte-identity oracle.
     #[test]
     fn all_wire_op_tags_decode() {
         for tag in 1..=63i64 {

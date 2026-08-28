@@ -13,6 +13,82 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-28 — The op-tag tables agree, and now something checks that they do
+
+**AN INBOUND FINDING FROM THE `v0.3.0` LINE, CLOSED BY MEASUREMENT.** They observed that
+`codegen.kel`'s 63 op tags and the driver's `decode_op` are two hand-maintained tables of the same
+numbers whose only guard asserts that decoding does not panic, so **a transposition passes it**.
+They could not close it: the decoder is private and `src/selfhost/mod.rs` is read-only there. It
+was unrecorded on this line.
+
+**THERE WERE THREE TABLES, NOT TWO, AND THE THIRD IS THE DANGEROUS ONE.** Besides the emitter and
+the shipping decoder there is `tests/selfhost_codegen.rs::decode_op`, which the shipping decoder's
+own comment calls the source it was **"ported verbatim"** from and is **"kept in lockstep with"**.
+**Nothing checked the lockstep.** That is the `five defects, one cause` pairing exactly — the
+driver and its test-file copy — and the copy is the one the differential oracle runs.
+
+**THE TABLES AGREE. STATED AS A MEASUREMENT, NOT AS A DEFECT AVOIDED.** Sixty-three arms in each,
+the same tag set, and identical once one refactor is canonicalised away: the shipping decoder
+factors the scalar-kind and composite-kind decoding into helpers that the oracle's copy inlines, so
+seven arms differ textually and none differ semantically. The peer's framing — *the claim is about
+what is CHECKED, not what is wrong* — was correct and is preserved rather than upgraded.
+
+**THE INSTRUMENT NEARLY WENT WRONG FIRST, IN THE WAY THIS TREE ALREADY DOCUMENTS.** A naive line
+pattern over the decoder text reports **63 arms for the driver and 111 for the copy**. The excess
+is arms of NESTED matches, whose `0 =>` and `1 =>` look exactly like op-tag arms. Everything here
+matches by brace depth, and a guard now asserts both extractions find the same shape, so a future
+regression to the naive form fails instead of silently comparing two different populations.
+**Checking the instrument before trusting the reading is the third time that has paid here.**
+
+**FOUR GUARDS, AND MUTATION TESTING SHOWS WHY NONE IS REDUNDANT.** Five mutants, each confirmed to
+COMPILE before its result was believed:
+
+| mutation | what fired |
+|---|---|
+| swap two tag numbers in the stage source ALONE | **only** the name correspondence |
+| assign one number to two names | the bijection guard, and the correspondence |
+| swap two arms in the oracle's decoder copy | **only** the decoder-agreement guard |
+| claim an exercised tag is unexercised | the census |
+| stop tracking bracket depth in the extractor | the extraction-shape guard, and agreement |
+
+**THE FIRST ROW IS THE POINT.** A one-sided transposition leaves the table a bijection and leaves
+the two decoders agreeing with each other, so neither of those guards can see it. The name
+correspondence — a **fourth** hand-written table, and therefore a hazard — earns its place only
+because it is a different KIND of derivation, names to names rather than numbers to numbers. Had it
+been produced by copying the numbers across it would have confirmed the model and checked nothing.
+
+**SIXTEEN OF THE SIXTY-THREE TAGS ARE INVISIBLE TO THE BYTE-IDENTITY ORACLE**, and naming them is
+the deliverable rather than the count. The eleven-stage corpus emits operations that cover 47 tags
+at most; the whole composite family (`newcomposite` and its three siblings, both `getfield` forms,
+both `getindex` forms, `gettuplefield`, both `getenumfield` forms, `isenum`), the unchecked
+`addop`/`subop`/`mulop`, and `checkedneg` appear in **no stage source at all**. A transposition
+among those cannot produce a byte difference for the oracle to detect.
+
+**AND THE SCOPE IS THE STAGE CORPUS, WHICH THE TEST NAME NOW SAYS.** The per-construct
+byte-identity tests in `tests/selfhost_codegen.rs` compile struct constructions, array indexing,
+enum payloads and tuple fields through the self-hosted compiler, so the composite family is **not**
+unchecked in general. That is a different population, this census does not measure it, and reading
+the sixteen as "unchecked" would overstate it. The assertion is written so a tag LEAVING the set
+fails too, because that is the corpus gaining coverage and is worth noticing.
+
+**THE CITATION GUARD CAUGHT ME WITHIN MINUTES OF WRITING THE THING IT CAUGHT.** I renamed the
+census test for scope precision and left the module header naming the old one. Fourth occurrence of
+that class in this repository, and the first where the interval between creating the stale citation
+and having it reported was under ten minutes. **The guard added last session is now paying for
+itself against its own author, twice.**
+
+**AN OBSERVATION, ATTRIBUTED RATHER THAN ASSUMED.** `cargo clippy --tests --no-default-features
+-- -D warnings` fails with seven diagnostics. It fails **identically on a clean `v0.2.3`** — checked
+by stashing, not inferred — so it is pre-existing and no part of this increment. That combination
+is not one continuous integration runs. Recorded as a fact about the tree, not as a claim that
+anything is broken.
+
+**PROPORTIONALITY, AS ALWAYS.** `self_hosted_compile` cross-checks against the reference and
+refuses on divergence, so a table defect would surface as a loud error rather than a wrong module.
+Exposure is to direct callers of the `self_host_compile*` entry points. And a renumbering applied
+consistently across the emitter and both decoders is **harmless** — the op word is internal to the
+pipeline and is not a wire format — so the guards are written to pass on one, deliberately.
+
 ## 2026-08-27 — Two of five type-channel extractions are moved
 
 **`decl_call_rows` HAS A PIPELINE ANALOGUE.** The second of the five Rust extractions that
