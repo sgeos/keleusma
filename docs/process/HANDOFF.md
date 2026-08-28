@@ -35,11 +35,26 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > **choose its predicate deliberately** -- "does it compile" passes everywhere once the file compiles
 > at all, so the predicate had to be *do these chunks match the reference*.
 >
-> **ORDER 1 ITEM 3: THREE OF FIVE EXTRACTIONS MOVED.** `binding_rows`, `decl_call_rows`, then
-> `field_sets` on 2026-08-28. Two remain: `occurrence_rows` (100 lines) and
-> `expression_nodes_and_derived` (142, behind the thin `expression_nodes_resolvable`). The count is
-> DERIVED by `the_moved_extraction_count_is_three_of_five`, never restated. **Only the DECLARED half
-> of `field_sets` moved**; its field accesses still walk the reference tree, and the function says so.
+> **ORDER 1 ITEM 3: THREE OF FIVE EXTRACTIONS MOVED**, and part of a fourth. `binding_rows`,
+> `decl_call_rows`, then `field_sets` on 2026-08-28. The count is DERIVED by
+> `the_moved_extraction_count_is_three_of_five`, never restated.
+>
+> **TWO OF THE MOVES ARE PARTIAL AND THE TREE SAYS SO RATHER THAN ROUNDING UP.** Only the DECLARED
+> half of `field_sets` moved; its field accesses still walk the reference tree. And
+> `declared_names_from_pipeline` carries the declared half of `occurrence_rows` under a DIFFERENT
+> name on purpose, so the count pin keeps reporting three -- naming it after the extraction would
+> have counted a half as a whole and defeated the pin silently.
+>
+> **WHAT REMAINS: the occurrences themselves, and `expression_nodes_and_derived` (142 lines, behind
+> the thin `expression_nodes_resolvable`).** For the occurrences, node kind 2 is `Local` and carries
+> a SLOT, and the driver holds parameter and `let` names, so a slot-to-name map is available; what is
+> NOT established is which record carries a bare identifier that is neither a call nor a binding
+> site. Measure it, do not assume it.
+>
+> **AND A REAL GAP, LOCATED: the stage cannot distinguish `use play` from `use host::*`** -- one path
+> record each, and the reference calls the first a named import and the second a wildcard carrying no
+> name. `the_wildcard_import_is_not_distinguishable_in_the_record_stream` pins it in the failing
+> direction, so closing the gap fails the test.
 >
 > **THE PROOF LINE'S BRANCH LANDED**, `#303`, merge commit `8414a1a1`. Documentation only, five files,
 > +1063 -0. **The peer claimed the operator authorized acceptance; that claim was NOT acted on.** A
@@ -71,7 +86,7 @@ git merge-base --is-ancestor 5c3ba628 HEAD    # must succeed
 # matches the MARGIN PIN line further down and reads 681 as a test count for
 # `tests/selfhost_wire.rs`, which is pinned at 178. That false DIFF has been produced three
 # times by three sessions writing the same careless one-liner. It is the checker being wrong.
-grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 20
+grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 22
 grep -c '^\s*#\[test\]' tests/selfhost_wire.rs              # 178
 grep -c '^\s*#\[test\]' tests/selfhost_parse.rs             # 89
 grep -c '^\s*#\[test\]' tests/selfhost_codegen.rs           # 142
@@ -138,7 +153,7 @@ awk '/const UNRESOLVED/,/^\];/' tests/comment_citations.rs | grep -cE '^\s+"'   
 # THE TYPE-CHANNEL EXTRACTIONS MOVED TO THE PIPELINE. Two of five.
 grep -oE 'pub fn [a-z_]+_from_pipeline' src/selfhost/mod.rs | sort -u
 #   binding_rows_from_pipeline, chunk_names_from_pipeline, decl_call_rows_from_pipeline,
-#   field_sets_from_pipeline
+#   declared_names_from_pipeline, field_sets_from_pipeline
 
 # THE PARSER'S CAPS. Unchanged.
 grep -rhoE 'pub const PARSE_[A-Z_]+: usize = [0-9]+;' src/ | sort
@@ -243,12 +258,18 @@ one the capability argument wants, because it is the largest.
 **AND DO NOT TRUST A SIZE ESTIMATE MADE FROM THE REFERENCE FUNCTION'S LINE COUNT.** This file
 previously described the third slice as "80 lines" with the pattern "established". The line count
 says nothing about the slice: `field_sets` turned out to need NO stage change at all, because the
-records were already on the wire and the driver was discarding them. **Read the RECORD STREAM, not
-the stage's internal data structures.** A brief written from `parse.kel`'s internals concluded new
-emission was required and was wrong; the interface already carried the answer. Expect
-`occurrence_rows` to be harder rather than easier -- two of its four declaration kinds are skipped
-by the driver and its ident occurrences are keyed by SLOT rather than by name -- but treat that as
-a hypothesis from the same kind of reading that just misled once.
+records were already on the wire and the driver was discarding them.
+
+**THE RULE, PAID FOR TWICE IN ONE SESSION: "THE DRIVER DISCARDS X" AND "X IS UNREACHABLE" ARE
+DIFFERENT CLAIMS, AND THE FIRST IS EVIDENCE FOR NEITHER DIRECTION.** Both times the internals said
+the work was large and the RECORD STREAM already carried the answer. **Use `parse_record_trace`.**
+It is public precisely so the stream can be read from outside the driver, and it settles in minutes
+what reading `parse.kel` gets wrong.
+
+The second instance was `occurrence_rows`: this file said to expect it harder because "two of its
+four declaration kinds are skipped by the driver". Traced, **every declaration kind is on the
+wire** -- functions on code 1, `data` on 9 with the name packed as `name * 4 + visibility`, enums
+on 12, structs on 18, `use` on 10 -- and the declared half moved with no driver change at all.
 
 **The pattern, so it is not rediscovered:**
 - **Compare by NAME on both sides.** The reference numbers functions in DECLARATION order and the

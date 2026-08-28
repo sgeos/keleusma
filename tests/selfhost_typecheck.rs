@@ -3050,3 +3050,171 @@ fn a_trait_or_impl_declaration_is_not_collected_as_a_struct() {
         "the reference sees a different set of structs than this test assumes"
     );
 }
+
+/// **THE DECLARED TOP-LEVEL NAMES AGREE BETWEEN THE PIPELINE AND THE REFERENCE.**
+///
+/// The declared half of `occurrence_rows`, the fourth extraction. **The occurrences themselves
+/// have NOT moved**, and this is deliberately not named after the extraction so that
+/// `the_moved_extraction_count_is_three_of_five` continues to report three. A partial migration
+/// counted as a whole one is the failure mode that pin exists to prevent.
+///
+/// # `use` imports are excluded, and the reason is measured
+///
+/// The reference's declared set also carries each `use` declaration's imported name, or sets a
+/// wildcard flag instead. `use play` and `use host::*` produce **identical record streams** —
+/// one path record each — so the pipeline cannot draw the reference's two opposite conclusions
+/// from them. Pinned separately below.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_declared_top_level_names_agree_between_the_pipeline_and_the_reference() {
+    use keleusma::ast::TypeDef;
+
+    const SOURCES: &[&str] = &[
+        // All four kinds in one program, declared out of alphabetical order so a sorted
+        // comparison is not accidentally satisfied by source order.
+        "struct Zed { a: Word }\nenum Ay { P, Q }\nprivate data dee { x: Word }\n\
+         fn helper() -> Word { 1 }\nfn main() -> Word { helper() }",
+        // No types at all: functions only.
+        "fn one() -> Word { 1 }\nfn main() -> Word { one() }",
+        // A public data block, to exercise the visibility packing in the record value.
+        "data pub_block { v: Word }\nfn main() -> Word { pub_block.v }",
+        // Two enums and two structs, so a per-kind collapse would be visible.
+        "enum E1 { A }\nenum E2 { B }\nstruct S1 { f: Word }\nstruct S2 { g: Word }\n\
+         fn main() -> Word { 0 }",
+    ];
+
+    let mut total = 0usize;
+    let mut kinds_seen = std::collections::BTreeSet::new();
+
+    for src in SOURCES {
+        let ast = keleusma::parser::parse(&keleusma::lexer::tokenize(src).expect("lex"))
+            .expect("the reference must parse a probe before it says anything about the stage");
+
+        // The reference's declared set, MINUS the `use` imports this function does not claim.
+        let mut want: Vec<String> = Vec::new();
+        for f in &ast.functions {
+            want.push(f.name.clone());
+            kinds_seen.insert("fn");
+        }
+        for d in &ast.data_decls {
+            want.push(d.name.clone());
+            kinds_seen.insert("data");
+        }
+        for t in &ast.types {
+            want.push(match t {
+                TypeDef::Struct(d) => {
+                    kinds_seen.insert("struct");
+                    d.name.clone()
+                }
+                TypeDef::Enum(d) => {
+                    kinds_seen.insert("enum");
+                    d.name.clone()
+                }
+                TypeDef::Newtype(d) => d.name.clone(),
+            });
+        }
+        assert!(
+            ast.uses.is_empty(),
+            "{src:?}: this corpus must not contain `use` declarations, because the function \
+             under test deliberately excludes them and the comparison would be about the \
+             exclusion rather than about agreement"
+        );
+        want.sort();
+        want.dedup();
+
+        let got = keleusma::selfhost::declared_names_from_pipeline(src);
+        assert_eq!(
+            got, want,
+            "{src:?}: the pipeline and the reference disagree on the declared top-level names"
+        );
+        total += got.len();
+    }
+
+    assert!(total >= 12, "only {total} declared names compared");
+    assert_eq!(
+        kinds_seen,
+        ["data", "enum", "fn", "struct"].into_iter().collect(),
+        "the corpus does not exercise every declaration kind this test claims to cover. A kind \
+         absent from the corpus is NOT covered, whatever the assertions above appear to say"
+    );
+}
+
+/// **A WILDCARD IMPORT IS NOT DISTINGUISHABLE FROM A SINGLE-SEGMENT IMPORT IN THE RECORD STREAM.**
+///
+/// This is why `declared_names_from_pipeline` omits `use` declarations. The reference draws
+/// OPPOSITE conclusions from the two forms — `use sin;` contributes the name `sin`, while
+/// `use audio::*;` contributes no name and sets a wildcard flag — and the stage emits the same
+/// shape for both: a USTART naming the first path segment, then one path record.
+///
+/// **This pin fires in the FAILING direction when the gap closes.** If the stage learns to mark a
+/// wildcard, the two streams stop matching and this test fails, which is the signal to extend the
+/// declared-names function rather than a regression. Mutation-tested by pointing the wildcard
+/// probe at the two-segment form, which genuinely differs.
+///
+/// # Comparing the record VALUES as well would not strengthen this, and that is not obvious
+///
+/// A first mutation carried each record's interned id alongside its code, expecting the two
+/// programs to become distinguishable. They did not. **Intern ids are positional**: `play` is id 0
+/// in the first program and `host` is id 0 in the third, so both shapes read the same with values
+/// attached. The discriminating content is the SEQUENCE OF RECORD CODES, and a richer-looking
+/// comparison here would add noise rather than reach.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_wildcard_import_is_not_distinguishable_in_the_record_stream() {
+    fn shape(src: &str) -> Vec<(i64, i64)> {
+        let (_, records) = keleusma::selfhost::parse_record_trace(src);
+        // The declaration prelude only: everything up to the first end-of-declaration record.
+        records
+            .iter()
+            .take_while(|(code, _, _)| *code != 5)
+            .filter(|(code, _, _)| *code != 0)
+            .map(|(code, _, _)| (*code, 0))
+            .collect()
+    }
+
+    // NO SEMICOLON: a `use` declaration takes none. The spelling is taken from
+    // `examples/scripts/piano_roll/piano_roll_6.kel`, after a first attempt with a semicolon was
+    // rejected by the REFERENCE -- which would have made this a test about a malformed probe.
+    const NAMED: &str = "use play\nfn main() -> Word { 0 }\n";
+    const STAR: &str = "use host::*\nfn main() -> Word { 0 }\n";
+    const PATHED: &str = "use host::play\nfn main() -> Word { 0 }\n";
+
+    let named = shape(NAMED);
+    let star = shape(STAR);
+    let pathed = shape(PATHED);
+
+    // MUST-FIRE CONTROL: the extraction sees something at all, and it distinguishes the case it
+    // CAN distinguish. Without this the equality below could hold because `shape` returns empty.
+    assert!(
+        !named.is_empty(),
+        "non-vacuity: the record shape came back empty, so the comparison below is meaningless"
+    );
+    assert_ne!(
+        named, pathed,
+        "a two-segment path IS distinguishable from a one-segment one, and if this stops being \
+         true the instrument has broken rather than the stage having changed"
+    );
+
+    assert_eq!(
+        named, star,
+        "the record stream now distinguishes a wildcard import from a single-segment named \
+         import. THIS IS A GAP CLOSING, NOT A REGRESSION: extend `declared_names_from_pipeline` \
+         to include `use` declarations, and retire this pin"
+    );
+
+    // And the reference genuinely disagrees about these two, which is what makes the gap matter.
+    let ref_named =
+        keleusma::parser::parse(&keleusma::lexer::tokenize(NAMED).expect("lex")).expect("parse");
+    let ref_star =
+        keleusma::parser::parse(&keleusma::lexer::tokenize(STAR).expect("lex")).expect("parse");
+    assert_eq!(ref_named.uses.len(), 1);
+    assert_eq!(ref_star.uses.len(), 1);
+    assert!(
+        matches!(ref_named.uses[0].import, keleusma::ast::ImportItem::Name(_)),
+        "the reference no longer treats a single-segment `use` as a named import"
+    );
+    assert!(
+        matches!(ref_star.uses[0].import, keleusma::ast::ImportItem::Wildcard),
+        "the reference no longer treats a `::*` import as a wildcard"
+    );
+}
