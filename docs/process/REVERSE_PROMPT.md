@@ -73,6 +73,25 @@ Publication remains held. **The floating-point entry ABI is still the last of yo
 rulings unimplemented**, with the `v0.3.0` line's `Fixed` shared-slot SCALE question attached.
 **It is theirs to bring you and I have not acted on it.**
 
+## Order 1 item 3 moved: two of five extractions
+
+`decl_call_rows` has a pipeline analogue, the second of five to leave the reference parser's
+abstract syntax tree. **The count is derived by a test rather than restated**, because a
+hand-written count is a second definition that goes stale — which is how the handoff came to
+assert a closed gap was still open.
+
+**Both moved slices hit the same trap**: the reference numbers functions in declaration order,
+the pipeline numbers chunks by sorted name. Comparing indices compares two unrelated
+numberings. The escape both times was to carry a string.
+
+**And a vacuity the obvious test would have missed.** If every corpus source declared its
+functions in sorted order, comparing by name would be indistinguishable from comparing by
+index — the property under test would go untested while the test passed. The corpus is now
+asserted to separate the two orders.
+
+**Not moved, and the test says so**: the per-argument ACTUAL-argument tag needs an expression
+classifier, which is new work rather than a re-projection.
+
 ## The smaller finding, which I would not want lost under the milestone
 
 **The citation guard never scanned the handoff**, and the handoff had carried a false claim:

@@ -1994,6 +1994,97 @@ pub fn chunk_names_from_pipeline(src: &str) -> Vec<String> {
         .collect()
 }
 
+/// One function's declaration, as the type channel needs it: name, declared arity, and each
+/// parameter's scalar tag.
+pub type DeclRow = (String, i64, Vec<i64>);
+
+/// One call site: the callee's NAME and the number of arguments passed.
+///
+/// **The name, not an index.** The reference numbers functions in DECLARATION order and the
+/// pipeline numbers chunks by SORTED name, so comparing indices would compare two unrelated
+/// numberings rather than the call sites. That trap already cost this line one increment,
+/// where a row carried a name id and "carrying a string removes the question rather than
+/// answering it".
+pub type CallSiteRow = (String, i64);
+
+/// The declaration and call-site halves of the type channel's input, from the PIPELINE.
+///
+/// # What this moves, and what it does not
+///
+/// `decl_call_rows` in `tests/selfhost_typecheck.rs` returns three things: declared arities,
+/// call sites, and a per-argument pair of (declared parameter tag, ACTUAL ARGUMENT tag).
+/// **The first two move here; the third does not.** The actual-argument tag requires
+/// classifying an arbitrary expression, which is a node classifier rather than a
+/// re-projection of data already in hand — so it is left, and said so, rather than
+/// half-built.
+///
+/// # Why it is a re-projection at all
+///
+/// The driver already holds every input: `ParsedFn` carries the declared arity and each
+/// parameter's type-name id from the header records, and a `Call` node carries the callee's
+/// chunk index. Nothing here re-walks the source.
+pub fn decl_call_rows_from_pipeline(src: &str) -> (Vec<DeclRow>, Vec<CallSiteRow>) {
+    let (fns, names, ..) = parse_functions_fused(src);
+    let name_of = |id: i64| -> Option<String> { names.get(id as usize).cloned() };
+
+    // The SAME tag mapping the binding rows use. Reused rather than restated: it already
+    // encodes the casing rule that an earlier revision got backwards, where `bool` is the
+    // primitive and `Bool` is an ordinary named type.
+    let tag_of = |type_name_id: i64| -> i64 {
+        match names.get(type_name_id as usize).map(String::as_str) {
+            Some("Word") => 1,
+            Some("bool") => 2,
+            Some("Byte") => 3,
+            _ => 0,
+        }
+    };
+
+    let mut decls: Vec<DeclRow> = Vec::new();
+    for f in &fns {
+        let Some(n) = name_of(f.name) else { continue };
+        let tags: Vec<i64> = (0..f.params)
+            .map(|i| f.param_types.get(i).copied().map_or(0, tag_of))
+            .collect();
+        decls.push((n, f.params as i64, tags));
+    }
+
+    // Call sites come from the reconstructed forest, which is the validated walker. A second
+    // walk written here is the mistake the `v0.3.0` line recorded when an independently
+    // written one reported 365 of 386 loops disagreeing.
+    let chunk_names = chunk_names_from_pipeline(src);
+    let mut sites: Vec<CallSiteRow> = Vec::new();
+    let mut i = 0usize;
+    while i < fns.len() {
+        let Some(group_name) = name_of(fns[i].name) else {
+            i += 1;
+            continue;
+        };
+        let mut group: Vec<&ParsedFn> = vec![&fns[i]];
+        let mut j = i + 1;
+        while j < fns.len() && name_of(fns[j].name).as_deref() == Some(group_name.as_str()) {
+            group.push(&fns[j]);
+            j += 1;
+        }
+        i = j;
+        let pc = group[0].params;
+        let body = if is_multihead_group(&group) {
+            reconstruct_via_kel_multihead(&group, pc, &group_name)
+        } else {
+            let category = reconstruct_category(group[0].cat);
+            reconstruct_via_kel(&group[0].body, category, pc, &group_name)
+        };
+        for node in &body.nodes {
+            if node.kind == 7
+                && let Some(callee) = chunk_names.get(node.arg as usize)
+            {
+                sites.push((callee.clone(), node.rhs));
+            }
+        }
+    }
+
+    (decls, sites)
+}
+
 /// The type checker's BINDING ROWS, derived from the self-hosted pipeline.
 ///
 /// Returns `(name, tag, form)` triples with names as STRINGS rather than interned
