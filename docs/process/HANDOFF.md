@@ -67,9 +67,10 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > **choose its predicate deliberately** -- "does it compile" passes everywhere once the file compiles
 > at all, so the predicate had to be *do these chunks match the reference*.
 >
-> **ORDER 1 ITEM 3: THREE OF FIVE EXTRACTIONS MOVED**, and part of a fourth. `binding_rows`,
+> **ORDER 1 ITEM 3: FOUR OF FIVE EXTRACTIONS MOVED.** One remains,
+> `expression_nodes_resolvable`. `binding_rows`,
 > `decl_call_rows`, then `field_sets` on 2026-08-28. The count is DERIVED by
-> `the_moved_extraction_count_is_three_of_five`, never restated.
+> `the_moved_extraction_count_is_four_of_five`, never restated.
 >
 > **TWO OF THE MOVES ARE PARTIAL AND THE TREE SAYS SO RATHER THAN ROUNDING UP.** Only the DECLARED
 > half of `field_sets` moved; its field accesses still walk the reference tree. And
@@ -118,7 +119,7 @@ git merge-base --is-ancestor 5c3ba628 HEAD    # must succeed
 # matches the MARGIN PIN line further down and reads 681 as a test count for
 # `tests/selfhost_wire.rs`, which is pinned at 178. That false DIFF has been produced three
 # times by three sessions writing the same careless one-liner. It is the checker being wrong.
-grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 22
+grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 25
 grep -c '^\s*#\[test\]' tests/selfhost_wire.rs              # 178
 grep -c '^\s*#\[test\]' tests/selfhost_parse.rs             # 89
 grep -c '^\s*#\[test\]' tests/selfhost_codegen.rs           # 142
@@ -187,7 +188,7 @@ awk '/const UNRESOLVED/,/^\];/' tests/comment_citations.rs | grep -cE '^\s+"'   
 # THE TYPE-CHANNEL EXTRACTIONS MOVED TO THE PIPELINE. Two of five.
 grep -oE 'pub fn [a-z_]+_from_pipeline' src/selfhost/mod.rs | sort -u
 #   binding_rows_from_pipeline, chunk_names_from_pipeline, decl_call_rows_from_pipeline,
-#   declared_names_from_pipeline, field_sets_from_pipeline
+#   declared_names_from_pipeline, field_sets_from_pipeline, occurrence_rows_from_pipeline
 
 # THE PARSER'S CAPS. Unchanged.
 grep -rhoE 'pub const PARSE_[A-Z_]+: usize = [0-9]+;' src/ | sort
@@ -781,7 +782,7 @@ are asserted**.
    nothing, and the reason is the same census as item 1: both are written only for `Struct` and `Enum`
    constants, and there are none.
 3. **The type checker's INPUT. THREE OF FIVE EXTRACTIONS ARE MOVED**, and the figure is derived by
-   `the_moved_extraction_count_is_three_of_five` rather than restated here. `binding_rows` moved
+   `the_moved_extraction_count_is_four_of_five` rather than restated here. `binding_rows` moved
    first, `decl_call_rows` second, `field_sets` third; `occurrence_rows` and the largest,
    `expression_nodes_and_derived` behind its thin wrapper, still walk the REFERENCE parser's AST.
    **`field_sets` moved only its DECLARED half** -- the field ACCESSES need a classifier over the

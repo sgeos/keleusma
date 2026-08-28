@@ -10,6 +10,23 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-28, session 56, sixth increment). ORDER 1 ITEM 3 IS AT FOUR OF FIVE.**
+>
+> `occurrence_rows_from_pipeline` carries the name occurrences; the declared half moved separately
+> in the third increment. **One extraction remains, `expression_nodes_resolvable`.**
+>
+> **"MOVED" MEANS AN ANALOGUE EXISTS, NOT THAT NOTHING IS LEFT**, and the pin's own documentation
+> now carries a table of what did NOT move for each of the four, so the count cannot be read as
+> completeness. For `occurrence_rows` the residuals are `data`-block identifiers -- a difference in
+> REPRESENTATION, since the pipeline has no ident node there at all -- and `for` loop variables,
+> where the read reaches the forest but **nothing on the wire binds the slot to a name**. Only
+> `let` bindings emit a name record. Closing the second is the same shape of change as that record.
+>
+> **A DEFECT THE PROBE CAUGHT BEFORE THE TEST EXISTED.** `let_names` carries `(slot, name)`; a
+> first revision paired it positionally against the `LetIn` nodes and read the tuple backwards, so
+> every `let` occurrence came back under the ENCLOSING FUNCTION'S name. Looked up BY SLOT now, the
+> way `binding_rows_from_pipeline` already did it. **Two extractions, one convention.**
+
 > **Currency note (2026-08-28, session 56, fifth increment). THE OP-TAG RESIDUE NARROWS FROM
 > SIXTEEN TO FOUR.**
 >
@@ -52,8 +69,11 @@ Current sprint source of truth.
 >
 > `declared_names_from_pipeline` covers functions, `data` blocks, enums and structs from the
 > pipeline, with **no driver change at all** -- every table already existed. It is deliberately NOT
-> named after `occurrence_rows`, so `the_moved_extraction_count_is_three_of_five` keeps reporting
-> three. A partial migration counted as a whole one is the failure that pin exists to prevent.
+> named after `occurrence_rows`, so the count pin kept reporting THREE at the time this note was
+> written. A partial migration counted as a whole one is the failure that pin exists to prevent.
+> **The pin has since been renamed to `the_moved_extraction_count_is_four_of_five`**, when the
+> occurrences half moved in the sixth increment; the identifier here is the current one so the
+> citation guard can resolve it, and the figure quoted is the one that was true then.
 >
 > **THE SAME PREDICTION ERROR, TWICE, MEASURED THIS TIME BEFORE ACTING.** The handoff said to expect
 > `occurrence_rows` harder because "two of its four declaration kinds are skipped by the driver".
@@ -73,8 +93,9 @@ Current sprint source of truth.
 
 > **Currency note (2026-08-28, session 56, second increment). ORDER 1 ITEM 3 IS AT THREE OF FIVE.**
 >
-> `field_sets` joins `binding_rows` and `decl_call_rows`. The count is DERIVED by
-> `the_moved_extraction_count_is_three_of_five`, and that pin is what reported the change rather
+> `field_sets` joins `binding_rows` and `decl_call_rows`, taking the count to THREE at the time
+> this note was written. The figure is DERIVED by the count pin -- since renamed to
+> `the_moved_extraction_count_is_four_of_five` -- and that pin is what reported the change rather
 > than the increment remembering to update a number.
 >
 > **ONLY THE DECLARED HALF MOVED.** `field_sets` returns four values; the three declared ones are

@@ -20,7 +20,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-28 (session 56 CLOSE) — five merges, Order 1 item 3 at three of five, and the
+**Date**: 2026-08-28 (session 56 CLOSE) — six merges, Order 1 item 3 at FOUR of five, and the
 twelfth stage's silence explained
 
 ## NOTHING IS WAITING ON YOU EXCEPT THE RULING YOU ALREADY HAVE
@@ -42,6 +42,7 @@ languages. Publication remains held.
 | #310 | the declared names reach it too, and the wildcard-import gap is located |
 | #311 | the twelfth stage does not self-compile, and the tree now says why |
 | #312 | a second corpus narrows the unexercised op tags from sixteen to four |
+| #313 | the name occurrences move — Order 1 item 3 at **four of five** |
 
 ## Nothing is waiting on you except the ruling you already have
 
@@ -84,8 +85,22 @@ And a mutation harness reported "zero compile errors" for three mutants while ru
 a shell variable escaped inside a quoted heredoc. Zero errors from a command that never ran looks
 exactly like a clean mutant. Re-run properly, two of three fired.
 
+## On "four of five", because the number would flatter the state
+
+**Moved means an analogue exists, not that nothing is left.** The count pin's own documentation now
+carries a table of the residual in each of the four, so the figure cannot be read as completeness:
+`decl_call_rows` left its actual-argument tag, `field_sets` its field accesses, and
+`occurrence_rows` two shapes.
+
+Those two are different in kind and the difference is the useful part. A `data` block identifier is
+**representational** — the pipeline has no ident node there at all, so nothing is missing from the
+wire. A `for` loop variable is **a wire gap**: the read reaches the forest but nothing binds its
+slot to its name, because only `let` bindings emit a name record. The occurrence is dropped rather
+than reported under a wrong name, which is the better of the two failures. Closing it is the same
+shape of change as the record that already exists, and that one needed your ruling.
+
 ## What I would take up next
 
-Either the two-pass data resolution above, which would take the byte-identity corpus to twelve and
-is the largest single item I can see; or the occurrences half of `occurrence_rows`, where local
-reads are body record code 2 carrying a slot and the driver already holds parameter and `let` names.
+The last extraction, `expression_nodes_resolvable`; or the two-pass data resolution, which would
+take the byte-identity corpus to twelve and is the largest single item I can see — **that one I
+flagged as yours to call rather than start unilaterally.**

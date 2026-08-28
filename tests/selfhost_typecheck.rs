@@ -2833,22 +2833,34 @@ fn the_declaration_and_call_rows_agree_between_the_pipeline_and_the_reference() 
     );
 }
 
-/// **THREE OF THE FIVE TYPE-CHANNEL EXTRACTIONS ARE MOVED, AND THE FIGURE IS DERIVED.**
+/// **FOUR OF THE FIVE TYPE-CHANNEL EXTRACTIONS ARE MOVED, AND THE FIGURE IS DERIVED.**
 ///
 /// The file header names all five. This counts how many have a pipeline analogue rather than
 /// restating a number, because a hand-written count is a second definition that goes stale —
 /// which is how a handoff came to assert a closed gap was open.
 ///
-/// `field_sets` moved third, on 2026-08-28, and this pin is what reported it: the assertion
-/// fired naming the new arrival rather than the increment having to remember to update a
-/// number. **The two that remain are `occurrence_rows` and `expression_nodes_resolvable`**,
-/// and only the DECLARED half of `field_sets` moved — its field accesses still walk the
-/// reference syntax tree, which the agreement test says in its own words.
+/// `field_sets` moved third and `occurrence_rows` fourth, both on 2026-08-28, and this pin reported
+/// each of them: the assertion fired naming the new arrival rather than the increment having to
+/// remember to update a number. **One remains, `expression_nodes_resolvable`.**
+///
+/// # "MOVED" MEANS AN ANALOGUE EXISTS, NOT THAT NOTHING IS LEFT, AND EVERY ROW HAS A RESIDUAL
+///
+/// The count would flatter the state if read as completeness, so the residuals are named here:
+///
+/// | extraction | what did NOT move |
+/// |---|---|
+/// | `decl_call_rows` | the ACTUAL-ARGUMENT tag, which needs an expression classifier |
+/// | `field_sets` | the field ACCESSES, which need a classifier over the body forest |
+/// | `occurrence_rows` | `data`-block identifiers and `for` loop variables |
+///
+/// Each residual is stated where its function is defined and pinned by its own test. The
+/// declared half of `occurrence_rows` moved separately as `declared_names_from_pipeline`, under
+/// a name this pin does NOT count, precisely so a half could not be counted as a whole.
 // NOT gated on `self-host`: this reads the driver's source as text and calls nothing from
 // it, so it can run under every feature set that builds this file. Its sibling above is
 // gated because it invokes the analogue.
 #[test]
-fn the_moved_extraction_count_is_three_of_five() {
+fn the_moved_extraction_count_is_four_of_five() {
     const DRIVER: &str = include_str!("../src/selfhost/mod.rs");
     let named = [
         "decl_call_rows",
@@ -2864,7 +2876,7 @@ fn the_moved_extraction_count_is_three_of_five() {
         .collect();
     assert_eq!(
         moved.len(),
-        3,
+        4,
         "the count of moved extractions changed. Moved: {moved:?}. Up is the point — update \
          this number and say which one moved. Down means an analogue was removed."
     );
@@ -3055,7 +3067,7 @@ fn a_trait_or_impl_declaration_is_not_collected_as_a_struct() {
 ///
 /// The declared half of `occurrence_rows`, the fourth extraction. **The occurrences themselves
 /// have NOT moved**, and this is deliberately not named after the extraction so that
-/// `the_moved_extraction_count_is_three_of_five` continues to report three. A partial migration
+/// `the_moved_extraction_count_is_four_of_five` continues to report three. A partial migration
 /// counted as a whole one is the failure mode that pin exists to prevent.
 ///
 /// # `use` imports are excluded, and the reason is measured
@@ -3216,5 +3228,209 @@ fn the_wildcard_import_is_not_distinguishable_in_the_record_stream() {
     assert!(
         matches!(ref_star.uses[0].import, keleusma::ast::ImportItem::Wildcard),
         "the reference no longer treats a `::*` import as a wildcard"
+    );
+}
+
+/// **THE NAME OCCURRENCES AGREE BETWEEN THE PIPELINE AND THE REFERENCE**, over the shapes both
+/// representations carry.
+///
+/// The occurrences half of `occurrence_rows`, whose declared half moved in the previous
+/// increment. Compared as MULTISETS: the reference walks its syntax tree and the pipeline walks a
+/// reconstructed forest, so the two visit orders have no reason to coincide and requiring them to
+/// would test the traversal rather than the occurrences.
+///
+/// # Two exclusions, measured rather than assumed, each with its own pin below
+///
+/// A `data` block identifier and a `for` loop variable are not covered. The corpus here contains
+/// neither, deliberately — a probe carrying an uncovered shape would fail for a reason the test is
+/// not about.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_name_occurrences_agree_between_the_pipeline_and_the_reference() {
+    use std::collections::BTreeMap;
+
+    const SOURCES: &[&str] = &[
+        "fn f(p: Word) -> Word { p + p }\nfn main() -> Word { f(1) }",
+        "fn main() -> Word { let a = 3; a + a }",
+        "fn g() -> Word { 1 }\nfn main() -> Word { g() + g() }",
+        "fn g(x: Word) -> Word { x }\nfn main() -> Word { let a = 3; g(a) + a }",
+        "fn main() -> Word { let a = 1; let b = 2; a + b + a }",
+        // Nested scopes that REUSE a frame slot. The pipeline resolves a read by slot, so if the
+        // reuse were mishandled this reports one binding's name where another's belongs.
+        "fn main() -> Word { let a = 1; \
+         let r = if a == 1 { let b = 2; b } else { let c = 3; c }; r }",
+        // A parameter and a `let` in the same body, and a call nested inside another call.
+        "fn f(p: Word) -> Word { let q = p; q + p }\nfn main() -> Word { f(1) }",
+        "fn g(x: Word) -> Word { x }\nfn h(y: Word) -> Word { y }\n\
+         fn main() -> Word { g(h(1)) }",
+        "fn g(x: Word) -> Word { x }\nfn main() -> Word { let a = 1; match a { 1 => g(a), _ => a } }",
+    ];
+
+    let mut total = 0usize;
+    for src in SOURCES {
+        let ast = keleusma::parser::parse(&keleusma::lexer::tokenize(src).expect("lex"))
+            .expect("the reference must parse a probe before it says anything about the stage");
+        let (_declared, occurrences, wildcard) = occurrence_rows(&ast);
+        assert!(
+            !wildcard,
+            "{src:?}: this corpus must not use wildcard imports"
+        );
+
+        // The reference returns interned INDICES. Re-express them as names through a second walk
+        // of the same tree, so neither side's numbering is compared. Third slice running that the
+        // escape is the same: carry a string.
+        let mut want: BTreeMap<(String, i64, i64), usize> = BTreeMap::new();
+        {
+            let names = reference_occurrence_names(&ast);
+            assert_eq!(
+                names.len(),
+                occurrences.len(),
+                "{src:?}: the reference's own two views of its occurrences disagree in length, so \
+                 the re-expression below is not describing the same walk"
+            );
+            for (name, (_, local, call)) in names.into_iter().zip(occurrences.iter().copied()) {
+                *want.entry((name, local, call)).or_insert(0) += 1;
+            }
+        }
+
+        let mut got: BTreeMap<(String, i64, i64), usize> = BTreeMap::new();
+        for row in keleusma::selfhost::occurrence_rows_from_pipeline(src) {
+            *got.entry(row).or_insert(0) += 1;
+        }
+
+        assert_eq!(
+            got, want,
+            "{src:?}: the pipeline disagrees with the reference on the name occurrences"
+        );
+        total += want.values().sum::<usize>();
+    }
+
+    assert!(
+        total >= 20,
+        "only {total} occurrences were compared across the corpus, so this measures far less \
+         than it appears to"
+    );
+}
+
+/// The reference's occurrence NAMES, in the same order `occurrence_rows` produces its rows.
+///
+/// A second walk rather than a change to the extraction under test: `occurrence_rows` is the thing
+/// being compared against, and altering it to make the comparison easier would compare it to
+/// itself.
+#[cfg(feature = "self-host")]
+fn reference_occurrence_names(ast: &keleusma::ast::Program) -> Vec<String> {
+    use keleusma::ast::{Expr, Pattern, Stmt};
+    use keleusma::visitor::Visitor;
+    use std::collections::BTreeSet;
+
+    struct Occ {
+        locals: BTreeSet<String>,
+        seen: Vec<String>,
+    }
+    impl Visitor for Occ {
+        fn visit_stmt(&mut self, stmt: &Stmt) {
+            if let Stmt::Let(l) = stmt
+                && let Pattern::Variable(n, _) = &l.pattern
+            {
+                self.locals.insert(n.clone());
+            }
+            self.walk_stmt(stmt);
+        }
+        fn visit_expr(&mut self, expr: &Expr) {
+            match expr {
+                Expr::Call { name, .. } | Expr::Ident { name, .. } => self.seen.push(name.clone()),
+                _ => {}
+            }
+            self.walk_expr(expr);
+        }
+    }
+
+    let mut out = Vec::new();
+    for f in &ast.functions {
+        let mut locals: BTreeSet<String> = BTreeSet::new();
+        for p in &f.params {
+            if let Pattern::Variable(n, _) = &p.pattern {
+                locals.insert(n.clone());
+            }
+        }
+        let mut pre = Occ {
+            locals,
+            seen: Vec::new(),
+        };
+        pre.visit_block(&f.body);
+        let mut pass = Occ {
+            locals: pre.locals,
+            seen: Vec::new(),
+        };
+        pass.visit_block(&f.body);
+        out.extend(pass.seen);
+    }
+    out
+}
+
+/// **A `data` BLOCK IDENTIFIER IS NOT AN OCCURRENCE IN THE PIPELINE, AND THAT IS REPRESENTATIONAL.**
+///
+/// The reference sees `d.q` as a field access whose object is an `Ident` and records `d`. The
+/// pipeline sees one data-read node carrying a block index and no ident node at all.
+///
+/// **Fires in the FAILING direction if the gap closes**, which is the signal to widen the
+/// pipeline function rather than a regression.
+#[cfg(feature = "self-host")]
+#[test]
+fn a_data_block_identifier_is_not_reported_as_an_occurrence() {
+    const SRC: &str = "private data d { q: Word }\nfn main() -> Word { d.q }";
+    let ast =
+        keleusma::parser::parse(&keleusma::lexer::tokenize(SRC).expect("lex")).expect("parse");
+
+    // The reference DOES record it, which is what makes the difference worth pinning.
+    let names = reference_occurrence_names(&ast);
+    assert!(
+        names.iter().any(|n| n == "d"),
+        "the reference no longer records a data-block identifier as an occurrence, so this \
+         exclusion may no longer describe a real difference: {names:?}"
+    );
+
+    let got = keleusma::selfhost::occurrence_rows_from_pipeline(SRC);
+    assert!(
+        got.iter().all(|(n, _, _)| n != "d"),
+        "the pipeline now reports the data-block identifier. THIS IS A GAP CLOSING: widen \
+         `occurrence_rows_from_pipeline`'s documented coverage and retire this pin. Got {got:?}"
+    );
+}
+
+/// **A `for` LOOP VARIABLE IS NOT AN OCCURRENCE IN THE PIPELINE, AND THE REASON IS THE WIRE.**
+///
+/// Its READ reaches the forest as an ordinary local node. What is missing is a record binding its
+/// SLOT to its NAME: only `let` bindings emit one, the record added under the operator's ruling on
+/// that fork. So the slot resolves to nothing and the occurrence is dropped rather than reported
+/// under a wrong name — which is the better of the two failures and is worth stating.
+///
+/// **Closing this is the same shape of change as the `let` name record that already exists.**
+#[cfg(feature = "self-host")]
+#[test]
+fn a_for_loop_variable_is_not_reported_as_an_occurrence() {
+    const SRC: &str = "fn main() -> Word { let t = 0; for i in 0..4 limit 4 { let u = i; } t }";
+    let ast =
+        keleusma::parser::parse(&keleusma::lexer::tokenize(SRC).expect("lex")).expect("parse");
+
+    let names = reference_occurrence_names(&ast);
+    assert!(
+        names.iter().any(|n| n == "i"),
+        "the reference no longer records the loop variable's read, so this exclusion may no \
+         longer describe a real difference: {names:?}"
+    );
+
+    let got = keleusma::selfhost::occurrence_rows_from_pipeline(SRC);
+    assert!(
+        got.iter().all(|(n, _, _)| n != "i"),
+        "the pipeline now reports the loop variable. THIS IS A GAP CLOSING: the stage must have \
+         gained a name record for the loop binding. Widen the documented coverage and retire this \
+         pin. Got {got:?}"
+    );
+    // The enclosing `let` IS reported, so the pipeline is not simply silent about this body.
+    assert!(
+        got.iter().any(|(n, _, _)| n == "t"),
+        "non-vacuity: the pipeline reported no occurrences at all for this body, so the \
+         assertion above passes without establishing anything: {got:?}"
     );
 }

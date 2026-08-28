@@ -68,7 +68,7 @@ said plainly that the third needs an expression classifier and was therefore lef
 here: if the ACCESSES half needs body-walk work the declared-sets half does not, move what moves
 and say what did not, rather than implying the extraction is fully migrated.
 
-**THE COUNT IS DERIVED, NEVER RESTATED.** `the_moved_extraction_count_is_three_of_five` counts the
+**THE COUNT IS DERIVED, NEVER RESTATED.** `the_moved_extraction_count_is_four_of_five` counts the
 analogues in the driver. A hand-written count is a second definition that goes stale, which is
 precisely how the handoff came to assert an already-closed gap was open.
 
