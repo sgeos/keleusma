@@ -56,6 +56,14 @@ fn corpus() -> Vec<(String, Module)> {
         }
     }
     paths.sort();
+    // **DEDUPE, BECAUSE THE ROOTS OVERLAP.** `examples/scripts/rogue` is listed
+    // explicitly AND reached by recursion from `examples/scripts`, so every
+    // rogue file was visited twice and the module and chunk denominators
+    // reported here were inflated by the whole of that directory: 67 unique
+    // files were counted as 91. Exact duplicates sort adjacent, so this removes
+    // them. The findings above were unaffected -- none of them fell in `rogue` --
+    // but the populations they were measured against were not what they said.
+    paths.dedup();
     let mut out = Vec::new();
     for p in paths {
         let name = p.file_name().unwrap().to_string_lossy().to_string();

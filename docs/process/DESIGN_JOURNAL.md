@@ -277,6 +277,57 @@ two-segment form, which genuinely differs, and it fired with its own message.
 kinds is missing from its probes, and removing the structs makes it fail with that message. The
 previous slice learned this the hard way: a guard whose corpus lacks a construct is a guard for a
 different question.
+## 2026-08-28 — [v0.3.0] Building a guard for one thing found the population was wrong
+
+**THE INTENDED WORK WAS SMALL**: turn the "corpus inputs touched?" habit into a check, because
+thirty-six test files here read directories owned by the `v0.2.3` line and **a habit is not a check**.
+The incidental finding is the larger one.
+
+### 91 was never the number
+
+Three test files written this session listed `examples/scripts/rogue` explicitly **and** recursed from
+`examples/scripts`, so **every file in `rogue` was visited twice**:
+
+$$
+67 \text{ unique files},\ 24 \text{ of them in } \texttt{rogue},\ \text{counted as } 67 + 24 = 91.
+$$
+
+**Corrected: "91 modules" → 67, "1117 chunks examined" → 1074.**
+
+**The published coverage figures were never affected.** `spike_corpus_coverage`,
+`isa_lowering_census` and `bound_transfer` do not list `rogue` explicitly, so recursion reached it
+once — and that was **re-derived to confirm rather than reasoned about**. 61 of 66, 1070 of 1074 and
+89841 of 89940 all stand.
+
+**The findings were unaffected too.** The three refusals and the one chunk carrying the escaping shape
+all lie outside `rogue`. **What was wrong was the population they were measured against**, which is
+the one thing a denominator is for.
+
+### The fix produced a cross-check that had not existed
+
+Two independent censuses now report the same chunk total, **1074**. Before the fix they said 1074 and
+1117, **and nobody had put the two numbers beside each other.** The `v0.2.3` line's op-tag defect was
+found the same way — by asking two instruments the same question — and here the question was never
+asked because the two figures lived in different files and were quoted in different sentences.
+
+### The guard nearly shipped under-covering
+
+The first fingerprint scan read only the three named directories and found **57** files where the
+loaders walk **67**: it missed the ten `piano_roll` modules, because the loaders recurse and it did
+not. **Caught before anything was pinned**, by comparing the scan against what the loaders actually
+walk rather than against what the directory list looked like it meant.
+
+**A guard that watches a smaller population than the thing it protects is the same defect as the pin
+it was built to prevent**, one level up.
+
+### What the guard is
+
+`corpus_fingerprint.rs` pins 67 files by path and content digest and fails with the added, removed and
+modified names plus a ready-to-paste manifest, naming the figures to re-derive. FNV-1a, because
+`DefaultHasher` is explicitly not stable across toolchains and **a tripwire that cries wolf is worse
+than none**. Its comparator is exercised on all three answers by perturbing a manifest directly, so
+the demonstration never requires editing a file another line owns.
+
 ## 2026-08-28 — [v0.3.0] The widest-input rule names an exposure this line was already managing
 
 **THE RULE, DERIVED BY THE `v0.2.3` LINE FROM THEIR OWN DEFECT**: *before pinning a value, ask what

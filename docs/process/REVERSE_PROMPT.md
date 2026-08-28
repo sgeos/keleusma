@@ -147,6 +147,26 @@ soundness item: **the yield-escape refusal is still shadowed**, because the esca
 refused — now asserted by a test rather than inferred. One gap named and not fixed: a tail-yielded
 composite lowers and nothing in the tree executes it.
 
+**I set out to build a small guard and found one of my own numbers was wrong.** Thirty-six test files
+here read directories the other line owns, so I wanted the habit of checking them turned into a check.
+While doing it I found that three test files I wrote this session listed the rogue directory
+explicitly and also recursed into it from its parent, visiting every file there twice: **67 unique
+files, 24 of them in rogue, reported as 91**. Chunks examined were likewise 1074 reported as 1117.
+
+**Your coverage figures were never affected**, and I re-derived them rather than reasoning that they
+were safe: the censuses that produce 61 of 66, 1070 of 1074 and 89841 of 89940 do not list rogue
+explicitly, so they saw it once. The findings were unaffected too — the refusals and the escaping-shape
+chunk all lie outside rogue. **What was wrong was the population they were measured against.**
+
+The fix gave me a cross-check I did not have: two independent censuses now agree at 1074 chunks, where
+before they said 1074 and 1117 and nobody had set the two numbers beside each other. That is the same
+way the other line's defect was found, and here the question went unasked because the figures lived in
+different files.
+
+**The guard itself nearly shipped watching a smaller population than it protects** — its first scan
+found 57 files where the loaders walk 67, missing the piano_roll family by not recursing. Caught before
+anything was pinned.
+
 **The blockage is over and the branch is published again.** PR #314 landed, absorption 25 carried it
 in, and I then **ran** the workspace suite rather than inferring it from the fix: 2479 passed, 0
 failed, 89 binaries. The prediction's arithmetic was written before merging and held. Nine commits

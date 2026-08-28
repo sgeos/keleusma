@@ -239,6 +239,25 @@ Current sprint source of truth.
 > **THREE CHECKS WRITTEN THIS SESSION COULD NOT FAIL**, each satisfied by a different part of a
 > document from the one it was about. Mutation caught all three; reading caught none.
 
+> **Currency note (2026-08-28, V0.3.X line, tenth entry). THE CORPUS POPULATION WAS NEVER 91; IT IS
+> 67, AND A CORPUS CHANGE NOW ANNOUNCES ITSELF.**
+>
+> Building a guard for the widest-input exposure found a defect in three test files written this
+> session: they listed `examples/scripts/rogue` explicitly **and** recursed from its parent, so every
+> file in `rogue` was visited twice — **67 unique files, 24 of them in `rogue`, counted as 91**.
+> Corrected to **67 modules and 1074 chunks examined**. **The published coverage figures were never
+> affected** and were re-derived to confirm it: `spike_corpus_coverage`, `isa_lowering_census` and
+> `bound_transfer` do not list `rogue` explicitly. **61 of 66**, **1070 of 1074**, **89841 of 89940**
+> all stand, and the findings stand too, since the three refusals and the one escaping-shape chunk lie
+> outside `rogue`. What was wrong was the population they were measured against.
+>
+> **The fix produced a cross-check that had not existed**: two independent censuses now agree at
+> 1074, where before they said 1074 and 1117 and nobody had set the numbers side by side.
+> `corpus_fingerprint.rs` now pins 67 files by path and content digest, failing with what moved and a
+> ready-to-paste manifest. Its own first scan under-covered at 57 files by not recursing, and was
+> caught before anything was pinned. `native_codegen` **346/0/67** clean.
+> See [`../decisions/CORPUS_FINGERPRINT_BRIEF.md`](../decisions/CORPUS_FINGERPRINT_BRIEF.md).
+
 > **Currency note (2026-08-28, V0.3.X line, ninth entry). THE WIDEST-INPUT RULE, AND AN ABSORPTION
 > WHERE THREE PREDICTIONS AGREED.**
 >
