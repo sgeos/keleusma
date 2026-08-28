@@ -107,7 +107,24 @@ That prerequisite is what this increment built, so the change is back rather tha
 stands from it**: lifting the two composite refusals needs a fixpoint over local widths, which is its
 own increment, and coverage is still 1070 of 1074.
 
-**Absorptions 18, 19 and 20 are complete**, every prediction recorded before merging and every one
+**The last two composite refusals are closed.** A local written more than once is now trusted when
+every write's producer fixes its width by the instruction itself. **Coverage 1070 → 1072 of 1074**,
+and — the part that actually matters — the corpus differential goes from 59 to **61 modules executed
+and agreeing** with the reference. A wrong width would have raised coverage identically and mispacked
+in silence, so the execution figure is the evidence and the coverage figure is not.
+
+**The fixpoint I told you this would need was not needed.** The arithmetic result slot carries a
+literal width whatever its operands, so the loop counter's two writes depend on nothing. Reading that
+one line removed an increment of planned work.
+
+**One thing I got wrong and want on the record.** I built a stack walk on `stack_growth`/`stack_shrink`
+as though they were pop and push counts. **They are the peak model, their own documentation says so
+and names the right function, and this repository had already recorded another place making the same
+mistake.** The wrong walk mis-attributed the loop increment's value — precisely the classification the
+fix depends on. I re-derived the earlier published conclusion rather than assume it survived; it did,
+but that was only knowable by checking.
+
+**Absorptions 18 through 21 are complete**, every prediction recorded before merging and every one
 hitting exactly.
 
 **Still blocked on you, all three unactionable here**: the `Fixed` shared-slot ABI, where the

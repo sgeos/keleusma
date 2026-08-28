@@ -2,7 +2,9 @@
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
 
-**Status**: cause established 2026-08-28. **Not fixed.** Corpus coverage unchanged at 1070 of 1074.
+**Status**: cause established and **FIXED**, 2026-08-28. Corpus coverage **1070 → 1072 of 1074**,
+opcode instances **89741 → 89854 of 89940**. Both modules now execute and agree with the reference:
+the corpus differential reports **61 executed and agreeing, up from 59, with exempt down to 12**.
 
 ## The condition, and why that was not yet a finding
 
@@ -71,12 +73,49 @@ what distinguishes it from a test that passes for unrelated reasons.
 **It still does not lift the two sites this document is about.** Coverage remains 1070 of 1074, and
 the cause there is the multi-write local, not the call result.
 
-## What would actually lift the refusal
+## What lifted it, and why no fixpoint was needed
 
-A **fixpoint over local widths** rather than a linear scan. The increment's width depends on the very
-local being analysed, so one pass cannot settle it; a monotone dataflow analysis can, because each
-local moves at most from undefined, to a concrete width, to unknown. Termination is bounded by twice
-the local count.
+The recorded plan said this required a **fixpoint** over local widths, since the increment's width
+appears to depend on the local being analysed. It does not. **`push_triple` pushes the arithmetic
+result at a literal `Width::Scalar(8)`, independent of its operands**, so the induction variable's two
+writes — a `Const` and an arithmetic result — depend on nothing, the circularity does not exist, and a
+single pre-pass suffices. **Reading the arm removed a whole increment of planned work.**
 
-**Not attempted here.** It is a real analysis with real mispack risk, and it deserves its own
-increment with its own differential evidence.
+### The narrowing, and the old rule was right
+
+A local's width was trusted only when written at most once, because a linear walk cannot see a back
+edge. That is sound. **"Cannot see a back edge" only matters when the writes DISAGREE**: if every
+write stores the same width, that is the width whichever write reached the read.
+
+`certified_local_widths` therefore certifies a multiply-written local when **every** write's producer
+fixes its width by the instruction alone — a `Const` by its kind, or the result slot of one of the
+four arithmetic instructions that push a `(low, high, flag)` triple. Two safeguards carry the
+argument:
+
+- **One unclassifiable write sinks the local**, rather than being ignored as though the rest agreed.
+- **A multi-push instruction is distinguished by which push is taken.** A triple's flag is a boolean,
+  not the arithmetic result; classifying on the instruction alone would label it a word.
+
+### The method error that nearly justified this for the wrong reason
+
+The producer walk first used `Op::stack_growth`/`stack_shrink`. **Those are the operand-stack PEAK
+model, not pop and push counts, and their own documentation says so** — `CheckedAdd` reports growth 1
+and shrink 0 while actually popping two and pushing three. The wrong walk attributed the increment's
+stored value to a `GetLocal` rather than to the arithmetic, which is exactly the classification this
+certification rests on. Corrected to `verify::op_depth_effect`, whose contract is true counts.
+
+**The repository had already recorded this mistake**, in the same doc comment: `text_size` made it and
+"desynchronised its shadow stack on every pop-and-push instruction".
+
+### The evidence is execution, not coverage
+
+A wrong width would raise coverage exactly as a right one does, and mispack silently. The two modules
+now **run** under the corpus differential and agree with the reference.
+
+### The refusing path is unit-tested, because no source program reaches it
+
+Every multiply-written local in the corpus, and in every source form tried, is a loop counter written
+from a constant and an arithmetic result. The obvious negative subject — a loop variable bound from an
+array element — is written **once**, so the pre-existing rule already trusted it; a test asserting it
+would be refused was asserting a falsehood and failed. The refusing path is tested directly against
+the predicate instead.

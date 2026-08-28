@@ -157,6 +157,24 @@ Current sprint source of truth.
 > **THREE CHECKS WRITTEN THIS SESSION COULD NOT FAIL**, each satisfied by a different part of a
 > document from the one it was about. Mutation caught all three; reading caught none.
 
+> **Currency note (2026-08-28, V0.3.X line, third entry). THE LAST TWO COMPOSITE REFUSALS ARE
+> CLOSED, AND A METHOD ERROR THIS REPOSITORY HAD ALREADY RECORDED WAS REPEATED AND CAUGHT.**
+>
+> A local written more than once is now trusted when **every** write's producer fixes its width by the
+> instruction alone. **No fixpoint was needed**: the arithmetic result slot carries a literal width
+> regardless of operands, so the induction variable's two writes depend on nothing. Coverage
+> **1070 → 1072 of 1074 (99.8%)**, opcode instances **89741 → 89854 (99.9%)**, and the corpus
+> differential goes **59 → 61 executed and agreeing** with exempt 14 → 12 — execution is the evidence,
+> since a wrong width would have raised coverage just the same.
+>
+> **`Op::stack_growth`/`stack_shrink` are the operand-stack PEAK model, not pop and push counts**, and
+> their own documentation says so and names `verify::op_depth_effect` as the correct source. A walk
+> built on them mis-attributed the loop increment's stored value, which is exactly the classification
+> the certification rests on. The same doc records that `text_size` made this mistake before. The
+> earlier published conclusion was re-derived rather than assumed to survive, and it did.
+> Absorption 21 complete, prediction hit exactly. `native_codegen` **330/0/62**, workspace
+> **2469/0/88**. See [`../decisions/OPERAND_WIDTH_RECOVERY.md`](../decisions/OPERAND_WIDTH_RECOVERY.md).
+
 > **Currency note (2026-08-28, V0.3.X line, second entry). A MULTI-FUNCTION PROGRAM CAN NOW BE
 > DIFFERENTIALLY TESTED FROM A SOURCE STRING, AND THE REVERTED WIDTH FIX IS BACK WITH EVIDENCE.**
 >

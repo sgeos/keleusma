@@ -237,6 +237,95 @@ pub struct LowerOptions {
     pub delegated_suspension: bool,
 }
 
+/// Packed width a producing instruction fixes by ITSELF, independent of its
+/// operands, or `None`.
+///
+/// **Only operand-independent sources qualify, and that is the whole safety
+/// argument.** A `Const` carries its kind, and the four arithmetic instructions
+/// that push a `(low, high, flag)` triple push `low` at a literal word width
+/// whatever they were given. An instruction whose result width depends on what
+/// it consumed cannot be classified here, because doing so would need the very
+/// analysis this pre-pass runs ahead of.
+///
+/// `which` selects among a multi-push instruction's results. **A triple's `low`
+/// is the arithmetic result; its `flag` is a boolean.** Classifying on the
+/// instruction alone would label a flag as a word.
+fn instruction_fixed_width(chunk: &Chunk, op_index: usize, which: u32) -> Option<Width> {
+    match chunk.ops.get(op_index)? {
+        Op::Const(c) if which == 0 => match chunk.constants.get(*c as usize)? {
+            keleusma::bytecode::ConstValue::Int(_) => Some(Width::Scalar(8)),
+            keleusma::bytecode::ConstValue::Byte(_) => Some(Width::Scalar(1)),
+            keleusma::bytecode::ConstValue::Bool(_) => Some(Width::Scalar(1)),
+            _ => None,
+        },
+        // `push_triple` pushes `low` at `Width::Scalar(8)` as a literal.
+        Op::CheckedAdd | Op::CheckedSub | Op::CheckedMul(_) | Op::CheckedNeg if which == 0 => {
+            Some(Width::Scalar(8))
+        }
+        _ => None,
+    }
+}
+
+/// Packed widths that can be trusted for locals the chunk writes MORE THAN ONCE.
+///
+/// # Why a multi-write local is normally untrusted, and why that is right
+///
+/// The width pass is a linear walk and **cannot see a back edge**, so a local
+/// rewritten inside a loop would be read at the width of whichever write appears
+/// earlier in the text and packed wrongly on every iteration after the first.
+/// Declining to trust it costs coverage and cannot mispack, which is the correct
+/// direction for a decision that is otherwise silent.
+///
+/// # What narrows it
+///
+/// **"Cannot see a back edge" only matters when the writes DISAGREE.** If every
+/// write to a local stores a value of the same width, that is the width whichever
+/// write reached the read, back edge or not. This certifies exactly that case,
+/// and only from sources whose width is fixed by the instruction rather than by
+/// its operands — so no circularity arises and no fixpoint is needed.
+///
+/// **A `for` loop's induction variable is the motivating case**: it is written
+/// twice, once from a constant and once from an arithmetic result, and both are
+/// words. Measured on `12_sensor_window.kel` and `14_frame_log.kel`.
+///
+/// # One unclassifiable write sinks the local
+///
+/// A write this cannot classify yields no certification at all, rather than
+/// being ignored as though the remaining writes agreed.
+fn certified_local_widths(chunk: &Chunk) -> BTreeMap<usize, Width> {
+    // `(op index, which push)` for every live operand-stack slot.
+    //
+    // **Driven by `op_depth_effect`, whose contract is true pop and push counts.**
+    // `Op::stack_growth`/`stack_shrink` are the PEAK model — a transient reach
+    // and a net — and their own documentation says they are not pop counts.
+    // A shadow stack driven by them desynchronises at every pop-and-push
+    // instruction, which is a mistake this repository has recorded once already.
+    let mut stack: Vec<(usize, u32)> = Vec::new();
+    let mut agreed: BTreeMap<usize, Option<Width>> = BTreeMap::new();
+    for (i, op) in chunk.ops.iter().enumerate() {
+        if let Op::SetLocal(n) = op {
+            let found = stack
+                .last()
+                .and_then(|&(pi, k)| instruction_fixed_width(chunk, pi, k));
+            let slot = agreed.entry(usize::from(*n)).or_insert(found);
+            if *slot != found {
+                *slot = None;
+            }
+        }
+        let (required, delta) = keleusma::verify::op_depth_effect(op, chunk);
+        for _ in 0..required.max(0) {
+            stack.pop();
+        }
+        for k in 0..(required + delta).max(0) {
+            stack.push((i, k as u32));
+        }
+    }
+    agreed
+        .into_iter()
+        .filter_map(|(idx, w)| w.map(|w| (idx, w)))
+        .collect()
+}
+
 /// Packed width implied by a DECLARED boundary shape, or [`Width::Unknown`].
 ///
 /// One definition serving both call paths. A native's declared return shape and
@@ -2100,6 +2189,9 @@ fn lower_chunk_body<'ctx>(
             *local_write_count.entry(*n as usize).or_default() += 1;
         }
     }
+    // Which of those multiply-written locals nonetheless have a knowable width,
+    // because every write agrees. Narrows the rule above without weakening it.
+    let certified_widths = certified_local_widths(chunk);
 
     // Operand-stack depth at each merge point, recorded per incoming edge.
     let mut tdepth: BTreeMap<usize, usize> = BTreeMap::new();
@@ -2250,7 +2342,13 @@ fn lower_chunk_body<'ctx>(
                 let idx = *n as usize;
                 let w = match local_write_count.get(&idx).copied().unwrap_or(0) {
                     0 | 1 => st.local_widths.get(idx).copied().unwrap_or(Width::Unknown),
-                    _ => Width::Unknown,
+                    // **Trusted when every write agrees**, which is the only case
+                    // the back-edge objection does not reach. See
+                    // [`certified_local_widths`].
+                    _ => certified_widths
+                        .get(&idx)
+                        .copied()
+                        .unwrap_or(Width::Unknown),
                 };
                 st.push_w(v, w);
             }
@@ -3802,5 +3900,109 @@ pub fn check_word_width(word_bits_log2: u8) -> Result<(), LowerError> {
         Ok(())
     } else {
         Err(LowerError::UnsupportedWordWidth(word_bits_log2))
+    }
+}
+
+#[cfg(test)]
+mod certification_tests {
+    use super::*;
+    use keleusma::bytecode::{NewCompositeOperand, Op};
+    use keleusma::value_layout::CompositeKind;
+
+    /// A chunk carrying only what the pre-pass reads, built from a real compile
+    /// so its other fields stay whatever the compiler considers valid rather
+    /// than being invented here and drifting from it.
+    fn chunk_with(ops: Vec<Op>) -> Chunk {
+        let src = "fn main(v: Word) -> Word { v + 1 }";
+        let m = keleusma::compiler::compile(
+            &keleusma::parser::parse(&keleusma::lexer::tokenize(src).expect("lex")).expect("parse"),
+        )
+        .expect("compile");
+        let mut c = m.chunks.into_iter().next().expect("one chunk");
+        c.ops = ops;
+        c
+    }
+
+    /// The accepting case: two writes, both from sources whose width is fixed by
+    /// the instruction, and both the same.
+    ///
+    /// **`Const(0)` is an `Int` in the chunk this borrows**, which is what makes
+    /// it a word; the assertion below would be meaningless if it were not.
+    #[test]
+    fn two_agreeing_writes_certify_the_local() {
+        let c = chunk_with(vec![
+            Op::Const(0),
+            Op::SetLocal(0),
+            Op::GetLocal(0),
+            Op::Const(0),
+            Op::CheckedAdd,
+            Op::PopN(2),
+            Op::SetLocal(0),
+            Op::Return,
+        ]);
+        assert!(
+            matches!(
+                c.constants.first(),
+                Some(keleusma::bytecode::ConstValue::Int(_))
+            ),
+            "this subject needs an Int constant to be about word widths at all"
+        );
+        let certified = certified_local_widths(&c);
+        assert_eq!(certified.get(&0), Some(&Width::Scalar(8)));
+    }
+
+    /// **THE REFUSING CASE.** One write comes from a `GetLocal`, whose width is a
+    /// property of the operand rather than of the instruction, so the local is
+    /// not certified at all — rather than the unclassifiable write being ignored
+    /// as though the others agreed.
+    ///
+    /// Exercised here rather than from source because **no program this line can
+    /// currently write reaches it**: locals written more than once are, in the
+    /// shipped corpus and in every source form tried, loop counters, and those
+    /// are always a constant plus an arithmetic result. That is a fact about the
+    /// compiler's output, not a reason to leave the path untested.
+    #[test]
+    fn one_unclassifiable_write_sinks_the_local() {
+        let c = chunk_with(vec![
+            Op::Const(0),
+            Op::SetLocal(0),
+            Op::GetLocal(1),
+            Op::SetLocal(0),
+            Op::Return,
+        ]);
+        assert_eq!(
+            certified_local_widths(&c).get(&0),
+            None,
+            "a local with an unclassifiable write must not be certified"
+        );
+    }
+
+    /// A multi-push instruction is distinguished by WHICH push is taken. The
+    /// flag slot of a checked triple is not the arithmetic result, and
+    /// certifying on the instruction alone would label it a word.
+    #[test]
+    fn the_flag_slot_of_a_triple_is_not_certified_as_a_word() {
+        assert_eq!(
+            instruction_fixed_width(&chunk_with(vec![Op::CheckedAdd]), 0, 0),
+            Some(Width::Scalar(8)),
+            "push 0 of a checked triple is the arithmetic result"
+        );
+        assert_eq!(
+            instruction_fixed_width(&chunk_with(vec![Op::CheckedAdd]), 0, 2),
+            None,
+            "push 2 of a checked triple is the overflow flag, not a word"
+        );
+    }
+
+    /// A composite construction is not a fixed-width source: nothing about the
+    /// instruction alone says how a local holding one should be packed.
+    #[test]
+    fn a_composite_construction_is_not_a_fixed_width_source() {
+        let c = chunk_with(vec![Op::NewComposite(NewCompositeOperand::Flat {
+            kind: CompositeKind::Struct,
+            count: 0,
+            byte_size: 8,
+        })]);
+        assert_eq!(instruction_fixed_width(&c, 0, 0), None);
     }
 }

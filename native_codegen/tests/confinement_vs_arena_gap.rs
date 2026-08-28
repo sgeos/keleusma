@@ -503,12 +503,25 @@ fn which_condition_refuses_the_last_composite_modules() {
 
     // **NON-VACUITY: a cause read from no refusal is not a cause.** If this
     // number is zero the report above says so explicitly rather than passing
-    // quietly, and the assertion below keeps that from being mistaken for a
-    // clean result.
+    // quietly.
+    //
+    // # RE-POINTED 2026-08-28, on this test's own instruction
+    //
+    // The residue of two has CLOSED. `12_sensor_window.kel` and
+    // `14_frame_log.kel` were refused for an unknown operand width, that width
+    // is now certified for a multiply-written local whose writes agree, and both
+    // modules lower and execute in agreement with the reference.
+    //
+    // The original assertion required a refusal to exist so that a cause could
+    // be read from it, and it fired the moment the cause was removed — which is
+    // the tripwire working, and its message said to re-point rather than delete.
+    // **It now guards the closed state instead**, and still fires if a composite
+    // refusal reappears, printing the cause above rather than only a count.
     assert!(
-        !hits.is_empty(),
-        "no module refuses on NewComposite, so no cause could be read. If the \
-         residue has genuinely closed, the coverage figures elsewhere are stale \
-         and this test should be re-pointed rather than deleted."
+        hits.is_empty(),
+        "a composite refusal has reappeared. The residue closed on 2026-08-28 and \
+         the coverage figures quoted elsewhere assume it stayed closed. The cause \
+         is printed above; re-derive the coverage figures before changing anything \
+         else: {hits:?}"
     );
 }

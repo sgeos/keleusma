@@ -13,6 +13,59 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-28 — [v0.3.0] I made the mistake this repository had already recorded
+
+**`Op::stack_growth` AND `Op::stack_shrink` ARE NOT POP AND PUSH COUNTS**, and their own documentation
+says so: *"Not a pop count... For true pop and push counts use `op_depth_effect`."* They are the
+operand-stack PEAK model — a transient reach and a net. Under it `CheckedAdd` reports growth 1 and
+shrink 0, when it in fact pops two and pushes three.
+
+**The previous increment built a shadow stack on them and published a conclusion from it.** The same
+file's doc comment records that `text_size` made this exact mistake and "desynchronised its shadow
+stack on every pop-and-push instruction". **It was written down, and I did it anyway.**
+
+**The wrong walk gave a wrong answer where it mattered**: it attributed the loop increment's stored
+value to a `GetLocal` rather than to the arithmetic that produced it — which is precisely the
+classification the certification below depends on. Had it gone unnoticed, the certification would
+have been justified for the wrong reason or abandoned as impossible.
+
+**The earlier published conclusion was re-derived, not assumed to survive.** With `op_depth_effect`
+the answer is unchanged: operand 1 at each refused site is produced by a `GetLocal` of a
+multiply-written local. **The method was wrong; that particular conclusion was not.** Both facts are
+recorded, because "it came out the same" is only knowable by checking.
+
+### The fixpoint that was not needed
+
+The recorded plan said lifting the refusal required a fixpoint over local widths, since the
+increment's width appears to depend on the local being analysed. **`push_triple` pushes the
+arithmetic result at a LITERAL `Width::Scalar(8)`, independent of its operands.** So the induction
+variable's two writes — a `Const` and an arithmetic result — depend on nothing, the circularity does
+not exist, and a single pre-pass suffices. **Reading the arm removed a whole increment of planned
+work.**
+
+### The narrowing, and why the old rule was right
+
+A local's width was trusted only when written at most once, because a linear walk cannot see a back
+edge. **That is sound, and "cannot see a back edge" only matters when the writes DISAGREE.** If every
+write stores the same width, that is the width whichever write reached the read. Certification
+requires every write's producer to fix its width by the instruction alone, and **one unclassifiable
+write sinks the local** rather than being ignored as though the rest agreed. A multi-push instruction
+is distinguished by which push is taken: a triple's flag is not its arithmetic result.
+
+**Measured: 1070 → 1072 of 1074 chunks (99.6% → 99.8%), opcode instances 89741 → 89854 (99.9%).**
+
+**And coverage is not the evidence.** The corpus differential now reports **61 executed and agreeing,
+up from 59, with exempt down from 14 to 12** — the two newly-admitted modules run against the
+reference and agree. A wrong width would have raised coverage just the same and mispacked silently.
+
+### A negative test that asserted something false
+
+The obvious refusing subject — a loop variable bound from an array element — **does not exercise the
+certification at all**. The compiler writes that binding once, so the old rule already trusted it. The
+test asserting it would be refused was asserting a falsehood, and it failed. It is now a test of what
+is actually true, and the refusing path is unit-tested directly, since no source program this line can
+write reaches it.
+
 ## 2026-08-28 — The third type-channel extraction, and the data was already on the wire
 
 **ORDER 1 ITEM 3 IS AT THREE OF FIVE.** `field_sets` follows `binding_rows` and
