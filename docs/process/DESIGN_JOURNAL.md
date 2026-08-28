@@ -13,6 +13,47 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-28 — The twelfth stage does not self-compile, and now the tree says why
+
+**`verify_types.kel` WAS THE ONLY STAGE WITH NO BYTE-IDENTITY TEST AND NO RECORDED REASON**, which
+made the absence read as an oversight. It is not. It is refused, reproducibly, and the cause is now
+four lines long.
+
+**A DATA BLOCK REFERENCED BEFORE ITS DECLARATION.** The self-hosted parser resolves a body's
+`block.field` against a layout table it accumulates AS IT ENCOUNTERS each `data` block. A function
+reading a block declared later finds nothing, emits an unresolved operand, and `reconstruct.kel`
+refuses the chunk because the record range does not reduce to a single root. `verify_types.kel`
+hits it at `ty_direct`, which reads `tyb.bres[b]` while `tyb` is declared thirty lines below.
+
+**THREE HYPOTHESES FAILED BEFORE THE STRUCTURAL ONE SUCCEEDED, AND ALL THREE WERE PLAUSIBLE.**
+`ty_direct` carries a doubly nested `if` EXPRESSION assigned to a data field, inside a
+`for ... limit`, reading indexed arrays from two different blocks. Probes carrying each shape — and
+four copies of the entire shape — all compile byte-identically. **What separated the cases was
+DECLARATION ORDER, which none of the shapes mention.** Guessing failed three times; the bisection
+that worked reduced against the REAL file rather than a simplified stand-in, exactly the lesson the
+`wire.kel` chain paid for.
+
+**THE PROBE HAD A CONTROL AND IT EARNED ITS PLACE.** `verify_depth.kel`, a stage already in the
+corpus, was compiled alongside and came back at 12 chunks with zero differing. Without it, a
+refusal from `verify_types` would have been indistinguishable from a broken harness. The five
+verifiers were added to the corpus under the same discipline in an earlier session, and the
+precedent held.
+
+**THE REPAIR IS NOT ATTEMPTED, AND SAYING SO IS THE POINT.** Resolving a forward reference means
+the stage collecting data declarations before parsing bodies — a two-pass restructuring of a
+single-pass streaming parser, not a defect fix. What landed is the reproduction, the control, the
+link from the four-line witness to `ty_direct`, and a derived assertion that the corpus is eleven of
+twelve with the missing one NAMED.
+
+**EVERY PIN FIRES IN THE DIRECTION THAT MATTERS.** If the forward reference ever compiles, the test
+fails and its message says to add `verify_types.kel` to the corpus and retire the file. If a
+DIFFERENT stage leaves the corpus, that is caught separately and called a regression. A gap that
+closes silently is how a corpus stops meaning anything.
+
+**PROPORTIONALITY.** The reference accepts forward references and the self-hosted compiler refuses
+LOUDLY rather than mis-compiling, with `self_hosted_compile` cross-checking against the reference
+besides. No user receives a wrong module from this.
+
 ## 2026-08-28 — The declared half of the fourth extraction, and a gap located precisely
 
 **I MADE THE SAME PREDICTION ERROR TWICE AND CAUGHT IT BY MEASURING THIS TIME.** After `field_sets`

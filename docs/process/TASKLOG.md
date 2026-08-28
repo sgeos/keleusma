@@ -10,6 +10,25 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-28, session 56, fourth increment). THE TWELFTH STAGE DOES NOT
+> SELF-COMPILE, AND THE TREE NOW SAYS WHY.**
+>
+> `verify_types.kel` was the only stage with no byte-identity test and no recorded reason, so the
+> absence read as an oversight. **It is refused, reproducibly**, at `ty_direct`, which reads the
+> `tyb` block thirty lines before `tyb` is declared. The stage resolves `block.field` against a
+> table accumulated AS IT MEETS each `data` block, so a forward reference resolves to nothing and
+> `reconstruct.kel` refuses the chunk.
+>
+> **THREE PLAUSIBLE HYPOTHESES FAILED FIRST** -- the nested `if` expression, the indexed reads, the
+> repetition -- and declaration order, which none of them mentions, is the whole difference. Witness
+> is four lines. Probe carried `verify_depth.kel` as a CONTROL.
+>
+> **THE REPAIR IS NOT ATTEMPTED.** Resolving a forward reference means collecting data declarations
+> before parsing bodies: a two-pass restructuring of a single-pass streaming parser, not a defect
+> fix. `tests/forward_data_reference.rs` pins the reproduction, the control, the link to
+> `ty_direct`, and the corpus at eleven of twelve with the missing stage NAMED. Every pin fires in
+> the direction that says "the gap closed, add it to the corpus".
+
 > **Currency note (2026-08-28, session 56, third increment). THE DECLARED HALF OF THE FOURTH
 > EXTRACTION, AND A GAP LOCATED PRECISELY.**
 >
