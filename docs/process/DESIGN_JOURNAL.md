@@ -277,6 +277,52 @@ two-segment form, which genuinely differs, and it fired with its own message.
 kinds is missing from its probes, and removing the structs makes it fail with that message. The
 previous slice learned this the hard way: a guard whose corpus lacks a construct is a guard for a
 different question.
+## 2026-08-28 — [v0.3.0] The instrument built to replace a belief had a proxy that overclaimed
+
+**THE PREVIOUS ENTRY BUILT A DISTRIBUTION TO REPLACE AN ATTENTION-DRIVEN CLAIM WITH COUNTING.**
+Reading the module it named as the outlier shows the instrument was wrong about it.
+
+`14_frame_log.kel`'s entry is `loop main(tick: Word) -> Word`. **It yields a `Word`.** The property
+counted as *"yields a composite"* was implemented as *a chunk containing both a `Yield` and a
+`NewComposite`* — co-occurrence, not the claim in its name.
+
+**Corrected**, by reading the chunk's declared return shape, since for a `loop` chunk that IS what it
+yields:
+
+| | published | corrected |
+|---|---|---|
+| "yields a composite" | 5 of 69 | **4 of 69** |
+| `14_frame_log.kel` | 4 properties | **3** |
+| outlier | **unique** | **two modules tie** |
+
+**So "a genuine outlier holding more unusual properties than any other module" is false.**
+`13_telemetry_stream.kel` holds three as well.
+
+### A second name was wrong, and only the name
+
+*"Constructs inside a loop"* is now *"constructs in a break scope"*. `Op::Loop` is a break-scope
+marker the compiler also emits for `match`, so the name asserted more than the body checked. **The
+body was right; the label was not** — which is the milder half of the same defect.
+
+### The reusable statement
+
+**An instrument is not exempt from the scrutiny applied to the claims it measures.** This one existed
+specifically to stop a belief resting on how often modules appeared in notes, and it shipped with a
+property whose name asserted more than its body checked — the same shape as a test named for a canary
+that never fires, and as a guard whose population is narrower than its subject.
+
+**What survives is the part that did not depend on the broken property**: 42 of 69 modules hold none,
+*returns a composite* is held by 17 of 69 and so marks nothing, and pairing `12_sensor_window` with
+`14_frame_log` was selection by attention. Those conclusions were re-derived, not carried.
+
+### An edit that silently did nothing
+
+One of the two substitutions in this increment **did not apply**, because `cargo fmt` had realigned
+the text it matched on and **the assertion was omitted on that one while its sibling had one**. It
+surfaced only because the printed property name was unchanged.
+
+**A no-op edit and a successful one are indistinguishable afterwards.** Assert on every substitution.
+
 ## 2026-08-28 — [v0.3.0] The clustering claim was half right, and the half that was wrong was mine
 
 **AN OBSERVATION BECAME A PREMISE IN TWO DOCUMENTS BEFORE ANYONE COUNTED.** The previous entry ended

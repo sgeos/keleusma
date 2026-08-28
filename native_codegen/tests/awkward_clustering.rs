@@ -87,8 +87,33 @@ fn producers_before(c: &keleusma::bytecode::Chunk, upto: usize) -> Vec<usize> {
 }
 
 /// The six properties, each mattering to the backend for its own reason.
+///
+/// # ⚠ EVERY NAME HERE WAS CHECKED AGAINST ITS BODY, AFTER ONE FAILED
+///
+/// The third was named **"yields a composite"** and implemented as *a chunk
+/// containing both a `Yield` and a `NewComposite`* — co-occurrence, not the
+/// claim. It counted `14_frame_log.kel`, whose entry is
+/// `loop main(tick: Word) -> Word` and which yields a **Word**, so that module
+/// was reported as holding four properties when it holds three.
+///
+/// **The instrument built to correct an attention-driven claim had a proxy that
+/// overclaimed.** An instrument is not exempt from the scrutiny applied to the
+/// claims it measures.
+///
+/// The other five were re-read against their implementations:
+///
+/// - *constructs in a break scope* — **renamed.** `Op::Loop` is a break-scope
+///   marker the compiler also emits for `match`, so "inside a loop" asserted
+///   more than the body checks. The body is unchanged; only the name was wrong.
+/// - *stores a composite to a slot* — matches: a `SetData` whose stored value is
+///   produced by a `Flat` construction.
+/// - *returns a composite* — matches: the value live at the last `Return` is
+///   produced by a `Flat` construction.
+/// - *packs a multi-write local* — matches: a construction one of whose operands
+///   is a read of a local the chunk writes more than once.
+/// - *is refused by the backend* — matches: the backend reports a refusal.
 const PROPERTY_NAMES: [&str; 6] = [
-    "constructs inside a loop",     // cross-iteration slot reuse
+    "constructs in a break scope",  // cross-iteration slot reuse
     "stores a composite to a slot", // persistence versus temporary placement
     "yields a composite",           // escape to the host
     "returns a composite",          // caller-region ABI
@@ -147,13 +172,20 @@ fn properties(m: &Module) -> [bool; 6] {
             }
         }
 
-        // 3: a Yield in a chunk that also constructs.
-        if c.ops.iter().any(|o| matches!(o, Op::Yield))
-            && c.ops
-                .iter()
-                .any(|o| matches!(o, Op::NewComposite(NewCompositeOperand::Flat { .. })))
-        {
-            p[2] = true;
+        // 3: a chunk that yields, whose YIELDED TYPE is a composite.
+        //
+        // **For a `loop` chunk the declared return type IS what it yields**, so
+        // the signature's shape distinguishes a composite yield from a `Word`
+        // one. The earlier version tested co-occurrence of `Yield` and
+        // `NewComposite` and counted a module that yields a `Word`.
+        if c.ops.iter().any(|o| matches!(o, Op::Yield)) {
+            let ci = m.chunks.iter().position(|x| std::ptr::eq(x, c));
+            let yields_composite = ci
+                .and_then(|i| m.signatures.get(i))
+                .is_some_and(|sg| matches!(sg.ret, keleusma::bytecode::WireShape::Flat { .. }));
+            if yields_composite {
+                p[2] = true;
+            }
         }
 
         // 4: a construction whose value is the returned one.

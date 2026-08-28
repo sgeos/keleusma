@@ -147,6 +147,22 @@ soundness item: **the yield-escape refusal is still shadowed**, because the esca
 refused — now asserted by a test rather than inferred. One gap named and not fixed: a tail-yielded
 composite lowers and nothing in the tree executes it.
 
+**The instrument I built last time to replace a belief with counting was itself wrong about the module
+it singled out.** I reported `14_frame_log.kel` as a unique outlier holding four of six properties.
+Reading it shows its entry is `loop main(tick: Word) -> Word` — **it yields a Word**. The property I
+called "yields a composite" was implemented as a chunk merely containing both a yield and a
+construction. Corrected to read the declared return shape: the count falls from 5 to 4, that module
+holds **three**, and it **ties with `13_telemetry_stream.kel`. There is no unique outlier.**
+
+A second property was misnamed rather than miscomputed — "constructs inside a loop" is now "constructs
+in a break scope", since that opcode is also emitted for `match`.
+
+**The statement worth keeping: an instrument is not exempt from the scrutiny applied to the claims it
+measures.** This one existed precisely to stop a belief resting on how often things appeared in my
+notes, and it shipped with a name asserting more than its body checked. What survives I re-derived
+rather than carried: 42 of 69 modules hold none of the properties, and *returns a composite* is held by
+17 of 69, so it marks nothing at all.
+
 **I tested a claim I had made rather than trading on it, and it was half wrong.** Last time I observed
 that three investigations converged on one instruction and wrote that the corpus's awkward cases
 cluster. That went into two documents as a finding before anyone counted. Counting over all 69 modules

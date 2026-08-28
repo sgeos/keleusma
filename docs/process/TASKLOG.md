@@ -239,6 +239,25 @@ Current sprint source of truth.
 > **THREE CHECKS WRITTEN THIS SESSION COULD NOT FAIL**, each satisfied by a different part of a
 > document from the one it was about. Mutation caught all three; reading caught none.
 
+> **Currency note (2026-08-28, V0.3.X line, fifteenth entry). THE INSTRUMENT THAT REPLACED A BELIEF
+> HAD A PROXY THAT OVERCLAIMED, AND THERE IS NO UNIQUE OUTLIER.**
+>
+> The fourteenth entry's distribution named `14_frame_log.kel` as a unique outlier at four of six
+> properties. **Reading that module refutes it**: its entry is `loop main(tick: Word) -> Word` and it
+> yields a **Word**. The property called *"yields a composite"* was implemented as co-occurrence of a
+> `Yield` and a `NewComposite`. Corrected by reading the chunk's declared return shape, which for a
+> `loop` chunk is what it yields: the count falls **5 → 4 of 69**, that module holds **three**, and it
+> **ties with `13_telemetry_stream.kel`** — so there is no unique outlier. A second property was
+> renamed *"constructs in a break scope"*, because `Op::Loop` is a break-scope marker the compiler
+> also emits for `match`; the body was right and only the label wrong.
+>
+> **An instrument is not exempt from the scrutiny applied to the claims it measures.** What survives
+> was re-derived rather than carried: 42 of 69 modules hold none, *returns a composite* is held by 17
+> of 69 and marks nothing, and pairing `12_sensor_window` with `14_frame_log` was selection by
+> attention. Separately, **one edit this increment silently did nothing** because its assertion was
+> omitted; a no-op edit and a successful one are indistinguishable afterwards. `native_codegen`
+> **353/0/70** clean; censuses unchanged at **61 of 66**, **1070 of 1074**, **89841 of 89940**.
+
 > **Currency note (2026-08-28, V0.3.X line, fourteenth entry). THE CLUSTERING CLAIM WAS HALF RIGHT,
 > AND THE HALF THAT WAS WRONG CAME FROM SELECTION BY ATTENTION.**
 >
