@@ -310,6 +310,48 @@ fn the_shipping_driver_seeds_every_slot_the_copy_does_at_every_feed() {
     );
 }
 
+/// Expand each arm pattern to the record CODES it covers, so `18..=20` and a split
+/// `18` plus `19..=20` compare equal.
+///
+/// # This test used to compare SPELLINGS while claiming to compare coverage
+///
+/// It asserted the two arm-pattern SETS were equal, which made `18..=20` on one side and an
+/// equivalent split on the other a failure. That is not the property the test is named for and
+/// not the one its message describes: a code reaching the function dispatch with no declaration
+/// open is about which codes are HANDLED, not about how the arms are written.
+///
+/// Surfaced on 2026-08-28 by splitting `18..=20` in the shipping driver so struct declarations
+/// could be collected while trait and impl stayed skipped. **The guard was right to fire and
+/// wrong about why**, which is the same shape as a too-tight check this line has recorded twice
+/// before.
+///
+/// A guard marker stays attached to the code it guards, because losing one is a real defect here.
+fn covered_codes(patterns: &BTreeSet<String>) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for p in patterns {
+        let (disc, suffix) = match p.strip_suffix("(guarded)") {
+            Some(d) => (d, "(guarded)"),
+            None => (p.as_str(), ""),
+        };
+        match disc.split_once("..=") {
+            Some((a, b)) => match (a.trim().parse::<i64>(), b.trim().parse::<i64>()) {
+                (Ok(a), Ok(b)) if a <= b => {
+                    for c in a..=b {
+                        out.insert(format!("{c}{suffix}"));
+                    }
+                }
+                _ => {
+                    out.insert(p.clone());
+                }
+            },
+            None => {
+                out.insert(p.clone());
+            }
+        }
+    }
+    out
+}
+
 /// **BOTH DRIVERS MUST HANDLE THE SAME TOP-LEVEL DECLARATION RECORD CODES.**
 ///
 /// A record code with no arm falls through to the function dispatch, where it arrives with no
@@ -320,9 +362,25 @@ fn the_shipping_driver_seeds_every_slot_the_copy_does_at_every_feed() {
 /// function name, because `tests/selfhost_codegen.rs` holds a SECOND record dispatch, in
 /// `parse_function_records`, whose arm set legitimately differs (it handles codes 2 and 3 and not
 /// 6 and 7). Matching the wrong one would report a divergence that is not one.
+///
+/// # A DELIBERATE behavioural divergence, recorded rather than left to be discovered
+///
+/// Since 2026-08-28 the shipping driver COLLECTS struct declarations, where the copy still skips
+/// them. Both still handle all three codes, which is what this test checks and what protects the
+/// function dispatch. The difference does not reach the oracle, because struct records feed the
+/// type channel and not code generation. **It is nonetheless a real divergence in a pair whose
+/// drift has produced five defects from one cause**, so it is written down here rather than
+/// inferred from a diff later.
 #[test]
 fn both_drivers_handle_the_same_declaration_records() {
-    let lib = arm_patterns(&match_body(&read(LIBRARY), "match code {", "18..=20"));
+    // Anchored on the `use`-declaration arm rather than on a struct arm: the struct arm's
+    // SPELLING is exactly what changed, so anchoring there made this test's own extraction
+    // depend on the thing under test.
+    let lib = arm_patterns(&match_body(
+        &read(LIBRARY),
+        "match code {",
+        "10 => in_use = true",
+    ));
     let cop_src = read(COPY);
     // The comparator is the dispatch that handles the parameter-TYPE and return-TYPE records
     // (6 and 7), which is `parse_functions`; the other dispatch has no such arm.
@@ -334,8 +392,16 @@ fn both_drivers_handle_the_same_declaration_records() {
         lib.len(),
         cop.len()
     );
+    let lib_codes = covered_codes(&lib);
+    let cop_codes = covered_codes(&cop);
+    assert!(
+        lib_codes.len() >= 12 && cop_codes.len() >= 12,
+        "code expansion produced {} and {} codes; it has broken",
+        lib_codes.len(),
+        cop_codes.len()
+    );
     assert_eq!(
-        lib, cop,
+        lib_codes, cop_codes,
         "the two drivers no longer handle the same declaration record codes. A code the copy \
          handles and the library does not will reach the library's function dispatch with no \
          declaration open and fault there"

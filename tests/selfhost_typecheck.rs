@@ -2833,16 +2833,22 @@ fn the_declaration_and_call_rows_agree_between_the_pipeline_and_the_reference() 
     );
 }
 
-/// **TWO OF THE FIVE TYPE-CHANNEL EXTRACTIONS ARE MOVED, AND THE FIGURE IS DERIVED.**
+/// **THREE OF THE FIVE TYPE-CHANNEL EXTRACTIONS ARE MOVED, AND THE FIGURE IS DERIVED.**
 ///
 /// The file header names all five. This counts how many have a pipeline analogue rather than
 /// restating a number, because a hand-written count is a second definition that goes stale —
 /// which is how a handoff came to assert a closed gap was open.
+///
+/// `field_sets` moved third, on 2026-08-28, and this pin is what reported it: the assertion
+/// fired naming the new arrival rather than the increment having to remember to update a
+/// number. **The two that remain are `occurrence_rows` and `expression_nodes_resolvable`**,
+/// and only the DECLARED half of `field_sets` moved — its field accesses still walk the
+/// reference syntax tree, which the agreement test says in its own words.
 // NOT gated on `self-host`: this reads the driver's source as text and calls nothing from
 // it, so it can run under every feature set that builds this file. Its sibling above is
 // gated because it invokes the analogue.
 #[test]
-fn the_moved_extraction_count_is_two_of_five() {
+fn the_moved_extraction_count_is_three_of_five() {
     const DRIVER: &str = include_str!("../src/selfhost/mod.rs");
     let named = [
         "decl_call_rows",
@@ -2858,8 +2864,189 @@ fn the_moved_extraction_count_is_two_of_five() {
         .collect();
     assert_eq!(
         moved.len(),
-        2,
+        3,
         "the count of moved extractions changed. Moved: {moved:?}. Up is the point — update \
          this number and say which one moved. Down means an analogue was removed."
+    );
+}
+
+/// **THE STRUCT FIELD SETS AGREE BETWEEN THE PIPELINE AND THE REFERENCE.**
+///
+/// The third of the five type-channel extractions to gain a pipeline analogue, after
+/// `binding_rows` and `decl_call_rows`.
+///
+/// # Nothing was added to the stage, contrary to the plan for this slice
+///
+/// The brief assumed `parse.kel` would need to emit struct declarations, because the driver
+/// mapped struct, trait and impl declarations alike onto skip state. **It already emitted
+/// them** — a STRUCTSTART carrying the type's name id, then one record per field name in
+/// declaration order — and the driver discarded the run. The data was on the wire and only
+/// the receiver was missing. Recorded because the brief was wrong in the cheap direction and
+/// the check that found it took minutes.
+///
+/// # What is NOT moved, said plainly
+///
+/// `field_sets` returns four values. The three declared ones move; the field ACCESSES do not.
+/// An access must attribute a field read to the type of the object being read, which for a
+/// let-bound local means resolving a binding first — a classifier over the body forest rather
+/// than a re-projection. It stays in Rust and this test does not pretend otherwise.
+///
+/// # The order hazard here is NOT the one the previous two slices had
+///
+/// Those compared a DECLARATION-ordered reference against a SORTED-name pipeline. Struct
+/// records arrive in source order on both sides, so that particular trap does not arise, and
+/// claiming it did would be borrowed rigour. The hazard that does arise is a SET comparison
+/// passing where an ordered one should not, so the corpus carries a struct whose fields are
+/// not in alphabetical order and the test asserts that it does.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_struct_field_sets_agree_between_the_pipeline_and_the_reference() {
+    use std::collections::BTreeMap;
+
+    const SOURCES: &[&str] = &[
+        "struct P { x: Word, y: Word }\nfn main() -> Word { let p = P { x: 1, y: 2 }; p.x }",
+        // Fields deliberately NOT in alphabetical order, so an ordered comparison is
+        // distinguishable from a set comparison.
+        "struct Q { zeta: Word, alpha: Word, mid: Word }\nfn main() -> Word { \
+         let q = Q { zeta: 1, alpha: 2, mid: 3 }; q.alpha }",
+        // Two structs, declared out of alphabetical order, sharing a field NAME. The shared
+        // name must be ONE interned index or the flattened comparison would not detect a
+        // divergence in the sharing.
+        "struct Zed { v: Word, w: Word }\nstruct Ay { v: Word }\n\
+         fn main() -> Word { let a = Ay { v: 1 }; a.v }",
+        // A struct with a single field, and a program with a struct it never constructs.
+        "struct Solo { only: Word }\nfn main() -> Word { 0 }",
+    ];
+
+    let mut total_structs = 0usize;
+    let mut total_fields = 0usize;
+    let mut saw_unsorted_fields = false;
+    let mut saw_unsorted_structs = false;
+
+    for src in SOURCES {
+        let ast = keleusma::parser::parse(&keleusma::lexer::tokenize(src).expect("lex"))
+            .expect("the reference must parse a probe before it says anything about the stage");
+
+        let (first, count, flat, _accesses) = field_sets(&ast);
+        let got = keleusma::selfhost::field_sets_from_pipeline(src);
+
+        // The reference does not return type names, so its declaration order is read from the
+        // syntax tree the same way `field_sets` reads it.
+        let want_names: Vec<String> = ast
+            .types
+            .iter()
+            .filter_map(|t| match t {
+                keleusma::ast::TypeDef::Struct(d) => Some(d.name.clone()),
+                _ => None,
+            })
+            .collect();
+        let got_names: Vec<String> = got.iter().map(|(n, _)| n.clone()).collect();
+        assert_eq!(
+            got_names, want_names,
+            "{src:?}: the pipeline and the reference disagree on which structs are declared"
+        );
+
+        // Re-intern the pipeline's field NAMES with the reference's own scheme -- first
+        // occurrence in declaration traversal order -- and require it to reproduce the
+        // reference's three declared vectors exactly. This compares the pipeline's names
+        // against the reference's indices without either side trusting the other's numbering.
+        let mut ids: BTreeMap<String, i64> = BTreeMap::new();
+        let mut re_flat: Vec<i64> = Vec::new();
+        let mut re_first: Vec<i64> = Vec::new();
+        let mut re_count: Vec<i64> = Vec::new();
+        for (_, fields) in &got {
+            re_first.push(re_flat.len() as i64);
+            re_count.push(fields.len() as i64);
+            for f in fields {
+                let next = ids.len() as i64;
+                let id = *ids.entry(f.clone()).or_insert(next);
+                re_flat.push(id);
+            }
+        }
+        assert_eq!(re_first, first, "{src:?}: per-type first index");
+        assert_eq!(re_count, count, "{src:?}: per-type field count");
+        assert_eq!(re_flat, flat, "{src:?}: the flattened field names");
+
+        total_structs += got.len();
+        for (_, fields) in &got {
+            total_fields += fields.len();
+            let mut sorted = fields.clone();
+            sorted.sort();
+            if fields.len() > 1 && *fields != sorted {
+                saw_unsorted_fields = true;
+            }
+        }
+        let mut sorted_names = got_names.clone();
+        sorted_names.sort();
+        if got_names.len() > 1 && got_names != sorted_names {
+            saw_unsorted_structs = true;
+        }
+    }
+
+    // NON-VACUITY. Without these the comparison could pass over a corpus with no structs at
+    // all, which is how two derivations on this tree passed while checking nothing.
+    assert!(total_structs >= 5, "only {total_structs} structs compared");
+    assert!(total_fields >= 8, "only {total_fields} fields compared");
+    assert!(
+        saw_unsorted_fields,
+        "no struct in the corpus declares its fields out of alphabetical order, so an ORDERED \
+         comparison is indistinguishable from a set comparison and this test would pass while \
+         establishing nothing about ordering"
+    );
+    assert!(
+        saw_unsorted_structs,
+        "no source declares its structs out of alphabetical order"
+    );
+}
+
+/// **A TRAIT OR IMPL DECLARATION IS NOT COLLECTED AS A STRUCT.**
+///
+/// The driver's record loop mapped struct, trait and impl declarations onto ONE skip state.
+/// Collecting struct declarations meant splitting that, and a split is exactly the kind of
+/// change whose failure mode is silent: trait and impl records would arrive as struct rows
+/// with a plausible-looking name and nothing would complain.
+///
+/// **The agreement test above cannot see this**, and that was established by mutation rather
+/// than by reasoning: re-admitting trait and impl into the collect leaves it PASSING, because
+/// its probes contain neither. A guard whose corpus lacks the construct is a guard for a
+/// different question.
+///
+/// The skip state exists because struct, trait and impl declarations once faulted the driver
+/// on 29 boundary cases, so this is also a standing check that widening it did not undo that.
+#[cfg(feature = "self-host")]
+#[test]
+fn a_trait_or_impl_declaration_is_not_collected_as_a_struct() {
+    // The trait/impl spelling is taken from `examples/scripts/08_method_dispatch.kel` rather
+    // than invented, because a probe the parser rejects would measure the parser and be
+    // reported as a finding about the driver. Five of this line's probes have done that.
+    const WITH_TRAIT: &str = "struct Pair { lo: Word, hi: Word }\n\
+                              trait Doubler {\n    fn double(x: Word) -> Word;\n}\n\
+                              impl Doubler for Word {\n    fn double(x: Word) -> Word {\n        x + x\n    }\n}\n\
+                              fn main() -> Word { let n: Word = 42; n.double() }";
+
+    let rows = keleusma::selfhost::field_sets_from_pipeline(WITH_TRAIT);
+
+    let names: Vec<&str> = rows.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["Pair"],
+        "the pipeline collected something other than the single declared struct. A trait or \
+         impl arriving here means the declaration split let them back into the collect."
+    );
+    assert_eq!(
+        rows[0].1,
+        vec!["lo".to_string(), "hi".to_string()],
+        "the struct's own fields were disturbed by the trait and impl that follow it"
+    );
+
+    // MUST-FIRE CONTROL. If the reference could not parse this probe the assertions above
+    // would be about a malformed input rather than about the driver.
+    let ast = keleusma::parser::parse(&keleusma::lexer::tokenize(WITH_TRAIT).expect("lex"))
+        .expect("the reference must accept the probe");
+    let (_, count, _, _) = field_sets(&ast);
+    assert_eq!(
+        count,
+        vec![2],
+        "the reference sees a different set of structs than this test assumes"
     );
 }

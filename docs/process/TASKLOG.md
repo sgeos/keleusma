@@ -10,6 +10,32 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-28, session 56, second increment). ORDER 1 ITEM 3 IS AT THREE OF FIVE.**
+>
+> `field_sets` joins `binding_rows` and `decl_call_rows`. The count is DERIVED by
+> `the_moved_extraction_count_is_three_of_five`, and that pin is what reported the change rather
+> than the increment remembering to update a number.
+>
+> **ONLY THE DECLARED HALF MOVED.** `field_sets` returns four values; the three declared ones are
+> re-projected from the pipeline, the field ACCESSES are not. An access must attribute a field read
+> to the type of the object read, which needs a classifier over the body forest rather than a
+> re-projection. Said in the function and in the test, not implied away.
+>
+> **THE BRIEF FOR THIS SLICE WAS WRONG AND THE CORRECTION IS RECORDED BESIDE IT.** It concluded the
+> work meant surfacing a table held inside `parse.kel`, which would have meant new emission from a
+> corpus stage. `parse.kel` was already emitting the struct name and every field name on the record
+> stream; the driver discarded them. The increment touched NO stage source.
+>
+> **THE SPLIT IS THE RISK AND MUTATION FOUND THE GAP.** Struct, trait and impl shared one skip
+> state, which exists because those three once faulted the driver on 29 boundary cases. Re-admitting
+> trait and impl into the collect leaves the agreement test PASSING, because its probes contain
+> neither. A second test carries that case.
+>
+> **WHAT REMAINS: `occurrence_rows` and `expression_nodes_resolvable`.** The first looks harder than
+> `field_sets` proved to be — two of its four declaration kinds are skipped and its ident
+> occurrences are keyed by slot, not name — but that is a hypothesis from reading the driver, and
+> this increment is a caution against trusting exactly that kind of reading.
+
 > **Currency note (2026-08-28, session 56). AN INBOUND FINDING FROM `v0.3.0` IS CLOSED BY
 > MEASUREMENT, AND THE OP-TAG TABLES AGREE.**
 >

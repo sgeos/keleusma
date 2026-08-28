@@ -13,6 +13,94 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-28 — The third type-channel extraction, and the data was already on the wire
+
+**ORDER 1 ITEM 3 IS AT THREE OF FIVE.** `field_sets` follows `binding_rows` and
+`decl_call_rows`. The pin reported it rather than the increment remembering to: the assertion
+fired naming the new arrival, which is the whole reason the count is derived instead of written.
+
+**MY OWN BRIEF WAS WRONG, IN THE CHEAP DIRECTION, AND THE CHECK THAT FOUND IT TOOK MINUTES.**
+The brief established that the driver maps struct, trait and impl declarations alike onto skip
+state, and concluded the work was to surface `parse.kel`'s internal `sd_fstart`/`sd_fcount`/
+`sd_fname` table — which would have meant new emission from a stage that is itself in the
+byte-identity corpus. **`parse.kel` was already emitting all of it**: a STRUCTSTART carrying the
+type's name id, then one record per field name in declaration order, using the same record code a
+function parameter uses. The driver received them and threw them away. **The data was on the wire
+and only the receiver was missing**, so the increment was driver-side and touched no stage source.
+
+**THE RIGHT LESSON IS NOT "READ MORE" BUT WHERE TO READ.** I read the stage's data structures and
+inferred the host could not see them. The record stream is the interface, and it already carried
+the answer. Reading the producer's internals told me about the producer, not about what crosses
+the boundary.
+
+**THE MECHANISM HAD IN-TREE PRECEDENT AND WAS NOT INVENTED.** The driver already collects
+declaration records for two other kinds — `data_records` on code 9, `enum_records` on code 12 —
+accumulated in the same loop that skipped 18..=20, terminated the same way. Struct records follow
+that shape exactly. Seventh occasion this line has looked for the existing form before writing one,
+and the first where the brief said to and the code agreed.
+
+**THE SPLIT WAS THE RISK, AND MUTATION IS WHAT SHOWED THE FIRST GUARD COULD NOT SEE IT.** Codes
+18, 19 and 20 shared one skip. Collecting 18 meant separating it from trait and impl, whose skip
+exists because those three once faulted the driver on 29 boundary cases. Re-admitting 19 and 20
+into the collect leaves the agreement test **PASSING**, because its probes contain no trait and no
+impl. **A guard whose corpus lacks the construct is a guard for a different question**, and no
+amount of reasoning about the guard would have said so — running the mutation did.
+
+A second test now carries that case, with its trait and impl spelling **taken from
+`examples/scripts/08_method_dispatch.kel` rather than invented**, because five of this line's
+probes have measured a malformed input and reported the result as a finding about the stage.
+
+**WHAT MOVED AND WHAT DID NOT, SAID PLAINLY.** `field_sets` returns four values. The three
+declared ones moved. The field ACCESSES did not: an access must attribute a field read to the type
+of the object being read, which for a let-bound local means resolving a binding first — a
+classifier over the body forest, not a re-projection. It stays in Rust and both the function's
+documentation and the test say so, rather than letting "the third extraction moved" imply more
+than it did.
+
+**THE ORDER HAZARD HERE IS NOT THE ONE THE PREVIOUS TWO SLICES HAD, AND CLAIMING IT WAS WOULD BE
+BORROWED RIGOUR.** Those compared a declaration-ordered reference against a sorted-name pipeline.
+Struct records arrive in source order on both sides, so that trap does not arise. The hazard that
+does is an ORDERED comparison passing where a SET comparison would too, so the corpus carries a
+struct whose fields are deliberately not alphabetical and the test asserts that it does. Mutating
+the corpus to be alphabetical fires that assertion with its own message.
+
+**THE COMPARISON STILL AVOIDS BOTH NUMBERINGS.** `field_sets` returns two independent index
+spaces, a type index and a field-name intern index, and the pipeline shares neither. The pipeline
+returns NAMES; the test re-interns them with the reference's own scheme and requires that to
+reproduce the reference's three declared vectors exactly. Carrying a string removes the question
+rather than answering it, for the third slice running.
+
+**THE COPY-DRIFT GUARD CAUGHT THE CHANGE, AND IT WAS RIGHT TO FIRE AND WRONG ABOUT WHY.**
+`both_drivers_handle_the_same_declaration_records` compares the shipping driver's declaration
+dispatch against the copy in `tests/selfhost_codegen.rs`. Splitting `18..=20` broke it twice over:
+its anchor string was the very text that changed, and it asserted the two ARM-PATTERN SETS were
+equal. **That is not the property it is named for.** Its own message describes a code reaching the
+function dispatch with no declaration open — a question about which codes are HANDLED, not about
+how the arms are spelled. It now expands ranges to codes before comparing, keeping guard markers
+attached, and a mutation that genuinely drops the trait/impl arm still fires it.
+
+**Third instance of a too-tight check on this line**, after a sixty-character window and a grep for
+one spelling of a word that had two.
+
+**A DELIBERATE DIVERGENCE IS NOW RECORDED IN THAT TEST RATHER THAN LEFT IN A DIFF.** The shipping
+driver collects struct declarations; the copy still skips them. Both handle all three codes, and
+the difference cannot reach the oracle because struct records feed the type channel and not code
+generation. It is still a real divergence in the pair whose drift produced five defects from one
+cause, so it is written down where the next reader of that test will meet it.
+
+**AND THE RUN THAT FOUND IT WAS ONE I NEARLY READ AS A PASS.** A whole-workspace sweep was KILLED
+near the end. It reported **55 binaries green with no failures** — and **31 binaries had never
+run**, among them `selfhost_driver_parity` itself, plus `selfhost_parse` and `selfhost_wire`.
+Reading the count as coverage would have shipped the drift. The handoff has said for two sessions
+that a truncated run is a lower bound on coverage rather than a pass; this is the first time the
+difference held a real defect. **The segments that replaced it: 55 + 17 + 14 = all 86 test
+binaries, each segment with its own exit status.**
+
+**FOUR MUTATIONS, EACH CONFIRMED TO COMPILE FIRST**: reversing each struct's field order, dropping
+a struct, making the corpus alphabetical, and re-admitting trait and impl. The first three fire the
+agreement test; the fourth fires only the second test, and that asymmetry is the finding rather
+than an inconvenience.
+
 ## 2026-08-28 — The op-tag tables agree, and now something checks that they do
 
 **AN INBOUND FINDING FROM THE `v0.3.0` LINE, CLOSED BY MEASUREMENT.** They observed that

@@ -823,7 +823,7 @@ pub fn parse_functions(
     src: &str,
 ) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>) {
     let mut fns = Vec::new();
-    let (names, data_records, enum_records) =
+    let (names, data_records, enum_records, _struct_records) =
         parse_functions_impl(src, false, &mut |_, f| fns.push(f), &mut |_, _, _| {});
     (fns, names, data_records, enum_records)
 }
@@ -1007,7 +1007,7 @@ pub fn parse_functions_fused(
     src: &str,
 ) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>) {
     let mut fns = Vec::new();
-    let (names, data_records, enum_records) =
+    let (names, data_records, enum_records, _struct_records) =
         parse_functions_impl(src, true, &mut |_, f| fns.push(f), &mut |_, _, _| {});
     (fns, names, data_records, enum_records)
 }
@@ -1238,11 +1238,21 @@ pub fn parse_cursor_trace(src: &str) -> Vec<i64> {
 // allow the complexity lint here as the root test file does file-wide.
 #[allow(clippy::type_complexity)]
 /// What the record walk returns beside the functions: the interned name table,
-/// the data-block records and the enum records.
+/// the data-block records, the enum records and the STRUCT records.
 ///
-/// Named because clippy asks at this depth and the ask is right -- three `Vec`s
+/// Named because clippy asks at this depth and the ask is right -- four `Vec`s
 /// of pairs in a signature tell a reader less than the name does.
-type ParseSideTables = (Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>);
+///
+/// **The struct records were being discarded until 2026-08-28.** `parse.kel` has always
+/// emitted them -- a STRUCTSTART carrying the type's name id, then one field record per
+/// field, in declaration order -- and the driver mapped the whole run to skip state and
+/// threw it away. Nothing needed adding to the stage; the data was on the wire.
+type ParseSideTables = (
+    Vec<String>,
+    Vec<(i64, i64)>,
+    Vec<(i64, i64)>,
+    Vec<(i64, i64)>,
+);
 
 /// Every `(kind, value)` token `lexer.kel` produces for `src`, beside the interned
 /// name table.
@@ -1520,6 +1530,9 @@ fn parse_functions_impl(
     // Every enum's header records (ENUMSTART, then EVARIANT/EDISC per variant, then END),
     // for the driver's own enum-layout assembly.
     let mut enum_records: Vec<(i64, i64)> = Vec::new();
+    // Struct-declaration records, collected exactly as the data and enum records are.
+    let mut struct_records: Vec<(i64, i64)> = Vec::new();
+    let mut in_struct = false;
     // **A STRUCT, TRAIT OR IMPL DECLARATION IS SKIPPED TO ITS `END`, NOT LEFT TO FALL
     // THROUGH.** `parse.kel` emits STRUCTSTART 18, TRAITSTART 19 and IMPLSTART 20 followed
     // by the declaration's own PARAM/PTYPE records. Without this state those records reach
@@ -1681,6 +1694,13 @@ fn parse_functions_impl(
                 } else if code != 0 {
                     enum_records.push((code, val));
                 }
+            } else if in_struct {
+                if code == 5 {
+                    struct_records.push((5, 0));
+                    in_struct = false;
+                } else if code != 0 {
+                    struct_records.push((code, val));
+                }
             } else if in_use {
                 in_use = code != 5;
             } else if in_skip_decl {
@@ -1718,7 +1738,16 @@ fn parse_functions_impl(
                     }
                     16 => in_body = true,
                     17 => in_guard = true,
-                    18..=20 => in_skip_decl = true, // struct/trait/impl declaration
+                    // A STRUCT declaration is now COLLECTED; trait and impl are still
+                    // skipped. Splitting them matters: the skip state exists because
+                    // struct, trait and impl declarations once faulted the driver on 29
+                    // boundary cases, and widening it into a collect for all three would
+                    // re-admit the two that were never made to work.
+                    18 => {
+                        in_struct = true;
+                        struct_records.push((18, val));
+                    }
+                    19..=20 => in_skip_decl = true, // trait/impl declaration
                     5 => {
                         open_decl(&mut cur, code, val);
                         on_function(&names, cur.take().unwrap())
@@ -1731,7 +1760,7 @@ fn parse_functions_impl(
         },
         before_resume,
     );
-    (names, data_records, enum_records)
+    (names, data_records, enum_records, struct_records)
 }
 
 /// Turn `codegen.kel`'s tagged constant pool into the reference compiler's `ConstValue`s.
@@ -2083,6 +2112,69 @@ pub fn decl_call_rows_from_pipeline(src: &str) -> (Vec<DeclRow>, Vec<CallSiteRow
     }
 
     (decls, sites)
+}
+
+/// One struct's declared field set: the type's name and its field names, in declaration order.
+///
+/// **Names, not indices, and that is load-bearing.** `field_sets` in
+/// `tests/selfhost_typecheck.rs` returns two independent index spaces -- a type index assigned
+/// in declaration order and a field-name intern index -- and the pipeline shares neither. The
+/// two slices that moved before this one both hit that trap, and the recorded escape is the
+/// same each time: carrying a string removes the question rather than answering it.
+pub type FieldSetRow = (String, Vec<String>);
+
+/// The declared struct field sets, from the PIPELINE rather than the reference syntax tree.
+///
+/// # Nothing was added to the stage, and that was the surprise
+///
+/// The plan for this slice assumed `parse.kel` would have to emit something new, because the
+/// driver's record loop mapped struct, trait and impl declarations alike onto skip state. It
+/// does not. `parse.kel` has always emitted a STRUCTSTART carrying the type's name id followed
+/// by one record per field name in declaration order -- the same record code a function
+/// parameter uses -- and the driver threw the whole run away. **The data was on the wire; only
+/// the receiver was missing.** Checking that before writing an emitter is the difference
+/// between this slice and a much larger one.
+///
+/// # What this moves, and what it does not
+///
+/// `field_sets` returns four values: a per-type first index, a per-type count, the flattened
+/// field names, and the field ACCESSES as (type, field) pairs. **The first three move here.
+/// The accesses do not.** An access needs the type of the object being read, which for a
+/// let-bound local means resolving a binding before the field can be attributed -- a
+/// classifier over the body forest, not a re-projection of data already in hand. It stays in
+/// Rust, and this says so rather than implying the extraction is fully migrated.
+///
+/// The first three are recoverable from the rows returned here: the flattened names are the
+/// concatenation in order, the counts are the row lengths, and the first indices are their
+/// running sum. Returning the grouped form rather than three parallel vectors keeps the
+/// association between a type and its fields from depending on an index space at all.
+#[must_use]
+pub fn field_sets_from_pipeline(src: &str) -> Vec<FieldSetRow> {
+    let (names, _data, _enums, struct_records) =
+        parse_functions_impl(src, true, &mut |_, _| {}, &mut |_, _, _| {});
+    let name_of = |id: i64| -> Option<String> { names.get(id as usize).cloned() };
+
+    let mut rows: Vec<FieldSetRow> = Vec::new();
+    for &(code, val) in &struct_records {
+        match code {
+            // STRUCTSTART carries the type's own name.
+            18 => {
+                if let Some(n) = name_of(val) {
+                    rows.push((n, Vec::new()));
+                }
+            }
+            // A field name, the same record code a function parameter uses.
+            4 => {
+                if let Some(row) = rows.last_mut()
+                    && let Some(n) = name_of(val)
+                {
+                    row.1.push(n);
+                }
+            }
+            _ => {}
+        }
+    }
+    rows
 }
 
 /// The type checker's BINDING ROWS, derived from the self-hosted pipeline.

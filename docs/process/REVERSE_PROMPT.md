@@ -10,8 +10,8 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-28 (session 56) — an inbound finding closed by measurement, and sixteen op tags
-the self-hosting oracle cannot see
+**Date**: 2026-08-28 (session 56) — an inbound finding closed, and Order 1 item 3 moved to three of
+five
 
 ## NOTHING IS WAITING ON YOU EXCEPT THE RULING YOU ALREADY HAVE
 
@@ -23,62 +23,71 @@ languages. Publication remains held.
 
 ## What this increment did
 
-The `v0.3.0` line handed this line a finding they could not close: the self-hosted codegen stage's
-63 op tags and the driver's decoder are two hand-maintained tables of the same numbers, and their
-only guard asserts that decoding does not panic. **A transposition passed it.** It was unrecorded
-here.
+Two things landed. The first closed a finding the `v0.3.0` line handed over and could not close
+themselves; the second is the roadmap item.
 
-**The tables agree.** That is now a measurement rather than an inference from a comment claiming
-they are kept in lockstep.
+**ORDER 1 ITEM 3 IS AT THREE OF FIVE.** `field_sets` joins `binding_rows` and `decl_call_rows`.
+Two remain, and only the DECLARED half of `field_sets` moved — its field accesses still walk the
+reference syntax tree, which the function and the test both say in their own words rather than
+letting the headline imply more.
 
-## Three things worth your attention
+## The part worth your attention: my brief was wrong, cheaply
 
-**ONE. THERE WERE THREE TABLES, NOT TWO.** The third is the copy of the decoder inside
-`tests/selfhost_codegen.rs` — the one the differential oracle actually runs — which the shipping
-decoder's own comment names as its source and claims to be in lockstep with. Nothing checked that.
-It is the same pairing that produced five defects from one cause in August, and a drift there
-would corrupt the oracle rather than the product.
+I wrote a brief saying the work meant surfacing a table held inside `parse.kel`, which would have
+required new emission from a stage that is itself in the byte-identity corpus — a much larger and
+riskier increment.
 
-**TWO. SIXTEEN OF THE SIXTY-THREE TAGS ARE INVISIBLE TO THE BYTE-IDENTITY ORACLE.** No stage source
-emits them — the whole composite family, the unchecked arithmetic, and `checkedneg` — so a
-transposition among them produces no byte difference to detect. They are named in the test rather
-than counted, because the names are where such a defect would hide.
+**`parse.kel` was already emitting all of it.** The struct's name and every field name were on the
+record stream, in declaration order, and the driver mapped the whole run to skip state and threw it
+away. The increment touched no stage source.
 
-**I have scoped that claim deliberately and want the scope read.** It is the eleven-stage corpus.
-The per-construct tests do compile struct constructions, array indexing, enum payloads and tuple
-fields through the self-hosted compiler, so these are **not** "unchecked" — they are "invisible to
-the self-hosting oracle", which is a narrower and true statement.
+**The lesson is not "read more".** I did read — I read the producer's internal data structures and
+reasoned about what the host could not see. The record stream is the interface, and it already
+carried the answer. Reading the producer's internals told me about the producer, not about what
+crosses the boundary. The correction is recorded beside the original claim rather than edited away.
 
-**THREE. ONLY ONE OF THE FOUR NEW GUARDS CATCHES THE DEFECT THE FINDING NAMED**, and mutation
-testing is what established that rather than reasoning. A one-sided swap leaves the table a
-bijection and leaves the two decoders agreeing with each other. The guard that sees it compares
-each tag's NAME to the operation its number decodes to — a fourth hand-written table, which is a
-hazard, and which earns its place only because it derives names from names where the others derive
-numbers from numbers.
+## What mutation testing caught that reasoning did not
 
-## What went wrong, since that is the more useful half
+The driver had one skip state covering struct, trait and impl declarations, and that state exists
+because those three once faulted the driver on 29 boundary cases. Collecting structs meant
+splitting it.
 
-**The citation guard caught me inside ten minutes.** I renamed the census test for scope precision
-and left the module header naming the old one. Fourth occurrence of that class here, and the
-shortest interval yet between creating a stale citation and having it reported. The guard added
-last session is now paying for itself against its own author.
+**Re-admitting trait and impl into the collect leaves the agreement test PASSING**, because its
+probes contain neither. A guard whose corpus lacks the construct is a guard for a different
+question. A second test now carries that case, with its spelling taken from a shipped example
+rather than invented, because five of this line's probes have measured a malformed input and
+reported the result as a finding about the stage.
 
-**My first extractor would have compared two different populations.** A naive line pattern reports
-63 decoder arms on one side and 111 on the other, the excess being arms of nested matches that look
-identical by line shape. I checked the instrument before trusting the reading, which this line has
-now had to do three times.
+## The earlier increment, briefly
+
+The `v0.3.0` line observed that the self-hosted codegen's 63 op tags and the driver's decoder are
+two hand-maintained tables whose only guard asserts that decoding does not panic — **a
+transposition passed it**. There were **three** tables, not two; the third is the decoder copy the
+differential oracle actually runs, which the shipping decoder claims lockstep with and nothing
+checked. **They agree**, now measured rather than inferred.
+
+And a measurement that bears on coverage generally: **sixteen of the sixty-three tags are exercised
+by no stage source**, so the self-hosting oracle cannot see a transposition among them. Scoped
+deliberately — the per-construct tests do cover composites, so these are invisible to that oracle,
+not unchecked.
+
+## Nothing is waiting on you except the ruling you already have
+
+**The floating-point entry ABI is still the last of your eight rulings unimplemented**, with the
+`v0.3.0` line's `Fixed` shared-slot SCALE question attached. **It is theirs to bring you and I have
+not acted on it.** Publication remains held.
 
 ## One observation, attributed rather than assumed
 
-`cargo clippy --tests --no-default-features -- -D warnings` fails with seven diagnostics. It fails
-**identically on a clean `v0.2.3`** — established by stashing and re-running, not inferred — so it
-is pre-existing and no part of this work. That combination is not one continuous integration runs.
-Recorded as a fact about the tree, not as a claim that something is broken, and not fixed here
-because it is outside what this increment was about.
+`cargo clippy --tests --no-default-features -- -D warnings` fails with seven diagnostics, and fails
+**identically on a clean tree** — established by stashing, not inferred. Pre-existing, not a
+combination continuous integration runs, and not fixed here because it is outside what these
+increments were about.
 
 ## What I would take up next
 
-The third type-channel extraction, which is Order 1 item 3 and the roadmap-advancing work.
-`field_sets` at 80 lines or `occurrence_rows` at 100; leave `expression_nodes_and_derived` at 142
-for last despite the capability argument favouring it. The pattern is established by the two slices
-that already moved and is written into the handoff so it is not rediscovered.
+`occurrence_rows`, the fourth extraction, leaving `expression_nodes_resolvable` for last. Expect it
+to be harder than `field_sets` turned out to be: two of its four declaration kinds are skipped by
+the driver and its ident occurrences are keyed by slot rather than by name. That assessment is from
+reading the driver, and given how this increment went, treat it as a starting hypothesis rather
+than a finding.

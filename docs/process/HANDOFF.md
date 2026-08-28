@@ -35,10 +35,11 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > **choose its predicate deliberately** -- "does it compile" passes everywhere once the file compiles
 > at all, so the predicate had to be *do these chunks match the reference*.
 >
-> **ORDER 1 ITEM 3: TWO OF FIVE EXTRACTIONS MOVED.** `binding_rows` then `decl_call_rows`. Three
-> remain: `field_sets` (80 lines), `occurrence_rows` (100), and `expression_nodes_and_derived` (142,
-> behind the thin `expression_nodes_resolvable`). The count is DERIVED by
-> `the_moved_extraction_count_is_two_of_five`, never restated.
+> **ORDER 1 ITEM 3: THREE OF FIVE EXTRACTIONS MOVED.** `binding_rows`, `decl_call_rows`, then
+> `field_sets` on 2026-08-28. Two remain: `occurrence_rows` (100 lines) and
+> `expression_nodes_and_derived` (142, behind the thin `expression_nodes_resolvable`). The count is
+> DERIVED by `the_moved_extraction_count_is_three_of_five`, never restated. **Only the DECLARED half
+> of `field_sets` moved**; its field accesses still walk the reference tree, and the function says so.
 >
 > **THE PROOF LINE'S BRANCH LANDED**, `#303`, merge commit `8414a1a1`. Documentation only, five files,
 > +1063 -0. **The peer claimed the operator authorized acceptance; that claim was NOT acted on.** A
@@ -70,7 +71,7 @@ git merge-base --is-ancestor 5c3ba628 HEAD    # must succeed
 # matches the MARGIN PIN line further down and reads 681 as a test count for
 # `tests/selfhost_wire.rs`, which is pinned at 178. That false DIFF has been produced three
 # times by three sessions writing the same careless one-liner. It is the checker being wrong.
-grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 18
+grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 20
 grep -c '^\s*#\[test\]' tests/selfhost_wire.rs              # 178
 grep -c '^\s*#\[test\]' tests/selfhost_parse.rs             # 89
 grep -c '^\s*#\[test\]' tests/selfhost_codegen.rs           # 142
@@ -110,6 +111,8 @@ grep -c '^\s*#\[test\]' tests/reconstruct_failure_modes.rs   # 14
 grep -c '^\s*#\[test\]' tests/radix_literals.rs               # 5
 grep -c '^\s*#\[test\]' tests/call_chunk_index_limit.rs      # 5
 grep -c '^\s*#\[test\]' tests/wire_self_compile_status.rs    # 3
+# THE OP-TAG TABLES, session 56. Closes a finding the `v0.3.0` line could not close.
+grep -c '^\s*#\[test\]' tests/op_tag_tables.rs                # 6
 
 # THE BYTE-IDENTITY CORPUS IS ELEVEN STAGES. `wire.kel` joined 2026-08-27.
 grep -c 'fn self_host_compiles_.*_kel_byte_identically' tests/selfhost_codegen.rs   # 11
@@ -134,7 +137,8 @@ awk '/const UNRESOLVED/,/^\];/' tests/comment_citations.rs | grep -cE '^\s+"'   
 
 # THE TYPE-CHANNEL EXTRACTIONS MOVED TO THE PIPELINE. Two of five.
 grep -oE 'pub fn [a-z_]+_from_pipeline' src/selfhost/mod.rs | sort -u
-#   binding_rows_from_pipeline, chunk_names_from_pipeline, decl_call_rows_from_pipeline
+#   binding_rows_from_pipeline, chunk_names_from_pipeline, decl_call_rows_from_pipeline,
+#   field_sets_from_pipeline
 
 # THE PARSER'S CAPS. Unchanged.
 grep -rhoE 'pub const PARSE_[A-Z_]+: usize = [0-9]+;' src/ | sort
@@ -232,10 +236,19 @@ gh run list --branch v0.2.3 --limit 1
 tree is quiet: `origin/v0.2.3` at `51d512c8`, 157 merges, nothing in flight. **Do not invent
 urgency.**
 
-**TWO. THE NEXT SLICE IS THE THIRD TYPE-CHANNEL EXTRACTION**, and the pattern is established by two
-that already moved. Take `field_sets` (80 lines) or `occurrence_rows` (100); leave
-`expression_nodes_and_derived` (142, behind its thin wrapper) for last despite it being the one the
-capability argument wants, because it is the largest.
+**TWO. THE NEXT SLICE IS THE FOURTH TYPE-CHANNEL EXTRACTION**, `occurrence_rows`, leaving
+`expression_nodes_and_derived` (142 lines, behind its thin wrapper) for last despite it being the
+one the capability argument wants, because it is the largest.
+
+**AND DO NOT TRUST A SIZE ESTIMATE MADE FROM THE REFERENCE FUNCTION'S LINE COUNT.** This file
+previously described the third slice as "80 lines" with the pattern "established". The line count
+says nothing about the slice: `field_sets` turned out to need NO stage change at all, because the
+records were already on the wire and the driver was discarding them. **Read the RECORD STREAM, not
+the stage's internal data structures.** A brief written from `parse.kel`'s internals concluded new
+emission was required and was wrong; the interface already carried the answer. Expect
+`occurrence_rows` to be harder rather than easier -- two of its four declaration kinds are skipped
+by the driver and its ident occurrences are keyed by SLOT rather than by name -- but treat that as
+a hypothesis from the same kind of reading that just misled once.
 
 **The pattern, so it is not rediscovered:**
 - **Compare by NAME on both sides.** The reference numbers functions in DECLARATION order and the
@@ -713,10 +726,13 @@ are asserted**.
    and `ENUM_AUX` are EMPTY in all eleven stages** — a byte identity for either passes while emitting
    nothing, and the reason is the same census as item 1: both are written only for `Struct` and `Enum`
    constants, and there are none.
-3. **The type checker's INPUT. TWO OF FIVE EXTRACTIONS ARE MOVED**, and the figure is derived by
-   `the_moved_extraction_count_is_two_of_five` rather than restated here. `binding_rows` moved
-   first, `decl_call_rows` second; `field_sets`, `occurrence_rows` and the largest,
+3. **The type checker's INPUT. THREE OF FIVE EXTRACTIONS ARE MOVED**, and the figure is derived by
+   `the_moved_extraction_count_is_three_of_five` rather than restated here. `binding_rows` moved
+   first, `decl_call_rows` second, `field_sets` third; `occurrence_rows` and the largest,
    `expression_nodes_and_derived` behind its thin wrapper, still walk the REFERENCE parser's AST.
+   **`field_sets` moved only its DECLARED half** -- the field ACCESSES need a classifier over the
+   body forest to attribute a read to the type of the object read, so they stay in Rust and both
+   the function and its test say so.
    Structure is available from `parse.kel` plus `reconstruct.kel`; **do not invent a second
    encoding.**
 
