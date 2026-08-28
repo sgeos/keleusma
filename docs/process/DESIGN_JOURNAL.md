@@ -13,6 +13,45 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-28 — A second corpus, and the op-tag residue narrows from sixteen to four
+
+**A CAVEAT I WROTE THIS SESSION IS NOW PARTLY ANSWERED, BY MEASUREMENT.** The first op-tag census
+reported sixteen tags the eleven-stage byte-identity corpus cannot check, and said plainly that the
+per-construct tests were "a different population, this test does not measure it". Honest, and it
+left the interesting question open.
+
+**THE SHIPPED EXAMPLES COVER TWELVE OF THE SIXTEEN.** Measured over the fifteen programs in
+`examples/scripts` — a real, file-based corpus rather than string literals inside a test. The whole
+composite family is exercised there, which the stages never touch because they are written in a
+restricted subset that constructs no struct, tuple or enum value.
+
+**WHAT REMAINS IS FOUR, AND IT HAS A SHAPE RATHER THAN BEING NOISE**: `addop`, `subop`, `mulop` and
+`checkedneg`. The first three are the UNCHECKED arithmetic that `Byte` operands take through
+promote-operate-truncate, where `Word` arithmetic lowers to the `checked*` tags both corpora
+exercise heavily. So the residue reads as "byte arithmetic and unary negation" — a corpus gap with
+a description, not a scattering.
+
+**THE CHARACTERISATION IS CHECKED RATHER THAN ASSERTED IN PROSE.** Two probes inside the test
+establish that byte addition really does lower to the unchecked `Add` and that unary negation
+really does lower to `CheckedNeg`. **This project has previously called an unwitnessed opcode
+unreachable and been wrong**, so the distinction between "no corpus reaches it" and "nothing can
+reach it" is one the test now makes for itself.
+
+**A REFUSAL IS REPORTED, NOT SKIPPED.** If the reference cannot compile a shipped example the
+census fails naming it, rather than quietly describing a smaller population than it claims. That is
+the same failure mode as a truncated test run counted as a pass, which cost this session a near
+miss.
+
+**BOTH GUARDS MUTATION-TESTED, EACH MUTANT CONFIRMED TO COMPILE.** Pointing the census at a
+directory with no stage sources fires the non-vacuity assertion with its own message; claiming the
+shipped examples narrow nothing fires the equality. The equality had already demonstrated itself
+before that: the constant was written EMPTY first and the test reported the four names, so the
+value was derived from the measurement rather than the measurement fitted to a guess.
+
+**WHAT THIS DOES NOT CLAIM.** The per-construct byte-identity tests remain a third population and
+remain unmeasured. Closing the residue means a program exercising byte arithmetic and unary
+negation in one of these corpora — not a change to any guard here.
+
 ## 2026-08-28 — The twelfth stage does not self-compile, and now the tree says why
 
 **`verify_types.kel` WAS THE ONLY STAGE WITH NO BYTE-IDENTITY TEST AND NO RECORDED REASON**, which

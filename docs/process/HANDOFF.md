@@ -137,7 +137,7 @@ grep -c '^\s*#\[test\]' tests/radix_literals.rs               # 5
 grep -c '^\s*#\[test\]' tests/call_chunk_index_limit.rs      # 5
 grep -c '^\s*#\[test\]' tests/wire_self_compile_status.rs    # 3
 # THE OP-TAG TABLES, session 56. Closes a finding the `v0.3.0` line could not close.
-grep -c '^\s*#\[test\]' tests/op_tag_tables.rs                # 6
+grep -c '^\s*#\[test\]' tests/op_tag_tables.rs                # 7
 # THE TWELFTH STAGE'S EXCLUSION, session 56. Explains why the corpus is 11 of 12.
 grep -c '^\s*#\[test\]' tests/forward_data_reference.rs       # 4
 

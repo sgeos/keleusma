@@ -1,3 +1,13 @@
+## The op-tag residue is four, not sixteen
+
+Earlier in the session I reported sixteen op tags the byte-identity corpus cannot check, and said
+the per-construct tests were a different population I had not measured. I measured a second one —
+the fifteen shipped examples — and **it covers twelve of the sixteen**, the whole composite family.
+
+Four remain unreached by either corpus: the unchecked arithmetic that `Byte` operands take, plus
+unary negation. The description is checked by probes inside the test rather than asserted, because
+this project has called an unwitnessed opcode unreachable before and been wrong.
+
 # Reverse Prompt
 
 > **Navigation**: [Process](./README.md) | [Documentation Root](../README.md)

@@ -525,6 +525,12 @@ fn corpus_stages() -> Vec<&'static str> {
 ///
 /// The direction of the assertion is the useful one: a tag LEAVING this list means the stage
 /// corpus grew to cover it, which is a gain and should be recorded rather than absorbed silently.
+///
+/// **A SECOND POPULATION NOW ANSWERS PART OF THAT CAVEAT.**
+/// `the_shipped_examples_narrow_the_unexercised_tags_and_the_residue_is_named` measures the
+/// shipped example corpus and finds it covers TWELVE of these sixteen — the whole composite
+/// family. Four remain unreached by either corpus. The per-construct tests are still a third
+/// population and still unmeasured, and saying so remains accurate.
 #[test]
 #[cfg(feature = "compile")]
 fn the_stage_corpus_leaves_sixteen_op_tags_unexercised_and_names_them() {
@@ -609,3 +615,166 @@ const EXPECTED_UNEXERCISED: &[&str] = &[
     "newcompositetuple",
     "subop",
 ];
+
+/// **A SECOND POPULATION, BECAUSE THE FIRST CENSUS NAMED A LIMIT IT DID NOT MEASURE.**
+///
+/// `the_stage_corpus_leaves_sixteen_op_tags_unexercised_and_names_them` reports which tags the
+/// eleven-stage byte-identity corpus cannot check, and says in its own words that the
+/// per-construct tests are "a different population, this test does not measure it". **That
+/// caveat was honest and it left the interesting question open.**
+///
+/// This measures the SHIPPED EXAMPLE corpus — `examples/scripts/*.kel`, the programs a user
+/// actually reads — and reports which tags neither corpus exercises. It is still not the
+/// per-construct population, and this does not claim to be: it is a second real corpus, and
+/// naming what BOTH of them miss is worth more than naming what one misses.
+///
+/// # The number is derived and the residue is named
+///
+/// A count alone would say nothing useful. What matters is WHICH tags no realistic program in
+/// either corpus reaches, because those are the ones where a transposition produces no byte
+/// difference for any oracle this project runs.
+#[test]
+#[cfg(feature = "compile")]
+fn the_shipped_examples_narrow_the_unexercised_tags_and_the_residue_is_named() {
+    use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
+
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/scripts");
+    let mut sources: Vec<(String, String)> = std::fs::read_dir(dir)
+        .expect("the shipped example directory")
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "kel"))
+        .map(|p| {
+            let name = p.file_name().unwrap().to_string_lossy().into_owned();
+            (
+                name,
+                std::fs::read_to_string(&p).expect("read a shipped example"),
+            )
+        })
+        .collect();
+    sources.sort();
+
+    // NON-VACUITY, AND IT IS THE FIRST THING THAT WOULD BREAK. A directory read that returns
+    // nothing makes every conclusion below vacuously true.
+    assert!(
+        sources.len() >= 12,
+        "only {} shipped examples were found; the census below would be measuring almost \
+         nothing",
+        sources.len()
+    );
+
+    let mut present = BTreeSet::new();
+    let mut refused: Vec<String> = Vec::new();
+    for (name, src) in &sources {
+        let compiled = tokenize(src)
+            .ok()
+            .and_then(|t| parse(&t).ok())
+            .and_then(|a| compile(&a).ok());
+        match compiled {
+            Some(module) => {
+                for chunk in &module.chunks {
+                    for op in &chunk.ops {
+                        present.insert(
+                            format!("{op:?}")
+                                .chars()
+                                .take_while(|c| c.is_alphanumeric())
+                                .collect::<String>(),
+                        );
+                    }
+                }
+            }
+            // A refusal is REPORTED rather than skipped. Silently dropping an input that would
+            // not compile is how a census comes to describe a smaller population than it claims.
+            None => refused.push(name.clone()),
+        }
+    }
+    assert!(
+        refused.is_empty(),
+        "the reference compiler refused shipped examples, so this census covers fewer programs \
+         than it names: {refused:?}. Either the examples are broken or the feature set this \
+         test runs under cannot compile them; both need saying rather than skipping."
+    );
+
+    let table = stage_tag_table();
+    let arms = decoder_arms(DRIVER);
+    let still_unexercised: BTreeSet<&str> = EXPECTED_UNEXERCISED
+        .iter()
+        .copied()
+        .filter(|name| {
+            let tag = table
+                .get(*name)
+                .expect("every expected name is a stage tag");
+            let variant = arm_variant(arms.get(tag).expect("an arm for every tag"));
+            !present.contains(&variant)
+        })
+        .collect();
+
+    assert_eq!(
+        still_unexercised,
+        SHIPPED_EXAMPLES_ALSO_MISS.iter().copied().collect(),
+        "the set of op tags that NEITHER the stage corpus NOR the shipped examples exercise has \
+         moved. Fewer is a coverage gain and worth recording; more means a corpus lost reach."
+    );
+
+    // The claim only means something if the second corpus actually covered some of them.
+    assert!(
+        still_unexercised.len() < EXPECTED_UNEXERCISED.len(),
+        "the shipped examples narrowed nothing, so this second population adds no information \
+         and the test is asserting the first census twice"
+    );
+
+    // THE CHARACTERISATION OF THE RESIDUE IS CHECKED, NOT ASSERTED IN PROSE. The constant above
+    // describes the four as byte arithmetic and unary negation. Two probes establish that these
+    // operations are reachable at all, so the residue is a CORPUS gap rather than dead tags --
+    // a distinction this project has got wrong before by calling an unwitnessed opcode
+    // unreachable.
+    let ops_of = |src: &str| -> BTreeSet<String> {
+        let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse"))
+            .expect("the reference must compile the witness");
+        module
+            .chunks
+            .iter()
+            .flat_map(|c| c.ops.iter())
+            .map(|op| {
+                format!("{op:?}")
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric())
+                    .collect::<String>()
+            })
+            .collect()
+    };
+
+    let byte_ops = ops_of("fn f(a: Byte, b: Byte) -> Byte { a + b }\nfn main() -> Word { 0 }");
+    assert!(
+        byte_ops.contains("Add"),
+        "byte addition no longer lowers to the unchecked Add, so the constant's description of \
+         the residue is wrong: {byte_ops:?}"
+    );
+    let neg_ops = ops_of(
+        "fn f(a: Word) -> Word { 0 - a }\nfn g(b: Word) -> Word { -b }\nfn main() -> Word { 0 }",
+    );
+    assert!(
+        neg_ops.contains("CheckedNeg"),
+        "unary negation no longer lowers to CheckedNeg, so the constant's description of the \
+         residue is wrong: {neg_ops:?}"
+    );
+}
+
+/// Of the sixteen tags no stage source reaches, the four the shipped examples miss too.
+///
+/// Measured 2026-08-28. **The shipped examples cover twelve of the sixteen** — the entire
+/// composite family, which the stage corpus never touches because the stages are written in a
+/// restricted subset that constructs no struct, tuple or enum value. That is a substantially
+/// better position than the first census alone suggested, and it is why a second population was
+/// worth measuring rather than assuming.
+///
+/// **What remains is one coherent group and not a scattering.** `addop`, `subop` and `mulop` are
+/// the UNCHECKED arithmetic — the lowering `Byte` operands take through promote-operate-truncate,
+/// where `Word` arithmetic lowers to the `checked*` tags that both corpora exercise heavily. So
+/// the residue is "byte arithmetic and unary negation", which reads as a corpus gap with a shape
+/// rather than as noise.
+///
+/// **This is where a transposition hides from every oracle this project runs**, and naming the
+/// four is the deliverable. Closing it means a program exercising byte arithmetic and `-x` in
+/// one of these corpora, not a change to any guard here.
+const SHIPPED_EXAMPLES_ALSO_MISS: &[&str] = &["addop", "checkedneg", "mulop", "subop"];
