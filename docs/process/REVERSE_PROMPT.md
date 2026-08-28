@@ -107,6 +107,23 @@ That prerequisite is what this increment built, so the change is back rather tha
 stands from it**: lifting the two composite refusals needs a fixpoint over local widths, which is its
 own increment, and coverage is still 1070 of 1074.
 
+**The opcodes whose lowering had never run are now each resolved to a status.** An arm that exists is
+not an arm that works, so I asked the four one at a time. Two float conversions are simply **refused**
+— one by name, the other unreached behind it. `IsStruct` has no producer I could find, and the
+reference's own arm only accepts a boxed struct body, of which the B28 work left none, so even a
+mutation witness would compare against a fault rather than a value.
+
+**`Reset` was the interesting one, and my own brief was wrong about it.** I predicted it was gated
+behind the `Stream` refusal. A minimal `loop main` emits it and the backend refuses nothing — so
+**`Stream` is lowered for that shape**, and an earlier statement of mine that `Stream` is unsupported
+was true of one module rather than of the opcode. `Reset` has in fact had an execution witness all
+along, in the suspension differential's fifteen subjects, which the census cannot see because it
+surveys only the shipped corpus. **No census figure moved, and none should have.**
+
+**Nothing was widened to make a test possible.** The float guard blocks the conversion witness, and
+that is the finding rather than an obstacle to work around; the float ABI is yours to rule on in any
+case.
+
 **A coverage figure I gave you last increment was wrong, and I found it by naming things.** I set out
 to name the last chunks the backend will not lower, because "other" is a bucket and not a cause. There
 are three refusals — `Stream` in the telemetry stream, a float constant in the float witness, and

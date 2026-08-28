@@ -114,6 +114,56 @@ two-segment form, which genuinely differs, and it fired with its own message.
 kinds is missing from its probes, and removing the structs makes it fail with that message. The
 previous slice learned this the hard way: a guard whose corpus lacks a construct is a guard for a
 different question.
+## 2026-08-28 — [v0.3.0] "Unproven" meant unproven from the corpus, and two of the four are simply refused
+
+**AN ARM THAT HAS NEVER RUN IS WHERE A MISCOMPILE HIDES**, so the four opcodes the census records as
+lowered-but-unexercised were asked, one at a time, what actually stands between them and a witness.
+Three of the four answers contradicted the plan I wrote before measuring.
+
+| opcode | status, measured |
+|---|---|
+| `IntToFloat` | **REFUSED by name.** `(x as Float) as Word` compiles and the backend says *"does not yet support opcode IntToFloat"* |
+| `FloatToInt` | **Unreached, behind that refusal.** The same program emits both; lowering stops at the first |
+| `Reset` | **REACHABLE, and its module LOWERS.** A minimal `loop main` is refused nothing |
+| `IsStruct` | No producer found by this search either, and the reference's arm accepts only a **Boxed** body |
+
+### The plan was wrong about `Reset`, and measuring is what caught it
+
+The brief guessed `Reset` was gated behind the `Stream` refusal and therefore unreachable. **A
+minimal `loop main(t: Word) -> Word { yield t }` emits `Stream` and `Reset` and the backend refuses
+nothing.** `Stream` is lowered for that shape; the refusal seen on `13_telemetry_stream.kel` is about
+that module, not about the opcode. Two increments ago this line described `Stream` as unsupported
+outright — true of one module, not of the opcode.
+
+### The census was not wrong, and saying so matters
+
+Its own line reads *"unproven FROM THE CORPUS, which is the only population this..."*. **"Never
+visited" is a claim about the shipped corpus, not about the test suite.** The suspension differential
+already drives **15** `loop main` subjects through both the native lowering and the reference,
+comparing whole yielded sequences — and every such program emits `Reset`. So `Reset` has had an
+execution witness all along, in a population the census does not survey.
+
+**That linkage is checked, not cited.** A test reads the sibling harness for its subjects and
+separately confirms such a program emits `Reset`. Citing a neighbouring file without checking it is
+how a claim outlives the file it describes.
+
+### `IsStruct` is blocked structurally, and the search is recorded rather than the conclusion
+
+The reference's arm matches a **Boxed** struct body and treats a flat one as a mis-compilation, and
+**after B28 the corpus contains zero non-`Flat` composites**. So even a witness built by injecting the
+opcode into real bytecode would compare the backend against a reference fault rather than a value.
+
+The `v0.2.3` line recorded its own bounded producer search in `src/compiler.rs`, together with the
+standard it adopted after a producerless claim there was falsified within the hour: **record the
+search, not the conclusion.** Two further shapes were tried here and both are refused by the type
+checker. **That is a fact about this search, not a proof of unreachability**, and it is written that
+way.
+
+### Nothing was widened to make a test possible
+
+The float guard blocks the conversion witness. That IS the finding, and relaxing it to reach an
+unexercised arm would be widening a compiler on the strength of wanting a test.
+
 ## 2026-08-28 — [v0.3.0] The coverage figure I published last increment was two chunks high
 
 **THE SURVIVORS ARE NAMED, AND NAMING THEM EXPOSED A DEFECT IN THE INSTRUMENT THAT COUNTS THEM.**

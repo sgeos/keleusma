@@ -200,6 +200,23 @@ Current sprint source of truth.
 > **THREE CHECKS WRITTEN THIS SESSION COULD NOT FAIL**, each satisfied by a different part of a
 > document from the one it was about. Mutation caught all three; reading caught none.
 
+> **Currency note (2026-08-28, V0.3.X line, fifth entry). THE FOUR UNEXERCISED OPCODE ARMS ARE
+> RESOLVED, AND `Stream` IS NOT AS UNSUPPORTED AS THIS LINE HAD SAID.**
+>
+> An arm that has never run is where a miscompile hides, so each of the four opcodes the census
+> records as lowered-but-unexercised was asked what stands between it and a witness. `IntToFloat` is
+> **refused by name**; `FloatToInt` is unreached behind that refusal; **`Reset` is reachable, its
+> module lowers, and it already has an execution witness** in the suspension differential's fifteen
+> `loop main` subjects; `IsStruct` has no producer found by a further search and the reference's arm
+> accepts only a `Boxed` body, of which B28 left none. **The brief guessed `Reset` was unreachable and
+> was wrong** — a minimal `loop main` is refused nothing, so **`Stream` is lowered for that shape**
+> and an earlier note on this line calling it unsupported was true of one module, not of the opcode.
+> **No census figure moved and none should have**: the census surveys the corpus, and this asked a
+> broader question. Nothing was widened to make a test possible; the float guard blocking the
+> conversion witness is the finding. Absorption 23 complete, prediction hit exactly. `native_codegen`
+> **337/0/64**, workspace **2475/0/89**.
+> See [`../decisions/UNPROVEN_OPCODES.md`](../decisions/UNPROVEN_OPCODES.md).
+
 > **Currency note (2026-08-28, V0.3.X line, fourth entry). THE COVERAGE CENSUS WAS OVERSTATING BY
 > TWO CHUNKS, AND THIS LINE PUBLISHED THE OVERSTATED FIGURE.**
 >
