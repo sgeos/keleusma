@@ -86,14 +86,26 @@ and a local's width is trusted only when written at most once, because the width
 scan and cannot see a back edge. I derived that by simulating the stack from the instruction set's
 own published effects, after a heuristic walk gave me a confident wrong answer.
 
-**I implemented a sound fix and then reverted it, which I want to flag rather than bury.** The
-backend seeds native call results from their declared shapes but never consults the equivalent table
-for chunk calls. Closing that asymmetry was correct and it changed nothing: the refusal did not move
-and coverage stayed at 1070 of 1074. Since no harness here can execute a source-string program
-containing a call, keeping it would have meant widening a compiler's accepted set with no
-execution-backed check, so it is out, with the reasoning recorded at the instruction itself. **The
-named prerequisite is a source-string whole-module differential harness.** Lifting the refusal itself
-needs a fixpoint over local widths, which is its own increment.
+**The fix I reverted last time is back, with the thing that can judge it.** I built a differential
+that runs a multi-function program written inline through both the native lowering and the reference,
+which the tree could not do before. Its ABI check earned its place on the first run: a pure-`Word`
+program emits a one-parameter entry, not the four-pointer one I had assumed, and calling it the wrong
+way would have been a SIGSEGV inside JIT code with nothing to attribute it to. With that in place,
+the target case was seen to **fail** first — refused for an unknown operand width — and then to pass
+and agree once the width seeding returned. **Coverage is unchanged at 1070 of 1074**, because the
+seeding widens the accepted set only for programs the corpus does not contain, which is precisely why
+it needed a harness rather than a coverage number.
+
+**Superseded, quoted so it is not mistaken for current:**
+
+> *"Closing that asymmetry was correct and it changed nothing... Since no harness here can execute a
+> source-string program containing a call, keeping it would have meant widening a compiler's accepted
+> set with no execution-backed check, so it is out... The named prerequisite is a source-string
+> whole-module differential harness."*
+
+That prerequisite is what this increment built, so the change is back rather than out. **What still
+stands from it**: lifting the two composite refusals needs a fixpoint over local widths, which is its
+own increment, and coverage is still 1070 of 1074.
 
 **Absorptions 18, 19 and 20 are complete**, every prediction recorded before merging and every one
 hitting exactly.

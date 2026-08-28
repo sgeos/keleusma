@@ -13,6 +13,60 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-28 — [v0.3.0] The reverted change came back, with the harness that could judge it
+
+**LAST INCREMENT REVERTED A SOUND CHANGE BECAUSE NOTHING COULD EXECUTE IT. THIS ONE BUILT THE THING
+THAT CAN.** Seeding an `Op::Call` result's packed width from `Module::signatures` — the exact
+analogue of what the native path already does with `native_return_shapes` — was correct, changed no
+corpus chunk, and had no possible test: `lower_chunk` refuses `Op::Call` outright, so no inline
+program could contain a call, and the whole-module differentials are file-driven.
+
+`module_source_differential.rs` joins two halves that already existed: `lower_module` with the entry
+ABI on one side, `Vm::call` on the other. A multi-function program written as a string now runs both
+ways and is compared.
+
+### The ABI assertion earned its place immediately
+
+The harness was written asserting the four-pointer entry signature, copied from the file-driven
+differential. **It fired on the first run**: a pure-`Word` two-function program emits a
+**one-parameter** entry. The trailing pointers — shared buffer, private slots, composite region — are
+**all-or-nothing**, appended only when the module declares data or builds a composite.
+
+**Calling that one-parameter function through a four-pointer signature is undefined behaviour that
+presents as a SIGSEGV inside JIT-compiled code, with no stack and no indication of which side is
+wrong.** The assertion turned that into a sentence. It is now a derived check — the arity must be the
+chunk's own parameter count, or that plus three — rather than a constant.
+
+### The evidence that matters is the failing case, not the passing one
+
+The case the harness was built for:
+
+```keleusma
+struct P { a: Word, b: Word }
+fn f(x: Word) -> Word { x * 3 }
+fn main(v: Word) -> Word { let p = P { a: f(v), b: v }; p.a + p.b }
+```
+
+**Run before re-landing the seeding, it is refused** — "operand 1 of 2 ... unknown packed width",
+which is `f(v)`. With the seeding it lowers and agrees with the reference across four inputs.
+**A test that passes is weak evidence; a test that fails without the change is the point**, and that
+order was deliberate.
+
+### Guards that can fire, because two failure modes are invisible to a value comparison
+
+**A uniform offset error inside a region is value-invariant** — reads and writes shift together, so
+the round trip returns the right answer. Canary words past every caller-provided buffer are the only
+thing that sees it. And a test asserts the comparison itself can report a disagreement, by running
+the native side on one input and the reference on another: without it, every agreement above would be
+consistent with a harness that compares nothing.
+
+### What this does NOT do, said plainly
+
+**It does not lift the two composite refusals.** Coverage stays at 1070 of 1074. Those are blocked by
+the multi-write local rule, which needs a fixpoint over local widths. The neighbouring `Call` was not
+their cause — and, correcting the previous entry's framing, it was not innocent everywhere either:
+the gap it pointed at was real, it simply lay somewhere else.
+
 ## 2026-08-28 — [v0.3.0] Adjacency is not provenance: the Call was innocent
 
 **THE INSTRUCTION IMMEDIATELY BEFORE BOTH REFUSED COMPOSITE SITES WAS A `Call`, AND IT WAS NOT THE

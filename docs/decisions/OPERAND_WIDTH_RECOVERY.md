@@ -47,20 +47,29 @@ instruction was not the producer of the offending operand.
 > local. **The heuristic produced a confident wrong answer; the published stack effects produced the
 > right one.**
 
-## Why the seeding was reverted rather than kept
+## The seeding was reverted, then re-landed with evidence
 
-It is sound and it is an obvious asymmetry to close. It was still reverted, and the reasoning is
-recorded at the instruction arm itself:
+**Reverted first, and that was right at the time.** It changed no corpus chunk, and nothing in the
+tree could execute it: the only source-string differential lowers a single chunk and therefore
+refuses `Op::Call` outright, while the whole-module differentials are file-driven. A
+behaviour-widening change to a compiler with no execution-backed check is how a silent mispack ships.
 
-- **It changed no corpus chunk**, so nothing in the tree executes it.
-- **Nothing can execute it.** The only source-string differential lowers a single chunk and therefore
-  refuses `Op::Call` outright; the whole-module differentials are driven from files through per-file
-  sizing helpers.
-- **A behaviour-widening change to a compiler with no execution-backed check is how a silent mispack
-  ships.**
+**Re-landed once the missing capability existed.**
+`native_codegen/tests/module_source_differential.rs` runs a multi-function program written inline
+through both the native lowering and the reference implementation. The case it was built for —
 
-**The prerequisite is a source-string whole-module differential harness.** With that in hand the
-seeding is a one-line change with a test that proves it.
+```keleusma
+struct P { a: Word, b: Word }
+fn f(x: Word) -> Word { x * 3 }
+fn main(v: Word) -> Word { let p = P { a: f(v), b: v }; p.a + p.b }
+```
+
+— was **refused for an operand of unknown packed width before the seeding**, and now lowers and
+agrees with the reference across four inputs. **The test fails if the seeding is removed**, which is
+what distinguishes it from a test that passes for unrelated reasons.
+
+**It still does not lift the two sites this document is about.** Coverage remains 1070 of 1074, and
+the cause there is the multi-write local, not the call result.
 
 ## What would actually lift the refusal
 

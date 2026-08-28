@@ -960,6 +960,7 @@ pub fn lower_chunk<'ctx>(
             delegated_call: None,
             natives: &[],
             native_shapes: &[],
+            chunk_signatures: &[],
             // `lower_chunk` sees no module, so it resolves no call and needs no
             // per-site offsets; it refuses `Op::Call` for the same reason.
             call_regions: &[],
@@ -1349,6 +1350,7 @@ fn lower_module_with<'ctx>(
             delegated_call,
             natives: &program.native_names,
             native_shapes: &program.native_return_shapes,
+            chunk_signatures: &program.signatures,
             call_regions: &call_regions,
             visited: visits.as_ref().map(|_| &seen),
         };
@@ -1503,6 +1505,12 @@ struct BodyCfg<'a> {
     /// native's result was refused for a width the module actually declares.
     /// `rogue_dungen` is the corpus case.
     native_shapes: &'a [keleusma::bytecode::WireShape],
+    /// Declared signature of each chunk, parallel to `Module::chunks`.
+    ///
+    /// **The chunk-call analogue of `native_shapes`.** Without it an `Op::Call`
+    /// result carries no width and any composite packing one is refused. Empty
+    /// for the single-chunk entry point, which resolves no call at all.
+    chunk_signatures: &'a [keleusma::bytecode::ChunkSignature],
     /// Region offset for each `Op::Call` in this chunk, by op index.
     ///
     /// **The caller-allocated return slot, expressed through the pointer the
@@ -1947,6 +1955,7 @@ fn lower_chunk_body<'ctx>(
         delegated_call,
         natives,
         native_shapes,
+        chunk_signatures,
         call_regions,
         visited,
     } = cfg;
@@ -2853,27 +2862,32 @@ fn lower_chunk_body<'ctx>(
                 if delegated_call == Some(i) {
                     st.b.build_return(Some(&ret)).unwrap();
                 } else {
-                    // # Why this result is pushed at an UNKNOWN width
+                    // **SEEDED FROM THE CALLEE'S DECLARED RETURN**, which is
+                    // exactly what the native arm does with `native_shapes`.
                     //
-                    // `Module::signatures` declares each chunk's return shape,
-                    // and seeding from it here — the exact analogue of what the
-                    // native arm does with `native_shapes` — is sound and was
-                    // written and then REVERTED, deliberately.
+                    // Without this an `Op::Call` result was pushed at
+                    // [`Width::Unknown`] unconditionally, so a composite packing
+                    // a call result was refused for a width the module already
+                    // declares. `Module::signatures` is the same table the typed
+                    // verifier uses to seed a call's result.
                     //
-                    // **It changed no corpus chunk**, so nothing executes it:
-                    // measured, coverage stayed at 1070 of 1074 with the seeding
-                    // in place. And nothing can execute it, because the only
-                    // source-string differential lowers a single chunk and
-                    // therefore refuses `Op::Call` outright, while the
-                    // whole-module differentials are driven from files with
-                    // per-file sizing helpers.
+                    // # This was written, reverted, and re-landed, on purpose
                     //
-                    // **A behaviour-widening change to a compiler with no
-                    // execution-backed check is how a silent mispack ships.**
-                    // The prerequisite is a source-string whole-module
-                    // differential; with that in hand this is a one-line change.
-                    // See `docs/decisions/OPERAND_WIDTH_RECOVERY_BRIEF.md`.
-                    st.push(ret);
+                    // It changes no corpus chunk — no shipped module packs a
+                    // call result into a composite — so for one increment
+                    // nothing in the tree could execute it, and it was reverted
+                    // rather than shipped unverified. It returns with
+                    // `module_source_differential.rs`, which runs a
+                    // multi-function program written inline against the
+                    // reference. **That test is refused for an unknown packed
+                    // width without this line**, so it fails if this is removed.
+                    //
+                    // An undeclared or unsizable return still yields `Unknown`
+                    // and still fails closed at the use.
+                    let w = width_of_declared_shape(
+                        chunk_signatures.get(usize::from(*idx)).map(|sg| &sg.ret),
+                    );
+                    st.push_w(ret, w);
                 }
             }
             // A call out to a host-registered native, as a direct call to an

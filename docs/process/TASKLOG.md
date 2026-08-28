@@ -131,6 +131,21 @@ Current sprint source of truth.
 > **THREE CHECKS WRITTEN THIS SESSION COULD NOT FAIL**, each satisfied by a different part of a
 > document from the one it was about. Mutation caught all three; reading caught none.
 
+> **Currency note (2026-08-28, V0.3.X line, second entry). A MULTI-FUNCTION PROGRAM CAN NOW BE
+> DIFFERENTIALLY TESTED FROM A SOURCE STRING, AND THE REVERTED WIDTH FIX IS BACK WITH EVIDENCE.**
+>
+> `native_codegen/tests/module_source_differential.rs` runs an inline multi-function program through
+> both the native lowering and the reference. It fills a real gap: `lower_chunk` refuses `Op::Call`,
+> so no inline test could contain a call, which is why a sound width fix had been reverted
+> unverified. **Its ABI assertion fired immediately** — the entry's trailing pointers are
+> all-or-nothing, so a pure-`Word` program emits a one-parameter entry and the four-pointer call
+> would have been undefined behaviour presenting as a SIGSEGV inside JIT code. With the harness in
+> place, chunk-call result widths are again seeded from `Module::signatures`: the target case **was
+> refused for an unknown packed width and now lowers and agrees**, and the test fails without the
+> change. **Coverage is unchanged at 1070 of 1074** — the seeding does not lift the two composite
+> refusals, whose cause is the multi-write local rule. `native_codegen` **324/0/62** clean under fmt,
+> clippy and doc; workspace **2467/0/88**.
+
 > **Currency note (2026-08-28, V0.3.X line). THE LAST TWO COMPOSITE REFUSALS ARE EXPLAINED TO THE
 > CAUSE, AND A SOUND FIX WAS REVERTED FOR WANT OF EVIDENCE.**
 >

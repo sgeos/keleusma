@@ -22,11 +22,19 @@
 //! **The `Boxed` composite form** — refuted earlier by measurement: the corpus
 //! contains zero non-`Flat` composites.
 //!
-//! **The `Call` result** — refuted here. The instruction immediately before both
-//! refused sites IS a `Call`, and both callees declare `ret = Scalar`, which made
-//! it the obvious candidate. Seeding call results from `Module::signatures` was
-//! implemented, and the refusal did not move: coverage stayed at 1070 of 1074.
-//! **The adjacent instruction was not the producer of the offending operand.**
+//! **The `Call` result** — refuted here AS THE CAUSE OF THESE TWO REFUSALS. The
+//! instruction immediately before both sites IS a `Call`, and both callees
+//! declare `ret = Scalar`, which made it the obvious candidate. Seeding call
+//! results from `Module::signatures` was implemented and the refusal did not
+//! move. **The adjacent instruction was not the producer of the offending
+//! operand.**
+//!
+//! **That seeding is nonetheless a real fix for a real gap, and it now ships**
+//! with `module_source_differential.rs` behind it: a composite packing a call
+//! result was refused for an unknown width and now lowers and agrees with the
+//! reference. It simply does not lift THESE two sites. Adjacency is not
+//! provenance in either direction — the neighbouring instruction was neither the
+//! cause here nor innocent everywhere.
 //!
 //! # What would actually lift it
 //!
