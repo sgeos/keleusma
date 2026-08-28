@@ -239,6 +239,19 @@ Current sprint source of truth.
 > **THREE CHECKS WRITTEN THIS SESSION COULD NOT FAIL**, each satisfied by a different part of a
 > document from the one it was about. Mutation caught all three; reading caught none.
 
+> **Currency note (2026-08-28, V0.3.X line, eighth entry). THE RED IS CLEARED AND THE BRANCH IS
+> PUBLISHED AGAIN; A RUN CLOSED IT, NOT THE UPSTREAM MERGE.**
+>
+> PR #314 landed and absorption 25 carried it in. The workspace suite was then **run**: **2479
+> passed, 0 failed, 89 binaries, exit 0**, zero `FAILED` lines. The prediction's arithmetic was
+> written before merging — 2475 passing, plus the one failing test, plus three new — and held. Nine
+> commits had waited four iterations rather than go through `--no-verify`; the gate was correct that
+> the suite was red, and bypassing it would have published a branch its own gate rejected. `src/` and
+> `tests/` remain byte-identical to `v0.2.3` and the ownership check is empty and non-vacuous.
+> `native_codegen` **344/0/66** clean under fmt, clippy and doc. Censuses re-derived and unchanged:
+> **61 of 66**, **1070 of 1074**, **89841 of 89940**.
+> See [`../decisions/UNBLOCK_AND_VERIFY_BRIEF.md`](../decisions/UNBLOCK_AND_VERIFY_BRIEF.md).
+
 > **Currency note (2026-08-28, V0.3.X line, seventh entry). A TAIL YIELD IS LOWERED AS A RETURN,
 > SO THE GAP NAMED LAST ENTRY DID NOT EXIST AS DESCRIBED.**
 >

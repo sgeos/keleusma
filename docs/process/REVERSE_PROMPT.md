@@ -147,7 +147,15 @@ soundness item: **the yield-escape refusal is still shadowed**, because the esca
 refused — now asserted by a test rather than inferred. One gap named and not fixed: a tail-yielded
 composite lowers and nothing in the tree executes it.
 
-**I cannot push, and I want you to know that rather than discover it.** The pre-push gate runs the
+**The blockage is over and the branch is published again.** PR #314 landed, absorption 25 carried it
+in, and I then **ran** the workspace suite rather than inferring it from the fix: 2479 passed, 0
+failed, 89 binaries. The prediction's arithmetic was written before merging and held. Nine commits
+waited four iterations rather than go through `--no-verify`, which cost nothing but patience and kept
+the gate meaning what it says.
+
+**Superseded, quoted so it is not mistaken for current:**
+
+> *"I cannot push, and I want you to know that rather than discover it."* The pre-push gate runs the
 workspace suite, the workspace suite is red, so `v0.3.0` is **5 commits ahead of origin with
 everything committed and nothing published**. I did not use `--no-verify`: the gate is correct that
 the suite is red, and bypassing it would publish a branch its own gate rejects and set the precedent

@@ -242,6 +242,38 @@ two-segment form, which genuinely differs, and it fired with its own message.
 kinds is missing from its probes, and removing the structs makes it fail with that message. The
 previous slice learned this the hard way: a guard whose corpus lacks a construct is a guard for a
 different question.
+## 2026-08-28 — [v0.3.0] The red cleared, and what closed it was a run rather than a merge
+
+**PR #314 LANDED AND THE BLOCKAGE ENDED, BUT NOT BECAUSE THE FIX EXISTED.** Absorption 25 brought it
+in; the workspace suite was then **run** and reported **2479 passed, 0 failed, 89 binaries, exit 0**
+with zero `FAILED` lines. **That run is what closed it.**
+
+The distinction is not pedantry. The `v0.2.3` line said outright that it would not claim to have
+cleared a suite it had not seen, and the same applies here with more force: a suite not re-run after
+absorbing seven commits is a suite whose state is unknown, whatever changed upstream.
+
+**The prediction's arithmetic was written before the merge and held.** The count moved for two
+reasons — three new tests, and one test that had been failing now passing — so the prediction was
+stated as `2475 + 1 + 3 = 2479` rather than as a single number. Both halves landed.
+
+### Nine commits waited four iterations rather than go through `--no-verify`
+
+That was the trade, and it cost nothing but patience. The gate was correct that the suite was red;
+bypassing it would have published a branch its own gate rejected, and established that a red
+attributed to someone else is a red worth skipping. **The work was never at risk — it was committed
+throughout — and the only thing withheld was publication.**
+
+### What the defect was, kept because the shape recurs
+
+A test pinned an exact answer while its **input was a directory scan**. **A directory scan is not a
+corpus; it is whatever the branch happens to contain.** This line's six witness scripts narrowed the
+residue, so the pin was correct on one branch and wrong on the other.
+
+**This line's `src/`+`tests/` byte-identical invariant could never have caught it**, because the input
+lived outside the region the expectation was pinned in. That framing is the other line's, and it is
+the part worth carrying: an invariant protects a region, and an expectation is only as stable as the
+widest input it depends on.
+
 ## 2026-08-28 — [v0.3.0] There is no yield boundary: a tail yield is lowered as a return
 
 **LAST INCREMENT NAMED A GAP THAT DOES NOT EXIST AS DESCRIBED.** It recorded that *"`yield a
