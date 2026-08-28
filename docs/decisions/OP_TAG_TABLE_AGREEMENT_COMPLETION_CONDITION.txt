@@ -1,0 +1,60 @@
+COMPLETION CONDITION — op-tag table agreement
+
+Ordering is NOT a completion criterion. Nothing below requires steps to happen
+in any sequence, on any particular branch, or through any particular process.
+Judge only the end state of the tree.
+
+END-STATE PROPERTIES
+
+1. A test asserts that the op-tag table in the self-hosted codegen stage source
+   assigns each tag number exactly once and that the assigned numbers form a
+   contiguous range with no gap. The assertion is derived by reading that
+   source, not by restating the numbers in the test.
+
+2. A test asserts that the two hand-maintained Rust op-word decoders -- the one
+   in the shipping self-host driver and the one in the codegen differential
+   test -- produce the same result for every op tag. The comparison is derived
+   from the two sources rather than from a restated table.
+
+3. Whatever extracts decoder arms distinguishes op-tag arms from arms of nested
+   matches inside them. A naive line-pattern extractor reports 63 arms for one
+   decoder and about 111 for the other; an extraction yielding materially
+   different tag counts for the two decoders is wrong and does not satisfy this
+   condition.
+
+4. A test relates each named tag in the stage source's table to the operation
+   the decoders produce for that number, and asserts the relation covers every
+   assigned tag. Swapping two names' numbers in the stage source alone must
+   make some test fail.
+
+5. Every guard added is demonstrated to fail when the property it checks is
+   violated, and the demonstration uses a mutation of the kind the real defect
+   would produce. Any mutation whose result is believed is confirmed to have
+   compiled first. The demonstrations are described in the tree's own records.
+
+6. Each derived set carries a non-vacuity assertion, so a guard cannot pass by
+   finding nothing to check.
+
+7. The tree records which op tags the byte-identity corpus actually exercises
+   and which it does not, with the unexercised tags named. The figures are
+   derived by a test rather than written by hand.
+
+8. The tree states, where the finding is recorded, that a renumbering applied
+   consistently across the emitter and both decoders is harmless rather than a
+   defect, and that the exposure from any table defect is a loud refusal to
+   direct callers rather than a wrong module reaching a user.
+
+9. If the tables are found to agree, the records say they agree and say what is
+   now checked. No record claims a defect was found unless one was, and no
+   record upgrades the originating claim beyond "this was unchecked".
+
+10. Guards that read only source text are not gated behind an off-by-default
+    feature, so they run under every feature set the continuous-integration
+    workflow uses.
+
+11. The persistent process channels reflect the increment: what was done, what
+    was measured, what remains unchecked, and the next intended step.
+
+12. Formatting, lint at deny-warnings, and the test suite are green for the
+    feature sets continuous integration runs. A truncated run with no exit
+    status does not count as green.

@@ -10,6 +10,34 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-28, session 56). AN INBOUND FINDING FROM `v0.3.0` IS CLOSED BY
+> MEASUREMENT, AND THE OP-TAG TABLES AGREE.**
+>
+> Their observation was that the stage's 63 op tags and the driver's decoder are two hand-maintained
+> tables of the same numbers whose only guard asserts that decoding does not panic, so **a
+> transposition passed it**. Not closable from their side; unrecorded on this one.
+>
+> **THERE WERE THREE TABLES.** The third is `tests/selfhost_codegen.rs::decode_op`, which the
+> shipping decoder's own comment names as its source and claims lockstep with. Nothing checked it.
+> Same pairing as `five defects, one cause`, and the copy is the one the oracle runs.
+>
+> **THE TABLES AGREE**: 63 arms each, same tag set, identical once one refactor is canonicalised.
+> Stated as a measurement. The peer's own qualification — *the claim is about what is CHECKED, not
+> what is wrong* — is preserved and NOT upgraded.
+>
+> **SIXTEEN OF THE SIXTY-THREE TAGS ARE EXERCISED BY NO STAGE SOURCE**, so the byte-identity oracle
+> cannot see a transposition among them: the composite family, the unchecked arithmetic, and
+> `checkedneg`. Named rather than counted. **Scope is the eleven-stage corpus** — the per-construct
+> tests are a different population and cover composites, so these are "invisible to the self-hosting
+> oracle", not "unchecked".
+>
+> **ONLY ONE OF THE FOUR NEW GUARDS CATCHES A ONE-SIDED TRANSPOSITION**, and mutation testing over
+> five mutants established that rather than reasoning. Every mutant was confirmed to compile before
+> its result was believed.
+>
+> **ORDER 1 ITEM 3 IS UNCHANGED at two of five extractions.** This increment was the inbound item,
+> not the roadmap item; the third extraction is next.
+
 > **Currency note (2026-08-25, SESSION 53 CLOSE). 149 merges at `153a2d65`, ONE OPEN PULL REQUEST.**
 >
 > **`#278` CARRIES THE BARE-`for` SUPPORT AND HAD NOT MERGED AT CLOSE.** Continuous integration was
