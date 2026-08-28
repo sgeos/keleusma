@@ -84,19 +84,35 @@ not acted on it.** Publication remains held.
 combination continuous integration runs, and not fixed here because it is outside what these
 increments were about.
 
+## The twelfth stage, which I would want you to know about
+
+`verify_types.kel` is the only stage source with no byte-identity test, and nothing in the tree
+recorded why, so the absence read as an oversight. **It is refused, reproducibly.**
+
+A function reads a `data` block declared **later in the file**, and the self-hosted parser resolves
+`block.field` against a table it builds as it meets each block, so the reference resolves to
+nothing. Four-line witness, with a control that differs only in declaration order.
+
+**I did not attempt the repair.** It means collecting data declarations before parsing bodies,
+which is a two-pass restructuring of a single-pass streaming parser rather than a defect fix. That
+is a decision I would rather you saw than have me take quietly inside a session. What landed is the
+reproduction, the control, and a derived pin that the corpus is eleven of twelve with the missing
+stage named — so the absence is now a documented gap instead of folklore.
+
+Three plausible hypotheses failed before the structural one succeeded, and none of them mentioned
+declaration order.
+
 ## What I would take up next
 
-The occurrences half of `occurrence_rows`, then `expression_nodes_and_derived`. Node kind 2 is
-`Local` and carries a slot, and the driver holds parameter and `let` names, so a slot-to-name map
-is available. What I have NOT established is which record carries a bare identifier that is neither
-a call nor a binding site, and I am not going to predict it again.
+Either the two-pass data resolution above — which would take the corpus to twelve and is the
+largest single remaining item I can see — or the occurrences half of `occurrence_rows`. Local reads
+are body record code 2 carrying a SLOT, and the driver holds parameter and `let` names, so a
+slot-to-name map is available.
 
-## A postscript on that, because it is the session's most repeated mistake
+## A postscript on the session's most repeated mistake
 
-I predicted twice that a slice would be harder than it was, both times by reading the stage's
-internal data structures and reasoning about what the host could not see. Both times the record
-stream already carried the answer. The second time I measured before acting, which is the only
-reason it cost nothing.
-
-The instrument for this is `parse_record_trace`, and it is public precisely so the stream can be
-read from outside the driver. Both handoffs now say to use it.
+I predicted three times that a slice would be harder or differently shaped than it was, each time by
+reasoning from a component's internals rather than from the interface. Twice the record stream
+already carried the answer; once the culprit was declaration order rather than any of the three
+constructs I suspected. The instrument for the first kind is `parse_record_trace`; for the second it
+is bisecting against the real file with a control. Both handoffs now say so.
