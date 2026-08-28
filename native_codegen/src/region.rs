@@ -204,6 +204,32 @@ fn loop_scopes(ops: &[Op]) -> Vec<(usize, usize, u16)> {
     out
 }
 
+/// Op indices of every `Flat` construction site that lies inside some `Loop`
+/// scope, and whose offset is therefore rewritten on each iteration.
+///
+/// This is the population the cross-iteration question is asked of. It says
+/// nothing about escape — [`yield_escape_hazards`] answers that for the
+/// single-chunk case, and the interprocedural case needs a call graph this
+/// function deliberately does not build.
+///
+/// Every `Loop` scope counts, including the ones the compiler emits for `match`
+/// and multi-clause dispatch, for the reason given on [`yield_escape_hazards`]:
+/// a real loop containing `break` cannot be told from a `match` by that test.
+pub fn loop_body_sites(chunk: &Chunk) -> Vec<usize> {
+    let mut out: Vec<usize> = Vec::new();
+    for (lo, hi, _exit) in loop_scopes(&chunk.ops) {
+        for (k, op) in chunk.ops[lo..hi].iter().enumerate() {
+            if matches!(op, Op::NewComposite(NewCompositeOperand::Flat { .. }))
+                && !out.contains(&(lo + k))
+            {
+                out.push(lo + k);
+            }
+        }
+    }
+    out.sort_unstable();
+    out
+}
+
 /// Sites whose fixed offset can be overwritten while the host still holds the
 /// value built there.
 ///

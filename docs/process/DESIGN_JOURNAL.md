@@ -13,6 +13,51 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-27 — [v0.3.0] I said the gate did not cover us; it did, and nobody ran it
+
+**A CLAIM ABOUT INFRASTRUCTURE WAS PUBLISHED WITHOUT READING THE INFRASTRUCTURE.** The previous
+increment reported, in a commit message and three documents, that *"neither `scripts/release-gate.sh`
+nor CI covers this subproject"*. **False.** That script runs `cargo fmt --check`, `cargo clippy
+--all-targets -- -D warnings`, `cargo test` and `RUSTDOCFLAGS="-D warnings" cargo doc` over
+`native_codegen/`, in a step whose own label reads *"gated nowhere else"*. It is conditional on an
+LLVM 22.1 install and announces itself as skipped otherwise — **and that install is present on this
+machine**. Four lines of `grep` would have settled it.
+
+**The true cause is worse than the one it replaces.** The coverage existed and was bypassed: the
+everyday loop substituted `cargo test` for the gate. So the finding is not a missing check but an
+unrun one, which is the failure mode this repository has already shipped once, when V0.2.1 went out
+with a red Doc job.
+
+**Running the missing step immediately paid.** `cargo doc -D warnings` failed on a public item
+linking to a private one — a defect **invisible to both `cargo test` and `cargo clippy`**, which is
+exactly why that step exists. It predated this session's work.
+
+### The interprocedural residual: measured, and empty
+
+The yield-escape refusal reads one chunk. A composite built in a loop, returned, and yielded by the
+caller is the same defect and was named as open without ever being measured. **An unmeasured residual
+is indistinguishable from an unbounded one.**
+
+Followed the call graph to a fixpoint, with a round bound of `chunks.len()` so **termination is
+structural rather than dependent on the graph being acyclic** — mutual recursion is expressible, and
+a test builds a cyclic graph by hand to prove the walk returns.
+
+Crude result over 14 loop-constructing chunks: **0 by call, 2 by return**. Both return candidates
+were then **ruled out by a scalar boundary**: a `loop` chunk's declared return type IS what it
+yields, and `piano_roll_0`/`piano_roll_1` yield `Word`. Confirmed independently by reading the
+source, whose `main` yields the literal `0`. **Refined residual: zero.**
+
+**THE REFINEMENT IS ITSELF GUARDED.** A test asserts the crude count strictly exceeds the refined
+one, because a refinement that ruled nothing out would leave the zero resting entirely on the crude
+test while looking like precision. **`Top` counts as "can carry a composite"** — an absent signature
+entry must not read as a safety claim.
+
+**Deliberately NOT refused, and the reason is stated rather than implied.** The refusal would stack
+three over-approximations with no data flow traced at any of them, rejecting sound programs on the
+strength of "a callee can yield", and there is no instance to justify that. The class also cannot
+occur today: everything that could yield a composite is behind the `Stream` refusal. **Both
+tripwires now point at the same moment — `Stream` landing.**
+
 ## 2026-08-27 — [v0.3.0] The reason the composite-reuse defect stayed quiet was not the recorded one
 
 **THE PREMISE WAS FALSE AND HAD BEEN RESTATED IN TWO DOCUMENTS.** Both this line's handoff and the
@@ -73,8 +118,16 @@ Running `clippy -D warnings` over the subproject for the first time found four w
 this line's own earlier work. One was substantive: `under_with` in `verifier_heap_mechanism.rs` was
 counted and never reported, so a census printed one half of a symmetric comparison. **Fixed by
 printing it, not by deleting the variable** — the count was the intent and the missing line was the
-defect. The local gate script does not run clippy over `native_codegen`, which is why four warnings
-accumulated unseen.
+defect.
+
+**⚠ AND THE CAUSE GIVEN HERE WAS WRONG, CORRECTED SAME DAY.** The superseded sentence read: *"The
+local gate script does not run clippy over `native_codegen`, which is why four warnings accumulated
+unseen."* `scripts/release-gate.sh` **does** run fmt, clippy `-D warnings`, tests and
+`cargo doc -D warnings` over it, in a step labelled *"gated nowhere else"*, conditional on an LLVM
+install that is present here. **The gate was simply never run**; `cargo test` was substituted for it.
+Running the missing step immediately found a real `cargo doc -D warnings` failure — a public item
+linking to a private one — that neither test nor clippy can see. **A claim about infrastructure was
+published without reading the infrastructure, four lines of `grep` away.**
 
 ## 2026-08-27 — Two of five type-channel extractions are moved
 

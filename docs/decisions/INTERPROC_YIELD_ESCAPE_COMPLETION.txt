@@ -1,0 +1,58 @@
+COMPLETION CONDITION — interprocedural yield-escape residual, and the unrun gate step
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, by any route, on any branch. Judge only the end state of the tree.
+
+1. CORRECTED CLAIM ABOUT GATE COVERAGE
+   No document in the tree asserts that scripts/release-gate.sh or CI fails to
+   cover the native_codegen subproject. Wherever this line previously said so,
+   the tree instead records that release-gate.sh runs format, lint, test and
+   documentation checks over native_codegen, that the step is conditional on an
+   LLVM install and announces itself as skipped otherwise, and that the warnings
+   which accumulated did so because the gate was not run rather than because it
+   lacked coverage. The superseded wording is visible as superseded rather than
+   silently replaced.
+
+2. THE DOCUMENTATION CHECK HAS ACTUALLY RUN
+   The tree contains a recorded result of building native_codegen's
+   documentation with warnings denied, and that result is clean. If it was not
+   clean when first run, the defects it found are fixed in the tree.
+
+3. INTERPROCEDURAL RESIDUAL IS BOUNDED BY MEASUREMENT
+   An executable check in the tree reports, over the shipped corpus, how many
+   chunks carry a composite construction site inside a loop whose value could
+   reach a yield in another chunk. The figure is produced by running code, not
+   asserted in prose. The check states plainly which direction it errs in, and
+   distinguishes "a callee can yield" from "the composite reaches that yield"
+   rather than treating them as the same fact. Any walk over the call graph
+   terminates by construction on cyclic input.
+
+4. THE MEASUREMENT GOVERNS THE DISPOSITION
+   Either the backend refuses the interprocedural shape and the tree records a
+   measured count of chunks newly refused as a result, or it does not refuse it
+   and the tree records why, naming the cost that made refusal unacceptable.
+   Either outcome is acceptable. What is not acceptable is a refusal whose cost
+   was never measured, or a decision not to refuse that is unexplained.
+
+5. NO GUARD IS TRUSTED WITHOUT EVIDENCE IT CAN FIRE
+   Every predicate or check added is exercised by at least one case it reports
+   positively and one closely related case it reports negatively, so that a
+   passing result distinguishes the property from its absence.
+
+6. THE OBLIGATION IS NOT OVERSTATED
+   No document claims the composite slot-reuse obligation is discharged.
+   Whatever is covered, the tree states that slot reuse itself is unchanged and
+   names what remains uncovered.
+
+7. VERIFICATION IS RECORDED WITH BOTH SIGNALS
+   The tree records test results for the native_codegen suite and for the main
+   workspace, each giving the runner's own exit status and the summed pass,
+   fail and binary counts, with the two agreeing. Any figure that a change
+   could have moved is re-derived rather than copied forward, and coverage
+   figures that did not move are stated as re-derived.
+
+8. WORK IS INTEGRATED AND CLEAN
+   No uncommitted changes remain, and the local branch and its remote agree.
+   Files owned by the v0.2.3 line are unmodified: src/verify.rs, src/bytecode.rs,
+   src/vm.rs, src/wire_schema.rs, src/selfhost/, src/confine.rs, and the CI
+   workflow directory.

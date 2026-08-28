@@ -1726,7 +1726,8 @@ fn delegated_suspension_plan(module: &Module) -> Option<(usize, usize, usize)> {
 
 /// Does this module delegate its suspension across one call edge, and to what?
 ///
-/// A thin public view of [`delegated_suspension_plan`]. It exists so that a
+/// A thin public view of `delegated_suspension_plan`, which is private, so the
+/// name is given as text rather than as a link. It exists so that a
 /// CENSUS can ask the question over a corpus without restating the predicate,
 /// and it delegates rather than reimplements for exactly that reason: a second
 /// copy of this test would be a second opinion about which modules the lowering

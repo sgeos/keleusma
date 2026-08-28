@@ -74,9 +74,25 @@ Measured over 91 modules and 1117 chunks by
 
 ## What is NOT closed, stated rather than implied
 
-- **The interprocedural case is open.** A composite built in a loop body, returned to a caller, and
-  yielded there is a hazard a single-chunk predicate cannot see. The `Call` disqualifier in
-  `loop_composite_census.rs` bounds the residual.
+- **The interprocedural case is MEASURED and empty over the shipped corpus**, and is not refused.
+  `native_codegen/tests/interproc_yield_escape.rs` follows the call graph to a fixpoint and reports,
+  of the 14 chunks that construct inside a loop, how many could hand the composite to a `yield` in
+  another chunk. **Crude result: 0 by call, 2 by return.** Both return-path candidates
+  (`piano_roll_0.kel` and `piano_roll_1.kel`, chunk 1) are **ruled out by a scalar boundary**: the
+  yielding caller's declared return type is `Word`, and a `loop` chunk's return type is the type it
+  yields, so no composite can reach the host through it. Confirmed independently by reading
+  `piano_roll_0.kel`, whose `main` is `loop main(input: Word) -> Word` and yields the literal `0`.
+  **Refined residual: 0.**
+
+  **Not refused, and the reason is not that it is free.** A refusal here would rest on three stacked
+  over-approximations with no data flow traced at any of them, so it would reject sound programs on
+  the strength of "a callee can yield" — and there is no instance to justify that cost. **The class
+  also cannot occur today**, because every chunk that could yield a composite is behind the same
+  `Stream` refusal. The census asserts the refined residual is zero, so a corpus change that creates
+  an instance fails the test and forces the decision then, on evidence, rather than now on none.
+
+  **Both tripwires point at the same moment**: the `Stream` opcode landing. Whoever lands it must
+  revisit the shadowing test AND this residual.
 - **The gate is shadowed today.** Every hazardous chunk is refused earlier for `Stream`, so the
   refusal cannot fire through `lower_module` on unmutated input.
   `the_yield_escape_refusal_is_shadowed_by_the_missing_stream_opcode` asserts that shadowing and is a

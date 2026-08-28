@@ -58,9 +58,30 @@ it must confirm this guard takes over. And **the obligation is narrowed, not dis
 is unchanged, and a composite built in a loop, returned, and yielded by the caller is still invisible
 to a single-chunk predicate.
 
-**A gap in our own gate.** `native_codegen` had never been linted; the first `clippy -D warnings` run
-found four warnings, all from this line's earlier work, one substantive — a census counted a figure
-and never printed it. Neither `scripts/release-gate.sh` nor CI covers this subproject.
+**A gap in our own practice, and I described it wrongly the first time.** I reported that neither
+`scripts/release-gate.sh` nor CI covers `native_codegen`. **⚠ CORRECTED. THE GATE DOES COVER IT; IT WAS NEVER RUN.** The superseded claim was that
+`scripts/release-gate.sh` and CI do not cover `native_codegen`. **False.** That script runs
+`cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, AND
+`RUSTDOCFLAGS="-D warnings" cargo doc` over the subproject, in a step whose own label reads *"gated
+nowhere else"*. The step is conditional on an LLVM 22.1 install and prints a loud SKIPPED banner
+otherwise, and **LLVM 22.1 IS installed here**, so it would have run. The warnings accumulated
+because **the gate was never run on this line** — the everyday loop substituted `cargo test` for it.
+**That is a worse finding than the one it replaces**: the coverage existed and was bypassed. Running
+the missing step found a real failure it had been hiding — a public item linking to a private one,
+which fails `cargo doc -D warnings` and is invisible to both test and clippy. Now fixed and the doc
+build is clean.
+
+**The interprocedural residual is now measured rather than named.** I said last time that a composite
+built in a loop, returned, and yielded by the caller was a hazard I could not see. Following the call
+graph: of 14 chunks that construct inside a loop, the crude figures are zero by call and two by
+return, and **both return candidates are ruled out because the yielding caller returns `Word`** — a
+`loop` chunk's return type is what it yields, so no composite can reach the host through it. Refined
+residual **zero**. I deliberately did not refuse it: that refusal would rest on three stacked
+over-approximations with no data flow and no instance to justify the cost, and the whole class sits
+behind the `Stream` refusal anyway. The census asserts zero, so an instance would fail loudly.
+
+**Absorptions 18 and 19 are complete**, the second documentation-only with zero predicted and zero
+observed movement.
 
 **Still blocked on you, all three unactionable here**: the `Fixed` shared-slot ABI, where the
 recommendation splits on whether cross-language interop should be convention-based or

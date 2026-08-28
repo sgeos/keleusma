@@ -103,6 +103,21 @@ Current sprint source of truth.
 > **THREE CHECKS WRITTEN THIS SESSION COULD NOT FAIL**, each satisfied by a different part of a
 > document from the one it was about. Mutation caught all three; reading caught none.
 
+> **Currency note (2026-08-27, V0.3.X line, third entry). THE RELEASE GATE COVERS
+> `native_codegen` AND WAS NEVER RUN; THE INTERPROCEDURAL RESIDUAL IS MEASURED AND EMPTY.**
+>
+> The second entry's claim that the gate does not cover this subproject is **false**.
+> `scripts/release-gate.sh` runs format, lint with warnings denied, tests and `cargo doc -D warnings`
+> over `native_codegen/`, conditional on an LLVM install that is present here. **The gate was simply
+> never run**, and running it found a real `cargo doc` failure invisible to both test and clippy.
+> Separately, the interprocedural residual of the composite slot-reuse obligation is now measured
+> rather than merely named: over 14 loop-constructing chunks the crude figures are 0 by call and 2 by
+> return, and both return candidates are ruled out by a scalar boundary, giving a **refined residual
+> of zero**. It is deliberately not refused, because the refusal would rest on three stacked
+> over-approximations with no instance to justify it and the class sits behind the `Stream` refusal;
+> the census asserts zero so an instance fails loudly. Absorptions 18 and 19 are complete.
+> See [`../decisions/YIELD_ESCAPE_REFUSAL.md`](../decisions/YIELD_ESCAPE_REFUSAL.md).
+
 > **Currency note (2026-08-27, V0.3.X line, second entry). THE REASON THE SLOT-REUSE DEFECT STAYED
 > QUIET WAS NOT THE RECORDED ONE, AND THE SHAPE IS NOW REFUSED.**
 >
