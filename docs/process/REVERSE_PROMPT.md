@@ -128,6 +128,13 @@ soundness item: **the yield-escape refusal is still shadowed**, because the esca
 refused — now asserted by a test rather than inferred. One gap named and not fixed: a tail-yielded
 composite lowers and nothing in the tree executes it.
 
+**I cannot push, and I want you to know that rather than discover it.** The pre-push gate runs the
+workspace suite, the workspace suite is red, so `v0.3.0` is **5 commits ahead of origin with
+everything committed and nothing published**. I did not use `--no-verify`: the gate is correct that
+the suite is red, and bypassing it would publish a branch its own gate rejects and set the precedent
+that a red attributed to someone else is one worth skipping. If `keleusma-02` has not acted by the
+next resume, this is yours to rule on.
+
 **The workspace suite is red, and it is not a defect in either line.** Absorption 24 brought a test of
 yours whose pinned set of unexercised op tags is branch-dependent. On this branch the residue is
 smaller than the pin, which its own message calls a coverage gain, and the cause is one of this line's
