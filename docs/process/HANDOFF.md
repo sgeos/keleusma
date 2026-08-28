@@ -5,16 +5,38 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-08-27 (session 55 CLOSE) against `51d512c8`, WHICH IS `origin/v0.2.3` ITSELF.**
-> Not a branch head this time. Every pinned value below was DERIVED on that tree at close, not
-> recalled. **THIS FILE HAS GONE STALE WITHIN HOURS SIX TIMES**; if the dates here disagree with the
-> three channels, trust the channels.
+> **REFRESHED 2026-08-28 (session 56) against `93e66b24`, WHICH IS `origin/v0.2.3` ITSELF.**
+> Not a branch head. Every pinned value below was DERIVED on that tree, not recalled, and the
+> whole check block was executed against it: **37 test-count pins, all matching.**
+> **THIS FILE HAS GONE STALE WITHIN HOURS SIX TIMES**; if the dates here disagree with the three
+> channels, trust the channels.
 >
-> **NO PULL REQUEST IS OPEN.** Eight merged today, each at 22 of 22 green.
+> **NO PULL REQUEST IS OPEN.** Five merged in session 56, each at 22 of 22 green.
 >
-> **AS OF `51d512c8`: 157 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive it:
-> `git log --oneline origin/v0.2.3 | grep -c 'Merge pull request'`. **NOTE THE REF** -- the local
-> `v0.2.3` lags and answers a smaller number for the same tree.
+> **AS OF `93e66b24`: 162 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive
+> it: `git log --oneline origin/v0.2.3 | grep -c 'Merge pull request'`. **NOTE THE REF** -- the
+> local `v0.2.3` lags and answers a smaller number for the same tree.
+>
+> ## THE ONE MISTAKE SESSION 56 MADE THREE TIMES. READ THIS BEFORE SIZING ANY SLICE.
+>
+> **I REASONED FROM A COMPONENT'S INTERNALS ABOUT WHAT CROSSES ITS BOUNDARY, AND WAS WRONG EVERY
+> TIME.** Twice I read `parse.kel`'s data structures, concluded the host could not see something,
+> and sized a large increment; **the record stream already carried it** and both slices needed no
+> stage change at all. Once I inspected a function's constructs to explain a refusal and named
+> three plausible culprits; **declaration order was the cause** and none of the three mentioned it.
+>
+> **"THE DRIVER DISCARDS X" AND "X IS UNREACHABLE" ARE DIFFERENT CLAIMS, AND THE FIRST IS EVIDENCE
+> FOR NEITHER DIRECTION.**
+>
+> **The instruments, both public and both cheap:** `parse_record_trace` reads the record stream
+> from outside the driver and settles in minutes what reading the stage gets wrong; and for a
+> refusal, bisect against the REAL file with a CONTROL that is known to pass. Guessing lost 3 of 3
+> this session; bisection with a control won.
+>
+> **THE OP-TAG RESIDUE IS FOUR, NOT SIXTEEN.** The stage corpus misses sixteen tags; the fifteen
+> shipped examples cover twelve of them. What neither reaches is `addop`, `subop`, `mulop`,
+> `checkedneg` -- byte arithmetic and unary negation. The per-construct tests are a THIRD
+> population and remain unmeasured, and the tree says so rather than rounding the claim up.
 >
 > **THE TWELFTH STAGE DOES NOT SELF-COMPILE, AND THE REASON IS NOW IN THE TREE.**
 > `verify_types.kel` is refused at `ty_direct`, which reads the `tyb` block **thirty lines before
@@ -137,7 +159,7 @@ grep -c '^\s*#\[test\]' tests/radix_literals.rs               # 5
 grep -c '^\s*#\[test\]' tests/call_chunk_index_limit.rs      # 5
 grep -c '^\s*#\[test\]' tests/wire_self_compile_status.rs    # 3
 # THE OP-TAG TABLES, session 56. Closes a finding the `v0.3.0` line could not close.
-grep -c '^\s*#\[test\]' tests/op_tag_tables.rs                # 6
+grep -c '^\s*#\[test\]' tests/op_tag_tables.rs                # 7
 # THE TWELFTH STAGE'S EXCLUSION, session 56. Explains why the corpus is 11 of 12.
 grep -c '^\s*#\[test\]' tests/forward_data_reference.rs       # 4
 
@@ -259,9 +281,8 @@ gh run list --branch v0.2.3 --limit 1
 
 ## WHAT A RESUMING SESSION SHOULD DO FIRST
 
-**ONE. THERE IS NO BLOCKER AND NO OPEN PULL REQUEST.** For the first time in several sessions the
-tree is quiet: `origin/v0.2.3` at `51d512c8`, 157 merges, nothing in flight. **Do not invent
-urgency.**
+**ONE. THERE IS NO BLOCKER AND NO OPEN PULL REQUEST.** `origin/v0.2.3` at `93e66b24`, 162 merges,
+nothing in flight. **Do not invent urgency.**
 
 **TWO. THE NEXT SLICE IS THE FOURTH TYPE-CHANNEL EXTRACTION**, `occurrence_rows`, leaving
 `expression_nodes_and_derived` (142 lines, behind its thin wrapper) for last despite it being the

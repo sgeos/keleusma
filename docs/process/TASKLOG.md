@@ -10,6 +10,24 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-28, session 56, fifth increment). THE OP-TAG RESIDUE NARROWS FROM
+> SIXTEEN TO FOUR.**
+>
+> The first census reported sixteen tags the eleven-stage byte-identity corpus cannot check, and
+> said the per-construct tests were a different population it did not measure. **The SHIPPED
+> EXAMPLES cover twelve of the sixteen** -- the whole composite family, which the stages never
+> touch because they construct no struct, tuple or enum value.
+>
+> **FOUR REMAIN AND THEY HAVE A SHAPE**: `addop`, `subop`, `mulop`, `checkedneg` -- the unchecked
+> arithmetic `Byte` operands take through promote-operate-truncate, plus unary negation. The
+> characterisation is CHECKED by two probes inside the test, not asserted in prose, because this
+> project has called an unwitnessed opcode unreachable before and been wrong.
+>
+> **A refusal is reported, not skipped**: if the reference cannot compile a shipped example the
+> census fails naming it, rather than describing a smaller population than it claims.
+>
+> **The per-construct tests remain a third population and remain unmeasured**, and the tree says so.
+
 > **Currency note (2026-08-28, session 56, fourth increment). THE TWELFTH STAGE DOES NOT
 > SELF-COMPILE, AND THE TREE NOW SAYS WHY.**
 >
