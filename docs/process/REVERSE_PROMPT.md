@@ -10,81 +10,75 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-27 (session 55 CLOSE) — `wire.kel` is byte-identical, the corpus is eleven
-stages, and nothing is open
+**Date**: 2026-08-28 (session 56) — an inbound finding closed by measurement, and sixteen op tags
+the self-hosting oracle cannot see
 
 ## NOTHING IS WAITING ON YOU EXCEPT THE RULING YOU ALREADY HAVE
 
-`origin/v0.2.3` is at `51d512c8`, **157 merges**, **no open pull request**. Eight merged today,
-each at 22 of 22 green. Publication remains held.
-
 **The floating-point entry ABI is still the last of your eight rulings unimplemented**, with the
-`v0.3.0` line's `Fixed` shared-slot SCALE question attached. **It is theirs to bring you and I
-have not acted on it.**
+`v0.3.0` line's `Fixed` shared-slot SCALE question attached. **It is theirs to bring you and I have
+not acted on it.** Their own record now says the recommendation *splits* on a question you have not
+answered — whether the fixed-point format must interoperate across object files from different
+languages. Publication remains held.
 
-## The milestone
+## What this increment did
 
-**`wire.kel` self-compiles byte-identically** — 486 chunks, **125,540 bytes on both sides, zero
-chunks differing.** The largest stage in the corpus, and the last one outside the byte-identity
-oracle, is in it. Ten stages become eleven.
+The `v0.3.0` line handed this line a finding they could not close: the self-hosted codegen stage's
+63 op tags and the driver's decoder are two hand-maintained tables of the same numbers, and their
+only guard asserts that decoding does not panic. **A transposition passed it.** It was unrecorded
+here.
 
-That sentence was **invented on this line once** and reached a doc comment, a pull-request body
-and all three channels while the compile still panicked. It is now a test's output.
+**The tables agree.** That is now a measurement rather than an inference from a comment claiming
+they are kept in lockstep.
 
-## Four causes, and I first diagnosed two of them wrongly
+## Three things worth your attention
 
-| recorded cause | verdict |
-|---|---|
-| a capacity bound, read off the `1024` in an index message | **wrong** |
-| the lexer having no hexadecimal or binary literal support | correct |
-| a cap of 256 on the declaration count | **wrong** |
-| a `Call` record whose chunk field overflowed at index 256 | correct |
-| `forin_count` not reset between functions | correct |
+**ONE. THERE WERE THREE TABLES, NOT TWO.** The third is the copy of the decoder inside
+`tests/selfhost_codegen.rs` — the one the differential oracle actually runs — which the shipping
+decoder's own comment names as its source and claims to be in lockstep with. Nothing checked that.
+It is the same pairing that produced five defects from one cause in August, and a drift there
+would corrupt the oracle rather than the product.
 
-Both wrong readings took **a number in a message for a cause**. The nearer miss had the right
-number attached to the wrong quantity.
+**TWO. SIXTEEN OF THE SIXTY-THREE TAGS ARE INVISIBLE TO THE BYTE-IDENTITY ORACLE.** No stage source
+emits them — the whole composite family, the unchecked arithmetic, and `checkedneg` — so a
+transposition among them produces no byte difference to detect. They are named in the test rather
+than counted, because the names are where such a defect would hide.
 
-**The tally is stark and it is now guidance rather than history: guessing failed seventeen times
-across those four causes; prefix bisection succeeded three out of three.**
+**I have scoped that claim deliberately and want the scope read.** It is the eleven-stage corpus.
+The per-construct tests do compile struct constructions, array indexing, enum payloads and tuple
+fields through the self-hosted compiler, so these are **not** "unchecked" — they are "invisible to
+the self-hosting oracle", which is a narrower and true statement.
 
-## What else landed
+**THREE. ONLY ONE OF THE FOUR NEW GUARDS CATCHES THE DEFECT THE FINDING NAMED**, and mutation
+testing is what established that rather than reasoning. A one-sided swap leaves the table a
+bijection and leaves the two decoders agreeing with each other. The guard that sees it compares
+each tag's NAME to the operation its number decodes to — a fourth hand-written table, which is a
+hazard, and which earns its place only because it derives names from names where the others derive
+numbers from numbers.
 
-**Order 1 item 3 moved from one of five extractions to two of five.** The count is derived by a
-test, never restated — because a hand-written count is a second definition that goes stale, which
-is exactly how this handoff came to assert an already-closed gap was open.
+## What went wrong, since that is the more useful half
 
-**The citation guard now scans the documents that make current claims.** It had never scanned the
-handoff, which had carried a false claim for at least a session. It does **not** scan the
-append-only documents, and that scope was measured rather than assumed: guarding them would have
-needed a sixty-entry excuse list on the first run.
+**The citation guard caught me inside ten minutes.** I renamed the census test for scope precision
+and left the module header naming the old one. Fourth occurrence of that class here, and the
+shortest interval yet between creating a stale citation and having it reported. The guard added
+last session is now paying for itself against its own author.
 
-**The proof line's branch merged**, `#303`, merge commit `8414a1a1`, documentation only.
+**My first extractor would have compared two different populations.** A naive line pattern reports
+63 decoder arms on one side and 111 on the other, the excess being arms of nested matches that look
+identical by line shape. I checked the instrument before trusting the reading, which this line has
+now had to do three times.
 
-## The one thing I want to flag about that merge
+## One observation, attributed rather than assumed
 
-**The peer stated that you had authorized acceptance. I did not act on that**, and could not — a
-peer cannot supply your approval. It merged on my own standing authorization for a green pull
-request, plus this line's own recorded arrangement, plus my own verification that the merged proof
-is **byte-unchanged** from the audited commit. The peer accepted the correction without
-qualification.
-
-They also said an earlier message from this line had told them acceptance was authorized. **I
-cannot verify that.** The closest thing in our mailbox is the opposite — this line telling them a
-relayed ruling is not authorization it can act on. If such a message existed it was never
-persisted, and I am not treating it as fact.
-
-## What almost every defect this session had in common
-
-**They were in my verification, not in the code.** I derived a family of three that was four and
-one of seven that was 26. I wrote guards that could not fire, one that flagged itself, and one
-that reported four filenames as dangling citations. Two mutation attempts silently failed to
-COMPILE, which looks exactly like a guard not firing. Twice a local gate covered the feature the
-work was about and missed the feature sets that lack it.
-
-**Every one surfaced by running something. None by reading.**
+`cargo clippy --tests --no-default-features -- -D warnings` fails with seven diagnostics. It fails
+**identically on a clean `v0.2.3`** — established by stashing and re-running, not inferred — so it
+is pre-existing and no part of this work. That combination is not one continuous integration runs.
+Recorded as a fact about the tree, not as a claim that something is broken, and not fixed here
+because it is outside what this increment was about.
 
 ## What I would take up next
 
-The third type-channel extraction. `field_sets` at 80 lines or `occurrence_rows` at 100; leave
-`expression_nodes_and_derived` at 142 for last despite the capability argument favouring it. The
-pattern is established and written into the handoff so it is not rediscovered.
+The third type-channel extraction, which is Order 1 item 3 and the roadmap-advancing work.
+`field_sets` at 80 lines or `occurrence_rows` at 100; leave `expression_nodes_and_derived` at 142
+for last despite the capability argument favouring it. The pattern is established by the two slices
+that already moved and is written into the handoff so it is not rediscovered.
