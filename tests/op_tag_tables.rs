@@ -623,10 +623,36 @@ const EXPECTED_UNEXERCISED: &[&str] = &[
 /// per-construct tests are "a different population, this test does not measure it". **That
 /// caveat was honest and it left the interesting question open.**
 ///
-/// This measures the SHIPPED EXAMPLE corpus — `examples/scripts/*.kel`, the programs a user
-/// actually reads — and reports which tags neither corpus exercises. It is still not the
-/// per-construct population, and this does not claim to be: it is a second real corpus, and
-/// naming what BOTH of them miss is worth more than naming what one misses.
+/// This measures the SHIPPED EXAMPLE corpus — the programs a user actually reads — and reports
+/// which tags neither corpus exercises. It is still not the per-construct population, and this
+/// does not claim to be: it is a second real corpus, and naming what BOTH of them miss is worth
+/// more than naming what one misses.
+///
+/// # THE POPULATION IS NAMED, NOT DISCOVERED, AND THAT IS A CORRECTION
+///
+/// A first revision scanned `examples/scripts` for every `*.kel`. **That made the expectation
+/// branch-dependent.** The `v0.3.0` line carries six further witness programs, one of which does
+/// `Byte` arithmetic in `byte_mix`, so on that branch the residue is `checkedneg` ALONE and the
+/// pinned set was wrong — wrong in the direction this test's own message calls "a coverage gain".
+/// Its `-prod` lowers to `Op::Neg`, which is not one of the sixty-three stage tags, which is why
+/// `checkedneg` survives there.
+///
+/// **Reported by the `v0.3.0` line, who declined to edit it.** They hold `src/` and `tests/`
+/// byte-identical to `v0.2.3` as an invariant and said that editing another line's test would
+/// destroy the property making their ownership checks meaningful. That was the right call, and
+/// the defect is mine: **the test's INPUT lived outside the region its expectation was pinned
+/// in.** A directory scan is not a corpus; it is whatever the branch happens to contain.
+///
+/// The population is now the fifteen programs in `CENSUS_EXAMPLES`, which exist on both lines, so
+/// the exact-set assertion keeps BOTH directions — a tag leaving means a gain, a tag joining
+/// means a corpus lost reach — without depending on which branch runs it. Verified by adding the
+/// six `v0.3.0` witnesses to this tree and re-running: it passes with twenty-one examples present
+/// exactly as with fifteen.
+///
+/// **What that trade gives up, said plainly:** a NEW shipped example is no longer folded into the
+/// census automatically, so a program that would narrow the residue does not narrow this number
+/// until someone names it. That is the price of the expectation and its input living in the same
+/// file, and it is the right way round — a census whose population moves under it is not a census.
 ///
 /// # The number is derived and the residue is named
 ///
@@ -638,127 +664,138 @@ const EXPECTED_UNEXERCISED: &[&str] = &[
 fn the_shipped_examples_narrow_the_unexercised_tags_and_the_residue_is_named() {
     use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/scripts");
-    let mut sources: Vec<(String, String)> = std::fs::read_dir(dir)
-        .expect("the shipped example directory")
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "kel"))
-        .map(|p| {
-            let name = p.file_name().unwrap().to_string_lossy().into_owned();
-            (
-                name,
-                std::fs::read_to_string(&p).expect("read a shipped example"),
-            )
-        })
-        .collect();
-    sources.sort();
-
-    // NON-VACUITY, AND IT IS THE FIRST THING THAT WOULD BREAK. A directory read that returns
-    // nothing makes every conclusion below vacuously true.
-    assert!(
-        sources.len() >= 12,
-        "only {} shipped examples were found; the census below would be measuring almost \
-         nothing",
-        sources.len()
-    );
-
-    let mut present = BTreeSet::new();
-    let mut refused: Vec<String> = Vec::new();
-    for (name, src) in &sources {
-        let compiled = tokenize(src)
-            .ok()
-            .and_then(|t| parse(&t).ok())
-            .and_then(|a| compile(&a).ok());
-        match compiled {
-            Some(module) => {
-                for chunk in &module.chunks {
-                    for op in &chunk.ops {
-                        present.insert(
-                            format!("{op:?}")
-                                .chars()
-                                .take_while(|c| c.is_alphanumeric())
-                                .collect::<String>(),
-                        );
-                    }
-                }
-            }
-            // A refusal is REPORTED rather than skipped. Silently dropping an input that would
-            // not compile is how a census comes to describe a smaller population than it claims.
-            None => refused.push(name.clone()),
-        }
-    }
-    assert!(
-        refused.is_empty(),
-        "the reference compiler refused shipped examples, so this census covers fewer programs \
-         than it names: {refused:?}. Either the examples are broken or the feature set this \
-         test runs under cannot compile them; both need saying rather than skipping."
-    );
-
+    let dir = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/scripts"));
     let table = stage_tag_table();
     let arms = decoder_arms(DRIVER);
-    let still_unexercised: BTreeSet<&str> = EXPECTED_UNEXERCISED
-        .iter()
-        .copied()
-        .filter(|name| {
-            let tag = table
-                .get(*name)
-                .expect("every expected name is a stage tag");
-            let variant = arm_variant(arms.get(tag).expect("an arm for every tag"));
-            !present.contains(&variant)
-        })
-        .collect();
 
+    // The operations a set of example files exercises. A refusal is REPORTED rather than skipped:
+    // silently dropping an input that would not compile is how a census comes to describe a
+    // smaller population than it claims.
+    let ops_present = |files: &[String]| -> BTreeSet<String> {
+        let mut present = BTreeSet::new();
+        let mut refused: Vec<String> = Vec::new();
+        for name in files {
+            let src = std::fs::read_to_string(dir.join(name))
+                .unwrap_or_else(|e| panic!("read the shipped example `{name}`: {e}"));
+            match tokenize(&src)
+                .ok()
+                .and_then(|t| parse(&t).ok())
+                .and_then(|a| compile(&a).ok())
+            {
+                Some(module) => {
+                    for chunk in &module.chunks {
+                        for op in &chunk.ops {
+                            present.insert(
+                                format!("{op:?}")
+                                    .chars()
+                                    .take_while(|c| c.is_alphanumeric())
+                                    .collect::<String>(),
+                            );
+                        }
+                    }
+                }
+                None => refused.push(name.clone()),
+            }
+        }
+        assert!(
+            refused.is_empty(),
+            "the reference compiler refused shipped examples, so this census covers fewer \
+             programs than it names: {refused:?}. Either the examples are broken or the feature \
+             set this test runs under cannot compile them; both need saying rather than skipping."
+        );
+        present
+    };
+
+    let residue = |present: &BTreeSet<String>| -> BTreeSet<&'static str> {
+        EXPECTED_UNEXERCISED
+            .iter()
+            .copied()
+            .filter(|name| {
+                let tag = table
+                    .get(*name)
+                    .expect("every expected name is a stage tag");
+                let variant = arm_variant(arms.get(tag).expect("an arm for every tag"));
+                !present.contains(&variant)
+            })
+            .collect()
+    };
+
+    // EXISTENCE AND NON-VACUITY. Every named program must be present; a rename or a deletion
+    // fails loudly rather than quietly shrinking the population the conclusion describes.
+    let missing: Vec<&&str> = CENSUS_EXAMPLES
+        .iter()
+        .filter(|n| !dir.join(n).exists())
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "shipped examples this census names are absent: {missing:?}"
+    );
+    assert!(
+        CENSUS_EXAMPLES.len() >= 12,
+        "only {} examples are named, so the census measures almost nothing",
+        CENSUS_EXAMPLES.len()
+    );
+
+    let named: Vec<String> = CENSUS_EXAMPLES.iter().map(|s| (*s).to_string()).collect();
+    let still_unexercised = residue(&ops_present(&named));
     assert_eq!(
         still_unexercised,
         SHIPPED_EXAMPLES_ALSO_MISS.iter().copied().collect(),
-        "the set of op tags that NEITHER the stage corpus NOR the shipped examples exercise has \
-         moved. Fewer is a coverage gain and worth recording; more means a corpus lost reach."
+        "the set of op tags that NEITHER the stage corpus NOR the NAMED shipped examples \
+         exercise has moved. Fewer is a coverage gain and worth recording; more means a corpus \
+         lost reach."
     );
 
     // The claim only means something if the second corpus actually covered some of them.
     assert!(
         still_unexercised.len() < EXPECTED_UNEXERCISED.len(),
-        "the shipped examples narrowed nothing, so this second population adds no information \
+        "the named examples narrowed nothing, so this second population adds no information \
          and the test is asserting the first census twice"
     );
 
-    // THE CHARACTERISATION OF THE RESIDUE IS CHECKED, NOT ASSERTED IN PROSE. The constant above
-    // describes the four as byte arithmetic and unary negation. Two probes establish that these
-    // operations are reachable at all, so the residue is a CORPUS gap rather than dead tags --
-    // a distinction this project has got wrong before by calling an unwitnessed opcode
-    // unreachable.
-    let ops_of = |src: &str| -> BTreeSet<String> {
-        let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse"))
-            .expect("the reference must compile the witness");
-        module
-            .chunks
-            .iter()
-            .flat_map(|c| c.ops.iter())
-            .map(|op| {
-                format!("{op:?}")
-                    .chars()
-                    .take_while(|c| c.is_alphanumeric())
-                    .collect::<String>()
-            })
-            .collect()
-    };
-
-    let byte_ops = ops_of("fn f(a: Byte, b: Byte) -> Byte { a + b }\nfn main() -> Word { 0 }");
-    assert!(
-        byte_ops.contains("Add"),
-        "byte addition no longer lowers to the unchecked Add, so the constant's description of \
-         the residue is wrong: {byte_ops:?}"
-    );
-    let neg_ops = ops_of(
-        "fn f(a: Word) -> Word { 0 - a }\nfn g(b: Word) -> Word { -b }\nfn main() -> Word { 0 }",
-    );
-    assert!(
-        neg_ops.contains("CheckedNeg"),
-        "unary negation no longer lowers to CheckedNeg, so the constant's description of the \
-         residue is wrong: {neg_ops:?}"
-    );
+    // NO SECOND PASS OVER THE DIRECTORY, AND THE REASON IS THAT IT COULD NOT FIRE.
+    //
+    // A first attempt at this fix added a scan of whatever `.kel` files the directory holds and
+    // asserted their residue was a SUBSET of the named one, as a net that would survive a branch
+    // carrying extra examples. **It is unreachable.** Once the existence check above passes, the
+    // directory is a SUPERSET of the named files, so it exercises at least as many operations and
+    // its residue is a subset by construction. The assertion could never fail.
+    //
+    // The case it was meant to catch -- a named example modified to cover less -- is already
+    // caught, because the exact-set assertion above reads those same files.
+    //
+    // Recorded rather than silently dropped: a guard that cannot fire is the failure this file's
+    // own header describes, and writing one while fixing a different defect in the same test is
+    // exactly how they get in.
 }
+
+/// The shipped example programs this census covers, NAMED rather than discovered.
+///
+/// **A directory scan made the expectation branch-dependent**, which the `v0.3.0` line found and
+/// reported without editing this file. They carry six further witness programs, one of which does
+/// `Byte` arithmetic, so on that branch the residue is `checkedneg` alone and the pinned set below
+/// was wrong — wrong in the direction this test's own message calls "a coverage gain".
+///
+/// **The defect was mine and its shape is worth keeping**: the test's INPUT lived outside the
+/// region its expectation was pinned in. A directory scan is not a corpus; it is whatever the
+/// branch happens to contain.
+const CENSUS_EXAMPLES: &[&str] = &[
+    "01_arithmetic.kel",
+    "02_struct_field.kel",
+    "03_enum_match.kel",
+    "04_for_in.kel",
+    "05_pipeline.kel",
+    "06_multiheaded.kel",
+    "07_refinement.kel",
+    "08_method_dispatch.kel",
+    "09_big_numbers.kel",
+    "10_multbyte.kel",
+    "11_signed.kel",
+    "12_sensor_window.kel",
+    "13_telemetry_stream.kel",
+    "14_frame_log.kel",
+    "15_pixel_blend.kel",
+];
 
 /// Of the sixteen tags no stage source reaches, the four the shipped examples miss too.
 ///
