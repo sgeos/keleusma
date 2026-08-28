@@ -239,6 +239,24 @@ Current sprint source of truth.
 > **THREE CHECKS WRITTEN THIS SESSION COULD NOT FAIL**, each satisfied by a different part of a
 > document from the one it was about. Mutation caught all three; reading caught none.
 
+> **Currency note (2026-08-28, V0.3.X line, twelfth entry). 239 WAS A CARRIED NUMBER, AND WHAT MAKES
+> A CROSS-CHECK VALID IS NOW STATED.**
+>
+> The tree gave composite construction sites as **239** in `region.rs` and **256 in 35 chunks** in the
+> handoff; a count over 35 chunks cannot exceed a corpus-wide one. **239 has no producer** — the spike
+> its comment cited no longer reports it. Current, with the population attached: **256 sites across 35
+> chunks of the four-root corpus's 69 compiling modules**, agreed by two independent walks, the
+> planner's placements and a raw scan of the instruction stream.
+>
+> **That is what a cross-check is: different METHODS over the SAME population.** The corroboration
+> claimed two entries ago was the same method over different populations, which is not evidence, and
+> it was corrected. The equality also matters on its own, since every `Flat` construction must receive
+> exactly one placement and neither a dropped nor a duplicated site is visible to a differential. The
+> stale sentence's other half, "0 of them slot-homed", is **not re-derived and not restated** —
+> correcting a denominator does not license the numerator. Incidentally **69 modules** confirms the
+> previous entry's arithmetic by a third route. `native_codegen` **349/0/68** clean; censuses
+> unchanged at **61 of 66**, **1070 of 1074**, **89841 of 89940**.
+
 > **Currency note (2026-08-28, V0.3.X line, eleventh entry). THE SAME DEFECT A THIRD TIME, AND A
 > CORROBORATION THAT WAS NOT ONE.**
 >

@@ -277,6 +277,43 @@ two-segment form, which genuinely differs, and it fired with its own message.
 kinds is missing from its probes, and removing the structs makes it fail with that message. The
 previous slice learned this the hard way: a guard whose corpus lacks a construct is a guard for a
 different question.
+## 2026-08-28 — [v0.3.0] What makes a cross-check valid, learned by getting one wrong first
+
+**THE TREE CARRIED TWO NUMBERS FOR ONE QUANTITY.** Composite construction sites were **239** in
+`region.rs` and **256 in 35 chunks** in the handoff. A count over 35 chunks cannot exceed a
+corpus-wide count, so either the populations differed and neither said so, or one was wrong.
+
+**239 has no producer.** The spike its comment cited no longer reports that figure — it reports
+chunks returning and taking composites. It was carried, and it sat beside a different number long
+enough that neither looked suspicious. **Current, with the population attached: 256 sites across 35
+chunks of the four-root corpus's 69 compiling modules.**
+
+### The distinction the last two increments were circling
+
+**A cross-check is different METHODS over the SAME population.**
+
+The corroboration claimed two increments ago was the opposite — *the same method over different
+populations* — and that is not evidence at all. The one built here is the right shape: the planner's
+placements and a raw scan of the instruction stream are independent walks, and they agree at 256 over
+one named set.
+
+**The equality earns its place beyond bookkeeping.** Every `Flat` construction must receive exactly
+one placement, and **neither failure is visible to a differential**: a region that is too large is
+invisible, and a site never placed is refused rather than mispacked. So this is the only place the
+relation is checked at all.
+
+### What was not done, and why that is the honest half
+
+The stale sentence also claimed **"0 of them slot-homed"**. That half is **not re-derived and not
+restated as fact** — it needs its own walk, and asserting it on the strength of the sentence it came
+from would be the same error one level down. **Correcting a denominator does not license the
+numerator.**
+
+### An incidental third confirmation
+
+**69 modules** over four roots confirms last increment's arithmetic — 67 from the three-root loaders
+plus the two preludes — by a route that did not exist when that claim was made.
+
 ## 2026-08-28 — [v0.3.0] The same defect a third time, and a corroboration that was not one
 
 **THE GUARD BUILT LAST INCREMENT WATCHED A NARROWER POPULATION THAN THE FIGURES IT PROTECTS.** It

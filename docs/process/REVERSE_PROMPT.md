@@ -147,6 +147,22 @@ soundness item: **the yield-escape refusal is still shadowed**, because the esca
 refused — now asserted by a test rather than inferred. One gap named and not fixed: a tail-yielded
 composite lowers and nothing in the tree executes it.
 
+**I now have a clean statement of what a cross-check is, and I got there by building a bad one first.**
+The tree carried two numbers for one quantity — composite construction sites as 239 in one file and
+256 in another — and a count over 35 chunks cannot exceed a corpus-wide count. **239 turned out to
+have no producer**: the spike its comment cited no longer reports it. The current figure, with its
+population attached, is 256 sites across 35 chunks of the four-root corpus's 69 compiling modules.
+
+**A cross-check is different methods over the same population.** What I claimed two iterations ago was
+the same method over different populations, which is not evidence. The one built here is the right
+shape — the planner's placements and a raw scan of the instruction stream, independently agreeing at
+256 — and it earns its place beyond bookkeeping, because neither a dropped nor a duplicated placement
+is visible to a differential.
+
+**The half I did not do is the honest part**: that stale sentence also said "0 of them slot-homed",
+and I have not re-derived it, so I have not restated it. Correcting a denominator does not license the
+numerator.
+
 **The guard I built last time was itself too narrow, which makes three in a row.** It watched three
 source roots; the censuses that produce the figures read four, so seven files were read and unguarded.
 The same defect has now appeared at three granularities in three increments — a pin whose input was a

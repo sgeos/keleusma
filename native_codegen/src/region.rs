@@ -12,8 +12,24 @@
 //! That mirrors what `compiler.rs` already does for private composite data slots,
 //! which it describes as "linker-style fixed-address placement of program state".
 //! This is the same idea applied to temporaries, which is where the corpus's
-//! composites actually are: **0 of 239 construction sites are slot-homed and 239
-//! are temporaries** (`spike_composite_shape.rs`).
+//! composites actually are.
+//!
+//! # ⚠ THE FIGURE THIS PARAGRAPH CARRIED WAS STALE AND HAD NO PRODUCER
+//!
+//! The superseded text read: *"0 of 239 construction sites are slot-homed and 239
+//! are temporaries (`spike_composite_shape.rs`)"*. **That spike no longer reports
+//! a 239 at all** — it reports chunks returning and taking composites — so the
+//! number was carried rather than measured, and the handoff simultaneously quoted
+//! **256 in 35 chunks** without either saying which population it meant.
+//!
+//! **Current, with its population named: 256 sites across 35 chunks of the
+//! FOUR-ROOT corpus's 69 compiling modules**, agreed independently by the planner
+//! and by a raw scan of the instruction stream (`site_count_agreement.rs`). A
+//! three-root walk reports a different number about a different set.
+//!
+//! **The "0 slot-homed" half is NOT re-derived here and is not restated as
+//! fact.** It needs its own walk, and asserting it on the strength of the stale
+//! sentence it came from would be the same error one level down.
 //!
 //! # What it deliberately does not do
 //!
