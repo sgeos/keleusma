@@ -16,6 +16,16 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > `git log --oneline origin/v0.2.3 | grep -c 'Merge pull request'`. **NOTE THE REF** -- the local
 > `v0.2.3` lags and answers a smaller number for the same tree.
 >
+> **THE TWELFTH STAGE DOES NOT SELF-COMPILE, AND THE REASON IS NOW IN THE TREE.**
+> `verify_types.kel` is refused at `ty_direct`, which reads the `tyb` block **thirty lines before
+> `tyb` is declared**. The stage resolves `block.field` against a table it accumulates as it meets
+> each `data` block, so a forward reference resolves to nothing. Witness is four lines;
+> `tests/forward_data_reference.rs` carries it with a control and pins the corpus at eleven of
+> twelve with the missing one NAMED. **The repair is a two-pass restructuring of a single-pass
+> parser and was deliberately not attempted.** Three plausible hypotheses about `ty_direct`'s
+> nested `if` expression, its indexed reads and its loop ALL FAILED; declaration order is the
+> whole difference.
+>
 > **`wire.kel` SELF-COMPILES BYTE-IDENTICALLY.** 486 chunks, 125,540 bytes on both sides, zero
 > chunks differing. **THE BYTE-IDENTITY CORPUS IS ELEVEN STAGES**, up from ten, and the largest is
 > finally one of them. **This sentence was INVENTED on this line once**, and reached a doc comment, a
@@ -128,6 +138,8 @@ grep -c '^\s*#\[test\]' tests/call_chunk_index_limit.rs      # 5
 grep -c '^\s*#\[test\]' tests/wire_self_compile_status.rs    # 3
 # THE OP-TAG TABLES, session 56. Closes a finding the `v0.3.0` line could not close.
 grep -c '^\s*#\[test\]' tests/op_tag_tables.rs                # 6
+# THE TWELFTH STAGE'S EXCLUSION, session 56. Explains why the corpus is 11 of 12.
+grep -c '^\s*#\[test\]' tests/forward_data_reference.rs       # 4
 
 # THE BYTE-IDENTITY CORPUS IS ELEVEN STAGES. `wire.kel` joined 2026-08-27.
 grep -c 'fn self_host_compiles_.*_kel_byte_identically' tests/selfhost_codegen.rs   # 11
