@@ -117,6 +117,25 @@ That prerequisite is what this increment built, so the change is back rather tha
 stands from it**: lifting the two composite refusals needs a fixpoint over local widths, which is its
 own increment, and coverage is still 1070 of 1074.
 
+**Two things this iteration, and one of them is a red I am not going to fix.**
+
+**The stream frontier is tail position, not composites.** A single `yield` in tail position lowers —
+**including a yielded composite** — and everything else is refused: a yield followed by code, two
+yields, a yield inside an `if`, a yield inside a `for`. The pair that settles it is that a composite
+in tail position lowers while a plain `Word` with code after it does not, which refutes the natural
+guess that composites are what the telemetry stream cannot get past. Consequence for the open
+soundness item: **the yield-escape refusal is still shadowed**, because the escaping shape is still
+refused — now asserted by a test rather than inferred. One gap named and not fixed: a tail-yielded
+composite lowers and nothing in the tree executes it.
+
+**The workspace suite is red, and it is not a defect in either line.** Absorption 24 brought a test of
+yours whose pinned set of unexercised op tags is branch-dependent. On this branch the residue is
+smaller than the pin, which its own message calls a coverage gain, and the cause is one of this line's
+own witness scripts doing Byte arithmetic. **I did not touch it** — this line keeps `src/` and
+`tests/` byte-identical to `v0.2.3`, and the ownership check I run at every absorption asserts exactly
+that, so editing it would destroy the property those checks rest on. I reported it to `keleusma-02`
+with the cause. **I am not reporting the workspace suite as green.**
+
 **The opcodes whose lowering had never run are now each resolved to a status.** An arm that exists is
 not an arm that works, so I asked the four one at a time. Two float conversions are simply **refused**
 — one by name, the other unreached behind it. `IsStruct` has no producer I could find, and the

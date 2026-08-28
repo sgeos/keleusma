@@ -218,6 +218,27 @@ Current sprint source of truth.
 > **THREE CHECKS WRITTEN THIS SESSION COULD NOT FAIL**, each satisfied by a different part of a
 > document from the one it was about. Mutation caught all three; reading caught none.
 
+> **Currency note (2026-08-28, V0.3.X line, sixth entry). THE STREAM FRONTIER IS TAIL POSITION, AND
+> THE WORKSPACE SUITE IS RED FOR A REASON THAT IS NOT A DEFECT.**
+>
+> Measured over eight suspending shapes, none of them reference-rejected: **a single `yield` in tail
+> position lowers, including a yielded COMPOSITE**, and everything else is refused for `Stream` — a
+> yield followed by code, two yields, a yield in an `if`, a yield in a `for`. **A composite in tail
+> position lowers while a `Word` with code after it does not**, which refutes the obvious guess that
+> composites are what blocks `13_telemetry_stream.kel`. The **yield-escape refusal remains shadowed**,
+> now asserted rather than inferred. Named and not fixed: **a tail-yielded composite lowers and
+> nothing executes it**, the suspension differential's subjects all yielding `Word`.
+>
+> **KNOWN RED, OWNED BY THE `v0.2.3` LINE.** Absorption 24 brought
+> `tests/op_tag_tables.rs::the_shipped_examples_narrow_the_unexercised_tags_and_the_residue_is_named`,
+> whose pinned set is branch-dependent: on `v0.3.0` the residue is `{checkedneg}` where the pin says
+> four, which is *fewer* and which its own message calls a coverage gain. The cause is this line's
+> `opcode_witness.kel`, whose `byte_mix` does Byte arithmetic and so exercises the unchecked
+> Add/Sub/Mul. **This line will not edit it**, because `src/` and `tests/` are kept byte-identical to
+> `v0.2.3` and the ownership check asserts that. Reported to `keleusma-02`. `native_codegen`
+> **341/0/65** clean; workspace **2475 passed, 1 failed, 89 binaries**.
+> See [`../decisions/STREAM_FRONTIER_BRIEF.md`](../decisions/STREAM_FRONTIER_BRIEF.md).
+
 > **Currency note (2026-08-28, V0.3.X line, fifth entry). THE FOUR UNEXERCISED OPCODE ARMS ARE
 > RESOLVED, AND `Stream` IS NOT AS UNSUPPORTED AS THIS LINE HAD SAID.**
 >

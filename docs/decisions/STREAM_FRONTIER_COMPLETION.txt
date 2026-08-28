@@ -1,0 +1,54 @@
+COMPLETION CONDITION — the stream frontier
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, by any route, on any branch. Judge only the end state of the tree.
+
+1. THE FRONTIER IS MAPPED BY RUNNING CODE
+   An executable check in the tree reports, over a set of deliberately varied
+   suspending programs, which ones the backend lowers and which it refuses, with
+   the refusal text the backend itself produces. The set varies more than one
+   property, so the boundary can be attributed rather than guessed.
+
+2. STAGES ARE DISTINGUISHED
+   A program the reference implementation rejects is reported as such and is not
+   counted as a backend refusal. The distinction is visible in the output.
+
+3. LOWERING IS NOT REPORTED AS WORKING
+   Any shape described as supported has been executed and compared against the
+   reference, not merely lowered without refusal. Shapes that lower but are not
+   executed are described that way.
+
+4. NOTHING IS ENABLED TO IMPROVE THE PICTURE
+   No opt-in flag is turned on to make more shapes lower. If a flag would change
+   the answer, the tree says so and reports the default separately.
+
+5. THE CONSEQUENCE FOR THE OPEN SOUNDNESS ITEM IS STATED
+   The tree states, on the evidence gathered, whether the refusal that guards a
+   yielded loop-body composite is still shadowed, and what would lift the shadow.
+   An unchanged conclusion is acceptable; an unexamined one is not.
+
+6. NO GUARD IS TRUSTED WITHOUT EVIDENCE IT CAN FIRE
+   Every check added is exercised by at least one case it reports positively and
+   one closely related case it reports negatively.
+
+7. FIGURES ARE RE-DERIVED
+   Opcode and corpus coverage figures are re-measured and stated whether or not
+   they moved, and nothing is described as changed that has not.
+
+8. THE GATE, NOT JUST THE TESTS
+   The tree records a run of the project's verification gate, or of the
+   subproject step it contains, showing formatting, lint with warnings denied,
+   tests, and the documentation build all clean. Test results give both the
+   runner's exit status and the summed pass, fail and binary counts, and the two
+   agree. A run that ended early is not reported as a result.
+
+9. CLAIMS MATCH THE TREE
+   No document asserts a figure, blocker, or cause the tree contradicts, and any
+   earlier description of stream support that this work contradicts is visibly
+   corrected rather than silently replaced.
+
+10. WORK IS INTEGRATED AND CLEAN
+    No uncommitted changes remain and the local branch agrees with its remote.
+    Files owned by the v0.2.3 line are unmodified: src/verify.rs,
+    src/bytecode.rs, src/vm.rs, src/wire_schema.rs, src/selfhost/,
+    src/confine.rs, and the CI workflow directory.

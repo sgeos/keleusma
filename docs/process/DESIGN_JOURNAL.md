@@ -153,6 +153,70 @@ two-segment form, which genuinely differs, and it fired with its own message.
 kinds is missing from its probes, and removing the structs makes it fail with that message. The
 previous slice learned this the hard way: a guard whose corpus lacks a construct is a guard for a
 different question.
+## 2026-08-28 — [v0.3.0] The stream frontier is tail position, not composites
+
+**BOTH OF THIS LINE'S EARLIER DESCRIPTIONS OF STREAM SUPPORT WERE WRONG, AND SO WAS THE GUESS THAT
+REPLACED THEM.** `Stream` was called unsupported outright; then, when a minimal `loop main` was found
+to lower, the natural next guess was that **composites** are what `13_telemetry_stream.kel` cannot get
+past, since composites are what it yields. **Measured, that is false.**
+
+| shape | result |
+|---|---|
+| yield in tail position | **LOWERS** |
+| **yield a composite, tail** | **LOWERS** |
+| yield calling a function | **LOWERS** |
+| yield then more code | REFUSED — `Stream` |
+| two yields in sequence | REFUSED — `Stream` |
+| yield inside an `if` | REFUSED — `Stream` |
+| yield inside a `for` | REFUSED — `Stream` |
+| yield a composite inside a `for` | REFUSED — `Stream` |
+
+**The discriminator is TAIL POSITION.** A composite yielded in tail position lowers; a `Word` yielded
+with code after it does not. That one pair separates the two candidate explanations, and it is the
+pair the matrix exists to contain. It also rules out "exactly one yield": *yield then more code* has
+exactly one and is refused.
+
+**Zero of the eight shapes were rejected by the reference**, so every row is a statement about the
+backend rather than about the language.
+
+### What it means for the open soundness item
+
+The yield-escape refusal guards a loop-body composite handed to the host. **The shape that would
+trigger it — a composite yielded inside a `for` — is still refused for `Stream`.** So the refusal
+remains **shadowed**: a precaution, not yet load-bearing. That is now asserted by a test that fails
+the day it stops being true, rather than being an inference from an unrelated corpus figure.
+
+### A shape that lowers with nothing executing it
+
+**`yield a composite, tail` lowers, and nothing in the tree runs it.** The suspension differential's
+subjects all yield `Word` — measured, zero composite-yielding subjects — so a composite crossing the
+yield boundary is marshalled by code no test has executed.
+
+This is **not** the cross-iteration hazard: a tail-yielded composite is built once and no later
+iteration overwrites it. It is plain untested lowering, the same class this line has been closing
+elsewhere, and it is **named rather than fixed** because a witness needs a suspension harness that
+drives composite yields and the existing one does not.
+
+### The method that keeps working
+
+Vary more than one property, and include the pair that separates the explanations. A matrix of
+composite-versus-`Word` alone would have shown composites failing and concluded the wrong thing; the
+tail-position axis is what made the answer attributable. **Guessing was free here only because the
+guess was written down before the measurement.**
+
+### And the workspace suite went red, for a reason neither line can call a defect
+
+Absorption 24 brought in `op_tag_tables.rs`, whose pinned set of unexercised op tags **is
+branch-dependent**. On `v0.3.0` the residue is `{checkedneg}` where the pin says four — *fewer*, which
+the assertion's own message calls a coverage gain. The cause is this line's own
+`opcode_witness.kel`: its `byte_mix` does **Byte** arithmetic, which lowers to the unchecked
+Add/Sub/Mul, and its `-prod` is `Neg` rather than `CheckedNeg`.
+
+**This line will not fix it.** `src/` and `tests/` are kept byte-identical to `v0.2.3`, and the
+ownership check run at every absorption asserts that; editing their test would destroy the property
+those checks rest on. Reported to `keleusma-02` with the cause, and recorded here as a known red with
+its owner named — **not as a green suite, and not as a backend defect.**
+
 ## 2026-08-28 — [v0.3.0] "Unproven" meant unproven from the corpus, and two of the four are simply refused
 
 **AN ARM THAT HAS NEVER RUN IS WHERE A MISCOMPILE HIDES**, so the four opcodes the census records as
