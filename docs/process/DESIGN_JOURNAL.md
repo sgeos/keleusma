@@ -13,6 +13,41 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-28 — A finding I handed over came back sharper, and is now a check
+
+**I TOLD THE `v0.3.0` LINE THAT `Op::Neg` HAS NO STAGE TAG AND "MAY MATTER" TO THEIR LOWERING
+CENSUS. THEY CHECKED AND IT DOES NOT**, because that census counts what the BACKEND can lower over
+the corpus it has, and `Neg` has a lowering arm their `byte_mix` reaches. **I was reasoning about
+the self-hosted SUBSET and labelled it with their census's name.** Two different populations,
+conflated, and their saying so plainly rather than nodding was worth more than agreement.
+
+**AND THEIR SHARPENING OF MY OWN FINDING IS THE BETTER STATEMENT.** Verified in this tree rather
+than accepted: `codegen.kel`'s `push_neg` emits `wire.checkedneg`, and the driver has **zero**
+decoder arms producing `Op::Neg`. So `Neg` is not merely untagged — **the self-hosted compiler
+cannot emit it from any source**, which is a property of the subset rather than of any corpus.
+
+**RECORDED AS A CHECK, NOT AS PROSE**, because it is exactly the kind of claim that goes stale
+silently. The test asserts three things, and two of them alone would mislead:
+
+| | why it is there |
+|---|---|
+| the REFERENCE emits `Neg` for byte negation | without it the claim reads as "a dead opcode", and this project has called an unwitnessed opcode unreachable and been wrong |
+| the stage emits `checkedneg` for the same construct | this is the mechanism |
+| no decoder arm produces `Neg` | nothing the stage emits could decode to it either |
+
+It also says what it does NOT say: nothing about a native backend's lowering. The earlier version
+of that note conflated the two populations and the correction is recorded rather than edited away.
+
+**MUTATION-TESTED WITH THE CHANGE IT ACTUALLY WATCHES FOR** — decoding tag 23 to the unchecked
+`Neg` — and it fires with the message that this is a SUBSET WIDENING, a gain to be recorded, not a
+regression.
+
+**THE EXCHANGE IS THE POINT.** They reported a red of mine with a named cause and declined to fix
+it; I verified rather than accepted and found the defect was mine; they corrected my framing of my
+own finding; I verified their correction rather than accepting that either. **Four claims crossed
+the line and every one was checked by its recipient before being acted on.** Nothing here needed
+either operator.
+
 ## 2026-08-28 — A census whose population moved under it, reported by the other line
 
 **THE `v0.3.0` LINE REPORTED ONE OF MY TESTS RED ON THEIR BRANCH, WITH THE CAUSE ESTABLISHED AND
