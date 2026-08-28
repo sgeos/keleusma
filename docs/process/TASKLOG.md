@@ -10,6 +10,30 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-28, session 56, third increment). THE DECLARED HALF OF THE FOURTH
+> EXTRACTION, AND A GAP LOCATED PRECISELY.**
+>
+> `declared_names_from_pipeline` covers functions, `data` blocks, enums and structs from the
+> pipeline, with **no driver change at all** -- every table already existed. It is deliberately NOT
+> named after `occurrence_rows`, so `the_moved_extraction_count_is_three_of_five` keeps reporting
+> three. A partial migration counted as a whole one is the failure that pin exists to prevent.
+>
+> **THE SAME PREDICTION ERROR, TWICE, MEASURED THIS TIME BEFORE ACTING.** The handoff said to expect
+> `occurrence_rows` harder because "two of its four declaration kinds are skipped by the driver".
+> Traced with `parse_record_trace`, every declaration kind is on the wire. **"The driver discards X"
+> and "X is unreachable" are different claims.** Corrected in the handoff as guidance.
+>
+> **A REAL GAP: THE STAGE CANNOT SEE A WILDCARD IMPORT.** `use play` and `use host::*` emit the same
+> record shape, and the reference calls one a named import and the other a wildcard contributing no
+> name. `use` is therefore excluded from the declared set, the exclusion is stated where the function
+> is defined, and a pin fires in the FAILING direction if the gap ever closes.
+>
+> **A MUTATION HARNESS THAT SILENTLY RAN NOTHING.** The first run reported zero compile errors for
+> three mutants and printed no test results: the command variable was escaped inside a quoted
+> heredoc, so the invocation was a literal string. **Zero errors from a command that never ran looks
+> exactly like a clean mutant.** Re-run properly, two of three fired and the third revealed that
+> intern ids are positional, so carrying them adds no discrimination.
+
 > **Currency note (2026-08-28, session 56, second increment). ORDER 1 ITEM 3 IS AT THREE OF FIVE.**
 >
 > `field_sets` joins `binding_rows` and `decl_call_rows`. The count is DERIVED by
