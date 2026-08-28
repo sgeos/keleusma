@@ -212,8 +212,17 @@ increments were about.
 
 ## What I would take up next
 
-`occurrence_rows`, the fourth extraction, leaving `expression_nodes_resolvable` for last. Expect it
-to be harder than `field_sets` turned out to be: two of its four declaration kinds are skipped by
-the driver and its ident occurrences are keyed by slot rather than by name. That assessment is from
-reading the driver, and given how this increment went, treat it as a starting hypothesis rather
-than a finding.
+The occurrences half of `occurrence_rows`, then `expression_nodes_and_derived`. Node kind 2 is
+`Local` and carries a slot, and the driver holds parameter and `let` names, so a slot-to-name map
+is available. What I have NOT established is which record carries a bare identifier that is neither
+a call nor a binding site, and I am not going to predict it again.
+
+## A postscript on that, because it is the session's most repeated mistake
+
+I predicted twice that a slice would be harder than it was, both times by reading the stage's
+internal data structures and reasoning about what the host could not see. Both times the record
+stream already carried the answer. The second time I measured before acting, which is the only
+reason it cost nothing.
+
+The instrument for this is `parse_record_trace`, and it is public precisely so the stream can be
+read from outside the driver. Both handoffs now say to use it.

@@ -2114,6 +2114,78 @@ pub fn decl_call_rows_from_pipeline(src: &str) -> (Vec<DeclRow>, Vec<CallSiteRow
     (decls, sites)
 }
 
+/// The top-level DECLARED NAMES a program introduces, from the PIPELINE.
+///
+/// Functions, `data` blocks, enums and structs. Returned sorted, because the reference groups
+/// them by kind (every function, then every data block, then every type) while the records arrive
+/// in SOURCE order, and neither grouping is more correct than the other. Sorting compares the
+/// content rather than either arrangement.
+///
+/// # `use` IMPORTS ARE EXCLUDED, AND THE REASON IS MEASURED RATHER THAN ASSUMED
+///
+/// The reference's declared set also contains the name each `use` declaration imports, or sets a
+/// wildcard flag instead when the import is `path::*`. **The record stream cannot tell those two
+/// cases apart.** Traced with `parse_record_trace`:
+///
+/// | source | records |
+/// |---|---|
+/// | `use play` | USTART(`play`), one path record (`play`) |
+/// | `use host::play` | USTART(`host`), path records (`host`), (`play`) |
+/// | `use host::*` | USTART(`host`), one path record (`host`) |
+///
+/// The first and third are **indistinguishable** — one path record each — yet the reference draws
+/// opposite conclusions from them, taking `play` as an imported name and taking `host::*` as a
+/// wildcard contributing no name at all. Including `use` here would therefore contribute the
+/// module name `host` as though it were an imported symbol.
+///
+/// So this is a re-projection of four declaration kinds and **not** of the fifth.
+/// `the_wildcard_import_is_not_distinguishable_in_the_record_stream` pins that gap in the failing
+/// direction: it fails if the stage ever learns to tell them apart, which is the signal to extend
+/// this function.
+///
+/// # Nothing was added to the driver
+///
+/// All four kinds were already collected: functions by the record walk, `data` blocks and enums
+/// since before this work, and structs since the previous slice. This reads tables that exist.
+#[must_use]
+pub fn declared_names_from_pipeline(src: &str) -> Vec<String> {
+    let mut fn_name_ids: Vec<i64> = Vec::new();
+    let (names, data_records, enum_records, struct_records) = parse_functions_impl(
+        src,
+        true,
+        &mut |_, f| fn_name_ids.push(f.name),
+        &mut |_, _, _| {},
+    );
+    let name_of = |id: i64| -> Option<String> { names.get(id as usize).cloned() };
+
+    let mut out: Vec<String> = fn_name_ids.iter().filter_map(|&id| name_of(id)).collect();
+    // A `data` record packs the block's name with its visibility as `name * 4 + visibility`.
+    for &(code, val) in &data_records {
+        if code == 9
+            && let Some(n) = name_of(val / 4)
+        {
+            out.push(n);
+        }
+    }
+    for &(code, val) in &enum_records {
+        if code == 12
+            && let Some(n) = name_of(val)
+        {
+            out.push(n);
+        }
+    }
+    for &(code, val) in &struct_records {
+        if code == 18
+            && let Some(n) = name_of(val)
+        {
+            out.push(n);
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// One struct's declared field set: the type's name and its field names, in declaration order.
 ///
 /// **Names, not indices, and that is load-bearing.** `field_sets` in

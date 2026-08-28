@@ -13,6 +13,66 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-28 — The declared half of the fourth extraction, and a gap located precisely
+
+**I MADE THE SAME PREDICTION ERROR TWICE AND CAUGHT IT BY MEASURING THIS TIME.** After `field_sets`
+landed I wrote, in three places, that `occurrence_rows` should be expected to be HARDER because
+"two of its four declaration kinds are skipped by the driver". That is true of the driver and says
+nothing about whether the data crosses the boundary. Traced with `parse_record_trace` — the public
+instrument that exists so the record stream can be read from outside the driver — **every
+declaration kind is on the wire**: functions on code 1, `data` blocks on code 9 with the name
+packed as `name * 4 + visibility`, enums on 12, structs on 18, and `use` imports on code 10.
+
+**"The driver discards X" and "X is unreachable" are different claims, and the first is evidence
+for neither direction.** That is now written into the handoff as guidance rather than left as a
+lesson I keep re-learning.
+
+**THE DECLARED NAMES MOVED AND THE OCCURRENCES DID NOT, AND THE FUNCTION IS NAMED SO THE COUNT
+STAYS HONEST.** `declared_names_from_pipeline` covers functions, `data` blocks, enums and structs
+and required **no driver change at all** — every table already existed. It is deliberately NOT
+called `occurrence_rows_from_pipeline`, so `the_moved_extraction_count_is_three_of_five` keeps
+reporting three. **A partial migration counted as a whole one is the failure that pin exists to
+prevent**, and naming it after the extraction would have defeated it silently.
+
+**A REAL GAP, LOCATED RATHER THAN GUESSED: THE STAGE CANNOT SEE A WILDCARD IMPORT.**
+
+| source | record shape | the reference concludes |
+|---|---|---|
+| `use play` | USTART, one path record | an imported NAME |
+| `use host::play` | USTART, two path records | an imported NAME |
+| `use host::*` | USTART, one path record | a WILDCARD, contributing no name |
+
+The first and third are **indistinguishable**, and the reference draws opposite conclusions from
+them. Including `use` in the pipeline's declared set would therefore contribute the MODULE name
+`host` as though it were an imported symbol. So `use` is excluded, the exclusion is stated where
+the function is defined, and a pin fires in the failing direction if the stage ever learns to tell
+them apart.
+
+**MY FIRST PROBE WAS MALFORMED AND THE REFERENCE CAUGHT IT.** `use sin;` is rejected — a `use`
+declaration takes no semicolon. The spelling now comes from
+`examples/scripts/piano_roll/piano_roll_6.kel`. **Sixth time a probe on this line measured
+something other than what it intended**, and the standing rule held: confirm the reference accepts
+the program before concluding anything about the stage.
+
+**A MUTATION HARNESS THAT SILENTLY RAN NOTHING.** The first mutation run reported "compile errors:
+0" for all three mutants and printed no test results. The command variable was escaped inside a
+quoted heredoc, so the test invocation was a literal string and never executed. **Zero errors from
+a command that never ran looks exactly like a clean mutant**, which is the failure this line
+already records twice under "a mutation attempt that fails to compile is silence". Re-run properly,
+M1 and M2 fired and M3 did not.
+
+**AND M3 NOT FIRING WAS ITSELF THE FINDING.** It carried each record's interned id alongside its
+code, expecting the wildcard and named forms to become distinguishable. They did not: **intern ids
+are positional**, so `play` is id 0 in one program and `host` is id 0 in the other and both shapes
+read identically. The discriminating content is the SEQUENCE OF RECORD CODES. A richer-looking
+comparison would have added noise rather than reach, and the note is in the test so the next person
+does not try it. The pin was then mutation-tested by pointing the wildcard probe at the
+two-segment form, which genuinely differs, and it fired with its own message.
+
+**THE CORPUS ASSERTS ITS OWN COVERAGE.** The agreement test fails if any of the four declaration
+kinds is missing from its probes, and removing the structs makes it fail with that message. The
+previous slice learned this the hard way: a guard whose corpus lacks a construct is a guard for a
+different question.
 ## 2026-08-28 — [v0.3.0] I made the mistake this repository had already recorded
 
 **`Op::stack_growth` AND `Op::stack_shrink` ARE NOT POP AND PUSH COUNTS**, and their own documentation
