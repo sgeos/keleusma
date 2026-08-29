@@ -2290,6 +2290,159 @@ pub fn occurrence_rows_from_pipeline(src: &str) -> Vec<OccurrenceRow> {
     out
 }
 
+/// Whether a forest node is a BINARY OPERATOR as the reference counts one.
+///
+/// **FOUR FOREST KINDS, NOT ONE, AND THE FIRST REVISION OF THIS SLICE SAW ONLY THE FIRST.**
+/// `Expr::BinOp` in the reference covers every binary operation whatever its operand types, and
+/// contributes one row regardless. The stage's forest splits them by lowering strategy: `Word`
+/// operations, and three `Byte` families that promote, operate and truncate.
+///
+/// | forest kind | lowering |
+/// |---|---|
+/// | 3 | the `Word` operators |
+/// | 44 | `Byte` bitwise, via widen-operate-truncate |
+/// | 45 | `Byte` arithmetic |
+/// | 60 | `Byte` shifts |
+///
+/// All four carry their operands in `lhs` and `rhs`, so one predicate covers them.
+///
+/// **This was a blind spot the agreement test could not see**, because its corpus used only
+/// `Word` operands — the failure this repository has recorded three times as "a guard whose corpus
+/// lacks the construct is a guard for a different question". Found by asking what ELSE the
+/// reference calls a binary operator, after the same reasoning had been applied to the eight node
+/// KINDS but not to the operand TYPES inside one of them.
+fn is_binary_operator(kind: i64) -> bool {
+    matches!(kind, 3 | 44 | 45 | 60)
+}
+
+/// One operand of an expression row: `(value, form, name)`.
+///
+/// Form 0 means `value` is a scalar TAG and `name` is empty. Form 1 means `name` is the
+/// identifier the operand mentions and `value` is unused — **a string rather than an id, for the
+/// third slice running**, because the reference interns into its own space and the pipeline into
+/// another, so an id could only be compared by comparing the numberings.
+pub type ExprOperand = (i64, i64, String);
+
+/// One expression row as the type channel consumes it: `(kind, left, right)`.
+pub type ExprRow = (i64, ExprOperand, ExprOperand);
+
+/// Binary-operator expression rows, and which row each DERIVED binding resolves through.
+///
+/// # Why order is not reproduced, which is the whole reason this was tractable
+///
+/// The reference's table is positional — `derived` carries `(name, index into the table)` — and
+/// three separate sizings of this slice treated reproducing that order as the obstacle. **It is
+/// not a requirement.** `verify_types.kel` reads the table in exactly two places: `tyb_node_tag`,
+/// indexed by `ty.btag[b]` for a binding whose form is 2, and a per-row predicate that examines
+/// row `i` in isolation. Nothing sweeps it in order. So the index need only be consistent between
+/// the two channels the host supplies, and **any numbering the pipeline chooses works**.
+///
+/// That was established by reading the CONSUMER after three wrong sizings taken from producers —
+/// the reference's line count, its visitor discipline, and the forest's child channels. The
+/// requirement lives at the boundary, not in either implementation.
+///
+/// # What moves, and what does not
+///
+/// **Only kind 1, the binary operator — but ALL of it**, across the four forest kinds the
+/// lowering splits it into (see `is_binary_operator`). The stage defines eight kinds and acts on all of them,
+/// but kind 1 is the only one `tyb_node_tag` resolves, so it is the one that makes
+/// `let d = 1 + 2` reach the bounded fixpoint — the gap the handoff names. The other seven —
+/// array elements, conditions, branch pairs, field and index access on a value, struct literals,
+/// and the tail-versus-return claim — **do not move here**, and three of them are composite,
+/// where the occurrences slice already showed the two representations disagree about what a node
+/// IS.
+///
+/// This function is deliberately NOT named after the extraction, so the count pin keeps reporting
+/// four of five. A partial migration counted as a whole one is the failure that pin exists to
+/// prevent.
+#[must_use]
+pub fn binop_expression_rows_from_pipeline(src: &str) -> (Vec<ExprRow>, Vec<(String, usize)>) {
+    let (fns, names, ..) = parse_functions_fused(src);
+    let name_of = |id: i64| -> Option<String> { names.get(id as usize).cloned() };
+    let chunk_names = chunk_names_from_pipeline(src);
+
+    let mut rows: Vec<ExprRow> = Vec::new();
+    let mut derived: Vec<(String, usize)> = Vec::new();
+    let mut i = 0usize;
+    while i < fns.len() {
+        let Some(group_name) = name_of(fns[i].name) else {
+            i += 1;
+            continue;
+        };
+        let mut group: Vec<&ParsedFn> = vec![&fns[i]];
+        let mut j = i + 1;
+        while j < fns.len() && name_of(fns[j].name).as_deref() == Some(group_name.as_str()) {
+            group.push(&fns[j]);
+            j += 1;
+        }
+        i = j;
+        let pc = group[0].params;
+        let body = if is_multihead_group(&group) {
+            reconstruct_via_kel_multihead(&group, pc, &group_name)
+        } else {
+            let category = reconstruct_category(group[0].cat);
+            reconstruct_via_kel(&group[0].body, category, pc, &group_name)
+        };
+
+        // Slot to name, the same convention `binding_rows_from_pipeline` uses: parameters take
+        // the low slots in order, and `let_names` carries `(slot, name)` looked up BY SLOT.
+        let mut slot_name: alloc::collections::BTreeMap<i64, String> =
+            alloc::collections::BTreeMap::new();
+        for (slot, &pid) in group[0].param_names.iter().enumerate() {
+            if let Some(n) = name_of(pid) {
+                slot_name.insert(slot as i64, n);
+            }
+        }
+        for &(slot, nid) in &group[0].let_names {
+            if let Some(n) = name_of(nid) {
+                slot_name.insert(slot, n);
+            }
+        }
+
+        // One operand, classified exactly as the reference classifies one: a literal is a TAG, an
+        // identifier or a call is a NAME, anything else is unknown and never rejects.
+        let operand = |idx: i64| -> ExprOperand {
+            match body.nodes.get(idx as usize) {
+                // The forest's literals are always integers -- `codegen.kel` interns every other
+                // scalar elsewhere -- so the tag is the Word tag.
+                Some(n) if n.kind == NODE_LITERAL => (1, 0, String::new()),
+                // Booleans ride the unit kind, whose payload is 0 unit, 1 true, 2 false.
+                Some(n) if n.kind == NODE_UNIT && (n.arg == 1 || n.arg == 2) => {
+                    (2, 0, String::new())
+                }
+                Some(n) if n.kind == NODE_UNIT && n.arg == 0 => (6, 0, String::new()),
+                Some(n) if n.kind == 2 => slot_name
+                    .get(&n.arg)
+                    .map_or((0, 0, String::new()), |s| (0, 1, s.clone())),
+                Some(n) if n.kind == NODE_CALL => chunk_names
+                    .get(n.arg as usize)
+                    .map_or((0, 0, String::new()), |s| (0, 1, s.clone())),
+                _ => (0, 0, String::new()),
+            }
+        };
+
+        // The rows, and the LetIn bindings whose initialiser is one of them.
+        let mut row_of_node: alloc::collections::BTreeMap<i64, usize> =
+            alloc::collections::BTreeMap::new();
+        for (at, node) in body.nodes.iter().enumerate() {
+            if is_binary_operator(node.kind) {
+                row_of_node.insert(at as i64, rows.len());
+                rows.push((1, operand(node.lhs), operand(node.rhs)));
+            }
+        }
+        for node in &body.nodes {
+            if node.kind == NODE_LET_IN
+                && let Some(&row) = row_of_node.get(&node.lhs)
+                && let Some(name) = slot_name.get(&node.arg)
+            {
+                derived.push((name.clone(), row));
+            }
+        }
+    }
+
+    (rows, derived)
+}
+
 /// One struct's declared field set: the type's name and its field names, in declaration order.
 ///
 /// **Names, not indices, and that is load-bearing.** `field_sets` in
