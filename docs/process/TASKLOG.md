@@ -608,6 +608,27 @@ Current sprint source of truth.
 > workspace **2467/0/88**, coverage re-derived and unchanged at 1070 of 1074.
 > See [`../decisions/OPERAND_WIDTH_RECOVERY.md`](../decisions/OPERAND_WIDTH_RECOVERY.md).
 
+> **Currency note (2026-08-29, V0.3.X line, ninth entry). ALL REMAINING CAPABILITY WORK IS BEHIND AN
+> OPERATOR DECISION; THE MUTATION FAMILY IS WIDER AND THE TWO SWEEPS ARE NOW OPT-IN.**
+>
+> **Measured, not recalled**: the 4 unlowerable chunks sit in exactly the 3 refused modules, so there is
+> no capability work this line can take without a decision. `OPERATOR_DECISIONS_OPEN.md` states the
+> three, their costs, and **what happens by default if nothing is said**, and notes that `Len` is not a
+> decision. **The mutation family was widened** to include the six comparison swaps and `Not`->`Neg`,
+> because its recorded reason for excluding control flow — process-killing traps — is handled by the
+> admissibility and fault filters built since. **Detected 39 to 48, undetected still 0, subjects with no
+> applicable site 10 to 3**; `verify_datalayout` went from 9 sites to 41 with a killable mutant that is
+> caught. **The cost forced a trade recorded as a loss**: comparison mutants are admissible AND
+> non-faulting so they run across every variant, and both sweeps are now `#[ignore]`, run with
+> `-- --ignored`. **Their assertions, including the detection floor, no longer protect anything day to
+> day**, and the figures are a dated measurement rather than a standing guarantee; the widening was kept
+> because 39→48 is worth more than a fast gate, matching how `tools/mutation_sweep.py` already drives
+> mutation work externally. **A 4132s gate figure from this run is CONTAMINATED** by a load average near
+> 13 and is not evidence about the change. Three wrong guesses about which test was slow are recorded in
+> the journal. No absorption needed. Workspace **2491/0/92**, `native_codegen` **370 passed, 0 failed,
+> 2 ignored, 74 binaries**, censuses unmoved. See
+> [`../decisions/OPERATOR_DECISIONS_OPEN.md`](../decisions/OPERATOR_DECISIONS_OPEN.md).
+
 > **Currency note (2026-08-29, V0.3.X line, eighth entry). ONE CANONICAL CORPUS WALK, CLOSING THE
 > DEFECT CLASS BEHIND FIVE PRIOR ERRORS — FOR ITS CALLERS, NOT REPOSITORY-WIDE.**
 >

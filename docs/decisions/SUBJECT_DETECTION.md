@@ -67,3 +67,43 @@ sweep — arrived at here independently before that note was read.
 
 Reported figures get a floor, on the principle established one increment earlier. **60% of measured
 subjects must detect**, calibrated against 38 of 50, as a ratio because the measured population moves.
+
+---
+
+## ⚠ 2026-08-29: these sweeps are now OPT-IN, and the figures above are DATED
+
+**Both mutation sweeps are marked `#[ignore]` and no longer run in the everyday gate.** Run them with
+`cargo test --test corpus_differential -- --ignored --nocapture`.
+
+### The widened family — a real gain
+
+| | arithmetic only | widened with control flow |
+|---|---|---|
+| detected | 39 | **48** |
+| undetected | 0 | **0** |
+| subjects with NO applicable site | 10 | **3** |
+
+Comparison swaps reach opcodes arithmetic never touched. In the deep sweep, **8 of 15** re-swept
+subjects yielded killable mutants under the wider family and every one was detected — including
+`verify_datalayout`, whose applicable sites went from 9 to 41, which further refutes the claim about it
+already withdrawn above.
+
+### The cost, measured rather than estimated
+
+About **600s** before the widening; **1379s** alone after it; and **neither sweep finished within
+twenty minutes** under gate contention, even after hoisting the reference runs out of the mutant loop
+and cutting the census to one site per module. The cause is that comparison mutants are admissible and
+non-faulting, so they run fully across every variant, and the seeded stages carry many variants each.
+
+### What being opt-in costs, stated plainly
+
+**The assertions in these sweeps — including the detection floor — no longer protect anything day to
+day.** A regression in mutation sensitivity would be caught only when someone runs them deliberately.
+**The figures above are a dated measurement, not a standing guarantee.**
+
+The widening was kept rather than reverted because 39→48 and 10→3 is more correctness than a fast gate
+is worth. This matches how the existing opcode-level mutation work is already driven: externally, by
+`tools/mutation_sweep.py`, rather than in the suite.
+
+**Roles are now split**: the census is BREADTH — every module, one site — and the deep sweep is DEPTH,
+at up to eight sites in the subjects the census finds nothing in.
