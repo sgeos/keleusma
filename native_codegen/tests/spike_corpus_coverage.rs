@@ -328,6 +328,46 @@ fn spike_report_corpus_coverage() {
         100.0 * chunks_lowerable as f64 / chunks_total as f64
     );
 
+    // **REGRESSION FLOORS.** The only assertion above this point is a
+    // non-vacuity check — `compiled > 10 && total_ops > 1000` — which catches
+    // "the corpus paths are wrong" and not "the backend got worse". Both figures
+    // printed here go into this line's handoff every increment, and until now a
+    // collapse in either turned no test red.
+    //
+    // **RATIOS, NOT COUNTS.** Both denominators move with the corpus: adding one
+    // `.kel` source changes `chunks_total` and `total_ops`. An absolute floor
+    // would fail on ordinary growth, and a guard that fails on growth gets
+    // deleted rather than investigated.
+    //
+    // **IT COMPOUNDS, WHICH IS WHY A FLOOR IS WORTH THE LINE.** `module_refusals`
+    // reports per CHUNK but the corpus differential exempts per MODULE, so one
+    // newly-refusing chunk removes a whole file from the correctness comparison.
+    // A lowering regression therefore shrinks coverage AND the differential.
+    //
+    // Calibrated 2026-08-29 at 1070 of 1074 chunks (99.63%) and 89841 of 89940
+    // instances (99.89%). The slack is roughly half a percent, which absorbs a
+    // corpus source arriving with a refused construct without absorbing a
+    // regression.
+    const CHUNK_RATIO_FLOOR: f64 = 0.99;
+    const INSTANCE_RATIO_FLOOR: f64 = 0.99;
+    let chunk_ratio = chunks_lowerable as f64 / chunks_total as f64;
+    let instance_ratio = lowered_ops as f64 / total_ops as f64;
+    assert!(
+        chunk_ratio >= CHUNK_RATIO_FLOOR,
+        "{chunks_lowerable} of {chunks_total} chunks fully lowerable ({:.2}%),          below the {:.2}% floor calibrated against 1070 of 1074 on 2026-08-29.          Either the backend regressed, or a corpus source arrived carrying          constructs it refuses — the second is legitimate and the floor should          move WITH a recorded reason",
+        100.0 * chunk_ratio,
+        100.0 * CHUNK_RATIO_FLOOR
+    );
+    assert!(
+        instance_ratio >= INSTANCE_RATIO_FLOOR,
+        "{lowered_ops} of {total_ops} opcode instances lower ({:.2}%), below the          {:.2}% floor calibrated against 89841 of 89940 on 2026-08-29",
+        100.0 * instance_ratio,
+        100.0 * INSTANCE_RATIO_FLOOR
+    );
+    // NOT A CORRECTNESS CLAIM. Meeting these floors says the backend emitted
+    // code, not that the code is right. That is the differential's job, and the
+    // census banner says so in its own words.
+
     println!("\nBLOCKING OPCODE INSTANCES BY WORKSTREAM");
     let mut ws: Vec<_> = by_workstream.iter().collect();
     ws.sort_by_key(|(_, n)| std::cmp::Reverse(**n));

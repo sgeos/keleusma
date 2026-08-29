@@ -3711,10 +3711,26 @@ fn every_lowering_module_executes_or_is_exempt() {
          for months precisely because nothing checked it."
     );
 
+    // **TIGHTENED from 20 to 56 on 2026-08-29.** At 61 executing modules a floor
+    // of 20 tolerated losing TWO THIRDS of the correctness comparison in
+    // silence, which is the failure mode the `KNOWN_VACUOUS` check above exists
+    // to prevent one module at a time. The two guards want the same thing.
+    //
+    // **This is the figure most worth flooring**, because a lowering regression
+    // reaches it INDIRECTLY and therefore quietly: `module_refusals` reports per
+    // chunk, but this harness exempts per MODULE, so one newly-refusing chunk
+    // removes a whole file from the comparison without any refusal being wrong.
+    //
+    // A FLOOR, NOT A PIN, with five modules of slack — enough that a source
+    // legitimately joining the exempt set is recorded rather than fought.
+    const EXECUTED_FLOOR: usize = 56;
     assert!(
-        executed.len() >= 20,
-        "only {} modules executed; the harness is not covering the corpus and \
-         every exemption above should be read as unfinished work",
+        executed.len() >= EXECUTED_FLOOR,
+        "only {} modules executed and agreed, below the floor of {EXECUTED_FLOOR} \
+         calibrated against 61 on 2026-08-29. A drop here need not mean a wrong \
+         refusal: one newly-refusing CHUNK exempts a whole MODULE. Either way \
+         the correctness comparison shrank and every exemption above should be \
+         read as unfinished work",
         executed.len()
     );
 }

@@ -608,6 +608,28 @@ Current sprint source of truth.
 > workspace **2467/0/88**, coverage re-derived and unchanged at 1070 of 1074.
 > See [`../decisions/OPERAND_WIDTH_RECOVERY.md`](../decisions/OPERAND_WIDTH_RECOVERY.md).
 
+> **Currency note (2026-08-29, V0.3.X line, third entry). THE FOUR FIGURES THIS LINE REPORTS EVERY
+> INCREMENT HAD NO REGRESSION FLOOR UNDER THEM.**
+>
+> Opcodes lowered (61 of 66), chunks lowerable (1070 of 1074), opcode instances (89841 of 89940) and
+> differential modules executing and agreeing (61) all go into the handoff every increment, and **a
+> large regression in any of them turned no test red**. The existing assertions are real but check
+> something else: `isa_lowering_census` asserts partition totality, non-vacuity and extraction
+> completeness, **all of which hold at 30 of 66 as well as at 61**; `spike_corpus_coverage` asserts
+> `compiled > 10 && total_ops > 1000`, which catches wrong corpus paths rather than a worse backend.
+> **The differential's was the one that mattered**: `module_refusals` reports per CHUNK while the
+> harness exempts per MODULE, so one newly-refusing chunk removes a whole file from the correctness
+> comparison **without any refusal being wrong** — and its floor stood at `>= 20` against an actual 61,
+> tolerating the loss of two thirds. Floors added at `>= 59` opcodes, `>= 99%` of chunks, `>= 99%` of
+> instances and `>= 56` modules; **ratios where the denominator moves with the corpus**, absolute where
+> it does not, and **floors rather than equality pins** because `corpus_differential.rs` already records
+> that a check breaking on ordinary progress "teaches the next reader to delete the check". **All four
+> were proven to fire** by raising each above its measured value, observing the failure, and restoring.
+> The `spike_*`/`probe_*` genre was deliberately left alone: those files are meant to report, and
+> flooring them on a print/assert ratio would manufacture a finding. No absorption was needed (already
+> zero unabsorbed). Workspace **2491/0/92**, `native_codegen` **366/0/74**, censuses unmoved. See
+> [`../decisions/REGRESSION_FLOORS.md`](../decisions/REGRESSION_FLOORS.md).
+
 > **Currency note (2026-08-29, V0.3.X line, second entry). A CONSERVATIVE REJECTION, NOT `verify()`,
 > IS WHAT HOLDS A RUNTIME TRAP SHUT — REPORTED, NOT REPAIRED.**
 >

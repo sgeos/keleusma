@@ -1,5 +1,52 @@
 # Design Journal
 
+## 2026-08-29 — The four figures I report every increment had nothing under them
+
+**Increment**: I went looking for the next product frontier and did not find one worth taking. The
+lowering frontier is closed at the corpus level — what remains is operator-held (floats), structurally
+inadmissible (`Len`), or the soundness obligation (`Stream`). The mutation sweep is calibrated and
+pre-registered. `miscompilation_reach.rs` already answers the load-time-hole question, and independently
+agrees with the leg-3 result I measured last increment.
+
+**So I audited the instruments instead, and that is where the defect was.** Four figures go into the
+handoff, `REVERSE_PROMPT.md` and `TASKLOG.md` every increment. A large regression in any of them turned
+**no test red**.
+
+The existing assertions are real, and every one of them checks something other than what the figure
+measures. `isa_lowering_census` asserts partition totality, non-vacuity, and extraction completeness —
+all of which hold just as well at 30 of 66 as at 61 of 66. `spike_corpus_coverage` asserts
+`compiled > 10 && total_ops > 1000`, which catches "the corpus paths are wrong", a different failure
+from "the backend got worse". Both are worth catching; only one was caught.
+
+**The fourth was the one that mattered.** `module_refusals` reports per **chunk**, but the corpus
+differential exempts per **module** — so one newly-refusing chunk removes a whole file from the
+correctness comparison **without any refusal being wrong**. A lowering regression reaches the
+differential indirectly and therefore quietly. Its floor stood at `>= 20` against an actual 61,
+tolerating the loss of two thirds of the comparison. The `KNOWN_VACUOUS` check immediately above it
+exists to stop exactly this one module at a time, and says the vacuous set "was 40-strong-looking
+coverage for months precisely because nothing checked it". The two guards want the same thing; only
+one was tight.
+
+**Floors, not pins, and ratios where the denominator moves.** `corpus_differential.rs` had already
+recorded the design constraint: a check that breaks on ordinary progress "teaches the next reader to
+delete the check". Lowering more must stay free. Chunk and instance counts move with the corpus, so
+those take ratio floors; the opcode and module counts have stable denominators and take absolute ones.
+
+**Each floor was proven to fire** — raised above the measured value, observed failing, restored. Four
+new guards whose reach I had not established would have been the very defect they exist to prevent,
+and this line has recorded that lesson enough times to owe the check.
+
+**What I deliberately did not do.** The `spike_*` and `probe_*` files print far more than they assert,
+and that is their genre — they are meant to report. Flooring them on the strength of a print/assert
+ratio would have been manufacturing a finding from a statistic. The criterion is not the ratio; it is
+whether the figure leaves this repository in a handoff.
+
+**This is the third instrument defect this session**, after the census reading English word order and
+the sweep reading 35 modules where its consumers read 74. The first two were instruments that could
+report the wrong thing. This one is instruments that report faithfully with nothing checking the report
+against yesterday's.
+
+
 ## 2026-08-29 — A conservative rejection, not the verifier, is what holds a runtime trap shut
 
 **Increment**: I went looking for the last named opcode refusal, `Len`, expecting a coverage

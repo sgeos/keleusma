@@ -646,6 +646,28 @@ fn how_many_isa_opcodes_does_the_backend_lower() {
         isa.len()
     );
 
+    // **REGRESSION FLOOR.** Every assertion above is STRUCTURAL — the partition
+    // is total, neither column is empty, the extraction is complete. All of them
+    // hold just as well at 30 of 66 as at 61 of 66, so the headline figure this
+    // line reports every increment could halve without a test going red.
+    //
+    // A FLOOR, NOT A PIN. An equality check breaks the day an opcode is lowered,
+    // and `corpus_differential.rs` records what happens then: a check that
+    // breaks on ordinary progress "teaches the next reader to delete the check".
+    // Lowering MORE must stay free; lowering materially less must be loud.
+    //
+    // Calibrated at 61 of 66 on 2026-08-29. The slack is two opcodes, which is
+    // enough that one opcode moving into a refusal for a considered reason can
+    // be recorded rather than fought, and little enough that a real regression
+    // cannot hide behind it.
+    const LOWERED_FLOOR: usize = 59;
+    assert!(
+        lowered.len() >= LOWERED_FLOOR,
+        "the backend lowers {} of {} opcodes, below the floor of {LOWERED_FLOOR}          calibrated at 61 on 2026-08-29. Either this is a regression, or an          opcode was deliberately given up and the floor should be lowered WITH          a recorded reason. Lowered: {lowered:?}",
+        lowered.len(),
+        isa.len()
+    );
+
     // The extraction must cover what the corpus emits, or NO CORPUS WITNESS is
     // measuring this file's parser rather than the backend.
     let unextracted: Vec<&String> = emitted.difference(&isa).collect();

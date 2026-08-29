@@ -6,49 +6,49 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## What this increment did, and one thing I want the `v0.2.3` line to see
+## What this increment did
 
-**Found a runtime trap whose only guard is a rejection the project defines as liftable.**
+**Audited the numbers I put in front of you every increment, and found none of them had a floor.**
 
-`src/vm.rs` returns `InvalidBytecode` for `Op::Len` on a flat array, justified by *"it never emits
-`Op::Len` on an array"*. **The reference compiler emits exactly that**, from
-`for x in if c { a } else { b }`. The error's classification rests on a premise the shipping compiler
-contradicts.
+I went looking for the next product frontier first and did not find one worth taking: the lowering
+frontier is closed at the corpus level, the mutation sweep is calibrated and pre-registered, and the
+load-time-hole question is already answered by a file that independently agrees with last increment's
+result. So I turned the instrument on the instruments.
 
-Four legs, each measured and separately pinned:
+| figure | value | strongest guard | what it actually caught |
+|---|---|---|---|
+| opcodes lowered | 61 of 66 | partition totality, non-vacuity | a broken **instrument** |
+| chunks lowerable | 1070 of 1074 | `compiled > 10 && total_ops > 1000` | wrong **corpus paths** |
+| opcode instances | 89841 of 89940 | the same check | wrong **corpus paths** |
+| differential executed and agreeing | 61 | `>= 20` | losing **two thirds** and no more |
 
-| leg | fact |
-|---|---|
-| 1 | `verify()` **accepts** the module |
-| 2 | executing it yields `InvalidBytecode` |
-| 3 | **`Vm::new` itself refuses it** at every arena size — **NOT reachable through the supported path today** |
-| 4 | that refusal is **second category**, surviving even when both arms are equal length and the trip count is provable by inspection |
+Every one of those is a real check. None checks the thing the figure measures. They hold as well at 30
+of 66 as at 61 of 66.
 
-`InvalidBytecode` is the class `verify()` exists to exclude at load time, and this project has had one
-instance already, repaired at both root causes. This is the same class one guard away — but the guard
-is **not** `verify()`. It is the resource-bound check, and leg 4 puts that refusal in the category
-defined as liftable.
+**The differential's was the one that mattered.** `module_refusals` reports per chunk; the harness
+exempts per module. So one newly-refusing chunk removes a whole file from the correctness comparison
+**without any refusal being wrong** — a lowering regression reaches it indirectly and therefore
+quietly. The `KNOWN_VACUOUS` check directly above that floor exists to catch this one module at a time,
+and its own note says the vacuous set "was 40-strong-looking coverage for months precisely because
+nothing checked it".
 
-**So an improvement to the bound extractor, made by someone with no reason to look at `Op::Len`, turns
-a rejected program into one that loads and traps.** The improvement is silently gated on an unrelated
-repair. Leg 4 fails the day it happens.
+## Design points you may want to disagree with
 
-## Where I was wrong, because it changes how much weight to give this
+**Floors, not pins**, and **ratios where the denominator moves**. Chunk and instance counts change when
+a `.kel` source is added; an absolute floor there fails on growth, and a guard that fails on growth
+gets deleted rather than investigated. That constraint is not mine — `corpus_differential.rs` had
+already written it down.
 
-I hypothesised a second load-time hole, reasoning that a host sizing its own arena would bypass the
-bound check. **Executing it showed `Vm::new` runs that check itself and refuses.** Had I written the
-report from the reasoning rather than the measurement, I would have spent your line's attention on a
-false alarm. The report says plainly that this is not exploitable today.
+**Each floor was proven to fire** — raised above the measured value, observed failing, restored. Four
+new guards whose reach I had not established would have been the defect they exist to prevent.
 
-## What I did not do
+**I left the `spike_*` and `probe_*` files alone.** They print far more than they assert, and that is
+their genre. The criterion is not the print/assert ratio; it is whether the figure leaves this
+repository in a handoff.
 
-**Not repaired.** Both plausible fixes — a load-time rejection of `Op::Len` on a statically flat
-operand, or a corrected error class — are in `src/vm.rs` and `src/verify.rs`, which this line may read
-and must not edit. Three dispositions are laid out in the report with **no recommendation**; the trade
-belongs to the line that owns the files.
-
-**Not pursued for coverage.** `Len` is the last named opcode refusal, and lowering it gains nothing:
-the property that makes the opcode reachable is the property that makes the loop unbounded.
+**A floor is not a correctness claim.** It detects regression and says nothing about whether the
+lowered code is right. That is the differential's job, which is why its floor was tightened rather than
+merely added.
 
 ## Verification
 
@@ -60,8 +60,7 @@ Both suites run **sequentially** (parallel invalidates the perf canary, 57x).
 | `native_codegen` gate step | **366 passed, 0 failed, 74 binaries**, exit 0 (fmt, clippy `-D warnings`, test, `doc -D warnings`) |
 | censuses | 61 of 66; NAMED REFUSED `["Len"]`; 1070 of 1074; 89841 of 89940 — all unmoved |
 
-**No absorption was needed**: the line was already at zero unabsorbed, recorded as a fact rather than
-reported as an absorption performed.
+**No absorption was needed**: already zero unabsorbed, recorded as a fact rather than reported as work.
 
 ## Standing constraints, unchanged
 
