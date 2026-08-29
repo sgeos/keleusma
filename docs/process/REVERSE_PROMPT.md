@@ -6,55 +6,42 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## The thing I most want you to see
+## A correction to what I told you last increment
 
-**This backend lowers modules the virtual machine would refuse to load, and nothing said the caller
-must not.**
+I reported **32 detected, 16 undetected** for "which differential subjects would notice a wrong
+backend". **That number was produced by a bad driver of mine**, not by the subjects: my census ran
+every subject at seed 0 with no stage seed, while the harness it describes seeds ten stages. A stage
+reading an unseeded segment sees zeros and computes nothing.
 
-Mutating `04_for_in.kel` by one `CheckedAdd` -> `CheckedSub` gives well-formed bytecode — same arity,
-same types — that behaves like this:
+Driving it the harness's way, and sampling three mutation sites per module instead of one:
 
-| check | result |
-|---|---|
-| `verify()` | **accepts** |
-| `auto_arena_capacity_for`, `module_wcmu`, `Vm::new` | **all reject** — no statically extractable iteration bound |
-| this backend's `module_refusals` | **accepts** |
-| the lowered code | **SIGBUS** |
+**38 detected, 12 undetected.**
 
-`lower_module` documented no admissibility precondition and checked none. **Verified is not enough**:
-`Vm::new` additionally requires a resource bound, and that bound is what this project sells. An
-ahead-of-time path that runs what the bound analysis refuses is a hole in the value proposition, not
-merely a crash.
+Every self-hosted stage appearing in an undetected list should have looked wrong to me before you read
+it. This is the **fifth** narrower-population error on this line and the first I published before
+catching.
 
-**Measured before deciding: 66 modules lower, 0 unbounded.** So it is a precondition gap and not a live
-defect. I documented the precondition and pinned the corpus rather than enforcing it, because
-enforcement couples a pure lowering function to the resource analysis and pays that on every call.
-**Enforcement is a real option and I have not ruled it out** — the disposition is in the record.
+## The finding that survives, and it is worth your attention
 
-## How it was found, which I think is the reusable part
+**Eight of the ten self-hosted stages do not notice any of three arithmetic mutations** — `codegen`,
+`parse`, `reconstruct`, `verify_datalayout`, `verify_depth`, `verify_structural`, `verify_typed`,
+`verify_types`. These are the modules the V0.3.0 self-hosting goal depends on most.
 
-Not by reading the source. It fell out of an unrelated measurement — a sweep asking which differential
-subjects would notice a wrong backend. **The sweep crashed, and the crash was the finding**, larger
-than the census that produced it.
+**I nearly published an excuse instead.** I was about to write that they are unseeded here and covered
+elsewhere. `STAGE_SEEDED` carries ten stages including six of these; **they are seeded, run on real
+input, and still agree under mutation.** The true statement is stronger than the excuse.
 
-## The census it came from, now complete
+## What this does NOT say
 
-`native_codegen/tests/probe_agreement_depth.rs` had sized a blind spot and declined to classify it. Having just floored the
-"61 executing and agreeing" figure, I asked whether it measures what its name says.
+- **Against ONE pre-registered family**, three sites per module. A different mutation might be caught.
+- **Within `corpus_differential` only.** `stage_differential.rs` seeds BOTH sides, and **whether it
+  detects these mutants is a question I have not asked.** "Undetected here" is not "uncovered", and
+  asking it is the obvious next increment.
+- **Nothing was deleted or exempted.** Coverage before equals coverage after.
 
-**32 detected a mutated backend, 16 did not, 10 had no mutation site.** The 16 include every
-self-hosted stage, consistent with the existing note that stages read input the harness supplies as
-zeros. **Nothing was deleted or exempted** — undetected against one pre-registered family is not
-"detects nothing", and the unmeasured classes are reported separately rather than folded in.
-
-## Two corrections to my own work, since they bear on how much to trust the above
-
-**My pre-registered mutation family was wrong** and matched a site in 4 modules of 65: Keleusma is
-total, so the corpus emits `CheckedAdd`, not `Add`. **My own non-vacuity assertion caught it.** The
-family was amended before any subject had been classified, so it cannot have been tuned to results.
-
-**I anticipated the trap risk and still under-estimated it.** After the admissibility filter removed
-the SIGBUS, an admissible mutant produced SIGTRAP, needing a second filter.
+The strengthening from one site to three was decided *after* seeing the undetected list. I say so
+because the direction matters: more sites can only move subjects out of that column, so it makes the
+finding harder to sustain rather than easier.
 
 ## Verification
 
@@ -64,7 +51,10 @@ Both suites run **sequentially** (parallel invalidates the perf canary, 57x).
 |---|---|
 | workspace | **2491 passed, 0 failed, 92 binaries**, cargo exit 0 |
 | `native_codegen` gate step | **368 passed, 0 failed, 74 binaries**, exit 0 (fmt, clippy `-D warnings`, test, `doc -D warnings`) |
-| censuses | 61 of 66; NAMED REFUSED `["Len"]`; 1070 of 1074; 89841 of 89940 — all unmoved |
+| censuses | 61 of 66; `["Len"]`; 1070 of 1074; 89841 of 89940 — all unmoved |
+
+The detection figure now carries a **60% ratio floor**, on the principle from two increments ago that a
+number reported to you without a floor can collapse in silence.
 
 **No absorption was needed**: already zero unabsorbed.
 

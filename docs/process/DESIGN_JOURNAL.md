@@ -1,5 +1,46 @@
 # Design Journal
 
+## 2026-08-29 — I corrected a figure I published one increment ago, twice, in the same direction
+
+**Increment**: last increment reported **32 detected, 16 undetected** for "which differential subjects
+would notice a wrong backend". Every self-hosted stage was in the undetected list. That should have
+looked wrong to me at the time, and on inspection it was: **my census drove every subject at seed 0
+with no stage seed**, while the main sweep seeds ten stages. A stage reading an unseeded shared segment
+sees zeros and computes nothing.
+
+**A measurement that drives a subject more weakly than the harness it describes reports a weaker result
+and attributes it to the subject.** This is the **fifth** narrower-population error on this line, and
+the first where I published the wrong number before catching it.
+
+Driving it the sweep's way: **33 detected, 15 undetected.**
+
+**Then I strengthened it in the direction that could refute my own finding.** The census mutated only
+the FIRST applicable site per module. Sampling three — first, middle, last — gives **38 and 12**. That
+choice was made *after* seeing the undetected list, which is worth stating plainly: more sites can only
+move subjects OUT of the undetected column, never into it, so this makes the finding harder to sustain
+rather than easier.
+
+**I also nearly published a false qualification.** I was about to write that the remaining stages are
+"not seeded by this harness, their coverage is elsewhere". Checking `STAGE_SEEDED` first: it carries
+**ten** stages, including `lexer`, `parse`, `reconstruct`, `verify_typed`, `verify_structural` and
+`verify_types` — all of which were in my undetected list. They are seeded, run on real input, and still
+agree under mutation. **The true statement is stronger than the excuse I almost made.**
+
+**Eight of the ten self-hosted stages do not notice any of three arithmetic mutations.** These are the
+modules the V0.3.0 self-hosting goal depends on most. Scoped honestly: one pre-registered family, three
+sites, and **within `corpus_differential` only** — `stage_differential.rs` seeds both sides, and whether
+it detects these mutants is a separate question I have not asked. "Undetected here" is not "uncovered",
+and I have not claimed it is.
+
+**The figure now carries a floor**, on the principle established one increment earlier: a number that
+goes into the handoff without a floor can collapse in silence. A ratio, because the measured population
+moves with the corpus and with the two filters.
+
+**Clippy caught what `cargo test` did not**: my rewrite left `mutant_declined` never pushed to, having
+folded "the native side declined" into "the mutant faults". Those support different conclusions, so I
+separated them rather than deleting the counter to silence the lint.
+
+
 ## 2026-08-29 — The sweep died with SIGBUS, and the crash was a bigger finding than the census
 
 **Increment**: `probe_agreement_depth` had sized a blind spot and deliberately declined to classify it

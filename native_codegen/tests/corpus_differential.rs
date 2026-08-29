@@ -3861,7 +3861,8 @@ fn sentinel_base_in(src: &str, decl: &str) -> Result<i64, String> {
 /// Choosing sites by where the insensitive subjects turned out to be would make
 /// this a demonstration rather than a measurement — the rule `corpus_differential`
 /// already applies to its opcode sweep.
-fn pre_registered_mutant(m: &Module) -> Option<(Module, String)> {
+fn pre_registered_sites(m: &Module) -> Vec<(usize, usize, Op)> {
+    let mut out = Vec::new();
     for (ci, c) in m.chunks.iter().enumerate() {
         for (oi, op) in c.ops.iter().enumerate() {
             let rep = match op {
@@ -3885,13 +3886,37 @@ fn pre_registered_mutant(m: &Module) -> Option<(Module, String)> {
                 Op::Shl => Op::Shr,
                 _ => continue,
             };
-            let mut mutated = m.clone();
-            let what = format!("chunk {ci} op {oi}: {op:?} -> {rep:?}");
-            mutated.chunks[ci].ops[oi] = rep;
-            return Some((mutated, what));
+            out.push((ci, oi, rep));
         }
     }
-    None
+    out
+}
+
+/// Up to three sites per module — first, middle and last of the applicable ones.
+///
+/// **The first version mutated only the FIRST site.** Sampling more was decided
+/// after seeing 15 subjects undetected, and that direction matters: more sites
+/// can only MOVE SUBJECTS OUT of the undetected column, never into it. This
+/// strengthens the measurement against my own finding rather than toward it.
+/// The choice of first/middle/last is positional and deterministic, not picked
+/// by reading which sites the insensitive subjects happen to execute.
+fn sampled_mutants(m: &Module) -> Vec<(Module, String)> {
+    let sites = pre_registered_sites(m);
+    if sites.is_empty() {
+        return Vec::new();
+    }
+    let mut idx = vec![0usize, sites.len() / 2, sites.len() - 1];
+    idx.sort_unstable();
+    idx.dedup();
+    idx.iter()
+        .map(|&i| {
+            let (ci, oi, rep) = sites[i];
+            let mut mutated = m.clone();
+            let what = format!("chunk {ci} op {oi} -> {rep:?}");
+            mutated.chunks[ci].ops[oi] = rep;
+            (mutated, what)
+        })
+        .collect()
 }
 
 /// **WOULD EACH SUBJECT NOTICE A WRONG BACKEND?**
@@ -3957,58 +3982,90 @@ fn which_subjects_would_notice_a_wrong_backend() {
         if table.len() > STUBS {
             continue;
         }
-        let Some((mutant, _what)) = pre_registered_mutant(&m) else {
+        let mutants = sampled_mutants(&m);
+        if mutants.is_empty() {
             no_site.push(name);
             continue;
-        };
-        // A mutant that the backend now refuses produced no comparison.
-        if !keleusma_native::module_refusals(&mutant, LowerOptions::default()).is_empty() {
-            mutant_declined.push(name);
-            continue;
         }
-        // **THE MUTANT MUST STILL BE ADMISSIBLE, and this is not a convenience.**
-        //
-        // A mutated arithmetic op can break the canonical for-range pattern, and
-        // the loop then has no statically extractable iteration bound. `Vm::new`
-        // REFUSES such a module — so it is not a wrong backend, it is a program
-        // the runtime would never run, and comparing against it measures nothing.
-        //
-        // Measured rather than anticipated: without this filter the sweep died
-        // with **SIGBUS** on `04_for_in.kel`, whose mutant is `verify()`-clean,
-        // refused by `Vm::new`, and lowered by this backend without complaint.
-        // That divergence is recorded in `docs/decisions/BACKEND_ADMISSIBILITY.md`
-        // and pinned by `no_lowerable_corpus_module_is_unbounded` below.
-        if keleusma::verify::module_wcmu(&mutant, &[]).is_err() {
+
+        // Drive the subject the way the MAIN SWEEP drives it. The first version
+        // of this census ran every subject at seed 0 with no stage seed and
+        // reported the self-hosted stages as undetecting; that was an artefact of
+        // the driver, since a stage reading an unseeded segment sees zeros. **A
+        // measurement that drives a subject more weakly than the harness it
+        // describes reports a weaker result and blames the subject** — the
+        // narrower-population error this line keeps making.
+        let n_params = m.chunks[entry].param_count as usize;
+        let is_stream = m.chunks[entry].block_type == BlockType::Stream;
+        let seeds = if is_stream || n_params == 0 { 1 } else { SEEDS };
+        let subject_seeds = stage_seeds(&m, &name);
+        let ok_seeds: Vec<&Vec<u8>> = subject_seeds
+            .iter()
+            .filter_map(|(_, r)| r.as_ref().ok())
+            .collect();
+        let variants: Vec<(usize, Option<&[u8]>)> = if ok_seeds.is_empty() {
+            (0..seeds).map(|sd| (sd, None)).collect()
+        } else {
+            ok_seeds
+                .iter()
+                .flat_map(|b| (0..seeds).map(move |sd| (sd, Some(b.as_slice()))))
+                .collect()
+        };
+
+        let mut any_diff = false;
+        let mut any_compared = false;
+        let mut usable_mutants = 0usize;
+        // Tracked separately from a fault: the native side DECLINING an entry
+        // signature and the mutant TRAPPING both leave `any_compared` false, and
+        // they support different conclusions.
+        let mut native_declined = false;
+        'mutants: for (mutant, _what) in &mutants {
+            // A mutant the backend refuses, or that the resource analysis
+            // refuses, produced no comparison. An INADMISSIBLE mutant is not a
+            // wrong backend — it is a program the runtime would refuse, and
+            // lowering one is what killed an earlier run with SIGBUS.
+            if !keleusma_native::module_refusals(mutant, LowerOptions::default()).is_empty() {
+                continue;
+            }
+            if keleusma::verify::module_wcmu(mutant, &[]).is_err() {
+                continue;
+            }
+            usable_mutants += 1;
+            for (seed, stage_bytes) in variants.iter().copied() {
+                // **THE TOLERANT SIDE RUNS FIRST**, which the main sweep also
+                // documents: a mutation that makes the program TRAP is not a
+                // wrong backend either — checked arithmetic is supposed to trap
+                // and both sides do — but natively it arrives as a
+                // process-killing signal. Measured as SIGTRAP before this filter
+                // existed.
+                if run_vm(mutant, &table, seed, stage_bytes).is_err() {
+                    continue 'mutants;
+                }
+                let Ok(v) = run_vm(&m, &table, seed, stage_bytes) else {
+                    continue;
+                };
+                let Some(n) = run_native(mutant, &table, seed, stage_bytes) else {
+                    native_declined = true;
+                    continue;
+                };
+                any_compared = true;
+                if v.results != n.results
+                    || v.log != n.log
+                    || v.shared != n.shared
+                    || ret_pairs_differ(&v, &n)
+                {
+                    any_diff = true;
+                    break 'mutants;
+                }
+            }
+        }
+        if usable_mutants == 0 {
             mutant_inadmissible.push(name);
-            continue;
-        }
-        // **RUN THE MUTANT ON THE REFERENCE FIRST, and skip it if it FAULTS.**
-        //
-        // A mutation that makes the program trap is not a wrong backend either:
-        // checked arithmetic is supposed to trap, and both sides would. On the
-        // native side that arrives as a process-killing signal rather than a
-        // value, so an unfiltered sweep cannot report anything at all — measured,
-        // as SIGTRAP, after the admissibility filter above had already removed
-        // the SIGBUS case.
-        //
-        // What survives is the population this measurement is actually about:
-        // mutants that RUN and merely compute something different.
-        if run_vm(&mutant, &table, 0, None).is_err() {
-            mutant_faults.push(name);
-            continue;
-        }
-        let Ok(v) = run_vm(&m, &table, 0, None) else {
-            continue;
-        };
-        let Some(n) = run_native(&mutant, &table, 0, None) else {
+        } else if !any_compared && native_declined {
             mutant_declined.push(name);
-            continue;
-        };
-        let differs = v.results != n.results
-            || v.log != n.log
-            || v.shared != n.shared
-            || ret_pairs_differ(&v, &n);
-        if differs {
+        } else if !any_compared {
+            mutant_faults.push(name);
+        } else if any_diff {
             detected.push(name);
         } else {
             undetected.push(name);
@@ -4046,9 +4103,11 @@ fn which_subjects_would_notice_a_wrong_backend() {
     );
     println!(
         "\n  Scoped to ONE pre-registered family: Checked/plain Add-Sub, Mul,\n  \
-         BitAnd and Shl swaps,\n  \
-         first applicable site only. `undetected` means undetected AGAINST THAT,\n  \
-         not that the subject detects nothing."
+         BitAnd and Shl swaps, at up to THREE sites per module\n  \
+         (first, middle, last). `undetected` means undetected AGAINST THAT,\n  \
+         not that the subject detects nothing. Coverage for the self-hosted\n  \
+         stages also exists in `stage_differential.rs`, which seeds BOTH sides;\n  \
+         whether it detects these mutants is a separate, unasked question."
     );
     println!("================\n");
 
@@ -4065,6 +4124,24 @@ fn which_subjects_would_notice_a_wrong_backend() {
             + mutant_declined.len()
             + mutant_inadmissible.len()
             + mutant_faults.len()
+    );
+    // **A FLOOR, on the same principle as the coverage floors.** This figure now
+    // goes into the handoff, and a figure reported without a floor under it can
+    // collapse in silence — the defect this line closed one increment ago.
+    //
+    // A RATIO, because the measured population moves as the corpus and the
+    // mutation filters do. Calibrated 2026-08-29 at 38 detected of 50 measured
+    // (76%), with slack for a subject legitimately joining the insensitive set.
+    const DETECTION_RATIO_FLOOR: f64 = 0.60;
+    let ratio = detected.len() as f64 / measured as f64;
+    assert!(
+        ratio >= DETECTION_RATIO_FLOOR,
+        "{} of {measured} measured subjects detected a mutated backend ({:.0}%), \
+         below the {:.0}% floor calibrated against 38 of 50 on 2026-08-29. The \
+         differential's agreement is weaker evidence than it was",
+        detected.len(),
+        100.0 * ratio,
+        100.0 * DETECTION_RATIO_FLOOR
     );
     assert!(
         !detected.is_empty(),

@@ -608,6 +608,30 @@ Current sprint source of truth.
 > workspace **2467/0/88**, coverage re-derived and unchanged at 1070 of 1074.
 > See [`../decisions/OPERAND_WIDTH_RECOVERY.md`](../decisions/OPERAND_WIDTH_RECOVERY.md).
 
+> **Currency note (2026-08-29, V0.3.X line, fifth entry). THE PREVIOUS ENTRY'S 32/16 IS CORRECTED TO
+> 38/12, AND EIGHT OF THE TEN SELF-HOSTED STAGES DO NOT NOTICE A MUTATED BACKEND.**
+>
+> The fourth entry reported **32 detected, 16 undetected**. That census **drove every subject at seed 0
+> with no stage seed** while the main sweep seeds ten stages, so a stage read an unseeded segment, saw
+> zeros, and computed nothing. **A measurement that drives a subject more weakly than the harness it
+> describes reports a weaker result and blames the subject** — the **fifth** narrower-population error
+> on this line and the first published before being caught. Driving it the sweep's way gives 33/15;
+> sampling **three** mutation sites per module instead of one gives **38 detected, 12 undetected**.
+> That strengthening was chosen after seeing the undetected list, which is stated plainly because more
+> sites can only move subjects OUT of that column — it makes the finding harder to sustain, not easier.
+> **A false qualification was nearly published**: that the remaining stages are unseeded here and
+> covered elsewhere. `STAGE_SEEDED` carries **ten** stages including `lexer`, `parse`, `reconstruct`,
+> `verify_typed`, `verify_structural` and `verify_types`, all of which are in the undetected list — they
+> are seeded, run on real input, and still agree. **Eight of the ten stages, the modules the V0.3.0
+> goal depends on most, do not notice any of three arithmetic mutations.** Scoped to one pre-registered
+> family, three sites, and **`corpus_differential` only**: `stage_differential.rs` seeds BOTH sides and
+> whether it detects these mutants **has not been asked**, so "undetected here" is not "uncovered".
+> The figure now carries a **60% ratio floor**. Clippy caught that the rewrite left `mutant_declined`
+> never pushed, having folded a declined native side into a faulting mutant; the two were separated
+> rather than the counter deleted. No absorption needed. Workspace **2491/0/92**, `native_codegen`
+> **368/0/74**, censuses unmoved. See
+> [`../decisions/SUBJECT_DETECTION.md`](../decisions/SUBJECT_DETECTION.md).
+
 > **Currency note (2026-08-29, V0.3.X line, fourth entry). THE BACKEND LOWERS MODULES THE VIRTUAL
 > MACHINE WOULD REFUSE TO LOAD — A PRECONDITION GAP, MEASURED AT ZERO LIVE INSTANCES.**
 >
