@@ -8,7 +8,7 @@ keleusma run examples/scripts/<file>.kel
 
 | File | Topic | Feature |
 |------|-------|---------|
-| [`01_arithmetic.kel`](./01_arithmetic.kel) | Primitives and operators | `Word`, `Float`, `bool`, arithmetic, comparison, casts |
+| [`01_arithmetic.kel`](./01_arithmetic.kel) | Primitives and operators | `Word` arithmetic, `let` bindings, function calls |
 | [`02_struct_field.kel`](./02_struct_field.kel) | Composite types | Struct declaration, construction, field access |
 | [`03_enum_match.kel`](./03_enum_match.kel) | Pattern matching | Enum declaration, variant construction, `match` |
 | [`04_for_in.kel`](./04_for_in.kel) | Bounded iteration | `for` over arrays and ranges |
@@ -17,7 +17,7 @@ keleusma run examples/scripts/<file>.kel
 | [`07_refinement.kel`](./07_refinement.kel) | Refinement types | `newtype Name = Underlying where predicate;` with compile-time literal elision and runtime construction check |
 | [`08_method_dispatch.kel`](./08_method_dispatch.kel) | Traits and impls | Receiver-style method calls |
 | [`09_big_numbers.kel`](./09_big_numbers.kel) | Big-number arithmetic | Pattern-matched checked arms binding `(high, low)` halves of an `i128` intermediate |
-| [`10_multbyte.kel`](./10_multbyte.kel) | Byte-typed arithmetic | Multiplication on `Byte` operands |
+| [`10_multbyte.kel`](./10_multbyte.kel) | Multi-word arithmetic | Checked-arithmetic `overflow`/`underflow` arms carrying between `Word` digits |
 | [`11_signed.kel`](./11_signed.kel) | Signed compiled module | `signed` modifier on the entry function, Ed25519 signature flow through the CLI |
 | [`12_sensor_window.kel`](./12_sensor_window.kel) | Per-iteration composite, confined | A struct built once per `for` iteration and consumed inside it |
 | [`13_telemetry_stream.kel`](./13_telemetry_stream.kel) | Per-iteration composite, yielded | `loop main` streaming a struct built inside a `for`. **Not runnable through `keleusma run`** — see below |

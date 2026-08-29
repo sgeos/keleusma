@@ -13,6 +13,51 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-28 — The example index claimed things its files contradict
+
+**A COVERAGE MEASUREMENT DISAGREEING WITH THE DOCUMENTATION IS A SIGNAL ABOUT ONE OF THEM.** The
+op-tag census reported the unchecked arithmetic opcodes unreached by any corpus. A reader
+consulting `examples/scripts/README.md` would have found that surprising, because it described
+`10_multbyte.kel` as "Byte-typed arithmetic — Multiplication on `Byte` operands". **The file
+contains no `Byte` at all**; its own header says multi-WORD arithmetic over `Word` digits. The name
+means multi-word and the index read it as the type.
+
+**ZERO `Byte` ACROSS ALL FIFTEEN SHIPPED EXAMPLES**, verified two independent ways — a
+word-boundary pattern and a fixed-string count — because a `\b` escape had silently failed
+elsewhere in this session and the whole finding rested on that count. (BSD `grep -E` honours `\b`;
+BSD `sed` does not. Both were checked rather than assumed.)
+
+**PROTOTYPING THE GUARD BEFORE COMMITTING TO IT FOUND A SECOND BAD ROW.** Twelve checkable claims,
+**three** violations across **two** rows, nine correct rows passing. `01_arithmetic.kel` is sixteen
+lines using only `Word` while the index claimed `Word`, `Float`, `bool`, arithmetic, comparison and
+casts.
+
+**THE TWO ROWS ARE NOT THE SAME KIND OF WRONG.** For `10_multbyte.kel` the file's own header
+CONTRADICTS the index, so the index is simply false. For `01_arithmetic.kel` the Topic agrees with
+the file and only the FEATURE column overstates — which admits a second reading, that the example
+under-delivers on its own title. **Correcting the column is the defect fix; enriching the example is
+a design call on a curated progression and went to the operator instead.**
+
+**EXTENDING FROM TYPES TO KEYWORDS TOOK THE CHECK COUNT FROM FOUR TO TWELVE AND FOUND NOTHING
+FURTHER.** That is worth recording as a result rather than a non-event: the other nine claims —
+`for`, `match`, `signed`, `private data`, `loop main`, `newtype` — are honest. **Both directions
+were checked**, not only the one I cared about, because a guard tuned until it fires is not a guard.
+
+**COMMENTS ARE STRIPPED BEFORE MATCHING, PREEMPTIVELY.** A claim satisfied only by a comment is not
+demonstrated, and this repository has already had an instrument match a commented-out construct and
+report a finding that was not there. Verified to matter here: `10_multbyte.kel` mentions `overflow`
+in its header prose AND uses it in twelve match arms, and the guard passes because of the second.
+
+**DEMONSTRATED TO FIRE ON THE UNCORRECTED TEXT**, naming all three violations, with the mutation
+confirmed APPLIED (the reverted rows printed) and COMPILED before its result was believed — the
+three-step rule this session arrived at the hard way.
+
+**TWO QUESTIONS WENT TO THE OPERATOR RATHER THAN BEING DECIDED**: whether a shipped example should
+demonstrate `Byte`, and whether `01_arithmetic.kel` should be enriched to cover the primitives its
+title suggests. The first would close three of the four residual op tags, **and that is precisely
+why it must not be decided on those grounds** — closing a coverage number is not a reason to add
+user-facing documentation.
+
 ## 2026-08-28 — The last extraction probed, and a mutation rule that needed three witnesses
 
 **THE BRIEF SAID PROBE THE ORDERING QUESTION BEFORE WRITING ANY MAPPING. That was right, and the
