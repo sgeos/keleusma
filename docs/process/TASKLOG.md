@@ -608,6 +608,28 @@ Current sprint source of truth.
 > workspace **2467/0/88**, coverage re-derived and unchanged at 1070 of 1074.
 > See [`../decisions/OPERAND_WIDTH_RECOVERY.md`](../decisions/OPERAND_WIDTH_RECOVERY.md).
 
+> **Currency note (2026-08-29, V0.3.X line). A CENSUS THIS LINE PUBLISHES EVERY INCREMENT WAS
+> READING ENGLISH, AND ITS CLEAN COLUMN WAS AN ACCIDENT OF THE CORPUS.**
+>
+> `LowerError::UnsupportedOp(String)` was documented as *"an opcode outside the currently supported
+> subset"* and constructed at **31 sites** carrying four unrelated conditions: an opcode with no
+> lowering, a type the backend lacks, an input whose own integrity failed, and a defect in the crate.
+> `isa_lowering_census` built its **NAMED REFUSED** column by taking the leading alphanumeric run of
+> the message, so **a refusal's class was decided by English word order**. Demonstrated rather than
+> hypothesised: an injected out-of-range constant index yields `Named: {"Const"}, lowered: {}` from
+> the census's own query, crediting the `Const` opcode with having no lowering for a module whose only
+> fault was a malformed operand. **Every published figure was nonetheless correct**, because the
+> corpus never fires a misattributing site — the column was clean because of what the corpus contains,
+> not because the query could not go wrong, which is why the answer had to come from firing the site
+> rather than reading the source. Four typed variants now carry the opcode as **data**; changing the
+> variant's shape made the compiler enumerate every consumer, of which there was exactly one, and the
+> census's silent filter is now a loud assertion. `Internal` is distinct so a consumer can tell *"your
+> program uses a feature I lack"* from *"I am broken"*. **`Internal` was never fired, and the test
+> records that search rather than concluding unreachability.** Absorption 31 (`e3e7bf02`) is complete
+> with both predictions exact; workspace **2491/0/92**, `native_codegen` **362/0/73**, censuses
+> unmoved at 61 of 66, NAMED REFUSED `["Len"]`, 1070 of 1074 and 89841 of 89940. See
+> [`../decisions/REFUSAL_CLASSES.md`](../decisions/REFUSAL_CLASSES.md).
+
 > **Currency note (2026-08-28, V0.3.X line). THE OBLIGATION IS NOW COSTED, AND ITS PRICE IS ZERO
 > TODAY AND ONE ALREADY-REFUSED MODULE LATER.**
 >

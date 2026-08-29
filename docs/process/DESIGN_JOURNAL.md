@@ -1,5 +1,50 @@
 # Design Journal
 
+## 2026-08-28 — A census was reading English, and the column was clean by accident
+
+**Increment**: `LowerError::UnsupportedOp(String)` was documented as *"an opcode outside the currently
+supported subset"* and constructed at **31 sites** carrying four unrelated conditions — an opcode with
+no lowering, a type the backend lacks, an input whose own integrity failed, and a defect in this
+crate. The only thing separating them was the English in the message.
+
+That mattered because `isa_lowering_census` built its NAMED REFUSED column by **taking the leading
+alphanumeric run of the sentence** and keeping it when it matched an opcode name. So the class of a
+refusal was decided by word order. `chunk 0 has a Float in its signature` was excluded only because
+`chunk` is not an opcode; `Const({idx}) out of range` was not excluded, because `Const` is.
+
+**The demonstration came before the fix, and it had to.** Injecting an out-of-range constant index
+produced, from the census's own query, `Named: {"Const"}, lowered: {}` — the `Const` opcode credited
+with having no lowering, landing in the *published* column, for a module whose only fault was a
+malformed operand. The backend lowers `Const` in nearly every corpus module.
+
+**Every figure this line has published was nonetheless correct.** The corpus never fires a
+misattributing site. The column was clean because of what the corpus happens to contain, not because
+the query could not go wrong — which is exactly why reading the source could not settle it and firing
+the site could. That is the `a-clean-guard-proves-its-reach-first` lesson arriving in a place I did
+not expect it: the guard under suspicion was *my own instrument*, not the product.
+
+**The fix leans on the type system to do the enumeration.** Four variants, with the opcode carried as
+data. Changing the variant's *shape* rather than its contents made the compiler list every consumer;
+there was exactly one. The census's silent `isa.contains(head)` filter became a loud assertion, so a
+mis-typed refusal can no longer be dropped without trace — the old form's failure mode was silence.
+
+`Internal` is kept distinct from `UnsupportedOp` because a consumer who cannot tell *"your program
+uses a feature I lack"* from *"I am broken"* is invited to rewrite a program that was never at fault.
+
+**Three of my own guards fired during the work**, which is the return on writing them: the sweep read
+35 modules where the censuses read 74 (the **fourth** narrower-population defect on this line — the
+walk was not recursive), and the float premise check caught that `WireShape` renders as
+`Scalar { kind: 5 }`, so a text search for "Float" would have passed by never looking.
+
+**Not established**: `Internal` was never fired. Its sites are reached only when this crate's own
+invariants break. The test asserts only what can be — that the class exists, is distinct, and renders
+as a defect — and records the search rather than concluding unreachability.
+
+**Absorption 31** (`e3e7bf02`) conflicted in `REVERSE_PROMPT.md`, which both lines write. Resolved by
+**keeping both messages**, the peer's marked explicitly as a merge resolution rather than a relay:
+nothing in it was reviewed or endorsed here, and its figures describe that line's tree.
+
+
 ## 2026-08-28 — The obligation's blast radius is one module, and that module is already refused
 
 **Increment**: measure which corpus modules the yield-escape refusal *takes over* on the day `Stream`

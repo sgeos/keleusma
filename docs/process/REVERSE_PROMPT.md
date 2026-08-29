@@ -8,35 +8,42 @@ V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
 ## What this increment did
 
-**Costed the open soundness obligation, then put it in one document.**
+**Found that a number this line has published every increment was produced by parsing English, and
+that its correctness was an accident of the corpus.**
 
-The composite slot-reuse defect has had a guard (`LowerError::YieldEscapingLoopComposite`) for several
-increments, and that guard was already shown to be *present* and *fireable*. What was missing was its
-**price**. A guard whose cost nobody has measured is a guard a later reviewer deletes as speculative.
+`isa_lowering_census` reports **NAMED REFUSED: ["Len"]**. It built that column by taking the leading
+alphanumeric run of a free-form error message and keeping it when it matched an opcode name.
+`LowerError::UnsupportedOp(String)` was documented as *"an opcode outside the currently supported
+subset"* but was constructed at **31 sites** carrying four unrelated conditions.
 
-**Measured**: the refusal takes over exactly **one** corpus module, `13_telemetry_stream.kel`, on the
-day `Stream` lowers — and that module is refused *today* for `Stream` anyway. **Coverage does not
-fall, now or then.** The refusal changes reason, from unimplemented-feature to soundness.
+**Demonstrated, not argued.** Injecting an out-of-range constant index produced, from the census's own
+query, `Named: {"Const"}, lowered: {}` — the `Const` opcode credited with having no lowering, for a
+module whose only fault was a malformed operand. The backend lowers `Const` in nearly every corpus
+module.
 
-The measurement mutates compiled bytecode (strips `Op::Stream` from a clone) rather than weakening the
-backend to accept `Stream`. Weakening the backend would have made the test pass by making the product
-wrong, and would have measured a backend nobody will ship.
+**Every figure I have reported was nonetheless correct.** The corpus never fires a misattributing
+site. The column was clean because of what the corpus happens to contain, not because the query could
+not go wrong. Reading the source could not have settled that; firing the site did.
 
-**Consolidated** into `docs/decisions/COMPOSITE_SLOT_REUSE_OBLIGATION.md`: defect, guards and their
-strength, what is *not* covered, and a four-option cost table.
+Four typed variants now carry the opcode as data. Changing the variant's *shape* made the compiler
+enumerate every consumer — there was exactly one. The census's silent filter became a loud assertion,
+because the old form's failure mode was silence.
 
-## What I need from you, when convenient
+## What I want you to know, though nothing is blocked
 
-**A disposition on the obligation.** It is stated but not recommended, because the option that would
-actually fix it — advancing the composite epoch on overwrite, converting a silent wrong value into a
-`Stale` error — lives in `src/vm.rs` and the arena, **which this line may read and must not edit**.
+**Three of my own guards fired during this work**, which is the return on having written them. The
+worst was the **fourth** narrower-population defect on this line: my sweep read 35 modules where the
+censuses read 74, because the walk was not recursive. I keep making this one specific mistake, and I
+now check the population against a named consumer rather than against my intent.
 
-The standing tension, which no amount of work here resolves: **discharging this requires the planner
-to consume a confinement verdict, and consuming no verdict is exactly why a wrong verdict cannot
-miscompile today.** Both cannot be had for free. That trade is yours.
+**`Internal` was never fired.** Its sites are reached only when this crate's own invariants break. The
+test asserts only that the class exists, is distinct, and renders as a defect rather than a missing
+feature. **That is a fact about the search, not a proof of unreachability**, and it is written that
+way.
 
-Nothing is blocked on the answer. Three tripwires fail if the situation changes: if `Stream` lowers,
-if a corpus module acquires the escaping shape, or if the interprocedural residual stops being empty.
+**Absorption 31 conflicted in this file**, which both lines write. I kept **both** messages rather
+than discarding the peer's. Its block below is a **merge resolution, not a relay**: I did not review,
+re-derive, or endorse any of it, and its figures describe that line's tree.
 
 ## Verification
 
@@ -44,13 +51,12 @@ Both suites run **sequentially** (parallel invalidates the perf canary, 57x).
 
 | | result |
 |---|---|
-| workspace | **2488 passed, 0 failed, 92 binaries**, cargo exit 0 |
-| `native_codegen` gate step | **356 passed, 0 failed, 72 binaries**, exit 0 (fmt, clippy `-D warnings`, test, `doc -D warnings`) |
+| workspace | **2491 passed, 0 failed, 92 binaries**, cargo exit 0 |
+| `native_codegen` gate step | **362 passed, 0 failed, 73 binaries**, exit 0 (fmt, clippy `-D warnings`, test, `doc -D warnings`) |
 | ownership diff | empty over `src/` and `tests/` |
-| censuses | 1070 of 1074 chunks; 89841 of 89940 instances; 61 of 66 opcodes — all unmoved |
+| censuses | 61 of 66 opcodes; NAMED REFUSED `["Len"]`; 1070 of 1074 chunks; 89841 of 89940 instances — all unmoved |
 
-**Absorption 30** (`18cdb5d8`): predicted 2488/92 and 356/72 from the diff shape before merging. Both
-exact.
+**Absorptions 30 and 31**: predictions pinned from the diff shape before merging. All four exact.
 
 ## Standing constraints, unchanged
 
