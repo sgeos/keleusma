@@ -3485,6 +3485,12 @@ fn the_derived_operator_rows_agree_between_the_pipeline_and_the_reference() {
         // Two derived bindings in one body, declared out of alphabetical order so a set
         // comparison cannot be satisfied by sorting alone.
         "fn main() -> Word { let zz = 3 + 4; let aa = 1 + 2; zz + aa }",
+        // BYTE OPERANDS, which the reference counts as the same kind and the forest splits into
+        // three further lowering kinds. The first revision of this slice saw only the `Word` kind
+        // and this corpus was all-`Word`, so the test PASSED while silent about three of the four.
+        "fn f(a: Byte, b: Byte) -> Byte { let d = a + b; d }\nfn main() -> Word { 0 }",
+        "fn f(a: Byte, b: Byte) -> Byte { let d = a band b; d }\nfn main() -> Word { 0 }",
+        "fn f(a: Byte) -> Byte { let d = a lsl 1; d }\nfn main() -> Word { 0 }",
     ];
 
     let mut compared = 0usize;
@@ -3529,8 +3535,23 @@ fn the_derived_operator_rows_agree_between_the_pipeline_and_the_reference() {
     }
 
     assert!(
-        compared >= 6,
+        compared >= 9,
         "only {compared} derived bindings were compared, so this measures far less than it appears to"
+    );
+
+    // THE CORPUS MUST EXERCISE BOTH OPERAND WIDTHS, and this assertion is the reason the byte
+    // sources above cannot be quietly dropped. The first revision of this slice extracted only the
+    // `Word` forest kind while the corpus used only `Word` operands, so the comparison passed
+    // while saying nothing about three of the four kinds the reference counts as one.
+    let widths: BTreeSet<&str> = SOURCES
+        .iter()
+        .map(|s| if s.contains("Byte") { "byte" } else { "word" })
+        .collect();
+    assert_eq!(
+        widths,
+        ["byte", "word"].into_iter().collect(),
+        "the corpus no longer exercises both operand widths, so this test would be silent about \
+         whichever is missing"
     );
 }
 

@@ -53,6 +53,28 @@ the tail-versus-return claim — do not move, three of them composite, where the
 already established the two representations disagree about what a node IS. The pin still reports
 four of five.
 
+**AND THE FIRST REVISION OF THIS SLICE HAD A BLIND SPOT ITS OWN TEST COULD NOT SEE.** It extracted
+forest kind 3 and called that "the binary operator". **The reference's `Expr::BinOp` covers every
+binary operation whatever its operand types**, and the forest splits `Byte` operations into three
+further lowering kinds — 44 bitwise, 45 arithmetic, 60 shifts. So byte arithmetic produced a
+reference row and NO pipeline row, three ways.
+
+**The agreement test could not see it because its corpus used only `Word` operands.** That is the
+failure this repository has now recorded four times — *a guard whose corpus lacks the construct is a
+guard for a different question* — and I had quoted it in this slice's own brief, applying it to the
+eight node KINDS while missing the operand TYPES inside one of them.
+
+**CAUGHT BEFORE IT LANDED, AND CORRECTED ON THE BRANCH RATHER THAN AFTER.** The pull request was at
+twenty of twenty-two when the probe found it. The precedent is explicit: #239 was green at 22 of 22
+and deliberately NOT merged while a false statement was in it, because correcting on the branch
+costs a CI run and keeps an overclaim out of the tree. The doc comment said "only kind 1 moves",
+which was an overclaim: only the `Word` part of kind 1 moved.
+
+The corpus now carries byte arithmetic, bitwise and shift sources, and **asserts it exercises both
+operand widths**, so the blind spot cannot return by someone dropping a source. Reverting the
+predicate to kind 3 alone — the state the pull request was pushed in — now FAILS, which is the
+demonstration that the corpus addition is what makes the gap visible.
+
 **THE CHAIN CASE IS THE ONE THAT MATTERS AND IT WORKS.** `let a = 1 + 2; let b = a + 1` emits a
 second row whose left operand is the NAME `a` rather than a tag, which is precisely what lets the
 fixpoint resolve `b` after `a`. A mutation reporting a local read as a Word tag instead of a name

@@ -2290,6 +2290,31 @@ pub fn occurrence_rows_from_pipeline(src: &str) -> Vec<OccurrenceRow> {
     out
 }
 
+/// Whether a forest node is a BINARY OPERATOR as the reference counts one.
+///
+/// **FOUR FOREST KINDS, NOT ONE, AND THE FIRST REVISION OF THIS SLICE SAW ONLY THE FIRST.**
+/// `Expr::BinOp` in the reference covers every binary operation whatever its operand types, and
+/// contributes one row regardless. The stage's forest splits them by lowering strategy: `Word`
+/// operations, and three `Byte` families that promote, operate and truncate.
+///
+/// | forest kind | lowering |
+/// |---|---|
+/// | 3 | the `Word` operators |
+/// | 44 | `Byte` bitwise, via widen-operate-truncate |
+/// | 45 | `Byte` arithmetic |
+/// | 60 | `Byte` shifts |
+///
+/// All four carry their operands in `lhs` and `rhs`, so one predicate covers them.
+///
+/// **This was a blind spot the agreement test could not see**, because its corpus used only
+/// `Word` operands — the failure this repository has recorded three times as "a guard whose corpus
+/// lacks the construct is a guard for a different question". Found by asking what ELSE the
+/// reference calls a binary operator, after the same reasoning had been applied to the eight node
+/// KINDS but not to the operand TYPES inside one of them.
+fn is_binary_operator(kind: i64) -> bool {
+    matches!(kind, 3 | 44 | 45 | 60)
+}
+
 /// One operand of an expression row: `(value, form, name)`.
 ///
 /// Form 0 means `value` is a scalar TAG and `name` is empty. Form 1 means `name` is the
@@ -2318,7 +2343,8 @@ pub type ExprRow = (i64, ExprOperand, ExprOperand);
 ///
 /// # What moves, and what does not
 ///
-/// **Only kind 1, the binary operator.** The stage defines eight kinds and acts on all of them,
+/// **Only kind 1, the binary operator — but ALL of it**, across the four forest kinds the
+/// lowering splits it into (see `is_binary_operator`). The stage defines eight kinds and acts on all of them,
 /// but kind 1 is the only one `tyb_node_tag` resolves, so it is the one that makes
 /// `let d = 1 + 2` reach the bounded fixpoint — the gap the handoff names. The other seven —
 /// array elements, conditions, branch pairs, field and index access on a value, struct literals,
@@ -2399,7 +2425,7 @@ pub fn binop_expression_rows_from_pipeline(src: &str) -> (Vec<ExprRow>, Vec<(Str
         let mut row_of_node: alloc::collections::BTreeMap<i64, usize> =
             alloc::collections::BTreeMap::new();
         for (at, node) in body.nodes.iter().enumerate() {
-            if node.kind == 3 {
+            if is_binary_operator(node.kind) {
                 row_of_node.insert(at as i64, rows.len());
                 rows.push((1, operand(node.lhs), operand(node.rhs)));
             }
