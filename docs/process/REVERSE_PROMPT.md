@@ -11,7 +11,7 @@ V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 **Found that a number this line has published every increment was produced by parsing English, and
 that its correctness was an accident of the corpus.**
 
-`isa_lowering_census` reports **NAMED REFUSED: ["Len"]**. It built that column by taking the leading
+`native_codegen/tests/isa_lowering_census.rs` reports **NAMED REFUSED: ["Len"]**. It built that column by taking the leading
 alphanumeric run of a free-form error message and keeping it when it matched an opcode name.
 `LowerError::UnsupportedOp(String)` was documented as *"an opcode outside the currently supported
 subset"* but was constructed at **31 sites** carrying four unrelated conditions.
