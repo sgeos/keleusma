@@ -608,6 +608,29 @@ Current sprint source of truth.
 > workspace **2467/0/88**, coverage re-derived and unchanged at 1070 of 1074.
 > See [`../decisions/OPERAND_WIDTH_RECOVERY.md`](../decisions/OPERAND_WIDTH_RECOVERY.md).
 
+> **Currency note (2026-08-29, V0.3.X line, sixth entry). 38/12 BECOMES 39/11, SIX MORE MOVE OUT AT
+> SIXTEEN SITES, AND ONLY THREE OF TEN STAGES REMAIN UNDETECTED.**
+>
+> Two explanations fitted the undetected set equally well — **the site** (the sampled ops are not on a
+> path the seeds execute) or **the subject** (the compared observable does not reflect the
+> computation). Sweeping sixteen sites instead of three in exactly those subjects: **six of eleven are
+> detected deeper** (`piano_roll_3`, `piano_roll_4`, `reconstruct`, `verify_depth`,
+> `verify_structural`, `verify_types`), so **for those it was the site**. Only `codegen`, `parse` and
+> `verify_datalayout` remain of the ten stages, down from eight. **Two subjects now exclude the
+> sampling explanation by EXHAUSTION**: `verify_datalayout` had nine applicable sites, all nine were
+> mutated, five real comparisons, no difference; `rogue_gear` has exactly one. Those point at the
+> observable. **`codegen` and `parse` point nowhere** — 16 of 845 and 16 of 1015 distinguishes nothing,
+> and 3198 sites beyond the cap went unexercised, which the test prints because an unprinted cap reads
+> as exhaustive. **Six subjects produced ZERO comparisons**, so their `no` means nothing ran; `wire.kel`
+> has 929 sites and not one usable mutant. **The instrument defect was the same shape twice**: the deep
+> sweep had its OWN copy of the probe, handling a faulting mutant differently, and then its own copy of
+> the site SELECTION (`len / 2` versus `(total - 1) / 2`). Both disagreed about `verify_typed.kel`,
+> which is what took 38/12 to **39/11**. Both are now single functions, so they agree by construction.
+> Clippy separately caught the shared probe collapsing "inadmissible mutant" and "faulting mutant" into
+> one case; the probe now returns the distinction rather than the counters being deleted. No absorption
+> needed. Workspace **2491/0/92**, `native_codegen` **369/0/74**, censuses unmoved. See
+> [`../decisions/UNDETECTED_DEPTH.md`](../decisions/UNDETECTED_DEPTH.md).
+
 > **Currency note (2026-08-29, V0.3.X line, fifth entry). THE PREVIOUS ENTRY'S 32/16 IS CORRECTED TO
 > 38/12, AND EIGHT OF THE TEN SELF-HOSTED STAGES DO NOT NOTICE A MUTATED BACKEND.**
 >

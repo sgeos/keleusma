@@ -6,42 +6,50 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## A correction to what I told you last increment
+## The third correction in a row, all in the same direction
 
-I reported **32 detected, 16 undetected** for "which differential subjects would notice a wrong
-backend". **That number was produced by a bad driver of mine**, not by the subjects: my census ran
-every subject at seed 0 with no stage seed, while the harness it describes seeds ten stages. A stage
-reading an unseeded segment sees zeros and computes nothing.
+| I reported | why it was wrong |
+|---|---|
+| 32 detected, 16 undetected | my census drove subjects with no stage seed |
+| 38 / 12 | three mutation sites was too thin a basis |
+| **39 / 11** | two copies of the site *selection* disagreed |
 
-Driving it the harness's way, and sampling three mutation sites per module instead of one:
+**Sweeping sixteen sites instead of three moves six more out of undetected.** Only **three** of the ten
+self-hosted stages remain — `codegen`, `parse`, `verify_datalayout` — down from the eight I reported
+last increment.
 
-**38 detected, 12 undetected.**
+Every one of these corrections found the subjects **better** than I first said. I am reporting that
+pattern because it is a bias in my measurements, not a run of luck.
 
-Every self-hosted stage appearing in an undetected list should have looked wrong to me before you read
-it. This is the **fifth** narrower-population error on this line and the first I published before
-catching.
+## What the evidence now supports, and where it supports nothing
 
-## The finding that survives, and it is worth your attention
+Two explanations were live: **the site** was never executed, or **the observable** does not reflect the
+computation.
 
-**Eight of the ten self-hosted stages do not notice any of three arithmetic mutations** — `codegen`,
-`parse`, `reconstruct`, `verify_datalayout`, `verify_depth`, `verify_structural`, `verify_typed`,
-`verify_types`. These are the modules the V0.3.0 self-hosting goal depends on most.
+| subject | sites | tried | comparisons | verdict |
+|---|---|---|---|---|
+| `verify_datalayout.kel` | 9 | **9, exhaustive** | 5 | points at the **observable** |
+| `rogue_gear.kel` | 1 | **1, exhaustive** | 1 | points at the **observable** |
+| `codegen.kel` | 845 | 16 | 15 | **distinguishes nothing** |
+| `parse.kel` | 1015 | 16 | 15 | **distinguishes nothing** |
 
-**I nearly published an excuse instead.** I was about to write that they are unseeded here and covered
-elsewhere. `STAGE_SEEDED` carries ten stages including six of these; **they are seeded, run on real
-input, and still agree under mutation.** The true statement is stronger than the excuse.
+For the first two, exhaustion excludes the sampling explanation. For the last two, 16 of ~1000 sites
+supports neither reading, and I have said so rather than letting the table imply otherwise. **3198
+sites beyond the cap went unexercised**, which the test prints, because an unprinted cap reads as
+exhaustive.
 
-## What this does NOT say
+**Six subjects produced zero comparisons**, so their result means *nothing ran*, not *nothing was
+noticed*. `wire.kel` is the striking one: 929 applicable sites, not one usable mutant.
 
-- **Against ONE pre-registered family**, three sites per module. A different mutation might be caught.
-- **Within `corpus_differential` only.** `stage_differential.rs` seeds BOTH sides, and **whether it
-  detects these mutants is a question I have not asked.** "Undetected here" is not "uncovered", and
-  asking it is the obvious next increment.
-- **Nothing was deleted or exempted.** Coverage before equals coverage after.
+## The defect I fixed in my own instruments, which was the same shape twice
 
-The strengthening from one site to three was decided *after* seeing the undetected list. I say so
-because the direction matters: more sites can only move subjects out of that column, so it makes the
-finding harder to sustain rather than easier.
+The deep sweep re-derived its membership using **its own copy** of the probe, which handled a faulting
+mutant differently from the census's copy. They disagreed about `verify_typed.kel`. I extracted a
+shared probe — and then the **selection** disagreed too, one copy picking the middle site as `len / 2`
+and the other `(total - 1) / 2`. `verify_typed` moved again, which is what took 38/12 to 39/11.
+
+**A disagreement between two copies of the same query is invisible unless something compares them**,
+and nothing did. Both are single functions now. I should have reached for that the first time.
 
 ## Verification
 
@@ -50,11 +58,8 @@ Both suites run **sequentially** (parallel invalidates the perf canary, 57x).
 | | result |
 |---|---|
 | workspace | **2491 passed, 0 failed, 92 binaries**, cargo exit 0 |
-| `native_codegen` gate step | **368 passed, 0 failed, 74 binaries**, exit 0 (fmt, clippy `-D warnings`, test, `doc -D warnings`) |
+| `native_codegen` gate step | **369 passed, 0 failed, 74 binaries**, exit 0 (fmt, clippy `-D warnings`, test, `doc -D warnings`) |
 | censuses | 61 of 66; `["Len"]`; 1070 of 1074; 89841 of 89940 — all unmoved |
-
-The detection figure now carries a **60% ratio floor**, on the principle from two increments ago that a
-number reported to you without a floor can collapse in silence.
 
 **No absorption was needed**: already zero unabsorbed.
 

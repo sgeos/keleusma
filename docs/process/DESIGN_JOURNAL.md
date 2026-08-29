@@ -1,5 +1,47 @@
 # Design Journal
 
+## 2026-08-29 — The same query existed twice, twice, and the two copies disagreed
+
+**Increment**: last increment left twelve subjects showing no difference under **three** mutation
+sites, eight of them self-hosted stages. Three sites is a thin basis, and two explanations fit equally
+well: **the site** (the sampled ops are not on a path the seeds execute) or **the subject** (the
+compared observable does not reflect the computation). Only the second is a weakness in the
+differential, and they are distinguishable by sweeping far more sites in exactly the subjects that
+showed nothing.
+
+**Six of eleven are detected at sixteen sites.** For `piano_roll_3`, `piano_roll_4`, `reconstruct`,
+`verify_depth`, `verify_structural` and `verify_types` it was the site. **Only three of the ten
+self-hosted stages remain undetected**, down from eight — the third correction in a row, and all three
+went the same way: the subjects are better than I reported.
+
+**Two subjects now exclude the sampling explanation by exhaustion.** `verify_datalayout` had nine
+applicable sites and all nine were mutated, producing five real comparisons and no difference;
+`rogue_gear` has exactly one site. For those the evidence points at the observable. **For `codegen` and
+`parse` it points nowhere**: 16 of 845 and 16 of 1015 sites distinguishes nothing, and saying so is the
+difference between a finding and an impression. 3198 sites beyond the cap went unexercised and the test
+prints that, because a cap that is not printed reads as exhaustive.
+
+**The instrument defect was the interesting part, and it was the same shape twice.** The deep sweep
+re-derived its membership by re-running a shallow probe **of its own**, and the two implementations
+handled a faulting mutant differently — one continued to the next mutant, the other abandoned the
+subject. They disagreed on `verify_typed.kel`. I extracted a shared probe. Then the *selection*
+disagreed too: one copy picked the middle site as `len / 2`, the other `(total - 1) / 2`, which differ
+for some lengths — and `verify_typed` moved again, this time from undetected to detected, taking the
+headline from 38/12 to **39/11**.
+
+**A disagreement between two copies of "the same query" is invisible unless something compares them**,
+and nothing did. Both are now single functions, so they agree by construction rather than by
+coincidence. That is the fix I should have reached for the first time rather than the second.
+
+**Clippy also caught me collapsing a distinction to silence a lint.** The shared probe folded
+"inadmissible mutant" and "faulting mutant" into one unusable case, leaving two counters unwritten.
+Those support different conclusions — a program the runtime refuses versus one both sides correctly
+trap on — so the probe now returns the distinction rather than the counters being deleted.
+
+**Six subjects produced ZERO comparisons**, so their `no` means nothing ran. `wire.kel` is the striking
+one: 929 applicable sites and not one usable mutant.
+
+
 ## 2026-08-29 — I corrected a figure I published one increment ago, twice, in the same direction
 
 **Increment**: last increment reported **32 detected, 16 undetected** for "which differential subjects

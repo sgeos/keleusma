@@ -3901,22 +3901,13 @@ fn pre_registered_sites(m: &Module) -> Vec<(usize, usize, Op)> {
 /// The choice of first/middle/last is positional and deterministic, not picked
 /// by reading which sites the insensitive subjects happen to execute.
 fn sampled_mutants(m: &Module) -> Vec<(Module, String)> {
-    let sites = pre_registered_sites(m);
-    if sites.is_empty() {
-        return Vec::new();
-    }
-    let mut idx = vec![0usize, sites.len() / 2, sites.len() - 1];
-    idx.sort_unstable();
-    idx.dedup();
-    idx.iter()
-        .map(|&i| {
-            let (ci, oi, rep) = sites[i];
-            let mut mutated = m.clone();
-            let what = format!("chunk {ci} op {oi} -> {rep:?}");
-            mutated.chunks[ci].ops[oi] = rep;
-            (mutated, what)
-        })
-        .collect()
+    // **Delegates, because it was a second copy of the same selection.** This
+    // picked the middle site as `len / 2` while `sampled_mutants_capped` picks
+    // `(total - 1) / 2`; the two differ for some lengths, so the census and the
+    // deep sweep disagreed about which subjects showed nothing at three sites —
+    // `verify_typed.kel` sat in one list and not the other. Sharing the code
+    // makes them agree by construction rather than by coincidence.
+    sampled_mutants_capped(m, 3).0
 }
 
 /// **WOULD EACH SUBJECT NOTICE A WRONG BACKEND?**
@@ -4012,59 +4003,17 @@ fn which_subjects_would_notice_a_wrong_backend() {
                 .collect()
         };
 
-        let mut any_diff = false;
-        let mut any_compared = false;
-        let mut usable_mutants = 0usize;
-        // Tracked separately from a fault: the native side DECLINING an entry
-        // signature and the mutant TRAPPING both leave `any_compared` false, and
-        // they support different conclusions.
-        let mut native_declined = false;
-        'mutants: for (mutant, _what) in &mutants {
-            // A mutant the backend refuses, or that the resource analysis
-            // refuses, produced no comparison. An INADMISSIBLE mutant is not a
-            // wrong backend — it is a program the runtime would refuse, and
-            // lowering one is what killed an earlier run with SIGBUS.
-            if !keleusma_native::module_refusals(mutant, LowerOptions::default()).is_empty() {
-                continue;
-            }
-            if keleusma::verify::module_wcmu(mutant, &[]).is_err() {
-                continue;
-            }
-            usable_mutants += 1;
-            for (seed, stage_bytes) in variants.iter().copied() {
-                // **THE TOLERANT SIDE RUNS FIRST**, which the main sweep also
-                // documents: a mutation that makes the program TRAP is not a
-                // wrong backend either — checked arithmetic is supposed to trap
-                // and both sides do — but natively it arrives as a
-                // process-killing signal. Measured as SIGTRAP before this filter
-                // existed.
-                if run_vm(mutant, &table, seed, stage_bytes).is_err() {
-                    continue 'mutants;
-                }
-                let Ok(v) = run_vm(&m, &table, seed, stage_bytes) else {
-                    continue;
-                };
-                let Some(n) = run_native(mutant, &table, seed, stage_bytes) else {
-                    native_declined = true;
-                    continue;
-                };
-                any_compared = true;
-                if v.results != n.results
-                    || v.log != n.log
-                    || v.shared != n.shared
-                    || ret_pairs_differ(&v, &n)
-                {
-                    any_diff = true;
-                    break 'mutants;
-                }
-            }
-        }
-        if usable_mutants == 0 {
-            mutant_inadmissible.push(name);
-        } else if !any_compared && native_declined {
-            mutant_declined.push(name);
-        } else if !any_compared {
+        // **THE SHARED PROBE**, so this census and the deep sweep cannot classify
+        // a subject differently. They once did, on `verify_typed.kel`, because
+        // each had its own copy handling a faulting mutant differently.
+        let out = probe_mutants(&m, &mutants, &table, &variants);
+        let any_diff = out.differed;
+        if out.usable == 0 && out.faulted > 0 {
             mutant_faults.push(name);
+        } else if out.usable == 0 && out.inadmissible > 0 {
+            mutant_inadmissible.push(name);
+        } else if out.usable == 0 {
+            mutant_declined.push(name);
         } else if any_diff {
             detected.push(name);
         } else {
@@ -4204,5 +4153,269 @@ fn no_lowerable_corpus_module_is_unbounded() {
          Either the module should not lower, or `lower_module` should require \
          admissibility rather than merely documenting it",
         unbounded.len()
+    );
+}
+
+/// The single mutation probe both censuses use.
+///
+/// **Written once because it was written twice.** The deep sweep re-derived
+/// membership by re-running a shallow probe of its own, and the two
+/// implementations handled a faulting mutant differently — one `continue`d to the
+/// next mutant, the other abandoned the subject. They disagreed on
+/// `verify_typed.kel`, and a disagreement between two copies of "the same query"
+/// is invisible unless something compares them. Sharing the code makes the
+/// disagreement impossible rather than detectable.
+///
+/// Returns whether any mutant produced an observable difference, plus the counts
+/// needed to tell UNMEASURED apart from undetected. The two unmeasured reasons
+/// are kept distinct because they support different conclusions: a mutant the
+/// resource analysis refuses is an inadmissible program, while one that faults is
+/// a program both sides correctly trap on.
+struct ProbeOutcome {
+    differed: bool,
+    /// Mutants that produced a real comparison.
+    usable: usize,
+    /// Mutants the backend or the resource analysis refused.
+    inadmissible: usize,
+    /// Mutants that made the program fault on the reference side.
+    faulted: usize,
+}
+
+fn probe_mutants(
+    original: &Module,
+    mutants: &[(Module, String)],
+    table: &[NativeEntry],
+    variants: &[(usize, Option<&[u8]>)],
+) -> ProbeOutcome {
+    let mut usable = 0usize;
+    let mut inadmissible = 0usize;
+    let mut faulted = 0usize;
+    for (mutant, _what) in mutants {
+        // An INADMISSIBLE mutant is not a wrong backend: it is a program the
+        // runtime would refuse, and lowering one killed a run with SIGBUS.
+        if !keleusma_native::module_refusals(mutant, LowerOptions::default()).is_empty() {
+            inadmissible += 1;
+            continue;
+        }
+        if keleusma::verify::module_wcmu(mutant, &[]).is_err() {
+            inadmissible += 1;
+            continue;
+        }
+        let mut compared = false;
+        let mut diff = false;
+        let mut hit_fault = false;
+        for (seed, sb) in variants.iter().copied() {
+            // The tolerant side first. A mutation that makes the program TRAP is
+            // not a wrong backend either — both sides trap — but natively it
+            // arrives as a process-killing signal. Measured as SIGTRAP.
+            if run_vm(mutant, table, seed, sb).is_err() {
+                hit_fault = true;
+                break;
+            }
+            let Ok(v) = run_vm(original, table, seed, sb) else {
+                continue;
+            };
+            let Some(n) = run_native(mutant, table, seed, sb) else {
+                continue;
+            };
+            compared = true;
+            if v.results != n.results
+                || v.log != n.log
+                || v.shared != n.shared
+                || ret_pairs_differ(&v, &n)
+            {
+                diff = true;
+                break;
+            }
+        }
+        if compared {
+            usable += 1;
+        } else if hit_fault {
+            faulted += 1;
+        }
+        if diff {
+            return ProbeOutcome {
+                differed: true,
+                usable,
+                inadmissible,
+                faulted,
+            };
+        }
+    }
+    ProbeOutcome {
+        differed: false,
+        usable,
+        inadmissible,
+        faulted,
+    }
+}
+
+/// Up to `cap` sites per module, spread evenly across the applicable ones.
+///
+/// Generalises `sampled_mutants`, which is this with `cap == 3`. Positional and
+/// deterministic: the sites are chosen by index, not by reading which ones the
+/// insensitive subjects happen to execute.
+fn sampled_mutants_capped(m: &Module, cap: usize) -> (Vec<(Module, String)>, usize) {
+    let sites = pre_registered_sites(m);
+    let total = sites.len();
+    if total == 0 || cap == 0 {
+        return (Vec::new(), total);
+    }
+    let take = cap.min(total);
+    let mut idx: Vec<usize> = (0..take)
+        .map(|k| {
+            if take == 1 {
+                0
+            } else {
+                k * (total - 1) / (take - 1)
+            }
+        })
+        .collect();
+    idx.dedup();
+    let out = idx
+        .iter()
+        .map(|&i| {
+            let (ci, oi, rep) = sites[i];
+            let mut mutated = m.clone();
+            let what = format!("chunk {ci} op {oi} -> {rep:?}");
+            mutated.chunks[ci].ops[oi] = rep;
+            (mutated, what)
+        })
+        .collect();
+    (out, total)
+}
+
+/// **IS IT THE SITE, OR THE SUBJECT?**
+///
+/// `which_subjects_would_notice_a_wrong_backend` mutates three sites per module
+/// and leaves twelve subjects showing no difference, eight of them self-hosted
+/// stages seeded with real input. **Three sites is a thin basis for that**, and
+/// two explanations fit equally well:
+///
+/// * **the site** — the sampled ops are not on a path the seeds execute;
+/// * **the subject** — the compared observable does not reflect the computation.
+///
+/// Only the second is a weakness in the differential. They are distinguishable
+/// by sweeping far more sites in exactly the subjects that showed nothing.
+///
+/// # What a null result here would and would not establish
+///
+/// It would strengthen the claim from "missed three mutations" to "missed every
+/// arithmetic mutation exercised in this module". **It would not prove the
+/// observable is weak**, because "no sampled site is executed under these seeds"
+/// remains live. The printed per-subject denominators are what let a reader tell
+/// those apart rather than take a verdict on trust.
+#[test]
+fn how_deep_does_the_undetected_set_go() {
+    /// Disclosed rather than silent: a cap that is not printed reads as
+    /// exhaustive. Sites beyond it are reported per subject.
+    const SITE_CAP: usize = 16;
+
+    let mut rows: Vec<(String, usize, usize, usize, bool)> = Vec::new();
+    for p in sources() {
+        let name = p
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("?")
+            .to_string();
+        let Some(src) = source_for(&p) else { continue };
+        let Some(m) = tokenize(&src)
+            .ok()
+            .and_then(|t| parse(&t).ok())
+            .and_then(|a| compile(&a).ok())
+        else {
+            continue;
+        };
+        if !keleusma_native::module_refusals(&m, LowerOptions::default()).is_empty() {
+            continue;
+        }
+        let Some(entry) = m.entry_point else { continue };
+        if !params_are_scalar(&m, entry) {
+            continue;
+        }
+        let table = native_table(&m);
+        if table.len() > STUBS {
+            continue;
+        }
+        // **The three-site sweep decides membership**, re-run rather than
+        // restated. A hand-copied list of the twelve could drift from the query
+        // that produced it and nobody would see the two disagree.
+        let (shallow, _) = sampled_mutants_capped(&m, 3);
+        if shallow.is_empty() {
+            continue;
+        }
+
+        let n_params = m.chunks[entry].param_count as usize;
+        let is_stream = m.chunks[entry].block_type == BlockType::Stream;
+        let seeds = if is_stream || n_params == 0 { 1 } else { SEEDS };
+        let subject_seeds = stage_seeds(&m, &name);
+        let ok_seeds: Vec<&Vec<u8>> = subject_seeds
+            .iter()
+            .filter_map(|(_, r)| r.as_ref().ok())
+            .collect();
+        let variants: Vec<(usize, Option<&[u8]>)> = if ok_seeds.is_empty() {
+            (0..seeds).map(|sd| (sd, None)).collect()
+        } else {
+            ok_seeds
+                .iter()
+                .flat_map(|b| (0..seeds).map(move |sd| (sd, Some(b.as_slice()))))
+                .collect()
+        };
+
+        let shallow_diff = probe_mutants(&m, &shallow, &table, &variants).differed;
+        if shallow_diff {
+            continue; // detected at three sites; not part of the question
+        }
+        let (deep_mutants, total_sites) = sampled_mutants_capped(&m, SITE_CAP);
+        let deep = probe_mutants(&m, &deep_mutants, &table, &variants);
+        let (deep_diff, usable) = (deep.differed, deep.usable);
+        rows.push((name, total_sites, deep_mutants.len(), usable, deep_diff));
+    }
+
+    println!("\n================ IS IT THE SITE, OR THE SUBJECT?");
+    println!("  Subjects that showed NO difference at three sites, re-swept at up");
+    println!("  to {SITE_CAP} sites. `cmp` is how many mutants survived the");
+    println!("  admissibility and fault filters to produce a real comparison.\n");
+    println!(
+        "  {:28} {:>6} {:>6} {:>5}  detected deeper?",
+        "subject", "sites", "tried", "cmp"
+    );
+    let mut moved = 0usize;
+    for (n, total, tried, usable, diff) in &rows {
+        if *diff {
+            moved += 1;
+        }
+        println!(
+            "  {n:28} {total:>6} {tried:>6} {usable:>5}  {}",
+            if *diff { "YES" } else { "no" }
+        );
+    }
+    let dropped: usize = rows
+        .iter()
+        .map(|(_, t, tr, _, _)| t.saturating_sub(*tr))
+        .sum();
+    println!(
+        "\n  {} subject(s) re-swept; {moved} moved OUT of undetected; {dropped} site(s) \
+         beyond the cap were NOT exercised.",
+        rows.len()
+    );
+    println!(
+        "  A null row is evidence, not proof: \"no sampled site is executed under\n  \
+         these seeds\" stays live, which is what the `sites` and `cmp` columns are\n  \
+         for."
+    );
+    println!("================\n");
+
+    assert!(
+        !rows.is_empty(),
+        "no subject was re-swept, so this test measured nothing. Either the \
+         three-site sweep now detects everywhere — in which case the finding it \
+         supports has changed and must be restated — or this query stopped \
+         selecting"
+    );
+    assert!(
+        rows.iter().any(|(_, _, _, usable, _)| *usable > 0),
+        "every re-swept subject produced ZERO usable comparisons, so the `no` \
+         column means 'nothing ran', not 'nothing was noticed'"
     );
 }
