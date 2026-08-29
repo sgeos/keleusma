@@ -147,6 +147,23 @@ soundness item: **the yield-escape refusal is still shadowed**, because the esca
 refused — now asserted by a test rather than inferred. One gap named and not fixed: a tail-yielded
 composite lowers and nothing in the tree executes it.
 
+**The name audit closes at zero, and I am stopping it — that is the result rather than a gap in it.**
+The third and largest class was too big to read carefully, so I scaled the method instead of the
+effort: a universal claim resting on a body that never iterates is mechanically detectable, which cut
+36 names to 7 worth reading. **All seven are sound.** Hit rates across the three classes are **2, 1,
+0**, totalling 3 of 29 read.
+
+**Three classes with a declining yield is evidence the habit is bounded**, and the brief I wrote before
+this pass said a null result would be the signal to stop. Writing the stopping condition down
+beforehand is what makes this a decision rather than fatigue.
+
+**Two limits, because a clean result invites overreading.** The triage is a filter with known false
+positives, so its 29 were not read and I do not claim they were. And names with no syntactic marker
+are unbounded — the canary defect was caught by reading, not by any pattern, so no rule-based rate
+closes the question.
+
+Absorption 27 is in, its prediction hit exactly.
+
 **I audited the blind spot the previous audit had named, which is the only reason it was findable.**
 The capability class — names claiming something *can*, *cannot* or *must* happen — is 11 of 325, and
 **one overclaimed**. Cumulatively **3 of 22** across the two classes examined.

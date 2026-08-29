@@ -239,6 +239,26 @@ Current sprint source of truth.
 > **THREE CHECKS WRITTEN THIS SESSION COULD NOT FAIL**, each satisfied by a different part of a
 > document from the one it was about. Mutation caught all three; reading caught none.
 
+> **Currency note (2026-08-28, V0.3.X line, eighteenth entry). THE NAME AUDIT CLOSES AT ZERO, AND
+> STOPPING IS THE RESULT.**
+>
+> The third and largest class — a quantifier somewhere other than the front — is **36 of 325**, too
+> many to read at the care the first two received, so **the method scaled instead of the effort**: a
+> universal claim resting on a body that never iterates is mechanically detectable, and **29 iterate,
+> 7 do not**. The seven were read and **all are sound**, the strongest candidate genuinely building,
+> linking and running a binary, the rest asserting over a fully enumerated population or carrying a
+> quantifier scoped inside a single subject.
+>
+> **Hit rates across the three classes are 2, 1, 0**, totalling **3 of 29 read across 58 names**.
+> **Auditing names stops here.** The brief written before this pass said that a null result would be
+> the signal to stop and that continuing would be momentum rather than judgement, which is what makes
+> this a decision rather than fatigue. Two limits are stated: the triage is a filter with known false
+> positives so its 29 were not read, and names with no syntactic marker remain unbounded — the canary
+> defect was caught by reading, not by a pattern. Noted and not fixed: the `retcon_m2` test skips
+> silently without a C compiler. Absorption 27 complete, prediction hit exactly. `native_codegen`
+> **353/0/70**, workspace **2482/0/90**; censuses unchanged at **61 of 66**, **1070 of 1074**,
+> **89841 of 89940**.
+
 > **Currency note (2026-08-28, V0.3.X line, seventeenth entry). THE BLIND SPOT AUDITED TOO;
 > CUMULATIVE 3 OF 22.**
 >

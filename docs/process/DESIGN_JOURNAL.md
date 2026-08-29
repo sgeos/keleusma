@@ -326,6 +326,48 @@ two-segment form, which genuinely differs, and it fired with its own message.
 kinds is missing from its probes, and removing the structs makes it fail with that message. The
 previous slice learned this the hard way: a guard whose corpus lacks a construct is a guard for a
 different question.
+## 2026-08-28 — [v0.3.0] The audit closes at zero, and stopping is the result
+
+**THE THIRD CLASS WAS TOO BIG TO READ, SO THE METHOD SCALED INSTEAD OF THE EFFORT.** Names carrying a
+quantifier somewhere other than the front number **36 of 325**. A universal claim resting on a body
+that never iterates is the shape most likely to overclaim, and that is mechanically detectable: **29
+iterate, 7 do not.** The seven were read.
+
+**All seven are sound.** The strongest candidate,
+`m2_a_buffer_large_enough_never_reaches_the_arena_at_run_time`, genuinely builds, links and **runs** a
+binary — "at run time" is demonstrated, not assumed. The others assert over a fully enumerated
+population, or carry a quantifier scoped **inside** a single subject: *"a module with no float
+anywhere"* describes one program rather than quantifying over many, which is why the pattern matched
+it and the reading cleared it.
+
+### The result is the decision
+
+| class | members | read | overclaimed |
+|---|---|---|---|
+| leading quantifier | 11 | 11 | 2 |
+| capability claim | 11 | 11 | 1 |
+| mid-name quantifier | 36 | 7 | **0** |
+
+**Hit rates 2, 1, 0.** Three classes with a declining yield is evidence the habit is bounded.
+**Auditing names stops here** — and the brief written before this pass said exactly that: *"if this
+class yields nothing, that is itself the signal to stop... continuing past that is momentum rather
+than judgement."* **Writing the stopping condition down beforehand is what makes stopping a decision
+rather than fatigue.**
+
+### Two limits, stated because a clean result invites overreading
+
+The triage is a **filter with known false positives** — four of the seven were flagged only because
+their quantifier scopes inside the subject — so **its 29 were not read**, and the coverage claim says
+so. And names with no syntactic marker remain unbounded: **the canary defect was caught by reading,
+not by any pattern**, so no rule-based rate can close the question.
+
+### One thing noticed and not fixed
+
+The `m2` test **skips silently when no C compiler is present**, passing without testing anything. It
+prints the skip loudly, which is the mitigating half, and it is a vacuity concern rather than a
+name-versus-body one — recorded here so it is not lost, not repaired because it is outside what this
+pass was about.
+
 ## 2026-08-28 — [v0.3.0] Auditing the blind spot the previous audit named
 
 **THE PREVIOUS AUDIT RECORDED WHAT IT COULD NOT SEE**, which is the only reason this increment had a
