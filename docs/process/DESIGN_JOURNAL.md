@@ -13,6 +13,78 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-28 — The derived-operand gap closes, after three wrong sizings from three producers
+
+**THE GAP THE HANDOFF NAMED FOR FOUR SESSIONS IS CLOSED FOR THE BINARY OPERATOR.**
+`let d = 1 + 2` now reaches the type channel from the pipeline as an operator row plus the index a
+form-2 binding resolves through — the shape the stage's bounded fixpoint needs, and the shape that
+previously lived only in the reference's syntax tree.
+
+**I MIS-SIZED THIS THREE TIMES, EACH BY READING A PRODUCER.**
+
+| attempt | what I read | conclusion | verdict |
+|---|---|---|---|
+| first | the reference extraction's line count | "eight node kinds, three composite" | wrong about the obstacle |
+| second | the reference's visitor discipline | "preorder against postorder" | wrong about the obstacle |
+| third | the forest's child channels | "a walk over six side-tables" | true, **and not required** |
+
+**THE ANSWER WAS IN THE CONSUMER AND TOOK TWENTY MINUTES.** `verify_types.kel` reads the expression
+table in exactly two places: `tyb_node_tag`, indexed by `ty.btag[b]` for a form-2 binding, and a
+per-row predicate examining row `i` in isolation. **Nothing sweeps it in order.** Verified from the
+other side too: the harness builds `derived` as `(name, base + i)`, a position in its own flattened
+output that nothing outside those two channels compares. **The contract is rows plus a
+per-derived-binding index, mutually consistent — order is free.**
+
+**THE GENERALISATION MIRRORS ONE THIS SESSION ALREADY PAID FOR TWICE.** Earlier: *read the record
+stream, not the parser's internals*, when the producer's data structures said a slice was large and
+the wire already carried it. Now: **read what CONSUMES the data, not what produces it.** The unified
+rule is that **the requirement lives at the boundary, not in either implementation** — and I have
+now been wrong on the producer side five times and right on the boundary side every time.
+
+**IT ALSO DECIDED THE TEST.** Comparing index for index against the reference would have tested a
+coincidence of traversal order the stage does not require — a check constraining more than the thing
+it checks. The comparison is on the RELATION: for each binding the reference calls derived, does the
+pipeline associate it with a row of the same CONTENT? Order-free, and it tests what is consumed.
+
+**ONLY KIND 1 MOVES, AND THE FUNCTION IS NAMED SO THE COUNT PIN CANNOT ROUND UP.** The stage defines
+eight kinds and acts on all of them; kind 1 is the only one `tyb_node_tag` resolves. The other seven
+— array elements, conditions, branch pairs, field and index access on a value, struct literals, and
+the tail-versus-return claim — do not move, three of them composite, where the occurrences slice
+already established the two representations disagree about what a node IS. The pin still reports
+four of five.
+
+**AND THE FIRST REVISION OF THIS SLICE HAD A BLIND SPOT ITS OWN TEST COULD NOT SEE.** It extracted
+forest kind 3 and called that "the binary operator". **The reference's `Expr::BinOp` covers every
+binary operation whatever its operand types**, and the forest splits `Byte` operations into three
+further lowering kinds — 44 bitwise, 45 arithmetic, 60 shifts. So byte arithmetic produced a
+reference row and NO pipeline row, three ways.
+
+**The agreement test could not see it because its corpus used only `Word` operands.** That is the
+failure this repository has now recorded four times — *a guard whose corpus lacks the construct is a
+guard for a different question* — and I had quoted it in this slice's own brief, applying it to the
+eight node KINDS while missing the operand TYPES inside one of them.
+
+**CAUGHT BEFORE IT LANDED, AND CORRECTED ON THE BRANCH RATHER THAN AFTER.** The pull request was at
+twenty of twenty-two when the probe found it. The precedent is explicit: #239 was green at 22 of 22
+and deliberately NOT merged while a false statement was in it, because correcting on the branch
+costs a CI run and keeps an overclaim out of the tree. The doc comment said "only kind 1 moves",
+which was an overclaim: only the `Word` part of kind 1 moved.
+
+The corpus now carries byte arithmetic, bitwise and shift sources, and **asserts it exercises both
+operand widths**, so the blind spot cannot return by someone dropping a source. Reverting the
+predicate to kind 3 alone — the state the pull request was pushed in — now FAILS, which is the
+demonstration that the corpus addition is what makes the gap visible.
+
+**THE CHAIN CASE IS THE ONE THAT MATTERS AND IT WORKS.** `let a = 1 + 2; let b = a + 1` emits a
+second row whose left operand is the NAME `a` rather than a tag, which is precisely what lets the
+fixpoint resolve `b` after `a`. A mutation reporting a local read as a Word tag instead of a name
+fires the agreement test.
+
+**A SECOND GUARD FOR A FAILURE THE FIRST CANNOT SEE**: every index a derived binding reports must
+address a row the pipeline actually emitted, and that row must be an operator. Without it the
+agreement could hold while an index pointed at nothing, because a lookup that misses simply
+contributes no comparison — a vacuity by omission rather than by an empty set.
+
 ## 2026-08-28 — The project instructions stated test counts three times wrong
 
 **GENERALISING THE PREVIOUS INCREMENT FOUND THE LARGEST INSTANCE IMMEDIATELY.** Having corrected the
