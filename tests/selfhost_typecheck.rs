@@ -3517,7 +3517,7 @@ fn the_derived_operator_rows_agree_between_the_pipeline_and_the_reference() {
             })
             .collect();
 
-        let (rows, pipe_derived) = keleusma::selfhost::binop_expression_rows_from_pipeline(src);
+        let (rows, pipe_derived) = keleusma::selfhost::expression_rows_from_pipeline(src);
         let got: BTreeSet<DerivedRelation> = pipe_derived
             .iter()
             .filter_map(|(n, row)| {
@@ -3566,7 +3566,7 @@ fn every_derived_row_index_addresses_an_operator_row_the_pipeline_emitted() {
     const SRC: &str = "fn g() -> Word { 1 }\n\
                        fn f(p: Word) -> Word { let q = p + 1; let r = q + g(); r }\n\
                        fn main() -> Word { let a = 1 + 2; f(a) }";
-    let (rows, derived) = keleusma::selfhost::binop_expression_rows_from_pipeline(SRC);
+    let (rows, derived) = keleusma::selfhost::expression_rows_from_pipeline(SRC);
 
     assert!(
         derived.len() >= 3 && rows.len() >= 3,
@@ -3583,4 +3583,246 @@ fn every_derived_row_index_addresses_an_operator_row_the_pipeline_emitted() {
             "binding `{name}` names row {idx}, which is not a binary operator: {row:?}"
         );
     }
+}
+
+/// One expression row keyed for multiset comparison: `(kind, left, right)`.
+///
+/// Named for the same reason `DerivedRelation` is: clippy asks at this depth and the ask is right.
+#[cfg(feature = "self-host")]
+type ExprRowKey = (
+    i64,
+    keleusma::selfhost::ExprOperand,
+    keleusma::selfhost::ExprOperand,
+);
+
+/// **THE CONDITION AND BRANCH-PAIR ROWS AGREE BETWEEN THE PIPELINE AND THE REFERENCE.**
+///
+/// Two more of the eight expression kinds, and they share one forest node: `push_if` keeps the
+/// condition in `args` and the branches in `lhs`/`rhs`.
+///
+/// # The branch VALUE is the tail, not the head of a statement chain
+///
+/// The reference takes `then_block.tail_expr`. For a branch that is a bare expression the forest's
+/// child is that expression and the two coincide. **For a branch with a statement before its value
+/// they do not**: the forest's child is a `LetIn` whose continuation reaches the tail. The
+/// extraction follows that chain, and this corpus contains both shapes **and asserts it does**,
+/// because a corpus of only bare-expression branches would be silent about exactly the case that
+/// motivated the walk.
+///
+/// That assertion exists because the previous slice in this family shipped covering only `Word`
+/// operands while its corpus was all-`Word`, and passed while silent about three of four kinds.
+///
+/// # Compared as a MULTISET
+///
+/// The stage reads the expression table only through `ty.btag[b]` and a per-row predicate, so its
+/// order is free. An ordered comparison would test a coincidence of traversal the stage does not
+/// require.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_condition_rows_agree_between_the_pipeline_and_the_reference() {
+    use std::collections::BTreeMap;
+
+    const SOURCES: &[&str] = &[
+        // Bare-expression branches.
+        "fn f(c: bool) -> Word { if c { 1 } else { 2 } }\nfn main() -> Word { f(true) }",
+        // A STATEMENT before the branch's value, on both arms, so the tail walk is exercised.
+        "fn f(c: bool) -> Word { if c { let a = 1; a } else { let b = 2; b } }\n\
+         fn main() -> Word { f(true) }",
+        // A condition that is itself a comparison, and branches yielding names.
+        "fn f(x: Word, y: Word) -> Word { if x == y { x } else { y } }\n\
+         fn main() -> Word { f(1, 2) }",
+        // Nested conditionals: two conditions and two branch pairs from one body.
+        "fn f(c: bool, d: bool) -> Word { if c { if d { 1 } else { 2 } } else { 3 } }\n\
+         fn main() -> Word { f(true, false) }",
+    ];
+
+    let mut compared = 0usize;
+    let mut saw_bare = false;
+    let mut saw_statement_branch = false;
+
+    for src in SOURCES {
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+        let (names, _) = binding_rows(&ast);
+        let (nodes, _) = expression_nodes_and_derived(&ast, &names);
+        let by_id: BTreeMap<i64, String> = names.iter().map(|(k, v)| (*v, k.clone())).collect();
+        let render = |v: i64, f: i64| -> (i64, i64, String) {
+            if f == 0 {
+                (v, 0, String::new())
+            } else {
+                (0, 1, by_id.get(&v).cloned().unwrap_or_default())
+            }
+        };
+
+        let mut want: BTreeMap<ExprRowKey, usize> = BTreeMap::new();
+        for (k, a, af, b, bf) in nodes.iter().copied() {
+            if k == 3 {
+                *want.entry((k, render(a, af), render(b, bf))).or_insert(0) += 1;
+            }
+        }
+
+        let (rows, _) = keleusma::selfhost::expression_rows_from_pipeline(src);
+        let mut got: BTreeMap<ExprRowKey, usize> = BTreeMap::new();
+        for (k, l, r) in rows.iter().cloned() {
+            if k == 3 {
+                *got.entry((k, l, r)).or_insert(0) += 1;
+            }
+        }
+
+        assert_eq!(
+            got, want,
+            "{src:?}: the pipeline and the reference disagree on the condition rows"
+        );
+        compared += want.values().sum::<usize>();
+        if src.contains("{ 1 }") {
+            saw_bare = true;
+        }
+        if src.contains("let a = 1; a") {
+            saw_statement_branch = true;
+        }
+    }
+
+    assert!(
+        compared >= 5,
+        "only {compared} condition rows were compared"
+    );
+    assert!(
+        saw_bare && saw_statement_branch,
+        "the corpus must contain both a bare-expression branch and one with a statement before \
+         its value, or this test is silent about the tail walk that motivated it"
+    );
+}
+
+/// **A ONE-ARMED CONDITIONAL IS WHY THE BRANCH PAIR DOES NOT MOVE.**
+///
+/// The branch-pair row was implemented and then withheld. This is the witness.
+///
+/// `push_if` visits an else arm unconditionally, so the forest carries one even for a conditional
+/// that has none in the source. The pipeline therefore cannot tell a synthesised arm from a
+/// written one, while the reference contributes a pair row **only** when `else_block` is present.
+///
+/// # Why the safe-looking heuristic was rejected
+///
+/// The synthesised arm yields the UNIT tag, and a real statement-only else yields UNKNOWN, so the
+/// tag appears to separate them. **It could not be shown safe**, and the stakes are asymmetric:
+///
+/// - a SPURIOUS pair row feeds `ty_node_bad`'s equality branch and can make the stage **reject a
+///   correct program**;
+/// - a DROPPED pair row makes the stage **miss a disagreement it exists to catch**.
+///
+/// Both directions are unsound, so no row is emitted and the gap is named here instead.
+///
+/// **PROPORTIONALITY.** This is a channel the type checker consumes, not code generation. Nothing
+/// here reaches a compiled module.
+#[cfg(feature = "self-host")]
+#[test]
+fn a_one_armed_conditional_is_why_the_branch_pair_does_not_move() {
+    use keleusma::ast::{Expr, Stmt};
+    use keleusma::visitor::Visitor;
+
+    const ONE_ARMED: &str = "private data d { q: Word }\n\
+                             fn f(c: bool) -> Word { if c { d.q = 1; } d.q }\n\
+                             fn main() -> Word { f(true) }";
+    const TWO_ARMED: &str = "fn f(c: bool) -> Word { if c { 1 } else { 2 } }\n\
+                             fn main() -> Word { f(true) }";
+
+    // The reference's own criterion, read from its syntax tree rather than assumed.
+    fn reference_pairs(src: &str) -> usize {
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+        struct V {
+            n: usize,
+        }
+        impl Visitor for V {
+            fn visit_expr(&mut self, e: &Expr) {
+                if let Expr::If { else_block, .. } = e
+                    && else_block.is_some()
+                {
+                    self.n += 1;
+                }
+                self.walk_expr(e);
+            }
+            fn visit_stmt(&mut self, s: &Stmt) {
+                self.walk_stmt(s);
+            }
+        }
+        let mut v = V { n: 0 };
+        for f in &ast.functions {
+            v.visit_block(&f.body);
+        }
+        v.n
+    }
+
+    // CONTROL: the reference really does distinguish the two shapes. Without this the claim below
+    // would be about a difference that does not exist.
+    assert_eq!(
+        reference_pairs(ONE_ARMED),
+        0,
+        "the reference now pairs a one-armed conditional"
+    );
+    assert_eq!(
+        reference_pairs(TWO_ARMED),
+        1,
+        "the reference no longer pairs a two-armed one"
+    );
+
+    // The pipeline emits NO pair rows at all, for either shape. If it ever does, the withholding
+    // decision has been revisited and this pin should be revisited with it.
+    for (label, src) in [("one-armed", ONE_ARMED), ("two-armed", TWO_ARMED)] {
+        let (rows, _) = keleusma::selfhost::expression_rows_from_pipeline(src);
+        assert!(
+            !rows.is_empty(),
+            "{label}: non-vacuity -- the pipeline produced no rows at all, so the absence of pair \
+             rows below establishes nothing"
+        );
+        assert!(
+            rows.iter().all(|(k, _, _)| *k != 4),
+            "{label}: the pipeline now emits branch-pair rows. THAT IS A DECISION BEING REVISITED, \
+             not a regression: confirm a one-armed conditional yields none before keeping them."
+        );
+    }
+}
+
+/// **THE UNIT LITERAL IS REFUSED BY THE SELF-HOSTED PIPELINE, AND THE REFERENCE ACCEPTS IT.**
+///
+/// Found while probing whether a real else could yield the unit tag. The construct-support
+/// boundary does not record `()` and nothing else pinned it, so this was an unrecorded gap.
+///
+/// `reconstruct.kel` refuses with a NAMED cause — an empty work-stack underflow — which is the
+/// failure mode this programme added in an earlier session doing exactly its job: a named refusal
+/// rather than a silent wrong answer.
+///
+/// **PROPORTIONALITY.** A loud refusal, not a mis-compile. `self_hosted_compile` cross-checks
+/// against the reference and refuses on divergence, so no user receives a wrong module from this.
+///
+/// **This pin fires in the FAILING direction if the gap closes**, which is the signal to add `()`
+/// to the construct-support boundary rather than absorb the change silently.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_unit_literal_is_refused_by_the_pipeline_and_accepted_by_the_reference() {
+    const SRC: &str = "fn f(c: bool) -> Word { let _x = if c { () } else { () }; 0 }\n\
+                       fn main() -> Word { f(true) }";
+
+    // CONTROL: the reference accepts it, so the refusal below is a divergence rather than a
+    // malformed probe. Five probes on this line have measured a malformed input instead.
+    let ast = parse(&tokenize(SRC).expect("lex")).expect("the reference must parse the unit probe");
+    keleusma::compiler::compile(&ast).expect("the reference must compile the unit probe");
+
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        keleusma::selfhost::expression_rows_from_pipeline(SRC)
+    }));
+    let message = match caught {
+        Ok(_) => panic!(
+            "the self-hosted pipeline now accepts the unit literal. THIS IS A GAP CLOSING: add \
+             `()` to the construct-support boundary and retire this pin."
+        ),
+        Err(e) => e
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| e.downcast_ref::<&str>().map(|s| (*s).to_string()))
+            .unwrap_or_default(),
+    };
+    assert!(
+        message.contains("EMPTY work stack"),
+        "the unit literal is still refused, but by a DIFFERENT cause than the underflow recorded \
+         here, so the mechanism may have changed: {message}"
+    );
 }
