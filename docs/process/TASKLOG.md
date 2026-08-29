@@ -608,6 +608,28 @@ Current sprint source of truth.
 > workspace **2467/0/88**, coverage re-derived and unchanged at 1070 of 1074.
 > See [`../decisions/OPERAND_WIDTH_RECOVERY.md`](../decisions/OPERAND_WIDTH_RECOVERY.md).
 
+> **Currency note (2026-08-29, V0.3.X line, second entry). A CONSERVATIVE REJECTION, NOT `verify()`,
+> IS WHAT HOLDS A RUNTIME TRAP SHUT — REPORTED, NOT REPAIRED.**
+>
+> Chasing the last named opcode refusal, `Len`, found no coverage opportunity: the corpus already
+> settled that the property making the opcode reachable **is** the property making the loop unbounded.
+> What it found instead is that `src/vm.rs` returns `InvalidBytecode` for `Op::Len` on a flat array,
+> justified by *"it never emits `Op::Len` on an array"* — a premise **the reference compiler
+> contradicts**, emitting exactly that from `for x in if c { a } else { b }`. Four legs are measured
+> and pinned in `native_codegen/tests/len_flat_array_hazard.rs`: `verify()` **accepts** the module;
+> executing it yields `InvalidBytecode`; **`Vm::new` itself refuses it at every arena size**, so it is
+> **NOT reachable through the supported path today**; and that refusal is **second category**,
+> surviving even when both arms have equal length and the trip count is provable by inspection. **The
+> hypothesis that a host could bypass the bound check by sizing its own arena was WRONG, and executing
+> it is what caught that** — reporting from the reasoning would have raised a false alarm. The finding
+> is that an unambiguous improvement to the bound extractor converts a rejected program into one that
+> loads and traps, so **the improvement is silently gated on an unrelated repair**; leg 4 fails the day
+> it happens. **Reported, not repaired**: both fixes lie in files this line may read and must not edit,
+> and three dispositions are laid out with no recommendation. No absorption was needed (already zero
+> unabsorbed). Workspace **2491/0/92**, `native_codegen` **366/0/74**, censuses unmoved at 61 of 66,
+> NAMED REFUSED `["Len"]`, 1070 of 1074 and 89841 of 89940. See
+> [`../decisions/LEN_FLAT_ARRAY_HAZARD.md`](../decisions/LEN_FLAT_ARRAY_HAZARD.md).
+
 > **Currency note (2026-08-29, V0.3.X line). A CENSUS THIS LINE PUBLISHES EVERY INCREMENT WAS
 > READING ENGLISH, AND ITS CLEAN COLUMN WAS AN ACCIDENT OF THE CORPUS.**
 >

@@ -1,5 +1,50 @@
 # Design Journal
 
+## 2026-08-29 — A conservative rejection, not the verifier, is what holds a runtime trap shut
+
+**Increment**: I went looking for the last named opcode refusal, `Len`, expecting a coverage
+opportunity. The corpus had already settled that question and said so at length: `Op::Len` fires only
+when the for-in source has no statically known length, and that same property is what makes the loop's
+trip count unextractable. **The property that makes the opcode reachable is the property that makes
+the loop unbounded** — one fact, not two limitations that might be lifted separately. Lowering it
+would gain nothing, because the module still cannot be admitted.
+
+**What was there instead was better.** `src/vm.rs` returns `InvalidBytecode` for `Op::Len` on a flat
+array, justified by *"it never emits `Op::Len` on an array"*. The reference compiler emits exactly
+that, from `for x in if c { a } else { b }`. The error's classification rests on a premise the shipping
+compiler contradicts.
+
+**I was wrong about the shape of the hazard, and measuring is what caught it.** I hypothesised a second
+instance of the load-time hole class that `Op::IsStruct` had produced — verify-clean, loadable,
+trapping at runtime — reasoning that a host sizing its own arena could bypass `auto_arena_capacity_for`.
+Executing it showed **`Vm::new` runs the bound check itself** and refuses at every arena size. Had I
+written the report from the reasoning, I would have spent the owning line's attention on a false alarm.
+
+**The real finding is forward-looking, and sharper for being narrower.** `verify()` *accepts* the
+module; the guard actually holding the trap shut is the resource-bound check. The project's own
+taxonomy puts that refusal in the **second category** — provable in principle, analysis not
+implemented — and I confirmed it survives even when both arms have the same length, so the trip count
+is two on every path and provable by inspection. That is the category defined as liftable. **So an
+unambiguous improvement to the bound extractor, made by someone with no reason to look at `Op::Len`,
+converts a rejected program into one that loads and traps. The improvement is silently gated on an
+unrelated repair, and nothing said so.**
+
+Four legs, each pinned with its own control, in `native_codegen/tests/len_flat_array_hazard.rs`. Leg 4
+fails on the day the bound extractor learns to see through an `if`, which is the day it matters.
+
+**Reported, not repaired.** Both plausible fixes — a load-time rejection of `Op::Len` on a statically
+flat operand, or a corrected error class — are in files this line may read and must not edit. Three
+dispositions are laid out with no recommendation.
+
+**`new_unchecked` earns a note.** It is the documented trust-skip, and it is the only way to ask what
+the runtime arm does. Using it to answer *that* question is legitimate; letting it stand as evidence
+that the program is admissible would not be, and leg 3 establishes the opposite. The test says so in
+those terms.
+
+**No absorption this increment**: the line was already at zero unabsorbed, which is worth recording as
+a fact rather than reported as an absorption performed.
+
+
 ## 2026-08-28 — A census was reading English, and the column was clean by accident
 
 **Increment**: `LowerError::UnsupportedOp(String)` was documented as *"an opcode outside the currently

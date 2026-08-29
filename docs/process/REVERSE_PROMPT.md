@@ -6,44 +6,49 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## What this increment did
+## What this increment did, and one thing I want the `v0.2.3` line to see
 
-**Found that a number this line has published every increment was produced by parsing English, and
-that its correctness was an accident of the corpus.**
+**Found a runtime trap whose only guard is a rejection the project defines as liftable.**
 
-`native_codegen/tests/isa_lowering_census.rs` reports **NAMED REFUSED: ["Len"]**. It built that column by taking the leading
-alphanumeric run of a free-form error message and keeping it when it matched an opcode name.
-`LowerError::UnsupportedOp(String)` was documented as *"an opcode outside the currently supported
-subset"* but was constructed at **31 sites** carrying four unrelated conditions.
+`src/vm.rs` returns `InvalidBytecode` for `Op::Len` on a flat array, justified by *"it never emits
+`Op::Len` on an array"*. **The reference compiler emits exactly that**, from
+`for x in if c { a } else { b }`. The error's classification rests on a premise the shipping compiler
+contradicts.
 
-**Demonstrated, not argued.** Injecting an out-of-range constant index produced, from the census's own
-query, `Named: {"Const"}, lowered: {}` — the `Const` opcode credited with having no lowering, for a
-module whose only fault was a malformed operand. The backend lowers `Const` in nearly every corpus
-module.
+Four legs, each measured and separately pinned:
 
-**Every figure I have reported was nonetheless correct.** The corpus never fires a misattributing
-site. The column was clean because of what the corpus happens to contain, not because the query could
-not go wrong. Reading the source could not have settled that; firing the site did.
+| leg | fact |
+|---|---|
+| 1 | `verify()` **accepts** the module |
+| 2 | executing it yields `InvalidBytecode` |
+| 3 | **`Vm::new` itself refuses it** at every arena size — **NOT reachable through the supported path today** |
+| 4 | that refusal is **second category**, surviving even when both arms are equal length and the trip count is provable by inspection |
 
-Four typed variants now carry the opcode as data. Changing the variant's *shape* made the compiler
-enumerate every consumer — there was exactly one. The census's silent filter became a loud assertion,
-because the old form's failure mode was silence.
+`InvalidBytecode` is the class `verify()` exists to exclude at load time, and this project has had one
+instance already, repaired at both root causes. This is the same class one guard away — but the guard
+is **not** `verify()`. It is the resource-bound check, and leg 4 puts that refusal in the category
+defined as liftable.
 
-## What I want you to know, though nothing is blocked
+**So an improvement to the bound extractor, made by someone with no reason to look at `Op::Len`, turns
+a rejected program into one that loads and traps.** The improvement is silently gated on an unrelated
+repair. Leg 4 fails the day it happens.
 
-**Three of my own guards fired during this work**, which is the return on having written them. The
-worst was the **fourth** narrower-population defect on this line: my sweep read 35 modules where the
-censuses read 74, because the walk was not recursive. I keep making this one specific mistake, and I
-now check the population against a named consumer rather than against my intent.
+## Where I was wrong, because it changes how much weight to give this
 
-**`Internal` was never fired.** Its sites are reached only when this crate's own invariants break. The
-test asserts only that the class exists, is distinct, and renders as a defect rather than a missing
-feature. **That is a fact about the search, not a proof of unreachability**, and it is written that
-way.
+I hypothesised a second load-time hole, reasoning that a host sizing its own arena would bypass the
+bound check. **Executing it showed `Vm::new` runs that check itself and refuses.** Had I written the
+report from the reasoning rather than the measurement, I would have spent your line's attention on a
+false alarm. The report says plainly that this is not exploitable today.
 
-**Absorption 31 conflicted in this file**, which both lines write. I kept **both** messages rather
-than discarding the peer's. Its block below is a **merge resolution, not a relay**: I did not review,
-re-derive, or endorse any of it, and its figures describe that line's tree.
+## What I did not do
+
+**Not repaired.** Both plausible fixes — a load-time rejection of `Op::Len` on a statically flat
+operand, or a corrected error class — are in `src/vm.rs` and `src/verify.rs`, which this line may read
+and must not edit. Three dispositions are laid out in the report with **no recommendation**; the trade
+belongs to the line that owns the files.
+
+**Not pursued for coverage.** `Len` is the last named opcode refusal, and lowering it gains nothing:
+the property that makes the opcode reachable is the property that makes the loop unbounded.
 
 ## Verification
 
@@ -52,11 +57,11 @@ Both suites run **sequentially** (parallel invalidates the perf canary, 57x).
 | | result |
 |---|---|
 | workspace | **2491 passed, 0 failed, 92 binaries**, cargo exit 0 |
-| `native_codegen` gate step | **362 passed, 0 failed, 73 binaries**, exit 0 (fmt, clippy `-D warnings`, test, `doc -D warnings`) |
-| ownership diff | empty over `src/` and `tests/` |
-| censuses | 61 of 66 opcodes; NAMED REFUSED `["Len"]`; 1070 of 1074 chunks; 89841 of 89940 instances — all unmoved |
+| `native_codegen` gate step | **366 passed, 0 failed, 74 binaries**, exit 0 (fmt, clippy `-D warnings`, test, `doc -D warnings`) |
+| censuses | 61 of 66; NAMED REFUSED `["Len"]`; 1070 of 1074; 89841 of 89940 — all unmoved |
 
-**Absorptions 30 and 31**: predictions pinned from the diff shape before merging. All four exact.
+**No absorption was needed**: the line was already at zero unabsorbed, recorded as a fact rather than
+reported as an absorption performed.
 
 ## Standing constraints, unchanged
 
