@@ -181,11 +181,18 @@ fn evidence_from(
 
     let mut named_refused = BTreeSet::new();
     for (_, e) in &refusals {
-        if let LowerError::UnsupportedOp(msg) = e {
-            let h = head(msg);
-            if isa.contains(&h) {
-                named_refused.insert(h);
-            }
+        // The opcode is read as DATA, not taken as the leading word of a
+        // sentence. The previous form credited `Const(60000) out of range` -- a
+        // malformed constant INDEX -- to the `Const` OPCODE, which this backend
+        // lowers in nearly every module of the corpus. Only `UnsupportedOp` is a
+        // claim about an opcode; the other classes concern the input, a type, or
+        // a defect in the backend, and none of them belongs in this column.
+        if let LowerError::UnsupportedOp { op, .. } = e {
+            assert!(
+                isa.contains(op),
+                "a refusal named `{op}`, which is not a declared ISA opcode. The                  previous form SILENTLY DROPPED such a name, so a mis-typed                  refusal left no trace; this column is only meaningful if every                  `UnsupportedOp` carries a real opcode."
+            );
+            named_refused.insert(op.clone());
         }
     }
 
@@ -647,5 +654,60 @@ fn how_many_isa_opcodes_does_the_backend_lower() {
         "these opcodes occur in compiled modules but were not extracted from \
          bytecode.rs, so the ISA side is incomplete and no column can be \
          trusted: {unextracted:?}"
+    );
+}
+
+/// **Does a refusal that is NOT about an unsupported opcode reach the NAMED
+/// REFUSED column?**
+///
+/// The column is built by [`head`], which takes the leading alphanumeric run of
+/// a free-form English sentence and keeps it when it matches an ISA opcode name.
+/// `LowerError::UnsupportedOp` is documented as *"an opcode outside the
+/// currently supported subset"*, but it also carries malformed-input and
+/// internal-invariant conditions whose sentences begin `Const(...)`,
+/// `Call(...)` and `NewComposite ...` — all real opcode names.
+///
+/// `chunk 0 has a Float ...` is excluded only because `chunk` is not an opcode.
+/// **That is an accident of English word order, not a guarantee.** Reading the
+/// source cannot settle whether the guard holds; firing the site can.
+///
+/// The subject is an out-of-range `Const` index. It is INJECTED rather than
+/// compiled, because the compiler will not emit one — which is the point: the
+/// condition is malformed input, not an unimplemented feature.
+#[test]
+fn a_non_opcode_refusal_must_not_be_attributed_to_an_opcode() {
+    let isa = declared_isa();
+    let mut m = compiled("fn main() -> Word { 0 }").expect("the probe must compile");
+
+    // Far beyond any constant pool this probe could have, so the index is out
+    // of range rather than merely unusual.
+    let bad = keleusma::bytecode::Op::Const(60_000);
+    m.chunks[0].ops.insert(0, bad);
+    assert!(
+        m.chunks
+            .iter()
+            .any(|c| c.ops.iter().any(|o| format!("{o:?}") == format!("{bad:?}"))),
+        "the injected op is not in the module, so this test would pass without \
+         testing anything"
+    );
+    assert!(
+        isa.contains("Const"),
+        "`Const` is not in the declared ISA, so this subject cannot demonstrate \
+         the misattribution it was chosen to demonstrate"
+    );
+
+    let (lowered, named, _) = evidence_from(&m, &isa);
+
+    // The condition is "your constant index is out of range", which says
+    // NOTHING about whether the backend can lower `Const`. Attributing it to the
+    // opcode would publish "the backend names Const as refused" about an opcode
+    // it lowers in almost every module in the corpus.
+    assert!(
+        !named.contains("Const"),
+        "an out-of-range constant INDEX was attributed to the `Const` OPCODE. \
+         The NAMED REFUSED column is therefore built from English word order: \
+         any refusal whose sentence opens with an opcode name is credited to \
+         that opcode regardless of the condition. Named: {named:?}, \
+         lowered: {lowered:?}"
     );
 }

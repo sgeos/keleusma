@@ -370,8 +370,44 @@ pub enum LowerError {
     /// earlier version moved it into this error and left the caller's vector
     /// empty — reporting that every module lowers cleanly.
     Diagnostic(usize),
-    /// An opcode outside the currently supported subset.
-    UnsupportedOp(String),
+    /// An opcode for which this backend has no lowering, or none for the shape
+    /// encountered.
+    ///
+    /// `op` carries the opcode's identity as **data**. It was previously
+    /// recoverable only as the leading word of the message, and
+    /// `isa_lowering_census` read it that way — so `Const(60000) out of range`,
+    /// a malformed constant INDEX, was credited to the `Const` OPCODE, which
+    /// this backend lowers in nearly every module of the corpus. Whether a
+    /// refusal concerns an opcode is now a property of the type rather than of
+    /// English word order.
+    UnsupportedOp {
+        /// The opcode this refusal is about. An ISA opcode name.
+        op: String,
+        /// What specifically was not lowerable. May be empty when the backend
+        /// has no arm for the opcode at all.
+        detail: String,
+    },
+    /// A type or feature this backend lacks, not attributable to one opcode.
+    ///
+    /// Floats are the standing case: a float in a chunk signature is a property
+    /// of the signature, and calling it an unsupported opcode produced the
+    /// sentence "does not yet support opcode chunk 0 has a Float in its
+    /// signature".
+    UnsupportedShape(String),
+    /// The input's own integrity failed — an out-of-range index, an arity
+    /// mismatch, a reserved encoding.
+    ///
+    /// **Not a statement that any opcode is unlowerable.** The opcode named in
+    /// the message is the one whose operand was malformed, and the backend
+    /// lowers it fine for well-formed input.
+    MalformedInput(String),
+    /// A defect in this crate rather than in the input, like
+    /// [`LowerError::InvalidIr`], but detected before IR was produced.
+    ///
+    /// Kept distinct so a consumer can tell "your program uses a feature I
+    /// lack" from "I am broken". Reporting the second as the first invites a
+    /// user to rewrite a program that was never the problem.
+    Internal(String),
     /// The module declares a word width this backend does not lower.
     UnsupportedWordWidth(u8),
     /// A data-segment slot this backend cannot lower.
@@ -420,14 +456,56 @@ pub enum LowerError {
     InvalidIr(String),
 }
 
+impl LowerError {
+    /// A refusal that genuinely concerns `op`.
+    ///
+    /// Takes the opcode name separately from the prose so the two cannot drift:
+    /// the census reads `op`, and the sentence is for a human.
+    fn unsupported_op(op: &str, detail: String) -> Self {
+        LowerError::UnsupportedOp {
+            op: op.to_string(),
+            detail,
+        }
+    }
+}
+
+/// The opcode's variant name, derived from the opcode itself.
+///
+/// This is deriving a name from an `Op` value, not parsing English out of a
+/// message — `Debug` for these variants opens with the variant name.
+fn op_variant_name(op: &Op) -> String {
+    format!("{op:?}")
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric())
+        .collect()
+}
+
 impl core::fmt::Display for LowerError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             LowerError::Diagnostic(n) => {
                 write!(f, "diagnostic lowering collected {n} chunk refusal(s)")
             }
-            LowerError::UnsupportedOp(op) => {
+            LowerError::UnsupportedOp { op, detail } if detail.is_empty() => {
                 write!(f, "native lowering does not yet support opcode {op}")
+            }
+            LowerError::UnsupportedOp { op, detail } => {
+                write!(
+                    f,
+                    "native lowering does not yet support opcode {op}: {detail}"
+                )
+            }
+            LowerError::UnsupportedShape(what) => {
+                // A neutral lead-in, because these messages are CLAUSES rather
+                // than noun phrases. "does not support {what}" rendered
+                // "does not support chunk 0 carries a Float CONSTANT ...".
+                write!(f, "native lowering refused this module: {what}")
+            }
+            LowerError::MalformedInput(what) => {
+                write!(f, "the module is malformed and was not lowered: {what}")
+            }
+            LowerError::Internal(what) => {
+                write!(f, "a defect in this crate rather than in the input: {what}")
             }
             LowerError::UnsupportedWordWidth(w) => {
                 write!(f, "native lowering does not support word_bits_log2 = {w}")
@@ -1292,7 +1370,7 @@ fn lower_module_with<'ctx>(
     // the same host definition, and every call site would look correct in
     // isolation. Refusing the module is the only place this is visible.
     if let Some((sym, names)) = native_symbol_collisions(&program.native_names) {
-        return Err(LowerError::UnsupportedOp(format!(
+        return Err(LowerError::MalformedInput(format!(
             "natives {names:?} all mangle to the external symbol `{sym}`; the \
              lowering refuses rather than binding several declarations to one \
              host definition"
@@ -1326,7 +1404,7 @@ fn lower_module_with<'ctx>(
                 matches!(p, keleusma::bytecode::WireShape::Scalar { kind } if *kind == SCALAR_FLOAT_TAG)
             })
     }) {
-        return Err(LowerError::UnsupportedOp(format!(
+        return Err(LowerError::UnsupportedShape(format!(
             "chunk {idx} has a Float in its signature and this backend has no float \
              representation: no `f64_type`, no float opcode lowered, and an entry ABI \
              of `i64` where a double belongs. Refusing the module is the guard; the \
@@ -1368,7 +1446,7 @@ fn lower_module_with<'ctx>(
             .iter()
             .position(|k| matches!(k, ConstValue::Float(_)))
         {
-            return Err(LowerError::UnsupportedOp(format!(
+            return Err(LowerError::UnsupportedShape(format!(
                 "chunk {i} carries a Float CONSTANT at index {k}. A float reaches this \
                  module without appearing in any signature, and the integer \
                  arithmetic lowering would silently miscompile it"
@@ -1380,7 +1458,7 @@ fn lower_module_with<'ctx>(
         .iter()
         .position(|sh| matches!(sh, keleusma::bytecode::WireShape::Scalar { kind } if *kind == SCALAR_FLOAT_TAG))
     {
-        return Err(LowerError::UnsupportedOp(format!(
+        return Err(LowerError::UnsupportedShape(format!(
             "native {i} declares a Float RETURN SHAPE; its result would reach the \
              operand stack as a float this backend cannot represent"
         )));
@@ -2281,9 +2359,10 @@ fn lower_chunk_body<'ctx>(
                     // mapped onto a struct's, so the message names what the
                     // source actually contains.
                     TF::Boxed { .. } => {
-                        return Err(LowerError::UnsupportedOp(format!(
-                            "GetTupleField reading {tf:?} is not lowered"
-                        )));
+                        return Err(LowerError::unsupported_op(
+                            "GetTupleField",
+                            format!("GetTupleField reading {tf:?} is not lowered"),
+                        ));
                     }
                 });
                 &normalised
@@ -2309,9 +2388,10 @@ fn lower_chunk_body<'ctx>(
                         variant: *variant,
                     },
                     other => {
-                        return Err(LowerError::UnsupportedOp(format!(
-                            "GetEnumField reading {other:?} is not lowered"
-                        )));
+                        return Err(LowerError::unsupported_op(
+                            "GetEnumField",
+                            format!("GetEnumField reading {other:?} is not lowered"),
+                        ));
                     }
                 });
                 &normalised
@@ -2607,11 +2687,14 @@ fn lower_chunk_body<'ctx>(
             // a wrong number misleads a reader, a wrong blocker stops work.**
             Op::FixedMul(frac_bits) => {
                 if u32::from(*frac_bits) >= WORD_BITS as u32 {
-                    return Err(LowerError::UnsupportedOp(format!(
-                        "FixedMul({frac_bits}) has a fraction count at or beyond the \
+                    return Err(LowerError::unsupported_op(
+                        "FixedMul",
+                        format!(
+                            "FixedMul({frac_bits}) has a fraction count at or beyond the \
                          {WORD_BITS}-bit word width; the VM fails closed here and the \
                          count is static, so the lowering refuses"
-                    )));
+                        ),
+                    ));
                 }
                 let rhs = st.pop();
                 let lhs = st.pop();
@@ -2650,11 +2733,14 @@ fn lower_chunk_body<'ctx>(
                 // count is a static operand, so this is a lowering-time refusal,
                 // exactly as `FixedMul` and `FixedToWord` already do.
                 if u32::from(*frac_bits) >= WORD_BITS as u32 {
-                    return Err(LowerError::UnsupportedOp(format!(
-                        "FixedDiv({frac_bits}) has a fraction count at or beyond the \
+                    return Err(LowerError::unsupported_op(
+                        "FixedDiv",
+                        format!(
+                            "FixedDiv({frac_bits}) has a fraction count at or beyond the \
                          {WORD_BITS}-bit word width; the VM fails closed here and the \
                          count is static, so the lowering refuses"
-                    )));
+                        ),
+                    ));
                 }
                 let rhs = st.pop();
                 let lhs = st.pop();
@@ -2705,12 +2791,15 @@ fn lower_chunk_body<'ctx>(
             }
             Op::FixedToWord(frac_bits) => {
                 if u32::from(*frac_bits) >= WORD_BITS as u32 {
-                    return Err(LowerError::UnsupportedOp(format!(
-                        "FixedToWord({frac_bits}) has a fraction count at or beyond the \
+                    return Err(LowerError::unsupported_op(
+                        "FixedToWord",
+                        format!(
+                            "FixedToWord({frac_bits}) has a fraction count at or beyond the \
                          {WORD_BITS}-bit word width; the VM fails closed here and the \
                          count is static, so the lowering refuses rather than emitting \
                          a trap"
-                    )));
+                        ),
+                    ));
                 }
                 let v = st.pop();
                 // Arithmetic, sign-preserving: the VM uses `bits >> frac_bits`
@@ -2724,10 +2813,13 @@ fn lower_chunk_body<'ctx>(
                 // verified module and reproducing it would require emitting a
                 // branch for a case that cannot occur, so it is refused.
                 if u32::from(*frac_bits) >= 2 * WORD_BITS as u32 {
-                    return Err(LowerError::UnsupportedOp(format!(
-                        "WordToFixed({frac_bits}) has a fraction count at or beyond the \
+                    return Err(LowerError::unsupported_op(
+                        "WordToFixed",
+                        format!(
+                            "WordToFixed({frac_bits}) has a fraction count at or beyond the \
                          wide width; the VM treats this as corrupt input"
-                    )));
+                        ),
+                    ));
                 }
                 let v = st.pop();
                 // Widen, shift, CLAMP, narrow. The VM saturates at the word's
@@ -2768,7 +2860,7 @@ fn lower_chunk_body<'ctx>(
             // Composite and string constants are Workstream C and are refused.
             Op::Const(idx) => {
                 let cv = chunk.constants.get(*idx as usize).ok_or_else(|| {
-                    LowerError::UnsupportedOp(format!("Const({idx}) out of range"))
+                    LowerError::MalformedInput(format!("Const({idx}) out of range"))
                 })?;
                 // The constant's own variant states its packed width exactly,
                 // which makes this the least ambiguous producer in the set.
@@ -2793,9 +2885,10 @@ fn lower_chunk_body<'ctx>(
                         // placeholder, same caveat, as `PushImmediate(0)`.
                         ConstValue::Unit => (0, Width::Unknown),
                         other => {
-                            return Err(LowerError::UnsupportedOp(format!(
-                                "Const holding {other:?}"
-                            )));
+                            return Err(LowerError::unsupported_op(
+                                "Const",
+                                format!("Const holding {other:?}"),
+                            ));
                         }
                     };
                     let c = i64t.const_int(v as u64, true);
@@ -2817,11 +2910,11 @@ fn lower_chunk_body<'ctx>(
                     // `None` needs an Option representation this backend has not
                     // settled. Refusing beats inventing one silently.
                     3 => {
-                        return Err(LowerError::UnsupportedOp("PushImmediate(None)".into()));
+                        return Err(LowerError::MalformedInput("PushImmediate(None)".into()));
                     }
                     n @ 4..=19 => (n as i64) - 4,
                     other => {
-                        return Err(LowerError::UnsupportedOp(format!(
+                        return Err(LowerError::MalformedInput(format!(
                             "PushImmediate({other}) is reserved"
                         )));
                     }
@@ -2885,7 +2978,7 @@ fn lower_chunk_body<'ctx>(
             // of the obvious test cases.
             Op::Call(idx, arg_count) => {
                 let callee = callees.get(*idx as usize).copied().ok_or_else(|| {
-                    LowerError::UnsupportedOp(format!(
+                    LowerError::Internal(format!(
                         "Call({idx}, {arg_count}) needs the whole module; lower_module resolves \
                          it, lower_chunk cannot"
                     ))
@@ -2898,7 +2991,7 @@ fn lower_chunk_body<'ctx>(
                 // a call LLVM accepts and the VM does not agree with.
                 let declared = callee.count_params() - trailing_ptrs(&data);
                 if u32::from(*arg_count) != declared {
-                    return Err(LowerError::UnsupportedOp(format!(
+                    return Err(LowerError::MalformedInput(format!(
                         "Call({idx}, {arg_count}) passes {arg_count} arguments to a chunk \
                          declaring {declared} parameters; the VM's Unit-fill convention for a \
                          short call is not lowered"
@@ -3022,7 +3115,7 @@ fn lower_chunk_body<'ctx>(
             // Sixty-eight of the corpus sites take one argument.
             Op::CallVerifiedNative(idx, n) | Op::CallExternalNative(idx, n) => {
                 if n & 0x80 != 0 {
-                    return Err(LowerError::UnsupportedOp(format!(
+                    return Err(LowerError::UnsupportedShape(format!(
                         "native call #{idx} sets the B35 P7 error-reify flag \
                          (argument byte {n:#04x}), which reifies a soft host \
                          failure as a two-slot (code, flag) result; the two-slot \
@@ -3031,7 +3124,7 @@ fn lower_chunk_body<'ctx>(
                 }
                 let argc = usize::from(n & 0x7F);
                 let name = natives.get(usize::from(*idx)).ok_or_else(|| {
-                    LowerError::UnsupportedOp(format!(
+                    LowerError::MalformedInput(format!(
                         "native call #{idx} indexes a native table of {} entries; \
                          lower_module resolves it, lower_chunk cannot",
                         natives.len()
@@ -3048,7 +3141,7 @@ fn lower_chunk_body<'ctx>(
                     Some(f) => {
                         let declared = f.count_params() as usize;
                         if declared != argc {
-                            return Err(LowerError::UnsupportedOp(format!(
+                            return Err(LowerError::MalformedInput(format!(
                                 "native `{name}` is called with {argc} arguments \
                                  here and {declared} at an earlier site; the \
                                  lowering refuses rather than emitting a call \
@@ -3133,13 +3226,16 @@ fn lower_chunk_body<'ctx>(
                 // is untested code that looks tested.
                 let byte_only = matches!(op, Op::Mul);
                 let out = arith_result_width(wl, wr, byte_only).ok_or_else(|| {
-                    LowerError::UnsupportedOp(format!(
-                        "{op:?} with operand widths {wl:?} and {wr:?}: this backend \
+                    LowerError::unsupported_op(
+                        &op_variant_name(op),
+                        format!(
+                            "{op:?} with operand widths {wl:?} and {wr:?}: this backend \
                          lowers the generic arithmetic surface only for a matched \
                          Byte pair (1 byte each) or, for Add and Sub, a matched \
                          Fixed pair (8 bytes each). Refusing rather than guessing, \
                          since a wrong choice here is a silent wrong answer"
-                    ))
+                        ),
+                    )
                 })?;
                 let rhs = st.pop();
                 let lhs = st.pop();
@@ -3156,11 +3252,14 @@ fn lower_chunk_body<'ctx>(
             Op::Neg => {
                 let w = st.width_at(0);
                 let out = arith_result_width(w, w, false).ok_or_else(|| {
-                    LowerError::UnsupportedOp(format!(
-                        "Neg with operand width {w:?}: lowered only for a Byte (1 \
+                    LowerError::unsupported_op(
+                        "Neg",
+                        format!(
+                            "Neg with operand width {w:?}: lowered only for a Byte (1 \
                          byte) or a Fixed (8 bytes) operand, and refused rather \
                          than guessed otherwise"
-                    ))
+                        ),
+                    )
                 })?;
                 let v = st.pop();
                 let raw = st.b.build_int_neg(v, "gneg").unwrap();
@@ -3411,7 +3510,7 @@ fn lower_chunk_body<'ctx>(
                 ..
             }) => {
                 let region = region_base.ok_or_else(|| {
-                    LowerError::UnsupportedOp(
+                    LowerError::Internal(
                         "NewComposite needs the region pointer, which lower_chunk does not \
                          receive"
                             .into(),
@@ -3419,7 +3518,7 @@ fn lower_chunk_body<'ctx>(
                 })?;
                 let plan = crate::region::plan_chunk_region(chunk);
                 let site = plan.sites.iter().find(|s| s.op_index == i).ok_or_else(|| {
-                    LowerError::UnsupportedOp(format!(
+                    LowerError::Internal(format!(
                         "no region placement for the NewComposite at op {i}"
                     ))
                 })?;
@@ -3460,12 +3559,15 @@ fn lower_chunk_body<'ctx>(
                     // a Byte and a Word are indistinguishable on this stack.
                     let w = st.width_at(back);
                     if w.bytes().is_none() {
-                        return Err(LowerError::UnsupportedOp(format!(
-                            "NewComposite at op {i} has an operand of unknown packed \
+                        return Err(LowerError::unsupported_op(
+                            "NewComposite",
+                            format!(
+                                "NewComposite at op {i} has an operand of unknown packed \
                              width: operand {} of {n} counting from the first, \
                              which is {back} back from the top of the stack",
-                            n - back
-                        )));
+                                n - back
+                            ),
+                        ));
                     }
                     widths.push(w);
                 }
@@ -3477,10 +3579,13 @@ fn lower_chunk_body<'ctx>(
                 // the VM reads differently.
                 let total: u32 = widths.iter().filter_map(|w| w.bytes()).sum();
                 if total != u32::from(*byte_size) {
-                    return Err(LowerError::UnsupportedOp(format!(
-                        "NewComposite at op {i} packs {total} bytes but the instruction bakes \
+                    return Err(LowerError::unsupported_op(
+                        "NewComposite",
+                        format!(
+                            "NewComposite at op {i} packs {total} bytes but the instruction bakes \
                          {byte_size}; the layout model has drifted"
-                    )));
+                        ),
+                    ));
                 }
 
                 let vals: Vec<IntValue<'ctx>> = {
@@ -3536,10 +3641,13 @@ fn lower_chunk_body<'ctx>(
                             i64t.const_int(u64::from(n_bytes), false),
                         )
                         .map_err(|e| {
-                            LowerError::UnsupportedOp(format!(
-                                "NewComposite at op {i} could not copy a {n_bytes}-byte nested \
+                            LowerError::unsupported_op(
+                                "NewComposite",
+                                format!(
+                                    "NewComposite at op {i} could not copy a {n_bytes}-byte nested \
                                  body: {e}"
-                            ))
+                                ),
+                            )
                         })?;
                         off += n_bytes;
                         continue;
@@ -3551,10 +3659,13 @@ fn lower_chunk_body<'ctx>(
                             st.b.build_store(addr, t).unwrap()
                         }
                         other => {
-                            return Err(LowerError::UnsupportedOp(format!(
-                                "NewComposite at op {i} has a {other}-byte scalar field; \
+                            return Err(LowerError::unsupported_op(
+                                "NewComposite",
+                                format!(
+                                    "NewComposite at op {i} has a {other}-byte scalar field; \
                                  only 1 and 8 are lowered"
-                            )));
+                                ),
+                            ));
                         }
                     };
                     store.set_alignment(1).expect("1 is a power of two");
@@ -3596,9 +3707,10 @@ fn lower_chunk_body<'ctx>(
                     SK::Int | SK::Fixed => 8,
                     SK::Byte | SK::Bool => 1,
                     other => {
-                        return Err(LowerError::UnsupportedOp(format!(
-                            "GetIndex reading {other:?} is not lowered"
-                        )));
+                        return Err(LowerError::unsupported_op(
+                            "GetIndex",
+                            format!("GetIndex reading {other:?} is not lowered"),
+                        ));
                     }
                 };
                 // The index is popped BEFORE the array, matching the virtual
@@ -3657,7 +3769,7 @@ fn lower_chunk_body<'ctx>(
                 let expected = match chunk.constants.get(*disc_const as usize) {
                     Some(ConstValue::Int(v)) => *v,
                     other => {
-                        return Err(LowerError::UnsupportedOp(format!(
+                        return Err(LowerError::MalformedInput(format!(
                             "IsEnum discriminant constant is {other:?}, not an Int"
                         )));
                     }
@@ -3773,9 +3885,10 @@ fn lower_chunk_body<'ctx>(
                         (z, 1u32)
                     }
                     other => {
-                        return Err(LowerError::UnsupportedOp(format!(
-                            "GetField reading {other:?} is not lowered"
-                        )));
+                        return Err(LowerError::unsupported_op(
+                            "GetField",
+                            format!("GetField reading {other:?} is not lowered"),
+                        ));
                     }
                 };
                 st.push_w(v, Width::Scalar(w));
@@ -3819,7 +3932,12 @@ fn lower_chunk_body<'ctx>(
                 let v = st.pop();
                 st.b.build_return(Some(&v)).unwrap();
             }
-            other => return Err(LowerError::UnsupportedOp(format!("{other:?}"))),
+            other => {
+                return Err(LowerError::unsupported_op(
+                    &op_variant_name(other),
+                    String::new(),
+                ));
+            }
         }
     }
 
