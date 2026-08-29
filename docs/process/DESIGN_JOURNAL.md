@@ -13,6 +13,56 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-28 — The derived-operand gap closes, after three wrong sizings from three producers
+
+**THE GAP THE HANDOFF NAMED FOR FOUR SESSIONS IS CLOSED FOR THE BINARY OPERATOR.**
+`let d = 1 + 2` now reaches the type channel from the pipeline as an operator row plus the index a
+form-2 binding resolves through — the shape the stage's bounded fixpoint needs, and the shape that
+previously lived only in the reference's syntax tree.
+
+**I MIS-SIZED THIS THREE TIMES, EACH BY READING A PRODUCER.**
+
+| attempt | what I read | conclusion | verdict |
+|---|---|---|---|
+| first | the reference extraction's line count | "eight node kinds, three composite" | wrong about the obstacle |
+| second | the reference's visitor discipline | "preorder against postorder" | wrong about the obstacle |
+| third | the forest's child channels | "a walk over six side-tables" | true, **and not required** |
+
+**THE ANSWER WAS IN THE CONSUMER AND TOOK TWENTY MINUTES.** `verify_types.kel` reads the expression
+table in exactly two places: `tyb_node_tag`, indexed by `ty.btag[b]` for a form-2 binding, and a
+per-row predicate examining row `i` in isolation. **Nothing sweeps it in order.** Verified from the
+other side too: the harness builds `derived` as `(name, base + i)`, a position in its own flattened
+output that nothing outside those two channels compares. **The contract is rows plus a
+per-derived-binding index, mutually consistent — order is free.**
+
+**THE GENERALISATION MIRRORS ONE THIS SESSION ALREADY PAID FOR TWICE.** Earlier: *read the record
+stream, not the parser's internals*, when the producer's data structures said a slice was large and
+the wire already carried it. Now: **read what CONSUMES the data, not what produces it.** The unified
+rule is that **the requirement lives at the boundary, not in either implementation** — and I have
+now been wrong on the producer side five times and right on the boundary side every time.
+
+**IT ALSO DECIDED THE TEST.** Comparing index for index against the reference would have tested a
+coincidence of traversal order the stage does not require — a check constraining more than the thing
+it checks. The comparison is on the RELATION: for each binding the reference calls derived, does the
+pipeline associate it with a row of the same CONTENT? Order-free, and it tests what is consumed.
+
+**ONLY KIND 1 MOVES, AND THE FUNCTION IS NAMED SO THE COUNT PIN CANNOT ROUND UP.** The stage defines
+eight kinds and acts on all of them; kind 1 is the only one `tyb_node_tag` resolves. The other seven
+— array elements, conditions, branch pairs, field and index access on a value, struct literals, and
+the tail-versus-return claim — do not move, three of them composite, where the occurrences slice
+already established the two representations disagree about what a node IS. The pin still reports
+four of five.
+
+**THE CHAIN CASE IS THE ONE THAT MATTERS AND IT WORKS.** `let a = 1 + 2; let b = a + 1` emits a
+second row whose left operand is the NAME `a` rather than a tag, which is precisely what lets the
+fixpoint resolve `b` after `a`. A mutation reporting a local read as a Word tag instead of a name
+fires the agreement test.
+
+**A SECOND GUARD FOR A FAILURE THE FIRST CANNOT SEE**: every index a derived binding reports must
+address a row the pipeline actually emitted, and that row must be an operator. Without it the
+agreement could hold while an index pointed at nothing, because a lookup that misses simply
+contributes no comparison — a vacuity by omission rather than by an empty set.
+
 ## 2026-08-28 — The project instructions stated test counts three times wrong
 
 **GENERALISING THE PREVIOUS INCREMENT FOUND THE LARGEST INSTANCE IMMEDIATELY.** Having corrected the

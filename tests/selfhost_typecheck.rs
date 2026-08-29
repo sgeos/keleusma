@@ -3434,3 +3434,132 @@ fn a_for_loop_variable_is_not_reported_as_an_occurrence() {
          assertion above passes without establishing anything: {got:?}"
     );
 }
+
+/// One derived binding's relation to its operator row: `(binding, kind, left, right)`.
+///
+/// Named because the comparison is between two spellings of the same relation and the tuple says
+/// less than the name does — and because clippy asks at this depth, which is the right ask.
+#[cfg(feature = "self-host")]
+type DerivedRelation = (
+    String,
+    i64,
+    keleusma::selfhost::ExprOperand,
+    keleusma::selfhost::ExprOperand,
+);
+
+/// **THE DERIVED BINDINGS' OPERATOR ROWS AGREE BETWEEN THE PIPELINE AND THE REFERENCE.**
+///
+/// The gap the handoff named for four sessions: `let d = 1 + 2` needs its initialiser to reach the
+/// stage's bounded fixpoint as a form-2 row, and the initialiser's shape lived only in the
+/// reference's syntax tree.
+///
+/// # The comparison is on the RELATION, and index-matching would be wrong
+///
+/// The reference's table is positional — `derived` carries `(name, index)` — and it would be easy
+/// to compare index for index. **That would test a coincidence of traversal order the stage does
+/// not require.** `verify_types.kel` reads the table only through `ty.btag[b]` for a derived
+/// binding and through a per-row predicate that examines each row in isolation; nothing sweeps it
+/// in order. So the index need only be consistent between the two channels the host supplies, and
+/// a check demanding more would constrain more than the thing it checks.
+///
+/// What is compared is therefore: **for each binding the reference calls derived, does the
+/// pipeline associate it with a row of the same CONTENT?**
+///
+/// # What moves, said plainly
+///
+/// Only kind 1, the binary operator — the only kind `tyb_node_tag` resolves. The stage defines
+/// eight kinds and acts on all of them; the other seven do not move, three of them being composite
+/// where the two representations are already known to disagree about what a node is.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_derived_operator_rows_agree_between_the_pipeline_and_the_reference() {
+    use std::collections::BTreeSet;
+
+    const SOURCES: &[&str] = &[
+        "fn main() -> Word { let d = 1 + 2; d }",
+        // A CHAIN: `b` is knowable only after `a`, which is the whole point of the stage's
+        // bounded fixpoint and the reason a name operand must survive the crossing.
+        "fn main() -> Word { let a = 1 + 2; let b = a + 1; b }",
+        "fn f(p: Word) -> Word { let q = p + 1; q }\nfn main() -> Word { f(1) }",
+        "fn g() -> Word { 1 }\nfn main() -> Word { let c = g() + 2; c }",
+        // Two derived bindings in one body, declared out of alphabetical order so a set
+        // comparison cannot be satisfied by sorting alone.
+        "fn main() -> Word { let zz = 3 + 4; let aa = 1 + 2; zz + aa }",
+    ];
+
+    let mut compared = 0usize;
+    for src in SOURCES {
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+        let (names, _) = binding_rows(&ast);
+        let (nodes, derived) = expression_nodes_and_derived(&ast, &names);
+        let by_id: std::collections::BTreeMap<i64, String> =
+            names.iter().map(|(k, v)| (*v, k.clone())).collect();
+
+        // The reference's relation, re-expressed with NAMES so neither id space is compared.
+        let render = |v: i64, f: i64| -> (i64, i64, String) {
+            if f == 0 {
+                (v, 0, String::new())
+            } else {
+                (0, 1, by_id.get(&v).cloned().unwrap_or_default())
+            }
+        };
+        let want: BTreeSet<DerivedRelation> = derived
+            .iter()
+            .filter_map(|(n, idx)| {
+                let (k, a, af, b, bf) = *nodes.get(*idx as usize)?;
+                (k == 1).then(|| (n.clone(), k, render(a, af), render(b, bf)))
+            })
+            .collect();
+
+        let (rows, pipe_derived) = keleusma::selfhost::binop_expression_rows_from_pipeline(src);
+        let got: BTreeSet<DerivedRelation> = pipe_derived
+            .iter()
+            .filter_map(|(n, row)| {
+                let (k, l, r) = rows.get(*row)?.clone();
+                Some((n.clone(), k, l, r))
+            })
+            .collect();
+
+        assert_eq!(
+            got, want,
+            "{src:?}: the pipeline and the reference disagree on which operator row each derived \
+             binding resolves through"
+        );
+        compared += want.len();
+    }
+
+    assert!(
+        compared >= 6,
+        "only {compared} derived bindings were compared, so this measures far less than it appears to"
+    );
+}
+
+/// **THE ROW INDEX IS INTERNALLY CONSISTENT, WHICH IS THE ONLY THING THE STAGE REQUIRES OF IT.**
+///
+/// Every index the pipeline reports for a derived binding addresses a row it actually emitted, and
+/// every such row is a binary operator. Without this the agreement above could hold while the
+/// index pointed at nothing, since a lookup that misses simply contributes no comparison.
+#[cfg(feature = "self-host")]
+#[test]
+fn every_derived_row_index_addresses_an_operator_row_the_pipeline_emitted() {
+    const SRC: &str = "fn g() -> Word { 1 }\n\
+                       fn f(p: Word) -> Word { let q = p + 1; let r = q + g(); r }\n\
+                       fn main() -> Word { let a = 1 + 2; f(a) }";
+    let (rows, derived) = keleusma::selfhost::binop_expression_rows_from_pipeline(SRC);
+
+    assert!(
+        derived.len() >= 3 && rows.len() >= 3,
+        "non-vacuity: {} rows and {} derived bindings",
+        rows.len(),
+        derived.len()
+    );
+    for (name, idx) in &derived {
+        let row = rows
+            .get(*idx)
+            .unwrap_or_else(|| panic!("binding `{name}` names row {idx}, which was never emitted"));
+        assert_eq!(
+            row.0, 1,
+            "binding `{name}` names row {idx}, which is not a binary operator: {row:?}"
+        );
+    }
+}
