@@ -530,7 +530,21 @@ fn an_effect_free_tail_after_the_yield_agrees_in_sequence() {
 /// observable and the virtual machine would take it after the suspension where
 /// native code, having already returned, would not.
 #[test]
-fn a_tail_that_can_trap_is_still_refused() {
+fn a_yield_with_a_trailing_expression_is_refused() {
+    // **RENAMED from "a tail that can trap is still refused".** The old name
+    // attributed the refusal to the trailing expression's ability to TRAP, and
+    // the body cannot show that: `assert_refused` checks only that lowering
+    // errs, not why, and the backend refuses this shape with *"does not yet
+    // support opcode Stream"* because **the yield is not in tail position**.
+    // Measured in `stream_frontier.rs`: "yield then more code" is refused
+    // whatever follows the yield, trapping or not.
+    //
+    // **The reasoning in the doc comment above still stands** — a trap observable
+    // WOULD be taken by the virtual machine after suspension where native code,
+    // having already returned, would not. That is why the refusal matters. But
+    // this test does not isolate it, and **a test that did would need a shape
+    // that lowers except for the trap, which does not exist while every non-tail
+    // yield is refused.**
     // Checked arithmetic after the suspension. Under the trap policy this can
     // fault, so it is not effect-free and the yield is not in tail position.
     assert_refused("loop main(a: Word) -> Word { yield a; a * a }");

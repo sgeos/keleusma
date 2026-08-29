@@ -239,6 +239,27 @@ Current sprint source of truth.
 > **THREE CHECKS WRITTEN THIS SESSION COULD NOT FAIL**, each satisfied by a different part of a
 > document from the one it was about. Mutation caught all three; reading caught none.
 
+> **Currency note (2026-08-28, V0.3.X line, seventeenth entry). THE BLIND SPOT AUDITED TOO;
+> CUMULATIVE 3 OF 22.**
+>
+> The sixteenth entry's audit recorded what it could not see — leading quantifiers only — which is the
+> only reason this one had a target. The **capability class** (*can*, *cannot*, *must*, *able*) is
+> **11 of 325 names**, of which **1 overclaimed**: a_tail_that_can_trap_is_still_refused (the superseded name, given without backticks because it no longer resolves). Its helper
+> `assert_refused` checks only that lowering **errs, not why**, and the backend refuses that shape for
+> **the yield not being in tail position**, measured independently in `stream_frontier.rs` — a yield
+> followed by code is refused whatever follows it. Renamed to
+> `a_yield_with_a_trailing_expression_is_refused`.
+>
+> **The doc comment's reasoning stands and the name did not**: a trap observable would be taken by the
+> virtual machine after suspension where native code, having returned, would not, but **no test can
+> isolate that while every non-tail yield is refused**. That is the second time in two increments that
+> a strong claim proved **unreachable rather than unproven**. A limitation is named rather than fixed:
+> `assert_refused` has six call sites and cannot distinguish reasons, though its message states the
+> true reason for all six. **Cumulative 3 of 22**, with **36 mid-name quantifiers and all unmarked
+> names unaudited**, so this is a floor on a habit rather than a rate for the suite. `native_codegen`
+> **353/0/70** clean; censuses unchanged at **61 of 66**, **1070 of 1074**, **89841 of 89940**.
+> See [`../decisions/CAPABILITY_CLAIMS_BRIEF.md`](../decisions/CAPABILITY_CLAIMS_BRIEF.md).
+
 > **Currency note (2026-08-28, V0.3.X line, sixteenth entry). NAMES AUDITED AGAINST BODIES: 2 OF 11
 > OVERCLAIMED, AND THE RATE IS A LOWER BOUND.**
 >

@@ -147,6 +147,24 @@ soundness item: **the yield-escape refusal is still shadowed**, because the esca
 refused — now asserted by a test rather than inferred. One gap named and not fixed: a tail-yielded
 composite lowers and nothing in the tree executes it.
 
+**I audited the blind spot the previous audit had named, which is the only reason it was findable.**
+The capability class — names claiming something *can*, *cannot* or *must* happen — is 11 of 325, and
+**one overclaimed**. Cumulatively **3 of 22** across the two classes examined.
+
+The one is instructive. a_tail_that_can_trap_is_still_refused (the superseded name, given without backticks because it no longer resolves) asserts a program is refused, and it
+is — **for a reason unrelated to trapping.** Its helper checks only that lowering errs, never why, and
+the backend refuses that shape because the yield is not in tail position, which I had measured
+independently a few increments ago. The doc comment's reasoning was right and the name was not, and
+**no test can isolate the trap concern while every non-tail yield is refused** — the second time in
+two increments a strong claim turned out unreachable rather than unproven.
+
+**I named a helper limitation rather than repairing it**: that assertion has six call sites and cannot
+distinguish refusal reasons, though its message happens to state the true reason for all six. Changing
+it would be a repair in search of a defect.
+
+**The cumulative figure is a floor, not a rate**: 36 mid-name quantifiers are unaudited and unmarked
+names are unbounded — the canary was caught by reading, not by a pattern.
+
 **I stopped meeting the same defect by accident and measured how often it occurs.** Three increments
 running, the finding was a name asserting more than its body checks. So I defined a set by rule before
 auditing it — test functions whose name opens with a universal or negative quantifier, **11 of 325** —

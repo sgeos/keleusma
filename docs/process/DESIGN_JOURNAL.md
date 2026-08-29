@@ -277,6 +277,47 @@ two-segment form, which genuinely differs, and it fired with its own message.
 kinds is missing from its probes, and removing the structs makes it fail with that message. The
 previous slice learned this the hard way: a guard whose corpus lacks a construct is a guard for a
 different question.
+## 2026-08-28 — [v0.3.0] Auditing the blind spot the previous audit named
+
+**THE PREVIOUS AUDIT RECORDED WHAT IT COULD NOT SEE**, which is the only reason this increment had a
+target: it selected names opening with a quantifier, so *"the region canary can fire"* — the defect
+fixed the same day — would have escaped it.
+
+**The capability class, audited: 11 of 325 names, 1 overclaimed.** Cumulatively **3 of 22** across
+both classes.
+
+### The one, and why its helper let it pass
+
+a_tail_that_can_trap_is_still_refused (the superseded name, given without backticks because it no longer resolves) asserts that
+`loop main(a: Word) -> Word { yield a; a * a }` is refused. **It is — for a reason unrelated to
+trapping.** `assert_refused` checks only that lowering **errs, not why**, and the backend refuses that
+shape with *"does not yet support opcode `Stream`"* because **the yield is not in tail position**.
+Measured independently in `stream_frontier.rs`: a yield followed by code is refused whatever follows
+it.
+
+**The doc comment's reasoning was right and the name was not.** A trap observable really would be
+taken by the virtual machine after suspension where native code, having returned, would not. **But no
+test can isolate that while every non-tail yield is refused** — a shape that lowers except for the
+trap does not exist. **This is the second time in two increments that a strong claim turned out
+unreachable rather than unproven**, the other being the float conversion behind its guard.
+
+### A limitation named rather than fixed
+
+`assert_refused` has **six call sites** and cannot distinguish refusal reasons. Its shared message
+says "outside the degenerate class", which **is** the true reason for all six, so it is sound for its
+purpose. But it would pass a shape refused for something unrelated, which is exactly what happened to
+the name above.
+
+**A helper that cannot say why makes every caller's name unfalsifiable in that dimension.** Recorded
+rather than repaired, because all six current callers are correct and changing them would be a repair
+in search of a defect.
+
+### What the cumulative rate does and does not mean
+
+**3 of 22 covers two recognisable shapes.** Thirty-six mid-name quantifiers are unaudited, and names
+with no syntactic marker are unbounded — the canary was caught by reading, not by a pattern. **The
+number is a floor on a habit, not a measurement of a suite.**
+
 ## 2026-08-28 — [v0.3.0] Two of eleven: the habit measured instead of met again
 
 **THE SAME DEFECT HAD APPEARED THREE INCREMENTS RUNNING** — a test named for a canary firing whose
