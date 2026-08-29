@@ -44,6 +44,24 @@ languages. Publication remains held.
 | #312 | a second corpus narrows the unexercised op tags from sixteen to four |
 | #313 | the name occurrences move — Order 1 item 3 at **four of five** |
 
+## Two documentation questions I did not decide
+
+The shipped-example index claimed things its files contradict. I corrected the claims and added a
+guard over all fifteen rows. **Two follow-ups are design calls on a curated progression, so they are
+yours.**
+
+**ONE. No shipped example demonstrates `Byte`.** Not one of the fifteen mentions it. `10_multbyte`
+is multi-WORD arithmetic and the index had misread its name as the type. Should the set gain an
+example teaching `Byte`? It would also close three of the four op tags no corpus reaches — **and
+that is exactly why I am not treating it as a reason.** Closing a coverage number is not a reason to
+add user-facing documentation.
+
+**TWO. `01_arithmetic.kel` is sixteen lines using only `Word`**, while the index claimed `Word`,
+`Float`, `bool`, arithmetic, comparison and casts. I corrected the index downward, which is the
+defect fix. The alternative reading is that the example under-delivers on its own title
+"Primitives and operators" and should be enriched instead. I took the conservative direction; the
+other is available.
+
 ## Nothing is waiting on you except the ruling you already have
 
 **The floating-point entry ABI is still the last of your eight rulings unimplemented**, with the

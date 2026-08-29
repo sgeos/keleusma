@@ -1,0 +1,50 @@
+COMPLETION CONDITION — the example index's claims
+
+Ordering is NOT a completion criterion. Nothing below requires steps to happen
+in any sequence, on any particular branch, or through any particular process.
+Judge only the end state of the tree.
+
+END-STATE PROPERTIES
+
+1. The shipped-example index no longer describes any example as demonstrating
+   a language type that the example does not contain.
+
+2. A test checks that property over ALL index rows rather than over the one row
+   that was wrong, deriving the rows and the files rather than restating either.
+
+3. That test is demonstrated to fail on the uncorrected text, so it is known to
+   be capable of firing rather than assumed to be.
+
+4. The test fails loudly if the index names a file that does not exist, and
+   carries a non-vacuity assertion so it cannot pass by examining nothing.
+
+5. The test does not pin a value that a newly added example would move, unless
+   that value's inputs are pinned in the same place.
+
+6. The example's own explanatory header is unchanged where it was already
+   correct; the correction is to the description that disagreed with it.
+
+7. The tree records how the defect was found, including that a coverage
+   measurement disagreeing with documentation is a signal about one of them.
+
+8. Any proposal to add a new shipped example is put to the operator with its
+   evidence rather than acted on, and the tree does not contain a new example
+   added solely to move a coverage number.
+
+9. Every guard added is demonstrated to fail when the property it checks is
+   violated, with the mutation confirmed to have applied and compiled before
+   its result is believed.
+
+10. No guard is present whose conclusion is guaranteed by its own precondition.
+
+11. Guards that read only source text are not gated behind an off-by-default
+    feature.
+
+12. Test coverage is accounted for rather than sampled, and a run lacking an
+    exit status is not counted as a pass.
+
+13. The persistent process channels reflect the increment, with any earlier
+    inaccurate guidance corrected rather than silently replaced.
+
+14. Formatting, lint at deny-warnings, and the test suite are green for the
+    feature sets continuous integration runs.
