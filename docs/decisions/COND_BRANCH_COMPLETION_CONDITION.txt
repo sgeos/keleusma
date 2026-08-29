@@ -1,0 +1,50 @@
+COMPLETION CONDITION — conditions and branch pairs from the pipeline
+
+Ordering is NOT a completion criterion. Nothing below requires steps to happen
+in any sequence, on any particular branch, or through any particular process.
+Judge only the end state of the tree.
+
+END-STATE PROPERTIES
+
+1. The self-hosted pipeline reports, without walking the reference compiler's
+   syntax tree, the expression rows a conditional contributes: the condition it
+   tests, and where both branches are present, the pair of values they yield.
+
+2. A test compares those rows against the reference extraction and asserts they
+   agree, comparing content rather than positional indices.
+
+3. The corpus that test runs over contains both a branch that is a bare
+   expression and a branch that has at least one statement before its value,
+   and the test asserts that coverage rather than assuming it.
+
+4. A conditional with no alternative branch contributes what the reference
+   contributes for it, and the corpus contains such a conditional.
+
+5. Every derived set carries a non-vacuity assertion.
+
+6. The tree states which parts of the reference extraction have moved and which
+   have not, and the derived count of migrated extractions does not report the
+   expression extraction as moved while parts of it remain.
+
+7. All stage sources still compile through the self-hosted pipeline with the
+   byte-identity corpus unchanged in size and still passing.
+
+8. No opcode is added and the bytecode version is unchanged.
+
+9. Every guard added is demonstrated to fail when the property it checks is
+   violated, with the mutation confirmed to have applied and compiled before
+   its result is believed.
+
+10. No guard is present whose conclusion is guaranteed by its own precondition.
+
+11. Guards that read only source text are not gated behind an off-by-default
+    feature.
+
+12. Test coverage is accounted for rather than sampled, and no run lacking an
+    exit status or conclusion is counted as a pass.
+
+13. The persistent process channels reflect the increment, including any earlier
+    guidance that proved inaccurate, corrected rather than silently replaced.
+
+14. Formatting, lint at deny-warnings, and the test suite are green for the
+    feature sets continuous integration runs.
