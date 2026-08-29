@@ -198,6 +198,7 @@ grep -c '^\s*#\[test\]' tests/op_tag_tables.rs                # 8
 grep -c '^\s*#\[test\]' tests/forward_data_reference.rs       # 4
 grep -c '^\s*#\[test\]' tests/forest_child_channels.rs        # 2
 grep -c '^\s*#\[test\]' tests/example_index_claims.rs         # 2
+grep -c '^\s*#\[test\]' tests/claimed_counts.rs               # 2
 
 # THE BYTE-IDENTITY CORPUS IS ELEVEN STAGES. `wire.kel` joined 2026-08-27.
 grep -c 'fn self_host_compiles_.*_kel_byte_identically' tests/selfhost_codegen.rs   # 11
