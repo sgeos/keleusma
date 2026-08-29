@@ -20,8 +20,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-28 (session 56 CLOSE) — six merges, Order 1 item 3 at FOUR of five, and the
-twelfth stage's silence explained
+**Date**: 2026-08-28 (session 56 CLOSE) — thirteen merges, and the last extraction is unblocked
 
 ## NOTHING IS WAITING ON YOU EXCEPT THE RULING YOU ALREADY HAVE
 
@@ -31,94 +30,55 @@ not acted on it.** Their own record now says the recommendation *splits* on a qu
 answered — whether the fixed-point format must interoperate across object files from different
 languages. Publication remains held.
 
-## Five increments merged, each at 22 of 22
+## Thirteen increments merged, each at 22 of 22
 
-`origin/v0.2.3` at `93e66b24`, **162 merges**, **no open pull request**. Publication remains held.
+`origin/v0.2.3` at `f8d691a1`, **170 merges**, **no open pull request**. Publication remains held.
 
-| | |
-|---|---|
-| #308 | the op-tag tables agree, and something now checks that they do |
-| #309 | `field_sets` reaches the type channel — Order 1 item 3 at **three of five** |
-| #310 | the declared names reach it too, and the wildcard-import gap is located |
-| #311 | the twelfth stage does not self-compile, and the tree now says why |
-| #312 | a second corpus narrows the unexercised op tags from sixteen to four |
-| #313 | the name occurrences move — Order 1 item 3 at **four of five** |
+Order 1 item 3 stands at **four of five**, and the fifth is part-moved: the binary operator and the
+condition now reach the type channel from the pipeline. **`let d = 1 + 2` resolves through the
+stage's bounded fixpoint**, which is the gap this file named for four sessions.
 
-## Two documentation questions I did not decide
+## The mistake I made five times, and the rule that replaces it
 
-The shipped-example index claimed things its files contradict. I corrected the claims and added a
-guard over all fifteen rows. **Two follow-ups are design calls on a curated progression, so they are
-yours.**
+**I reasoned from a component's internals about what crosses its boundary.** Twice from the parser's
+data structures, when the record stream already carried the answer. Three times from the reference
+extraction — its line count, its visitor discipline, the forest's child channels — when the
+*consumer* settled it in twenty minutes.
 
-**ONE. No shipped example demonstrates `Byte`.** Not one of the fifteen mentions it. `10_multbyte`
-is multi-WORD arithmetic and the index had misread its name as the type. Should the set gain an
-example teaching `Byte`? It would also close three of the four op tags no corpus reaches — **and
-that is exactly why I am not treating it as a reason.** Closing a coverage number is not a reason to
-add user-facing documentation.
+**The requirement lives at the boundary, not in either implementation.** Five wrong sizings from
+producers; none from the boundary. Both handoffs now say so and name the instruments.
 
-**TWO. `01_arithmetic.kel` is sixteen lines using only `Word`**, while the index claimed `Word`,
-`Float`, `bool`, arithmetic, comparison and casts. I corrected the index downward, which is the
-defect fix. The alternative reading is that the example under-delivers on its own title
-"Primitives and operators" and should be enriched instead. I took the conservative direction; the
-other is available.
+## Two decisions I want visible rather than buried
 
-## Nothing is waiting on you except the ruling you already have
+**I built the branch-pair extraction and did not ship it.** The forest synthesises an else arm, so
+the pipeline cannot tell a one-armed conditional from a two-armed one. A spurious pair row feeds an
+equality predicate and could make the stage **reject a correct program**; dropping a real one would
+make it **miss a disagreement**. Both directions are unsound, so it is pinned rather than guessed. A
+heuristic existed and I rejected it because I could not show it safe.
 
-**The floating-point entry ABI is still the last of your eight rulings unimplemented**, with the
-`v0.3.0` line's `Fixed` shared-slot SCALE question attached. **It is theirs to bring you and I have
-not acted on it.** Their record says the recommendation now splits on a question you have not
-answered: whether the fixed-point format must interoperate across object files from different
-languages.
+**I corrected a pull request at twenty of twenty-two rather than let it merge.** Its doc said "only
+kind 1 moves" when only the *Word* part of kind 1 moved — the reference counts byte operations as
+the same kind and the forest splits them into three more. That discarded a nearly-complete CI run,
+following this line's own precedent that an overclaim must not reach the tree.
 
-## The one mistake I made three times
+## Three questions that are yours
 
-**I reasoned from a component's internals about what crosses its boundary.** Twice I read the
-parser's data structures, concluded the host could not see something, and sized a large increment —
-and the record stream already carried it, so both slices needed no stage change at all. Once I
-inspected a function's constructs to explain a refusal and named three plausible culprits;
-declaration order was the cause and none of the three mentioned it.
+**One. The floating-point entry ABI** — still the last of your eight rulings, with the `v0.3.0`
+line's `Fixed` shared-slot SCALE question attached. **Theirs to bring you; I have not acted on it.**
 
-I measured before acting on the second and third occasions, which is the only reason they cost
-nothing. Both handoffs now carry the rule and name the two instruments.
+**Two. Should a shipped example demonstrate `Byte`?** None of the fifteen does. It would also close
+three of the four op tags no corpus reaches — **and that is precisely why I did not let it decide
+the matter.**
 
-## The decision I want visible rather than taken quietly
+**Three. Should `01_arithmetic.kel` be enriched?** It is sixteen lines using only `Word` while the
+index claimed `Float`, `bool`, comparison and casts. I corrected the index downward, which is the
+conservative direction; enriching the example is the other.
 
-**`verify_types.kel`, the twelfth stage, does not self-compile.** A function reads a `data` block
-declared later in the file, and the parser builds its field table as it meets each block, so the
-reference resolves to nothing. Four-line witness, with a control differing only in declaration
-order.
-
-**I did not attempt the repair.** It means collecting data declarations before parsing bodies — a
-two-pass restructuring of a single-pass streaming parser, not a defect fix. What landed converts an
-unexplained absence into a documented, reproducible gap whose pins fire when it closes. If you want
-the corpus at twelve, that is the next large item and it is your call whether it is worth the
-restructuring.
-
-## Two things I corrected in my own work
-
-A guard I wrote earlier in the session compared arm **spellings** where its own message described
-which **codes** were handled; splitting a range made that visible and it now compares coverage.
-
-And a mutation harness reported "zero compile errors" for three mutants while running **nothing** —
-a shell variable escaped inside a quoted heredoc. Zero errors from a command that never ran looks
-exactly like a clean mutant. Re-run properly, two of three fired.
-
-## On "four of five", because the number would flatter the state
-
-**Moved means an analogue exists, not that nothing is left.** The count pin's own documentation now
-carries a table of the residual in each of the four, so the figure cannot be read as completeness:
-`decl_call_rows` left its actual-argument tag, `field_sets` its field accesses, and
-`occurrence_rows` two shapes.
-
-Those two are different in kind and the difference is the useful part. A `data` block identifier is
-**representational** — the pipeline has no ident node there at all, so nothing is missing from the
-wire. A `for` loop variable is **a wire gap**: the read reaches the forest but nothing binds its
-slot to its name, because only `let` bindings emit a name record. The occurrence is dropped rather
-than reported under a wrong name, which is the better of the two failures. Closing it is the same
-shape of change as the record that already exists, and that one needed your ruling.
+And the two-pass parser work that would make `verify_types.kel` self-compile — taking the corpus to
+twelve — remains **yours to call**, not something I will start unilaterally.
 
 ## What I would take up next
 
-The last extraction, `expression_nodes_resolvable`; or the two-pass data resolution, which would
-take the byte-identity corpus to twelve and is the largest single item I can see — **that one I
-flagged as yours to call rather than start unilaterally.**
+The remaining six expression kinds, now that order is known to be free. Three are composite, where
+the occurrences slice already showed the two representations disagree about what a node is, so
+expect those to need the same measure-then-decide treatment the branch pair got.
