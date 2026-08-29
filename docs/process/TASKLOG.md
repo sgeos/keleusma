@@ -608,6 +608,23 @@ Current sprint source of truth.
 > workspace **2467/0/88**, coverage re-derived and unchanged at 1070 of 1074.
 > See [`../decisions/OPERAND_WIDTH_RECOVERY.md`](../decisions/OPERAND_WIDTH_RECOVERY.md).
 
+> **Currency note (2026-08-28, V0.3.X line). THE OBLIGATION IS NOW COSTED, AND ITS PRICE IS ZERO
+> TODAY AND ONE ALREADY-REFUSED MODULE LATER.**
+>
+> The yield-escape refusal was already shown present and fireable; what was missing was its **price**.
+> Measured by mutating compiled bytecode to strip `Op::Stream` from a clone, rather than by weakening
+> the backend to accept `Stream`: the refusal takes over **exactly one** corpus module,
+> `13_telemetry_stream.kel`, which is refused today for `Stream` anyway, so **coverage does not fall,
+> now or then** — only the reason changes, from unimplemented-feature to soundness. The obligation is
+> consolidated at
+> [`../decisions/COMPOSITE_SLOT_REUSE_OBLIGATION.md`](../decisions/COMPOSITE_SLOT_REUSE_OBLIGATION.md)
+> with a four-option cost table and **no recommendation**: the option that would convert the silent
+> wrong value into a `Stale` error edits files this line may read and must not edit, so the
+> disposition is the operator's. The standing tension is that discharging this requires the planner to
+> consume a confinement verdict, and consuming none is exactly why a wrong verdict cannot miscompile
+> today. Absorption 30 (`18cdb5d8`) is complete with both predictions exact; workspace **2488/0/92**,
+> `native_codegen` **356/0/72**, censuses unmoved at 1070 of 1074 and 61 of 66.
+
 > **Currency note (2026-08-27, V0.3.X line, third entry). THE RELEASE GATE COVERS
 > `native_codegen` AND WAS NEVER RUN; THE INTERPROCEDURAL RESIDUAL IS MEASURED AND EMPTY.**
 >

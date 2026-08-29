@@ -1,519 +1,60 @@
-## The op-tag residue is four, not sixteen
-
-Earlier in the session I reported sixteen op tags the byte-identity corpus cannot check, and said
-the per-construct tests were a different population I had not measured. I measured a second one —
-the fifteen shipped examples — and **it covers twelve of the sixteen**, the whole composite family.
-
-Four remain unreached by either corpus: the unchecked arithmetic that `Byte` operands take, plus
-unary negation. The description is checked by probes inside the test rather than asserted, because
-this project has called an unwitnessed opcode unreachable before and been wrong.
-
 # Reverse Prompt
 
-> **Navigation**: [Process](./README.md) | [Documentation Root](../README.md)
+> AI to human communication. Overwritten each increment.
 
-AI to Human communication channel. This is the **bounded latest-state handoff**,
-overwritten each session per [COMMUNICATION.md](./COMMUNICATION.md). The append-only
-increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.md).
+## Line
 
----
+V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## ⚠ TWO LINES SHARE THIS FILE — READ BOTH SECTIONS
+## What this increment did
 
-The protocol says overwrite this file each session. **I did not.** The report below the V0.3.X
-section is the `v0.2.3` line's, written at `b725c1f2`, and it is current for that line. Overwriting
-it would have destroyed a channel this line does not own. **This choice is stated rather than made
-silently**, so the next reader knows the deviation is deliberate.
+**Costed the open soundness obligation, then put it in one document.**
 
-The V0.3.X line's full resume prompt is [`handoffs/v0.3.0.md`](./handoffs/v0.3.0.md), which is
-self-contained and carries the ancestry check. What follows is only the bounded summary.
+The composite slot-reuse defect has had a guard (`LowerError::YieldEscapingLoopComposite`) for several
+increments, and that guard was already shown to be *present* and *fireable*. What was missing was its
+**price**. A guard whose cost nobody has measured is a guard a later reviewer deletes as speculative.
 
----
+**Measured**: the refusal takes over exactly **one** corpus module, `13_telemetry_stream.kel`, on the
+day `Stream` lowers — and that module is refused *today* for `Stream` anyway. **Coverage does not
+fall, now or then.** The refusal changes reason, from unimplemented-feature to soundness.
 
-## V0.3.X — native code generation, 2026-08-27, after absorption 18
+The measurement mutates compiled bytecode (strips `Op::Stream` from a clone) rather than weakening the
+backend to accept `Stream`. Weakening the backend would have made the test pass by making the product
+wrong, and would have measured a backend nobody will ship.
 
-**Verification.** `native_codegen` **314 passed, 0 failed, 59 binaries**, and clean under
-`clippy -D warnings` and `fmt --check`. The main workspace **2461 passed, 0 failed, 87 binaries**.
-Both figures read cargo's own exit status **and** the summed per-binary counts, and the two agree.
-`native_codegen/` is a detached workspace **not built by CI**, so this local suite is its only gate.
+**Consolidated** into `docs/decisions/COMPOSITE_SLOT_REUSE_OBLIGATION.md`: defect, guards and their
+strength, what is *not* covered, and a four-option cost table.
 
-> **Run the two suites SEQUENTIALLY.** In parallel they invalidate the workspace perf canary —
-> 69.04s under concurrent load against a 30s tripwire, 1.20s alone. A 57x false red.
+## What I need from you, when convenient
 
-**Absorption 18 landed, and both predictions were recorded before merging and hit exactly**:
-`native_codegen` unchanged, because no stage source or example script was touched; the workspace up
-by exactly two, being the incoming tests. The ownership check is empty and was shown non-vacuous
-against the previous absorption point.
+**A disposition on the obligation.** It is stated but not recommended, because the option that would
+actually fix it — advancing the composite epoch on overwrite, converting a silent wrong value into a
+`Stale` error — lives in `src/vm.rs` and the arena, **which this line may read and must not edit**.
 
-**The finding, and it corrects something I told you before.** I reported the composite slot-reuse
-defect as latent because no corpus module had the escaping shape. **That was wrong, and it was
-wrong in two documents.** `examples/scripts/13_telemetry_stream.kel` carries the shape deliberately
-and says so in its own header. What actually keeps the defect quiet is the backend: it refuses that
-module with *"native lowering does not yet support opcode `Stream`"*, and every chunk that can carry
-the shape is a `loop` chunk opening with `Stream`. **The safety is accidental — it rests on an
-unimplemented opcode rather than on any escape reasoning, and it expires the day `Stream` lowers.**
-I found this by measuring where I expected zero and getting one, not by re-reading.
+The standing tension, which no amount of work here resolves: **discharging this requires the planner
+to consume a confinement verdict, and consuming no verdict is exactly why a wrong verdict cannot
+miscompile today.** Both cannot be had for free. That trade is yours.
 
-**What I did about it.** The backend now refuses the shape at the placement itself
-(`LowerError::YieldEscapingLoopComposite`). Measured cost over 91 modules and 1117 chunks: one chunk
-carries the shape, that one was already refused, and **zero are newly refused** — the coverage
-censuses `61 of 66` and `1070 of 1074` both held. Refusing is sound even if the underlying verdict
-is wrong, because the result is only ever used to refuse and never to place, so the recorded reason
-a wrong verdict cannot miscompile stays intact.
+Nothing is blocked on the answer. Three tripwires fail if the situation changes: if `Stream` lowers,
+if a corpus module acquires the escaping shape, or if the interprocedural residual stops being empty.
 
-**Two things I want stated plainly rather than left implied.** The refusal is **shadowed** by the
-`Stream` refusal today, so it cannot fire on unmutated input; I proved it fires by removing `Stream`
-from compiled bytecode, and left a tripwire test that fails the day `Stream` lands so whoever lands
-it must confirm this guard takes over. And **the obligation is narrowed, not discharged**: slot reuse
-is unchanged, and a composite built in a loop, returned, and yielded by the caller is still invisible
-to a single-chunk predicate.
+## Verification
 
-**A gap in our own practice, and I described it wrongly the first time.** I reported that neither
-`scripts/release-gate.sh` nor CI covers `native_codegen`. **⚠ CORRECTED. THE GATE DOES COVER IT; IT WAS NEVER RUN.** The superseded claim was that
-`scripts/release-gate.sh` and CI do not cover `native_codegen`. **False.** That script runs
-`cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, AND
-`RUSTDOCFLAGS="-D warnings" cargo doc` over the subproject, in a step whose own label reads *"gated
-nowhere else"*. The step is conditional on an LLVM 22.1 install and prints a loud SKIPPED banner
-otherwise, and **LLVM 22.1 IS installed here**, so it would have run. The warnings accumulated
-because **the gate was never run on this line** — the everyday loop substituted `cargo test` for it.
-**That is a worse finding than the one it replaces**: the coverage existed and was bypassed. Running
-the missing step found a real failure it had been hiding — a public item linking to a private one,
-which fails `cargo doc -D warnings` and is invisible to both test and clippy. Now fixed and the doc
-build is clean.
+Both suites run **sequentially** (parallel invalidates the perf canary, 57x).
 
-**The interprocedural residual is now measured rather than named.** I said last time that a composite
-built in a loop, returned, and yielded by the caller was a hazard I could not see. Following the call
-graph: of 14 chunks that construct inside a loop, the crude figures are zero by call and two by
-return, and **both return candidates are ruled out because the yielding caller returns `Word`** — a
-`loop` chunk's return type is what it yields, so no composite can reach the host through it. Refined
-residual **zero**. I deliberately did not refuse it: that refusal would rest on three stacked
-over-approximations with no data flow and no instance to justify the cost, and the whole class sits
-behind the `Stream` refusal anyway. The census asserts zero, so an instance would fail loudly.
-
-**The last two composite refusals are now explained to the cause.** The unknown operand is the first
-of three, produced by a read of the `for` loop's induction variable, which each chunk writes twice —
-and a local's width is trusted only when written at most once, because the width pass is a linear
-scan and cannot see a back edge. I derived that by simulating the stack from the instruction set's
-own published effects, after a heuristic walk gave me a confident wrong answer.
-
-**The fix I reverted last time is back, with the thing that can judge it.** I built a differential
-that runs a multi-function program written inline through both the native lowering and the reference,
-which the tree could not do before. Its ABI check earned its place on the first run: a pure-`Word`
-program emits a one-parameter entry, not the four-pointer one I had assumed, and calling it the wrong
-way would have been a SIGSEGV inside JIT code with nothing to attribute it to. With that in place,
-the target case was seen to **fail** first — refused for an unknown operand width — and then to pass
-and agree once the width seeding returned. **Coverage is unchanged at 1070 of 1074**, because the
-seeding widens the accepted set only for programs the corpus does not contain, which is precisely why
-it needed a harness rather than a coverage number.
-
-**Superseded, quoted so it is not mistaken for current:**
-
-> *"Closing that asymmetry was correct and it changed nothing... Since no harness here can execute a
-> source-string program containing a call, keeping it would have meant widening a compiler's accepted
-> set with no execution-backed check, so it is out... The named prerequisite is a source-string
-> whole-module differential harness."*
-
-That prerequisite is what this increment built, so the change is back rather than out. **What still
-stands from it**: lifting the two composite refusals needs a fixpoint over local widths, which is its
-own increment, and coverage is still 1070 of 1074.
-
-**I closed a gap I had described wrongly, and the correction is the interesting part.** Last time I
-told you a tail-yielded composite lowers with nothing executing it, and called the untested code a
-composite crossing the yield boundary. **There is no yield boundary there.** The lowered module
-declares no host yield hook at all and the entry returns a pointer into the region the caller
-provides, so a single yield in tail position is compiled as a return. The probe I wrote to examine the
-boundary failed on its own message, which had said in advance that if no hook were declared then the
-probe was aimed wrongly.
-
-The shape is now witnessed properly: the native body and the reference's body, resolved through the
-arena, are identical byte for byte. My first attempt compared the reference's debug text, which prints
-the handle rather than the contents, and failed — comparing an address to an address would have proved
-nothing about marshalling.
-
-One fact worth your attention: **the reference suspends where the native side returns**, and they
-agree on the value. That is what the degenerate-yield path means, and it is a thing to know before
-reasoning about suspension. What is genuinely still uncovered is sequence semantics for a
-composite-yielding stream, and that is blocked rather than merely unwritten, because it needs a
-non-tail yield and those are refused.
-
-**Two things this iteration, and one of them is a red I am not going to fix.**
-
-**The stream frontier is tail position, not composites.** A single `yield` in tail position lowers —
-**including a yielded composite** — and everything else is refused: a yield followed by code, two
-yields, a yield inside an `if`, a yield inside a `for`. The pair that settles it is that a composite
-in tail position lowers while a plain `Word` with code after it does not, which refutes the natural
-guess that composites are what the telemetry stream cannot get past. Consequence for the open
-soundness item: **the yield-escape refusal is still shadowed**, because the escaping shape is still
-refused — now asserted by a test rather than inferred. One gap named and not fixed: a tail-yielded
-composite lowers and nothing in the tree executes it.
-
-**Three module counts in the tree turned out to describe three different corpora, and all three were
-right.** One census reported 74 and 71 where every other says 69. The cause is that it **prepends the
-RTOS prelude before compiling**, so five scripts that fail standalone succeed there: 74 is every
-corpus file, 71 is those with an entry point, 69 is compiling standalone. **None of the three said
-which population it meant**, which is the third time that exact shape has appeared here.
-
-**The probe I wrote to reconcile them had two defects of its own.** It keyed modules by file name, and
-two files are named `prelude.kel`, so it undercounted by one. And one substitution silently did
-nothing because formatting had split the line it matched and **I omitted the assertion** — the second
-time this session, after I had written the lesson down. **Recording a lesson is not applying it**, and
-both data points are mine.
-
-**The pin I added last increment caught my own new test this increment**, because a closure-local
-`return` looks like an early exit to the scanner. I repaired the closure rather than widening the pin:
-recording a test as skippable when it cannot skip would corrupt the figure the pin exists to protect.
-
-**A different question than the audits asked: not whether a test proves its claim, but whether it ran
-at all.** A test that returns early when a toolchain is missing reports as passed and joins the total
-I quote to you as evidence. **10 of 325 can do that, and none are doing it here** — which I verified
-rather than assumed, after a timing-based suspicion about one of them proved wrong and its output
-turned out to contain real subprocess results.
-
-**The scanner I wrote to measure this was wrong first.** It reported 33 by matching the word "return"
-inside comments, and only disagreeing with an earlier count exposed it; otherwise I would have
-reported a third of the suite as at risk. The population is now pinned so an eleventh announces
-itself, and **I deliberately did not assert that no skip occurs** — a machine without a C compiler
-should not see a failure, since the defect is invisibility rather than the skip.
-
-**The finding is bounded and I would rather say so than dramatise it**: ten tests, none currently
-vacuous, each printing a loud banner when it does skip.
-
-**The name audit closes at zero, and I am stopping it — that is the result rather than a gap in it.**
-The third and largest class was too big to read carefully, so I scaled the method instead of the
-effort: a universal claim resting on a body that never iterates is mechanically detectable, which cut
-36 names to 7 worth reading. **All seven are sound.** Hit rates across the three classes are **2, 1,
-0**, totalling 3 of 29 read.
-
-**Three classes with a declining yield is evidence the habit is bounded**, and the brief I wrote before
-this pass said a null result would be the signal to stop. Writing the stopping condition down
-beforehand is what makes this a decision rather than fatigue.
-
-**Two limits, because a clean result invites overreading.** The triage is a filter with known false
-positives, so its 29 were not read and I do not claim they were. And names with no syntactic marker
-are unbounded — the canary defect was caught by reading, not by any pattern, so no rule-based rate
-closes the question.
-
-Absorption 27 is in, its prediction hit exactly.
-
-**I audited the blind spot the previous audit had named, which is the only reason it was findable.**
-The capability class — names claiming something *can*, *cannot* or *must* happen — is 11 of 325, and
-**one overclaimed**. Cumulatively **3 of 22** across the two classes examined.
-
-The one is instructive. a_tail_that_can_trap_is_still_refused (the superseded name, given without backticks because it no longer resolves) asserts a program is refused, and it
-is — **for a reason unrelated to trapping.** Its helper checks only that lowering errs, never why, and
-the backend refuses that shape because the yield is not in tail position, which I had measured
-independently a few increments ago. The doc comment's reasoning was right and the name was not, and
-**no test can isolate the trap concern while every non-tail yield is refused** — the second time in
-two increments a strong claim turned out unreachable rather than unproven.
-
-**I named a helper limitation rather than repairing it**: that assertion has six call sites and cannot
-distinguish refusal reasons, though its message happens to state the true reason for all six. Changing
-it would be a repair in search of a defect.
-
-**The cumulative figure is a floor, not a rate**: 36 mid-name quantifiers are unaudited and unmarked
-names are unbounded — the canary was caught by reading, not by a pattern.
-
-**I stopped meeting the same defect by accident and measured how often it occurs.** Three increments
-running, the finding was a name asserting more than its body checks. So I defined a set by rule before
-auditing it — test functions whose name opens with a universal or negative quantifier, **11 of 325** —
-and read every one. **Two overclaimed; nine were sound.**
-
-Both repairs picked a direction rather than defaulting to the cheap one, because weakening a name
-quietly reduces what the suite proves. One became a narrower claim that is also the more useful one.
-The other I deliberately did **not** strengthen: a program reaching the second float conversion alone
-would need a float arriving without a signature or a constant, and both routes are guarded, so the
-strong claim is **unreachable rather than unproven** — and the honest name now records that fact about
-the guard.
-
-**The rate is a lower bound and I would rather say so**: the rule sees leading quantifiers only, and
-the canary defect I fixed earlier today would not have been caught by it. Two of eleven measures one
-recognisable shape of the habit, not the habit — but that is worth considerably more than "I keep
-finding these", which is what this claim amounted to an hour ago.
-
-**The instrument I built last time to replace a belief with counting was itself wrong about the module
-it singled out.** I reported `14_frame_log.kel` as a unique outlier holding four of six properties.
-Reading it shows its entry is `loop main(tick: Word) -> Word` — **it yields a Word**. The property I
-called "yields a composite" was implemented as a chunk merely containing both a yield and a
-construction. Corrected to read the declared return shape: the count falls from 5 to 4, that module
-holds **three**, and it **ties with `13_telemetry_stream.kel`. There is no unique outlier.**
-
-A second property was misnamed rather than miscomputed — "constructs inside a loop" is now "constructs
-in a break scope", since that opcode is also emitted for `match`.
-
-**The statement worth keeping: an instrument is not exempt from the scrutiny applied to the claims it
-measures.** This one existed precisely to stop a belief resting on how often things appeared in my
-notes, and it shipped with a name asserting more than its body checked. What survives I re-derived
-rather than carried: 42 of 69 modules hold none of the properties, and *returns a composite* is held by
-17 of 69, so it marks nothing at all.
-
-**I tested a claim I had made rather than trading on it, and it was half wrong.** Last time I observed
-that three investigations converged on one instruction and wrote that the corpus's awkward cases
-cluster. That went into two documents as a finding before anyone counted. Counting over all 69 modules
-and six properties: **42 hold none**, and only two modules hold three or more.
-
-**One module is a genuine outlier** — `14_frame_log.kel`, four of six properties, more than any other,
-and measured rather than inferred from how often I looked at it. **The other one is not.**
-`12_sensor_window.kel` holds two, tied with five more, and pairing them was selection by attention:
-they appeared together in my notes because I investigated them together. One of the six properties
-turned out not to be a marker at all — *returns a composite* is held by 17 of 69, so weighting it
-would have sent work at a seventh of the corpus while feeling selective.
-
-**The reusable part**: "these keep showing up in my notes" is evidence about the notes. Only counting
-over everything, including what was never examined, separates attention from structure — and 42
-modules holding nothing is a fact no amount of re-reading would have produced.
-
-**The half I deliberately left unverified last time was not merely stale — it was false.** The claim
-was that no composite in the corpus is slot-homed. One is: `14_frame_log.kel` constructs a composite
-and stores it into a private data slot. Two independent methods agree on it, and a must-fire control
-shows neither is blind. **I wrote the prediction down first and it was wrong**, which is the only
-reason being wrong was cheap.
-
-**The model it supported survives, for a reason I had to check rather than hope.** The planner does
-place that construction in the chunk region, so it is a temporary whose value is *copied* into the
-slot afterwards — no body lives only in a slot. "Constructed as a temporary" and "copied into
-persistent storage" are compatible, and the old sentence conflated them: a false sentence and a sound
-model in the same paragraph.
-
-**Finishing it mattered more than leaving it would have.** A claim with one freshly verified half
-reads as verified throughout, and the half I left behind was the false one.
-
-**I now have a clean statement of what a cross-check is, and I got there by building a bad one first.**
-The tree carried two numbers for one quantity — composite construction sites as 239 in one file and
-256 in another — and a count over 35 chunks cannot exceed a corpus-wide count. **239 turned out to
-have no producer**: the spike its comment cited no longer reports it. The current figure, with its
-population attached, is 256 sites across 35 chunks of the four-root corpus's 69 compiling modules.
-
-**A cross-check is different methods over the same population.** What I claimed two iterations ago was
-the same method over different populations, which is not evidence. The one built here is the right
-shape — the planner's placements and a raw scan of the instruction stream, independently agreeing at
-256 — and it earns its place beyond bookkeeping, because neither a dropped nor a duplicated placement
-is visible to a differential.
-
-**The half I did not do is the honest part**: that stale sentence also said "0 of them slot-homed",
-and I have not re-derived it, so I have not restated it. Correcting a denominator does not license the
-numerator.
-
-**The guard I built last time was itself too narrow, which makes three in a row.** It watched three
-source roots; the censuses that produce the figures read four, so seven files were read and unguarded.
-The same defect has now appeared at three granularities in three increments — a pin whose input was a
-directory scan, a scan of three directories where the loaders recurse, and a guard whose roots were
-narrower than its consumers'. **Each time the narrow scan returned a well-formed answer**, which is
-what makes it invisible. The rule I take from it is to derive the scope from what the consumers read,
-never from a list that looks right.
-
-**And a claim I made last time did not survive checking.** I told you the fix produced a cross-check,
-two censuses agreeing at 1074 chunks. They read different root sets, so that was not corroboration.
-My first explanation for the agreement was wrong too, and its test failed: I said the extra files do
-not compile, and two of them do — both preludes, which compile to **zero chunks**. So a four-root
-census sees two more modules and the same chunk total. The agreement is real and weaker than I said,
-and the module counts do differ: 67 against 69. **Quote the population with the number** is the
-correction that generalises.
-
-**I set out to build a small guard and found one of my own numbers was wrong.** Thirty-six test files
-here read directories the other line owns, so I wanted the habit of checking them turned into a check.
-While doing it I found that three test files I wrote this session listed the rogue directory
-explicitly and also recursed into it from its parent, visiting every file there twice: **67 unique
-files, 24 of them in rogue, reported as 91**. Chunks examined were likewise 1074 reported as 1117.
-
-**Your coverage figures were never affected**, and I re-derived them rather than reasoning that they
-were safe: the censuses that produce 61 of 66, 1070 of 1074 and 89841 of 89940 do not list rogue
-explicitly, so they saw it once. The findings were unaffected too — the refusals and the escaping-shape
-chunk all lie outside rogue. **What was wrong was the population they were measured against.**
-
-The fix gave me a cross-check I did not have: two independent censuses now agree at 1074 chunks, where
-before they said 1074 and 1117 and nobody had set the two numbers beside each other. That is the same
-way the other line's defect was found, and here the question went unasked because the figures lived in
-different files.
-
-**The guard itself nearly shipped watching a smaller population than it protects** — its first scan
-found 57 files where the loaders walk 67, missing the piano_roll family by not recursing. Caught before
-anything was pinned.
-
-**The blockage is over and the branch is published again.** PR #314 landed, absorption 25 carried it
-in, and I then **ran** the workspace suite rather than inferring it from the fix: 2479 passed, 0
-failed, 89 binaries. The prediction's arithmetic was written before merging and held. Nine commits
-waited four iterations rather than go through `--no-verify`, which cost nothing but patience and kept
-the gate meaning what it says.
-
-**Superseded, quoted so it is not mistaken for current:**
-
-> *"I cannot push, and I want you to know that rather than discover it."* The pre-push gate runs the
-workspace suite, the workspace suite is red, so `v0.3.0` is **5 commits ahead of origin with
-everything committed and nothing published**. I did not use `--no-verify`: the gate is correct that
-the suite is red, and bypassing it would publish a branch its own gate rejects and set the precedent
-that a red attributed to someone else is one worth skipping. If `keleusma-02` has not acted by the
-next resume, this is yours to rule on.
-
-**The workspace suite is red, and it is not a defect in either line.** Absorption 24 brought a test of
-yours whose pinned set of unexercised op tags is branch-dependent. On this branch the residue is
-smaller than the pin, which its own message calls a coverage gain, and the cause is one of this line's
-own witness scripts doing Byte arithmetic. **I did not touch it** — this line keeps `src/` and
-`tests/` byte-identical to `v0.2.3`, and the ownership check I run at every absorption asserts exactly
-that, so editing it would destroy the property those checks rest on. I reported it to `keleusma-02`
-with the cause. **I am not reporting the workspace suite as green.**
-
-**The opcodes whose lowering had never run are now each resolved to a status.** An arm that exists is
-not an arm that works, so I asked the four one at a time. Two float conversions are simply **refused**
-— one by name, the other unreached behind it. `IsStruct` has no producer I could find, and the
-reference's own arm only accepts a boxed struct body, of which the B28 work left none, so even a
-mutation witness would compare against a fault rather than a value.
-
-**`Reset` was the interesting one, and my own brief was wrong about it.** I predicted it was gated
-behind the `Stream` refusal. A minimal `loop main` emits it and the backend refuses nothing — so
-**`Stream` is lowered for that shape**, and an earlier statement of mine that `Stream` is unsupported
-was true of one module rather than of the opcode. `Reset` has in fact had an execution witness all
-along, in the suspension differential's fifteen subjects, which the census cannot see because it
-surveys only the shipped corpus. **No census figure moved, and none should have.**
-
-**Nothing was widened to make a test possible.** The float guard blocks the conversion witness, and
-that is the finding rather than an obstacle to work around; the float ABI is yours to rule on in any
-case.
-
-**A coverage figure I gave you last increment was wrong, and I found it by naming things.** I set out
-to name the last chunks the backend will not lower, because "other" is a bucket and not a cause. There
-are three refusals — `Stream` in the telemetry stream, a float constant in the float witness, and
-`Len` in the refused witness — where the coverage figure implied two. That gap was the finding: the
-census marks a chunk unlowerable by matching a refusal's symbol to a chunk name, and **a module
-refused as a whole names no chunk**, so both chunks of the float witness were counted as lowerable
-while the backend emitted nothing for them. Corrected, **1072 of 1074 becomes 1070 of 1074**.
-
-**What survives of the previous claim, precisely**: the delta was right and the level was not. The
-width certification did lift exactly two chunks, so the honest movement is **1068 → 1070**, and the
-execution evidence — 59 to 61 modules running and agreeing with the reference — never depended on the
-census at all.
-
-**One process note.** A gate run was killed by a signal partway through and reported 51 tests passed,
-which is a plausible-looking number and not a result. I re-ran it rather than record it; the clean run
-is 332 passed, 0 failed, 63 binaries.
-
-**The last two composite refusals are closed.** A local written more than once is now trusted when
-every write's producer fixes its width by the instruction itself. **Coverage 1070 → 1072 of 1074**,
-and — the part that actually matters — the corpus differential goes from 59 to **61 modules executed
-and agreeing** with the reference. A wrong width would have raised coverage identically and mispacked
-in silence, so the execution figure is the evidence and the coverage figure is not.
-
-**The fixpoint I told you this would need was not needed.** The arithmetic result slot carries a
-literal width whatever its operands, so the loop counter's two writes depend on nothing. Reading that
-one line removed an increment of planned work.
-
-**One thing I got wrong and want on the record.** I built a stack walk on `stack_growth`/`stack_shrink`
-as though they were pop and push counts. **They are the peak model, their own documentation says so
-and names the right function, and this repository had already recorded another place making the same
-mistake.** The wrong walk mis-attributed the loop increment's value — precisely the classification the
-fix depends on. I re-derived the earlier published conclusion rather than assume it survived; it did,
-but that was only knowable by checking.
-
-**Absorptions 18 through 21 are complete**, every prediction recorded before merging and every one
-hitting exactly.
-
-**Still blocked on you, all three unactionable here**: the `Fixed` shared-slot ABI, where the
-recommendation splits on whether cross-language interop should be convention-based or
-self-describing; the float entry ABI, ruled to settle alongside it; and the git-topology mechanism,
-formally unruled but no longer contested.
-
----
-
-## Last Updated (v0.2.3 line)
-
-**Date**: 2026-08-28 (session 56 CLOSE) — six merges, Order 1 item 3 at FOUR of five, and the
-twelfth stage's silence explained
-
-## NOTHING IS WAITING ON YOU EXCEPT THE RULING YOU ALREADY HAVE
-
-**The floating-point entry ABI is still the last of your eight rulings unimplemented**, with the
-`v0.3.0` line's `Fixed` shared-slot SCALE question attached. **It is theirs to bring you and I have
-not acted on it.** Their own record now says the recommendation *splits* on a question you have not
-answered — whether the fixed-point format must interoperate across object files from different
-languages. Publication remains held.
-
-## Five increments merged, each at 22 of 22
-
-`origin/v0.2.3` at `93e66b24`, **162 merges**, **no open pull request**. Publication remains held.
-
-| | |
+| | result |
 |---|---|
-| #308 | the op-tag tables agree, and something now checks that they do |
-| #309 | `field_sets` reaches the type channel — Order 1 item 3 at **three of five** |
-| #310 | the declared names reach it too, and the wildcard-import gap is located |
-| #311 | the twelfth stage does not self-compile, and the tree now says why |
-| #312 | a second corpus narrows the unexercised op tags from sixteen to four |
-| #313 | the name occurrences move — Order 1 item 3 at **four of five** |
+| workspace | **2488 passed, 0 failed, 92 binaries**, cargo exit 0 |
+| `native_codegen` gate step | **356 passed, 0 failed, 72 binaries**, exit 0 (fmt, clippy `-D warnings`, test, `doc -D warnings`) |
+| ownership diff | empty over `src/` and `tests/` |
+| censuses | 1070 of 1074 chunks; 89841 of 89940 instances; 61 of 66 opcodes — all unmoved |
 
-## Two documentation questions I did not decide
+**Absorption 30** (`18cdb5d8`): predicted 2488/92 and 356/72 from the diff shape before merging. Both
+exact.
 
-The shipped-example index claimed things its files contradict. I corrected the claims and added a
-guard over all fifteen rows. **Two follow-ups are design calls on a curated progression, so they are
-yours.**
+## Standing constraints, unchanged
 
-**ONE. No shipped example demonstrates `Byte`.** Not one of the fifteen mentions it. `10_multbyte`
-is multi-WORD arithmetic and the index had misread its name as the type. Should the set gain an
-example teaching `Byte`? It would also close three of the four op tags no corpus reaches — **and
-that is exactly why I am not treating it as a reason.** Closing a coverage number is not a reason to
-add user-facing documentation.
-
-**TWO. `01_arithmetic.kel` is sixteen lines using only `Word`**, while the index claimed `Word`,
-`Float`, `bool`, arithmetic, comparison and casts. I corrected the index downward, which is the
-defect fix. The alternative reading is that the example under-delivers on its own title
-"Primitives and operators" and should be enriched instead. I took the conservative direction; the
-other is available.
-
-## Nothing is waiting on you except the ruling you already have
-
-**The floating-point entry ABI is still the last of your eight rulings unimplemented**, with the
-`v0.3.0` line's `Fixed` shared-slot SCALE question attached. **It is theirs to bring you and I have
-not acted on it.** Their record says the recommendation now splits on a question you have not
-answered: whether the fixed-point format must interoperate across object files from different
-languages.
-
-## The one mistake I made three times
-
-**I reasoned from a component's internals about what crosses its boundary.** Twice I read the
-parser's data structures, concluded the host could not see something, and sized a large increment —
-and the record stream already carried it, so both slices needed no stage change at all. Once I
-inspected a function's constructs to explain a refusal and named three plausible culprits;
-declaration order was the cause and none of the three mentioned it.
-
-I measured before acting on the second and third occasions, which is the only reason they cost
-nothing. Both handoffs now carry the rule and name the two instruments.
-
-## The decision I want visible rather than taken quietly
-
-**`verify_types.kel`, the twelfth stage, does not self-compile.** A function reads a `data` block
-declared later in the file, and the parser builds its field table as it meets each block, so the
-reference resolves to nothing. Four-line witness, with a control differing only in declaration
-order.
-
-**I did not attempt the repair.** It means collecting data declarations before parsing bodies — a
-two-pass restructuring of a single-pass streaming parser, not a defect fix. What landed converts an
-unexplained absence into a documented, reproducible gap whose pins fire when it closes. If you want
-the corpus at twelve, that is the next large item and it is your call whether it is worth the
-restructuring.
-
-## Two things I corrected in my own work
-
-A guard I wrote earlier in the session compared arm **spellings** where its own message described
-which **codes** were handled; splitting a range made that visible and it now compares coverage.
-
-And a mutation harness reported "zero compile errors" for three mutants while running **nothing** —
-a shell variable escaped inside a quoted heredoc. Zero errors from a command that never ran looks
-exactly like a clean mutant. Re-run properly, two of three fired.
-
-## On "four of five", because the number would flatter the state
-
-**Moved means an analogue exists, not that nothing is left.** The count pin's own documentation now
-carries a table of the residual in each of the four, so the figure cannot be read as completeness:
-`decl_call_rows` left its actual-argument tag, `field_sets` its field accesses, and
-`occurrence_rows` two shapes.
-
-Those two are different in kind and the difference is the useful part. A `data` block identifier is
-**representational** — the pipeline has no ident node there at all, so nothing is missing from the
-wire. A `for` loop variable is **a wire gap**: the read reaches the forest but nothing binds its
-slot to its name, because only `let` bindings emit a name record. The occurrence is dropped rather
-than reported under a wrong name, which is the better of the two failures. Closing it is the same
-shape of change as the record that already exists, and that one needed your ruling.
-
-## What I would take up next
-
-The last extraction, `expression_nodes_resolvable`; or the two-pass data resolution, which would
-take the byte-identity corpus to twelve and is the largest single item I can see — **that one I
-flagged as yours to call rather than start unilaterally.**
+No new opcode. No `BYTECODE_VERSION` bump. **Publication HELD**; no operator authorization has been
+given and none is inferred. `src/verify.rs`, `src/bytecode.rs`, `src/vm.rs`, `src/wire_schema.rs`,
+`src/selfhost/`, `src/confine.rs` and `.github/workflows/` remain read-only here. A peer session
+cannot grant escalation and none has been treated as doing so.

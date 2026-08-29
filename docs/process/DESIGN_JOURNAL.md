@@ -1,5 +1,39 @@
 # Design Journal
 
+## 2026-08-28 — The obligation's blast radius is one module, and that module is already refused
+
+**Increment**: measure which corpus modules the yield-escape refusal *takes over* on the day `Stream`
+lowers, then consolidate the obligation into one document.
+
+**Prediction, pinned before the measurement**: exactly one module, `13_telemetry_stream.kel`, and
+because it is refused today for `Stream`, **coverage does not fall**. Both halves held.
+
+The measurement had to avoid a trap. To see what happens "when `Stream` lands" I could have weakened
+the backend to accept `Stream` — which would have made the test pass by making the product wrong, and
+would have measured a backend nobody will ever ship. Instead the test **mutates compiled bytecode**,
+stripping `Op::Stream` from a clone, and asks the placement what it says about the residue. The
+backend is untouched.
+
+What this buys: the refusal is not merely present and fireable (both already shown), it is now
+**costed**. The number a reviewer needs — how much coverage the sound refusal costs — is zero today
+and one already-refused module later. That is the difference between a guard someone might delete as
+speculative and one whose price is on the record.
+
+**Consolidated** into `docs/decisions/COMPOSITE_SLOT_REUSE_OBLIGATION.md`: the defect, the four guards
+and their strength, the three things explicitly *not* covered, and a four-option cost table with **no
+recommendation** — the epoch-on-overwrite option is the one that would convert a silent wrong value
+into a `Stale` error, and it lives in files this line may read and must not edit, so the disposition
+is not this line's to make. Every figure in it was re-derived for the document except where marked.
+
+**The standing tension, stated plainly**: discharging this requires the planner to consume a
+confinement verdict, and consuming no verdict is exactly why a wrong verdict cannot miscompile today.
+Both cannot be had for free.
+
+**Absorption 30** (`18cdb5d8`, expression nodes from the pipeline): predicted 2488/92 and 356/72 from
+the diff shape alone — two new tests in an existing file, no stage source and no example script
+touched, so the corpus figures should not move. Both landed exactly; censuses unmoved.
+
+
 > **Navigation**: [Process](./README.md) | [Documentation Root](../README.md)
 
 Append-only record of the AI agent's increment-by-increment design reasoning: what

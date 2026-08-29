@@ -436,3 +436,80 @@ fn with_the_shadow_removed_the_lowering_refuses_the_shape() {
          composite, and it did not: {text:?}"
     );
 }
+
+/// **THE BLAST RADIUS: what the soundness refusal takes over on the day
+/// `Stream` lowers.**
+///
+/// Today the yield-escape refusal is shadowed — every module that could trigger
+/// it is refused earlier for `Stream`. **That makes it a precaution.** When
+/// `Stream` lowers it becomes the only thing between this corpus and a silently
+/// wrong value, and the question an operator needs answered is **which modules
+/// it then refuses, and whether coverage falls.**
+///
+/// # Simulated by mutation, not by weakening anything
+///
+/// `Op::Stream` is removed from compiled bytecode inside this test. **No guard or
+/// refusal in the lowering is relaxed** — the backend is untouched and the
+/// mutation lives and dies here.
+#[test]
+fn which_modules_the_soundness_refusal_takes_over_when_stream_lands() {
+    let mods = corpus();
+    let mut taken_over: Vec<String> = Vec::new();
+    let mut already_refused_for_stream: Vec<String> = Vec::new();
+
+    for (name, m) in &mods {
+        let before: Vec<String> = module_refusals(m, LowerOptions::default())
+            .iter()
+            .map(|(_, e)| e.to_string())
+            .collect();
+        if !before.iter().any(|t| t.contains("Stream")) {
+            continue;
+        }
+        already_refused_for_stream.push(name.clone());
+
+        // Remove the shadowing opcode from a COPY.
+        let mut mutated = m.clone();
+        for c in mutated.chunks.iter_mut() {
+            c.ops.retain(|o| !matches!(o, Op::Stream));
+        }
+        let after: Vec<String> = module_refusals(&mutated, LowerOptions::default())
+            .iter()
+            .map(|(_, e)| e.to_string())
+            .collect();
+        if after.iter().any(|t| t.contains("yielded at op")) {
+            taken_over.push(name.clone());
+        }
+    }
+
+    println!("\n================ BLAST RADIUS WHEN `Stream` LANDS");
+    println!(
+        "  modules currently refused for Stream        : {} {already_refused_for_stream:?}",
+        already_refused_for_stream.len()
+    );
+    println!(
+        "  ...of those, taken over by the yield-escape refusal: {} {taken_over:?}",
+        taken_over.len()
+    );
+    println!(
+        "\n  COVERAGE DOES NOT FALL. Every module named here is refused TODAY, for\n  \
+         Stream. When Stream lands the refusal changes REASON rather than adding\n  \
+         a rejection -- and it changes from an unimplemented-feature refusal to a\n  \
+         SOUNDNESS one, which is the whole point of having written it early.\n================\n"
+    );
+
+    // **NON-VACUITY.** If nothing were refused for Stream, the mutation would
+    // exercise nothing and an empty take-over set would say nothing at all.
+    assert!(
+        !already_refused_for_stream.is_empty(),
+        "no module is refused for Stream, so this simulation has no subject and \
+         its result is meaningless"
+    );
+    assert_eq!(
+        taken_over,
+        vec!["13_telemetry_stream.kel".to_string()],
+        "the set of modules the soundness refusal takes over has changed. Each is \
+         already refused today, so coverage does not move -- but the identity of \
+         the set is what an operator weighs when deciding whether the planner may \
+         consume a confinement verdict."
+    );
+}
