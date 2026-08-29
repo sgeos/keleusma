@@ -6,49 +6,55 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## What this increment did
+## The thing I most want you to see
 
-**Audited the numbers I put in front of you every increment, and found none of them had a floor.**
+**This backend lowers modules the virtual machine would refuse to load, and nothing said the caller
+must not.**
 
-I went looking for the next product frontier first and did not find one worth taking: the lowering
-frontier is closed at the corpus level, the mutation sweep is calibrated and pre-registered, and the
-load-time-hole question is already answered by a file that independently agrees with last increment's
-result. So I turned the instrument on the instruments.
+Mutating `04_for_in.kel` by one `CheckedAdd` -> `CheckedSub` gives well-formed bytecode — same arity,
+same types — that behaves like this:
 
-| figure | value | strongest guard | what it actually caught |
-|---|---|---|---|
-| opcodes lowered | 61 of 66 | partition totality, non-vacuity | a broken **instrument** |
-| chunks lowerable | 1070 of 1074 | `compiled > 10 && total_ops > 1000` | wrong **corpus paths** |
-| opcode instances | 89841 of 89940 | the same check | wrong **corpus paths** |
-| differential executed and agreeing | 61 | `>= 20` | losing **two thirds** and no more |
+| check | result |
+|---|---|
+| `verify()` | **accepts** |
+| `auto_arena_capacity_for`, `module_wcmu`, `Vm::new` | **all reject** — no statically extractable iteration bound |
+| this backend's `module_refusals` | **accepts** |
+| the lowered code | **SIGBUS** |
 
-Every one of those is a real check. None checks the thing the figure measures. They hold as well at 30
-of 66 as at 61 of 66.
+`lower_module` documented no admissibility precondition and checked none. **Verified is not enough**:
+`Vm::new` additionally requires a resource bound, and that bound is what this project sells. An
+ahead-of-time path that runs what the bound analysis refuses is a hole in the value proposition, not
+merely a crash.
 
-**The differential's was the one that mattered.** `module_refusals` reports per chunk; the harness
-exempts per module. So one newly-refusing chunk removes a whole file from the correctness comparison
-**without any refusal being wrong** — a lowering regression reaches it indirectly and therefore
-quietly. The `KNOWN_VACUOUS` check directly above that floor exists to catch this one module at a time,
-and its own note says the vacuous set "was 40-strong-looking coverage for months precisely because
-nothing checked it".
+**Measured before deciding: 66 modules lower, 0 unbounded.** So it is a precondition gap and not a live
+defect. I documented the precondition and pinned the corpus rather than enforcing it, because
+enforcement couples a pure lowering function to the resource analysis and pays that on every call.
+**Enforcement is a real option and I have not ruled it out** — the disposition is in the record.
 
-## Design points you may want to disagree with
+## How it was found, which I think is the reusable part
 
-**Floors, not pins**, and **ratios where the denominator moves**. Chunk and instance counts change when
-a `.kel` source is added; an absolute floor there fails on growth, and a guard that fails on growth
-gets deleted rather than investigated. That constraint is not mine — `corpus_differential.rs` had
-already written it down.
+Not by reading the source. It fell out of an unrelated measurement — a sweep asking which differential
+subjects would notice a wrong backend. **The sweep crashed, and the crash was the finding**, larger
+than the census that produced it.
 
-**Each floor was proven to fire** — raised above the measured value, observed failing, restored. Four
-new guards whose reach I had not established would have been the defect they exist to prevent.
+## The census it came from, now complete
 
-**I left the `spike_*` and `probe_*` files alone.** They print far more than they assert, and that is
-their genre. The criterion is not the print/assert ratio; it is whether the figure leaves this
-repository in a handoff.
+`native_codegen/tests/probe_agreement_depth.rs` had sized a blind spot and declined to classify it. Having just floored the
+"61 executing and agreeing" figure, I asked whether it measures what its name says.
 
-**A floor is not a correctness claim.** It detects regression and says nothing about whether the
-lowered code is right. That is the differential's job, which is why its floor was tightened rather than
-merely added.
+**32 detected a mutated backend, 16 did not, 10 had no mutation site.** The 16 include every
+self-hosted stage, consistent with the existing note that stages read input the harness supplies as
+zeros. **Nothing was deleted or exempted** — undetected against one pre-registered family is not
+"detects nothing", and the unmeasured classes are reported separately rather than folded in.
+
+## Two corrections to my own work, since they bear on how much to trust the above
+
+**My pre-registered mutation family was wrong** and matched a site in 4 modules of 65: Keleusma is
+total, so the corpus emits `CheckedAdd`, not `Add`. **My own non-vacuity assertion caught it.** The
+family was amended before any subject had been classified, so it cannot have been tuned to results.
+
+**I anticipated the trap risk and still under-estimated it.** After the admissibility filter removed
+the SIGBUS, an admissible mutant produced SIGTRAP, needing a second filter.
 
 ## Verification
 
@@ -57,10 +63,10 @@ Both suites run **sequentially** (parallel invalidates the perf canary, 57x).
 | | result |
 |---|---|
 | workspace | **2491 passed, 0 failed, 92 binaries**, cargo exit 0 |
-| `native_codegen` gate step | **366 passed, 0 failed, 74 binaries**, exit 0 (fmt, clippy `-D warnings`, test, `doc -D warnings`) |
+| `native_codegen` gate step | **368 passed, 0 failed, 74 binaries**, exit 0 (fmt, clippy `-D warnings`, test, `doc -D warnings`) |
 | censuses | 61 of 66; NAMED REFUSED `["Len"]`; 1070 of 1074; 89841 of 89940 — all unmoved |
 
-**No absorption was needed**: already zero unabsorbed, recorded as a fact rather than reported as work.
+**No absorption was needed**: already zero unabsorbed.
 
 ## Standing constraints, unchanged
 

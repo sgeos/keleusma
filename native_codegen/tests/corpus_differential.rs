@@ -3846,3 +3846,286 @@ fn sentinel_base_in(src: &str, decl: &str) -> Result<i64, String> {
         .map(|n| -n)
         .map_err(|e| format!("`{decl}` base does not parse: {e}"))
 }
+
+/// The PRE-REGISTERED mutation family, fixed before any subject was measured.
+///
+/// **Arithmetic and bitwise only — no comparison, no branch.** A comparison swap
+/// can change a loop's trip count, and the native side carries no bound check,
+/// so a mutant could run forever and hang the suite rather than report anything.
+/// Restricting the family is a property of what can be measured safely, and it
+/// is why the finding below is scoped to this family rather than stated as
+/// "detects nothing".
+///
+/// Tried in this order at each op, scanning chunks in index order and ops in
+/// program order; the FIRST applicable site is mutated and nothing else is.
+/// Choosing sites by where the insensitive subjects turned out to be would make
+/// this a demonstration rather than a measurement — the rule `corpus_differential`
+/// already applies to its opcode sweep.
+fn pre_registered_mutant(m: &Module) -> Option<(Module, String)> {
+    for (ci, c) in m.chunks.iter().enumerate() {
+        for (oi, op) in c.ops.iter().enumerate() {
+            let rep = match op {
+                // **The CHECKED forms come first because they are what the
+                // corpus actually emits.** Keleusma is total, so ordinary source
+                // arithmetic compiles to `CheckedAdd`/`CheckedSub`, not `Add`.
+                // The first draft of this family listed only the unchecked forms
+                // and found a site in 4 modules out of 65 — the non-vacuity
+                // assertion below is what caught it.
+                //
+                // **The family was amended for near-zero applicability, NOT
+                // tuned to results.** At the time of the amendment no subject
+                // had been classified as insensitive, so the ordering cannot
+                // have been chosen to flatter it.
+                Op::CheckedAdd => Op::CheckedSub,
+                Op::CheckedSub => Op::CheckedAdd,
+                Op::Add => Op::Sub,
+                Op::Sub => Op::Add,
+                Op::Mul => Op::Add,
+                Op::BitAnd => Op::BitOr,
+                Op::Shl => Op::Shr,
+                _ => continue,
+            };
+            let mut mutated = m.clone();
+            let what = format!("chunk {ci} op {oi}: {op:?} -> {rep:?}");
+            mutated.chunks[ci].ops[oi] = rep;
+            return Some((mutated, what));
+        }
+    }
+    None
+}
+
+/// **WOULD EACH SUBJECT NOTICE A WRONG BACKEND?**
+///
+/// `every_lowering_module_executes_or_is_exempt` counts modules that execute and
+/// agree. **Agreement is only evidence if disagreement was possible**, and for
+/// one class of subject that had never been shown. `is_vacuous` returns false
+/// immediately for a module with fewer than two results, so every single-call
+/// module inside the count is unexamined by it; `probe_agreement_depth` sized
+/// that blind spot at 15 single-call modules with agreement trivial on all three
+/// of its axes, and deliberately stopped short of classifying them.
+///
+/// This runs the reference on the ORIGINAL module and the native side on a
+/// MUTATED clone. That is a simulated backend defect. A subject that still agrees
+/// did not distinguish it.
+///
+/// # Three outcomes, and conflating them would manufacture a finding
+///
+/// * **detected** — the subject is load-bearing for this defect family.
+/// * **undetected** — agreement did not distinguish a wrong backend.
+/// * **UNMEASURED** — no applicable mutation site, or the mutant did not run.
+///   Reporting these as undetecting would invent a result. A previous guard on
+///   this line counted 33 where the truth was 10 by matching a word in comments.
+///
+/// # What this does NOT establish
+///
+/// **Undetected here means undetected against ONE pre-registered family**, not
+/// that the subject detects nothing. Nothing is deleted or exempted on this
+/// evidence: coverage present before this test is present after it.
+#[test]
+fn which_subjects_would_notice_a_wrong_backend() {
+    let mut detected: Vec<String> = Vec::new();
+    let mut undetected: Vec<String> = Vec::new();
+    let mut no_site: Vec<String> = Vec::new();
+    let mut mutant_declined: Vec<String> = Vec::new();
+    let mut mutant_inadmissible: Vec<String> = Vec::new();
+    let mut mutant_faults: Vec<String> = Vec::new();
+
+    for p in sources() {
+        let name = p
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("?")
+            .to_string();
+        let Some(src) = source_for(&p) else { continue };
+        let Some(m) = tokenize(&src)
+            .ok()
+            .and_then(|t| parse(&t).ok())
+            .and_then(|a| compile(&a).ok())
+        else {
+            continue;
+        };
+        // Only subjects the main sweep actually drives. Measuring a module it
+        // exempts would report detection for a subject that contributes none.
+        if !keleusma_native::module_refusals(&m, LowerOptions::default()).is_empty() {
+            continue;
+        }
+        let Some(entry) = m.entry_point else { continue };
+        if !params_are_scalar(&m, entry) {
+            continue;
+        }
+        let table = native_table(&m);
+        if table.len() > STUBS {
+            continue;
+        }
+        let Some((mutant, _what)) = pre_registered_mutant(&m) else {
+            no_site.push(name);
+            continue;
+        };
+        // A mutant that the backend now refuses produced no comparison.
+        if !keleusma_native::module_refusals(&mutant, LowerOptions::default()).is_empty() {
+            mutant_declined.push(name);
+            continue;
+        }
+        // **THE MUTANT MUST STILL BE ADMISSIBLE, and this is not a convenience.**
+        //
+        // A mutated arithmetic op can break the canonical for-range pattern, and
+        // the loop then has no statically extractable iteration bound. `Vm::new`
+        // REFUSES such a module — so it is not a wrong backend, it is a program
+        // the runtime would never run, and comparing against it measures nothing.
+        //
+        // Measured rather than anticipated: without this filter the sweep died
+        // with **SIGBUS** on `04_for_in.kel`, whose mutant is `verify()`-clean,
+        // refused by `Vm::new`, and lowered by this backend without complaint.
+        // That divergence is recorded in `docs/decisions/BACKEND_ADMISSIBILITY.md`
+        // and pinned by `no_lowerable_corpus_module_is_unbounded` below.
+        if keleusma::verify::module_wcmu(&mutant, &[]).is_err() {
+            mutant_inadmissible.push(name);
+            continue;
+        }
+        // **RUN THE MUTANT ON THE REFERENCE FIRST, and skip it if it FAULTS.**
+        //
+        // A mutation that makes the program trap is not a wrong backend either:
+        // checked arithmetic is supposed to trap, and both sides would. On the
+        // native side that arrives as a process-killing signal rather than a
+        // value, so an unfiltered sweep cannot report anything at all — measured,
+        // as SIGTRAP, after the admissibility filter above had already removed
+        // the SIGBUS case.
+        //
+        // What survives is the population this measurement is actually about:
+        // mutants that RUN and merely compute something different.
+        if run_vm(&mutant, &table, 0, None).is_err() {
+            mutant_faults.push(name);
+            continue;
+        }
+        let Ok(v) = run_vm(&m, &table, 0, None) else {
+            continue;
+        };
+        let Some(n) = run_native(&mutant, &table, 0, None) else {
+            mutant_declined.push(name);
+            continue;
+        };
+        let differs = v.results != n.results
+            || v.log != n.log
+            || v.shared != n.shared
+            || ret_pairs_differ(&v, &n);
+        if differs {
+            detected.push(name);
+        } else {
+            undetected.push(name);
+        }
+    }
+
+    println!("\n================ WOULD EACH SUBJECT NOTICE A WRONG BACKEND?");
+    println!("  DETECTED the mutant      : {}", detected.len());
+    println!("  did NOT detect it        : {}", undetected.len());
+    for n in &undetected {
+        println!("     {n}");
+    }
+    println!(
+        "  UNMEASURED, no mutation site : {}  <- not a failure to detect",
+        no_site.len()
+    );
+    for n in &no_site {
+        println!("     {n}");
+    }
+    println!(
+        "  UNMEASURED, mutant declined  : {}  <- produced no comparison",
+        mutant_declined.len()
+    );
+    println!(
+        "  UNMEASURED, mutant unbounded : {}  <- `Vm::new` would refuse it, so it\n  \
+         {:29}   is not a WRONG BACKEND but an inadmissible program",
+        mutant_inadmissible.len(),
+        ""
+    );
+    println!(
+        "  UNMEASURED, mutant FAULTS    : {}  <- the mutation makes the program\n  \
+         {:29}   trap, which both sides do",
+        mutant_faults.len(),
+        ""
+    );
+    println!(
+        "\n  Scoped to ONE pre-registered family: Checked/plain Add-Sub, Mul,\n  \
+         BitAnd and Shl swaps,\n  \
+         first applicable site only. `undetected` means undetected AGAINST THAT,\n  \
+         not that the subject detects nothing."
+    );
+    println!("================\n");
+
+    // NON-VACUOUS. A sweep that measured nothing, or that detected nothing,
+    // would otherwise pass while establishing the opposite of what it claims.
+    let measured = detected.len() + undetected.len();
+    assert!(
+        measured >= 20,
+        "only {measured} subjects were measured, so this says almost nothing \
+         about the {} the differential counts",
+        detected.len()
+            + undetected.len()
+            + no_site.len()
+            + mutant_declined.len()
+            + mutant_inadmissible.len()
+            + mutant_faults.len()
+    );
+    assert!(
+        !detected.is_empty(),
+        "NO subject detected a mutated backend. Either the mutation is not \
+         reaching execution or the comparison is not comparing, and in both \
+         cases the differential's agreement would be worth nothing"
+    );
+}
+
+/// **THE BACKEND LOWERS MODULES THE VIRTUAL MACHINE WOULD REFUSE TO LOAD.**
+///
+/// `lower_module` documents no admissibility precondition and checks none. A
+/// module that `verify()` accepts but that `Vm::new` REFUSES — because a loop
+/// has no statically extractable iteration bound — is lowered without complaint,
+/// and the resulting native code is not memory-safe.
+///
+/// **Measured, not reasoned about.** Mutating `04_for_in.kel` by a single
+/// `CheckedAdd` -> `CheckedSub` produces a module that is `verify()`-clean,
+/// refused by `auto_arena_capacity_for`, `module_wcmu` AND `Vm::new`, accepted by
+/// `module_refusals`, and whose lowered code died with **SIGBUS**.
+///
+/// **This is a precondition gap, not a live corpus defect.** Every module the
+/// backend lowers today is bounded — measured at 66 lowering, 0 unbounded. This
+/// test is what keeps that true, because the guarantee the project sells is a
+/// resource bound, and an execution path that runs what the bound analysis
+/// refuses is a hole in it.
+///
+/// See `docs/decisions/BACKEND_ADMISSIBILITY.md`.
+#[test]
+fn no_lowerable_corpus_module_is_unbounded() {
+    let mut lowers = 0usize;
+    let mut unbounded: Vec<String> = Vec::new();
+    for p in sources() {
+        let Some(src) = source_for(&p) else { continue };
+        let Some(m) = tokenize(&src)
+            .ok()
+            .and_then(|t| parse(&t).ok())
+            .and_then(|a| compile(&a).ok())
+        else {
+            continue;
+        };
+        if !keleusma_native::module_refusals(&m, LowerOptions::default()).is_empty() {
+            continue;
+        }
+        lowers += 1;
+        if keleusma::verify::module_wcmu(&m, &[]).is_err() {
+            unbounded.push(p.file_name().unwrap().to_string_lossy().to_string());
+        }
+    }
+    assert!(
+        lowers > 40,
+        "only {lowers} modules lowered, so this pin is far narrower than the \
+         population the coverage census reads and would pass by not looking"
+    );
+    assert!(
+        unbounded.is_empty(),
+        "the backend lowers {} module(s) that the resource analysis REFUSES: \
+         {unbounded:?}. `Vm::new` would not load them, so an AOT path would run \
+         what the bound analysis rejected — the guarantee this project sells. \
+         Either the module should not lower, or `lower_module` should require \
+         admissibility rather than merely documenting it",
+        unbounded.len()
+    );
+}

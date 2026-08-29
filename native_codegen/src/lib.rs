@@ -1151,6 +1151,24 @@ pub fn lower_chunk<'ctx>(
 /// needs metadata a `Chunk` does not carry. Nothing here is externally linked
 /// yet, so an internal, obviously-provisional name is more honest than a
 /// half-implemented mangling that looks authoritative.
+/// # Precondition: the module must be ADMISSIBLE, and this function does not check it
+///
+/// **Verified is not enough.** A module can pass [`keleusma::verify::verify`] and
+/// still be refused by `Vm::new`, which additionally requires a statically
+/// extractable resource bound. This function accepts such a module and lowers it,
+/// and the code it produces is **not memory-safe**.
+///
+/// Measured rather than supposed: mutating one `CheckedAdd` to `CheckedSub` in a
+/// corpus module yields bytecode that is `verify()`-clean, refused by
+/// `auto_arena_capacity_for`, `module_wcmu` and `Vm::new` alike, accepted here
+/// without complaint, and whose lowered form died with SIGBUS.
+///
+/// **The caller is responsible for admissibility.** The guarantee this project
+/// sells is a resource bound; an execution path that runs what the bound analysis
+/// refuses is a hole in it. Enforcing the check here was considered and not done —
+/// it would couple a pure lowering function to the resource analysis and pay that
+/// cost on every call. `no_lowerable_corpus_module_is_unbounded` in
+/// `tests/corpus_differential.rs` pins that no shipped corpus module violates it.
 pub fn lower_module<'ctx>(
     ctx: &'ctx Context,
     module: &LlvmModule<'ctx>,

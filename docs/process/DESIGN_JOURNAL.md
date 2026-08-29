@@ -1,5 +1,53 @@
 # Design Journal
 
+## 2026-08-29 — The sweep died with SIGBUS, and the crash was a bigger finding than the census
+
+**Increment**: `probe_agreement_depth` had sized a blind spot and deliberately declined to classify it
+— 15 single-call modules inside the differential's count whose agreement is trivial on all three of its
+axes, never shown to be evidence. Having just put a floor under that count, the next question was
+whether it measures what its name says: **if the backend were wrong, which subjects would notice?**
+
+The method is the one this line has used all session: run the reference on the original module and the
+native side on a **mutated clone**, which is a simulated backend defect.
+
+**The sweep died with SIGBUS, and that was worth more than the census.** The subject was
+`04_for_in.kel`, mutated by a single `CheckedAdd` → `CheckedSub` — well-formed bytecode, same arity,
+same types. Checking it properly:
+
+| check | result |
+|---|---|
+| `verify()` | accepts |
+| `auto_arena_capacity_for`, `module_wcmu`, `Vm::new` | **all reject** — no statically extractable iteration bound |
+| this backend's `module_refusals` | **accepts** |
+
+**`lower_module` documented no admissibility precondition and checked none.** Verified is not enough:
+`Vm::new` additionally requires a resource bound, and that bound is the guarantee the project sells. An
+ahead-of-time path that runs what the bound analysis refuses is a hole in the value proposition rather
+than merely a crash.
+
+**Blast radius measured before deciding: 66 modules lower, 0 unbounded.** So this is a precondition gap
+and not a live defect, which is why documenting plus pinning was enough and enforcement was left as a
+named option with its cost — coupling a pure lowering function to the resource analysis on every call.
+
+**Two corrections I had to make to my own reasoning.** First, the pre-registered mutation family listed
+only `Add`/`Sub`/`Mul` and found a site in 4 modules of 65, because Keleusma is total and the corpus
+emits `CheckedAdd`. **My own non-vacuity assertion caught that**, and the family was amended before any
+subject had been classified, so it cannot have been tuned to results. Second, I expected the trap risk
+and still under-estimated it: after the admissibility filter removed the SIGBUS, an admissible mutant
+produced SIGTRAP.
+
+**Both filters are correctness points, not conveniences.** An inadmissible mutant is not a wrong
+backend — it is a program the runtime would refuse. A mutant that faults is not one either — checked
+arithmetic is supposed to trap and both sides do. What survives is the population the measurement is
+actually about: mutants that run and merely compute something different.
+
+**The census then worked: 32 detected, 16 undetected, 10 with no mutation site**, with the unmeasured
+classes reported separately because calling an unmeasured module undetecting would manufacture a
+finding. The 16 include every self-hosted stage, consistent with the existing note that the stages read
+input the harness supplies as zeros. **Nothing was deleted or exempted on this evidence** — undetected
+against one family is not "detects nothing".
+
+
 ## 2026-08-29 — The four figures I report every increment had nothing under them
 
 **Increment**: I went looking for the next product frontier and did not find one worth taking. The

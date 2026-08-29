@@ -608,6 +608,30 @@ Current sprint source of truth.
 > workspace **2467/0/88**, coverage re-derived and unchanged at 1070 of 1074.
 > See [`../decisions/OPERAND_WIDTH_RECOVERY.md`](../decisions/OPERAND_WIDTH_RECOVERY.md).
 
+> **Currency note (2026-08-29, V0.3.X line, fourth entry). THE BACKEND LOWERS MODULES THE VIRTUAL
+> MACHINE WOULD REFUSE TO LOAD — A PRECONDITION GAP, MEASURED AT ZERO LIVE INSTANCES.**
+>
+> Found sideways. A sweep asking which differential subjects would notice a wrong backend built mutated
+> modules and ran them; **the sweep died with SIGBUS and the crash was the larger finding.** Mutating
+> `04_for_in.kel` by a single `CheckedAdd` -> `CheckedSub` yields well-formed bytecode that `verify()`
+> **accepts**, that `auto_arena_capacity_for`, `module_wcmu` and `Vm::new` **all reject** for having no
+> statically extractable iteration bound, that this backend **accepts**, and whose lowered code is not
+> memory-safe. **`lower_module` documented no admissibility precondition and checked none**, so an
+> ahead-of-time path could run what the bound analysis refuses — the guarantee the project sells.
+> **Blast radius measured before deciding: 66 modules lower, 0 unbounded**, so this is a precondition
+> gap rather than a live defect; the precondition is now documented and pinned by
+> `no_lowerable_corpus_module_is_unbounded`, with **enforcement left as a named option** whose cost is
+> coupling a pure lowering function to the resource analysis on every call. The census then completed
+> once two filters were added, each a correctness point rather than a convenience: an **inadmissible**
+> mutant is a program the runtime would refuse, and a mutant that **faults** is one both sides trap on.
+> Result **32 detected, 16 undetected, 10 with no mutation site**, unmeasured classes reported
+> separately and **nothing deleted or exempted** — undetected against one pre-registered family is not
+> "detects nothing". The family itself had to be amended after **my own non-vacuity assertion caught**
+> it matching 4 modules of 65, Keleusma being total and the corpus emitting `CheckedAdd`; the amendment
+> preceded any subject being classified. No absorption needed (zero unabsorbed). Workspace
+> **2491/0/92**, `native_codegen` **368/0/74**, censuses unmoved. See
+> [`../decisions/BACKEND_ADMISSIBILITY.md`](../decisions/BACKEND_ADMISSIBILITY.md).
+
 > **Currency note (2026-08-29, V0.3.X line, third entry). THE FOUR FIGURES THIS LINE REPORTS EVERY
 > INCREMENT HAD NO REGRESSION FLOOR UNDER THEM.**
 >
