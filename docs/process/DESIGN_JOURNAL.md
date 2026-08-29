@@ -13,6 +13,52 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-28 — The project instructions stated test counts three times wrong
+
+**GENERALISING THE PREVIOUS INCREMENT FOUND THE LARGEST INSTANCE IMMEDIATELY.** Having corrected the
+shipped-example index, the question was whether any OTHER documentation makes claims nothing checks.
+`CLAUDE.md` — the document an agent reads first, and in TWO places — said "approximately 1168
+keleusma lib tests plus **368 integration tests across 30 files** ... 42 keleusma-arena".
+
+| claim | stated | measured 2026-08-28 |
+|---|---|---|
+| lib tests | 1168 | **1263** self-host, 1256 default |
+| integration files | **30** | **90** |
+| integration `#[test]` functions | 368 | **1194** |
+| keleusma-arena | 42 | **59** (51 lib plus 8 integration) |
+| keleusma-bench | 6 | 6 |
+
+**IT MATTERED OPERATIONALLY AND THIS SESSION PROVED IT.** A killed sweep reported **55 binaries
+green while 31 never ran**, caught only by enumerating the files. **An agent calibrated on "30
+files" would have read 55 as comfortably complete.** A stale count in the orientation document is a
+wrong prior for every coverage judgement made against it.
+
+**MEASURED THE WAY THE CLAIM MEANS IT.** A grep for `#[test]` counts functions the feature gates
+exclude; the sentence says tests that pass. Both were taken and both are reported, labelled, because
+a reader comparing a run count against a grep would get a different number and conclude the document
+was wrong when it was not.
+
+**ONLY FACTUAL COUNTS CHANGED.** `CLAUDE.md` is the instruction file, so editing it changes what a
+future agent is told — including me. Nothing normative was touched: no guidance, no policy, no
+process wording. The diff is two lines. Had a normative change looked warranted it would have gone
+to the operator instead.
+
+**THE FIGURES NOW CARRY THEIR DERIVATION**, which is this repository's own convention for numbers
+that move and the reason the handoff's figures survived where these did not.
+
+**THE TOLERANCE IS NOT LAZINESS, AND THE INCREMENT PROVED IT WITHIN THE HOUR.** An exact pin would
+fail on every increment that adds a test, become a nuisance, and be deleted. Then **adding the guard
+changed the quantity it guards**: the file count went 89 to 90 because the guard is itself a test
+file, and the mutation's own error message is what reported it. An exact pin would have been
+self-defeating on its own commit. The stated figure was corrected to 90; the tolerance is what made
+that a correction rather than a red build.
+
+**AND THE AUDIT'S OWN INSTRUMENT WAS WRONG FIRST.** Verifying the handoff's headline claims, an
+extractor reported the op-tag residue constant as EMPTY. The constant has four names on one line and
+the extractor read the blank line after it. **Had it been trusted, an audit — whose entire purpose is
+accuracy — would have invented a defect.** Fifth instance this session of checking the instrument
+before the finding, and the first to occur inside an audit.
+
 ## 2026-08-28 — The example index claimed things its files contradict
 
 **A COVERAGE MEASUREMENT DISAGREEING WITH THE DOCUMENTATION IS A SIGNAL ABOUT ONE OF THEM.** The

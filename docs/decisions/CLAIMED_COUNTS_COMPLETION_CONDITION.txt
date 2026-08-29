@@ -1,0 +1,47 @@
+COMPLETION CONDITION — the project instructions' test counts
+
+Ordering is NOT a completion criterion. Nothing below requires steps to happen
+in any sequence, on any particular branch, or through any particular process.
+Judge only the end state of the tree.
+
+END-STATE PROPERTIES
+
+1. The project's instruction document no longer states a test count or file
+   count that differs from the tree by more than a small margin. Every such
+   number it states is accurate at the commit where it appears.
+
+2. Each such number is presented so a reader can re-derive it: the figure
+   carries the date it was measured and the means of measuring it.
+
+3. A test checks those numbers against the tree and fails when they drift
+   grossly, while tolerating the ordinary movement of adding tests. An exact
+   pin that would fail on any added test does not satisfy this.
+
+4. That test is demonstrated to fail on the uncorrected text, so it is known to
+   be capable of firing.
+
+5. The test carries a non-vacuity assertion, so it cannot pass by finding no
+   numbers to check.
+
+6. Only factual counts changed in the instruction document. No guidance,
+   policy, process wording, or other normative content was altered, and the
+   prose describing what the suites cover is preserved where it was accurate.
+
+7. Where a figure can be measured in more than one way, the tree states which
+   way was used, and does not present one measurement as though it were the
+   other.
+
+8. Every guard added is demonstrated to fail when the property it checks is
+   violated, with the mutation confirmed to have applied and compiled before
+   its result is believed.
+
+9. No guard is present whose conclusion is guaranteed by its own precondition.
+
+10. Guards that read only source text are not gated behind an off-by-default
+    feature.
+
+11. The persistent process channels reflect the increment, including how the
+    defect was found, so the same question can be asked of other documents.
+
+12. Formatting, lint at deny-warnings, and the test suite are green for the
+    feature sets continuous integration runs.
