@@ -417,6 +417,47 @@ two-segment form, which genuinely differs, and it fired with its own message.
 kinds is missing from its probes, and removing the structs makes it fail with that message. The
 previous slice learned this the hard way: a guard whose corpus lacks a construct is a guard for a
 different question.
+## 2026-08-28 — [v0.3.0] Three counts, all correct, and a guard that caught its author
+
+**`bound_transfer.rs` PREPENDS THE RTOS PRELUDE BEFORE COMPILING.** That one line explains a
+three-way disagreement that had sat in the tree unnoticed: it prints **74 modules examined** and **71
+compared**, where every other census reports **69**.
+
+| figure | what it counts |
+|---|---|
+| **74** | every corpus file — all of which compile once the RTOS scripts get their prelude |
+| **71** | of those, the ones with an entry point |
+| **69** | modules that compile **standalone** |
+
+**All three are correct and none says which population it means.** That was the prediction written
+before measuring, and it is the third instance of this shape after 239-against-256 and 91-against-67.
+**The consequence is concrete**: `bound_transfer` measures a strictly larger corpus than every other
+census here, so its figures and theirs are not comparable without saying so.
+
+### The probe written to reconcile them had two defects of its own
+
+**It keyed by file name**, and **two files are named `prelude.kel`** — one under the RTOS scripts, one
+under the compiler — so it reported 73 files where the fingerprint pins 74. A key that silently merges
+distinct items is the same shape as every population defect this line has found.
+
+**And a substitution silently did nothing**, because `cargo fmt` had split the line it matched and
+**the assertion was omitted**. That is the **second occurrence of that exact slip this session, after
+the lesson was written down**. When the assertion was finally added, it fired on a wrong expectation —
+two filters where one remained — which is the assertion doing its job twice over.
+
+**Recording a lesson is not applying it.** The rule now has two data points and both are mine.
+
+### The pin caught its own author within one increment
+
+`skippable_tests.rs`, added last increment to pin the tests that can pass without testing, **flagged
+this increment's new test**. Its body used `else { return false; }` **inside a closure**, and the
+scanner cannot tell a closure's value from a test's early exit.
+
+**It fired correctly on its own terms and was wrong about the cause.** The repair was to rewrite the
+closure, **not** to add the test to the pin: recording a test as skippable when it cannot skip would
+corrupt the figure the pin exists to keep honest. **A guard's false positive is repaired at the
+subject or documented as a class — never by widening the pin to swallow it.**
+
 ## 2026-08-28 — [v0.3.0] A pass count is worth the fraction of it that ran
 
 **THE NAME AUDIT ASKED WHETHER A TEST PROVES ITS CLAIM. THIS ASKS WHETHER IT RAN.** A test that

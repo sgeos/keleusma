@@ -41,6 +41,20 @@ const SKIPPABLE: &[&str] = &[
     "trap_child_runs_one_module_natively",
 ];
 
+/// # ⚠ A KNOWN FALSE POSITIVE: A `return` INSIDE A CLOSURE
+///
+/// **This pin caught its own author within one increment.** A test added the
+/// next day used `else { return false; }` inside a closure, and the scanner —
+/// which cannot tell a closure's value from a test's early exit — flagged it as
+/// able to pass without testing. **The pin fired correctly on its own terms and
+/// was wrong about the cause.**
+///
+/// The repair was to write that closure without a `return`, **not** to add the
+/// test to the pinned list: recording a test as skippable when it cannot skip
+/// would corrupt the very figure this file exists to keep honest. If a future
+/// test genuinely needs a closure-local `return`, add it here with that reason
+/// stated rather than silently.
+///
 /// Is this line a `return` STATEMENT, rather than the word in prose?
 ///
 /// **The first version asked whether the line contained "return" and counted

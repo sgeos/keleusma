@@ -147,6 +147,22 @@ soundness item: **the yield-escape refusal is still shadowed**, because the esca
 refused — now asserted by a test rather than inferred. One gap named and not fixed: a tail-yielded
 composite lowers and nothing in the tree executes it.
 
+**Three module counts in the tree turned out to describe three different corpora, and all three were
+right.** One census reported 74 and 71 where every other says 69. The cause is that it **prepends the
+RTOS prelude before compiling**, so five scripts that fail standalone succeed there: 74 is every
+corpus file, 71 is those with an entry point, 69 is compiling standalone. **None of the three said
+which population it meant**, which is the third time that exact shape has appeared here.
+
+**The probe I wrote to reconcile them had two defects of its own.** It keyed modules by file name, and
+two files are named `prelude.kel`, so it undercounted by one. And one substitution silently did
+nothing because formatting had split the line it matched and **I omitted the assertion** — the second
+time this session, after I had written the lesson down. **Recording a lesson is not applying it**, and
+both data points are mine.
+
+**The pin I added last increment caught my own new test this increment**, because a closure-local
+`return` looks like an early exit to the scanner. I repaired the closure rather than widening the pin:
+recording a test as skippable when it cannot skip would corrupt the figure the pin exists to protect.
+
 **A different question than the audits asked: not whether a test proves its claim, but whether it ran
 at all.** A test that returns early when a toolchain is missing reports as passed and joins the total
 I quote to you as evidence. **10 of 325 can do that, and none are doing it here** — which I verified

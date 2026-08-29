@@ -239,6 +239,27 @@ Current sprint source of truth.
 > **THREE CHECKS WRITTEN THIS SESSION COULD NOT FAIL**, each satisfied by a different part of a
 > document from the one it was about. Mutation caught all three; reading caught none.
 
+> **Currency note (2026-08-28, V0.3.X line, twentieth entry). THREE MODULE COUNTS RECONCILED, AND A
+> GUARD CAUGHT ITS OWN AUTHOR.**
+>
+> `bound_transfer.rs` reported **74 modules examined** and **71 compared** where every other census
+> says **69**. Measured: it **prepends the RTOS prelude before compiling**, so five scripts that fail
+> standalone succeed there. **74** is every corpus file, all of which compile under that treatment;
+> **71** is those with an entry point; **69** is compiling standalone. **All three are correct and
+> none says which population it means** — the third instance of this shape after 239-against-256 and
+> 91-against-67. The consequence is that `bound_transfer` measures a strictly larger corpus than every
+> other census here.
+>
+> **The probe written to reconcile them had two defects of its own**: it keyed by file name, and two
+> files are named `prelude.kel`, so it reported 73 against the fingerprint's 74; and a substitution
+> silently did nothing because `cargo fmt` had split its target line and **the assertion was
+> omitted** — the second occurrence of that slip this session, after the lesson was recorded.
+> Separately, the skippable-test pin added last entry **flagged this entry's new test**, because a
+> closure-local `return` is indistinguishable from an early exit to the scanner; repaired by rewriting
+> the closure rather than widening the pin, with the false-positive class documented. Absorption 29
+> complete, both predictions hit. `native_codegen` **355/0/72**, workspace **2486/0/92**; censuses
+> unchanged at **61 of 66**, **1070 of 1074**, **89841 of 89940**.
+
 > **Currency note (2026-08-28, V0.3.X line, nineteenth entry). A PASS COUNT IS WORTH THE FRACTION OF
 > IT THAT RAN: 10 OF 325 CAN SKIP, NONE ARE.**
 >
