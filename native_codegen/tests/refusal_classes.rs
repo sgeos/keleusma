@@ -21,6 +21,8 @@
 
 use keleusma::bytecode::{ConstValue, Op};
 use keleusma_native::{LowerError, LowerOptions, module_lowered_op_indices};
+mod common;
+
 use std::collections::BTreeSet;
 
 fn compiled(src: &str) -> Option<keleusma::bytecode::Module> {
@@ -196,34 +198,11 @@ fn a_float_is_classified_as_an_unsupported_shape() {
 #[test]
 fn no_corpus_refusal_names_a_nonexistent_opcode() {
     let isa = declared_isa();
-    let dirs = [
-        "../examples/scripts",
-        "../src/selfhost/kel",
-        "../examples/rtos/scripts",
-        "../compiler/kel",
-    ];
-    let mut sources: Vec<std::path::PathBuf> = Vec::new();
-    for d in dirs {
-        // RECURSIVE, matching `spike_corpus_coverage::corpus_sources`. A
-        // non-recursive read saw 35 of the 74 modules the censuses read, and a
-        // sweep over a narrower population than its consumers is a weaker claim
-        // wearing the same words.
-        let Ok(rd) = std::fs::read_dir(d) else {
-            continue;
-        };
-        let mut stack: Vec<std::path::PathBuf> = rd.flatten().map(|e| e.path()).collect();
-        while let Some(p) = stack.pop() {
-            if p.is_dir() {
-                if let Ok(rd2) = std::fs::read_dir(&p) {
-                    stack.extend(rd2.flatten().map(|e| e.path()));
-                }
-            } else if p.extension().is_some_and(|x| x == "kel") {
-                sources.push(p);
-            }
-        }
-    }
-    sources.sort();
-    sources.dedup();
+    // **The one canonical walk.** This sweep previously carried its own copy —
+    // and an earlier version of it was non-recursive, seeing 35 modules where
+    // its consumers saw 74. Sharing the enumeration makes that impossible here
+    // rather than merely unlikely.
+    let sources = common::corpus_sources();
 
     let mut checked = 0usize;
     let mut refusals = 0usize;

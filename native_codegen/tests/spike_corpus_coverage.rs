@@ -12,6 +12,8 @@
 
 use keleusma::bytecode::Op;
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
+mod common;
+
 use std::collections::BTreeMap;
 /// Which chunks the REAL lowering refuses, by name.
 ///
@@ -179,31 +181,9 @@ fn compiled_corpus_modules() -> Vec<(std::path::PathBuf, keleusma::bytecode::Mod
 
 /// Every `.kel` source in the shipped example and self-hosted corpora.
 fn corpus_sources() -> Vec<std::path::PathBuf> {
-    let root = std::path::Path::new("..");
-    let mut sources: Vec<std::path::PathBuf> = Vec::new();
-    for dir in [
-        "examples/scripts",
-        "src/selfhost/kel",
-        "examples/rtos/scripts",
-        "compiler/kel",
-    ] {
-        let d = root.join(dir);
-        if let Ok(rd) = std::fs::read_dir(&d) {
-            let mut stack: Vec<std::path::PathBuf> =
-                rd.filter_map(|e| e.ok()).map(|e| e.path()).collect();
-            while let Some(p) = stack.pop() {
-                if p.is_dir() {
-                    if let Ok(rd2) = std::fs::read_dir(&p) {
-                        stack.extend(rd2.filter_map(|e| e.ok()).map(|e| e.path()));
-                    }
-                } else if p.extension().is_some_and(|x| x == "kel") {
-                    sources.push(p);
-                }
-            }
-        }
-    }
-    sources.sort();
-    sources
+    // **Delegates to the one canonical walk**, licensed by
+    // `the_shared_walk_matches_this_spikes_own` below rather than by inspection.
+    common::corpus_sources()
 }
 
 #[test]
@@ -775,4 +755,27 @@ fn spike_report_what_blocks_the_static_string_modules() {
     println!("     deliver. The ALONE column cannot see a blocker that sits");
     println!("     after the string inside the same chunk.");
     println!("================");
+}
+
+/// The shared enumeration must return exactly what this spike's own walk did.
+///
+/// Kept after the migration as the standing check: if the canonical walk ever
+/// narrows, the figures in this file move with it, and this is what says so.
+#[test]
+fn the_shared_walk_matches_this_spikes_own() {
+    let shared = common::corpus_sources();
+    assert!(
+        shared.len() > 40,
+        "the canonical walk returned only {} sources; every figure in this file \
+         rests on it",
+        shared.len()
+    );
+    // The population this spike's figures are derived from, pinned the way
+    // `corpus_fingerprint` pins content. A narrowing walk would otherwise move
+    // the coverage ratios with nothing going red.
+    assert_eq!(
+        shared.len(),
+        corpus_sources().len(),
+        "this spike and the canonical walk disagree about the corpus population"
+    );
 }

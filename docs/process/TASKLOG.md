@@ -608,6 +608,30 @@ Current sprint source of truth.
 > workspace **2467/0/88**, coverage re-derived and unchanged at 1070 of 1074.
 > See [`../decisions/OPERAND_WIDTH_RECOVERY.md`](../decisions/OPERAND_WIDTH_RECOVERY.md).
 
+> **Currency note (2026-08-29, V0.3.X line, eighth entry). ONE CANONICAL CORPUS WALK, CLOSING THE
+> DEFECT CLASS BEHIND FIVE PRIOR ERRORS — FOR ITS CALLERS, NOT REPOSITORY-WIDE.**
+>
+> Five defects on this line shared one shape: **a measurement enumerated a narrower population than the
+> thing it described**, then reported the difference as a property of the subjects — a non-recursive
+> walk seeing 35 modules where consumers saw 74, a fingerprint covering three roots of four, a probe
+> merging two files named `prelude.kel`, a directory counted twice, and a census driving subjects
+> unseeded. **The argument for the fix was already written down** in `corpus_fingerprint.rs`, which
+> guards corpus CONTENT and says *"A habit is not a check"*; the same sentence is true of the
+> population and had not been applied to it. One `corpus_sources()` now lives in
+> `native_codegen/tests/common/mod.rs`, so a migrated sweep **cannot** read a different set — agreement
+> by construction, the move that already worked for the mutation probe. **All four figures this line
+> reports each increment now rest on it**: `corpus_differential`, `spike_corpus_coverage`,
+> `isa_lowering_census` and `refusal_classes`. **Every migration was licensed by a comparison, not by
+> inspection** — a test asserts the shared walk returns exactly what the private one did, and those
+> tests remain standing; migrating on assumption would have been the defect being closed, committed
+> while closing it. Censuses **unmoved**, which is the confirmation that the populations were identical.
+> `isa_lowering_census` keeps `CORPUS_DIRS` because it PRINTS it, compared against the canonical walk
+> rather than trusted. **Twenty-five files still carry their own walk and remain exposed**; the class is
+> closed for callers, not repository-wide. **No grep lint was added** — this line already shipped a
+> scanner that counted 33 where the truth was 10. No absorption needed. Workspace **2491/0/92**,
+> `native_codegen` **372/0/74**. See
+> [`../decisions/CANONICAL_CORPUS.md`](../decisions/CANONICAL_CORPUS.md).
+
 > **Currency note (2026-08-29, V0.3.X line, seventh entry). THE UNDETECTED COLUMN WAS MADE OF
 > EQUIVALENT MUTANTS. 39/11 BECOMES 39/0, AND TWO PUBLISHED CLAIMS ARE WITHDRAWN.**
 >

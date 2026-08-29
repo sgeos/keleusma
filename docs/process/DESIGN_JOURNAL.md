@@ -1,5 +1,42 @@
 # Design Journal
 
+## 2026-08-29 — One corpus walk, because a habit is not a check
+
+**Increment**: after four consecutive corrections to my own instruments, the most useful thing was not
+another measurement but a structural fix to the class of error behind them.
+
+**Five defects on this line have had one shape**: a measurement enumerated a **narrower population than
+the thing it described**, and reported the difference as a property of the subjects. A non-recursive
+walk saw 35 modules where its consumers saw 74. A fingerprint covered three roots where consumers read
+four. A probe keyed modules by file name and merged two files called `prelude.kel`. A directory listed
+explicitly *and* reached by recursion was counted twice. The detection census drove subjects unseeded.
+
+**The argument for the fix was already written down, by a file I wrote for the neighbouring hole.**
+`corpus_fingerprint.rs` guards the corpus CONTENT, and its header says: *"It has never bitten here,
+because every absorption asks 'corpus inputs touched?' by hand … A habit is not a check."* That
+sentence is exactly as true of the population, and the population is where I keep failing. I had the
+reasoning and had not applied it to the adjacent case.
+
+**The fix is the same move that worked on the mutation probe**: one canonical `corpus_sources()` in
+`tests/common/mod.rs`, so a migrated sweep **cannot** read a different set. Agreement by construction
+rather than by comparison.
+
+**Every migration was licensed by a comparison, not by inspection.** Before switching each sweep, a
+test asserts the shared enumeration returns exactly what that sweep's private walk returned — and those
+tests stay as standing checks. Migrating on the assumption that two walks agree would have been the
+very defect being closed, committed while closing it. All four figures this line reports each increment
+now rest on the canonical walk.
+
+**`isa_lowering_census` keeps its `CORPUS_DIRS` constant because it PRINTS it.** A printed root list
+that no longer describes what was read is a quieter version of the same defect, so the retained
+constant is compared against the canonical walk rather than trusted.
+
+**Twenty-five files still carry their own walk**, and the record says so. The class is eliminated for
+callers of the shared function, not repository-wide. I also deliberately did **not** add a grep lint
+asserting the absence of private walks: this line already shipped a scanner that counted 33 where the
+truth was 10 by matching a word inside a comment, and a second one is not the answer.
+
+
 ## 2026-08-29 — The undetected column was made of equivalent mutants, and I should have known
 
 **Increment**: the open question was `codegen` and `parse`, where 16 sampled sites of 845 and 1015

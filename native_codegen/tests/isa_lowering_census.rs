@@ -75,6 +75,8 @@
 use keleusma::bytecode::Module;
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 use keleusma_native::{LowerError, LowerOptions, module_lowered_op_indices};
+mod common;
+
 use std::collections::BTreeSet;
 
 /// The corpus directories, matching `isa_coverage_census` and the differential.
@@ -97,19 +99,12 @@ fn source_for(p: &std::path::Path) -> Option<String> {
 }
 
 fn all_compiling_modules() -> Vec<(String, Module)> {
-    let root = std::path::Path::new("..");
-    let mut stack: Vec<std::path::PathBuf> = CORPUS_DIRS.iter().map(|d| root.join(d)).collect();
-    let mut paths = Vec::new();
-    while let Some(p) = stack.pop() {
-        if p.is_dir() {
-            if let Ok(rd) = std::fs::read_dir(&p) {
-                stack.extend(rd.filter_map(|e| e.ok()).map(|e| e.path()));
-            }
-        } else if p.extension().is_some_and(|x| x == "kel") {
-            paths.push(p);
-        }
-    }
-    paths.sort();
+    // **The one canonical walk**, licensed by
+    // `the_shared_walk_matches_this_census` rather than by inspection. This
+    // census's figures — 61 of 66 among them — are reported to the operator
+    // every increment, and a walk that quietly narrowed would move them with
+    // nothing going red.
+    let paths = common::corpus_sources();
     let mut out = Vec::new();
     for p in paths {
         let name = p.file_name().unwrap().to_string_lossy().to_string();
@@ -731,5 +726,40 @@ fn a_non_opcode_refusal_must_not_be_attributed_to_an_opcode() {
          any refusal whose sentence opens with an opcode name is credited to \
          that opcode regardless of the condition. Named: {named:?}, \
          lowered: {lowered:?}"
+    );
+}
+
+/// The canonical walk must return what this census's own walk returned.
+///
+/// `CORPUS_DIRS` is retained because the census PRINTS it, and a printed root
+/// list that no longer describes what was read would be a quieter version of the
+/// defect this migration closes.
+#[test]
+fn the_shared_walk_matches_this_census() {
+    let shared = common::corpus_sources();
+    assert!(
+        shared.len() > 40,
+        "the canonical walk returned only {} sources",
+        shared.len()
+    );
+    let root = std::path::Path::new("..");
+    let mut stack: Vec<std::path::PathBuf> = CORPUS_DIRS.iter().map(|d| root.join(d)).collect();
+    let mut mine = Vec::new();
+    while let Some(p) = stack.pop() {
+        if p.is_dir() {
+            if let Ok(rd) = std::fs::read_dir(&p) {
+                stack.extend(rd.filter_map(|e| e.ok()).map(|e| e.path()));
+            }
+        } else if p.extension().is_some_and(|x| x == "kel") {
+            mine.push(p);
+        }
+    }
+    mine.sort();
+    let a: Vec<String> = mine.iter().map(|p| p.display().to_string()).collect();
+    let b: Vec<String> = shared.iter().map(|p| p.display().to_string()).collect();
+    assert_eq!(
+        a, b,
+        "`CORPUS_DIRS`, which this census PRINTS as its root list, no longer \
+         enumerates what the canonical walk enumerates. One of the two narrowed"
     );
 }

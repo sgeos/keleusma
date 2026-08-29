@@ -6,55 +6,57 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## I have to withdraw two things I told you
+## What this increment did
 
-**"Eight of the ten self-hosted stages do not notice a mutated backend."** Withdrawn. Their mutants
-were **semantically inert** — the reference computes the same result with and without the mutation, so
-a *correct* backend must agree too and no differential could ever have caught them. I was counting
-equivalent mutants as failures.
+After four consecutive corrections to my own instruments, I stopped measuring and fixed the class of
+error behind them.
 
-**"`verify_datalayout` and `rogue_gear`, swept exhaustively, point at the observable."** Withdrawn, and
-this is the one that should worry you more. I offered exhaustion as the reason to trust it.
-**Exhaustion over inert sites establishes nothing.** `verify_datalayout` had nine of nine sites mutated
-and **not one was killable** — that is a fact about the seeds, not the observable. It is also
-consistent with the harness's own `KNOWN_VACUOUS` record for that module, reached independently, which
-I could have cross-checked and did not.
+**Five defects on this line have had one shape**: a measurement enumerated a **narrower population than
+the thing it described**, then reported the difference as a property of the subjects.
 
-| | before | after |
-|---|---|---|
-| detected | 39 | **39** |
-| undetected | **11** | **0** |
-| all mutants inert | — | **11** |
+| defect | cause |
+|---|---|
+| a sweep read 35 modules where consumers read 74 | the walk was not recursive |
+| a fingerprint covered 3 roots of 4 | roots listed by hand |
+| a probe merged two files named `prelude.kel` | keyed by file name |
+| a rogue directory counted twice | listed explicitly *and* reached by recursion |
+| the detection census drove subjects unseeded | a weaker driver than the harness it described |
 
-## What is now true, and what still is not
+**The argument for the fix was already in the tree, in a file I wrote for the neighbouring hole.**
+`corpus_fingerprint.rs` guards corpus *content* and says *"A habit is not a check."* That is exactly as
+true of the population, and the population is where I keep failing. I had the reasoning and had not
+applied it one step across.
 
-**Asserted, and stronger than what was there before**: every mutant that *could* be caught **is**
-caught, so one going uncaught would be loud.
+There is now **one** `corpus_sources()`, so a migrated sweep cannot read a different set — agreement by
+construction, the same move that already fixed the mutation probe. **All four figures I report you each
+increment now rest on it.**
 
-**Not established**: that the differential is sound. Sites are capped, one pre-registered family is
-used, and **3198 applicable sites were never exercised**. `codegen` and `parse` alone carry 845 and
-1015 sites and had 15 of 16 sampled mutants inert.
+## The discipline I applied to myself here
 
-**The large inert counts measure the SEEDS, not the differential.** Reporting them as differential
-strength is precisely the error I just made, so I am flagging the temptation rather than repeating it.
+**Every migration was licensed by a comparison, not by inspection.** Before switching a sweep, a test
+asserts the shared walk returns exactly what that sweep's private walk returned, and those tests stay.
+Migrating on the assumption that two walks agree would have been the defect being closed, committed
+while closing it.
 
-## The pattern, which is mine and is systematic
+**The censuses did not move**, which is the confirmation that the populations really were identical.
 
-Four corrections in a row: an unseeded driver, too few sites, two disagreeing copies of the site
-selection, and now equivalent mutants. **Every one found the subjects better than I had reported, and
-every one took the form of a measurement that could only understate.** That is a bias in how I build
-instruments, not four unlucky bugs, and you should read my measurements with it in mind until I have
-gone a few increments without one.
+## What is not closed, said plainly
+
+**Twenty-five files still carry their own walk.** The class is eliminated for callers of the shared
+function, not repository-wide.
+
+I deliberately did **not** add a lint asserting no file has a private walk. This line already shipped a
+scanner that counted 33 where the truth was 10 by matching a word inside a comment; a second grep is
+not the answer to a structural problem.
 
 ## Verification
 
-Both suites run **sequentially** (parallel invalidates the perf canary, 57x). The native gate was
-re-run after the last edit rather than reported from the earlier pass.
+Both suites run **sequentially** (parallel invalidates the perf canary, 57x).
 
 | | result |
 |---|---|
 | workspace | **2491 passed, 0 failed, 92 binaries**, cargo exit 0 |
-| `native_codegen` gate step | **369 passed, 0 failed, 74 binaries**, exit 0 (fmt, clippy `-D warnings`, test, `doc -D warnings`) |
+| `native_codegen` gate step | **372 passed, 0 failed, 74 binaries**, exit 0 (fmt, clippy `-D warnings`, test, `doc -D warnings`) |
 | censuses | 61 of 66; `["Len"]`; 1070 of 1074; 89841 of 89940 — all unmoved |
 
 **No absorption was needed**: already zero unabsorbed.

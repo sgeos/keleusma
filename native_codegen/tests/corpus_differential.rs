@@ -304,28 +304,10 @@ stubs!(
 );
 
 fn sources() -> Vec<std::path::PathBuf> {
-    let root = std::path::Path::new("..");
-    let mut out = Vec::new();
-    let mut stack: Vec<std::path::PathBuf> = [
-        "examples/scripts",
-        "src/selfhost/kel",
-        "examples/rtos/scripts",
-        "compiler/kel",
-    ]
-    .iter()
-    .map(|d| root.join(d))
-    .collect();
-    while let Some(p) = stack.pop() {
-        if p.is_dir() {
-            if let Ok(rd) = std::fs::read_dir(&p) {
-                stack.extend(rd.filter_map(|e| e.ok()).map(|e| e.path()));
-            }
-        } else if p.extension().is_some_and(|x| x == "kel") {
-            out.push(p);
-        }
-    }
-    out.sort();
-    out
+    // **Delegates to the one canonical walk.** Proven equal to the previous
+    // private copy by `the_shared_corpus_enumeration_matches_this_harness`
+    // before this line was written, which is what licensed the switch.
+    common::corpus_sources()
 }
 
 /// The source to compile for `p`, with the rtos prelude prepended where the
@@ -4497,5 +4479,33 @@ fn how_deep_does_the_undetected_set_go() {
         rows.iter().any(|(_, _, _, usable, _, _)| *usable > 0),
         "every re-swept subject produced ZERO usable comparisons, so the `no` \
          column means 'nothing ran', not 'nothing was noticed'"
+    );
+}
+
+/// **The shared enumeration must return exactly what this harness's own
+/// `sources()` returns — asserted BEFORE anything is switched to it.**
+///
+/// Migrating a sweep to a shared walk on the assumption that the two agree is
+/// the very defect the shared walk exists to close, committed while closing it.
+/// This is the comparison that licenses the migration.
+#[test]
+fn the_shared_corpus_enumeration_matches_this_harness() {
+    let mine = sources();
+    let shared = common::corpus_sources();
+    assert!(
+        mine.len() > 40,
+        "this harness enumerated only {} sources, so the comparison below would \
+         pass by both sides being nearly empty",
+        mine.len()
+    );
+    let mut a: Vec<String> = mine.iter().map(|p| p.display().to_string()).collect();
+    let mut b: Vec<String> = shared.iter().map(|p| p.display().to_string()).collect();
+    a.sort();
+    b.sort();
+    assert_eq!(
+        a, b,
+        "the shared corpus enumeration and this harness's own walk disagree. \
+         Switching to the shared one would silently change the population every \
+         figure in this file rests on"
     );
 }
