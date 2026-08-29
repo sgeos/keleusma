@@ -608,6 +608,27 @@ Current sprint source of truth.
 > workspace **2467/0/88**, coverage re-derived and unchanged at 1070 of 1074.
 > See [`../decisions/OPERAND_WIDTH_RECOVERY.md`](../decisions/OPERAND_WIDTH_RECOVERY.md).
 
+> **Currency note (2026-08-29, V0.3.X line, tenth entry). THE CENSUS IS RESTORED TO THE GATE; A GUARD
+> HAD BEEN REMOVED ON A NUMBER ITS OWN COMMIT DISCLAIMED.**
+>
+> The ninth entry marked **both** mutation sweeps `#[ignore]` on grounds of cost. **That cost was never
+> cleanly measured**: three optimisations had been applied without measuring their combined effect, and
+> the one full figure obtained, **4132s, was disclaimed in the same commit** as contaminated by a load
+> average near 13 — then slowness was used as the reason to disable the guards anyway. With a threshold
+> **fixed at 600s before measuring**: both sweeps together **712s**, census alone **206s**, deep sweep
+> alone **710s**, all at load ~5–6. **The pair failed the threshold and it was not re-litigated by
+> appeal to load.** Measuring them separately settled the matter — the deep sweep is essentially the
+> entire cost — so **the census now runs in the gate** (detection floor and non-vacuity checks restored
+> over every module) and **the deep sweep stays opt-in**. What remains unprotected day to day is
+> regression in the DEPTH of mutation sensitivity. **The whole native gate is now 496s at load 6**,
+> against the disclaimed 4132s: the gate was never the problem. **Two intermediate readings were
+> opposite** — the deep sweep dominates (right), then the census does (wrong, from libtest printing its
+> over-60s notice for every parallel long test) — and only separate measurement settled it. **An
+> assertion of mine counted a word in a doc comment**, claiming two `#[ignore]` where one attribute
+> existed: the same defect as the scanner that counted 33 skippable tests against a true 10. No
+> absorption needed. Workspace **2491/0/92**, `native_codegen` **371 passed, 0 failed, 1 ignored, 74
+> binaries**, censuses unmoved. See [`../decisions/SWEEP_COST.md`](../decisions/SWEEP_COST.md).
+
 > **Currency note (2026-08-29, V0.3.X line, ninth entry). ALL REMAINING CAPABILITY WORK IS BEHIND AN
 > OPERATOR DECISION; THE MUTATION FAMILY IS WIDER AND THE TWO SWEEPS ARE NOW OPT-IN.**
 >

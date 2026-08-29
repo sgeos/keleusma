@@ -3953,34 +3953,24 @@ fn sampled_mutants(m: &Module) -> Vec<(Module, String)> {
 /// **Undetected here means undetected against ONE pre-registered family**, not
 /// that the subject detects nothing. Nothing is deleted or exempted on this
 /// evidence: coverage present before this test is present after it.
-/// # ⚠ OPT-IN: this does NOT run in the everyday gate
+/// # Cost, measured rather than inferred
 ///
-/// **Marked `#[ignore]` on 2026-08-29, and that is a real reduction in standing
-/// protection rather than a tidy-up.** Run it with
-/// `cargo test --test corpus_differential -- --ignored --nocapture`.
+/// **This sweep RUNS in the everyday gate. Measured at 206s** on 2026-08-29 at a
+/// load average near 5, after the reference runs were hoisted out of the mutant
+/// loop and the per-module sample cut to one site.
 ///
-/// **Why.** Widening the mutation family to include control flow made these
-/// sweeps produce far more mutants that are admissible AND non-faulting, so each
-/// runs fully across every variant — and the seeded stages carry many variants
-/// apiece. Measured: about 600s before the widening, 1379s alone after it, and
-/// **neither sweep finished within twenty minutes** under gate contention even
-/// after the reference runs were hoisted and the census cut to one site per
-/// module.
+/// **It was briefly marked `#[ignore]` and that was a mistake**, made on a 4132s
+/// figure taken under a load average near 13 which the same commit had already
+/// disclaimed in writing as contaminated. A guard was removed on a number its
+/// own author had rejected. Measuring the two sweeps separately settled it:
+/// **206s here against 710s** for `how_deep_does_the_undetected_set_go`, which
+/// remains opt-in. The cost was almost entirely the other one.
 ///
-/// **What this costs.** The assertions here — including the detection floor —
-/// no longer protect anything day to day. A regression in the differential's
-/// mutation sensitivity would now be caught only when someone runs this
-/// deliberately. **Its last green result is a DATED MEASUREMENT, not a standing
-/// guarantee**, and `SUBJECT_DETECTION.md` records it as such.
-///
-/// **Why not simply revert the widening.** It is a real gain: detected went from
-/// 39 to 48 and subjects with no applicable mutation site at all fell from 10 to
-/// 3, because comparison swaps reach opcodes arithmetic never touched. Throwing
-/// that away to keep a fast gate would trade more correctness than it buys.
-///
-/// This matches how the existing opcode-level mutation work is already run:
-/// `tools/mutation_sweep.py` drives it externally rather than in the suite.
-#[ignore]
+/// Recorded because the intermediate reasoning was wrong twice in opposite
+/// directions — first that the deep sweep dominated (correct), then that this
+/// census did (wrong, from watching libtest print its over-60-seconds notice for
+/// every long test running in parallel). **Only the separate measurement
+/// settled it.**
 #[test]
 fn which_subjects_would_notice_a_wrong_backend() {
     let mut detected: Vec<String> = Vec::new();
@@ -4441,31 +4431,22 @@ fn sampled_mutants_capped(m: &Module, cap: usize) -> (Vec<(Module, String)>, usi
 /// those apart rather than take a verdict on trust.
 /// # ⚠ OPT-IN: this does NOT run in the everyday gate
 ///
-/// **Marked `#[ignore]` on 2026-08-29, and that is a real reduction in standing
-/// protection rather than a tidy-up.** Run it with
-/// `cargo test --test corpus_differential -- --ignored --nocapture`.
+/// Run it with `cargo test --test corpus_differential -- --ignored --nocapture`.
 ///
-/// **Why.** Widening the mutation family to include control flow made these
-/// sweeps produce far more mutants that are admissible AND non-faulting, so each
-/// runs fully across every variant — and the seeded stages carry many variants
-/// apiece. Measured: about 600s before the widening, 1379s alone after it, and
-/// **neither sweep finished within twenty minutes** under gate contention even
-/// after the reference runs were hoisted and the census cut to one site per
-/// module.
+/// **Measured at 710s alone** on 2026-08-29 at a load average near 5, against a
+/// threshold of 600s fixed before the measurement was taken. It is over, so it
+/// stays opt-in; the sibling census is 206s and runs in the gate.
 ///
-/// **What this costs.** The assertions here — including the detection floor —
-/// no longer protect anything day to day. A regression in the differential's
-/// mutation sensitivity would now be caught only when someone runs this
-/// deliberately. **Its last green result is a DATED MEASUREMENT, not a standing
-/// guarantee**, and `SUBJECT_DETECTION.md` records it as such.
+/// **What this costs**: a regression in the DEPTH of mutation sensitivity — a
+/// subject that starts hiding a killable mutant beyond the census's single site
+/// — would be caught only when someone runs this deliberately. **Its last green
+/// result is a dated measurement, not a standing guarantee.** The breadth
+/// property, that every killable mutant found at one site per module is
+/// detected, IS still asserted every run by the census.
 ///
-/// **Why not simply revert the widening.** It is a real gain: detected went from
-/// 39 to 48 and subjects with no applicable mutation site at all fell from 10 to
-/// 3, because comparison swaps reach opcodes arithmetic never touched. Throwing
-/// that away to keep a fast gate would trade more correctness than it buys.
-///
-/// This matches how the existing opcode-level mutation work is already run:
-/// `tools/mutation_sweep.py` drives it externally rather than in the suite.
+/// The widened mutation family was kept rather than reverted: detected went from
+/// 39 to 48 and subjects with no applicable site at all from 10 to 3, which is
+/// more correctness than a fast gate is worth.
 #[ignore]
 #[test]
 fn how_deep_does_the_undetected_set_go() {

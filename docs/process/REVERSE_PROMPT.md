@@ -6,46 +6,45 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## The thing I most need from you
+## Correcting myself: I removed a guard on a number I had disclaimed
 
-**All remaining capability work on this line is behind a decision only you can take.** Measured, not
-recalled: 66 of 69 modules lower end to end, 1070 of 1074 chunks, and the 4 unlowerable chunks sit in
-exactly the 3 refused modules. There is no fourth thing to fix.
+Last increment I told you both mutation sweeps were now opt-in, and called it a loss. **The reasoning
+behind it was worse than I said.** The justification was cost; the cost was never cleanly measured. I
+had applied three optimisations without measuring their effect, obtained one figure of 4132s, **wrote
+in the same commit that it was contaminated** by a load average near 13 — and then used slowness as the
+reason to disable the guards anyway.
 
-[`OPERATOR_DECISIONS_OPEN.md`](../decisions/OPERATOR_DECISIONS_OPEN.md) is one page: the three
-decisions, what each costs, and **what I do by default if you say nothing**. It re-argues nothing and
-recommends nothing where the underlying records declined to. `Len` is listed as *not* a decision so it
-is not mistaken for one.
+So I fixed a threshold **before** measuring: under 600s for the two together.
 
-## What I did, and a trade I want you to see rather than discover
+| | time | load |
+|---|---|---|
+| both together | **712s** | ~5–6 |
+| **census alone** | **206s** | ~5–6 |
+| deep sweep alone | **710s** | ~5–6 |
 
-The mutation family excluded control flow, and the recorded reason was that a comparison swap could
-hang the suite. **Two filters built since then handle exactly that**, so the restriction was a carried
-claim whose basis had expired.
+**The pair failed my own threshold, and I did not argue my way out of it** by pointing at the load
+average. But the deep sweep turns out to be essentially the entire cost, so:
 
-Widening it is a real gain — **detected 39 to 48, undetected still 0, subjects with no applicable
-mutation site at all 10 to 3.**
+- **the census runs in the gate again** — the detection floor and the non-vacuity checks are protecting
+  every module on every run, which was the part worth recovering;
+- **the deep sweep stays opt-in**, at 710s against a 600s threshold.
 
-**Then the cost forced a decision I am recording as a loss.** Comparison mutants are admissible *and*
-non-faulting, so they run across every variant, and the seeded stages carry many variants each. Both
-mutation sweeps are now `#[ignore]`, run with `-- --ignored`.
+**What is still unprotected day to day**: regression in the *depth* of mutation sensitivity, beyond the
+census's single site per module.
 
-**Their assertions, including the detection floor, no longer protect anything day to day.** A
-regression in mutation sensitivity would now be caught only when someone runs them deliberately, and
-the figures above are a dated measurement rather than a standing guarantee. I kept the widening rather
-than reverting because 39→48 is worth more than a fast gate, and this matches how
-`tools/mutation_sweep.py` already drives the opcode-level mutation work externally. **If you disagree
-with that trade, it is one line to revert.**
+**The whole native gate is now 496s at load 6**, against the 4132s I recorded and disclaimed. The gate
+was never the problem, and I should have trusted my own disclaimer instead of acting past it.
 
-## Where I worked badly
+## Two more things I got wrong, both recorded
 
-When the cost appeared I **guessed three times** at which test was slow — cutting the deep sweep's cap,
-hoisting the reference runs, cutting the census to one site — and each guess was wrong. I have a
-recorded rule about measuring before acting and did not follow it.
+**I read the cost backwards mid-course.** I first judged the deep sweep to dominate (right), then
+watching the gate concluded the census did (wrong — libtest prints its over-sixty-seconds notice for
+every long test running in parallel, so both looked stalled). That wrong premise cost three coverage
+reductions.
 
-**A number I will not report as mine**: this run's native gate took 4132s, but the machine was carrying
-a load average near 13, some of it my own overlapping runs. That figure is contaminated and is not
-evidence about the change.
+**An assertion of mine counted a word inside a doc comment**, reporting two `#[ignore]` where one
+attribute existed. That is precisely the defect this line documented when a scanner counted 33
+skippable tests against a true 10. The file had been right the whole time.
 
 ## Verification
 
@@ -54,12 +53,17 @@ Both suites run **sequentially** (parallel invalidates the perf canary, 57x).
 | | result |
 |---|---|
 | workspace | **2491 passed, 0 failed, 92 binaries**, cargo exit 0 |
-| `native_codegen` gate step | **370 passed, 0 failed, 2 ignored, 74 binaries**, exit 0 |
+| `native_codegen` gate step | **371 passed, 0 failed, 1 ignored, 74 binaries**, exit 0, **496s** |
 | censuses | 61 of 66; `["Len"]`; 1070 of 1074; 89841 of 89940 — all unmoved |
 
-**The 2 ignored are the mutation sweeps**, and that is the trade above rather than an incidental skip.
+**The 1 ignored is the deep sweep**, which is the disposition above rather than an incidental skip.
 
 **No absorption was needed**: already zero unabsorbed.
+
+## Still waiting on you
+
+[`OPERATOR_DECISIONS_OPEN.md`](../decisions/OPERATOR_DECISIONS_OPEN.md) — three decisions, their
+costs, and what I do by default. All remaining capability work on this line is behind them.
 
 ## Standing constraints, unchanged
 

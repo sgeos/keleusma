@@ -1,5 +1,48 @@
 # Design Journal
 
+## 2026-08-29 — I removed a guard on a number I had myself disclaimed, and measured my way back
+
+**Increment**: the previous one marked both mutation sweeps `#[ignore]`, taking their assertions —
+including the detection floor — out of the gate. **The justification was cost, and the cost was never
+cleanly measured.** The sequence is the problem: the sweeps were slow, I applied three optimisations
+and never measured their combined effect, obtained one figure of 4132s, **disclaimed it in writing as
+contaminated by a load average near 13** — and then used slowness as the reason to disable the guards
+anyway. Step four does not follow from a number rejected at step three.
+
+**So I fixed a threshold before measuring: under 600s for the two sweeps together.**
+
+| | time | load |
+|---|---|---|
+| both together | **712s** | ~5–6 |
+| census alone | **206s** | ~5–6 |
+| deep sweep alone | **710s** | ~5–6 |
+
+**The pair failed my own threshold and I did not re-litigate it** by pointing at the load average,
+which is exactly what pre-registering it was for. But measuring the two separately is a different
+question rather than a second attempt at the same one, and it settled the matter: **the deep sweep is
+essentially the entire cost.** The census is restored to the gate; the deep sweep stays opt-in.
+
+**Two intermediate readings of mine were opposite, and only measurement settled it.** First I judged
+the deep sweep to dominate — right. Then, watching the gate, I concluded the census did and acted on
+it — wrong, because libtest prints its over-sixty-seconds notice for *every* long test running in
+parallel, so both looked stalled. That wrong premise cost three coverage reductions. I kept one of
+them, the census's three sites to one, because it is cheap and the breadth gain came from the wider
+family rather than from extra sites.
+
+**The whole native gate is now 496s at load 6**, against the 4132s I recorded and disclaimed. The
+disclaimer was right and the gate was never the problem.
+
+**My own assertion failed in the way this repository already documents.** The script restoring the
+census asserted "exactly one `#[ignore]`" and counted two — the second being the text `` `#[ignore]` ``
+**inside a doc comment**. That is the defect recorded when a scanner counted 33 skippable tests where
+the truth was 10. The file had been correct the whole time; the check was wrong. Rewritten to match
+attribute lines only.
+
+**What remains unprotected**: a regression in the *depth* of mutation sensitivity. The breadth
+property — every killable mutant found at one site per module is detected — is asserted every run
+again, which was the piece worth getting back.
+
+
 ## 2026-08-29 — A restriction whose reason had expired, and a trade I had to take against myself
 
 **Increment**: six increments had gone into instruments, so the first task was checking I was still on
