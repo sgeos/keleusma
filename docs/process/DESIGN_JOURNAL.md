@@ -13,6 +13,55 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-28 — The last extraction probed, and a mutation rule that needed three witnesses
+
+**THE BRIEF SAID PROBE THE ORDERING QUESTION BEFORE WRITING ANY MAPPING. That was right, and the
+answer corrected the brief's own framing for the second time.** A previous iteration sized the last
+type-channel extraction as "eight node kinds, three composite" and declined it on that basis. Then
+this brief said the real difficulty was preorder against postorder. **Both were wrong about the
+obstacle.**
+
+**THE FOREST'S CHILDREN ARE NOT ALL IN `lhs` AND `rhs`.** Measured:
+
+| program | reference sees | a preorder walk over the two child fields saw |
+|---|---|---|
+| `g() + g() * 2` | two calls | **one** |
+| `f(1)` | one call | **hundreds**, until a guard stopped it |
+
+It misses children AND revisits nodes, in one probe. A call's arguments live in `call_args`; loop,
+match, limit and multihead constructs each keep their parts in their own side-table.
+
+**WHAT LANDED IS THE MEASUREMENT AND A GUARD, NOT THE MAPPING.** `tests/forest_child_channels.rs`
+pins that there are exactly six child-bearing channels, so a walk written against them is complete
+by construction and a seventh cannot arrive silently. The probe function was deliberately not
+shipped, and nothing was named so as to make the count pin report Order 1 item 3 finished.
+
+**A CAUTION FOR WHOEVER WRITES THE WALK**, recorded because it is the obvious wrong move:
+`codegen.kel`'s visit order is EMISSION order for a stack machine, not the reference's syntax-tree
+preorder. Copying its child sequence gives a consistent traversal that is still the wrong order.
+
+## AND THE PROCESS RULE THIS COST THREE WITNESSES TO GET RIGHT
+
+**A MUTATION HAS THREE FAILURE POINTS AND I WAS BITTEN AT ALL THREE IN ONE SESSION.** The standing
+rule was "confirm the mutant compiles". It is not enough, because every one of these produces "test
+passed", which is indistinguishable from a guard that cannot fire:
+
+| step | the failure |
+|---|---|
+| the harness RUNS | a command variable escaped inside a quoted heredoc; three mutants ran nothing and reported zero compile errors |
+| the mutation APPLIES | **BSD `sed` has no `\b`**, so the substitution matched nothing and changed no bytes, while every surrounding signal looked healthy |
+| the mutant COMPILES | an unconstructed struct field broke every literal; two errors, result meaningless |
+
+**The rule is now: confirm the mutation APPLIED, then that it compiled, then believe the result** --
+and PRINT what changed rather than trusting the edit. The third attempt at this one printed
+"renamed 4 occurrences" and showed the mutated line before running, which is what finally made the
+result trustworthy.
+
+**I checked whether earlier mutations this session were affected**: only this one used `\b`, and
+each of the others was confirmed by a `grep` afterwards. So no earlier result is in doubt -- but I
+would not have known that without enumerating them, and "no earlier result is in doubt" is a claim
+that has to be checked rather than assumed.
+
 ## 2026-08-28 — A finding I handed over came back sharper, and is now a check
 
 **I TOLD THE `v0.3.0` LINE THAT `Op::Neg` HAS NO STAGE TAG AND "MAY MATTER" TO THEIR LOWERING

@@ -19,6 +19,22 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > it: `git log --oneline origin/v0.2.3 | grep -c 'Merge pull request'`. **NOTE THE REF** -- the
 > local `v0.2.3` lags and answers a smaller number for the same tree.
 >
+> ## A MUTATION HAS THREE FAILURE POINTS, AND SESSION 56 WAS BITTEN AT ALL THREE.
+>
+> The standing rule was "confirm the mutant COMPILES". Not enough. **Confirm the mutation APPLIED,
+> then that it compiled, then believe the result** -- and each step silently produces "test passed",
+> which is indistinguishable from a guard that cannot fire.
+>
+> | step | how it failed here |
+> |---|---|
+> | the harness RUNS | a command variable escaped inside a quoted heredoc, so three mutants ran nothing and reported zero compile errors |
+> | the mutation APPLIES | **BSD `sed` on macOS has no `\b`**, so `sed -i '' 's/\bname\b/.../'` matched nothing and changed no bytes |
+> | the mutant COMPILES | adding an unconstructed struct field broke every literal; two errors, result meaningless |
+>
+> **`\b` IS A GNU EXTENSION AND THIS IS A DARWIN BOX.** Use python for edits, or a pattern with no
+> word-boundary escape, and **print what changed** -- `grep` the mutated line and read it before
+> running anything.
+>
 > ## A TEST WHOSE ANSWER DEPENDS ON A DIRECTORY IS NOT PINNED. LEARNED THE HARD WAY, 2026-08-28.
 >
 > `the_shipped_examples_narrow_the_unexercised_tags_and_the_residue_is_named` scanned
@@ -180,6 +196,7 @@ grep -c '^\s*#\[test\]' tests/wire_self_compile_status.rs    # 3
 grep -c '^\s*#\[test\]' tests/op_tag_tables.rs                # 8
 # THE TWELFTH STAGE'S EXCLUSION, session 56. Explains why the corpus is 11 of 12.
 grep -c '^\s*#\[test\]' tests/forward_data_reference.rs       # 4
+grep -c '^\s*#\[test\]' tests/forest_child_channels.rs        # 2
 
 # THE BYTE-IDENTITY CORPUS IS ELEVEN STAGES. `wire.kel` joined 2026-08-27.
 grep -c 'fn self_host_compiles_.*_kel_byte_identically' tests/selfhost_codegen.rs   # 11
@@ -307,8 +324,20 @@ at 142 lines behind its thin wrapper. Four of five have moved; this is the one t
 1 item 3. **Read the record stream first** -- see the rule at the top of this file, which two of the
 four slices proved the hard way.
 
-**IT IS SIZED, SO DO NOT RE-DERIVE THAT. IT EMITS EIGHT NODE KINDS**, and each needs its own
-forest mapping plus operand classification:
+**THE OBSTACLE IS MEASURED AND IT IS NOT WHAT THE SIZING SAID.** The table is POSITIONAL --
+`derived` indexes into it -- so its ORDER is content. A probe walked the forest in preorder over
+`lhs` and `rhs` to see whether that order is recoverable, and the way it failed is the finding:
+for `g() + g() * 2` it saw ONE call where there are two, and for `f(1)` it ran to HUNDREDS of nodes
+before a guard stopped it. **It misses children and revisits nodes in the same probe**, because a
+call's arguments live in `call_args` and the loop, match, limit and multihead constructs each keep
+their parts in their own side-table. `tests/forest_child_channels.rs` pins that there are exactly
+SIX such channels, so a walk written against them is complete by construction.
+
+**AND `codegen.kel`'s VISIT ORDER IS NOT THE ORDER YOU WANT.** It is emission order for a stack
+machine, not the reference's syntax-tree preorder. Copying its child sequence gives a consistent
+traversal that is still wrong for this comparison.
+
+**IT EMITS EIGHT NODE KINDS**, each needing its own mapping plus operand classification:
 
 | kind | note |
 |---|---|
