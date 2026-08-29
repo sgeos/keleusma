@@ -147,6 +147,21 @@ soundness item: **the yield-escape refusal is still shadowed**, because the esca
 refused — now asserted by a test rather than inferred. One gap named and not fixed: a tail-yielded
 composite lowers and nothing in the tree executes it.
 
+**A different question than the audits asked: not whether a test proves its claim, but whether it ran
+at all.** A test that returns early when a toolchain is missing reports as passed and joins the total
+I quote to you as evidence. **10 of 325 can do that, and none are doing it here** — which I verified
+rather than assumed, after a timing-based suspicion about one of them proved wrong and its output
+turned out to contain real subprocess results.
+
+**The scanner I wrote to measure this was wrong first.** It reported 33 by matching the word "return"
+inside comments, and only disagreeing with an earlier count exposed it; otherwise I would have
+reported a third of the suite as at risk. The population is now pinned so an eleventh announces
+itself, and **I deliberately did not assert that no skip occurs** — a machine without a C compiler
+should not see a failure, since the defect is invisibility rather than the skip.
+
+**The finding is bounded and I would rather say so than dramatise it**: ten tests, none currently
+vacuous, each printing a loud banner when it does skip.
+
 **The name audit closes at zero, and I am stopping it — that is the result rather than a gap in it.**
 The third and largest class was too big to read carefully, so I scaled the method instead of the
 effort: a universal claim resting on a body that never iterates is mechanically detectable, which cut

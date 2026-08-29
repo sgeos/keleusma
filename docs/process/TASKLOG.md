@@ -239,6 +239,26 @@ Current sprint source of truth.
 > **THREE CHECKS WRITTEN THIS SESSION COULD NOT FAIL**, each satisfied by a different part of a
 > document from the one it was about. Mutation caught all three; reading caught none.
 
+> **Currency note (2026-08-28, V0.3.X line, nineteenth entry). A PASS COUNT IS WORTH THE FRACTION OF
+> IT THAT RAN: 10 OF 325 CAN SKIP, NONE ARE.**
+>
+> The closed name audit asked whether a test proves its claim; this asks whether it **ran**. A test
+> returning early when a toolchain is absent reports as passed and joins the total quoted as evidence.
+> **10 of 325 can return before asserting anything, and none are skipping here** — verified rather
+> than assumed, after a timing-based suspicion about `retcon_m2` proved wrong and its output turned
+> out to carry real subprocess results.
+>
+> **The scanner written to measure this was wrong first**, reporting 33 by matching the word "return"
+> inside comments; **two instruments disagreeing is the only reason it surfaced**, and 33 would
+> otherwise have been published as a finding about a third of the suite. The population is now pinned
+> so an eleventh announces itself, while **whether a skip occurs is deliberately not asserted**,
+> because a machine without a C compiler should not see a failure and the defect is invisibility
+> rather than the skip. Absorption 28 complete; both its predictions hit exactly, including that the
+> corpus fingerprint would not move for a README change since it scans `.kel` only. `native_codegen`
+> **354/0/71**, workspace **2484/0/91**; censuses unchanged at **61 of 66**, **1070 of 1074**,
+> **89841 of 89940**.
+> See [`../decisions/SILENT_SKIP_BRIEF.md`](../decisions/SILENT_SKIP_BRIEF.md).
+
 > **Currency note (2026-08-28, V0.3.X line, eighteenth entry). THE NAME AUDIT CLOSES AT ZERO, AND
 > STOPPING IS THE RESULT.**
 >

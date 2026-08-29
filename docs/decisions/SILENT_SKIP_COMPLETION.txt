@@ -1,0 +1,51 @@
+COMPLETION CONDITION — tests that can pass without testing
+
+Ordering is NOT a completion criterion. These properties may be reached in any
+order, by any route, on any branch. Judge only the end state of the tree.
+
+1. THE POPULATION AND THE ACTUAL SKIPS ARE DISTINGUISHED
+   The tree states how many tests can return before asserting anything, and
+   separately how many actually did so when the suite was last run here. The
+   second figure comes from observing a run, not from reading the code.
+
+2. THE CONSEQUENCE FOR THE QUOTED PASS COUNT IS STATED
+   The tree says what the suite's pass total means given the number of tests that
+   executed nothing, rather than leaving the total to be read as if every test
+   exercised its subject.
+
+3. A SKIP IS DISCOVERABLE WITHOUT READING CAPTURED OUTPUT
+   Either a skip is made visible in the suite's own accounting, or the tree
+   records why that was not done and how a reader is expected to notice one.
+
+4. NO SKIP IS CONVERTED INTO A FAILURE ON AN UNEQUIPPED MACHINE
+   Nothing added makes a test fail merely because a toolchain is absent. The
+   defect addressed is invisibility, not the skip itself.
+
+5. THE FINDING IS NOT DRAMATISED
+   If the number is small and the skips announce themselves, the tree says so
+   plainly, and does not describe the suite as unreliable on the strength of a
+   bounded result.
+
+6. ANY CHECK ADDED CAN FAIL
+   Every check added is exercised by at least one case it reports positively and
+   one closely related case it reports negatively, and no guard's conclusion is
+   made automatic by its own precondition.
+
+7. FIGURES CARRY THEIR POPULATION AND ARE RE-DERIVED
+   Coverage and opcode figures are re-measured and stated whether or not they
+   changed, and every figure names the set it was measured over.
+
+8. THE GATE, NOT JUST THE TESTS
+   The tree records a run of the subproject's verification step showing
+   formatting, lint with warnings denied, tests, and the documentation build all
+   clean, with the runner's exit status and the summed counts agreeing. A run
+   that ended early is not reported as a result. The main workspace suite's state
+   is recorded, either from a run or with a stated reason why the change could
+   not affect it.
+
+9. CLAIMS MATCH THE TREE, AND WORK IS PUBLISHED
+   No document asserts a figure or status the tree contradicts. No uncommitted
+   changes remain, and either the branch agrees with its remote or the tree says
+   why not. Files owned by the v0.2.3 line are unmodified: src/verify.rs,
+   src/bytecode.rs, src/vm.rs, src/wire_schema.rs, src/selfhost/, src/confine.rs,
+   and the CI workflow directory.

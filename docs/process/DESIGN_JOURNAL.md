@@ -371,6 +371,39 @@ two-segment form, which genuinely differs, and it fired with its own message.
 kinds is missing from its probes, and removing the structs makes it fail with that message. The
 previous slice learned this the hard way: a guard whose corpus lacks a construct is a guard for a
 different question.
+## 2026-08-28 — [v0.3.0] A pass count is worth the fraction of it that ran
+
+**THE NAME AUDIT ASKED WHETHER A TEST PROVES ITS CLAIM. THIS ASKS WHETHER IT RAN.** A test that
+returns early when a toolchain is absent reports as **passed** and joins the total quoted as evidence.
+
+**10 of 325 can return before asserting anything. None are skipping here** — and the zero was
+verified rather than assumed. `retcon_m2` finishing in 0.39s looked implausible for build-link-run,
+and **that suspicion was wrong**: the output carries real subprocess results. **Timing suggested;
+reading settled it.**
+
+### The scanner written to measure this was wrong first
+
+It asked whether a line contained `"return"` and reported **33**, where an earlier one-off had
+reported 10. The difference was **entirely comments** — *"// while still returning the right low
+word."* matched.
+
+**Two instruments disagreeing is the only reason it surfaced.** Either alone looked reasonable, and
+33 would have been published as a finding about a third of the suite. Corrected to require a
+statement-position `return` outside comments, both now read 10.
+
+**That is the fourth time this session a cross-check between two methods caught something neither
+would have caught alone**, and the second time the defective instrument was the newer one.
+
+### What is pinned, and what is deliberately not
+
+The **population** is pinned, so an eleventh skippable test announces itself. **Whether a skip occurs
+is not asserted**: these need a C compiler and a linker, and a machine without one should not see a
+failure. **The defect is invisibility, not the skip** — and each of the ten prints a loud banner when
+it does skip, which is the mitigating half.
+
+**The finding is bounded and is stated as such.** Ten tests, none currently vacuous, all announcing
+themselves. That is a latent risk worth a pin, not a compromised suite.
+
 ## 2026-08-28 — [v0.3.0] The audit closes at zero, and stopping is the result
 
 **THE THIRD CLASS WAS TOO BIG TO READ, SO THE METHOD SCALED INSTEAD OF THE EFFORT.** Names carrying a
