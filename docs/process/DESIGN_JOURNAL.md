@@ -47,6 +47,48 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-28 — A branch pair built, measured, and withheld; and the unit literal is refused
+
+**THE CONDITION MOVES. THE BRANCH PAIR DOES NOT, AND THE REASON IS THE FINDING.**
+
+Kind 4 looked free: `push_if` keeps the condition in `args` and the branches in `lhs`/`rhs`, so one
+node yields both. It was implemented. **A probe then found it wrong for a ONE-ARMED conditional**:
+`push_if` visits an else arm unconditionally, so the forest carries one even where the source has
+none, while the reference contributes a pair row only when `else_block` is present. The pipeline
+emitted a row the reference does not.
+
+**THE ASYMMETRY IS WHAT DECIDED IT.** A pair row feeds `ty_node_bad`'s EQUALITY branch:
+
+- a SPURIOUS row can make the stage **reject a correct program**;
+- a DROPPED row makes the stage **miss a disagreement it exists to catch**.
+
+A heuristic was available — the synthesised arm yields the UNIT tag while a real statement-only else
+yields UNKNOWN — and **it was rejected because it could not be shown safe**. Both error directions
+are unsound, so no row is emitted and the witness is pinned instead. **Building it and then not
+shipping it is the right outcome, not a wasted increment.**
+
+**AND THE PROBE THAT SETTLED IT TURNED UP AN UNRECORDED GAP.** Asking whether a real else could
+yield the unit tag meant writing `if c { () } else { () }` — and **the pipeline PANICS on it** while
+the reference compiles it. `reconstruct.kel` refuses with a named cause, an empty work-stack
+underflow: the failure mode this programme added in session 54 doing exactly its job, a named
+refusal rather than a silent wrong answer.
+
+**The construct-support boundary does not record `()` and nothing else pinned it.** It is now
+pinned, in the failing direction, so closing the gap prompts adding the construct to the boundary
+rather than absorbing it silently. Proportionality: a loud refusal, not a mis-compile.
+
+**THE FUNCTION WAS RENAMED IN THE SAME BREATH.** `binop_expression_rows_from_pipeline` became false
+the moment it carried conditions, and **a name that lies is what several increments of this session
+were spent removing.** Renamed rather than left to drift, one increment after it was introduced.
+
+**A DEAD HELPER WAS DELETED RATHER THAN LEFT WITH AN UNDERSCORE.** The tail-following walk existed
+only for the branch pair; when that was withheld the compiler flagged it unused. Prefixing it would
+have preserved a plausible-looking piece of machinery for a decision that had been reversed.
+
+**TWO MUTATIONS, EACH CONFIRMED APPLIED AND COMPILED**: re-enabling the branch-pair row fires the
+one-armed pin, and blanking the condition operand fires the agreement test. Neither fires the other,
+which is what makes them two guards rather than one written twice.
+
 ## 2026-08-28 — The derived-operand gap closes, after three wrong sizings from three producers
 
 **THE GAP THE HANDOFF NAMED FOR FOUR SESSIONS IS CLOSED FOR THE BINARY OPERATOR.**

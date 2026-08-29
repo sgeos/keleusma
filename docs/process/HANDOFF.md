@@ -5,17 +5,37 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-08-28 (session 56 CLOSE) against `64d7d87e`, WHICH IS `origin/v0.2.3` ITSELF.**
+> **REFRESHED 2026-08-28 (session 56 CLOSE) against `f8d691a1`, WHICH IS `origin/v0.2.3` ITSELF.**
 > Not a branch head. Every pinned value below was DERIVED on that tree, not recalled, and the
 > whole check block was executed against it: **37 test-count pins, all matching.**
 > **THIS FILE HAS GONE STALE WITHIN HOURS SIX TIMES**; if the dates here disagree with the three
 > channels, trust the channels.
 >
-> **NO PULL REQUEST IS OPEN.** Eight merged in session 56, each at 22 of 22 green. The last two
-> came from a CROSS-LINE EXCHANGE rather than from the plan: the `v0.3.0` line reported one of this
-> line's tests red on their branch with the cause named, and declined to fix it.
+> **NO PULL REQUEST IS OPEN.** THIRTEEN merged in session 56, each at 22 of 22 green. Two came from
+> a CROSS-LINE EXCHANGE rather than from the plan: the `v0.3.0` line reported one of this line's
+> tests red on their branch with the cause named, and declined to fix it.
 >
-> **AS OF `64d7d87e`: 165 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive
+> ## ORDER 1 ITEM 3: FOUR OF FIVE, AND THE FIFTH IS PART-MOVED
+>
+> The last extraction is no longer blocked. **Its obstacle was measured and it was not what three
+> sizings said.** `verify_types.kel` reads the expression table only through `ty.btag[b]` for a
+> form-2 binding and through a per-row predicate; **nothing sweeps it in order**, so the index need
+> only be consistent between the two channels the host supplies. **Any numbering the pipeline
+> chooses works.**
+>
+> Two of the eight expression kinds now move: the binary operator, across **all four** forest kinds
+> the lowering splits it into, and the condition a conditional tests. **`let d = 1 + 2` reaches the
+> bounded fixpoint from the pipeline**, which is the gap this file named for four sessions.
+>
+> **THE BRANCH PAIR WAS BUILT AND WITHHELD, DELIBERATELY.** `push_if` synthesises an else arm, so
+> the pipeline cannot tell a one-armed conditional from a two-armed one; a spurious pair row feeds
+> an EQUALITY predicate and could make the stage reject a correct program, while dropping a real one
+> would make it miss a disagreement. **Both directions are unsound.** Pinned rather than guessed.
+>
+> **AND `()` IS REFUSED BY THE PIPELINE WHILE THE REFERENCE COMPILES IT** -- an unrecorded gap the
+> construct-support boundary does not carry. A loud named refusal, not a mis-compile.
+>
+> **AS OF `f8d691a1`: 170 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive
 > it: `git log --oneline origin/v0.2.3 | grep -c 'Merge pull request'`. **NOTE THE REF** -- the
 > local `v0.2.3` lags and answers a smaller number for the same tree.
 >
@@ -50,7 +70,18 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > The population is now NAMED in the test. Verified branch-independent by copying their six
 > witnesses in and re-running.
 >
-> ## THE ONE MISTAKE SESSION 56 MADE THREE TIMES. READ THIS BEFORE SIZING ANY SLICE.
+> ## THE ONE MISTAKE SESSION 56 MADE FIVE TIMES. READ THIS BEFORE SIZING ANY SLICE.
+>
+> **I REASONED FROM A COMPONENT'S INTERNALS ABOUT WHAT CROSSES ITS BOUNDARY.** Twice from the
+> parser's data structures, when the RECORD STREAM already carried the answer. Three times from the
+> reference extraction -- its line count, its visitor discipline, the forest's child channels --
+> when the CONSUMER settled it in twenty minutes.
+>
+> **THE UNIFIED RULE: THE REQUIREMENT LIVES AT THE BOUNDARY, NOT IN EITHER IMPLEMENTATION.** Read
+> the record stream with `parse_record_trace`; read what CONSUMES the data before sizing work to
+> produce it. Five wrong sizings from producers, none from the boundary.
+>
+> ## THE OLDER FORM OF THE SAME LESSON, KEPT BECAUSE IT NAMES THE INSTRUMENTS.
 >
 > **I REASONED FROM A COMPONENT'S INTERNALS ABOUT WHAT CROSSES ITS BOUNDARY, AND WAS WRONG EVERY
 > TIME.** Twice I read `parse.kel`'s data structures, concluded the host could not see something,
@@ -152,7 +183,7 @@ git merge-base --is-ancestor 5c3ba628 HEAD    # must succeed
 # matches the MARGIN PIN line further down and reads 681 as a test count for
 # `tests/selfhost_wire.rs`, which is pinned at 178. That false DIFF has been produced three
 # times by three sessions writing the same careless one-liner. It is the checker being wrong.
-grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 27
+grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 30
 grep -c '^\s*#\[test\]' tests/selfhost_wire.rs              # 178
 grep -c '^\s*#\[test\]' tests/selfhost_parse.rs             # 89
 grep -c '^\s*#\[test\]' tests/selfhost_codegen.rs           # 142
@@ -223,9 +254,9 @@ awk '/const UNRESOLVED/,/^\];/' tests/comment_citations.rs | grep -cE '^\s+"'   
 
 # THE TYPE-CHANNEL EXTRACTIONS MOVED TO THE PIPELINE. Two of five.
 grep -oE 'pub fn [a-z_]+_from_pipeline' src/selfhost/mod.rs | sort -u
-#   binding_rows_from_pipeline, binop_expression_rows_from_pipeline,
-#   chunk_names_from_pipeline, decl_call_rows_from_pipeline, declared_names_from_pipeline,
-#   field_sets_from_pipeline, occurrence_rows_from_pipeline
+#   binding_rows_from_pipeline, chunk_names_from_pipeline, decl_call_rows_from_pipeline,
+#   declared_names_from_pipeline, expression_rows_from_pipeline, field_sets_from_pipeline,
+#   occurrence_rows_from_pipeline
 
 # THE PARSER'S CAPS. Unchanged.
 grep -rhoE 'pub const PARSE_[A-Z_]+: usize = [0-9]+;' src/ | sort
@@ -319,7 +350,7 @@ gh run list --branch v0.2.3 --limit 1
 
 ## WHAT A RESUMING SESSION SHOULD DO FIRST
 
-**ONE. THERE IS NO BLOCKER AND NO OPEN PULL REQUEST.** `origin/v0.2.3` at `64d7d87e`, 165 merges,
+**ONE. THERE IS NO BLOCKER AND NO OPEN PULL REQUEST.** `origin/v0.2.3` at `f8d691a1`, 170 merges,
 nothing in flight. **Do not invent urgency.**
 
 **TWO. THE LAST TYPE-CHANNEL EXTRACTION IS `expression_nodes_resolvable`**, and it is the largest

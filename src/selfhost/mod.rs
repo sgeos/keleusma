@@ -2343,20 +2343,43 @@ pub type ExprRow = (i64, ExprOperand, ExprOperand);
 ///
 /// # What moves, and what does not
 ///
-/// **Only kind 1, the binary operator — but ALL of it**, across the four forest kinds the
-/// lowering splits it into (see `is_binary_operator`). The stage defines eight kinds and acts on all of them,
-/// but kind 1 is the only one `tyb_node_tag` resolves, so it is the one that makes
-/// `let d = 1 + 2` reach the bounded fixpoint — the gap the handoff names. The other seven —
-/// array elements, conditions, branch pairs, field and index access on a value, struct literals,
-/// and the tail-versus-return claim — **do not move here**, and three of them are composite,
-/// where the occurrences slice already showed the two representations disagree about what a node
-/// IS.
+/// **TWO OF THE EIGHT KINDS.** Kind 1, the binary operator — all of it, across the four forest
+/// kinds the lowering splits it into (see `is_binary_operator`) — plus kind 3, the CONDITION a
+/// conditional tests.
+///
+/// Kind 1 is the one `tyb_node_tag` resolves, so it is what makes `let d = 1 + 2` reach the
+/// bounded fixpoint.
+///
+/// # THE BRANCH PAIR WAS BUILT, MEASURED, AND WITHHELD
+///
+/// Kind 4 looked free: `push_if` keeps the condition in `args` and the branches in `lhs`/`rhs`, so
+/// one node yields both. It was implemented, and a probe found it **wrong for a one-armed
+/// conditional**: the forest synthesises an else arm, so the pipeline emitted a pair row where the
+/// reference emits none.
+///
+/// **That direction is the dangerous one.** A pair row feeds `ty_node_bad`'s EQUALITY branch, so a
+/// spurious row can make the stage reject a correct program. A heuristic on the synthesised arm's
+/// unit tag was considered and rejected: it could not be shown safe, and the opposite error —
+/// dropping a real pair — would let the stage miss a disagreement it exists to catch. **Both
+/// directions are unsound, so the row is not emitted at all**, and
+/// `a_one_armed_conditional_is_why_the_branch_pair_does_not_move` pins the witness.
+///
+/// **Six do not move**: the branch pair above, array elements, field and index access on a value,
+/// struct literals, and the tail-versus-return claim. Three of those are composite, where the
+/// occurrences slice already showed the two representations disagree about what a node IS.
+///
+/// **THIS FUNCTION CARRIED A NARROWER NAME FOR ONE INCREMENT**, naming only the binary operator.
+/// Covering conditions made that name false, and a name that lies is precisely what several
+/// increments of this session were spent removing, so it was renamed rather than left to drift.
+/// The old name is deliberately NOT spelled here: the citation guard rejects a name that resolves
+/// to nothing, and writing one while explaining its retirement is the fourth instance of that
+/// class in this repository.
 ///
 /// This function is deliberately NOT named after the extraction, so the count pin keeps reporting
 /// four of five. A partial migration counted as a whole one is the failure that pin exists to
 /// prevent.
 #[must_use]
-pub fn binop_expression_rows_from_pipeline(src: &str) -> (Vec<ExprRow>, Vec<(String, usize)>) {
+pub fn expression_rows_from_pipeline(src: &str) -> (Vec<ExprRow>, Vec<(String, usize)>) {
     let (fns, names, ..) = parse_functions_fused(src);
     let name_of = |id: i64| -> Option<String> { names.get(id as usize).cloned() };
     let chunk_names = chunk_names_from_pipeline(src);
@@ -2424,10 +2447,21 @@ pub fn binop_expression_rows_from_pipeline(src: &str) -> (Vec<ExprRow>, Vec<(Str
         // The rows, and the LetIn bindings whose initialiser is one of them.
         let mut row_of_node: alloc::collections::BTreeMap<i64, usize> =
             alloc::collections::BTreeMap::new();
+        let nothing: ExprOperand = (0, 0, String::new());
+
         for (at, node) in body.nodes.iter().enumerate() {
             if is_binary_operator(node.kind) {
                 row_of_node.insert(at as i64, rows.len());
                 rows.push((1, operand(node.lhs), operand(node.rhs)));
+            } else if node.kind == 4 {
+                // The condition tested. Its second operand is unused, exactly as the reference
+                // leaves it.
+                //
+                // **THE BRANCH PAIR IS DELIBERATELY NOT EMITTED. SEE THE DOC ABOVE.** The forest
+                // synthesises an else arm for a one-armed conditional, so the pipeline cannot tell
+                // it from a written one, and a spurious pair row feeds an EQUALITY predicate in
+                // the stage -- it could reject a correct program.
+                rows.push((3, operand(node.arg), nothing.clone()));
             }
         }
         for node in &body.nodes {
