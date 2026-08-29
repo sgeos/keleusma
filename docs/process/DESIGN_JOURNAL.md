@@ -1,5 +1,44 @@
 # Design Journal
 
+## 2026-08-29 — The undetected column was made of equivalent mutants, and I should have known
+
+**Increment**: the open question was `codegen` and `parse`, where 16 sampled sites of 845 and 1015
+settled nothing. The obvious move was to raise the cap. The right move was to notice a defect in the
+method.
+
+**The census compared `VM(original)` against `NATIVE(mutant)` and never asked whether the mutation
+changed anything at all.** If `VM(mutant) == VM(original)` the mutated site is not executed under these
+seeds, so the mutant is **semantically inert** and a *correct* backend must produce that same answer.
+**No differential could ever detect it.** Standard mutation testing calls that an equivalent mutant and
+excludes it; I had been counting them as subjects failing to notice a wrong backend.
+
+**The fix was nearly free, which is the embarrassing part.** The probe already ran `VM(mutant)` for the
+fault filter and threw the result away. Killability is that discarded value compared against
+`VM(original)`. No extra execution.
+
+**All eleven undetected subjects were inert. The column is now empty: 39 detected, 0 undetected.**
+
+**Two published claims are withdrawn**, and the second matters more than the first. "Eight of the ten
+self-hosted stages do not notice a mutated backend" — their mutants were inert. And "`verify_datalayout`
+and `rogue_gear`, swept exhaustively, point at the observable" — **they point at the seeds.** That one
+was stated confidently, with exhaustion offered as the reason to trust it, and **exhaustion over inert
+sites establishes nothing.** Sweeping every site of a module the seeds barely exercise yields a null
+result meaning only that. `verify_datalayout` had nine of nine sites mutated and not one killable, which
+is consistent with the harness's own independently-reached `KNOWN_VACUOUS` record for it.
+
+**What is now asserted is stronger than what was there before**: every killable mutant is detected, so
+one going uncaught would be loud. What is *not* established is that the differential is sound — sites
+are capped, one family is used, and **3198 applicable sites were never exercised**.
+
+**The large inert counts are a seed-coverage measurement that fell out of a differential-strength
+measurement**, and reporting them as the latter is exactly the error I just made.
+
+**Four corrections in a row, all in one direction.** Unseeded driver, too-few sites, two disagreeing
+copies of the selection, and now equivalent mutants. Every one found the subjects better than I
+reported, and every one took the form of a measurement that could only understate. That is systematic,
+not incidental, and worth naming as a bias in how I build instruments rather than as four unlucky bugs.
+
+
 ## 2026-08-29 — The same query existed twice, twice, and the two copies disagreed
 
 **Increment**: last increment left twelve subjects showing no difference under **three** mutation

@@ -3945,6 +3945,8 @@ fn which_subjects_would_notice_a_wrong_backend() {
     let mut mutant_declined: Vec<String> = Vec::new();
     let mut mutant_inadmissible: Vec<String> = Vec::new();
     let mut mutant_faults: Vec<String> = Vec::new();
+    let mut mutant_equivalent: Vec<String> = Vec::new();
+    let mut equiv_total = 0usize;
 
     for p in sources() {
         let name = p
@@ -4008,7 +4010,12 @@ fn which_subjects_would_notice_a_wrong_backend() {
         // each had its own copy handling a faulting mutant differently.
         let out = probe_mutants(&m, &mutants, &table, &variants);
         let any_diff = out.differed;
-        if out.usable == 0 && out.faulted > 0 {
+        equiv_total += out.equivalent;
+        if out.usable == 0 && out.equivalent > 0 {
+            // Every mutant that ran was semantically inert. Nothing could have
+            // been caught, so this is UNMEASURED rather than a failure.
+            mutant_equivalent.push(name);
+        } else if out.usable == 0 && out.faulted > 0 {
             mutant_faults.push(name);
         } else if out.usable == 0 && out.inadmissible > 0 {
             mutant_inadmissible.push(name);
@@ -4051,6 +4058,21 @@ fn which_subjects_would_notice_a_wrong_backend() {
         ""
     );
     println!(
+        "  UNMEASURED, all mutants INERT: {}  <- the reference computes the same\n  \
+         {:29}   thing with and without them, so NO differential\n  \
+         {:29}   could detect them",
+        mutant_equivalent.len(),
+        "",
+        ""
+    );
+    for n in &mutant_equivalent {
+        println!("     {n}");
+    }
+    println!(
+        "  inert mutants excluded overall: {equiv_total}  <- counted, not dropped \
+         silently"
+    );
+    println!(
         "\n  Scoped to ONE pre-registered family: Checked/plain Add-Sub, Mul,\n  \
          BitAnd and Shl swaps, at up to THREE sites per module\n  \
          (first, middle, last). `undetected` means undetected AGAINST THAT,\n  \
@@ -4073,6 +4095,7 @@ fn which_subjects_would_notice_a_wrong_backend() {
             + mutant_declined.len()
             + mutant_inadmissible.len()
             + mutant_faults.len()
+            + mutant_equivalent.len()
     );
     // **A FLOOR, on the same principle as the coverage floors.** This figure now
     // goes into the handoff, and a figure reported without a floor under it can
@@ -4179,6 +4202,14 @@ struct ProbeOutcome {
     inadmissible: usize,
     /// Mutants that made the program fault on the reference side.
     faulted: usize,
+    /// **Mutants the reference computes IDENTICALLY to the unmutated module.**
+    ///
+    /// Semantically inert under these seeds — the site is not executed, or its
+    /// result never reaches an observable. A *correct* backend must also produce
+    /// that answer, so **no differential could ever detect one**. Counting these
+    /// as "the subject failed to notice a wrong backend" conflates an equivalent
+    /// mutant with a weak observable, which is what this census did until now.
+    equivalent: usize,
 }
 
 fn probe_mutants(
@@ -4190,6 +4221,7 @@ fn probe_mutants(
     let mut usable = 0usize;
     let mut inadmissible = 0usize;
     let mut faulted = 0usize;
+    let mut equivalent = 0usize;
     for (mutant, _what) in mutants {
         // An INADMISSIBLE mutant is not a wrong backend: it is a program the
         // runtime would refuse, and lowering one killed a run with SIGBUS.
@@ -4204,21 +4236,38 @@ fn probe_mutants(
         let mut compared = false;
         let mut diff = false;
         let mut hit_fault = false;
+        let mut killable = false;
         for (seed, sb) in variants.iter().copied() {
             // The tolerant side first. A mutation that makes the program TRAP is
             // not a wrong backend either — both sides trap — but natively it
             // arrives as a process-killing signal. Measured as SIGTRAP.
-            if run_vm(mutant, table, seed, sb).is_err() {
+            let Ok(vm_mut) = run_vm(mutant, table, seed, sb) else {
                 hit_fault = true;
                 break;
-            }
+            };
             let Ok(v) = run_vm(original, table, seed, sb) else {
                 continue;
             };
+            // **KILLABILITY, from a run this probe already made and discarded.**
+            // If the reference computes the same thing with and without the
+            // mutation, the mutant is inert under these seeds and a CORRECT
+            // backend must agree too. There is nothing for any differential to
+            // catch, so it cannot count against the subject.
+            if vm_mut.results != v.results
+                || vm_mut.log != v.log
+                || vm_mut.shared != v.shared
+                || ret_pairs_differ(&v, &vm_mut)
+            {
+                killable = true;
+            }
             let Some(n) = run_native(mutant, table, seed, sb) else {
                 continue;
             };
             compared = true;
+            // Detection is against the UNMUTATED reference: a correct backend
+            // versus a wrong one. Comparing the native side to `VM(mutant)`
+            // would instead ask whether the backend faithfully compiles a
+            // mutated program, which is not the question.
             if v.results != n.results
                 || v.log != n.log
                 || v.shared != n.shared
@@ -4227,6 +4276,12 @@ fn probe_mutants(
                 diff = true;
                 break;
             }
+        }
+        if compared && !killable && !diff {
+            // Inert: excluded from `usable` so it cannot land in the undetected
+            // column, but counted so the denominators still add up.
+            equivalent += 1;
+            continue;
         }
         if compared {
             usable += 1;
@@ -4239,6 +4294,7 @@ fn probe_mutants(
                 usable,
                 inadmissible,
                 faulted,
+                equivalent,
             };
         }
     }
@@ -4247,6 +4303,7 @@ fn probe_mutants(
         usable,
         inadmissible,
         faulted,
+        equivalent,
     }
 }
 
@@ -4285,7 +4342,22 @@ fn sampled_mutants_capped(m: &Module, cap: usize) -> (Vec<(Module, String)>, usi
     (out, total)
 }
 
-/// **IS IT THE SITE, OR THE SUBJECT?**
+/// **IS IT THE SITE, OR THE SUBJECT? — IT WAS NEITHER.**
+///
+/// **The question below was a false dichotomy and the `inert` column is the
+/// answer it was missing.** A mutant the reference computes identically to the
+/// unmutated module is semantically inert under these seeds; a *correct* backend
+/// must agree too, so there was never anything for any differential to catch.
+/// Once inert mutants are excluded, **the undetected column is empty** and the
+/// rows below that say `no` are rows where every mutant that ran was inert.
+///
+/// An earlier reading of this table concluded that `verify_datalayout` and
+/// `rogue_gear`, having been swept exhaustively, "point at the observable".
+/// **That was wrong.** They point at the seeds: those sites are not exercised.
+///
+/// The table is kept because the `sites`/`tried`/`cmp`/`inert` columns are the
+/// evidence for that, and because a killable mutant appearing where there were
+/// none is exactly what should be noticed.
 ///
 /// `which_subjects_would_notice_a_wrong_backend` mutates three sites per module
 /// and leaves twelve subjects showing no difference, eight of them self-hosted
@@ -4311,7 +4383,7 @@ fn how_deep_does_the_undetected_set_go() {
     /// exhaustive. Sites beyond it are reported per subject.
     const SITE_CAP: usize = 16;
 
-    let mut rows: Vec<(String, usize, usize, usize, bool)> = Vec::new();
+    let mut rows: Vec<(String, usize, usize, usize, usize, bool)> = Vec::new();
     for p in sources() {
         let name = p
             .file_name()
@@ -4368,31 +4440,38 @@ fn how_deep_does_the_undetected_set_go() {
         }
         let (deep_mutants, total_sites) = sampled_mutants_capped(&m, SITE_CAP);
         let deep = probe_mutants(&m, &deep_mutants, &table, &variants);
-        let (deep_diff, usable) = (deep.differed, deep.usable);
-        rows.push((name, total_sites, deep_mutants.len(), usable, deep_diff));
+        let (deep_diff, usable, equiv) = (deep.differed, deep.usable, deep.equivalent);
+        rows.push((
+            name,
+            total_sites,
+            deep_mutants.len(),
+            usable,
+            equiv,
+            deep_diff,
+        ));
     }
 
-    println!("\n================ IS IT THE SITE, OR THE SUBJECT?");
+    println!("\n================ SITE, SUBJECT, OR INERT MUTANT?");
     println!("  Subjects that showed NO difference at three sites, re-swept at up");
     println!("  to {SITE_CAP} sites. `cmp` is how many mutants survived the");
     println!("  admissibility and fault filters to produce a real comparison.\n");
     println!(
-        "  {:28} {:>6} {:>6} {:>5}  detected deeper?",
-        "subject", "sites", "tried", "cmp"
+        "  {:28} {:>6} {:>6} {:>5} {:>6}  detected deeper?",
+        "subject", "sites", "tried", "cmp", "inert"
     );
     let mut moved = 0usize;
-    for (n, total, tried, usable, diff) in &rows {
+    for (n, total, tried, usable, equiv, diff) in &rows {
         if *diff {
             moved += 1;
         }
         println!(
-            "  {n:28} {total:>6} {tried:>6} {usable:>5}  {}",
+            "  {n:28} {total:>6} {tried:>6} {usable:>5} {equiv:>6}  {}",
             if *diff { "YES" } else { "no" }
         );
     }
     let dropped: usize = rows
         .iter()
-        .map(|(_, t, tr, _, _)| t.saturating_sub(*tr))
+        .map(|(_, t, tr, _, _, _)| t.saturating_sub(*tr))
         .sum();
     println!(
         "\n  {} subject(s) re-swept; {moved} moved OUT of undetected; {dropped} site(s) \
@@ -4400,9 +4479,10 @@ fn how_deep_does_the_undetected_set_go() {
         rows.len()
     );
     println!(
-        "  A null row is evidence, not proof: \"no sampled site is executed under\n  \
-         these seeds\" stays live, which is what the `sites` and `cmp` columns are\n  \
-         for."
+        "  A `no` row with cmp 0 and inert > 0 means EVERY mutant that ran was\n  \
+         semantically inert — the seeds do not exercise those sites. It is not a\n  \
+         weak observable, and reading it as one is the error this table made\n  \
+         before the inert column existed."
     );
     println!("================\n");
 
@@ -4414,7 +4494,7 @@ fn how_deep_does_the_undetected_set_go() {
          selecting"
     );
     assert!(
-        rows.iter().any(|(_, _, _, usable, _)| *usable > 0),
+        rows.iter().any(|(_, _, _, usable, _, _)| *usable > 0),
         "every re-swept subject produced ZERO usable comparisons, so the `no` \
          column means 'nothing ran', not 'nothing was noticed'"
     );

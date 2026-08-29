@@ -6,54 +6,50 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## The third correction in a row, all in the same direction
+## I have to withdraw two things I told you
 
-| I reported | why it was wrong |
-|---|---|
-| 32 detected, 16 undetected | my census drove subjects with no stage seed |
-| 38 / 12 | three mutation sites was too thin a basis |
-| **39 / 11** | two copies of the site *selection* disagreed |
+**"Eight of the ten self-hosted stages do not notice a mutated backend."** Withdrawn. Their mutants
+were **semantically inert** — the reference computes the same result with and without the mutation, so
+a *correct* backend must agree too and no differential could ever have caught them. I was counting
+equivalent mutants as failures.
 
-**Sweeping sixteen sites instead of three moves six more out of undetected.** Only **three** of the ten
-self-hosted stages remain — `codegen`, `parse`, `verify_datalayout` — down from the eight I reported
-last increment.
+**"`verify_datalayout` and `rogue_gear`, swept exhaustively, point at the observable."** Withdrawn, and
+this is the one that should worry you more. I offered exhaustion as the reason to trust it.
+**Exhaustion over inert sites establishes nothing.** `verify_datalayout` had nine of nine sites mutated
+and **not one was killable** — that is a fact about the seeds, not the observable. It is also
+consistent with the harness's own `KNOWN_VACUOUS` record for that module, reached independently, which
+I could have cross-checked and did not.
 
-Every one of these corrections found the subjects **better** than I first said. I am reporting that
-pattern because it is a bias in my measurements, not a run of luck.
+| | before | after |
+|---|---|---|
+| detected | 39 | **39** |
+| undetected | **11** | **0** |
+| all mutants inert | — | **11** |
 
-## What the evidence now supports, and where it supports nothing
+## What is now true, and what still is not
 
-Two explanations were live: **the site** was never executed, or **the observable** does not reflect the
-computation.
+**Asserted, and stronger than what was there before**: every mutant that *could* be caught **is**
+caught, so one going uncaught would be loud.
 
-| subject | sites | tried | comparisons | verdict |
-|---|---|---|---|---|
-| `verify_datalayout.kel` | 9 | **9, exhaustive** | 5 | points at the **observable** |
-| `rogue_gear.kel` | 1 | **1, exhaustive** | 1 | points at the **observable** |
-| `codegen.kel` | 845 | 16 | 15 | **distinguishes nothing** |
-| `parse.kel` | 1015 | 16 | 15 | **distinguishes nothing** |
+**Not established**: that the differential is sound. Sites are capped, one pre-registered family is
+used, and **3198 applicable sites were never exercised**. `codegen` and `parse` alone carry 845 and
+1015 sites and had 15 of 16 sampled mutants inert.
 
-For the first two, exhaustion excludes the sampling explanation. For the last two, 16 of ~1000 sites
-supports neither reading, and I have said so rather than letting the table imply otherwise. **3198
-sites beyond the cap went unexercised**, which the test prints, because an unprinted cap reads as
-exhaustive.
+**The large inert counts measure the SEEDS, not the differential.** Reporting them as differential
+strength is precisely the error I just made, so I am flagging the temptation rather than repeating it.
 
-**Six subjects produced zero comparisons**, so their result means *nothing ran*, not *nothing was
-noticed*. `wire.kel` is the striking one: 929 applicable sites, not one usable mutant.
+## The pattern, which is mine and is systematic
 
-## The defect I fixed in my own instruments, which was the same shape twice
-
-The deep sweep re-derived its membership using **its own copy** of the probe, which handled a faulting
-mutant differently from the census's copy. They disagreed about `verify_typed.kel`. I extracted a
-shared probe — and then the **selection** disagreed too, one copy picking the middle site as `len / 2`
-and the other `(total - 1) / 2`. `verify_typed` moved again, which is what took 38/12 to 39/11.
-
-**A disagreement between two copies of the same query is invisible unless something compares them**,
-and nothing did. Both are single functions now. I should have reached for that the first time.
+Four corrections in a row: an unseeded driver, too few sites, two disagreeing copies of the site
+selection, and now equivalent mutants. **Every one found the subjects better than I had reported, and
+every one took the form of a measurement that could only understate.** That is a bias in how I build
+instruments, not four unlucky bugs, and you should read my measurements with it in mind until I have
+gone a few increments without one.
 
 ## Verification
 
-Both suites run **sequentially** (parallel invalidates the perf canary, 57x).
+Both suites run **sequentially** (parallel invalidates the perf canary, 57x). The native gate was
+re-run after the last edit rather than reported from the earlier pass.
 
 | | result |
 |---|---|

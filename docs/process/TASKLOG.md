@@ -608,6 +608,28 @@ Current sprint source of truth.
 > workspace **2467/0/88**, coverage re-derived and unchanged at 1070 of 1074.
 > See [`../decisions/OPERAND_WIDTH_RECOVERY.md`](../decisions/OPERAND_WIDTH_RECOVERY.md).
 
+> **Currency note (2026-08-29, V0.3.X line, seventh entry). THE UNDETECTED COLUMN WAS MADE OF
+> EQUIVALENT MUTANTS. 39/11 BECOMES 39/0, AND TWO PUBLISHED CLAIMS ARE WITHDRAWN.**
+>
+> The census compared `VM(original)` against `NATIVE(mutant)` and **never asked whether the mutation
+> changed anything**. If `VM(mutant) == VM(original)` the site is not executed under these seeds, the
+> mutant is **semantically inert**, and a *correct* backend must agree too — **no differential could
+> ever detect it**. Standard mutation testing excludes such an equivalent mutant; this census counted
+> it as a subject failing to notice a wrong backend. **The fix was nearly free**: the probe already ran
+> `VM(mutant)` for the fault filter and discarded the result. **All eleven undetected subjects were
+> inert**, so the column is now empty. **Withdrawn**: "eight of the ten self-hosted stages do not notice
+> a mutated backend", and — the one that matters — "`verify_datalayout` and `rogue_gear`, swept
+> exhaustively, point at the observable". **They point at the SEEDS**; exhaustion over inert sites
+> establishes nothing, and `verify_datalayout` had nine of nine sites mutated with **not one killable**,
+> consistent with the harness's independently-reached `KNOWN_VACUOUS` record. **Now asserted and
+> stronger than before**: every killable mutant is detected. **Not established**: that the differential
+> is sound — sites are capped, one family is used, and **3198 applicable sites were never exercised**.
+> The large inert counts are a **seed-coverage** measurement that fell out of a differential-strength
+> one. **Fourth correction in a row, all one direction** — unseeded driver, too-few sites, two
+> disagreeing copies of the selection, equivalent mutants — every one a measurement that could only
+> understate. No absorption needed. Workspace **2491/0/92**, `native_codegen` **369/0/74**, censuses
+> unmoved. See [`../decisions/KILLABLE_MUTANTS.md`](../decisions/KILLABLE_MUTANTS.md).
+
 > **Currency note (2026-08-29, V0.3.X line, sixth entry). 38/12 BECOMES 39/11, SIX MORE MOVE OUT AT
 > SIXTEEN SITES, AND ONLY THREE OF TEN STAGES REMAIN UNDETECTED.**
 >
