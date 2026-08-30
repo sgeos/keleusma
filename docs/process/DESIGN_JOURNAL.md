@@ -13,6 +13,56 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-30 — Session 57, eighth increment: the canary's guidance gains the one instruction it lacked, learned by violating it three times
+
+The perf canary's failure message is excellent and was missing one line. It tells the reader to rule
+out concurrent load, to re-run alone, and to reap orphaned binaries **scoped to their own worktree**.
+It never says to look at the machine.
+
+**I satisfied every instruction it gives and still measured under a load average of fifteen.**
+
+### THE THREE FAILURES, BECAUSE THE GUIDANCE IS ONLY CREDIBLE WITH THEM ATTACHED
+
+1. Declared the red **"false, confirmed rather than assumed"** on a 16.51s measurement taken with no
+   cargo processes of my own running. That was not a control: the check was for MY processes, never
+   for the machine.
+2. Reported a **"thin 1.8x margin, not much headroom"** as a finding worth flagging to a future
+   session. Pure artifact. **It was one iteration from entering the handoff as a durable
+   observation**, where a later reader would have treated it as evidence.
+3. Wrote the guidance about checking load, then **immediately measured under a load average of 22**
+   with my own segment C running, and got 71s.
+
+### THE NUMBERS, WHICH ARE THE ACTUAL DELIVERABLE
+
+| condition | measured |
+|---|---|
+| machine genuinely idle | **1.196s** |
+| under load | 16.51s, 35.23s, 36.79s, 71.04s |
+
+**A 31x spread on one unchanged tree.** The healthy figure is ~1.2s against a 30s ceiling -- a 25x
+margin, not a thin one -- and the `v0.3.0` line independently recorded 1.20s for its equivalent.
+Two sessions, same machine, same figure to three digits.
+
+**That corroboration is what makes the number safe to publish.** A single measurement of my own,
+after this record, would not have been.
+
+### WHY THE NUMBER MATTERS MORE THAN THE INSTRUCTION
+
+"Re-run it alone" is advice a reader can follow **completely** and still get a meaningless answer,
+because "alone" is ambiguous between *my processes stopped* and *the machine is idle*. With the
+healthy figure recorded, a reader measuring single-digit seconds knows they are still under load
+rather than looking at a regression. The instruction disambiguates itself only once it carries a
+scale.
+
+### THE PATTERN, STATED WITHOUT FLATTERING MYSELF
+
+Nine instrument or measurement errors this session; the last three are one error repeated after
+writing it down. **Knowing a rule and applying it are separate skills, and the gap is not closed by
+stating the rule more emphatically.** What actually caught all three was re-measuring when
+conditions changed -- not vigilance, and not the rule.
+
+---
+
 ## 2026-08-30 — Session 57, seventh increment: a measurement identified, attempted, and recorded as unsupportable
 
 No new capability. The deliverable is a number NOT reported and the reason written down.
