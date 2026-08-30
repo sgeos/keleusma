@@ -13,6 +13,9 @@ The operator ruled: *settle `Fixed` alongside the float ABI.* The `v0.3.X` nativ
 `Fixed` shared data slot with the message
 
 > `Fixed slot; fixed-point representation is unsettled`
+>
+> **(that wording was corrected on 2026-08-29 — see the ACTION at the foot of this document, now
+> discharged; it now names the missing host-visible fraction-bit scale)**
 
 **That message is imprecise, and the imprecision made the decision look bigger than it is.** The
 representation is not unsettled. Measured, not assumed:
@@ -174,9 +177,10 @@ in-module representation is settled and whose boundary contract is not.
 **Nothing changes.** `alloc_format_kind` keeps refusing the slot. The refusal was already correct;
 only its stated reason was imprecise.
 
-> **ACTION, for whichever line owns the message**: the refusal text should say *the host-visible
-> fraction-bit scale is unspecified* rather than *fixed-point representation is unsettled*. The
-> current wording sends a reader looking for a representation decision that was made long ago.
+> **ACTION — DISCHARGED 2026-08-29 by the `v0.3.X` line, which owns the message.** The refusal text
+> now says *the host-visible fraction-bit scale is unspecified* rather than *fixed-point
+> representation is unsettled*. The old wording sent a reader looking for a representation decision
+> made long ago. **Only the wording changed; the refusal is unchanged and was already correct.**
 
 `native_codegen/tests/fixed_shared_scale.rs` pins the three facts. **If a scale ever becomes
 recoverable, that file fails** — which is how the decision landing on the other line reaches this

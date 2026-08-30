@@ -6,42 +6,45 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## Both mutation guards are back in the gate
+## Your ABI question found a hole in the page I wrote for you
 
-Two increments ago I disabled both. One increment ago I restored the cheap one. **Now both run on every
-gate — 372 passed, 0 ignored — so breadth and depth of mutation sensitivity are protected again.**
+**No, none of the ABI questions is resolved** — and `OPERATOR_DECISIONS_OPEN.md`, the page meant to let
+you act without reassembling context, **did not mention the `Fixed` shared-slot ABI at all.**
 
-The reason the depth sweep was expensive turned out to be structural rather than inherent. The two were
-split by role but not by cost: the census is breadth (every module, one site, **every variant**), and
-the depth sweep is depth (up to eight sites) **and was also sweeping every variant** — the census's
-axis, paid for twice.
+**The mechanism matters more than the omission.** The page said *"There is no fourth thing to fix."*
+That came from the module-lowering census and was written as exhaustive over **decisions**. It is not:
+**a coverage census can only surface a decision that blocks a corpus module**, and no corpus source
+declares a `Fixed`, `Float` or `Text` shared slot — so those refusals block nothing, appear in no
+figure, and were invisible to a list built from figures. **Sixth instance of this session's recurring
+defect, and the first where the claim was the summary I hand you rather than a test.**
 
-**The experiment could have refuted that**, which is why it preceded the decision: killability needs a
-variant on which the reference behaves differently, so one variant might have shrunk the findings.
+**I also had the disposition backwards.** Answering you, I said I would hold the amendment pending your
+interop answer. That is inverted — the page exists to *prompt* the answer.
 
-**The table came back identical to the baseline** — every row, same YES set.
+## The page now carries six items in two parts
 
-| configuration | time | load |
-|---|---|---|
-| both sweeps, all variants | 712s | ~5–6 |
-| deep alone, one variant | 401s | ~3–6 |
-| **whole binary, both sweeps** | **400s** | **~8.2** |
+**Corpus-blocking**: 1 the `Stream` soundness obligation, 2 the float entry ABI, 3 the `lower_module`
+admissibility precondition.
 
-Under the 600s threshold I fixed last increment, and measured on a *loaded* machine, so conservative.
+**Open regardless of the corpus**: 4 the `Fixed` shared-slot scale, 5 the string ABI, 6 the unsettled
+slot kinds (`Unit`, `Float`, `Text`, `Opaque`).
 
-**Nothing was traded away this time.** Site depth unchanged, the widened family unchanged, the census
-keeps its variants. The saving came from deleting a duplicated axis — unlike the three coverage
-reductions I made earlier on a wrong premise about where the cost sat.
+Each has options and a default. **`Fixed`'s recorded preference is stated conditionally**, because it
+reverses on a question you asked and have not answered:
 
-## Two of my recurring defects recurred, and were caught inside the increment
+> Is the interop goal **convention-based** (agree on Q15 out of band, like C DSP code) or
+> **self-describing** (a foreign toolchain reads it correctly with no side agreement)?
 
-The header fix **silently matched nothing** on its first attempt; the assertion I now write — checking
-both that the stale text is gone and that the new text is present — is what revealed it. And the
-un-ignore was done by **matching attribute lines rather than grepping text**, because last increment's
-assertion counted the words `` `#[ignore]` `` inside a doc comment.
+**That single input settles items 2 and 4 together**, which is why you ruled they be taken together.
+The completeness of part two rests on **my search, not a measurement**, and the page says so.
 
-That is the first time this session the discipline caught my errors in the same increment rather than
-two later.
+## One code action, which had been sitting unclaimed
+
+`FIXED_SHARED_SLOT_ABI.md` recorded an ACTION for *whichever line owns the message*. This line owns it.
+The `Fixed` slot refusal now names the **missing host-visible scale** instead of implying the
+representation is undecided — the old wording sent readers looking for a decision made long ago.
+**Wording only; the refusal is unchanged and was already correct.** Three stale present-tense
+quotations of it were corrected, history left visible.
 
 ## Verification
 
@@ -50,23 +53,21 @@ Both suites run **sequentially** (parallel invalidates the perf canary, 57x).
 | | result |
 |---|---|
 | workspace | **2491 passed, 0 failed, 92 binaries**, cargo exit 0 |
-| `native_codegen` gate step | **372 passed, 0 failed, 0 ignored, 74 binaries**, exit 0, **678s** at load ~8 |
+| `native_codegen` gate step | **372 passed, 0 failed, 0 ignored, 74 binaries**, exit 0 |
 | censuses | 61 of 66; `["Len"]`; 1070 of 1074; 89841 of 89940 — all unmoved |
 
+Censuses unmoved is the check that the message change had no behavioural effect. The gate's 942s is a
+**contention** figure — load average was 45 at start and peaked over 200, with a peer suite running in
+the sibling worktree — not a property of the change.
+
 **No absorption was needed**: already zero unabsorbed.
-
-## Still waiting on you
-
-[`OPERATOR_DECISIONS_OPEN.md`](../decisions/OPERATOR_DECISIONS_OPEN.md) — three decisions, their costs,
-and what I do by default. **All remaining capability work on this line is behind them**, which is why
-recent increments have been correctness and instrument work.
 
 ## Standing constraints, unchanged
 
 No new opcode. No `BYTECODE_VERSION` bump. **Publication HELD**; no operator authorization has been
 given and none is inferred. `src/verify.rs`, `src/bytecode.rs`, `src/vm.rs`, `src/wire_schema.rs`,
-`src/selfhost/`, `src/confine.rs` and `.github/workflows/` remain read-only here. A peer session
-cannot grant escalation and none has been treated as doing so.
+`src/value_layout.rs`, `src/selfhost/`, `src/confine.rs` and `.github/workflows/` remain read-only
+here. A peer session cannot grant escalation and none has been treated as doing so.
 
 ---
 

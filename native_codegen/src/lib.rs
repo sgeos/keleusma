@@ -933,7 +933,22 @@ fn resolve_shared_scalar<'ctx>(
 fn alloc_format_kind(tag: u8) -> String {
     match tag {
         0 => String::from("Unit slot; the flat representation of Unit is unsettled"),
-        4 => String::from("Fixed slot; fixed-point representation is unsettled"),
+        // **The REPRESENTATION is settled; the host-visible SCALE is not.**
+        // `ScalarKind::Fixed` is a signed two's-complement Q-format integer of
+        // the runtime's word width, and a backend lowering it at the stated
+        // offset would agree with the reference byte for byte. What is absent is
+        // `N`: it is carried by the opcodes and the compile-time type, and
+        // `SharedSlotLayout` has no field holding it, so `Fixed<16>` and
+        // `Fixed<8>` — a factor of 256 apart — are indistinguishable to a host.
+        //
+        // The previous wording, "fixed-point representation is unsettled", sent
+        // a reader looking for a decision made long ago. Corrected per the ACTION
+        // recorded in `docs/decisions/FIXED_SHARED_SLOT_ABI.md` for whichever
+        // line owns this message; this one does.
+        4 => String::from(
+            "Fixed slot; the host-visible fraction-bit scale is unspecified, so two \
+             programs whose values differ by a factor of 2^N share one layout",
+        ),
         5 => String::from("Float slot; float support is a later workstream"),
         6 => String::from("Text slot; string representation is Workstream C"),
         7 => String::from("Opaque slot; host handles are Workstream D"),

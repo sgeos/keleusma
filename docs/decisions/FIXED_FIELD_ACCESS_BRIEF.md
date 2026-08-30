@@ -37,7 +37,7 @@ a fact, not a choice.
 
 A **shared data slot is HOST-VISIBLE.** Its layout is an application binary interface — the same
 class of question as the string ABI (ruled provisional) and the float ABI (undecided, and blocking
-two opcodes). `alloc_format_kind` says *"Fixed slot; fixed-point representation is unsettled"*, and
+two opcodes). `alloc_format_kind` said *"Fixed slot; fixed-point representation is unsettled"* when this was written — corrected 2026-08-29 to name the missing host-visible scale — and
 whether that is stale is **not** something to settle by writing whichever version compiles.
 
 **So: lower the two body-access arms. Leave the two slot arms, and say why.** A brief that treats

@@ -1,13 +1,20 @@
 //! **Is the `Fixed` shared-slot ABI actually UNSETTLED, or merely UNMEASURED?**
 //!
-//! `alloc_format_kind` in this backend refuses a `Fixed` shared data slot with
-//! *"fixed-point representation is unsettled"*, and the doc comment above it
-//! defends the refusal on the ground that a shared slot's layout is
-//! host-visible and therefore an ABI question rather than an internal one.
+//! `alloc_format_kind` in this backend refuses a `Fixed` shared data slot, and
+//! the doc comment above it defends the refusal on the ground that a shared
+//! slot's layout is host-visible and therefore an ABI question rather than an
+//! internal one.
 //!
 //! **That refusal is right and this file does not challenge it. What it
-//! challenges is the REASON GIVEN**, which is imprecise in a way that makes the
-//! decision look larger and vaguer than it is.
+//! challenged was the REASON GIVEN**, which used to read *"fixed-point
+//! representation is unsettled"* — imprecise in a way that made the decision
+//! look larger and vaguer than it is.
+//!
+//! **THAT WORDING WAS CORRECTED on 2026-08-29** and now names the missing
+//! host-visible fraction-bit scale. This file's role is therefore no longer to
+//! challenge a message but to **pin the facts the correction rests on**, so that
+//! a later change making the scale recoverable fails here rather than silently
+//! invalidating the decision document.
 //!
 //! # What is settled, and it is more than the message implies
 //!

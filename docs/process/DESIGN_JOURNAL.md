@@ -1,5 +1,43 @@
 # Design Journal
 
+## 2026-08-29 — I built a decisions list out of a coverage measurement, and it inherited the blind spot
+
+**Increment**: the operator asked whether the ABI issues were resolved. Checking rather than answering
+from memory found that **`OPERATOR_DECISIONS_OPEN.md` — the page I wrote so they could act without
+reassembling context — does not mention the `Fixed` shared-slot ABI at all**, an open item with its own
+decision document, on which the operator had already ruled it should be settled alongside the float ABI.
+
+**The mechanism is the finding, not the omission.** The page said *"There is no fourth thing to fix."*
+That sentence came from the module-lowering census — 4 unlowerable chunks in 3 refused modules — and
+was then written as exhaustive over **decisions**. **A coverage census can only surface a decision that
+blocks a corpus module.** Verified: no corpus source declares a `Fixed`, `Float` or `Text` shared slot,
+so those refusals block nothing, appear in no figure, and were invisible to a list built from figures.
+
+**That is this session's recurring defect in a new place** — a measurement answering a narrower question
+than the claim built on it — and this time the claim was the operator-facing summary rather than a
+test. It is the sixth instance, and the page now says so about itself.
+
+**I also had the disposition backwards.** Answering the question, I said I would hold the amendment
+pending the operator's interop answer. That is inverted: the page exists to *prompt* the answer, so
+withholding the item guarantees the answer never comes. The item is now listed with its options and
+with the condition that decides it, rather than waiting on that condition.
+
+**A code action had been sitting unclaimed.** `FIXED_SHARED_SLOT_ABI.md` records an ACTION for
+*whichever line owns the message* — the refusal should name the missing host-visible scale rather than
+imply the representation is undecided. `alloc_format_kind` is in this line's file, so the action was
+mine. Discharged: the wording changed, the refusal did not.
+
+**Three stale present-tense quotations followed from that change** — in the test that challenged the old
+wording, in the decision document that quoted it as current, and in a sibling brief. All corrected with
+the history left visible, because the test's whole premise (*"what it challenges is the reason given"*)
+had just been acted on and would otherwise read as still-open.
+
+**My own assertion was too broad and told me so.** It checked that the old phrase was absent from the
+whole file, and fired — because my new comment quotes the old wording deliberately. The check was
+wrong, not the edit; but it surfaced the three stale references, so a too-broad assertion was more
+useful here than a precise one would have been.
+
+
 ## 2026-08-29 — The depth sweep was paying for the census's axis, and both guards are back
 
 **Increment**: the deep sweep was opt-in at 710s, so regression in the *depth* of mutation sensitivity

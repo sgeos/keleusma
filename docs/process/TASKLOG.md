@@ -608,6 +608,30 @@ Current sprint source of truth.
 > workspace **2467/0/88**, coverage re-derived and unchanged at 1070 of 1074.
 > See [`../decisions/OPERAND_WIDTH_RECOVERY.md`](../decisions/OPERAND_WIDTH_RECOVERY.md).
 
+> **Currency note (2026-08-29, V0.3.X line, twelfth entry). THE OPERATOR-FACING DECISION PAGE WAS BUILT
+> FROM A COVERAGE MEASUREMENT AND INHERITED ITS BLIND SPOT.**
+>
+> Asked whether the ABI issues were resolved, checking found that
+> `OPERATOR_DECISIONS_OPEN.md` **did not mention the `Fixed` shared-slot ABI at all** — an open item
+> with its own decision document, on which the operator had already ruled it be settled alongside the
+> float ABI. **The mechanism is the finding**: the page said *"There is no fourth thing to fix"*, a
+> sentence taken from the module-lowering census and written as exhaustive over DECISIONS. **A coverage
+> census can only surface a decision that blocks a corpus module**, and **no corpus source declares a
+> `Fixed`, `Float` or `Text` shared slot**, so those refusals block nothing, appear in no figure, and
+> were invisible to a list built from figures. **Sixth instance of this session's recurring defect**, and
+> the first where the claim was the operator-facing summary rather than a test; the page now says so
+> about itself. The page carries **six items** in two parts — corpus-blocking (1–3) and open regardless
+> (4–6: `Fixed` scale, string ABI, the unsettled slot kinds) — each with options and defaults, with
+> `Fixed`'s recorded preference stated **conditionally**, since the operator asked the interop question
+> but has not stated the goal, and that single input settles items 2 and 4 together. **I also had the
+> disposition backwards**, saying I would hold the amendment pending that answer; the page exists to
+> prompt it. **A code ACTION had sat unclaimed**: the `Fixed` slot refusal now names the missing
+> host-visible scale rather than implying the representation is undecided — wording only, refusal
+> unchanged — with three stale present-tense quotations corrected. Native gate **942s at load 45**, a
+> contention figure. No absorption needed. Workspace **2491/0/92**, `native_codegen` **372/0/0
+> ignored/74**, censuses unmoved. See
+> [`../decisions/OPERATOR_DECISIONS_OPEN.md`](../decisions/OPERATOR_DECISIONS_OPEN.md).
+
 > **Currency note (2026-08-29, V0.3.X line, eleventh entry). BOTH MUTATION SWEEPS ARE BACK IN THE
 > GATE; THE DEPTH SWEEP HAD BEEN PAYING FOR THE CENSUS'S AXIS.**
 >
