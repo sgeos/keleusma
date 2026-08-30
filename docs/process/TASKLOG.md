@@ -681,6 +681,26 @@ Current sprint source of truth.
 > workspace **2467/0/88**, coverage re-derived and unchanged at 1070 of 1074.
 > See [`../decisions/OPERAND_WIDTH_RECOVERY.md`](../decisions/OPERAND_WIDTH_RECOVERY.md).
 
+> **Currency note (2026-08-30, V0.3.X line, third entry). FLOAT COMPARISONS: THE REFERENCE SAYS NaN
+> EQUALS EVERYTHING, AND LLVM DOES NOT.**
+>
+> The virtual machine compares floats with `x.partial_cmp(y).unwrap_or(Ordering::Equal)`, so **a NaN
+> collapses to Equal** — equal to everything rather than unordered. That is neither IEEE-754 nor LLVM's
+> default, and emitting the obvious `fcmp oeq` would make `NaN == x` **true on the reference and false
+> natively**: a silent divergence. **Found by reading the reference BEFORE implementing**, which is why
+> matching it is small: `olt`/`ogt`/`one` are already false for NaN, so **only `Eq`, `Le` and `Ge` need
+> forcing true**. Three of six predicates would otherwise have been wrong and silent. **Verified**: all
+> six predicates against the reference over seven probes each, operands chosen so a comparison done on
+> the integer bit pattern would disagree, with a must-fire control that the probes discriminate.
+> **NOT verified, and stated rather than implied**: the NaN adjustment itself — **no source construct
+> produces a NaN**, since the route is division and `Op::CheckedDiv` pushes three values and is a
+> larger slice. It was written to MATCH rather than left to diverge, because relying on NaN being
+> unreachable is the accidental protection this backend already lost once. Comparisons joined the
+> operand whitelist; **division still refuses**. **Censuses were not expected to move and did not** — no
+> corpus module compares floats. Absorption 35 (`defa9151`) complete, prediction exact. Workspace
+> **2502/0/92**, `native_codegen` **379/0/0 ignored/76**. See
+> [`../decisions/FLOAT_COMPARISONS.md`](../decisions/FLOAT_COMPARISONS.md).
+
 > **Currency note (2026-08-30, V0.3.X line, second entry). FLOAT SLICE TWO: ONE GUARD ROUTE OPENED,
 > VERIFIED BY EXECUTION, AND THE CENSUSES MOVED FOR THE FIRST TIME IN MANY INCREMENTS.**
 >

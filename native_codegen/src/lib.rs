@@ -2551,6 +2551,14 @@ fn lower_chunk_body<'ctx>(
                     | Op::Sub
                     | Op::Mul
                     | Op::FloatToInt
+                    // Comparisons became float-aware on 2026-08-30, matching the
+                    // reference's NaN-as-Equal ordering rather than IEEE.
+                    | Op::CmpEq
+                    | Op::CmpNe
+                    | Op::CmpLt
+                    | Op::CmpGt
+                    | Op::CmpLe
+                    | Op::CmpGe
                     | Op::SetLocal(_)
                     | Op::GetLocal(_)
                     | Op::Return
@@ -2787,20 +2795,90 @@ fn lower_chunk_body<'ctx>(
             // matches it. The result is 0 or 1 in an i64, which is the flat
             // representation of the VM's tagged `Bool`.
             Op::CmpEq | Op::CmpNe | Op::CmpLt | Op::CmpGt | Op::CmpLe | Op::CmpGe => {
-                let pred = match op {
-                    Op::CmpEq => IntPredicate::EQ,
-                    Op::CmpNe => IntPredicate::NE,
-                    Op::CmpLt => IntPredicate::SLT,
-                    Op::CmpGt => IntPredicate::SGT,
-                    Op::CmpLe => IntPredicate::SLE,
-                    Op::CmpGe => IntPredicate::SGE,
-                    _ => unreachable!("the outer match restricts this set"),
-                };
-                let rhs = st.pop();
-                let lhs = st.pop();
-                let c = st.b.build_int_compare(pred, lhs, rhs, "cmp").unwrap();
-                let v = st.b.build_int_z_extend(c, i64t, "cmpz").unwrap();
-                st.push(v);
+                // **FLOAT COMPARISON MATCHES THE REFERENCE, WHICH IS NOT IEEE.**
+                //
+                // The virtual machine compares floats with
+                // `x.partial_cmp(y).unwrap_or(Ordering::Equal)`, so **a NaN
+                // collapses to Equal** — it is equal to everything, rather than
+                // unordered. Emitting the obvious `fcmp oeq` would make
+                // `NaN == x` TRUE on the reference and FALSE natively, which is a
+                // silent divergence rather than a fault.
+                //
+                // `olt`, `ogt` and `one` are already false when either side is
+                // NaN, which is what NaN-as-Equal implies, so **only `Eq`, `Le`
+                // and `Ge` need forcing true**.
+                //
+                // **⚠ THE NaN PATH IS UNEXERCISED.** No source construct produces
+                // a NaN today: the route is division, and `Op::CheckedDiv` is not
+                // lowered. It is written to MATCH rather than left to diverge,
+                // because relying on NaN being unreachable is the accidental
+                // protection this backend already lost once — see
+                // `FLOAT_SLICE_ONE.md`. Its correctness rests on reading the
+                // reference, not on a differential.
+                if st.kind_at(0) == OperandKind::Float || st.kind_at(1) == OperandKind::Float {
+                    if float_bytes != 8 {
+                        return Err(LowerError::UnsupportedShape(format!(
+                            "float comparison at a float width of {float_bytes} \
+                             bytes; only 8 is lowered"
+                        )));
+                    }
+                    let (kl, kr) = (st.kind_at(1), st.kind_at(0));
+                    if kl != OperandKind::Float || kr != OperandKind::Float {
+                        return Err(LowerError::unsupported_op(
+                            &op_variant_name(op),
+                            format!(
+                                "{op:?} with operand kinds {kl:?} and {kr:?}: one \
+                                 side is a float and the other is not, so no \
+                                 comparison is correct for both"
+                            ),
+                        ));
+                    }
+                    let f64t = ctx.f64_type();
+                    let rhs_bits = st.pop();
+                    let lhs_bits = st.pop();
+                    let l =
+                        st.b.build_bit_cast(lhs_bits, f64t, "lcf")
+                            .unwrap()
+                            .into_float_value();
+                    let r =
+                        st.b.build_bit_cast(rhs_bits, f64t, "rcf")
+                            .unwrap()
+                            .into_float_value();
+                    use inkwell::FloatPredicate as FP;
+                    let ordered = match op {
+                        Op::CmpEq => FP::OEQ,
+                        Op::CmpNe => FP::ONE,
+                        Op::CmpLt => FP::OLT,
+                        Op::CmpGt => FP::OGT,
+                        Op::CmpLe => FP::OLE,
+                        _ => FP::OGE,
+                    };
+                    let base = st.b.build_float_compare(ordered, l, r, "fcmp").unwrap();
+                    // `uno` is true exactly when either operand is NaN.
+                    let unordered = st.b.build_float_compare(FP::UNO, l, r, "funo").unwrap();
+                    let c = if matches!(op, Op::CmpEq | Op::CmpLe | Op::CmpGe) {
+                        st.b.build_or(base, unordered, "nan_eq").unwrap()
+                    } else {
+                        base
+                    };
+                    let z = st.b.build_int_z_extend(c, i64t, "fcmpz").unwrap();
+                    st.push_w(z, Width::Scalar(1));
+                } else {
+                    let pred = match op {
+                        Op::CmpEq => IntPredicate::EQ,
+                        Op::CmpNe => IntPredicate::NE,
+                        Op::CmpLt => IntPredicate::SLT,
+                        Op::CmpGt => IntPredicate::SGT,
+                        Op::CmpLe => IntPredicate::SLE,
+                        Op::CmpGe => IntPredicate::SGE,
+                        _ => unreachable!("the outer match restricts this set"),
+                    };
+                    let rhs = st.pop();
+                    let lhs = st.pop();
+                    let c = st.b.build_int_compare(pred, lhs, rhs, "cmp").unwrap();
+                    let v = st.b.build_int_z_extend(c, i64t, "cmpz").unwrap();
+                    st.push(v);
+                }
             }
             // Logical NOT. The VM applies it only to `Bool` and raises a type
             // error otherwise, so the operand here is always 0 or 1 and the

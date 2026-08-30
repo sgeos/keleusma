@@ -6,56 +6,48 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## The censuses moved, for the first time in many increments
+## The reference says NaN equals everything, and LLVM does not
 
-Float slice two opened **one** route of the module float guard — the **constant** route, the only one
-of the four with a lowering behind it. `float_witness.kel` now runs in the **corpus differential**
-against the virtual machine and **agrees**.
+Float comparisons are implemented. The finding that shaped them came from reading the reference
+**before** writing anything:
 
-| figure | before | after |
-|---|---|---|
-| opcodes the backend lowers | 61 of 66 | **63 of 66** |
-| UNPROVEN opcodes | 3 | **1** — only `Reset` |
-| modules lowering end to end | 66 | **67** |
-| chunks fully lowerable | 1070 | **1072** of 1074 |
-| opcode instances | 89841 | **89854** |
-| differential executing and agreeing | 61 | **62** |
+```rust
+x.partial_cmp(y).unwrap_or(core::cmp::Ordering::Equal)
+```
 
-**All from one cause**: the module is no longer refused, so its chunks and opcodes enter every census
-that walks the corpus. **Verified by execution, not by lowering** — that distinction is the whole
-reason to trust the movement.
+**A NaN collapses to `Equal`** — equal to everything, rather than unordered. Emitting the obvious
+`fcmp oeq` would make `NaN == x` **true on the reference and false natively**. A silent divergence,
+which is the class the float guard exists to prevent.
 
-## What still refuses, and why that is deliberate
+Matching it is small **because it was checked first**: `olt`, `ogt` and `one` are already false for
+NaN, so only `Eq`, `Le` and `Ge` need forcing true. **Three of six predicates would otherwise have been
+wrong, and none of them noisily.**
 
-The other three routes — a float in a **signature**, a float **native return**, a float **data slot** —
-still refuse, because the entry ABI, a native float ABI and the float-slot ABI are all unbuilt.
-Opening a route with nothing behind it would admit a module compiled wrong rather than refused.
+## What is verified, and what is not
 
-The **operand whitelist** replaced the coarse route guard: a float reaching division, a comparison, a
-composite or a native still fails closed at the use.
+**Verified**: all six predicates against the reference, seven probes each, operands chosen so a
+comparison accidentally done on the integer bit pattern would disagree. A must-fire control confirms
+the probes discriminate.
 
-## Five pins went red, all correctly
-
-The scope pin whose own message anticipated spending its premise; the guard-route pin, **renamed**
-because `..._refuses_...` asserting the opposite is a stale label; the refusal-set count; and **two
-assertions inverted to assert zero**, because **the corpus now contains no module-level refusal at
-all** — the float guard was the only one. An unattributable refusal is what makes a coverage figure
-overstate, so it must announce itself if it returns rather than the test being deleted.
-
-`differential`'s unsupported-opcode subject **retired as its sixth predecessor** — the list already
-records composite construction, array indexing, nested reads, tuple fields and static strings retiring
-the same way. Its successor is a float in a signature.
+**Not verified — and I want this read as a limit, not a footnote**: the NaN adjustment itself. **No
+source construct produces a NaN**, because the route is division, and `Op::CheckedDiv` pushes three
+values and is a larger slice than it looks. I wrote it to match rather than leaving it to diverge,
+because relying on NaN being unreachable is the accidental protection this backend already lost once.
+Its correctness rests on reading the reference, not on a differential.
 
 ## Verification
 
-Both suites run **sequentially** (parallel invalidates the perf canary, 57x).
+Both suites run **sequentially**.
 
 | | result |
 |---|---|
-| workspace | **2497 passed, 0 failed, 92 binaries**, cargo exit 0 |
-| `native_codegen` gate step | **377 passed, 0 failed, 0 ignored, 76 binaries**, exit 0 |
+| workspace | **2502 passed, 0 failed, 92 binaries**, cargo exit 0 |
+| `native_codegen` gate step | **379 passed, 0 failed, 0 ignored, 76 binaries**, exit 0 |
+| censuses | 63 of 66; `["Len"]`; 1072 of 1074; 89854 of 89940 — **unmoved, as expected** |
 
-**Absorption 34** (`f8232021`) complete, prediction exact.
+Censuses were not expected to move: no corpus module compares floats. Division still refuses.
+
+**Absorption 35** (`defa9151`) complete, prediction exact.
 
 ## Still open, and yours
 
@@ -63,9 +55,7 @@ Both suites run **sequentially** (parallel invalidates the perf canary, 57x).
 is unstated), `Text` (your supposition that it was covered is incorrect), `Opaque` (your intent is
 already what the handle achieves), `Unit`.
 
-**The entry ABI is the piece your float ruling names, and it is still unbuilt** — no corpus module
-carries a float in a signature, so it has no witness here. Building it means verifying against
-hand-written subjects only, which I have not done without saying so.
+**The entry ABI your float ruling names is still unbuilt** and still has no corpus witness.
 
 ## Standing constraints, unchanged
 

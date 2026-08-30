@@ -176,3 +176,64 @@ fn the_whitelist_does_not_refuse_the_supported_shape() {
     )
     .expect("the supported round trip must still lower; the whitelist is too tight");
 }
+
+/// **Float comparisons agree with the reference, including its unusual ordering.**
+///
+/// The virtual machine compares floats with
+/// `x.partial_cmp(y).unwrap_or(Ordering::Equal)`, so a NaN is **equal to
+/// everything** rather than unordered. The lowering matches that rather than
+/// emitting the natural `fcmp`, which would make `NaN == x` true on the
+/// reference and false natively.
+///
+/// **⚠ The NaN case is NOT exercised here and cannot be**: no source construct
+/// produces a NaN, because the route is division and `Op::CheckedDiv` is not
+/// lowered. The adjustment is written to match by reading the reference. Saying
+/// so is the point — a green result below must not be read as covering it.
+#[test]
+fn float_comparisons_agree_with_the_reference() {
+    // Each predicate, with operands whose fractional parts decide the answer, so
+    // a comparison accidentally done on the integer bit pattern would differ.
+    for (op, name) in [
+        ("<", "lt"),
+        (">", "gt"),
+        ("<=", "le"),
+        (">=", "ge"),
+        ("==", "eq"),
+        ("!=", "ne"),
+    ] {
+        let src = format!(
+            "fn main(w: Word) -> Word {{\n  \
+               let a = w as Float;\n  \
+               let b = 2.5;\n  \
+               if a {op} b {{ 1 }} else {{ 0 }}\n\
+             }}\n"
+        );
+        for arg in [0i64, 1, 2, 3, 5, -1, -3] {
+            let v = vm_result(&src, arg);
+            let n = native_result(&src, arg);
+            assert_eq!(
+                v, n,
+                "float `{name}` disagrees at {arg}: reference {v}, native {n}"
+            );
+        }
+    }
+}
+
+/// **CONTROL, must-fire.** Without it, agreement above could hold because every
+/// probe gives the same answer and nothing distinguishes the predicates.
+#[test]
+fn the_comparison_probes_actually_discriminate() {
+    let src = "\
+fn main(w: Word) -> Word {
+  let a = w as Float;
+  let b = 2.5;
+  if a < b { 1 } else { 0 }
+}
+";
+    let answers: Vec<i64> = [0i64, 3].iter().map(|&a| vm_result(src, a)).collect();
+    assert!(
+        answers[0] != answers[1],
+        "both probes give {answers:?}, so the comparison never changes answer and \
+         the agreement above would be vacuous"
+    );
+}

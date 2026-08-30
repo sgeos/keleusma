@@ -1,5 +1,37 @@
 # Design Journal
 
+## 2026-08-30 — Reading the reference first turned a three-of-six silent bug into three lines
+
+**Increment**: float comparisons. The finding that mattered came before any code: the reference
+compares floats with `partial_cmp(...).unwrap_or(Equal)`, so **a NaN is equal to everything** rather
+than unordered. That is neither IEEE-754 nor LLVM's default. The obvious `fcmp oeq` would have made
+`NaN == x` true on the reference and false natively — silent, not a fault.
+
+**Matching it is three lines, and only because the semantics were read first.** `olt`, `ogt` and `one`
+are already false for NaN, which is what NaN-as-Equal implies, so only `Eq`, `Le` and `Ge` need
+forcing. Written the natural way, **three of six predicates would have been wrong**, and a differential
+over ordinary values would have passed anyway because none of those values is NaN.
+
+**Verified**: six predicates, seven probes each, operands whose fractional part decides the answer so a
+comparison performed on the integer bit pattern would disagree; plus a must-fire control that the
+probes discriminate.
+
+**Not verified, and stated as a limit rather than a footnote**: the NaN adjustment. No source construct
+produces a NaN — the route is division, and `Op::CheckedDiv` pushes three values, which is a larger
+slice than it appears. **I wrote it to match anyway.** Relying on NaN being unreachable is exactly the
+accidental protection this backend lost two increments ago, when implementing float arithmetic removed
+a block that had been supplied by the absence of an implementation. Its correctness rests on reading
+the reference rather than on a test, which is the weaker of the two footings and is recorded as such.
+
+**Division was deliberately not attempted.** Investigating it produced the useful part of this
+increment's scoping: float division is TOTAL on the reference — no zero trap, signed infinity or NaN —
+which matches `fdiv`, but it flows through `Op::CheckedDiv` with a three-value push convention. Knowing
+that is worth more than a rushed attempt at it.
+
+**Censuses unmoved, as predicted**, since no corpus module compares floats. A movement would have meant
+something unexpected rather than a gain.
+
+
 ## 2026-08-30 — Slice two: one route opened, and every census moved from a single cause
 
 **Increment**: the module float guard closes four routes, and after slice one **only the constant route
