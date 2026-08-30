@@ -5,7 +5,7 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-08-28 (session 56 CLOSE) against `f8d691a1`, WHICH IS `origin/v0.2.3` ITSELF.**
+> **REFRESHED 2026-08-29 (session 56 CLOSE) against `e3e7bf02`, WHICH IS `origin/v0.2.3` ITSELF.**
 > Not a branch head. Every pinned value below was DERIVED on that tree, not recalled, and the
 > whole check block was executed against it: **37 test-count pins, all matching.**
 > **THIS FILE HAS GONE STALE WITHIN HOURS SIX TIMES**; if the dates here disagree with the three
@@ -35,7 +35,7 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > **AND `()` IS REFUSED BY THE PIPELINE WHILE THE REFERENCE COMPILES IT** -- an unrecorded gap the
 > construct-support boundary does not carry. A loud named refusal, not a mis-compile.
 >
-> **AS OF `f8d691a1`: 170 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive
+> **AS OF `e3e7bf02`: 170 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive
 > it: `git log --oneline origin/v0.2.3 | grep -c 'Merge pull request'`. **NOTE THE REF** -- the
 > local `v0.2.3` lags and answers a smaller number for the same tree.
 >
@@ -350,7 +350,7 @@ gh run list --branch v0.2.3 --limit 1
 
 ## WHAT A RESUMING SESSION SHOULD DO FIRST
 
-**ONE. THERE IS NO BLOCKER AND NO OPEN PULL REQUEST.** `origin/v0.2.3` at `f8d691a1`, 170 merges,
+**ONE. THERE IS NO BLOCKER AND NO OPEN PULL REQUEST.** `origin/v0.2.3` at `e3e7bf02`, 170 merges,
 nothing in flight. **Do not invent urgency.**
 
 **TWO. THE LAST TYPE-CHANNEL EXTRACTION IS PART-MOVED. TWO OF ITS EIGHT KINDS ARE DONE.**
