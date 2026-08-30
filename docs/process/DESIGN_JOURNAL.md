@@ -734,6 +734,61 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-30 — Session 57, fifth increment: two documentation classes guarded, and the instrument was wrong a fourth time
+
+Three guards, all closing gaps found by measuring rather than assuming.
+
+### THE KNOWLEDGE GRAPH'S EDGES ARE CHECKED NOW, AND THE ANCHOR GAP WAS CLOSED RATHER THAN NAMED
+
+`docs/README.md` calls the documentation a knowledge graph and the strategy document treats it as a
+first-class artifact. **Nothing checked that its edges exist.** `cargo doc -D warnings` catches
+broken intra-doc links in Rust source and says nothing about markdown.
+
+Measured: **194 files, 1184 relative links, zero broken.** The first sweep covered only `docs/` and
+the two root documents — 116 files — and came back clean, which is evidence about the checker's
+reach before it is evidence about the tree. Widened, it reported 203 broken links, all under
+`tmp/research/`; `.gitignore` carries `tmp/*` with `!tmp/.gitkeep`, so that is a deliberate scratch
+area and not repository content. Checking rather than reporting.
+
+The first revision stripped anchor fragments and named that as a known gap. **Measured, all 100
+anchor links resolve**, so the gap was closable rather than merely reportable and it is closed.
+The zero is evidence rather than silence: the check is exact set membership against a target's
+heading slugs, so a slug rule that disagreed with the documents would produce FALSE POSITIVES, not
+a quiet pass.
+
+**This pins a PROPERTY, not a count, and that is why it is safe** where an earlier test in this
+family was not. That one scanned a directory while pinning its answer as a constant and was wrong
+on the other line's branch. "Every relative link resolves" is something a branch adding documents
+can only satisfy or genuinely violate.
+
+### THE HANDOFF'S HEADLINE BOUNDARY FIGURE NOW CHECKS ITSELF
+
+The construct-support boundary is quoted twice in the handoff — in the validity block a resuming
+session runs, and in the state table. **Nothing checked either.** It moved this session from
+94 SOk over 99 cases to 96 over 101, and it moved because someone remembered to edit two documents.
+
+The guard derives the counts by calling `boundary_cases` and compares them against the prose. It
+also enforces the `__GAP`/`__REJECT` naming convention, because a case whose label changed without
+its name changing would be **a name that lies** — corrected once already this session, in a doc
+comment claiming the branch-pair rows agree on a test that compares the condition alone.
+
+### THE INSTRUMENT WAS WRONG A FOURTH TIME, AND THIS ONE SHARPENS THE RULE
+
+A regular expression over the boundary table reported **99 cases where there are 101**. Not the two
+added this session — two OLDER entries carry a comment between the opening parenthesis and the
+name, which `\(\s*"` rejects. The handoff's own `awk` census strips comments and is right.
+
+**The rule is sharper than "check your instrument".** When the data is reachable AS DATA, parsing
+its source text is choosing to have an instrument that can be wrong. `boundary_cases` is a
+function; the guard calls it, and there is no parser left to be wrong.
+
+Four instrument errors this session — an `awk` range running past an enum, a tree extractor at the
+wrong indentation depth, a counter counting occurrences instead of distinct names, and this. **All
+four were caught before they became claims**, three of them because a test failed and the failure
+was read as evidence about the checker rather than about the tree.
+
+---
+
 ## 2026-08-30 — Session 57, fourth increment: the orientation document was wrong in three places, and its own guard predicted it
 
 `tests/claimed_counts.rs` exists because `CLAUDE.md` once stated test counts that were three times

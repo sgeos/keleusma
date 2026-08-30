@@ -9537,3 +9537,96 @@ fn the_residue_named_here_matches_the_census_file() {
          four operations and would be silent about any fifth."
     );
 }
+
+/// **THE BOUNDARY TABLE'S LABEL COUNTS MATCH WHAT THE HANDOFF STATES, AND ITS NAMES MATCH THEIR
+/// LABELS.**
+///
+/// The construct-support boundary is quoted as a headline figure in `docs/process/HANDOFF.md`,
+/// twice — once as an expectation in the validity block a resuming session runs, once in the state
+/// table. **Nothing checked either.** The figure moved this session, from 94 SOk over 99 cases to
+/// 96 over 101, and it moved because a person remembered to edit two documents.
+///
+/// # Both sides derived, neither pinned
+///
+/// The actual counts come from calling `boundary_cases` — no text extraction, so there is no
+/// parser to be wrong. The expected counts are read out of the handoff. A branch that adds a case
+/// stays green provided the document moves with it, which is the property wanted; a branch that
+/// adds one silently does not.
+///
+/// **A TEXT PARSER WAS THE FIRST DESIGN AND IT WAS WRONG.** A regular expression over the table
+/// read 99 cases where there are 101: two entries carry a COMMENT between the opening parenthesis
+/// and the name, which `\(\s*"` rejects. The handoff's own `awk` census strips comments and is
+/// right. Calling the function removes the question entirely — the lesson being that when the data
+/// is reachable as data, parsing its source text is a choice to have an instrument that can be
+/// wrong.
+///
+/// # The naming convention is load-bearing, so it is checked
+///
+/// A case that is not byte-identical carries a `__GAP` or `__REJECT` suffix. That is how a reader
+/// scanning the table sees the exceptions without cross-referencing labels. **A case whose label
+/// changed without its name changing would be a name that lies**, which this repository has
+/// already had to correct once in a doc comment this session.
+#[test]
+fn the_boundary_table_counts_match_the_handoff_and_the_names_match_the_labels() {
+    const HANDOFF: &str = include_str!("../docs/process/HANDOFF.md");
+
+    let mut ok = 0usize;
+    let mut diverges = 0usize;
+    let mut refuses = 0usize;
+    let mut rejects = 0usize;
+    let mut lying: Vec<&str> = Vec::new();
+
+    for (name, support, _) in boundary_cases() {
+        let suffixed = name.ends_with("__GAP") || name.ends_with("__REJECT");
+        match support {
+            Support::Ok => {
+                ok += 1;
+                if suffixed {
+                    lying.push(name);
+                }
+            }
+            Support::Diverges => {
+                diverges += 1;
+                if !suffixed {
+                    lying.push(name);
+                }
+            }
+            Support::Refuses => {
+                refuses += 1;
+                if !suffixed {
+                    lying.push(name);
+                }
+            }
+            Support::RefRejects => {
+                rejects += 1;
+                if !suffixed {
+                    lying.push(name);
+                }
+            }
+        }
+    }
+    let total = ok + diverges + refuses + rejects;
+
+    assert!(
+        lying.is_empty(),
+        "these case names disagree with their labels — a byte-identical case carrying a gap \
+         suffix, or a non-identical one without: {lying:?}"
+    );
+    assert!(
+        total >= 50,
+        "only {total} boundary cases were seen, so this guard is measuring almost nothing"
+    );
+
+    let stated =
+        format!("{ok} SOk / {refuses} Refuses / {diverges} Diverges / {rejects} RefRejects");
+    let occurrences = HANDOFF.matches(stated.as_str()).count();
+    assert!(
+        occurrences >= 2,
+        "the handoff states the construct-support boundary in two places and neither now reads \
+         `{stated}`; found {occurrences} occurrence(s). The table moved and the document did not."
+    );
+    assert!(
+        HANDOFF.contains(&format!("{total} cases")) || HANDOFF.contains(&format!("{total}\n")),
+        "the handoff does not state the boundary case total of {total}"
+    );
+}
