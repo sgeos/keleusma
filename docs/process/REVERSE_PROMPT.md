@@ -10,13 +10,44 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-29 (session 57, second increment) — array elements move; the easy slices are gone
+**Date**: 2026-08-30 (session 57, third increment) — the frontier is measured, and your ABI rulings surfaced
 
-## NOTHING IS WAITING ON YOU EXCEPT THE RULING YOU ALREADY HAVE
+## THE ABI RULINGS EXIST, ONE OF THEM IS MINE, AND I HAVE NOT ACTED ON IT
 
-**The floating-point entry ABI is still the last of your eight rulings unimplemented**, with the
-`v0.3.0` line's `Fixed` shared-slot SCALE question attached. **It is theirs to bring you and I
-have not acted on it.** Publication remains held.
+**How this reached me matters and is stated first.** I did not receive these rulings. I read them in
+`docs/decisions/ABI_RULINGS.md` on `origin/v0.3.0`, committed by the other line on 2026-08-29. No
+peer sent them to me, and `PROMPT.md` is empty and unchanged since March. **Everything below is
+what that document says, not what you told me.**
+
+**The float ruling closes an item this channel has carried for sessions.** Their record says you
+ruled Option A, a real floating-point ABI, which also settles the `Float` shared slot. This file
+has said for several sessions that the float entry ABI was the last of your eight rulings
+outstanding and that it was theirs to bring you. **That is now stale, and the staleness is the
+reason I am writing this rather than waiting.** Note their document flags the WIDTH as their
+reading rather than your words.
+
+**The string ruling names my surface.** Their record says you ruled Option B, make the two
+embeddings agree, and states plainly that it is not implementable by their line because it changes
+marshalling in `src/`, which this line owns.
+
+**I verified the underlying technical claim against this tree rather than trusting the
+description.** `String::from_value` in `src/marshall.rs` clones an owned `String` out of a
+`StaticStr`, so a string-taking native really does receive an owned copy under the virtual-machine
+embedding, while the native backend passes a `{ length, bytes }` pointer. The
+source-incompatibility is real and it is on my surface.
+
+**I DID NOT IMPLEMENT IT, AND THE REASON IS A STANDING RULE RATHER THAN CAUTION.** A ruling I read
+off another branch is not a ruling I received. Recording it as settled would put the other line's
+reading into this line's durable artifacts, which is the exact failure this project has already
+paid for once — a claim relayed to you without both texts being read, which turned out to be an
+inversion. Beyond that, Option B is an **embedder-visible ABI change to the shipping crate**: its
+benefit is realisable only on the native backend, which lives on the other line, while its cost
+falls on every existing embedder of this one. Their own record flags that Option B is the most
+expensive of the three options and that the ruling anticipates revisiting strings.
+
+**WHAT I NEED FROM YOU IS ONE ANSWER**: whether the string ruling is binding on this line as
+recorded. If it is, the work is scoped and I will take it. If the recording drifted from what you
+said, this is the moment that costs nothing to correct.
 
 ## What moved, across two merged increments
 
@@ -111,7 +142,9 @@ to guess about.
 
 ## Three questions that remain yours
 
-**One. The floating-point entry ABI**, as above.
+**One. Is the string ABI ruling binding on this line as recorded?** That is the only question that
+gates work. The float ruling appears settled per the other line's record, so it is no longer a
+question I am holding for you — but I am reading both off their branch, not from you.
 
 **Two. Should a shipped example demonstrate `Byte`?** None of the fifteen does, and it would close
 three of the four op tags no corpus reaches.

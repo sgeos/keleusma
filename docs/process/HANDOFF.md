@@ -34,10 +34,29 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > claim; and the array elements. **`let d = 1 + 2` reaches the bounded fixpoint from the
 > pipeline**, which is the gap this file named for four sessions.
 >
-> **THERE IS NO CHEAP SLICE LEFT IN THIS FAMILY.** All four remaining kinds are hard: the branch
-> pair is withheld for a reason that still stands, and the other three are COMPOSITE, where the
-> occurrences slice already established the two representations disagree about what a node IS.
-> **Measure that disagreement before designing a mapping against it.**
+> **THE EXTRACTION HAS REACHED A REAL BOUNDARY, AND IT IS MEASURED RATHER THAN GUESSED.** All four
+> remaining kinds are blocked, and **none of them on work in the driver**:
+>
+> | kind | blocker |
+> |---|---|
+> | branch pair | the forest synthesises an else arm; a spurious row can reject a valid program |
+> | field on value | needs a `let`'s TYPE ANNOTATION, which the record stream does not carry |
+> | index on value | the same annotation |
+> | struct literal | needs the STRUCT'S IDENTITY, which the record does not carry |
+>
+> **`let a: Word = 1` and `let a = 1` produce IDENTICAL non-zero record streams**, and so does a
+> `Byte` annotation -- the annotation advances the cursor and emits nothing. And the `StructInit`
+> record packs the flat byte size and the field count only; the parser resolves the struct's name
+> to look its byte size up and then discards it. **Byte size is not identity**: two structs of the
+> same field types share one.
+>
+> **EVERY KIND THAT MOVED NEEDED NO STAGE CHANGE. NONE OF THE FOUR REMAINING CAN AVOID ONE.**
+> Closing them means `parse.kel` emitting new records, which perturbs the stream the byte-identity
+> oracle pins -- a different ORDER of increment, and arguably the operator's call.
+> `a_let_type_annotation_is_invisible_in_the_record_stream` and
+> `a_struct_literal_does_not_carry_which_struct_it_constructs` pin both blockers **in the failing
+> direction**, so a stage that starts carrying the information breaks the test rather than letting
+> a stale exclusion outlive its cause.
 >
 > **THE BRANCH PAIR WAS BUILT AND WITHHELD, DELIBERATELY.** `push_if` synthesises an else arm, so
 > the pipeline cannot tell a one-armed conditional from a two-armed one; a spurious pair row feeds
@@ -109,10 +128,28 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > refusal, bisect against the REAL file with a CONTROL that is known to pass. Guessing lost 3 of 3
 > this session; bisection with a control won.
 >
-> **THE OP-TAG RESIDUE IS FOUR, NOT SIXTEEN.** The stage corpus misses sixteen tags; the fifteen
-> shipped examples cover twelve of them. What neither reaches is `addop`, `subop`, `mulop`,
-> `checkedneg` -- byte arithmetic and unary negation. The per-construct tests are a THIRD
-> population and remain unmeasured, and the tree says so rather than rounding the claim up.
+> **THE OP-TAG RESIDUE IS CLOSED. IT WAS SIXTEEN, THEN FOUR, THEN THREE, AND IS NOW NONE.**
+>
+> The stage corpus misses sixteen tags; the fifteen shipped examples cover twelve. The
+> per-construct boundary table -- recorded for two sessions as a THIRD population that had never
+> been measured -- turned out to reach `addop` already, through `scalar/byte_arith` and
+> `scope/float_arith__GAP`, **both of the shape `a + b`**. So the honest count was three, not
+> four: **rounding the claim up instead of measuring would have been wrong by exactly one tag.**
+>
+> **And the shape of the witnesses said how to close the rest.** Both were ADDITION and nothing
+> else, which is exactly why subtraction and multiplication escaped every oracle. Two cases
+> closed it -- `scalar/byte_sub_mul` and `scalar/word_unary_neg` -- and **both compile
+> BYTE-IDENTICALLY**, so no coverage was bought with a divergence. No language change, no stage
+> change, two source snippets.
+>
+> **DO NOT COLLAPSE THE POPULATIONS.** `SHIPPED_EXAMPLES_ALSO_MISS` in the census file still reads
+> four and must: it records what the SHIPPED EXAMPLES miss, which is unchanged. The closed claim
+> is "no corpus reaches these". Conflating the two would make that file assert something it never
+> measured.
+>
+> **`scalar/byte_neg` IS DELIBERATELY ABSENT.** Byte negation lowers to `Op::Neg`, the stage emits
+> `checkedneg` and DIVERGES, and `Neg` is not one of the sixty-three stage tags at all. It would
+> buy a divergence for no tag.
 >
 > **THE TWELFTH STAGE DOES NOT SELF-COMPILE, AND THE REASON IS NOW IN THE TREE.**
 > `verify_types.kel` is refused at `ty_direct`, which reads the `tyb` block **thirty lines before
@@ -171,11 +208,22 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > a green pull request, plus this file's own record of the arrangement, plus independent verification
 > that the merged proof is BYTE-UNCHANGED from the audited commit `f779be7d`.
 >
-> **THE OPERATOR QUEUE IS EMPTY. Publication remains held.**
+> **Publication remains held.**
 >
-> **OF THE EIGHT RULINGS, SEVEN ARE DONE.** **THE FLOATING-POINT ENTRY ABI IS THE ONE THAT REMAINS**,
-> with the `v0.3.0` line's `Fixed` shared-slot SCALE question attached. It is THEIRS to bring the
-> operator; this line has not acted on it.
+> **THE ABI RULINGS EXIST AND ONE OF THEM NAMES THIS LINE'S SURFACE. READ THE PROVENANCE FIRST.**
+> This file said for several sessions that the floating-point entry ABI was the last of eight
+> rulings outstanding and was THEIRS to bring the operator. On 2026-08-29 the `v0.3.0` line
+> committed `docs/decisions/ABI_RULINGS.md` recording that the operator ruled: float is Option A,
+> and **string is Option B, "make the two embeddings agree"** -- which their own record says is
+> **not implementable by them because it changes marshalling in `src/`, owned by this line.**
+>
+> **THAT RULING WAS NOT RECEIVED HERE. It was READ OFF THEIR BRANCH**, no peer sent it, and
+> `PROMPT.md` is empty and unchanged since March. **Nothing was implemented on it**, because a
+> ruling read off another branch is not a ruling received, and Option B is an embedder-visible ABI
+> change to the shipping crate whose benefit lands on the OTHER line. The underlying technical
+> claim WAS verified here rather than trusted: `String::from_value` clones an owned `String` out
+> of a `StaticStr`, so the source-incompatibility is real. **The open question for the operator is
+> whether the string ruling binds this line as recorded.**
 
 ## Validity
 
@@ -195,10 +243,10 @@ git merge-base --is-ancestor 5c3ba628 HEAD    # must succeed
 # matches the MARGIN PIN line further down and reads 681 as a test count for
 # `tests/selfhost_wire.rs`, which is pinned at 178. That false DIFF has been produced three
 # times by three sessions writing the same careless one-liner. It is the checker being wrong.
-grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 36
+grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 39
 grep -c '^\s*#\[test\]' tests/selfhost_wire.rs              # 178
 grep -c '^\s*#\[test\]' tests/selfhost_parse.rs             # 89
-grep -c '^\s*#\[test\]' tests/selfhost_codegen.rs           # 142
+grep -c '^\s*#\[test\]' tests/selfhost_codegen.rs           # 144
 grep -c '^\s*#\[test\]' tests/selfhost_pool_tags.rs          # 8
 grep -c '^\s*#\[test\]' tests/selfhost_driver_parity.rs      # 4
 grep -c '^\s*#\[test\]' tests/selfhost_chained_index.rs      # 3
@@ -273,7 +321,7 @@ grep -oE 'pub fn [a-z_]+_from_pipeline' src/selfhost/mod.rs | sort -u
 # THE PARSER'S CAPS. Unchanged.
 grep -rhoE 'pub const PARSE_[A-Z_]+: usize = [0-9]+;' src/ | sort
 
-# THE CONSTRUCT-SUPPORT BOUNDARY. Expect 94 SOk / 1 Refuses / 3 Diverges / 1 RefRejects, 99
+# THE CONSTRUCT-SUPPORT BOUNDARY. Expect 96 SOk / 1 Refuses / 3 Diverges / 1 RefRejects, 101
 # cases. Three radix-literal cases were added in session 54 -- their ABSENCE is why the
 # lexer's total lack of radix support went unmeasured, the fourth instance of that class.
 # The `use Support::{...}` line contributes one of each name and must be excluded.
@@ -372,7 +420,7 @@ flight. **Do not invent urgency.**
 | `BINOP` | **MOVED**, across ALL FOUR forest kinds the lowering splits it into -- `Word` (3) and `Byte` bitwise (44), arithmetic (45), shifts (60) |
 | `CONDITION` | **MOVED** |
 | `TAIL_VS_RETURN` | **MOVED** 2026-08-29, with TWO losses pinned -- see below |
-| `ARRAY_ELEM` | **MOVED** 2026-08-29 |
+| `ARRAY_ELEM` | **MOVED** 2026-08-29. The LAST non-composite kind |
 | `BRANCH_PAIR` | **BUILT AND WITHHELD.** See below -- do not simply finish it |
 | `FIELD_ON_VALUE` | not moved, **composite** |
 | `INDEX_ON_VALUE` | not moved, **composite** |
@@ -597,7 +645,7 @@ push cancelled run `31932202253` and `31932359730` replaced it.
 | **`parse.kel` failure modes named** | **THIRTEEN**, across **ELEVEN** guarded counters |
 | shared-slot layouts | **nine copies collapsed to two definitions**, in `selfhost_host` |
 | architecture | one binary, selectable phases -- see `../decisions/PIPELINE_THEN_MONOLITH.md` |
-| construct-support boundary | **94 SOk / 1 Refuses / 3 Diverges / 1 RefRejects**, 99 cases |
+| construct-support boundary | **96 SOk / 1 Refuses / 3 Diverges / 1 RefRejects**, 101 cases |
 | **the SHIPPING compiler against that table** | **it AGREES with the boundary on every case** |
 | **chained array indexing** | **`a[0][1]` and its split form both byte-identical** |
 | operand-stack models | **agree on every one of the 66 opcodes**; the known list is EMPTY |

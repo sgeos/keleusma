@@ -9,6 +9,15 @@
 //! **89** files, **59** arena, 6 bench. The file count was three times wrong and the integration
 //! count more than three times. "Approximately" cannot carry that.
 //!
+//! **THOSE TWO FIGURES WERE TAKEN BEFORE THIS FILE EXISTED, AND `CLAUDE.md` STATES 1194 ACROSS 90
+//! FOR THE SAME DAY.** The difference is exactly this file: 89 + 1 = 90 and 1192 + 2 = 1194. Both
+//! numbers are right for their moment and neither said which moment that was, so a reader
+//! comparing them finds two measurements of "the same thing" that disagree.
+//!
+//! **A COUNT THAT DOES NOT NAME ITS POPULATION IS THE DEFECT THIS FILE EXISTS TO CATCH**, and the
+//! file had it in its own header. Recorded rather than quietly reconciled, because the instinct on
+//! finding two numbers is to pick one — and here both were correct.
+//!
 //! # Why it mattered operationally, which is why this is a test and not a tidy-up
 //!
 //! In the session that found it, a killed test sweep reported **55 binaries green while 31 never
