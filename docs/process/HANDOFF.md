@@ -29,10 +29,15 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > only be consistent between the two channels the host supplies. **Any numbering the pipeline
 > chooses works.**
 >
-> Three of the eight expression kinds now move: the binary operator, across **all four** forest
-> kinds the lowering splits it into; the condition a conditional tests; and, since 2026-08-29, the
-> tail-versus-return claim. **`let d = 1 + 2` reaches the bounded fixpoint from the pipeline**,
-> which is the gap this file named for four sessions.
+> Four of the eight expression kinds now move: the binary operator, across **all four** forest
+> kinds the lowering splits it into; the condition a conditional tests; the tail-versus-return
+> claim; and the array elements. **`let d = 1 + 2` reaches the bounded fixpoint from the
+> pipeline**, which is the gap this file named for four sessions.
+>
+> **THERE IS NO CHEAP SLICE LEFT IN THIS FAMILY.** All four remaining kinds are hard: the branch
+> pair is withheld for a reason that still stands, and the other three are COMPOSITE, where the
+> occurrences slice already established the two representations disagree about what a node IS.
+> **Measure that disagreement before designing a mapping against it.**
 >
 > **THE BRANCH PAIR WAS BUILT AND WITHHELD, DELIBERATELY.** `push_if` synthesises an else arm, so
 > the pipeline cannot tell a one-armed conditional from a two-armed one; a spurious pair row feeds
@@ -190,7 +195,7 @@ git merge-base --is-ancestor 5c3ba628 HEAD    # must succeed
 # matches the MARGIN PIN line further down and reads 681 as a test count for
 # `tests/selfhost_wire.rs`, which is pinned at 178. That false DIFF has been produced three
 # times by three sessions writing the same careless one-liner. It is the checker being wrong.
-grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 35
+grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 36
 grep -c '^\s*#\[test\]' tests/selfhost_wire.rs              # 178
 grep -c '^\s*#\[test\]' tests/selfhost_parse.rs             # 89
 grep -c '^\s*#\[test\]' tests/selfhost_codegen.rs           # 142
@@ -367,8 +372,8 @@ flight. **Do not invent urgency.**
 | `BINOP` | **MOVED**, across ALL FOUR forest kinds the lowering splits it into -- `Word` (3) and `Byte` bitwise (44), arithmetic (45), shifts (60) |
 | `CONDITION` | **MOVED** |
 | `TAIL_VS_RETURN` | **MOVED** 2026-08-29, with TWO losses pinned -- see below |
+| `ARRAY_ELEM` | **MOVED** 2026-08-29 |
 | `BRANCH_PAIR` | **BUILT AND WITHHELD.** See below -- do not simply finish it |
-| `ARRAY_ELEM` | not moved. **The only non-composite one left** |
 | `FIELD_ON_VALUE` | not moved, **composite** |
 | `INDEX_ON_VALUE` | not moved, **composite** |
 | `STRUCT_LIT` | not moved, **composite** |
@@ -432,6 +437,24 @@ occurrences slice established that the two sides **disagree about what a node IS
 `d.q` is a field access over an `Ident` on one side and a single data-read node on the other. Probe
 against the reference BEFORE designing a mapping for `FIELD_ON_VALUE`, `INDEX_ON_VALUE` or
 `STRUCT_LIT`.
+
+**ASSERTING COVERAGE IS NOT ASSERTING COVERAGE, AND THIS COST TWO INCREMENTS IN A ROW.** Session
+57 wrote a corpus-coverage assertion in one increment, documented it as the lesson, and then wrote
+a second vacuous one in the very next increment.
+
+| increment | the assertion | why it separated nothing |
+|---|---|---|
+| the tail claim | the corpus holds three distinct STATEMENT FORMS before a tail | two of those cases ended in a data read, untypable on both sides -- so stopping the descent early produced the identical unknown row, and dropping two of six continuation kinds left the SUITE GREEN |
+| the array claim | the corpus holds literals of differing element counts and operand forms | every multi-element literal was homogeneous or exactly two long, and for those shapes ADJACENT pairing and first-versus-rest give identical rows -- an adjacent-pairing mutant survived |
+
+**The transferable form is sharper than "assert coverage".** The assertion must name **the property
+that distinguishes the competing readings**, not the constructs the corpus contains. A construct
+list is a PROXY for coverage, and a proxy for coverage is not coverage. Both were found only by
+mutation testing, and neither would have been found by re-reading the test.
+
+**AND A SURVIVING MUTANT IS NOT AUTOMATICALLY A GAP.** One array mutant survives because it is
+EQUIVALENT -- the loop bound already enforces what the guard states. That is recorded in the code,
+because an unexplained survivor reads as a missing guard and sends the next reader hunting.
 
 **AND A CORPUS MUST CONTAIN THE CONSTRUCT OR THE TEST IS SILENT ABOUT IT.** Recorded four times,
 including inside this very slice family: the kind-1 extraction shipped covering only `Word` operands

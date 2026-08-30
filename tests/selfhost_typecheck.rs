@@ -4177,3 +4177,163 @@ fn a_multiheaded_function_contributes_no_tail_row() {
          recorded loss is stale."
     );
 }
+
+/// **THE ARRAY-ELEMENT ROWS AGREE BETWEEN THE PIPELINE AND THE REFERENCE.**
+///
+/// The fourth of the eight expression kinds, and **the last non-composite one**. Kind 2 pairs an
+/// array literal's first element against each later one; `ty_kind_is_equality` covers it, so it
+/// is the row that refuses `[1, true]`.
+///
+/// # The pairing is first-versus-rest, and adjacent pairing is not equivalent
+///
+/// A literal of n elements contributes n-1 rows; one of n <= 1 contributes none. Pairing
+/// ADJACENT elements would give the same row count and a different meaning — it would still
+/// catch `[1, true]`, but the first-versus-rest reading is what the reference does and the
+/// stage's predicate is an equality, so any difference in which pair is compared is a difference
+/// in which programs are refused.
+///
+/// # THE RISK DIRECTION WAS MEASURED BEFORE THIS WAS WRITTEN
+///
+/// Kind 2 is an equality kind, so a row emitted where the reference emits none can **reject a
+/// correct program**. On every probe the count of the pipeline's array-literal nodes equalled
+/// the count of the reference's array-literal expressions — including the nested-index shape
+/// that this repository once recorded as mis-parsing into an array literal. The corpus below
+/// keeps that comparison running rather than leaving it as a one-off measurement.
+///
+/// # THE COVERAGE ASSERTION IS BEHAVIOURAL, NOT SYNTACTIC
+///
+/// The previous slice in this family asserted its corpus held three distinct statement forms and
+/// was **vacuous**: two of them could not separate the behaviour, and only mutation testing
+/// showed it. So this one asserts what the rows actually contain — that the corpus produced
+/// literals of more than one element count, operands of more than one form, and at least one
+/// pair the stage would refuse.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_array_element_rows_agree_between_the_pipeline_and_the_reference() {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    const SOURCES: &[&str] = &[
+        // Three elements: two rows, both agreeing.
+        "fn main() -> Word { let a = [1, 2, 3]; a[0] }",
+        // ONE element: no row at all. The reference skips the first and has nothing left.
+        "fn main() -> Word { let a = [7]; a[0] }",
+        // Two literals in one body, so the extraction must not merge them.
+        "fn main() -> Word { let a = [1, 2]; let b = [3, 4]; a[0] + b[1] }",
+        // Elements that are NAMES rather than literals, so the operand form varies.
+        "fn f(x: Word, y: Word) -> Word { let a = [x, y]; a[0] }\nfn main() -> Word { f(1, 2) }",
+        // A HETEROGENEOUS literal: the row the stage exists to refuse.
+        "fn main() -> Word { let a = [1, true]; a[0] }",
+        // THREE elements whose tags are not all equal. **This is the case that separates
+        // first-versus-rest pairing from ADJACENT pairing**, and without it the two readings
+        // produce identical rows: first-versus-rest gives (1,bool) and (1,1), adjacent gives
+        // (1,bool) and (bool,1). Mutation-tested -- an adjacent-pairing mutant SURVIVED the
+        // corpus before this source was added, because every other literal here is either
+        // homogeneous or exactly two elements long, and for those the two pairings coincide.
+        "fn main() -> Word { let a = [1, true, 2]; a[0] }",
+        // Three NAMED elements, so the separation also holds for form-1 operands.
+        "fn f(x: Word, y: Word, z: Word) -> Word { let a = [x, y, z]; a[0] }\n\
+         fn main() -> Word { f(1, 2, 3) }",
+        // An INDEXED READ and no literal at all -- the shape this repository once recorded as
+        // mis-parsing into an array literal. Both sides must produce nothing.
+        "private data d { m: [Word; 4] }\nfn main() -> Word { d.m[0] }",
+    ];
+
+    let mut compared = 0usize;
+    let mut element_counts: BTreeSet<usize> = BTreeSet::new();
+    let mut operand_forms: BTreeSet<i64> = BTreeSet::new();
+    let mut saw_a_disagreeing_pair = false;
+    let mut saw_a_source_with_no_rows = false;
+    // Whether any source produced a literal of THREE OR MORE elements that are not all the same
+    // tag. That is the only shape distinguishing first-versus-rest pairing from adjacent
+    // pairing, and its absence is what let an adjacent-pairing mutant survive.
+    let mut saw_a_literal_longer_than_two_with_unequal_tags = false;
+
+    for src in SOURCES {
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+        let (names, _) = binding_rows(&ast);
+        let (nodes, _) = expression_nodes_and_derived(&ast, &names);
+        let by_id: BTreeMap<i64, String> = names.iter().map(|(k, v)| (*v, k.clone())).collect();
+        let render = |v: i64, f: i64| -> (i64, i64, String) {
+            if f == 0 {
+                (v, 0, String::new())
+            } else {
+                (0, 1, by_id.get(&v).cloned().unwrap_or_default())
+            }
+        };
+
+        let mut want: BTreeMap<ExprRowKey, usize> = BTreeMap::new();
+        let mut here = 0usize;
+        for (k, a, af, b, bf) in nodes.iter().copied() {
+            if k == 2 {
+                operand_forms.insert(af);
+                operand_forms.insert(bf);
+                if af == 0 && bf == 0 && a != b {
+                    saw_a_disagreeing_pair = true;
+                }
+                *want.entry((k, render(a, af), render(b, bf))).or_insert(0) += 1;
+                here += 1;
+            }
+        }
+        element_counts.insert(here + 1);
+        if here >= 2 {
+            let distinct: BTreeSet<(i64, i64)> = nodes
+                .iter()
+                .filter(|(k, ..)| *k == 2)
+                .flat_map(|(_, a, af, b, bf)| [(*a, *af), (*b, *bf)])
+                .collect();
+            if distinct.len() > 1 {
+                saw_a_literal_longer_than_two_with_unequal_tags = true;
+            }
+        }
+        if here == 0 {
+            saw_a_source_with_no_rows = true;
+        }
+
+        let (rows, _) = keleusma::selfhost::expression_rows_from_pipeline(src);
+        let mut got: BTreeMap<ExprRowKey, usize> = BTreeMap::new();
+        for (k, l, r) in rows.iter().cloned() {
+            if k == 2 {
+                *got.entry((k, l, r)).or_insert(0) += 1;
+            }
+        }
+
+        assert_eq!(
+            got, want,
+            "{src:?}: the pipeline and the reference disagree on the array-element rows"
+        );
+        compared += want.values().sum::<usize>();
+    }
+
+    assert!(
+        compared >= 5,
+        "only {compared} array-element rows were compared"
+    );
+    assert!(
+        element_counts.len() >= 3,
+        "the corpus produced only these row-count classes {element_counts:?}; it must contain \
+         literals of differing element counts, or it cannot tell first-versus-rest pairing from \
+         any other pairing"
+    );
+    assert!(
+        operand_forms.len() >= 2,
+        "the corpus produced only the operand forms {operand_forms:?}; it must contain elements \
+         that are literals and elements that are names"
+    );
+    assert!(
+        saw_a_literal_longer_than_two_with_unequal_tags,
+        "no source produced an array literal of more than two elements whose tags differ. \
+         Without one, pairing element ZERO against each later element and pairing ADJACENT \
+         elements produce identical rows, so this test cannot tell them apart -- an \
+         adjacent-pairing mutant survived exactly this corpus before the case was added."
+    );
+    assert!(
+        saw_a_disagreeing_pair,
+        "no source produced a pair of KNOWN and DIFFERING tags, so this test never exercised the \
+         row the stage exists to refuse and would pass over a corpus of only valid programs"
+    );
+    assert!(
+        saw_a_source_with_no_rows,
+        "every source produced rows, so the test is silent about the sources that must produce \
+         NONE -- the one-element literal and the indexed read that carries no literal at all"
+    );
+}
