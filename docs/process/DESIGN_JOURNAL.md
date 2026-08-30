@@ -13,6 +13,51 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-30 — Session 57, sixth increment: the handoff was stale in four places, one of them against its own table
+
+Re-reading the resume section against what the session actually did — the check that caught a stale
+section in session 56 — caught four more.
+
+| stale | reality |
+|---|---|
+| "TWO of its eight kinds are done" | the table DIRECTLY BENEATH IT already said four |
+| "no blocker and no open pull request, 170 merges at the refresh" | 174 merges, a pull request open |
+| "NO PULL REQUEST IS OPEN" in the banner | the same |
+| "AT THAT REFRESH: 170 merges" | the same |
+
+**A HEADING THAT DISAGREES WITH ITS OWN TABLE IS WORSE THAN EITHER BEING WRONG ALONE**, because a
+reader who checks one believes they have checked both. The table was right; the heading above it
+was the version from two increments earlier, and updating the table had not prompted a re-read of
+the sentence introducing it.
+
+### THE REPAIR GENERALISES A DECISION THIS FILE ALREADY MADE
+
+The banner carries a paragraph explaining why **no commit hash is named** in it: a refresh takes
+more than one commit, so any hash is stale the moment it is written, and three sessions had a reader
+treat the off-by-one as staleness.
+
+**The merge count and the pull-request state are the same shape.** The count moved four times in
+session 57 alone, so any figure written here is stale by several before a reader arrives — and a
+reader who trusts it mis-judges how much has landed since the refresh. Both now say DERIVE IT, with
+the commands and the warning that the local ref lags behind `origin`.
+
+**What stays is HISTORY.** "Thirteen merged in session 56, six in session 57, each at 22 of 22
+green" does not go stale. The distinction worth keeping is between a measurement of the past, which
+is permanent, and a measurement of the present, which is not — and the second kind does not belong
+in a document refreshed on a slower cadence than it changes.
+
+That is the third figure this file has stopped asserting and started deriving. The reasoning is
+identical each time.
+
+### AND THE BOUNDED-STATE CHANNEL WAS THREE INCREMENTS BEHIND
+
+`REVERSE_PROMPT.md` is specified as the bounded latest-state handoff and was stamped at the third
+increment while the session had run to the sixth. **The same failure class, in the file whose whole
+job is to be current.** Brought up to date in the same increment rather than left for a close that
+might not come.
+
+---
+
 ## 2026-08-30 — Session 57, fifth increment: two documentation classes guarded, and the instrument was wrong a fourth time
 
 Three guards, all closing gaps found by measuring rather than assuming.

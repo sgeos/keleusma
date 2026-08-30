@@ -17,7 +17,10 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > **THIS FILE HAS GONE STALE WITHIN HOURS SIX TIMES**; if the dates here disagree with the three
 > channels, trust the channels.
 >
-> **NO PULL REQUEST IS OPEN.** THIRTEEN merged in session 56, each at 22 of 22 green. Two came from
+> **DO NOT READ A PULL-REQUEST STATE OR A MERGE COUNT OUT OF THIS FILE. DERIVE THEM** -- see item
+> ONE of the resume section. Both figures moved several times within single sessions, which is the
+> same reason no commit hash is named above. Thirteen pull requests merged in session 56 and six in
+> session 57, each at 22 of 22 green; those are HISTORY and do not go stale. Two of session 56's came from
 > a CROSS-LINE EXCHANGE rather than from the plan: the `v0.3.0` line reported one of this line's
 > tests red on their branch with the cause named, and declined to fix it.
 >
@@ -66,9 +69,11 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > **AND `()` IS REFUSED BY THE PIPELINE WHILE THE REFERENCE COMPILES IT** -- an unrecorded gap the
 > construct-support boundary does not carry. A loud named refusal, not a mis-compile.
 >
-> **AT THAT REFRESH: 170 merges on `v0.2.3`.** Stated as a MEASUREMENT AT A NAMED COMMIT. Derive
-> it: `git log --oneline origin/v0.2.3 | grep -c 'Merge pull request'`. **NOTE THE REF** -- the
-> local `v0.2.3` lags and answers a smaller number for the same tree.
+> **THE MERGE COUNT IS NOT WRITTEN HERE, DELIBERATELY.** It moved four times in session 57 alone,
+> so any figure in this file is stale by several the moment a reader arrives -- and a reader who
+> trusts it mis-judges how much has landed since the last refresh. Derive it:
+> `git log --oneline origin/v0.2.3 | grep -c 'Merge pull request'`. **NOTE THE REF** -- the local
+> `v0.2.3` lags and answers a smaller number for the same tree.
 >
 > ## A MUTATION HAS THREE FAILURE POINTS, AND SESSION 56 WAS BITTEN AT ALL THREE.
 >
@@ -429,10 +434,29 @@ gh run list --branch v0.2.3 --limit 1
 
 ## WHAT A RESUMING SESSION SHOULD DO FIRST
 
-**ONE. THERE IS NO BLOCKER AND NO OPEN PULL REQUEST.** 170 merges at the refresh, nothing in
-flight. **Do not invent urgency.**
+**ONE. DERIVE THE MERGE COUNT AND THE PULL-REQUEST STATE. DO NOT READ THEM HERE.**
 
-**TWO. THE LAST TYPE-CHANNEL EXTRACTION IS PART-MOVED. TWO OF ITS EIGHT KINDS ARE DONE.**
+This item used to say "no blocker and no open pull request, 170 merges at the refresh". **Both
+halves went stale within a day** -- the count moved four times in one session and a pull request
+was open when a later reader arrived. A number that changes every increment cannot be carried in a
+document refreshed every few increments, which is **the same argument that removed the commit hash
+from the banner**, applied to the next-most-copied figure.
+
+```sh
+git log --oneline origin/v0.2.3 | grep -c 'Merge pull request'   # NOTE THE REF; local lags
+gh pr list --state open                                          # by BASE branch; the other line's appear too
+```
+
+**Do not invent urgency** from whatever those report. A pull request mid-CI is the normal state of
+this workflow, not a problem to solve.
+
+**TWO. THE LAST TYPE-CHANNEL EXTRACTION IS PART-MOVED AT FOUR OF ITS EIGHT KINDS, AND THE OTHER
+FOUR ARE BLOCKED ON THE RECORD STREAM RATHER THAN ON EFFORT.**
+
+**This heading said TWO of eight while the table beneath it already said four.** A heading that
+disagrees with its own table is worse than either being wrong alone, because a reader who checks
+one believes they have checked both. Found by re-reading this section against what the session
+actually did -- the same check that caught a stale resume section the session before.
 
 | kind | state |
 |---|---|
