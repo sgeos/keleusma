@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-30 (session 57, third increment) — the frontier is measured, and your ABI rulings surfaced
+**Date**: 2026-08-30 (session 57, close) — the frontier is measured, the op-tag residue is closed, and your ABI rulings surfaced
 
 ## THE ABI RULINGS EXIST, ONE OF THEM IS MINE, AND I HAVE NOT ACTED ON IT
 
@@ -48,6 +48,57 @@ expensive of the three options and that the ruling anticipates revisiting string
 **WHAT I NEED FROM YOU IS ONE ANSWER**: whether the string ruling is binding on this line as
 recorded. If it is, the work is scoped and I will take it. If the recording drifted from what you
 said, this is the moment that costs nothing to correct.
+
+## THREE MORE INCREMENTS AFTER THE FRONTIER, ALL ABOUT CLAIMS NOTHING CHECKED
+
+With the engineering frontier measured and the ABI question yours, the work turned to a class this
+repository keeps rediscovering. **Six distinct unchecked-claim classes were closed.**
+
+**The op-tag residue is gone.** It sat at "four tags no corpus reaches" for two sessions while the
+tree recorded a THIRD population it had never measured. Measured, that population already reached
+one of the four, so the honest count was three — **rounding up instead of measuring would have been
+wrong by exactly one tag**. The shape of the two witnesses then said how to close the rest: both
+were `a + b` and nothing else, which is precisely why subtraction and multiplication escaped every
+oracle. Two byte-identical boundary cases closed it. No language change, no stage change.
+
+**The orientation document was wrong in three places**, and the guard covering it had predicted
+exactly that — its header said the remaining claims were unguarded and called it luck rather than
+design. It said `src/selfhost/kel/` holds TEN stage sources (twice) where it holds twelve; named six
+workspace members where there are seven, omitting one entirely; and presented its `src/` tree as
+complete while eighteen files were unlisted. **A caveat naming an unguarded region is a work item,
+not a disclaimer.**
+
+**The documentation knowledge graph is checked now** — 194 files, 1184 relative links, 100 anchors,
+zero broken. The anchor half shipped first as a named gap and was then closed, because measurement
+showed it was closable rather than merely reportable.
+
+**And the handoff's own headline boundary figure now checks itself.** It is quoted twice there and
+nothing checked either; it moved this session because someone remembered to edit two documents.
+
+## FOUR INSTRUMENT ERRORS, ALL CAUGHT BEFORE THEY BECAME CLAIMS
+
+This is the part I most want visible. I nearly reported four defects that were my own tooling: an
+`awk` range running past an enum and reporting 68 opcodes against the documented 66; a tree
+extractor at the wrong indentation depth calling two files missing that live elsewhere; a counter
+counting occurrences rather than distinct names, which would have hidden the very gap it checked;
+and a regular expression rejecting table entries that carry an interior comment.
+
+Three surfaced because **a test failed**, and the failure was read as evidence about the checker
+rather than about the tree. The last sharpens the rule the tree already had: *check your instrument*
+becomes **when the data is reachable AS DATA, parsing its source text is choosing to have an
+instrument that can be wrong.**
+
+## AND THIS FILE'S SIBLING WAS STALE IN FOUR PLACES, INCLUDING A HEADING THAT CONTRADICTED ITS OWN TABLE
+
+The handoff's resume section said two of eight expression kinds were done while the table beneath
+it said four, and asserted a merge count and "no open pull request" that had both moved. **A heading
+that disagrees with its own table is worse than either being wrong alone**, because a reader who
+checks one believes they have checked both.
+
+The repair generalises a decision already in that file: it names no commit hash, because a refresh
+takes more than one commit. The merge count and pull-request state are the same shape — the count
+moved four times in one session — so both now say DERIVE IT, with the commands. History stays;
+figures that change faster than the document is refreshed do not.
 
 ## What moved, across two merged increments
 
