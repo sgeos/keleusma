@@ -225,6 +225,24 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > of a `StaticStr`, so the source-incompatibility is real. **The open question for the operator is
 > whether the string ruling binds this line as recorded.**
 
+> **THE ORIENTATION DOCUMENT WAS WRONG IN THREE PLACES, AND THE GUARD THAT COVERS IT SAID SO IN
+> ADVANCE.** `tests/claimed_counts.rs` guarded two figures in `CLAUDE.md` and stated in its own
+> header that **the remaining claims were unguarded**. Three of them were then found wrong:
+>
+> | claim | reality |
+> |---|---|
+> | `src/selfhost/kel/` holds TEN stage sources, said twice | it holds **twelve**, and every other document says twelve |
+> | the workspace has six members | it has **seven**; `keleusma-wire-derive` appeared NOWHERE in the document |
+> | the `src/` tree ends in a leaf marker, reading as complete | **eighteen** `src/*.rs` files were unlisted, and the document uses an ellipsis elsewhere for exactly this |
+>
+> All three are corrected and all three are now guarded, **with both sides derived and neither
+> pinned** -- the expected value read from the prose, the actual from the tree. That shape is the
+> repair for the earlier failure in this family, where a test scanned a directory while pinning
+> its answer as a constant and was wrong on another line's branch.
+>
+> **A CAVEAT NAMING AN UNGUARDED REGION IS A PREDICTION, AND THIS ONE CAME TRUE.** When a test
+> says what it does not cover, treat that sentence as a work item rather than a disclaimer.
+
 ## Validity
 
 - **Branch**: `v0.2.3`, or a branch cut from it. If you are on `v0.3.0`, read
@@ -289,7 +307,7 @@ grep -c '^\s*#\[test\]' tests/op_tag_tables.rs                # 8
 grep -c '^\s*#\[test\]' tests/forward_data_reference.rs       # 4
 grep -c '^\s*#\[test\]' tests/forest_child_channels.rs        # 2
 grep -c '^\s*#\[test\]' tests/example_index_claims.rs         # 2
-grep -c '^\s*#\[test\]' tests/claimed_counts.rs               # 2
+grep -c '^\s*#\[test\]' tests/claimed_counts.rs               # 5
 
 # THE BYTE-IDENTITY CORPUS IS ELEVEN STAGES. `wire.kel` joined 2026-08-27.
 grep -c 'fn self_host_compiles_.*_kel_byte_identically' tests/selfhost_codegen.rs   # 11
