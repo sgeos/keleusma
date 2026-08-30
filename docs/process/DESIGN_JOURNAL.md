@@ -669,6 +669,108 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-30 — Session 57, third increment: the frontier is measured, and the operator's ABI rulings surface
+
+Two unrelated findings, both from doing something the protocol already asked for.
+
+### THE EXTRACTION HAS REACHED A REAL BOUNDARY, AND IT IS MEASURED
+
+I set out to size the composite kinds. Reading the **boundary** rather than either implementation
+settled all three at once, and the answer is not what "three kinds left" implies.
+
+| kind | blocker |
+|---|---|
+| field on value | needs a `let`'s TYPE ANNOTATION |
+| index on value | the same annotation |
+| struct literal | needs the STRUCT'S IDENTITY |
+
+**`let a: Word = 1` and `let a = 1` produce identical non-zero record streams**, and so does
+`let a: Byte = 1`. The annotation advances the parser's cursor and emits nothing, so the driver
+cannot build the set the reference calls `scalars` — and no amount of driver work changes that.
+
+**The `StructInit` record packs the flat byte size and the field count, nothing else.** The parser
+resolves the struct's name to look its byte size up and then discards it. Byte size is not a
+substitute for identity: two structs of the same field types share one. And the disagreement is
+**reachable, not hypothetical** — the pipeline accepts a struct literal with a missing field, which
+is exactly the program on which the reference reports a mismatched pair.
+
+**So every kind that moved needed no stage change, and none of the four remaining can avoid one.**
+That is a boundary in the work rather than a pause, and stating it plainly should save a resuming
+session an increment spent hunting a cheap slice that is not there. Both blockers are pinned in the
+FAILING direction.
+
+### THE OPERATOR'S ABI RULINGS EXIST, AND ONE NAMES THIS LINE'S SURFACE
+
+Found by polling the other line's mailbox — a resume-protocol step I had skipped for two increments.
+They committed `docs/decisions/ABI_RULINGS.md` on 2026-08-29 recording that the operator ruled float
+as Option A and **string as Option B, "make the two embeddings agree"**, which their own record says
+they cannot implement because it changes marshalling in `src/`.
+
+**I did not implement it, and the reasoning is the transferable part.** A ruling read off another
+branch is not a ruling received: no peer sent it and the human-to-agent channel is empty and
+unchanged since March. Recording it as settled would put the other line's reading into this line's
+durable artifacts — the exact failure already paid for once here, when a claim was relayed to the
+operator without both texts being read and turned out to be an inversion. Beyond provenance, Option
+B is an **embedder-visible ABI change to the shipping crate** whose benefit is realisable only on the
+native backend, which lives on the other line.
+
+**But the technical claim WAS verified here rather than trusted.** `String::from_value` clones an
+owned `String` out of a `StaticStr`, so a string-taking native really does receive an owned copy
+under the virtual-machine embedding. The incompatibility is real and it is on this surface. Checking
+the claim while declining to act on the ruling are separate decisions and both were made
+deliberately.
+
+### THE THIRD OP-TAG POPULATION IS MEASURED, AND THE RESIDUE CLOSES ENTIRELY
+
+For two sessions the tree has said the op-tag residue is four — `addop`, `subop`, `mulop`,
+`checkedneg` — while recording that the per-construct boundary table was a **third population it
+had not measured**, and saying so rather than rounding the claim up.
+
+**Measured, and rounding up would have been wrong by exactly one tag.** The boundary table reaches
+`addop`, through `scalar/byte_arith` and `scope/float_arith__GAP`. So what no corpus this project
+runs reaches is `subop`, `mulop` and `checkedneg`.
+
+**The shape explains which one escaped.** Both witnesses are `a + b`. Neither carries a
+subtraction, a multiplication, or a unary negation — so the residue is "byte and float subtraction
+and multiplication, plus `-x`", which is narrower and more actionable than the previous statement.
+
+**The census lives where `boundary_cases` is callable, and that was a deliberate choice.** Putting
+it in the census file would have meant extracting Rust string literals textually from another file,
+and this repository has twice had an audit reach a wrong conclusion because its own extractor was
+wrong. No instrument, no instrument error. The cost is that the residue is now named in two
+spellings — stage tags there, `Op` variants here — so a second test checks the two still agree.
+
+**Then closed, in the same increment, because the alternative was worse.** Shipping a document
+saying "the residue is three" and superseding it hours later is the churn this project dislikes,
+and the closure turned out to be contained: no test pins the boundary counts, only the handoff
+does. Two cases were added -- `scalar/byte_sub_mul` and `scalar/word_unary_neg` -- and **both
+compile byte-identically**, so no coverage was bought with a divergence. The table goes from
+94 SOk over 99 cases to 96 over 101. **No language change and no stage change; two source
+snippets in a corpus that had never carried a `Byte` subtraction.**
+
+**`scalar/byte_neg` was considered and rejected.** Byte negation lowers to `Op::Neg`, the stage
+emits `checkedneg` for it and diverges, and `Neg` is not one of the sixty-three stage tags at all
+-- so it would buy a divergence for no tag.
+
+**The populations are deliberately NOT collapsed.** The shipped-examples constant still reads four
+and must: it records what THAT corpus misses, which is unchanged. The closed claim is "no corpus
+reaches these", which is a different sentence, and merging them would make the census file assert
+something it never measured.
+
+### A SMALLER FINDING, INSIDE THE GUARD THAT EXISTS TO CATCH IT
+
+`tests/claimed_counts.rs` guards `CLAUDE.md` against stale test counts. Its own header states 1192
+integration tests across 89 files while `CLAUDE.md` states 1194 across 90 — **both dated the same
+day**. The arithmetic settles it exactly: the header was measured before the file existed, and
+89 + 1 = 90 while 1192 + 2 = 1194.
+
+Both numbers are correct for their moment and neither said which moment that was. **A count that does
+not name its population is precisely the defect that file exists to catch**, and it had it in its own
+header. Recorded rather than quietly reconciled, because the instinct on finding two numbers is to
+pick one — and here both were right.
+
+---
+
 ## 2026-08-29 — Session 57, second increment: the array-element claim moves, and a second vacuous coverage assertion
 
 **Expression kind 2 now reaches the type channel from the pipeline.** Four of the eight kinds have

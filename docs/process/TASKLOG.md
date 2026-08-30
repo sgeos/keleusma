@@ -10,6 +10,35 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-30, session 57, third increment, second half). THE OP-TAG RESIDUE IS
+> CLOSED, AND THE BOUNDARY TABLE IS NOW 96 SOk / 1 Refuses / 3 Diverges / 1 RefRejects OVER 101
+> CASES.**
+>
+> The per-construct boundary table -- recorded for two sessions as a third population that had NOT
+> been measured -- already reached `addop`, through two cases both of the shape `a + b`. So the
+> honest count was three, not four: **rounding up instead of measuring would have been wrong by
+> exactly one tag.** The shape of those witnesses then said how to close the rest, and two
+> byte-identical cases did: `scalar/byte_sub_mul` and `scalar/word_unary_neg`.
+>
+> **The shipped-examples constant still reads four and must.** It records what THAT corpus misses.
+> The closed claim is "no corpus reaches these", which is a different sentence.
+
+> **Currency note (2026-08-30, session 57, third increment). THE EXTRACTION HAS REACHED A MEASURED
+> BOUNDARY, AND THE OPERATOR'S ABI RULINGS HAVE SURFACED.**
+>
+> **All four remaining expression kinds are blocked, and none on driver work.** A `let`'s type
+> annotation is invisible in the record stream -- `let a: Word = 1` and `let a = 1` produce
+> identical non-zero records -- which blocks the field-on-value and index-on-value rows. The
+> `StructInit` record carries byte size and field count but not the struct's identity, which blocks
+> the struct-literal row. The branch pair remains withheld for its own reason. **Closing any of
+> them means a stage change, which perturbs the byte-identity oracle.**
+>
+> **AND THE ABI RULINGS ARE RECORDED ON `origin/v0.3.0`, NOT RECEIVED HERE.** The other line's
+> document says the operator ruled string as Option B, which changes marshalling in `src/` -- this
+> line's surface, and not implementable by theirs. **Nothing was implemented on it.** The
+> underlying technical claim was verified against this tree; the RULING was not, and a ruling read
+> off another branch is not a ruling received. See `REVERSE_PROMPT.md`.
+
 > **Currency note (2026-08-29, session 57, second increment). THE FIFTH EXTRACTION IS AT FOUR OF
 > ITS EIGHT KINDS, AND THE NON-COMPOSITE WORK IS DONE.**
 >

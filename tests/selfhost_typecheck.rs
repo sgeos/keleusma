@@ -4337,3 +4337,170 @@ fn the_array_element_rows_agree_between_the_pipeline_and_the_reference() {
          NONE -- the one-element literal and the indexed read that carries no literal at all"
     );
 }
+
+/// **A `let`'s TYPE ANNOTATION IS INVISIBLE IN THE RECORD STREAM, WHICH BLOCKS TWO KINDS.**
+///
+/// The reference emits the field-on-value and index-on-value rows (kinds 5 and 6) exactly when
+/// the object is a name bound by a `let` carrying an explicit PRIMITIVE type annotation. Those
+/// rows are the misuse detector: a field access on something declared `Word` is a rejection.
+///
+/// **The pipeline cannot see that annotation at all.** `let a: Word = 1` and `let a = 1` produce
+/// the identical sequence of non-zero records, and so does `let a: Byte = 1` — the annotation
+/// advances the parser's cursor and emits nothing. So the driver has no way to build the set the
+/// reference calls `scalars`, and no amount of work in the driver changes that.
+///
+/// # This is a STAGE-SHAPED gap, not a driver-shaped one
+///
+/// Closing it means `parse.kel` emitting a record for the annotation, which changes the record
+/// stream the byte-identity oracle pins. That is a different order of increment from the four
+/// kinds that moved, every one of which needed no stage change.
+///
+/// # PINNED IN THE FAILING DIRECTION
+///
+/// If the stream ever does carry the annotation, this test fails and its reader should revisit
+/// kinds 5 and 6 rather than leaving them recorded as blocked. A gap that silently stops being a
+/// gap is how a stale exclusion outlives its cause.
+#[cfg(feature = "self-host")]
+#[test]
+fn a_let_type_annotation_is_invisible_in_the_record_stream() {
+    let meaningful = |src: &str| -> Vec<(i64, i64)> {
+        let (_, recs) = keleusma::selfhost::parse_record_trace(src);
+        recs.iter()
+            .filter(|(code, _, _)| *code != 0)
+            .map(|(code, val, _)| (*code, *val))
+            .collect()
+    };
+
+    let bare = meaningful("fn main() -> Word { let a = 1; a }");
+    assert!(
+        !bare.is_empty(),
+        "the record trace is empty, so this test would pass over any pair of programs"
+    );
+
+    for annotated in [
+        "fn main() -> Word { let a: Word = 1; a }",
+        "fn main() -> Word { let a: Byte = 1; a }",
+        "fn main() -> Word { let a: bool = 1; a }",
+    ] {
+        assert_eq!(
+            meaningful(annotated),
+            bare,
+            "{annotated:?} now produces a different record stream from the unannotated form. \
+             The annotation has become visible to the driver, so the field-on-value and \
+             index-on-value rows may be reachable after all -- revisit them rather than leaving \
+             them recorded as blocked."
+        );
+    }
+}
+
+/// **A STRUCT LITERAL DOES NOT CARRY WHICH STRUCT IT CONSTRUCTS, WHICH BLOCKS A THIRD KIND.**
+///
+/// The reference emits the struct-literal row (kind 7) as `(declared field count, supplied field
+/// count)`, and the stage refuses when they differ. The supplied count is on the wire. **The
+/// declared count is not, and neither is the struct's identity**: the record packs the flat byte
+/// size and the field count, nothing more. The parser resolves the name to look the byte size up
+/// and then discards it.
+///
+/// **Byte size is not a substitute for identity.** Two structs of the same field types have the
+/// same flat byte size, so recovering the name from it is ambiguous by construction.
+///
+/// # The disagreement is REACHABLE, not hypothetical
+///
+/// The pipeline accepts a struct literal that omits a field — the program on which the reference
+/// emits a mismatched pair. So this is not a case the pipeline refuses anyway.
+///
+/// # PINNED IN THE FAILING DIRECTION
+///
+/// If the record ever carries the struct's name or its declared field count, this test fails and
+/// kind 7 should be revisited.
+#[cfg(feature = "self-host")]
+#[test]
+fn a_struct_literal_does_not_carry_which_struct_it_constructs() {
+    const MISSING: &str = "struct P { a: Word, b: Word }\n\
+                           fn main() -> Word { let p = P { a: 1 }; p.a }";
+
+    // The reference emits a MISMATCHED pair, so there is something to disagree about.
+    let ast = parse(&tokenize(MISSING).expect("lex")).expect("parse");
+    let (names, _) = binding_rows(&ast);
+    let (nodes, _) = expression_nodes_and_derived(&ast, &names);
+    let pair = nodes
+        .iter()
+        .find(|(k, ..)| *k == 7)
+        .map(|(_, a, _, b, _)| (*a, *b));
+    assert_eq!(
+        pair,
+        Some((2, 1)),
+        "the reference no longer reports a two-field struct given one field as (2, 1); the gap \
+         this test records may have changed shape"
+    );
+
+    // And the pipeline ACCEPTS that program, so the disagreement is reachable.
+    assert!(
+        keleusma::selfhost::try_parse_functions(MISSING).is_ok(),
+        "the pipeline now refuses a struct literal with a missing field. If it refuses every \
+         program on which the reference reports a mismatch, kind 7 may be vacuous rather than \
+         blocked -- which is a different claim and should replace this one."
+    );
+
+    // The record carries the byte size and the count, and NOT the struct's identity.
+    let stage = std::fs::read_to_string("src/selfhost/kel/parse.kel").expect("read parse.kel");
+    let emit = stage
+        .lines()
+        .find(|l| l.contains("Node::StructInit() as Word"))
+        .expect("parse.kel emits a StructInit record");
+    assert!(
+        emit.contains("sd_bytesize") && emit.contains("sc_count"),
+        "the StructInit record no longer packs the byte size and the field count: {emit}"
+    );
+    assert!(
+        !emit.contains("sc_name[structdefs.sc_sp]] * 1024 + structdefs.sc_name"),
+        "unexpected shape; re-read the emission before trusting the claim below"
+    );
+}
+
+/// **EVERY REMAINING EXPRESSION KIND IS BLOCKED ON THE RECORD STREAM OR ON A SYNTHESISED NODE,
+/// AND NOT ON WORK IN THE DRIVER.** This is the frontier statement for the extraction.
+///
+/// | kind | why it has not moved |
+/// |---|---|
+/// | branch pair | the forest synthesises an else arm; a spurious row can reject a valid program |
+/// | field on value | needs a `let`'s type annotation, which the record stream does not carry |
+/// | index on value | the same annotation |
+/// | struct literal | needs the struct's identity, which the record does not carry |
+///
+/// **THE FOUR THAT MOVED NEEDED NO STAGE CHANGE. NONE OF THE FOUR REMAINING CAN AVOID ONE**
+/// (except the branch pair, which needs a different forest, not a different record). That is a
+/// real boundary in the work rather than a pause, and it is worth stating plainly so a resuming
+/// session does not spend another increment looking for a cheap slice that is not there.
+///
+/// This test asserts only what it can check from the tree: that the two witnesses above exist and
+/// that the four moved kinds are the ones the extraction emits. **The table is prose and is not
+/// checked**; it is here because the reader who needs it will be reading this file.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_moved_expression_kinds_are_exactly_four() {
+    use std::collections::BTreeSet;
+
+    const CORPUS: &[&str] = &[
+        "fn main() -> Word { 1 + 2 }",
+        "fn f(c: bool) -> Word { if c { 1 } else { 2 } }\nfn main() -> Word { f(true) }",
+        "fn main() -> Word { let a = [1, 2, 3]; a[0] }",
+        "struct P { a: Word, b: Word }\nfn main() -> Word { let p = P { a: 1, b: 2 }; p.a }",
+    ];
+
+    let mut kinds: BTreeSet<i64> = BTreeSet::new();
+    for src in CORPUS {
+        let (rows, _) = keleusma::selfhost::expression_rows_from_pipeline(src);
+        for (k, _, _) in rows {
+            kinds.insert(k);
+        }
+    }
+
+    assert_eq!(
+        kinds,
+        BTreeSet::from([1, 2, 3, 8]),
+        "the set of expression kinds the pipeline emits has changed. If a kind was ADDED, the \
+         blockers recorded in this file should be re-read and the stale one removed; if one was \
+         LOST, a check the type channel used to make is gone."
+    );
+}
