@@ -169,6 +169,35 @@ fn the_driver_reaches_the_constant_streaming_commands() {
 /// would otherwise count as driving them. That is the too-loose direction of the
 /// same error, and this line has four recorded instances of a guard firing on the
 /// prose that explains it.
+/// Every integer literal appearing in the driver's non-comment code.
+///
+/// # THIS IS A PROXY, IT IS FIT FOR LARGE DISTINCTIVE NUMBERS ONLY, AND A POPULATION CENSUS OF
+/// THE DISPATCHED COMMANDS IS NOT SUPPORTABLE BY IT
+///
+/// The tests here use this for commands 178 to 181. Those numbers are large and appear nowhere
+/// else in the driver, so "the number is present" is a sound reading of "the driver issues the
+/// command".
+///
+/// **It does not generalise, and the attempt was made and abandoned on 2026-08-30.** `wire.kel`
+/// dispatches 182 commands, and the file above records the transferable lesson — presence and
+/// dispatch are not evidence that code runs — which makes "how many of the 182 does the driver
+/// actually reach?" the obvious next question. It is the same shape as a gap this repository
+/// closed by measuring a population it had only described.
+///
+/// **Run against all 182, this reader reports near-total coverage and is wrong.** Commands 1, 2
+/// and 3 are dispatched, and those integers appear throughout the driver as array indices, field
+/// counts and widths. The census would be confidently wrong in the flattering direction, which is
+/// the worst one.
+///
+/// **A better instrument would need a precise call form to match, and there is none.** The driver
+/// addresses the stage by writing a command number into a shared slot, and it does so through
+/// several differently shaped helpers rather than one. Matching the write sites is possible but is
+/// real work, not a grep.
+///
+/// **So the census is UNMEASURED, and the reason is recorded rather than the number.** Anyone
+/// costing work on the strength of "most commands are driven" or "most are dead" should know that
+/// neither statement has been established, and that the cheap-looking way to establish it produces
+/// a wrong answer rather than no answer.
 fn driver_command_numbers() -> Vec<u32> {
     const DRIVER: &str = include_str!("../src/selfhost/mod.rs");
     let mut out: Vec<u32> = Vec::new();

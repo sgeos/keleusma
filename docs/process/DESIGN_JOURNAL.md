@@ -13,6 +13,57 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-30 — Session 57, seventh increment: a measurement identified, attempted, and recorded as unsupportable
+
+No new capability. The deliverable is a number NOT reported and the reason written down.
+
+### The question was the right one to ask
+
+`tests/stage_command_reach.rs` pins that the driver reaches two of `wire.kel`'s dispatched commands
+and not two others, and its header states the transferable lesson: **presence, dispatch, and even an
+announcement are not evidence that code runs.** `wire.kel` dispatches 182 commands. "How many does
+the driver actually reach?" is the obvious next question, and it is the same shape as the op-tag
+residue — a gap this session closed by measuring a population the tree had only described.
+
+### THE INSTRUMENT CANNOT ANSWER IT, AND NEITHER CAN THE ONE ALREADY IN THE TREE
+
+A first attempt matched each command number anywhere in the driver and tests. It reported 181 of 182
+reached. **That figure is meaningless**: commands 1, 2 and 3 are dispatched, and those integers
+appear throughout as indices, counts and widths.
+
+Then the tree's own `driver_command_numbers` turned out to use the same proxy — every integer
+literal in the driver's non-comment code. **It is sound where it is used**, for commands 178 to 181,
+because those numbers are large and appear nowhere else. It is unsound for a population containing
+small ones, and would report near-total coverage **in the flattering direction**, which is the worst
+one to be wrong in.
+
+A better instrument needs a precise call form to match, and there is none: the driver writes command
+numbers into shared slots through several differently shaped helpers. Matching the write sites is
+possible and is real work rather than a grep.
+
+### WHAT WAS SHIPPED IS THE REASON, NOT THE NUMBER
+
+The note sits on `driver_command_numbers` itself, where anyone reaching for it will read it before
+using it. It says the proxy is fit for large distinctive numbers, that the census was attempted and
+abandoned, and that **neither "most commands are driven" nor "most are dead" has been established.**
+
+**This is the sixth instrument problem this session and the first caught before it produced a
+claim.** The other five were found after the fact — an `awk` range running past an enum, a tree
+extractor at the wrong depth, a counter counting occurrences, a regex rejecting commented entries,
+and a name filter applied to two binaries at once. Every one of those was caught by reading a NUMBER
+rather than a verdict. This one was caught by asking what the number could mean before believing it,
+which is cheaper and should be the habit.
+
+### A SEVENTH, AND IT WAS OPERATIONAL RATHER THAN ANALYTICAL
+
+The environment reaped eleven background tasks at once, including the live CI waiter. Eight were
+zombies: each `until ... done` wait that exceeds its foreground limit is backgrounded and polls
+forever, and re-issuing a wait for the same condition creates another. **A poller forgotten about is
+a signal source no longer being reasoned about.** Checked the pull request directly rather than
+assuming; nothing was hidden. One waiter armed since.
+
+---
+
 ## 2026-08-30 — Session 57, sixth increment: the handoff was stale in four places, one of them against its own table
 
 Re-reading the resume section against what the session actually did — the check that caught a stale
