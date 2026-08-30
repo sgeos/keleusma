@@ -1,5 +1,33 @@
 # Design Journal
 
+## 2026-08-30 — The scalar float surface closes, and two semantics that would have been wrong if assumed
+
+**Increment**: `Neg` and `Mod`, completing scalar float arithmetic.
+
+**`Mod` is the truncated remainder**, carrying the sign of the dividend — Rust's `%` on `f64`, hence
+`frem`. A floored remainder would give `+1.0` where the reference gives `-1.0` for `-7.0 % 2.0`, and
+**a probe using only positive operands cannot tell the two apart**. So the differential uses negative
+dividends, with a must-fire control requiring the positive and negative results to have opposite signs.
+Checking rather than assuming cost one lookup.
+
+**`Neg` needed its own branch, and the reason is the recurring one.** The existing arm dispatches on
+WIDTH, and a float is eight bytes exactly like a `Fixed` — so without the kind check it would have
+negated the **bit pattern as an integer**, flipping a mantissa bit instead of the sign. That is the
+same collapse the kind channel was built for, showing up in one more arm.
+
+**The entry ABI was scoped and deliberately not started.** `lower_chunk` receives `chunk.param_types`,
+but **the chunk carries no return type** — it lives in module-level `ChunkSignature`, which a
+single-chunk lowering never sees. So parameters, return, prologue bitcasts, `Op::Return` and `Op::Call`
+must land together across both entry points. Recording that constraint means the next attempt starts
+from it rather than discovering it halfway.
+
+**Three brace-placement fumbles in the mechanical edits**, all caught by the compiler within a minute
+each. Worth noting only because the pattern is consistent: my brace-matching script inserts the closing
+brace past the arm when rustfmt has reflowed between edits. The compiler is a sufficient guard here, so
+this costs minutes rather than correctness — but it is the third increment where the same script has
+misplaced a brace, and the honest fix is to stop using brace-matching for arm surgery.
+
+
 ## 2026-08-30 — The test I said I could not write caught the defect I wrote blind
 
 **Increment**: float division, and the correction it forced.

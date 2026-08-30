@@ -725,6 +725,28 @@ Current sprint source of truth.
 > workspace **2467/0/88**, coverage re-derived and unchanged at 1070 of 1074.
 > See [`../decisions/OPERAND_WIDTH_RECOVERY.md`](../decisions/OPERAND_WIDTH_RECOVERY.md).
 
+> **Currency note (2026-08-30, V0.3.X line, sixth entry). THE FLOAT SCALAR SURFACE IS COMPLETE, AND
+> THE ENTRY ABI IS DEFERRED WITH A MEASURED REASON.**
+>
+> `Neg` and `Mod` land, completing scalar float arithmetic: constants, both conversions,
+> `Add`/`Sub`/`Mul`/`Div`/`Mod`/`Neg`, and all six comparisons, each verified by running the same
+> program on both sides. **Two semantics that would have been wrong if assumed.** `Mod` is the
+> **TRUNCATED** remainder carrying the sign of the dividend — Rust's `%` on `f64`, hence `frem`, not a
+> floored remainder: `-7.0 % 2.0` is `-1.0`. A probe with only positive operands cannot distinguish the
+> conventions, so the differential uses negative dividends with a **must-fire control requiring the
+> positive and negative probes to have opposite signs**. And **`Neg` needed its own branch**: the
+> existing arm dispatches on WIDTH, and a float is eight bytes like a `Fixed`, so without a kind check
+> it would have negated the **bit pattern as an integer**, flipping a mantissa bit rather than the sign.
+> **The entry ABI is NOT built, and the reason is measured**: `lower_chunk` receives
+> `chunk.param_types`, but **the chunk carries no RETURN type** — that lives in module-level
+> `ChunkSignature`, which a single-chunk lowering never sees. So parameter types, return type, the
+> prologue's bitcasts, `Op::Return` and `Op::Call` must land **together**, across both entry points;
+> that is a scoped plan rather than a slice. The signature route stays closed and is now the
+> unsupported-opcode subject, **the fourth in that succession** after composites, division and
+> remainder. **Still absent**: entry ABI, float shared slots, `f32`, floats in composites. Absorption 38
+> (`59129add`) is docs-only, every count predicted unchanged. `native_codegen` **385/0/0 ignored/76**,
+> censuses unmoved. See [`../decisions/FLOAT_SCALAR_SURFACE.md`](../decisions/FLOAT_SCALAR_SURFACE.md).
+
 > **Currency note (2026-08-30, V0.3.X line, fifth entry). FLOAT DIVISION LANDS, AND THE FIRST NaN TEST
 > CATCHES A COMPARISON DEFECT WRITTEN BLIND LAST INCREMENT.**
 >

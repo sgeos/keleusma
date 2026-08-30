@@ -128,38 +128,33 @@ fn the_result_is_not_what_integer_arithmetic_would_give() {
 /// written to understand a float refuses.
 #[test]
 fn a_float_cannot_reach_an_opcode_not_written_for_one() {
-    // **DIVISION RETIRED AS THE SUBJECT on 2026-08-30**, having been implemented
-    // and verified. The successor is **remainder**: the reference's float
-    // remainder was never checked here, so `Op::Mod` on a float is still refused
-    // — and an integer `srem` on a double's bit pattern would be a plausible
-    // wrong number rather than a fault, which is what this test guards.
-    const DIV: &str = "\
-fn main(w: Word) -> Word {
-  let f = w as Float;
-  let g = f % 2.0;
-  g as Word
-}
-";
-    let m = compile(&parse(&tokenize(DIV).expect("lex")).expect("parse")).expect("compile");
-    let ctx = Context::create();
-    let lm = ctx.create_module("kel");
-    let err = lower_chunk(
-        &ctx,
-        &lm,
-        &m.chunks[0],
-        "kel_entry",
-        LowerOptions::default(),
-    )
-    .expect_err(
-        "float division lowered, but no float division was written. Either it \
-             was added and this test should cover its differential instead, or a \
-             double's bits are being divided as an integer",
-    );
-    let text = format!("{err}");
+    // **REMAINDER RETIRED IN THE SAME INCREMENT IT WAS ADOPTED.** Division
+    // retired when it was implemented; remainder replaced it for one increment
+    // and has now been implemented and verified too.
+    //
+    // The successor is a float in a chunk **SIGNATURE**, a route of the
+    // module-level guard that stays closed because the entry ABI is not built:
+    // `lower_chunk` receives `param_types` but the chunk carries no RETURN type,
+    // so parameters, return, prologue, `Op::Return` and `Op::Call` must land
+    // together. Recorded in `FLOAT_SCALAR_SURFACE.md`.
+    const SUBJECT: &str = "fn p(a: Float) -> Float { a }\nfn main(w: Word) -> Word { w }";
+    let m = compile(&parse(&tokenize(SUBJECT).expect("lex")).expect("parse")).expect("compile");
+    let refusals = keleusma_native::module_refusals(&m, LowerOptions::default());
     assert!(
-        text.contains("float") || text.contains("Float"),
+        !refusals.is_empty(),
+        "a float in a SIGNATURE no longer refuses the module. Either the entry \
+         ABI was built — in which case this subject has retired like its three \
+         predecessors and needs a successor — or a route was opened without one"
+    );
+    let text = refusals
+        .iter()
+        .map(|(_, e)| format!("{e}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    assert!(
+        text.contains("Float") || text.contains("float"),
         "the refusal does not mention a float, so it may be refusing for an \
-         unrelated reason and this test would pass without guarding anything: {text}"
+         unrelated reason and this test would guard nothing: {text}"
     );
 }
 
@@ -377,4 +372,70 @@ fn nan_compares_equal_to_everything_as_the_reference_does() {
              and the rest false"
         );
     }
+}
+
+/// **Float negation and remainder, the last two of the scalar surface.**
+///
+/// The reference's `Op::Neg` arm handles `Byte`, `Fixed` and `Float`, negating a
+/// float with a plain `-x`. Its `Op::Mod` float arm is `x % y`, and **Rust's `%`
+/// on `f64` is the TRUNCATED remainder carrying the sign of the dividend** —
+/// exactly `frem`, and NOT a floor-style remainder.
+///
+/// **The negative dividends are the point.** `-7.0 % 2.0` is `-1.0` truncated and
+/// `+1.0` floored; a probe with only positive operands would not tell them apart.
+#[test]
+fn float_negation_and_remainder_agree_with_the_reference() {
+    const NEG: &str = "\
+fn main(w: Word) -> Word {
+  let f = w as Float;
+  let g = 0.0 - f;
+  g as Word
+}
+";
+    for arg in [0i64, 1, 7, -1, -7] {
+        let v = vm_result(NEG, arg);
+        let n = native_result(NEG, arg);
+        assert_eq!(v, n, "float negation disagrees at {arg}: {v} vs {n}");
+    }
+
+    const REM: &str = "\
+fn main(w: Word) -> Word {
+  let f = w as Float;
+  let d = 2.0;
+  let r = f % d;
+  let scaled = r * 100.0;
+  scaled as Word
+}
+";
+    // Scaled by 100 so a fractional remainder survives the cast to a word:
+    // `7 % 2 = 1.0` and `-7 % 2 = -1.0`, which differ in SIGN between the
+    // truncated and floored conventions.
+    for arg in [0i64, 1, 2, 3, 7, -1, -3, -7] {
+        let v = vm_result(REM, arg);
+        let n = native_result(REM, arg);
+        assert_eq!(v, n, "float remainder disagrees at {arg}: {v} vs {n}");
+    }
+}
+
+/// **CONTROL, must-fire.** Without it, the remainder probes could all give zero
+/// and the agreement above would say nothing about the sign convention.
+#[test]
+fn the_remainder_probes_show_a_signed_result() {
+    const REM: &str = "\
+fn main(w: Word) -> Word {
+  let f = w as Float;
+  let d = 2.0;
+  let r = f % d;
+  let scaled = r * 100.0;
+  scaled as Word
+}
+";
+    let pos = vm_result(REM, 7);
+    let neg = vm_result(REM, -7);
+    assert!(
+        pos > 0 && neg < 0,
+        "the remainder probes give {pos} and {neg}; a truncated remainder must \
+         carry the sign of the dividend, so if these are not opposite in sign \
+         the probes do not distinguish the convention"
+    );
 }

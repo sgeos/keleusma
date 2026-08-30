@@ -2555,6 +2555,10 @@ fn lower_chunk_body<'ctx>(
                     // NOT: the reference's float remainder was not verified here,
                     // so it still fails closed.
                     | Op::Div
+                    // `Mod` and `Neg` joined on 2026-08-30, both checked against
+                    // the reference: `frem` and `fneg`.
+                    | Op::Mod
+                    | Op::Neg
                     // Comparisons became float-aware on 2026-08-30, matching the
                     // reference's NaN-as-Equal ordering rather than IEEE.
                     | Op::CmpEq
@@ -2731,12 +2735,12 @@ fn lower_chunk_body<'ctx>(
                 // `Op::Div`; `CheckedDiv` is a different opcode with a different
                 // convention. Corrected in `FLOAT_DIVISION.md`.
                 //
-                // `Op::Mod` on floats is NOT lowered: the reference's remainder
-                // arm is not float-total in the same way, and nothing verified it
-                // here, so a float `Mod` still fails closed at the whitelist.
-                if matches!(op, Op::Div)
-                    && (st.kind_at(0) == OperandKind::Float || st.kind_at(1) == OperandKind::Float)
-                {
+                // **`Op::Mod` IS lowered now**, added 2026-08-30 after checking
+                // the reference: its float arm is `x % y`, and Rust's `%` on
+                // `f64` is the TRUNCATED remainder carrying the sign of the
+                // dividend — exactly `frem`. Verified with negative dividends,
+                // where a floor-style remainder would disagree.
+                if st.kind_at(0) == OperandKind::Float || st.kind_at(1) == OperandKind::Float {
                     if float_bytes != 8 {
                         return Err(LowerError::UnsupportedShape(format!(
                             "float division at a float width of {float_bytes} \
@@ -2746,7 +2750,7 @@ fn lower_chunk_body<'ctx>(
                     let (kl, kr) = (st.kind_at(1), st.kind_at(0));
                     if kl != OperandKind::Float || kr != OperandKind::Float {
                         return Err(LowerError::unsupported_op(
-                            "Div",
+                            &op_variant_name(op),
                             format!(
                                 "Div with operand kinds {kl:?} and {kr:?}: one side \
                                  is a float and the other is not"
@@ -2764,7 +2768,11 @@ fn lower_chunk_body<'ctx>(
                         st.b.build_bit_cast(rb, f64t, "rdf")
                             .unwrap()
                             .into_float_value();
-                    let q = st.b.build_float_div(l, r, "fdiv").unwrap();
+                    let q = if matches!(op, Op::Div) {
+                        st.b.build_float_div(l, r, "fdiv").unwrap()
+                    } else {
+                        st.b.build_float_rem(l, r, "frem").unwrap()
+                    };
                     let bits =
                         st.b.build_bit_cast(q, i64t, "qbits")
                             .unwrap()
@@ -3757,20 +3765,47 @@ fn lower_chunk_body<'ctx>(
             // `Byte` with `u8::wrapping_neg`, which is `(-a) & 0xFF`, and a
             // `Fixed` with `i64::wrapping_neg`.
             Op::Neg => {
-                let w = st.width_at(0);
-                let out = arith_result_width(w, w, false).ok_or_else(|| {
-                    LowerError::unsupported_op(
-                        "Neg",
-                        format!(
-                            "Neg with operand width {w:?}: lowered only for a Byte (1 \
+                // **Float negation is `fneg`.** The reference's `Op::Neg` arm
+                // handles `Byte`, `Fixed` AND `Float`, negating a float with a
+                // plain `-x`. Without this branch the width-based path below
+                // would either refuse it or, worse, negate the bit pattern as an
+                // integer — which flips the sign bit of the mantissa's neighbour
+                // rather than the number.
+                if st.kind_at(0) == OperandKind::Float {
+                    if float_bytes != 8 {
+                        return Err(LowerError::UnsupportedShape(format!(
+                            "float negation at a float width of {float_bytes} \
+                             bytes; only 8 is lowered"
+                        )));
+                    }
+                    let f64t = ctx.f64_type();
+                    let bits = st.pop();
+                    let f =
+                        st.b.build_bit_cast(bits, f64t, "nf")
+                            .unwrap()
+                            .into_float_value();
+                    let n = st.b.build_float_neg(f, "fneg").unwrap();
+                    let out =
+                        st.b.build_bit_cast(n, i64t, "nbits")
+                            .unwrap()
+                            .into_int_value();
+                    st.push_k(out, Width::Scalar(8), OperandKind::Float);
+                } else {
+                    let w = st.width_at(0);
+                    let out = arith_result_width(w, w, false).ok_or_else(|| {
+                        LowerError::unsupported_op(
+                            "Neg",
+                            format!(
+                                "Neg with operand width {w:?}: lowered only for a Byte (1 \
                          byte) or a Fixed (8 bytes) operand, and refused rather \
                          than guessed otherwise"
-                        ),
-                    )
-                })?;
-                let v = st.pop();
-                let raw = st.b.build_int_neg(v, "gneg").unwrap();
-                st.push_w(mask_if_byte(&st.b, i64t, raw, out), out);
+                            ),
+                        )
+                    })?;
+                    let v = st.pop();
+                    let raw = st.b.build_int_neg(v, "gneg").unwrap();
+                    st.push_w(mask_if_byte(&st.b, i64t, raw, out), out);
+                }
             }
             Op::WordToByte => {
                 let v = st.pop();

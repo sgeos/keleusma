@@ -6,61 +6,57 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## The test I said I could not write caught a defect I wrote blind
+## The float scalar surface is complete
 
-Last increment I implemented the float NaN comparison rule **by reading the reference, with no way to
-test it** — nothing could produce a NaN, because the route was division and division was unimplemented.
-I said so explicitly rather than letting a green suite imply coverage.
+`Neg` and `Mod` land, finishing scalar float arithmetic: constants, both conversions,
+`Add`/`Sub`/`Mul`/`Div`/`Mod`/`Neg`, and all six comparisons — each verified by running the same
+program on the reference and on the lowered code.
 
-**Division landed this increment, and the first NaN test failed immediately.**
+**Two semantics that would have been wrong if assumed:**
 
-The reference has **two comparison paths with different NaN semantics**:
+- **`Mod` is the TRUNCATED remainder**, carrying the sign of the dividend — Rust's `%` on `f64`, so
+  `frem`, not a floored remainder. `-7.0 % 2.0` is `-1.0`, not `+1.0`. **A probe with only positive
+  operands cannot tell the conventions apart**, so the differential uses negative dividends with a
+  must-fire control requiring the positive and negative results to have opposite signs.
+- **`Neg` needed its own branch.** The existing arm dispatches on WIDTH, and a float is eight bytes
+  like a `Fixed` — without a kind check it would have negated the **bit pattern as an integer**,
+  flipping a mantissa bit rather than the sign.
 
-| opcodes | path | NaN |
-|---|---|---|
-| `CmpEq`, `CmpNe` | **`PartialEq`** | IEEE — NaN equals nothing, so `!=` is **true** |
-| `CmpLt`, `Gt`, `Le`, `Ge` | `compare_op` = `partial_cmp(...).unwrap_or(Equal)` | **NaN as Equal** |
+## The entry ABI is still not built, and here is the measured reason
 
-I had read only `compare_op` and applied NaN-as-Equal to `Eq`, `Le` and `Ge`. **`Eq` was wrong** —
-`NaN == x` was true natively and false on the reference — and `Ne` needed the **unordered** predicate.
-Both fixed.
+It is the piece your ruling names, so I want the reason on the record rather than implied:
+**`lower_chunk` receives `chunk.param_types`, but the chunk carries no RETURN type.** The return lives
+in module-level `ChunkSignature`, which a single-chunk lowering never sees.
 
-**`NaN == x` is not a value anyone inspects. Had I not flagged the path as unexercised and written the
-test the moment it became possible, that divergence would have shipped silently.**
+So it cannot be done by halves — parameter types, return type, the prologue's bitcasts, `Op::Return`
+and `Op::Call` all have to land together, across both entry points. **That is a scoped plan, not a
+slice to fit beside an absorption**, and I would rather say so than half-build it.
 
-## A second correction to my own record
+The signature route of the guard therefore stays closed, and is now the unsupported-opcode subject —
+the fourth in that succession, after composites, division and remainder.
 
-Last increment I declined division because it "flows through `Op::CheckedDiv`'s three-value push".
-**Wrong for the `/` operator** — the compiler emits plain `Op::Div`, whose reference arm is a bare
-`x / y` with no zero check, matching `fdiv` exactly. I had read the virtual machine's arm rather than
-what the compiler emits. **Compiling one line of source would have settled it.**
+## Still absent, so the surface is not read as finished
 
-## Verified now
-
-- **Division** over eight probes including negatives.
-- **Division by zero**: `+inf`, `-inf` and NaN, through the saturating cast to `i64::MAX`, `i64::MIN`
-  and `0`, with a non-vacuity check that the three probes give three different answers.
-- **All six predicates against a NaN** — the test that could not exist before this increment.
-
-`Op::Mod` on floats is still refused, and is now the unsupported-opcode subject, division having
-retired.
+The entry ABI; **float shared slots**, which is one of your open ABI questions; `f32`, since only the
+8-byte width is lowered and any other is refused rather than approximated; and floats inside
+composites.
 
 ## Verification
 
 | | result |
 |---|---|
-| `native_codegen` gate step | **383 passed, 0 failed, 0 ignored, 76 binaries**, exit 0 |
-| censuses | 63 of 66; `["Len"]`; 1072 of 1074; 89854 of 89940 — unmoved |
-| workspace | **verified by the pre-push gate**, not separately counted this increment |
+| `native_codegen` gate step | **385 passed, 0 failed, 0 ignored, 76 binaries**, exit 0 |
+| censuses | 63 of 66; 1072 of 1074; 89854 of 89940 — **unmoved, as expected** |
+| workspace | verified by the pre-push gate |
 
-**I stopped a duplicate workspace run rather than pay for it twice**: the pre-push hook runs the same
-gate and refuses the push if anything is red. It had reached 1853 passed, 0 failed across 60 binaries
-when stopped. Absorption 37 (`e45a2ff9`) is merged with a clean ownership diff.
+Censuses were not expected to move: no corpus module negates or takes the remainder of a float.
+**Absorption 38** (`59129add`) is docs-only, every count predicted unchanged.
 
 ## Still open, and yours
 
-[`ABI_RULINGS.md`](../decisions/ABI_RULINGS.md) — `Fixed`, `Text`, `Opaque`, `Unit`. **The entry ABI
-your float ruling names is still unbuilt** and still has no corpus witness.
+[`ABI_RULINGS.md`](../decisions/ABI_RULINGS.md) — `Fixed` (the interop goal decides and is unstated),
+`Text` (your supposition that it was covered is incorrect), `Opaque` (your intent is already what the
+handle achieves), `Unit`.
 
 ## Standing constraints, unchanged
 
