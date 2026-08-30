@@ -8203,6 +8203,17 @@ fn boundary_cases() -> &'static [(&'static str, Support, &'static str)] {
             SOk,
             "fn f(a: Byte, b: Byte) -> Byte { a + b }",
         ),
+        // THE TWO CASES BELOW EXIST TO CLOSE AN OP-TAG GAP, NOT TO WIDEN THE LANGUAGE. The
+        // op-tag census recorded `subop`, `mulop` and `checkedneg` as reached by no corpus this
+        // project runs. `byte_arith` above is `a + b` and NOTHING MORE, which is exactly why
+        // subtraction and multiplication escaped every oracle while addition did not. Both
+        // compile byte-identically, so neither buys its coverage with a divergence.
+        (
+            "scalar/byte_sub_mul",
+            SOk,
+            "fn f(a: Byte, b: Byte) -> Byte { a - b * a }",
+        ),
+        ("scalar/word_unary_neg", SOk, "fn f(a: Word) -> Word { -a }"),
         (
             "scalar/byte_cmp",
             SOk,
@@ -9342,5 +9353,187 @@ fn the_test_drivers_category_mapping_agrees_with_the_library() {
         keleusma::selfhost::reconstruct_category(1),
         "`loop` and `fn` must not map to the same reconstruct category, or this \
          agreement is between two constant functions"
+    );
+}
+
+/// **THE THIRD OP-TAG POPULATION, MEASURED. THE RESIDUE WAS FOUR AND IT IS STILL FOUR.**
+///
+/// `tests/op_tag_tables.rs` censused two corpora against the stage's sixty-three op tags. The
+/// twelve stage sources leave sixteen tags unexercised; the fifteen shipped examples cover twelve
+/// of those, leaving `addop`, `subop`, `mulop` and `checkedneg` — byte arithmetic and unary
+/// negation. That file records the **per-construct boundary table as a THIRD population it had
+/// not measured**, and says so rather than rounding the claim up.
+///
+/// This is that measurement. It lives here rather than in the census file because
+/// `boundary_cases` is directly callable here: extracting the sources textually from another
+/// file would mean writing a Rust string-literal scanner, and **this repository has twice had an
+/// audit reach a wrong conclusion because its own extractor was wrong**. No instrument, no
+/// instrument error.
+///
+/// # WHAT IT ESTABLISHED, AND THEN CLOSED
+///
+/// The four residual tags correspond to `Op::Add`, `Op::Sub`, `Op::Mul` and `Op::CheckedNeg` —
+/// the UNCHECKED forms `Byte` operands take through promote-operate-truncate, plus unary
+/// negation.
+///
+/// **Measured, the boundary table already reached `Op::Add`** — through `scalar/byte_arith`
+/// (`a + b` on two `Byte` operands) and `scope/float_arith__GAP` (the same shape on `Float`s). So
+/// the residue across all three populations was THREE, not four. **Rounding the census's claim up
+/// instead of measuring would have been wrong by exactly one tag.**
+///
+/// **And the shape said how to close the rest.** Both witnesses were ADDITION and nothing else,
+/// which is precisely why subtraction and multiplication escaped every oracle while addition did
+/// not. Two cases were added — `scalar/byte_sub_mul` and `scalar/word_unary_neg` — and the
+/// boundary table now reaches all four. **Both compile BYTE-IDENTICALLY, so the coverage is not
+/// bought with a divergence.**
+///
+/// # WHAT THIS DOES NOT SAY
+///
+/// The other two corpora are unchanged and still miss all four; `SHIPPED_EXAMPLES_ALSO_MISS` in
+/// the census file is about the shipped examples and stays at four. **The closed claim is "no
+/// corpus reaches these", not "the shipped examples reach these".** Conflating the populations is
+/// the error this census family exists to avoid.
+///
+/// `scalar/byte_neg` is deliberately absent: byte negation lowers to `Op::Neg`, the stage emits
+/// `checkedneg` for it and diverges, and `Neg` is not one of the sixty-three stage tags at all.
+/// Adding it would buy a divergence for no tag.
+///
+/// # A refusal is REPORTED, not skipped
+///
+/// A case the reference cannot compile is counted and bounded rather than dropped, because
+/// silently discarding inputs is how a census comes to describe a smaller population than it
+/// names. `RefRejects` cases are expected to refuse and are excluded by their own label.
+#[test]
+fn the_boundary_table_is_the_third_op_tag_population_and_leaves_the_same_four() {
+    use std::collections::BTreeSet;
+
+    // The `Op` variants the four residual stage tags decode to. Named here rather than derived,
+    // and kept honest by `the_residue_named_here_matches_the_census_file` below.
+    const RESIDUE_OPS: &[&str] = &["Add", "Sub", "Mul", "CheckedNeg"];
+
+    let mut present: BTreeSet<String> = BTreeSet::new();
+    let mut compiled = 0usize;
+    let mut refused: Vec<&str> = Vec::new();
+
+    for (name, support, src) in boundary_cases() {
+        if matches!(support, Support::RefRejects) {
+            continue;
+        }
+        match tokenize(src)
+            .ok()
+            .and_then(|t| parse(&t).ok())
+            .and_then(|a| compile(&a).ok())
+        {
+            Some(module) => {
+                compiled += 1;
+                for chunk in &module.chunks {
+                    for op in &chunk.ops {
+                        present.insert(
+                            format!("{op:?}")
+                                .chars()
+                                .take_while(char::is_ascii_alphanumeric)
+                                .collect::<String>(),
+                        );
+                    }
+                }
+            }
+            None => refused.push(name),
+        }
+    }
+
+    assert!(
+        compiled >= 90,
+        "only {compiled} boundary cases compiled, so this census describes a population much \
+         smaller than the table it claims to measure"
+    );
+    assert!(
+        refused.len() <= 2,
+        "the reference refused {} boundary cases not labelled RefRejects: {refused:?}. A census \
+         that drops inputs describes a smaller population than it names.",
+        refused.len()
+    );
+    assert!(
+        present.len() > 20,
+        "only {} distinct operations were seen across {compiled} modules, which is too few for \
+         this census to be measuring what it claims",
+        present.len()
+    );
+
+    let reached: Vec<&str> = RESIDUE_OPS
+        .iter()
+        .copied()
+        .filter(|op| present.contains(*op))
+        .collect();
+    let mut want: Vec<&str> = RESIDUE_OPS.to_vec();
+    want.sort_unstable();
+    let mut got = reached.clone();
+    got.sort_unstable();
+    assert_eq!(
+        got, want,
+        "the boundary table no longer reaches every operation the other two corpora miss. It \
+         reached all four once `scalar/byte_sub_mul` and `scalar/word_unary_neg` were added; a \
+         NARROWER set means one of those cases has left the table or stopped compiling, and the \
+         residue claim in `tests/op_tag_tables.rs` is stale in the unsafe direction."
+    );
+
+    // Name the cases responsible, so the finding is grounded in a witness rather than a count.
+    let mut witnesses: Vec<&str> = Vec::new();
+    for (name, support, src) in boundary_cases() {
+        if matches!(support, Support::RefRejects) {
+            continue;
+        }
+        let Some(module) = tokenize(src)
+            .ok()
+            .and_then(|t| parse(&t).ok())
+            .and_then(|a| compile(&a).ok())
+        else {
+            continue;
+        };
+        if module
+            .chunks
+            .iter()
+            .flat_map(|c| &c.ops)
+            .any(|op| format!("{op:?}").starts_with("Add"))
+        {
+            witnesses.push(name);
+        }
+    }
+    assert!(
+        witnesses.len() >= 2,
+        "only {} case(s) carry `Op::Add`, where two did when measured. The two loops here \
+         disagree, or a witness has left the table.",
+        witnesses.len()
+    );
+}
+
+/// **THE FOUR RESIDUAL OPERATIONS NAMED IN THE CENSUS ABOVE STILL MATCH THE CENSUS FILE.**
+///
+/// The population census lives in `tests/op_tag_tables.rs` and names its residue by STAGE TAG;
+/// the test above names the same residue by `Op` VARIANT, because that is what a compiled module
+/// carries. Two spellings of one fact drift, so this checks they still agree.
+///
+/// It is a text check on purpose. Deriving the correspondence here would duplicate the mapping
+/// that file already owns, which is the nine-copies defect this tree has paid for once.
+#[test]
+fn the_residue_named_here_matches_the_census_file() {
+    const CENSUS: &str = include_str!("op_tag_tables.rs");
+
+    let line = CENSUS
+        .lines()
+        .find(|l| l.contains("const SHIPPED_EXAMPLES_ALSO_MISS"))
+        .expect("the census file declares the residue it measured");
+
+    for tag in ["addop", "subop", "mulop", "checkedneg"] {
+        assert!(
+            line.contains(tag),
+            "the census file no longer lists `{tag}` among the tags no corpus reaches: {line}. \
+             The residue has changed, so the operation list in the test above is stale."
+        );
+    }
+    assert_eq!(
+        line.matches('"').count(),
+        8,
+        "the census residue is no longer exactly four tags: {line}. The test above enumerates \
+         four operations and would be silent about any fifth."
     );
 }

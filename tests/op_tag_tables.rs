@@ -811,9 +811,31 @@ const CENSUS_EXAMPLES: &[&str] = &[
 /// the residue is "byte arithmetic and unary negation", which reads as a corpus gap with a shape
 /// rather than as noise.
 ///
-/// **This is where a transposition hides from every oracle this project runs**, and naming the
-/// four is the deliverable. Closing it means a program exercising byte arithmetic and `-x` in
-/// one of these corpora, not a change to any guard here.
+/// **THIS CONSTANT IS ABOUT THE SHIPPED EXAMPLES AND STAYS AT FOUR. THE OVERALL RESIDUE IS
+/// THREE.** A later increment measured the THIRD population this file names below and had not
+/// measured — the per-construct boundary table — and it **reaches `addop`**, through
+/// `scalar/byte_arith` and `scope/float_arith__GAP`, both of the shape `a + b`. See
+/// `the_boundary_table_is_the_third_op_tag_population_and_leaves_the_same_four` in
+/// `tests/selfhost_codegen.rs`.
+///
+/// So `addop` was exercised by a corpus, and what no corpus reached was `subop`, `mulop` and
+/// `checkedneg`. **Both witnesses were ADDITION, which is exactly why one of the four escaped and
+/// the other three did not** — and that shape said how to close them. Two byte-identical cases
+/// were added to the boundary table, `scalar/byte_sub_mul` and `scalar/word_unary_neg`, and **the
+/// residue over all three populations is now EMPTY.**
+///
+/// **THIS CONSTANT IS STILL FOUR AND MUST STAY FOUR.** It records what the SHIPPED EXAMPLES miss,
+/// and they miss all four exactly as before. The closed claim is "no corpus reaches these"; this
+/// one is "the shipped examples do not". Collapsing the two would make this file assert something
+/// it never measured.
+///
+/// **The earlier wording said this was where a transposition hides from every oracle this project
+/// runs. That was true of four tags when two populations had been measured and is true of three
+/// now.** It is corrected rather than deleted, because the correction is the argument for
+/// measuring a population instead of describing it.
+///
+/// That closure needed no change to any guard here, no language change and no stage change — only
+/// two source snippets in a corpus that had never carried a `Byte` subtraction.
 const SHIPPED_EXAMPLES_ALSO_MISS: &[&str] = &["addop", "checkedneg", "mulop", "subop"];
 
 /// **`Op::Neg` IS OUTSIDE THE SELF-HOSTED SUBSET, WHICH IS STRONGER THAN BEING UNTAGGED.**
