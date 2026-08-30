@@ -204,9 +204,14 @@ fn an_unsupported_opcode_is_refused_rather_than_mislowered() {
     // ABI landed and `entry_abi_float.rs` agreed with the virtual machine
     // through the real calling convention. **The subject is now `Op::Len`.**
     //
-    // Earlier subjects were chosen by running `probe_unsupported`; that probe is
-    // no longer in the tree, so this one comes from the measured refusal census
-    // instead: `Len` is the single opcode the lowering refuses BY NAME, and
+    // Earlier subjects were chosen by running `probe_unsupported`, and it was
+    // run for this one too — its whole candidate list now LOWERS or is rejected
+    // by the reference compiler, so it names no successor. (A first draft of
+    // this comment said the probe was "no longer in the tree", off a grep for
+    // its name in file CONTENTS; the file does not name itself, and the claim
+    // was false. Check for a file by its NAME.) The subject therefore comes
+    // from the measured refusal census: `Len` is the single opcode the lowering
+    // refuses BY NAME, and
     // `len_flat_array_hazard.rs` pins that its witness construct — a for-in
     // whose source is an `if` expression choosing between two arrays — compiles
     // and passes `verify()`, so the refusal really is this backend's boundary
