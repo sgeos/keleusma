@@ -353,52 +353,61 @@ gh run list --branch v0.2.3 --limit 1
 **ONE. THERE IS NO BLOCKER AND NO OPEN PULL REQUEST.** `origin/v0.2.3` at `f8d691a1`, 170 merges,
 nothing in flight. **Do not invent urgency.**
 
-**TWO. THE LAST TYPE-CHANNEL EXTRACTION IS `expression_nodes_resolvable`**, and it is the largest
-at 142 lines behind its thin wrapper. Four of five have moved; this is the one that completes Order
-1 item 3. **Read the record stream first** -- see the rule at the top of this file, which two of the
-four slices proved the hard way.
+**TWO. THE LAST TYPE-CHANNEL EXTRACTION IS PART-MOVED. TWO OF ITS EIGHT KINDS ARE DONE.**
 
-**THE OBSTACLE IS MEASURED AND IT IS NOT WHAT THE SIZING SAID.** The table is POSITIONAL --
-`derived` indexes into it -- so its ORDER is content. A probe walked the forest in preorder over
-`lhs` and `rhs` to see whether that order is recoverable, and the way it failed is the finding:
-for `g() + g() * 2` it saw ONE call where there are two, and for `f(1)` it ran to HUNDREDS of nodes
-before a guard stopped it. **It misses children and revisits nodes in the same probe**, because a
-call's arguments live in `call_args` and the loop, match, limit and multihead constructs each keep
-their parts in their own side-table. `tests/forest_child_channels.rs` pins that there are exactly
-SIX such channels, so a walk written against them is complete by construction.
-
-**AND `codegen.kel`'s VISIT ORDER IS NOT THE ORDER YOU WANT.** It is emission order for a stack
-machine, not the reference's syntax-tree preorder. Copying its child sequence gives a consistent
-traversal that is still wrong for this comparison.
-
-**IT EMITS EIGHT NODE KINDS**, each needing its own mapping plus operand classification:
-
-| kind | note |
+| kind | state |
 |---|---|
-| `BINOP` | |
-| `ARRAY_ELEM` | |
-| `CONDITION` | |
-| `BRANCH_PAIR` | |
-| `FIELD_ON_VALUE` | **composite** |
-| `INDEX_ON_VALUE` | **composite** |
-| `STRUCT_LIT` | **composite** |
-| `TAIL_VS_RETURN` | |
+| `BINOP` | **MOVED**, across ALL FOUR forest kinds the lowering splits it into -- `Word` (3) and `Byte` bitwise (44), arithmetic (45), shifts (60) |
+| `CONDITION` | **MOVED** |
+| `BRANCH_PAIR` | **BUILT AND WITHHELD.** See below -- do not simply finish it |
+| `ARRAY_ELEM` | not moved |
+| `FIELD_ON_VALUE` | not moved, **composite** |
+| `INDEX_ON_VALUE` | not moved, **composite** |
+| `STRUCT_LIT` | not moved, **composite** |
+| `TAIL_VS_RETURN` | not moved |
 
-Each operand is reported as `(value, form)` where form 0 is a TAG and form 1 a NAME. The
-name-resolution half is already available: `occurrence_rows_from_pipeline` builds a slot-to-name
-map from parameter names and `let_names` looked up BY SLOT, and that is the piece the previous
-four slices had to invent each time.
+`expression_rows_from_pipeline` carries the moved kinds. **Its name deliberately does not match
+the pattern the count pin searches for**, which is each extraction's own name with the pipeline
+suffix appended, so the pin keeps reporting FOUR of five rather than letting a partial migration
+read as complete. **Keep that discipline.**
 
-**THE THREE COMPOSITE KINDS ARE THE RISK, AND THERE IS EVIDENCE FOR THAT RATHER THAN A HUNCH.**
-The occurrences slice established that the reference and the pipeline **disagree about what an
-occurrence IS** for a composite: `d.q` is a field access over an `Ident` on one side and a single
-data-read node on the other. Expect the same class of representational mismatch on
-`FIELD_ON_VALUE`, `INDEX_ON_VALUE` and `STRUCT_LIT`, and settle it with a probe against the
-reference BEFORE designing the mapping.
+The name it avoids is not written out here, and neither is the bare suffix: the citation guard
+rejects any identifier that resolves to nothing, and it caught BOTH attempts to write this
+paragraph. That is the fifth and sixth instance in this repository of naming a dead identifier
+while explaining why it must not exist.
 
-**SESSION 56 DECLINED TO START THIS** rather than risk a partial migration counted as a whole one,
-which is the failure the count pin exists to prevent. That is a scope judgement, not a blocker: the
-work is well defined and the sizing above is the measurement it was declined on.
+**RETRACTED: "THE TABLE IS POSITIONAL, SO ITS ORDER IS CONTENT."** This file said that, and it is
+FALSE. `verify_types.kel` reads the expression table in exactly two places -- `tyb_node_tag`,
+indexed by `ty.btag[b]` for a form-2 binding, and a per-row predicate examining row `i` in isolation
+-- and **nothing sweeps it in order**. Confirmed from the other side: the harness builds `derived`
+as `(name, base + i)`, a position in its own flattened output that nothing outside those two
+channels compares. **The index need only be consistent between the two channels the host supplies,
+so ANY numbering the pipeline chooses works.**
+
+That retraction cost three wrong sizings, and the corrected framing is at the top of this file:
+**read what CONSUMES the data.** The forest-child-channel finding
+(`tests/forest_child_channels.rs`, six channels) remains TRUE and remains useful for any walk, but
+it is **not** the blocker it was described as.
+
+**THE BRANCH PAIR WAS BUILT, MEASURED, AND WITHHELD -- DO NOT JUST FINISH IT.** `push_if`
+synthesises an else arm, so the pipeline cannot distinguish a one-armed conditional from a
+two-armed one. A pair row feeds `ty_node_bad`'s EQUALITY branch, so a SPURIOUS row can make the
+stage reject a correct program, and a DROPPED row makes it miss a disagreement it exists to catch.
+**Both directions are unsound.** A heuristic on the synthesised arm's UNIT tag was considered and
+rejected because it could not be shown safe.
+`a_one_armed_conditional_is_why_the_branch_pair_does_not_move` pins the witness.
+
+**THE THREE COMPOSITE KINDS ARE THE REMAINING RISK, WITH EVIDENCE RATHER THAN A HUNCH.** The
+occurrences slice established that the two sides **disagree about what a node IS** for a composite:
+`d.q` is a field access over an `Ident` on one side and a single data-read node on the other. Probe
+against the reference BEFORE designing a mapping for `FIELD_ON_VALUE`, `INDEX_ON_VALUE` or
+`STRUCT_LIT`.
+
+**AND A CORPUS MUST CONTAIN THE CONSTRUCT OR THE TEST IS SILENT ABOUT IT.** Recorded four times,
+including inside this very slice family: the kind-1 extraction shipped covering only `Word` operands
+while its corpus was all-`Word`, and PASSED while blind to three of the four forest kinds. That was
+caught at twenty of twenty-two and corrected on the branch. **The agreement tests now assert their
+corpus coverage; keep doing that.**
 
 **AND THE OTHER LARGE ITEM IS THE OPERATOR'S TO CALL, NOT YOURS TO START.** Making
 `verify_types.kel` self-compile means collecting `data` declarations before parsing bodies: a
