@@ -4447,7 +4447,6 @@ fn sampled_mutants_capped(m: &Module, cap: usize) -> (Vec<(Module, String)>, usi
 /// The widened mutation family was kept rather than reverted: detected went from
 /// 39 to 48 and subjects with no applicable site at all from 10 to 3, which is
 /// more correctness than a fast gate is worth.
-#[ignore]
 #[test]
 fn how_deep_does_the_undetected_set_go() {
     /// Disclosed rather than silent: a cap that is not printed reads as
@@ -4527,7 +4526,13 @@ fn how_deep_does_the_undetected_set_go() {
             continue; // detected at three sites; not part of the question
         }
         let (deep_mutants, total_sites) = sampled_mutants_capped(&m, SITE_CAP);
-        let deep = probe_mutants(&m, &deep_mutants, &table, &variants);
+        // **ONE reference configuration, because variants are the CENSUS's axis.**
+        // This sweep exists for depth in SITES; it was also paying for breadth in
+        // variants, which the census already covers at every module. Whether that
+        // costs any finding is measured against the recorded baseline rather than
+        // assumed — see `DEEP_SWEEP_AXES.md`.
+        let deep_variants: Vec<(usize, Option<&[u8]>)> = variants.iter().take(1).copied().collect();
+        let deep = probe_mutants(&m, &deep_mutants, &table, &deep_variants);
         let (deep_diff, usable, equiv) = (deep.differed, deep.usable, deep.equivalent);
         rows.push((
             name,
@@ -4540,9 +4545,12 @@ fn how_deep_does_the_undetected_set_go() {
     }
 
     println!("\n================ SITE, SUBJECT, OR INERT MUTANT?");
-    println!("  Subjects that showed NO difference at three sites, re-swept at up");
-    println!("  re-swept at up to {SITE_CAP}. `cmp` is how many mutants survived the");
-    println!("  admissibility and fault filters to produce a real comparison.\n");
+    println!(
+        "  Subjects the census found nothing in, re-swept at up to {SITE_CAP} sites\n  \
+         against ONE reference configuration. `cmp` is how many mutants survived\n  \
+         the admissibility and fault filters to produce a real comparison."
+    );
+
     println!(
         "  {:28} {:>6} {:>6} {:>5} {:>6}  detected deeper?",
         "subject", "sites", "tried", "cmp", "inert"

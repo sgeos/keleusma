@@ -6,45 +6,42 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## Correcting myself: I removed a guard on a number I had disclaimed
+## Both mutation guards are back in the gate
 
-Last increment I told you both mutation sweeps were now opt-in, and called it a loss. **The reasoning
-behind it was worse than I said.** The justification was cost; the cost was never cleanly measured. I
-had applied three optimisations without measuring their effect, obtained one figure of 4132s, **wrote
-in the same commit that it was contaminated** by a load average near 13 — and then used slowness as the
-reason to disable the guards anyway.
+Two increments ago I disabled both. One increment ago I restored the cheap one. **Now both run on every
+gate — 372 passed, 0 ignored — so breadth and depth of mutation sensitivity are protected again.**
 
-So I fixed a threshold **before** measuring: under 600s for the two together.
+The reason the depth sweep was expensive turned out to be structural rather than inherent. The two were
+split by role but not by cost: the census is breadth (every module, one site, **every variant**), and
+the depth sweep is depth (up to eight sites) **and was also sweeping every variant** — the census's
+axis, paid for twice.
 
-| | time | load |
+**The experiment could have refuted that**, which is why it preceded the decision: killability needs a
+variant on which the reference behaves differently, so one variant might have shrunk the findings.
+
+**The table came back identical to the baseline** — every row, same YES set.
+
+| configuration | time | load |
 |---|---|---|
-| both together | **712s** | ~5–6 |
-| **census alone** | **206s** | ~5–6 |
-| deep sweep alone | **710s** | ~5–6 |
+| both sweeps, all variants | 712s | ~5–6 |
+| deep alone, one variant | 401s | ~3–6 |
+| **whole binary, both sweeps** | **400s** | **~8.2** |
 
-**The pair failed my own threshold, and I did not argue my way out of it** by pointing at the load
-average. But the deep sweep turns out to be essentially the entire cost, so:
+Under the 600s threshold I fixed last increment, and measured on a *loaded* machine, so conservative.
 
-- **the census runs in the gate again** — the detection floor and the non-vacuity checks are protecting
-  every module on every run, which was the part worth recovering;
-- **the deep sweep stays opt-in**, at 710s against a 600s threshold.
+**Nothing was traded away this time.** Site depth unchanged, the widened family unchanged, the census
+keeps its variants. The saving came from deleting a duplicated axis — unlike the three coverage
+reductions I made earlier on a wrong premise about where the cost sat.
 
-**What is still unprotected day to day**: regression in the *depth* of mutation sensitivity, beyond the
-census's single site per module.
+## Two of my recurring defects recurred, and were caught inside the increment
 
-**The whole native gate is now 496s at load 6**, against the 4132s I recorded and disclaimed. The gate
-was never the problem, and I should have trusted my own disclaimer instead of acting past it.
+The header fix **silently matched nothing** on its first attempt; the assertion I now write — checking
+both that the stale text is gone and that the new text is present — is what revealed it. And the
+un-ignore was done by **matching attribute lines rather than grepping text**, because last increment's
+assertion counted the words `` `#[ignore]` `` inside a doc comment.
 
-## Two more things I got wrong, both recorded
-
-**I read the cost backwards mid-course.** I first judged the deep sweep to dominate (right), then
-watching the gate concluded the census did (wrong — libtest prints its over-sixty-seconds notice for
-every long test running in parallel, so both looked stalled). That wrong premise cost three coverage
-reductions.
-
-**An assertion of mine counted a word inside a doc comment**, reporting two `#[ignore]` where one
-attribute existed. That is precisely the defect this line documented when a scanner counted 33
-skippable tests against a true 10. The file had been right the whole time.
+That is the first time this session the discipline caught my errors in the same increment rather than
+two later.
 
 ## Verification
 
@@ -53,17 +50,16 @@ Both suites run **sequentially** (parallel invalidates the perf canary, 57x).
 | | result |
 |---|---|
 | workspace | **2491 passed, 0 failed, 92 binaries**, cargo exit 0 |
-| `native_codegen` gate step | **371 passed, 0 failed, 1 ignored, 74 binaries**, exit 0, **496s** |
+| `native_codegen` gate step | **372 passed, 0 failed, 0 ignored, 74 binaries**, exit 0, **678s** at load ~8 |
 | censuses | 61 of 66; `["Len"]`; 1070 of 1074; 89841 of 89940 — all unmoved |
-
-**The 1 ignored is the deep sweep**, which is the disposition above rather than an incidental skip.
 
 **No absorption was needed**: already zero unabsorbed.
 
 ## Still waiting on you
 
-[`OPERATOR_DECISIONS_OPEN.md`](../decisions/OPERATOR_DECISIONS_OPEN.md) — three decisions, their
-costs, and what I do by default. All remaining capability work on this line is behind them.
+[`OPERATOR_DECISIONS_OPEN.md`](../decisions/OPERATOR_DECISIONS_OPEN.md) — three decisions, their costs,
+and what I do by default. **All remaining capability work on this line is behind them**, which is why
+recent increments have been correctness and instrument work.
 
 ## Standing constraints, unchanged
 

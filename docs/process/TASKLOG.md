@@ -608,6 +608,28 @@ Current sprint source of truth.
 > workspace **2467/0/88**, coverage re-derived and unchanged at 1070 of 1074.
 > See [`../decisions/OPERAND_WIDTH_RECOVERY.md`](../decisions/OPERAND_WIDTH_RECOVERY.md).
 
+> **Currency note (2026-08-29, V0.3.X line, eleventh entry). BOTH MUTATION SWEEPS ARE BACK IN THE
+> GATE; THE DEPTH SWEEP HAD BEEN PAYING FOR THE CENSUS'S AXIS.**
+>
+> The two sweeps were split by role but not by cost. The census is breadth — every module, one site,
+> **every variant**; the deep sweep is depth — up to eight sites — **and was also sweeping every
+> variant**, which is the census's axis. **The experiment could have refuted the idea**: killability
+> needs a variant on which the reference differs, so one variant might have shrunk the findings. **The
+> table came back identical to the recorded baseline**, same YES set of `piano_roll_3`, `piano_roll_4`,
+> `verify_depth`, `verify_types`. Cost with load recorded: **712s** both at all variants, **401s** deep
+> alone at one variant, **400s** for the whole binary with both — the last at load 8.2, so conservative,
+> and under the **600s** threshold fixed the previous increment. **Both sweeps now run every gate: 372
+> passed, 0 ignored**, so breadth AND depth of mutation sensitivity are protected again. **Site depth
+> was not reduced, the widened family was not narrowed, and the census keeps its variants** — the saving
+> came from removing a duplicated axis rather than trading coverage, unlike the three earlier
+> reductions. Two recurring defects of mine recurred and were caught within the increment: the header
+> fix **silently matched nothing** on the first attempt and was revealed by an assertion checking both
+> the stale text's absence and the new text's presence, and the un-ignore was done by **matching
+> attribute lines rather than grepping**, after the previous increment's assertion counted
+> `` `#[ignore]` `` inside a doc comment. Native gate **678s** at load ~8. No absorption needed.
+> Workspace **2491/0/92**, `native_codegen` **372/0/0 ignored/74**, censuses unmoved. See
+> [`../decisions/DEEP_SWEEP_AXES.md`](../decisions/DEEP_SWEEP_AXES.md).
+
 > **Currency note (2026-08-29, V0.3.X line, tenth entry). THE CENSUS IS RESTORED TO THE GATE; A GUARD
 > HAD BEEN REMOVED ON A NUMBER ITS OWN COMMIT DISCLAIMED.**
 >

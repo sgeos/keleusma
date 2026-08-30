@@ -1,5 +1,39 @@
 # Design Journal
 
+## 2026-08-29 — The depth sweep was paying for the census's axis, and both guards are back
+
+**Increment**: the deep sweep was opt-in at 710s, so regression in the *depth* of mutation sensitivity
+was unprotected. Looking at why it cost what it did: the two sweeps had been split by role but not by
+cost. The census is breadth — every module, one site, **every variant**. The deep sweep is depth — up
+to eight sites — **and was also sweeping every variant.** Variants are the census's axis; the depth
+sweep was paying for it twice.
+
+**The experiment could have refuted the idea, which is why it came before the decision.** Killability
+requires a variant on which the reference behaves differently, so one variant might have made fewer
+mutants killable and shrunk the findings. **The table came back identical to the recorded baseline** —
+every row, and the same YES set of `piano_roll_3`, `piano_roll_4`, `verify_depth`, `verify_types`. The
+variant sweep was redundant *for this instrument*, and remains necessary for the census.
+
+**Cost, measured with load recorded**: 712s for both sweeps at all variants, 401s for the deep sweep
+alone at one variant, and **400s for the whole binary with both running** — that last on a machine at
+load 8.2, so conservative, and comfortably under the 600s threshold fixed last increment. The two run
+in parallel threads, so the binary's wall-clock is the larger rather than the sum.
+
+**So both sweeps are back in the gate: 372 passed, 0 ignored.** Breadth and depth are protected again.
+Site depth was not reduced, the widened family was not narrowed, and the census keeps its variants —
+the saving came from removing a duplicated axis rather than from trading coverage, which is what the
+three earlier reductions did.
+
+**Two of my own recurring defects showed up again and were caught by the checks I now write.** The
+header fix silently matched nothing on the first attempt; the second asserted both that the stale
+fragment was gone and that the new text was present, and it was that assertion which revealed the first
+had failed. And the un-ignore was done by **matching attribute lines rather than grepping text**,
+because last increment's assertion counted the words `` `#[ignore]` `` inside a doc comment.
+
+**The pattern is finally working in my favour**: the discipline I adopted after those failures is now
+what surfaces them within the same increment rather than two increments later.
+
+
 ## 2026-08-29 — I removed a guard on a number I had myself disclaimed, and measured my way back
 
 **Increment**: the previous one marked both mutation sweeps `#[ignore]`, taking their assertions —
