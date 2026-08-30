@@ -128,12 +128,15 @@ fn the_result_is_not_what_integer_arithmetic_would_give() {
 /// written to understand a float refuses.
 #[test]
 fn a_float_cannot_reach_an_opcode_not_written_for_one() {
-    // Division is the sharp case: `Op::Div` on a double's bit pattern is an
-    // integer division that yields a plausible wrong number rather than a fault.
+    // **DIVISION RETIRED AS THE SUBJECT on 2026-08-30**, having been implemented
+    // and verified. The successor is **remainder**: the reference's float
+    // remainder was never checked here, so `Op::Mod` on a float is still refused
+    // — and an integer `srem` on a double's bit pattern would be a plausible
+    // wrong number rather than a fault, which is what this test guards.
     const DIV: &str = "\
 fn main(w: Word) -> Word {
   let f = w as Float;
-  let g = f / 2.0;
+  let g = f % 2.0;
   g as Word
 }
 ";
@@ -275,5 +278,103 @@ fn main(w: Word) -> Word {
         let n = native_result(SRC, arg);
         println!("  arg {arg}: reference {v}   native {n}");
         assert_eq!(v, n, "runtime out-of-range float cast disagrees at {arg}");
+    }
+}
+
+/// **Float division, including the results that used to be unreachable.**
+///
+/// The reference's `Op::Div` float arm is a bare `x / y` with **no zero check** —
+/// division by zero yields a signed infinity and `0.0 / 0.0` yields NaN. That is
+/// exactly `fdiv`, so the lowering is a straight bitcast pair around it.
+///
+/// **A previous increment recorded that float division flows through
+/// `Op::CheckedDiv`'s three-value push. That was wrong for the `/` operator**:
+/// the compiler emits plain `Op::Div`. Corrected in `FLOAT_DIVISION.md`.
+#[test]
+fn float_division_agrees_with_the_reference() {
+    const SRC: &str = "\
+fn main(w: Word) -> Word {
+  let a = w as Float;
+  let b = 2.0;
+  let q = a / b;
+  q as Word
+}
+";
+    for arg in [0i64, 1, 2, 3, 7, -1, -3, -8] {
+        let v = vm_result(SRC, arg);
+        let n = native_result(SRC, arg);
+        assert_eq!(v, n, "float division disagrees at {arg}: {v} vs {n}");
+    }
+}
+
+/// **Division by zero, which the saturating conversion finally makes OBSERVABLE.**
+///
+/// `x / 0.0` is `+inf` or `-inf` and `0.0 / 0.0` is NaN. Converting those to a
+/// word saturates on the reference — `i64::MAX`, `i64::MIN`, and **0 for NaN** —
+/// and the lowering now uses `llvm.fptosi.sat`, so both sides are defined.
+///
+/// **Before division landed, no source construct could produce these values.**
+/// This is the first test in the suite that exercises them.
+#[test]
+fn dividing_by_zero_agrees_including_nan() {
+    const SRC: &str = "\
+fn main(w: Word) -> Word {
+  let a = w as Float;
+  let z = 0.0;
+  let q = a / z;
+  q as Word
+}
+";
+    // 1/0 -> +inf -> i64::MAX ; -1/0 -> -inf -> i64::MIN ; 0/0 -> NaN -> 0.
+    for arg in [1i64, -1, 0] {
+        let v = vm_result(SRC, arg);
+        let n = native_result(SRC, arg);
+        assert_eq!(v, n, "division by zero disagrees at {arg}: {v} vs {n}");
+    }
+    // Non-vacuity: the three probes must not all give the same answer, or the
+    // saturation and NaN behaviour would be untested by them.
+    let answers: Vec<i64> = [1i64, -1, 0].iter().map(|&a| vm_result(SRC, a)).collect();
+    assert!(
+        answers[0] != answers[1] && answers[1] != answers[2],
+        "the zero-division probes give {answers:?}, so they do not distinguish \
+         +inf, -inf and NaN and this test would pass without exercising them"
+    );
+}
+
+/// **THE NaN COMPARISON PATH, WRITTEN BLIND LAST INCREMENT, IS NOW EXERCISED.**
+///
+/// The reference compares floats with `partial_cmp(...).unwrap_or(Equal)`, so a
+/// NaN is **equal to everything**. That adjustment was implemented by reading the
+/// reference, with no way to test it: nothing could produce a NaN.
+///
+/// **Division changed that.** `0.0 / 0.0` is a NaN, so every predicate can now be
+/// asked about one — and this is the test the previous increment said it could
+/// not write.
+#[test]
+fn nan_compares_equal_to_everything_as_the_reference_does() {
+    for (op, name) in [
+        ("<", "lt"),
+        (">", "gt"),
+        ("<=", "le"),
+        (">=", "ge"),
+        ("==", "eq"),
+        ("!=", "ne"),
+    ] {
+        let src = format!(
+            "fn main(w: Word) -> Word {{\n  \
+               let z = 0.0;\n  \
+               let nan = z / z;\n  \
+               let other = 2.5;\n  \
+               if nan {op} other {{ 1 }} else {{ 0 }}\n\
+             }}\n"
+        );
+        let v = vm_result(&src, 0);
+        let n = native_result(&src, 0);
+        assert_eq!(
+            v, n,
+            "NaN `{name}` disagrees: reference {v}, native {n}. The reference \
+             treats NaN as EQUAL to everything, so `==`, `<=` and `>=` are true \
+             and the rest false"
+        );
     }
 }

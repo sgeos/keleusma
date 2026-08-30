@@ -2551,6 +2551,10 @@ fn lower_chunk_body<'ctx>(
                     | Op::Sub
                     | Op::Mul
                     | Op::FloatToInt
+                    // Division became float-aware on 2026-08-30. `Op::Mod` did
+                    // NOT: the reference's float remainder was not verified here,
+                    // so it still fails closed.
+                    | Op::Div
                     // Comparisons became float-aware on 2026-08-30, matching the
                     // reference's NaN-as-Equal ordering rather than IEEE.
                     | Op::CmpEq
@@ -2714,32 +2718,86 @@ fn lower_chunk_body<'ctx>(
             // inventory recorded that `i64::MIN / -1` traps like a zero divisor.
             // It does not; it wraps.
             Op::Div | Op::Mod => {
-                let rhs = st.pop();
-                let lhs = st.pop();
+                // **FLOAT DIVISION IS TOTAL, AND SO IS `fdiv` — they match.**
+                //
+                // The reference's `Op::Div` float arm is a bare `x / y` with **no
+                // zero check**: division by zero yields a signed infinity, and
+                // `0.0 / 0.0` yields NaN. That is exactly `fdiv`, so no divisor
+                // substitution and no trap belongs here.
+                //
+                // **A previous increment recorded that float division flows
+                // through `Op::CheckedDiv`'s three-value push, and that was
+                // WRONG for the `/` operator.** The compiler emits plain
+                // `Op::Div`; `CheckedDiv` is a different opcode with a different
+                // convention. Corrected in `FLOAT_DIVISION.md`.
+                //
+                // `Op::Mod` on floats is NOT lowered: the reference's remainder
+                // arm is not float-total in the same way, and nothing verified it
+                // here, so a float `Mod` still fails closed at the whitelist.
+                if matches!(op, Op::Div)
+                    && (st.kind_at(0) == OperandKind::Float || st.kind_at(1) == OperandKind::Float)
+                {
+                    if float_bytes != 8 {
+                        return Err(LowerError::UnsupportedShape(format!(
+                            "float division at a float width of {float_bytes} \
+                             bytes; only 8 is lowered"
+                        )));
+                    }
+                    let (kl, kr) = (st.kind_at(1), st.kind_at(0));
+                    if kl != OperandKind::Float || kr != OperandKind::Float {
+                        return Err(LowerError::unsupported_op(
+                            "Div",
+                            format!(
+                                "Div with operand kinds {kl:?} and {kr:?}: one side \
+                                 is a float and the other is not"
+                            ),
+                        ));
+                    }
+                    let f64t = ctx.f64_type();
+                    let rb = st.pop();
+                    let lb = st.pop();
+                    let l =
+                        st.b.build_bit_cast(lb, f64t, "ldf")
+                            .unwrap()
+                            .into_float_value();
+                    let r =
+                        st.b.build_bit_cast(rb, f64t, "rdf")
+                            .unwrap()
+                            .into_float_value();
+                    let q = st.b.build_float_div(l, r, "fdiv").unwrap();
+                    let bits =
+                        st.b.build_bit_cast(q, i64t, "qbits")
+                            .unwrap()
+                            .into_int_value();
+                    st.push_k(bits, Width::Scalar(8), OperandKind::Float);
+                } else {
+                    let rhs = st.pop();
+                    let lhs = st.pop();
 
-                // A zero divisor faults. This is the one case in the family that
-                // reaches the trap block, and it must come first: everything
-                // after it may assume a non-zero divisor.
-                let cont = ctx.append_basic_block(func, "nonzerodivisor");
-                let zero =
-                    st.b.build_int_compare(IntPredicate::EQ, rhs, i64t.const_zero(), "divzero")
-                        .unwrap();
-                st.b.build_conditional_branch(zero, trap_bb, cont).unwrap();
-                st.b.position_at_end(cont);
+                    // A zero divisor faults. This is the one case in the family that
+                    // reaches the trap block, and it must come first: everything
+                    // after it may assume a non-zero divisor.
+                    let cont = ctx.append_basic_block(func, "nonzerodivisor");
+                    let zero =
+                        st.b.build_int_compare(IntPredicate::EQ, rhs, i64t.const_zero(), "divzero")
+                            .unwrap();
+                    st.b.build_conditional_branch(zero, trap_bb, cont).unwrap();
+                    st.b.position_at_end(cont);
 
-                // Substituting a divisor of 1 for the `i64::MIN / -1` case is
-                // not an approximation, it is exact for BOTH opcodes:
-                // `sdiv(i64::MIN, 1)` is `i64::MIN`, which is the wrapped
-                // quotient the VM returns, and `srem(i64::MIN, 1)` is `0`, which
-                // is the remainder it returns. No corrective select is needed
-                // afterwards, and none is emitted. The substitution is inert for
-                // every other input because the predicate names exactly one pair.
-                let safe = st.guard_min_div_neg_one(lhs, rhs, i64t);
-                let v = match op {
-                    Op::Div => st.b.build_int_signed_div(lhs, safe, "sdiv").unwrap(),
-                    _ => st.b.build_int_signed_rem(lhs, safe, "srem").unwrap(),
-                };
-                st.push(v);
+                    // Substituting a divisor of 1 for the `i64::MIN / -1` case is
+                    // not an approximation, it is exact for BOTH opcodes:
+                    // `sdiv(i64::MIN, 1)` is `i64::MIN`, which is the wrapped
+                    // quotient the VM returns, and `srem(i64::MIN, 1)` is `0`, which
+                    // is the remainder it returns. No corrective select is needed
+                    // afterwards, and none is emitted. The substitution is inert for
+                    // every other input because the predicate names exactly one pair.
+                    let safe = st.guard_min_div_neg_one(lhs, rhs, i64t);
+                    let v = match op {
+                        Op::Div => st.b.build_int_signed_div(lhs, safe, "sdiv").unwrap(),
+                        _ => st.b.build_int_signed_rem(lhs, safe, "srem").unwrap(),
+                    };
+                    st.push(v);
+                }
             }
             // The checked forms do NOT fault on a zero divisor. They reify it as
             // flag 3 with the numerator in the low slot, so a handled
@@ -2845,18 +2903,43 @@ fn lower_chunk_body<'ctx>(
                             .unwrap()
                             .into_float_value();
                     use inkwell::FloatPredicate as FP;
+                    // **THE REFERENCE USES TWO DIFFERENT PATHS, WITH DIFFERENT
+                    // NaN SEMANTICS. Measured, after getting it wrong.**
+                    //
+                    // `Op::CmpEq`/`CmpNe` go through **`PartialEq`**, which is
+                    // ordinary IEEE: NaN equals nothing, and `!=` is therefore
+                    // TRUE for NaN. `CmpLt`/`Gt`/`Le`/`Ge` go through
+                    // `compare_op`, which is
+                    // `partial_cmp(...).unwrap_or(Equal)` — **NaN as Equal**.
+                    //
+                    // A previous increment applied NaN-as-Equal to all of `Eq`,
+                    // `Le` and `Ge`, having read only `compare_op`. That made
+                    // `NaN == x` true natively and false on the reference. It was
+                    // written blind, because nothing could produce a NaN until
+                    // division landed; the test that could not be written then is
+                    // `nan_compares_equal_to_everything_as_the_reference_does`,
+                    // and it caught this immediately.
                     let ordered = match op {
+                        // IEEE, via `PartialEq`: false for NaN.
                         Op::CmpEq => FP::OEQ,
-                        Op::CmpNe => FP::ONE,
+                        // **UNORDERED not-equal**: `PartialEq::ne` is TRUE for a
+                        // NaN, and `ONE` would have been false.
+                        Op::CmpNe => FP::UNE,
+                        // `compare_op` maps NaN to Equal, so `<` and `>` are
+                        // false — which the ordered forms already give.
                         Op::CmpLt => FP::OLT,
                         Op::CmpGt => FP::OGT,
+                        // ...and `<=`/`>=` are TRUE, which they do not.
                         Op::CmpLe => FP::OLE,
                         _ => FP::OGE,
                     };
                     let base = st.b.build_float_compare(ordered, l, r, "fcmp").unwrap();
                     // `uno` is true exactly when either operand is NaN.
                     let unordered = st.b.build_float_compare(FP::UNO, l, r, "funo").unwrap();
-                    let c = if matches!(op, Op::CmpEq | Op::CmpLe | Op::CmpGe) {
+                    // Only `Le` and `Ge` need forcing: they go through
+                    // `compare_op`, where NaN is Equal. `Eq` does NOT — it is
+                    // `PartialEq`, which is false for NaN.
+                    let c = if matches!(op, Op::CmpLe | Op::CmpGe) {
                         st.b.build_or(base, unordered, "nan_eq").unwrap()
                     } else {
                         base

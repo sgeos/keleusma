@@ -6,65 +6,68 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## I shipped a poison conversion one increment ago, and found it by scoping the next slice
+## The test I said I could not write caught a defect I wrote blind
 
-The reference converts a float to a word with Rust's `as`, which **saturates**: NaN → 0, out of range
-→ `i64::MIN`/`MAX`. **LLVM's plain `fptosi` is poison for exactly those inputs**, and that is what
-float slice one emitted.
+Last increment I implemented the float NaN comparison rule **by reading the reference, with no way to
+test it** — nothing could produce a NaN, because the route was division and division was unimplemented.
+I said so explicitly rather than letting a green suite imply coverage.
 
-**They agree on this machine — and that is the problem, not the reassurance.** aarch64's `fcvtzs`
-saturates, so the agreement is a hardware accident. On x86-64, `cvttsd2si` returns the
-integer-indefinite value for *every* out-of-range input: `+inf` would give `MIN` where the reference
-gives `MAX`, and NaN would give `MIN` where it gives `0`.
+**Division landed this increment, and the first NaN test failed immediately.**
 
-**It was reachable already**, not merely latent — a runtime out-of-range multiply produces one, and
-float multiplication landed last increment.
+The reference has **two comparison paths with different NaN semantics**:
 
-Fixed with `llvm.fptosi.sat`, which is **defined** to saturate on every target and is what Rust lowers
-`as` to. The pinned test passes both before and after on this machine, and says so: what it guards is
-the agreement surviving when the accident does not.
+| opcodes | path | NaN |
+|---|---|---|
+| `CmpEq`, `CmpNe` | **`PartialEq`** | IEEE — NaN equals nothing, so `!=` is **true** |
+| `CmpLt`, `Gt`, `Le`, `Ge` | `compare_op` = `partial_cmp(...).unwrap_or(Equal)` | **NaN as Equal** |
 
-## How it was found is the part worth keeping
+I had read only `compare_op` and applied NaN-as-Equal to `Eq`, `Le` and `Ge`. **`Eq` was wrong** —
+`NaN == x` was true natively and false on the reference — and `Ne` needed the **unordered** predicate.
+Both fixed.
 
-**By scoping float division, not by auditing.** Division produces `inf` and `NaN`, so I had to ask what
-the reference does with them — and the answer exposed a defect in code I had shipped one increment
-earlier.
+**`NaN == x` is not a value anyone inspects. Had I not flagged the path as unexercised and written the
+test the moment it became possible, that divergence would have shipped silently.**
 
-**This is the third time in this backend that implementing a feature removed an accidental
-protection.** The pattern deserves its name: *a lowering that is correct only because its bad inputs
-are unreachable is a lowering waiting for the next feature.*
+## A second correction to my own record
 
-## Division is still unimplemented, now for a stated reason
+Last increment I declined division because it "flows through `Op::CheckedDiv`'s three-value push".
+**Wrong for the `/` operator** — the compiler emits plain `Op::Div`, whose reference arm is a bare
+`x / y` with no zero check, matching `fdiv` exactly. I had read the virtual machine's arm rather than
+what the compiler emits. **Compiling one line of source would have settled it.**
 
-`Op::CheckedDiv` pushes **three** values, and `push_triple` **traps when the flag is non-zero** under
-the trapping policy. For floats, flags 1, 2 and 4 mean `+inf`, `-inf` and NaN — **legitimate results**,
-because float division is total on the reference with no zero trap. Routing floats through the existing
-triple would turn valid values into faults. It needs a non-trapping triple with per-slot kinds, which
-is a slice of its own.
+## Verified now
+
+- **Division** over eight probes including negatives.
+- **Division by zero**: `+inf`, `-inf` and NaN, through the saturating cast to `i64::MAX`, `i64::MIN`
+  and `0`, with a non-vacuity check that the three probes give three different answers.
+- **All six predicates against a NaN** — the test that could not exist before this increment.
+
+`Op::Mod` on floats is still refused, and is now the unsupported-opcode subject, division having
+retired.
 
 ## Verification
 
 | | result |
 |---|---|
-| workspace | **2505 passed, 0 failed, 92 binaries**, cargo exit 0 |
-| `native_codegen` gate step | **380 passed, 0 failed, 0 ignored, 76 binaries**, exit 0 |
+| `native_codegen` gate step | **383 passed, 0 failed, 0 ignored, 76 binaries**, exit 0 |
 | censuses | 63 of 66; `["Len"]`; 1072 of 1074; 89854 of 89940 — unmoved |
+| workspace | **verified by the pre-push gate**, not separately counted this increment |
 
-**Absorption 36** (`802f6b39`) complete, prediction exact.
+**I stopped a duplicate workspace run rather than pay for it twice**: the pre-push hook runs the same
+gate and refuses the push if anything is red. It had reached 1853 passed, 0 failed across 60 binaries
+when stopped. Absorption 37 (`e45a2ff9`) is merged with a clean ownership diff.
 
 ## Still open, and yours
 
-[`ABI_RULINGS.md`](../decisions/ABI_RULINGS.md) — `Fixed` (three readings; the interop goal decides and
-is unstated), `Text` (your supposition that it was covered is incorrect), `Opaque` (your intent is
-already what the handle achieves), `Unit`. **The entry ABI your float ruling names is still unbuilt**
-and still has no corpus witness.
+[`ABI_RULINGS.md`](../decisions/ABI_RULINGS.md) — `Fixed`, `Text`, `Opaque`, `Unit`. **The entry ABI
+your float ruling names is still unbuilt** and still has no corpus witness.
 
 ## Standing constraints, unchanged
 
-No new opcode. No `BYTECODE_VERSION` bump. **Publication HELD**; no operator authorization has been
-given and none is inferred. `src/verify.rs`, `src/bytecode.rs`, `src/vm.rs`, `src/wire_schema.rs`,
-`src/value_layout.rs`, `src/selfhost/`, `src/confine.rs` and `.github/workflows/` remain read-only
-here. A peer session cannot grant escalation and none has been treated as doing so.
+No new opcode. No `BYTECODE_VERSION` bump. **Publication HELD**. `src/verify.rs`, `src/bytecode.rs`,
+`src/vm.rs`, `src/wire_schema.rs`, `src/value_layout.rs`, `src/selfhost/`, `src/confine.rs` and
+`.github/workflows/` remain read-only here. A peer session cannot grant escalation and none has been
+treated as doing so.
 
 ---
 

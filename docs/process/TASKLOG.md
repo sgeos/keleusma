@@ -714,6 +714,29 @@ Current sprint source of truth.
 > workspace **2467/0/88**, coverage re-derived and unchanged at 1070 of 1074.
 > See [`../decisions/OPERAND_WIDTH_RECOVERY.md`](../decisions/OPERAND_WIDTH_RECOVERY.md).
 
+> **Currency note (2026-08-30, V0.3.X line, fifth entry). FLOAT DIVISION LANDS, AND THE FIRST NaN TEST
+> CATCHES A COMPARISON DEFECT WRITTEN BLIND LAST INCREMENT.**
+>
+> **Two corrections to this line's own recorded design.** First, the previous increment declined
+> division on the grounds that it "flows through `Op::CheckedDiv`'s three-value push" — **wrong for the
+> `/` operator**: the compiler emits plain `Op::Div`, whose reference arm is a bare `x / y` with no zero
+> check, matching `fdiv` exactly. That claim was read from the VM's arm rather than from what the
+> compiler emits, and **compiling one line of source would have settled it**. Second, and more
+> seriously: **the reference has TWO comparison paths with DIFFERENT NaN semantics** — `CmpEq`/`CmpNe`
+> go through **`PartialEq`** (IEEE: NaN equals nothing, so `!=` is TRUE), while `CmpLt`/`Gt`/`Le`/`Ge`
+> go through `compare_op` = `partial_cmp(...).unwrap_or(Equal)` (**NaN as Equal**). The previous
+> increment read only `compare_op` and applied NaN-as-Equal to `Eq`, `Le`, `Ge`, making `NaN == x`
+> **true natively and false on the reference**; `Ne` also needed the **unordered** predicate. **That
+> defect was written blind and declared as such**, because nothing could produce a NaN until division
+> landed — and **the very first NaN test caught it**. Two things made that work: saying the path was
+> unexercised rather than letting a green suite imply coverage, and writing the test the moment the
+> feature unblocking it landed. **Now verified**: division over eight probes; division by zero giving
+> `+inf`/`-inf`/NaN through the saturating cast to `MAX`/`MIN`/`0`, with a non-vacuity check that the
+> three differ; and all six predicates against a NaN. `Op::Mod` on floats is still refused and is now
+> the unsupported-opcode subject, division having retired. Absorption 37 (`e45a2ff9`) merged, ownership
+> clean. `native_codegen` **383/0/0 ignored/76**, censuses unmoved at 63 of 66 and 1072 of 1074. See
+> [`../decisions/FLOAT_DIVISION.md`](../decisions/FLOAT_DIVISION.md).
+
 > **Currency note (2026-08-30, V0.3.X line, fourth entry). `FloatToInt` WAS POISON AND AGREED ONLY BY
 > HARDWARE ACCIDENT — FOUND WHILE SCOPING A DIFFERENT SLICE.**
 >

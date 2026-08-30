@@ -1,5 +1,39 @@
 # Design Journal
 
+## 2026-08-30 — The test I said I could not write caught the defect I wrote blind
+
+**Increment**: float division, and the correction it forced.
+
+**Two of my own recorded claims were wrong.** First, I had declined division because it "flows through
+`Op::CheckedDiv`'s three-value push". The compiler emits plain `Op::Div`, whose reference arm is a bare
+`x / y` with no zero check — matching `fdiv` exactly, a bitcast pair around one instruction. I had read
+the virtual machine's arm rather than what the compiler emits, and **compiling one line of source would
+have settled it in seconds**.
+
+**Second, and the one that matters.** Last increment I implemented the NaN comparison rule by reading
+`compare_op`, and applied NaN-as-Equal to `Eq`, `Le` and `Ge`. **The reference has two comparison paths
+with different NaN semantics**: `CmpEq`/`CmpNe` go through `PartialEq`, which is ordinary IEEE, while
+the four orderings go through `compare_op`. So `Eq` was wrong — `NaN == x` was true natively and false
+on the reference — and `Ne` needed the unordered predicate.
+
+**That defect was written blind, and I said so at the time.** The path could not be tested because
+nothing could produce a NaN. Division changed that, and the first NaN test failed immediately.
+
+Two habits made the catch possible: **declaring the path unexercised** rather than letting a green
+differential imply coverage, and **writing the test the moment the feature that unblocks it landed**.
+`NaN == x` is not a value anyone inspects; without both, the divergence ships silently.
+
+**Verified now**: division over eight probes; division by zero producing `+inf`, `-inf` and NaN, each
+observable through the saturating cast fixed last increment, with a non-vacuity check that the three
+give three different answers; and all six predicates against a NaN.
+
+**A process note.** The workspace half of the gate was still grinding through the peer line's
+self-hosted compile tests after a very long time under contention, and it duplicates what the pre-push
+hook runs. I stopped it and let the hook be the binding verification rather than paying twice — and
+recorded that it had reached 1853 passed, 0 failed across 60 binaries when stopped, rather than
+implying a figure I did not see.
+
+
 ## 2026-08-30 — Scoping division found a poison conversion I shipped last increment
 
 **Increment**: I set out to implement float division. Scoping it required answering "what does the
