@@ -10,6 +10,23 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-30, session 57, fifth increment). TWO DOCUMENTATION CLASSES ARE GUARDED
+> THAT NOTHING CHECKED.**
+>
+> **The knowledge graph's links resolve**: 194 files, 1184 relative links, 100 anchors, zero broken.
+> `cargo doc -D warnings` covers intra-doc links in Rust source and says nothing about markdown.
+> The anchor half was first shipped as a named gap and then closed, because measurement showed it
+> was closable.
+>
+> **The construct-support boundary now checks itself.** Its counts are quoted twice in the handoff
+> and nothing checked either; the guard derives them by calling `boundary_cases` and compares them
+> against the prose, and enforces the `__GAP`/`__REJECT` naming convention.
+>
+> **A FOURTH INSTRUMENT ERROR, AND IT SHARPENS THE RULE.** A regular expression over the boundary
+> table read 99 cases where there are 101, because two entries carry a comment between the opening
+> parenthesis and the name. **When the data is reachable AS DATA, parsing its source text is
+> choosing to have an instrument that can be wrong.**
+
 > **Currency note (2026-08-30, session 57, fourth increment). THE ORIENTATION DOCUMENT WAS WRONG
 > IN THREE PLACES AND IS NOW GUARDED IN THREE MORE.**
 >
