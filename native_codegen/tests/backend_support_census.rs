@@ -261,44 +261,45 @@ fn which_opcodes_does_the_backend_refuse() {
     );
 }
 
-/// **THE FLOAT HAZARD IS NOW A STRUCTURAL GUARD, and this test used to pin the
-/// hazard instead.**
+/// **THE FLOAT SIGNATURE ROUTE IS OPEN, and this test has now flipped twice.**
 ///
-/// It previously asserted that a float-typed function LOWERS with no refusal,
-/// recording that the absence of float miscompiles rested on no float OPERATION
-/// being supported rather than on anything preventing a float VALUE. Its own
-/// message said to rewrite it rather than delete it when that changed. It has
-/// changed, so this is the rewrite.
+/// Its first form asserted that a float-typed function LOWERS, recording that
+/// the absence of float miscompiles rested on no float OPERATION being
+/// supported. Its second form asserted the opposite: `lower_module` refused any
+/// module with a `Float` in a chunk signature, because the lowered entry took
+/// `i64` where the C ABI passes a double, so a host would have read an FP
+/// register the backend never wrote. Each form's own message directed the next
+/// rewrite, and this is the second one.
 ///
-/// `lower_module` now refuses any module with a `Float` in a chunk signature.
-/// That closes a live ABI defect and not merely a hazard: the lowered entry
-/// takes `i64`, while a float-typed Keleusma function should receive a double,
-/// so a host calling it under the real C ABI would read an FP register this
-/// backend never wrote.
+/// The entry ABI now exists for the one float width that is built: a float
+/// parameter or return takes a real floating-point position in the declared
+/// function type, converted at the four boundary points. So the census claim is
+/// that the float identity module produces NO refusal. **Acceptance is not the
+/// evidence of correctness** — the convention itself is exercised by calling
+/// the JIT-ed symbol with a runtime `f64` in `entry_abi_float.rs`, which is
+/// where the register-agreement claim lives.
 ///
-/// **The tag is compared numerically in the guard on purpose** — `ScalarKind::Float`
-/// sits behind the `floats` feature, and naming the variant would delete the
-/// guard from a build without it, which is exactly when it still matters.
+/// What remains refused is a float of a width this lowering does not emit; that
+/// guard reads the module's `float_bits_log2`, and this build's `Float` is
+/// 8 bytes, so the refusal path is unreachable by compiling a program here.
 #[test]
-fn a_float_signature_refuses_the_whole_module() {
+fn an_eight_byte_float_signature_lowers_with_no_refusal() {
     let identity = module_of("fn p(a: Float) -> Float { a }\nfn main() -> Word { 0 }")
         .expect("the float identity compiles");
+    assert_eq!(
+        1u32 << identity.float_bits_log2 >> 3,
+        8,
+        "this build's Float is not 8 bytes, so the signature route should be \
+         refused and this test's claim does not describe it"
+    );
     let refusals = module_refusals(&identity, LowerOptions::default());
-    println!("\n  FLOAT SIGNATURE REFUSAL: {refusals:?}");
+    println!("\n  FLOAT SIGNATURE REFUSALS: {refusals:?}");
 
     assert!(
-        !refusals.is_empty(),
-        "a float-typed function lowers again. The backend either gained a float \
-         representation, in which case rewrite this to pin THAT, or the guard was \
-         removed, in which case a host calling such a function under the C ABI \
-         reads an FP register this code never writes."
-    );
-    assert!(
-        refusals
-            .iter()
-            .any(|(_, e)| format!("{e:?}").contains("Float in its signature")),
-        "the module refuses, but not for the float signature. Something else now \
-         rejects it first and this test no longer measures what it names: {refusals:?}"
+        refusals.is_empty(),
+        "a float-typed function refuses again. Either the entry ABI was removed, \
+         in which case this test should return to pinning the refusal, or \
+         something else now rejects the module first: {refusals:?}"
     );
 }
 
@@ -312,9 +313,22 @@ fn a_float_signature_refuses_the_whole_module() {
 ///
 /// Two guards had this shape before the float one: the native-symbol collision
 /// check and the word-width check.
+///
+/// **The subject changed once.** This test originally used a float signature,
+/// which was the newest module-level refusal at the time; the entry ABI then
+/// opened that route, so the subject is now the word-width guard. It is the one
+/// module-level refusal reachable without a float, and it cannot be reached by
+/// compiling a program in this build — the compiler stamps the build's own
+/// width — so the module's declared width is overwritten after compilation.
 #[test]
 fn a_module_level_refusal_is_visible_to_module_refusals() {
-    let m = module_of("fn p(a: Float) -> Float { a }\nfn main() -> Word { 0 }").expect("compiles");
+    let mut m = module_of("fn main() -> Word { 0 }").expect("compiles");
+    assert_eq!(
+        m.word_bits_log2, 6,
+        "this build's Word is not 64 bits, so the width mutation below would be \
+         a no-op and this test would measure nothing"
+    );
+    m.word_bits_log2 = 5;
     let reported = module_refusals(&m, LowerOptions::default());
     assert!(
         reported

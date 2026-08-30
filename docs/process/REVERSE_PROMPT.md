@@ -6,57 +6,54 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## The float scalar surface is complete
+## The entry ABI is built, called through the real convention, and agrees bit-for-bit
 
-`Neg` and `Mod` land, finishing scalar float arithmetic: constants, both conversions,
-`Add`/`Sub`/`Mul`/`Div`/`Mod`/`Neg`, and all six comparisons — each verified by running the same
-program on the reference and on the lowered code.
+Your Option A ruling is implemented as recorded in `ABI_RULINGS.md`. A float parameter or return
+now takes a real floating-point position in the declared function type, converted at the four
+boundary points the brief named: declaration, prologue, `Op::Return`, `Op::Call`. It is a
+`lower_module` feature, and `lower_chunk` keeps refusing a float signature, because a chunk carries
+no return type.
 
-**Two semantics that would have been wrong if assumed:**
+The evidence is not acceptance. `entry_abi_float.rs` JITs a module and calls the symbol as
+`unsafe extern "C" fn(f64) -> f64` with runtime arguments, bit-comparing against the virtual
+machine — NaN, signed zero, infinities, a cross-call round trip, and a mixed float-parameter
+integer-return signature. A wrong convention would have lowered, verified, linked, and returned a
+plausible number from the wrong register, which is why acceptance was never going to be the check.
 
-- **`Mod` is the TRUNCATED remainder**, carrying the sign of the dividend — Rust's `%` on `f64`, so
-  `frem`, not a floored remainder. `-7.0 % 2.0` is `-1.0`, not `+1.0`. **A probe with only positive
-  operands cannot tell the conventions apart**, so the differential uses negative dividends with a
-  must-fire control requiring the positive and negative results to have opposite signs.
-- **`Neg` needed its own branch.** The existing arm dispatches on WIDTH, and a float is eight bytes
-  like a `Fixed` — without a kind check it would have negated the **bit pattern as an integer**,
-  flipping a mantissa bit rather than the sign.
+The session break landed mid-edit; the resume found one stray brace from the guard rewrite — the
+brace-splicing failure the brief itself warned about — deleted it, and every check ran.
 
-## The entry ABI is still not built, and here is the measured reason
-
-It is the piece your ruling names, so I want the reason on the record rather than implied:
-**`lower_chunk` receives `chunk.param_types`, but the chunk carries no RETURN type.** The return lives
-in module-level `ChunkSignature`, which a single-chunk lowering never sees.
-
-So it cannot be done by halves — parameter types, return type, the prologue's bitcasts, `Op::Return`
-and `Op::Call` all have to land together, across both entry points. **That is a scoped plan, not a
-slice to fit beside an absorption**, and I would rather say so than half-build it.
-
-The signature route of the guard therefore stays closed, and is now the unsupported-opcode subject —
-the fourth in that succession, after composites, division and remainder.
+Four tests rotated their subjects because the signature route opened, each by its own standing
+instruction. The subset-boundary subject is now `Op::Len`; the float whitelist subject is now the
+uncalled native float return; the module-level-refusal pin now uses the word-width guard, made
+must-fire by overwriting the module's declared width; the width refusal itself is must-fire the
+same way.
 
 ## Still absent, so the surface is not read as finished
 
-The entry ABI; **float shared slots**, which is one of your open ABI questions; `f32`, since only the
-8-byte width is lowered and any other is refused rather than approximated; and floats inside
-composites.
+Float shared slots — your ruling settles the layout, the lowering is not built. `f32`: the
+ruling's coherent reading wants the entry type to match the runtime float width, and today any
+non-8-byte width is refused loudly rather than lowered. Floats inside composites.
 
 ## Verification
 
 | | result |
 |---|---|
-| `native_codegen` gate step | **385 passed, 0 failed, 0 ignored, 76 binaries**, exit 0 |
-| censuses | 63 of 66; 1072 of 1074; 89854 of 89940 — **unmoved, as expected** |
-| workspace | verified by the pre-push gate |
+| `native_codegen` | **391 passed, 0 failed, 0 ignored, 77 binaries**, cargo's own exit 0 — the predicted 385 + 6, 76 + 1 |
+| fmt, clippy `-D warnings`, `cargo doc -D warnings`, citation guard | all clean |
+| censuses | **unmoved, as `ABI_RULINGS.md` predicted** — no corpus module carries a float signature |
+| workspace | untouched by this increment; verified by the pre-push gate |
 
-Censuses were not expected to move: no corpus module negates or takes the remainder of a float.
-**Absorption 38** (`59129add`) is docs-only, every count predicted unchanged.
+**Absorption 39 is pending and scoped**: one upstream pull request, `#327`, a doc comment in
+`tests/stage_command_reach.rs` plus a journal entry, zero `src/` changes. Every count predicted
+unchanged. It is the next increment, measured alone per the standing discipline.
 
 ## Still open, and yours
 
-[`ABI_RULINGS.md`](../decisions/ABI_RULINGS.md) — `Fixed` (the interop goal decides and is unstated),
-`Text` (your supposition that it was covered is incorrect), `Opaque` (your intent is already what the
-handle achieves), `Unit`.
+[`ABI_RULINGS.md`](../decisions/ABI_RULINGS.md) — `Fixed` (the interop goal decides and is
+unstated), `Text`, `Opaque`, `Unit`. And the region planner's open soundness obligation stands
+unchanged: cross-iteration slot reuse is unconditional, held safe today only by the `Stream`
+refusal.
 
 ## Standing constraints, unchanged
 
@@ -66,7 +63,6 @@ No new opcode. No `BYTECODE_VERSION` bump. **Publication HELD**. `src/verify.rs`
 treated as doing so.
 
 ---
-
 # Also unread by the human: the `v0.2.3` line's message
 
 **Both lines write this one file, so absorption 34 conflicted here.** Neither message is discarded.

@@ -725,6 +725,26 @@ Current sprint source of truth.
 > workspace **2467/0/88**, coverage re-derived and unchanged at 1070 of 1074.
 > See [`../decisions/OPERAND_WIDTH_RECOVERY.md`](../decisions/OPERAND_WIDTH_RECOVERY.md).
 
+> **Currency note (2026-08-30, V0.3.X line, seventh entry). THE ENTRY ABI IS BUILT AND CALLED
+> THROUGH THE REAL CONVENTION.**
+>
+> The operator's Option A float ruling is implemented as recorded: a float parameter or return takes
+> a real floating-point position in the declared function type, converted at the four boundary
+> points — declaration, prologue, `Op::Return`, `Op::Call`. A `lower_module` feature; `lower_chunk`
+> keeps refusing, since a chunk carries no return type. **The evidence is a JIT call through
+> `unsafe extern "C" fn(f64) -> f64` with runtime arguments, bit-compared against the virtual
+> machine** — NaN, signed zero, infinities, a cross-call round trip, a mixed signature — because a
+> wrong convention lowers, verifies, links, and returns a plausible number from the wrong register.
+> **Two requirements the plan did not name**: the parameter's local must be tagged `Float` after the
+> prologue bitcast, and `Op::Call` converts each argument to the callee's DECLARED parameter type,
+> refusing a kind-versus-declaration disagreement in either direction. **Four tests rotated their
+> subjects** because the signature route opened, each per its own standing instruction; the width
+> refusal and the module-level-refusal pin are now must-fire via post-compilation width overwrites.
+> **Still absent**: float shared slots (ruled, unbuilt), `f32` (refused, not lowered), floats in
+> composites. `native_codegen` **391/0/0 ignored/77 binaries**, cargo exit 0 — the predicted
+> 385 + 6 and 76 + 1; censuses unmoved, as `ABI_RULINGS.md` predicted. See
+> [`../decisions/ENTRY_ABI_BRIEF.md`](../decisions/ENTRY_ABI_BRIEF.md).
+
 > **Currency note (2026-08-30, V0.3.X line, sixth entry). THE FLOAT SCALAR SURFACE IS COMPLETE, AND
 > THE ENTRY ABI IS DEFERRED WITH A MEASURED REASON.**
 >

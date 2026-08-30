@@ -19,7 +19,7 @@
 //!
 //! These tests fix the classes in place so the conflation cannot return.
 
-use keleusma::bytecode::{ConstValue, Op};
+use keleusma::bytecode::Op;
 use keleusma_native::{LowerError, LowerOptions, module_lowered_op_indices};
 mod common;
 
@@ -153,10 +153,17 @@ fn an_unlowerable_opcode_is_classified_as_such_and_names_itself() {
 /// This is the refusal that rendered as "native lowering does not yet support
 /// opcode chunk 0 has a Float in its signature" — a sentence naming an opcode
 /// called `chunk`.
+///
+/// **The subject changed once.** It was a float chunk signature, which the
+/// entry ABI then opened, so no refusal fires there any more. The subject is
+/// now route 3, a native declaring a Float RETURN SHAPE — the one float
+/// refusal still reachable by compiling a program in this build, uncalled so
+/// that no other route can fire first (the isolation argument is in
+/// `float_guard_routes.rs`).
 #[test]
 fn a_float_is_classified_as_an_unsupported_shape() {
-    let m = compiled("fn p(a: Float) -> Float { a }\nfn main() -> Word { 0 }")
-        .expect("a float program must still COMPILE; the guard is in the backend");
+    let m = compiled("use host::read_temp() -> Float\n\nfn main() -> Word { 0 }")
+        .expect("a float-returning native must still COMPILE; the guard is in the backend");
     assert!(
         {
             // The float scalar's wire tag. Debug renders `Scalar { kind: 5 }`,
@@ -164,17 +171,10 @@ fn a_float_is_classified_as_an_unsupported_shape() {
             // premise check pass by never looking.
             const FLOAT_TAG: u8 = 5;
             let is_float = |w: &keleusma::bytecode::WireShape| matches!(w, keleusma::bytecode::WireShape::Scalar { kind } if *kind == FLOAT_TAG);
-            m.signatures
-                .iter()
-                .any(|sg| is_float(&sg.ret) || sg.params.iter().any(is_float))
-                || m.chunks.iter().any(|c| {
-                    c.constants
-                        .iter()
-                        .any(|k| matches!(k, ConstValue::Float(_)))
-                })
+            m.native_return_shapes.iter().any(is_float)
         },
-        "no Float reached the module, so the float route cannot fire and this \
-         test would pass without testing anything"
+        "no Float reached the module's native return shapes, so the float route \
+         cannot fire and this test would pass without testing anything"
     );
 
     let seen = refusals_of(&m);

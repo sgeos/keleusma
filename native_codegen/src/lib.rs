@@ -1382,6 +1382,9 @@ fn lower_module_with<'ctx>(
 ) -> Result<Vec<FunctionValue<'ctx>>, LowerError> {
     check_word_width(program.word_bits_log2)?;
     let i64t = ctx.i64_type();
+    // The entry ABI's floating-point type. Only an 8-byte `Float` reaches a
+    // signature position; a narrower one is refused below rather than widened.
+    let f64t = ctx.f64_type();
     let ptrt = ctx.ptr_type(AddressSpace::default());
 
     // Shared slots occupy the low indices of the unified slot space, so their
@@ -1438,7 +1441,23 @@ fn lower_module_with<'ctx>(
         .iter()
         .enumerate()
         .map(|(i, c)| {
-            let mut params: Vec<_> = (0..c.param_count).map(|_| i64t.into()).collect();
+            let sig = program.signatures.get(i);
+            // **A FLOAT PARAMETER TAKES A FLOATING-POINT POSITION, so the lowered
+            // function uses the platform's floating-point calling convention where
+            // the signature says it should.**
+            //
+            // Before this every position was `i64`, which on aarch64 means a
+            // general-purpose register where the C convention passes a double in
+            // `v0`-`v7`. A host calling the symbol through its declared Keleusma
+            // type would have read an unrelated register. That is not a fault; it
+            // is a plausible wrong number, which is why the signature route stayed
+            // REFUSED until this existed.
+            let mut params: Vec<_> = (0..c.param_count as usize)
+                .map(|p| match sig.and_then(|s| s.params.get(p)) {
+                    Some(sh) if shape_is_float(sh) => f64t.into(),
+                    _ => i64t.into(),
+                })
+                .collect();
             if has_data || needs_region {
                 params.push(ptrt.into()); // shared buffer
                 params.push(ptrt.into()); // private region
@@ -1455,11 +1474,16 @@ fn lower_module_with<'ctx>(
                 // into memory the host scoped.
                 params.push(ptrt.into()); // composite body region
             }
-            module.add_function(
-                &format!("kel_chunk_{i}"),
-                i64t.fn_type(&params, false),
-                None,
-            )
+            // The RETURN type comes from the same table. `lower_chunk` cannot do
+            // this at all — a chunk carries its parameter types but NOT its
+            // return type, which lives only in the module-level signature — which
+            // is why the entry ABI is a module-level feature.
+            let fnty = if sig.is_some_and(|s| shape_is_float(&s.ret)) {
+                f64t.fn_type(&params, false)
+            } else {
+                i64t.fn_type(&params, false)
+            };
+            module.add_function(&format!("kel_chunk_{i}"), fnty, None)
         })
         .collect();
 
@@ -1495,18 +1519,27 @@ fn lower_module_with<'ctx>(
     // vanish in a build without it — exactly when it is still needed, because
     // the wire tag is stable regardless of which features the READER was built
     // with.
-    const SCALAR_FLOAT_TAG: u8 = 5;
-    if let Some((idx, _)) = program.signatures.iter().enumerate().find(|(_, sg)| {
-        matches!(sg.ret, keleusma::bytecode::WireShape::Scalar { kind } if kind == SCALAR_FLOAT_TAG)
-            || sg.params.iter().any(|p| {
-                matches!(p, keleusma::bytecode::WireShape::Scalar { kind } if *kind == SCALAR_FLOAT_TAG)
-            })
-    }) {
+    //
+    // **THE SIGNATURE ROUTE IS NOW OPEN — for the one float width that is built.**
+    // A float parameter or return takes a real floating-point position in the
+    // declared function type, converted at the four boundary points (declaration,
+    // prologue, return, call). What stays refused is a float of a width this
+    // lowering does not emit: `Float` is `f32` under `narrow-float-32`, and
+    // declaring a `double` there would be a silently wrong number rather than a
+    // fault. Approximating a width is exactly the failure this guard exists for.
+    let float_bytes = 1u32 << program.float_bits_log2 >> 3;
+    if float_bytes != 8
+        && let Some((idx, _)) = program
+            .signatures
+            .iter()
+            .enumerate()
+            .find(|(_, sg)| shape_is_float(&sg.ret) || sg.params.iter().any(shape_is_float))
+    {
         return Err(LowerError::UnsupportedShape(format!(
-            "chunk {idx} has a Float in its signature and this backend has no float \
-             representation: no `f64_type`, no float opcode lowered, and an entry ABI \
-             of `i64` where a double belongs. Refusing the module is the guard; the \
-             absence of float arithmetic is not one"
+            "chunk {idx} has a Float in its signature and this module's Float is \
+                 {float_bytes} bytes wide; only an 8-byte Float has an entry ABI here. \
+                 Refused rather than declared as a `double`, because a float of the \
+                 wrong width is a wrong number and not a fault"
         )));
     }
 
@@ -2220,6 +2253,49 @@ fn degenerate_stream_yield(chunk: &Chunk, module: &Module) -> Option<Vec<usize>>
     Some(tail_yields)
 }
 
+/// The wire tag `WireShape::Scalar { kind }` carries when the scalar is a `Float`.
+///
+/// **Named by VALUE rather than by the enum variant on purpose.** The float
+/// variant sits behind the `floats` feature, so matching on the name would make
+/// every use of this vanish in a build without it — exactly when it is still
+/// needed, because the wire tag is stable regardless of which features the
+/// READER was built with.
+const SCALAR_FLOAT_TAG: u8 = 5;
+
+/// Whether a declared flat shape is a scalar float, and so takes a
+/// floating-point position in the entry application binary interface rather than
+/// an integer one.
+fn shape_is_float(shape: &keleusma::bytecode::WireShape) -> bool {
+    matches!(shape, keleusma::bytecode::WireShape::Scalar { kind } if *kind == SCALAR_FLOAT_TAG)
+}
+
+/// Return `v` from `func`, converting to the function's DECLARED return type.
+///
+/// The operand stack is homogeneous `i64` and a float rides it as its BIT
+/// PATTERN, so a chunk whose signature returns a float still has an `i64` in
+/// hand at every return site.
+///
+/// # Why this reads the declared type rather than the signature
+///
+/// The declaration is the single fact a caller and a callee must agree on.
+/// Deriving "is this a float return?" separately at the declaration and again at
+/// each return site is precisely how the two come to disagree, and a disagreement
+/// here is not a fault — it is a plausible wrong number, or an `i64` reinterpreted
+/// as a double. Every return site in this lowering goes through this function, so
+/// the conversion cannot be forgotten at one of them.
+fn build_typed_return<'ctx>(b: &Builder<'ctx>, func: FunctionValue<'ctx>, v: IntValue<'ctx>) {
+    let rt = func
+        .get_type()
+        .get_return_type()
+        .expect("every lowered chunk returns a value, never void");
+    if rt.is_float_type() {
+        let f = b.build_bit_cast(v, rt.into_float_type(), "ret_f").unwrap();
+        b.build_return(Some(&f)).unwrap();
+    } else {
+        b.build_return(Some(&v)).unwrap();
+    }
+}
+
 fn lower_chunk_body<'ctx>(
     ctx: &'ctx Context,
     module: &LlvmModule<'ctx>,
@@ -2253,11 +2329,21 @@ fn lower_chunk_body<'ctx>(
         .map(|i| b.build_alloca(i64t, &format!("l{i}")).unwrap())
         .collect();
     for (i, local) in locals.iter().enumerate().take(chunk.param_count as usize) {
-        b.build_store(
-            *local,
-            func.get_nth_param(i as u32).unwrap().into_int_value(),
-        )
-        .unwrap();
+        // **A FLOAT PARAMETER ARRIVES AS A DOUBLE AND LIVES AS ITS BITS.** Local
+        // slots are `i64` because the operand stack is, so the boundary is where
+        // the representation changes — once, on entry, rather than at every use.
+        //
+        // Read off the DECLARED parameter type for the same reason the return is:
+        // the declaration is what the caller obeyed.
+        let raw = func.get_nth_param(i as u32).unwrap();
+        let stored = if raw.is_float_value() {
+            b.build_bit_cast(raw.into_float_value(), i64t, &format!("p{i}_bits"))
+                .unwrap()
+                .into_int_value()
+        } else {
+            raw.into_int_value()
+        };
+        b.build_store(*local, stored).unwrap();
     }
     // Non-parameter locals start DEFINED in the VM: `Op::Call` pushes
     // `local_count - arg_count` copies of `GenericValue::Unit` into the callee's
@@ -2364,6 +2450,24 @@ fn lower_chunk_body<'ctx>(
         local_kinds: vec![OperandKind::Unknown; local_widths.len()],
         local_widths,
     };
+
+    // **A FLOAT PARAMETER'S LOCAL IS TAGGED `Float`, so a `GetLocal` of it pushes
+    // an operand the float arms will act on.** Without this the bits stored by the
+    // prologue would read back as `Unknown` and every float operation on a
+    // parameter would refuse — the ABI would be right and the body unusable.
+    //
+    // The comment above says parameter kinds start `Unknown` because the entry ABI
+    // did not handle a float; this is that handling, and it seeds only the
+    // positions the DECLARATION says are floats.
+    for i in 0..chunk.param_count as usize {
+        if func
+            .get_nth_param(i as u32)
+            .is_some_and(|p| p.is_float_value())
+            && i < st.local_kinds.len()
+        {
+            st.local_kinds[i] = OperandKind::Float;
+        }
+    }
 
     // Every local this chunk writes anywhere, computed up front so the decision
     // does not depend on instruction order. See the `GetLocal` arm.
@@ -2572,7 +2676,46 @@ fn lower_chunk_body<'ctx>(
                     | Op::Return
                     | Op::PopN(_)
                     | Op::Dup
+                    // **A CALL IS FLOAT-AWARE ONLY POSITIONALLY.** The arm
+                    // converts each argument to the callee's DECLARED parameter
+                    // type, so a float in a position the callee declares as a
+                    // float is correct. A float in an INTEGER position is not,
+                    // and is caught below rather than by this list — a blanket
+                    // entry here would admit both.
+                    | Op::Call(_, _)
             );
+            // The positional half of the `Op::Call` admission.
+            if let Op::Call(idx, arg_count) = op
+                && consumes_float
+            {
+                let n = usize::from(*arg_count);
+                let params = callees
+                    .get(*idx as usize)
+                    .map(|c| c.get_type().get_param_types())
+                    .unwrap_or_default();
+                for p in 0..n {
+                    // Argument `p` sits at depth `n - 1 - p`: the last argument
+                    // pushed is nearest the top. Getting this backwards is
+                    // invisible for a one-argument callee, which is why the
+                    // direction is stated rather than inferred.
+                    let is_float = st.kind_at(n - 1 - p) == OperandKind::Float;
+                    let wants_float = params.get(p).is_some_and(|t| t.is_float_type());
+                    if is_float != wants_float {
+                        return Err(LowerError::unsupported_op(
+                            &op_variant_name(op),
+                            format!(
+                                "argument {p} of Call({idx}, {arg_count}) is \
+                                 {} where the callee declares {}; the operand \
+                                 kind and the declared signature disagree, and \
+                                 reinterpreting either way is a plausible wrong \
+                                 number rather than a fault",
+                                if is_float { "a float" } else { "an integer" },
+                                if wants_float { "a float" } else { "an integer" }
+                            ),
+                        ));
+                    }
+                }
+            }
             if consumes_float && !float_aware {
                 return Err(LowerError::unsupported_op(
                     &op_variant_name(op),
@@ -3379,8 +3522,25 @@ fn lower_chunk_body<'ctx>(
 
                 let mut args: Vec<_> = (0..*arg_count).map(|_| st.pop()).collect();
                 args.reverse();
-                let mut args: Vec<inkwell::values::BasicMetadataValueEnum> =
-                    args.into_iter().map(|a| a.into()).collect();
+                // **CONVERTED TO THE CALLEE'S DECLARED PARAMETER TYPES.** The
+                // operand stack hands over an `i64` even when the value is a
+                // float's bit pattern, so a float parameter needs the bitcast here
+                // or LLVM sees a type mismatch — and, were the declaration `i64`
+                // on both sides, the callee would read the wrong register with no
+                // complaint from anything.
+                let callee_params = callee.get_type().get_param_types();
+                let mut args: Vec<inkwell::values::BasicMetadataValueEnum> = args
+                    .into_iter()
+                    .enumerate()
+                    .map(|(p, a)| match callee_params.get(p) {
+                        Some(t) if t.is_float_type() => {
+                            st.b.build_bit_cast(a, t.into_float_type(), "arg_f")
+                                .unwrap()
+                                .into()
+                        }
+                        _ => a.into(),
+                    })
+                    .collect();
                 // Forward the shared buffer. Every function in a module with
                 // shared slots takes the trailing pointer, so a call that
                 // omitted it would pass garbage where the callee expects the
@@ -3419,9 +3579,17 @@ fn lower_chunk_body<'ctx>(
                     .unwrap()
                     .try_as_basic_value()
                 {
+                    // A float RESULT comes back as a double and rejoins the
+                    // homogeneous operand stack as its bits, mirroring the
+                    // prologue.
+                    ValueKind::Basic(v) if v.is_float_value() => {
+                        st.b.build_bit_cast(v.into_float_value(), i64t, "call_f_bits")
+                            .unwrap()
+                            .into_int_value()
+                    }
                     ValueKind::Basic(v) => v.into_int_value(),
                     ValueKind::Instruction(_) => {
-                        unreachable!("every lowered chunk returns an i64, never void")
+                        unreachable!("every lowered chunk returns a value, never void")
                     }
                 };
                 // A DELEGATED suspension. The callee returned at its `Yield`, so
@@ -3430,7 +3598,7 @@ fn lower_chunk_body<'ctx>(
                 // machine's bookkeeping for a frame this side has already left,
                 // and the loop's `dead` tracking skips them.
                 if delegated_call == Some(i) {
-                    st.b.build_return(Some(&ret)).unwrap();
+                    build_typed_return(&st.b, func, ret);
                 } else {
                     // **SEEDED FROM THE CALLEE'S DECLARED RETURN**, which is
                     // exactly what the native arm does with `native_shapes`.
@@ -3454,10 +3622,17 @@ fn lower_chunk_body<'ctx>(
                     //
                     // An undeclared or unsizable return still yields `Unknown`
                     // and still fails closed at the use.
-                    let w = width_of_declared_shape(
-                        chunk_signatures.get(usize::from(*idx)).map(|sg| &sg.ret),
-                    );
-                    st.push_w(ret, w);
+                    let sg_ret = chunk_signatures.get(usize::from(*idx)).map(|sg| &sg.ret);
+                    let w = width_of_declared_shape(sg_ret);
+                    // The KIND comes from the same declaration as the width, so a
+                    // float call result is operable rather than `Unknown` — the
+                    // caller-side twin of the parameter seeding in the prologue.
+                    let k = if sg_ret.is_some_and(shape_is_float) {
+                        OperandKind::Float
+                    } else {
+                        OperandKind::Unknown
+                    };
+                    st.push_k(ret, w, k);
                 }
             }
             // A call out to a host-registered native, as a direct call to an
@@ -4446,7 +4621,7 @@ fn lower_chunk_body<'ctx>(
             // unreachable and the loop's own `dead` tracking skips them.
             Op::Yield if degenerate_yield.is_some_and(|ys| ys.contains(&i)) => {
                 let v = st.pop();
-                st.b.build_return(Some(&v)).unwrap();
+                build_typed_return(&st.b, func, v);
             }
             // The envelope of a degenerate stream. `Stream` marks the point
             // `Reset` rewinds to, and with an empty prologue that is the entry
@@ -4472,7 +4647,7 @@ fn lower_chunk_body<'ctx>(
             }
             Op::Return => {
                 let v = st.pop();
-                st.b.build_return(Some(&v)).unwrap();
+                build_typed_return(&st.b, func, v);
             }
             other => {
                 return Err(LowerError::unsupported_op(
@@ -4506,7 +4681,7 @@ fn lower_chunk_body<'ctx>(
         } else {
             i64t.const_zero()
         };
-        st.b.build_return(Some(&v)).unwrap();
+        build_typed_return(&st.b, func, v);
     }
 
     // Checked once at the end rather than at each push, because the slot array

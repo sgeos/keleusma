@@ -128,23 +128,25 @@ fn the_result_is_not_what_integer_arithmetic_would_give() {
 /// written to understand a float refuses.
 #[test]
 fn a_float_cannot_reach_an_opcode_not_written_for_one() {
-    // **REMAINDER RETIRED IN THE SAME INCREMENT IT WAS ADOPTED.** Division
-    // retired when it was implemented; remainder replaced it for one increment
-    // and has now been implemented and verified too.
+    // **THE SIGNATURE SUBJECT RETIRED 2026-08-30 when the entry ABI landed** —
+    // `entry_abi_float.rs` calls the JIT-ed symbol through the real C
+    // convention and agrees with the virtual machine — following division and
+    // remainder, each retired the increment it was implemented and verified.
     //
-    // The successor is a float in a chunk **SIGNATURE**, a route of the
-    // module-level guard that stays closed because the entry ABI is not built:
-    // `lower_chunk` receives `param_types` but the chunk carries no RETURN type,
-    // so parameters, return, prologue, `Op::Return` and `Op::Call` must land
-    // together. Recorded in `FLOAT_SCALAR_SURFACE.md`.
-    const SUBJECT: &str = "fn p(a: Float) -> Float { a }\nfn main(w: Word) -> Word { w }";
+    // The successor is route 3, a native declaring a Float **RETURN SHAPE**,
+    // which stays closed because an unsignatured native result would reach the
+    // operand stack as a float with no kind seeding behind it. The native is
+    // deliberately UNCALLED so no other route can fire first; the isolation
+    // argument is in `float_guard_routes.rs`.
+    const SUBJECT: &str = "use host::read_temp() -> Float\n\nfn main(w: Word) -> Word { w }";
     let m = compile(&parse(&tokenize(SUBJECT).expect("lex")).expect("parse")).expect("compile");
     let refusals = keleusma_native::module_refusals(&m, LowerOptions::default());
     assert!(
         !refusals.is_empty(),
-        "a float in a SIGNATURE no longer refuses the module. Either the entry \
-         ABI was built — in which case this subject has retired like its three \
-         predecessors and needs a successor — or a route was opened without one"
+        "a native declaring a Float RETURN SHAPE no longer refuses the module. \
+         Either native float results gained a lowering — in which case this \
+         subject has retired like its predecessors and needs a successor — or a \
+         route was opened without one"
     );
     let text = refusals
         .iter()

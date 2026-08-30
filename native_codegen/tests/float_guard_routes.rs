@@ -55,10 +55,36 @@ fn refused(m: &Module) -> Option<String> {
 }
 
 /// **Route 1: a float in a chunk signature.**
+///
+/// **This route OPENED when the entry ABI landed**, for the one float width
+/// that is built: an 8-byte float takes a real floating-point position in the
+/// declared function type. What the route still refuses is a float of any
+/// other declared width, where declaring a `double` would be a silently wrong
+/// number rather than a fault.
+///
+/// This build's `Float` is 8 bytes, so the width refusal cannot be reached by
+/// compiling a program; the module's declared width is overwritten after
+/// compilation to make the refusal a must-fire fact rather than an
+/// unreachable claim. The open half — that the lowered entry really uses the
+/// floating-point calling convention — is exercised by calling the JIT-ed
+/// symbol in `entry_abi_float.rs`, not here.
 #[test]
-fn a_float_in_a_signature_refuses_the_module() {
-    let m = build("fn p(a: Float) -> Float { a }\nfn main() -> Word { 0 }").expect("compiles");
-    let why = refused(&m).expect("a float in a signature must refuse the module");
+fn a_float_in_a_signature_lowers_at_eight_bytes_and_refuses_at_any_other_width() {
+    let mut m = build("fn p(a: Float) -> Float { a }\nfn main() -> Word { 0 }").expect("compiles");
+    assert_eq!(
+        1u32 << m.float_bits_log2 >> 3,
+        8,
+        "this build's Float is not 8 bytes, so both halves of this test \
+         describe a different build than the one running it"
+    );
+    assert!(
+        refused(&m).is_none(),
+        "an 8-byte float signature refuses again; either the entry ABI was \
+         removed or another guard now fires first: {:?}",
+        refused(&m)
+    );
+    m.float_bits_log2 = 5;
+    let why = refused(&m).expect("a 4-byte float in a signature must refuse the module");
     assert!(
         why.contains("signature"),
         "refused, but not by the signature route: {why}"

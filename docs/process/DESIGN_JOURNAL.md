@@ -1,5 +1,52 @@
 # Design Journal
 
+## 2026-08-30 — The entry ABI lands at the four boundary points, and four tests rotate their subjects
+
+**Increment**: the float entry ABI, implementing the operator's Option A ruling as recorded in
+`ABI_RULINGS.md`. The scoped plan from last increment held: parameter declarations, the prologue,
+`Op::Return` and `Op::Call` landed together in `lower_module`, and `lower_chunk` keeps refusing a
+float signature because a chunk carries no return type. See `../decisions/ENTRY_ABI_BRIEF.md`,
+including its outcome section.
+
+**The session break landed mid-edit, and the resume found the brief's own warning fulfilled**: a
+stray closing brace from the guard rewrite — the exact brace-splicing failure the brief names as a
+three-time offender — left the crate uncompilable. One deleted brace, then every check ran.
+
+**Two details the plan did not name, both required.** A float parameter's local must be TAGGED
+`Float` after the prologue bitcast, or the ABI is correct and the body unusable — every operation on
+the parameter would refuse. And `Op::Call` is float-aware only positionally: each argument converts
+to the callee's DECLARED parameter type, and a kind-versus-declaration disagreement refuses in
+either direction rather than reinterpreting.
+
+**The evidence is a call through the real convention, not acceptance.** A wrong calling convention
+produces a module that lowers, verifies and links — on aarch64 a `double` arrives in `v0` while an
+`i64` is read from `x0`, so the wrong declaration reads an unrelated register and returns a
+plausible number. `entry_abi_float.rs` JITs the module, calls the symbol as
+`unsafe extern "C" fn(f64) -> f64` with runtime arguments, and bit-compares against the virtual
+machine: NaN, signed zero, infinities, a cross-call round trip, and a mixed float-parameter
+integer-return signature, that last because parameters and return come from different places and
+conflating them is the error that deferred this increment.
+
+**Four tests rotated their subjects, each by its own standing instruction.** The census pin's
+failure message directed its rewrite when the backend gained a float representation; the
+module-level-refusal visibility pin moved to the word-width guard, made must-fire by overwriting
+`word_bits_log2` after compilation; the subset-boundary subject in `differential.rs` moved to
+`Op::Len`, the one opcode still refused by name, with its witness pinned compilable by
+`len_flat_array_hazard.rs`; and the float whitelist subject moved to route 3, the uncalled native
+float return. The width refusal itself became must-fire the same way — `float_bits_log2`
+overwritten to 5 — where before it was an unreachable claim in this build.
+
+**Verification**: `native_codegen` **391 passed, 0 failed, 0 ignored, 77 binaries**, cargo's own
+exit status 0 — exactly the predicted 385 + 6 and 76 + 1. `fmt --check`, `clippy --tests
+-D warnings`, `cargo doc -D warnings`, and the citation guard all clean. Censuses unmoved, as the
+rulings document predicted: no corpus module carries a float in a signature, so the entry ABI has
+no corpus witness and the hand-built subjects are the entire population.
+
+**Still absent, stated so the surface is not read as finished**: float shared slots (ruled settled
+by Option A, not yet built), `f32` (the ruling's coherent reading wants the entry type to match the
+runtime float width; today any non-8-byte width is refused loudly rather than lowered), and floats
+inside composites.
+
 ## 2026-08-30 — The scalar float surface closes, and two semantics that would have been wrong if assumed
 
 **Increment**: `Neg` and `Mod`, completing scalar float arithmetic.

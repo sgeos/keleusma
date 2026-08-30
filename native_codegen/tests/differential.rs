@@ -199,31 +199,29 @@ fn an_unsupported_opcode_is_refused_rather_than_mislowered() {
     //
     // Subjects so far, each retired the moment a differential agreed with the
     // virtual machine: composite construction, array indexing, nested composite
-    // reads, tuple fields, static string constants. **The subject is now a
-    // `Float` constant.**
+    // reads, tuple fields, static string constants, a `Float` constant, and a
+    // float in a chunk signature — the last retired 2026-08-30 when the entry
+    // ABI landed and `entry_abi_float.rs` agreed with the virtual machine
+    // through the real calling convention. **The subject is now `Op::Len`.**
     //
-    // It was chosen by running `probe_unsupported`, as every subject since the
-    // second has been, after four consecutive guesses cost four compile-and-run
-    // cycles. That run mattered here: when native calls and static strings both
-    // entered the subset, EVERY case the probe carried began reporting LOWERS,
-    // so the probe was extended with five candidates first. Three of them —
-    // all three stream shapes — turned out to be REJECTED BY THE REFERENCE
-    // COMPILER rather than refused by this backend, which is not a subset
-    // boundary at all and would have made this test assert nothing about the
-    // lowering. The probe distinguishes those two outcomes; a guess would not
-    // have.
-    //
-    // **THE FLOAT CONSTANT RETIRED ON 2026-08-30**, joining the list above for
-    // the same reason each of the others did: float slice two lowered it, and
-    // `float_witness.kel` now agrees with the virtual machine in the corpus
-    // differential.
-    //
-    // **The successor is a float in a chunk SIGNATURE**, which is a different
-    // route of the same guard and is still closed because the entry ABI is not
-    // built. It is the natural next subject rather than a hunted one: the guard
-    // closes four routes, slice two opened exactly one, and this is among the
-    // three that remain.
-    let src = "fn p(a: Float) -> Float { a }\nfn main(a: Word, b: Word) -> Word { a + b }";
+    // Earlier subjects were chosen by running `probe_unsupported`; that probe is
+    // no longer in the tree, so this one comes from the measured refusal census
+    // instead: `Len` is the single opcode the lowering refuses BY NAME, and
+    // `len_flat_array_hazard.rs` pins that its witness construct — a for-in
+    // whose source is an `if` expression choosing between two arrays — compiles
+    // and passes `verify()`, so the refusal really is this backend's boundary
+    // and not the reference compiler's. (The reference VIRTUAL MACHINE traps on
+    // `Op::Len` over a flat array at runtime, which is that file's subject;
+    // this test never runs the program.)
+    let src = "\
+fn f(c: bool) -> Word {
+  let a = [1, 2];
+  let b = [3, 4];
+  for x in if c { a } else { b } { let _d = x; }
+  0
+}
+fn main() -> Word { f(true) }
+";
     let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
 
     // **The vacuity guard is on the REFUSAL, not on a chunk search.** Three
@@ -235,13 +233,13 @@ fn an_unsupported_opcode_is_refused_rather_than_mislowered() {
     let ctx = Context::create();
     let lm2 = ctx.create_module("kel2");
     let err = lower_module(&ctx, &lm2, &m, LowerOptions::default()).expect_err(
-        "lower_module must refuse a Float constant; a refusal that only \
+        "lower_module must refuse the Len witness; a refusal that only \
              lower_chunk makes is not evidence the opcode is unsupported, which is \
              how the Op::Call version of this test rotted",
     );
     let rendered = format!("{err:?}");
     assert!(
-        rendered.contains("Float"),
+        rendered.contains("Len"),
         "refused for the wrong reason: {rendered}"
     );
 }
