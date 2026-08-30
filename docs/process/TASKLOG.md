@@ -10,6 +10,17 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-30, session 57, sixth increment). THE HANDOFF ASSERTED A MERGE COUNT AND
+> A PULL-REQUEST STATE, AND BOTH WENT STALE WITHIN THE SESSION.**
+>
+> Its resume section also said TWO of eight expression kinds were done while the table beneath it
+> said four. **A heading that disagrees with its own table is worse than either being wrong alone.**
+>
+> Repaired by generalising a decision the file had already made for the commit hash: a figure that
+> changes faster than the document is refreshed is DERIVED, not asserted. The merge count and the
+> pull-request state now carry their commands instead of their values. **History stays** -- a
+> measurement of the past is permanent; a measurement of the present is not.
+
 > **Currency note (2026-08-30, session 57, fifth increment). TWO DOCUMENTATION CLASSES ARE GUARDED
 > THAT NOTHING CHECKED.**
 >
