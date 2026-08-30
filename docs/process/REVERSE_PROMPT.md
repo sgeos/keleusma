@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-29 (session 57, first increment) — the tail-versus-return claim moves
+**Date**: 2026-08-29 (session 57, second increment) — array elements move; the easy slices are gone
 
 ## NOTHING IS WAITING ON YOU EXCEPT THE RULING YOU ALREADY HAVE
 
@@ -18,7 +18,17 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 `v0.3.0` line's `Fixed` shared-slot SCALE question attached. **It is theirs to bring you and I
 have not acted on it.** Publication remains held.
 
-## What moved
+## What moved, across two merged increments
+
+**Expression kinds 8 and 2 — the tail-versus-return claim and the array elements — now reach the
+type channel from the pipeline.** Four of that extraction's eight kinds are done, and kind 2 was
+**the last non-composite one**. The migrated-extraction count still reads four of five on purpose.
+
+**There is no cheap slice left in this family.** The branch pair is withheld for a reason that
+still stands, and the three remaining kinds are all composite, where the occurrences slice already
+established the two representations disagree about what a node is.
+
+## The tail claim in detail
 
 Expression kind 8 — the tail-versus-return claim — now reaches the type channel from the
 pipeline, joining the binary operator and the condition. Three of that extraction's eight kinds
@@ -40,7 +50,7 @@ land on a payload-0 unit is a written `()`, and the pipeline refuses that outrig
 the refusal in the failing direction**, so if `()` ever becomes admissible the test breaks rather
 than the descent quietly going wrong.
 
-## THE THING I MOST WANT VISIBLE: MY OWN COVERAGE ASSERTION ASSERTED NOTHING
+## THE THING I MOST WANT VISIBLE: MY COVERAGE ASSERTION WAS VACUOUS TWICE, IN CONSECUTIVE INCREMENTS
 
 The new agreement test asserted that its corpus contained three distinct statement forms before a
 tail — the discipline this family adopted after an earlier slice shipped blind to three of four
@@ -55,9 +65,18 @@ The corpus now ends those cases in a literal and the assertion demands a **typab
 continuation kinds fire under mutation, each mutant confirmed to compile before its result was
 believed.
 
-I am recording this prominently because it is the sixth-plus instance of one defect — a check
-built from the same model as the thing it checks — and this time it appeared **inside the guard
-written specifically to prevent that defect**.
+**Then it happened again in the very next increment**, after I had written the first one up as the
+lesson. The array-element test asserted its corpus held literals of differing element counts and
+operand forms. An **adjacent-pairing mutant survived**: the reference pairs element zero against
+every later element, and every multi-element literal in the corpus was homogeneous or exactly two
+long — shapes for which adjacent pairing and first-versus-rest give identical rows.
+
+**The transferable form is sharper than "assert coverage", which I did both times.** The assertion
+must name **the property that distinguishes the competing readings**, not the constructs the corpus
+contains. A construct list is a proxy for coverage, and a proxy for coverage is not coverage.
+
+Both were found only by mutation testing. Neither would have been found by re-reading the test,
+and I had re-read both.
 
 ## A doc in the same file was claiming a row that was deliberately not emitted
 
@@ -103,8 +122,17 @@ conservative direction; enriching the example is the other.
 And the two-pass parser work that would make the twelfth stage self-compile remains **yours to
 call**. I have not started it.
 
+## One surviving mutant recorded as equivalent rather than as a kill
+
+Relaxing the array guard changes no output — the loop bound already enforces what the guard states.
+It is written down in the code, because an unexplained surviving mutant reads as a missing guard
+and would send the next reader hunting for one that is not needed.
+
 ## What I would take up next
 
-The remaining five kinds. Array elements is the only non-composite one left; the other four are
-the branch pair, which is pinned as withheld for a reason that still stands, and the three
-composite kinds where the two representations are already known to disagree about what a node is.
+**The composite kinds, and they should begin with a measurement rather than a design.** The
+occurrences slice already showed the two sides disagree about what a node IS for a composite —
+`d.q` is a field access over an identifier on one side and a single data-read node on the other.
+Every cheap slice in this family is now spent, so I would expect the next one to be mostly
+measurement, and I would expect a real chance that the honest outcome is another pinned refusal
+rather than a move.

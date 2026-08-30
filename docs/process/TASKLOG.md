@@ -10,6 +10,27 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-29, session 57, second increment). THE FIFTH EXTRACTION IS AT FOUR OF
+> ITS EIGHT KINDS, AND THE NON-COMPOSITE WORK IS DONE.**
+>
+> Expression kind 2, the array-element claim, now reaches the type channel from the pipeline. The
+> migrated-extraction count is still FOUR of five and deliberately so.
+>
+> **ALL FOUR REMAINING KINDS ARE NOW HARD.** The branch pair is pinned as withheld; field access,
+> index access and struct literals are composite, where the occurrences slice already established
+> the two representations disagree about what a node IS. There is no cheap slice left in this
+> family, and the next one should begin by measuring that disagreement.
+>
+> **THE ELEMENTS WERE DIRECTLY ADDRESSABLE, WHICH BOTH STAGES ALREADY DOCUMENTED.** Forest node
+> kind 17 carries the element-slice start and count, with the elements in the `call_args` channel
+> in source order. No descent, unlike the tail claim.
+>
+> **AND THE COVERAGE ASSERTION WAS VACUOUS FOR THE SECOND INCREMENT RUNNING.** An adjacent-pairing
+> mutant survived: every multi-element literal in the corpus was homogeneous or exactly two long,
+> and for those shapes adjacent pairing and first-versus-rest produce identical rows. The lesson is
+> sharper than "assert coverage" -- **the assertion must name the property that distinguishes the
+> readings, not the constructs the corpus contains.**
+
 > **Currency note (2026-08-29, session 57, first increment). THE FIFTH EXTRACTION IS AT THREE OF
 > ITS EIGHT KINDS.**
 >

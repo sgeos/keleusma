@@ -13,6 +13,60 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-29 — Session 57, second increment: the array-element claim moves, and a second vacuous coverage assertion
+
+**Expression kind 2 now reaches the type channel from the pipeline.** Four of the eight kinds have
+moved, and this was **the last non-composite one**. It is the row `verify_types.kel` uses to refuse
+a heterogeneous array literal.
+
+### The boundary answered the sizing question before a line was written
+
+Both stages **document the contract** rather than leaving it to be inferred: forest node kind 17
+carries the element-slice start in `lhs`, the count in `rhs`, and the elements themselves in the
+`call_args` channel in source order. So unlike the tail claim, there is no descent — the elements
+are directly addressable. Reading the two stage sources for their documented node contract took
+minutes and settled what three sizings of an earlier slice got wrong by reasoning from internals.
+
+### The dangerous direction was measured first, not argued
+
+Kind 2 is an equality kind, so a row emitted where the reference emits none can **reject a correct
+program**. On six probes the count of kind-17 nodes equalled the count of the reference's
+array-literal expressions — **including the nested-index shape this repository once recorded as
+mis-parsing into an array literal**, repaired earlier under a different increment. That was the
+one shape capable of producing the unsound direction, and it produces nothing on both sides.
+
+### THE COVERAGE ASSERTION WAS VACUOUS AGAIN, IN THE ITERATION AFTER WRITING ABOUT IT
+
+The agreement test passed. Mutation testing then showed an **adjacent-pairing mutant surviving**:
+the reference pairs element ZERO against every later element, and every multi-element literal in
+the corpus was either homogeneous or exactly two elements long. For both of those shapes,
+first-versus-rest and adjacent pairing produce identical rows. **The corpus separated nothing.**
+
+The fix is a three-element literal whose tags are not all equal, plus an assertion that fails if
+such a case ever leaves the corpus. Three of four mutants now die.
+
+**This is the second consecutive increment in which my own coverage assertion asserted nothing**,
+and the first was already written up as a lesson in the file I was editing. The transferable form
+is not "assert coverage" — I did — but that **the assertion must name the property that
+distinguishes the readings**, not the constructs the corpus contains. A construct list is a proxy,
+and a proxy for coverage is not coverage.
+
+### One surviving mutant is recorded as EQUIVALENT rather than as a kill
+
+Relaxing the `count >= 2` guard changes no output: the loop runs `1..count`, already empty at a
+count of one. Recorded in the code, because a surviving mutant left unexplained reads as a missing
+guard and would send the next reader hunting for one that is not needed.
+
+### What remains
+
+**Four kinds, and all four are now off the easy path.** The branch pair is pinned as withheld for
+a reason that still stands, and field access, index access and struct literals are all composite,
+where the occurrences slice already established the two sides disagree about what a node IS. The
+next increment in this family should expect to measure that disagreement first rather than design
+a mapping against it.
+
+---
+
 ## 2026-08-29 — Session 57, first increment: the tail-versus-return claim moves, and a coverage assertion that asserted nothing
 
 **Expression kind 8 now reaches the type channel from the pipeline.** That is the third of the

@@ -1053,6 +1053,13 @@ const NODE_LITERAL: i64 = 1;
 /// true, `2` false. Boolean literals ride this kind rather than a new one.
 const NODE_UNIT: i64 = 20;
 
+/// `Node::ArrayLit`. Its ELEMENTS are not `lhs`/`rhs`: `lhs` is the start index into the
+/// `call_args` channel and `rhs` the element count, with the elements in SOURCE ORDER.
+///
+/// **`call_args` IS SHARED WITH `Node::Call`.** Only this node's own `lhs`/`rhs` slice may be
+/// read; scanning the channel would collect call arguments as array elements.
+const NODE_ARRAY_LIT: i64 = 17;
+
 /// A declared type NAME to the type channel's scalar tag.
 ///
 /// **THIS WAS TWO IDENTICAL CLOSURES BEFORE A THIRD CALLER WANTED IT**, one inside
@@ -2437,9 +2444,9 @@ pub type ExprRow = (i64, ExprOperand, ExprOperand);
 ///
 /// # What moves, and what does not
 ///
-/// **THREE OF THE EIGHT KINDS.** Kind 1, the binary operator — all of it, across the four
+/// **FOUR OF THE EIGHT KINDS.** Kind 1, the binary operator — all of it, across the four
 /// forest kinds the lowering splits it into (see `is_binary_operator`); kind 3, the CONDITION a
-/// conditional tests; and kind 8, the TAIL-VERSUS-RETURN claim.
+/// conditional tests; kind 8, the TAIL-VERSUS-RETURN claim; and kind 2, the ARRAY ELEMENTS.
 ///
 /// Kind 1 is the one `tyb_node_tag` resolves, so it is what makes `let d = 1 + 2` reach the
 /// bounded fixpoint. Kind 8 is the row that refuses `fn f() -> Word { true }`; it reaches the
@@ -2460,9 +2467,10 @@ pub type ExprRow = (i64, ExprOperand, ExprOperand);
 /// directions are unsound, so the row is not emitted at all**, and
 /// `a_one_armed_conditional_is_why_the_branch_pair_does_not_move` pins the witness.
 ///
-/// **Five do not move**: the branch pair above, array elements, field and index access on a
-/// value, and struct literals. Three of those are composite, where the occurrences slice already
-/// showed the two representations disagree about what a node IS.
+/// **Four do not move**: the branch pair above, and field access, index access and struct
+/// literals — **all three of the remainder are composite**, where the occurrences slice already
+/// showed the two representations disagree about what a node IS. Kind 2 was the last
+/// non-composite one.
 ///
 /// **THIS FUNCTION CARRIED A NARROWER NAME FOR ONE INCREMENT**, naming only the binary operator.
 /// Covering conditions made that name false, and a name that lies is precisely what several
@@ -2558,6 +2566,46 @@ pub fn expression_rows_from_pipeline(src: &str) -> (Vec<ExprRow>, Vec<(String, u
                 // it from a written one, and a spurious pair row feeds an EQUALITY predicate in
                 // the stage -- it could reject a correct program.
                 rows.push((3, operand(node.arg), nothing.clone()));
+            } else if node.kind == NODE_ARRAY_LIT {
+                // --- THE ARRAY-ELEMENT CLAIM, KIND 2 ---------------------------------------
+                //
+                // The reference pairs element ZERO against every LATER element, so a literal of
+                // n elements contributes n-1 rows and one of n <= 1 contributes none. Kind 2 is
+                // an equality kind, so the pairing must match exactly: pairing adjacent elements
+                // instead would accept `[1, true, 2]`, where every adjacent pair disagrees but
+                // the first-versus-rest reading catches it at the first comparison.
+                //
+                // **THE ELEMENTS COME FROM `call_args`, SLICED BY THIS NODE'S OWN `lhs`/`rhs`.**
+                // That channel is shared with `Node::Call`; a scan would read call arguments as
+                // array elements.
+                //
+                // Measured before it was written: on every probe the count of kind-17 nodes
+                // equalled the count of the reference's array-literal expressions, INCLUDING the
+                // nested-index shape that once mis-parsed as a literal. That was the one
+                // direction capable of rejecting a correct program.
+                //
+                // **THE `count >= 2` GUARD IS BELT-AND-BRACES AND MUTATING IT PROVES NOTHING.**
+                // The loop below runs `1..count`, which is already empty at a count of one, so
+                // relaxing the guard to `>= 1` is an EQUIVALENT MUTANT: it changes no output and
+                // its survival is not a gap in the tests. Recorded because a surviving mutant
+                // left unexplained reads as a missing guard, and the next reader would go looking
+                // for one. The guard earns its place by making the intent legible and by keeping
+                // the `call_args` read below off a slice that a zero-count node does not own.
+                let start = node.lhs;
+                let count = node.rhs;
+                if count >= 2
+                    && let Some(&head) = body.call_args.get(usize::try_from(start).unwrap_or(0))
+                {
+                    let first = operand(head);
+                    for k in 1..count {
+                        let Ok(at) = usize::try_from(start + k) else {
+                            continue;
+                        };
+                        if let Some(&elem) = body.call_args.get(at) {
+                            rows.push((2, first.clone(), operand(elem)));
+                        }
+                    }
+                }
             }
         }
         for node in &body.nodes {
