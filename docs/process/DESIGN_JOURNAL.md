@@ -588,6 +588,73 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-29 — Session 57, first increment: the tail-versus-return claim moves, and a coverage assertion that asserted nothing
+
+**Expression kind 8 now reaches the type channel from the pipeline.** That is the third of the
+eight kinds, after the binary operator and the condition. It is the row `verify_types.kel` uses
+to refuse a function whose body yields something its signature does not promise.
+
+### The slice was chosen by reading the consumer, and it was the cheapest of the six for a reason
+
+Both halves were already on the wire: a parsed function carries its declared return type's name
+id, and the reconstructed body's root reaches the tail through the continuation chain. No stage
+change and no new record. The three composite kinds stay parked behind the representation
+disagreement the occurrences slice measured.
+
+### THE HAZARD WAS THE BRANCH PAIR'S, AND THIS TIME THE AMBIGUITY DOES NOT EXIST
+
+Kind 8 is an equality kind, so a row emitted where the reference emits none can make the stage
+**reject a correct program** — the precise reason the branch pair was built and withheld.
+
+Measured rather than argued: a body with no tail expression reconstructs with a **synthesised
+payload-0 unit** in the continuation slot, exactly where a body with one puts its value. That is
+the same shape as the synthesised else arm. **The difference is that the only source expression
+which would also land there is a written `()`, and `reconstruct.kel` refuses it outright.** So
+within the subset the pipeline accepts, a payload-0 unit in tail position is always synthesised.
+
+Both halves of that argument are pinned, and the refusal is pinned **in the failing direction**:
+if `()` ever becomes admissible the descent silently starts reporting "no tail" for functions
+that have one, so closing that gap must break the test rather than pass quietly.
+
+### THE FINDING THAT COST THE MOST WAS IN MY OWN TEST
+
+The agreement test asserted its corpus contained three distinct statement forms before a tail —
+the corpus-coverage discipline this family adopted after the kind-1 slice shipped blind to three
+of four forest kinds.
+
+**It asserted nothing.** Mutation-testing the descent one continuation kind at a time showed that
+dropping kind 12 or kind 16 left the whole suite **green**. Both of those corpus cases ended in a
+data read, which neither side can type — and stopping the descent early lands on a node that is
+also untypable, so the two readings produced the identical unknown row. The assertion counted
+statement forms that could not separate the behaviour they were there to guard.
+
+The corpus now ends those cases in a literal, and the assertion demands a **typable** tail. All
+six continuation kinds fire under mutation, each mutant confirmed to compile before its result
+was believed.
+
+**This is the same defect the tree already records in six costumes** — a check built from the same
+model as the thing it checks — and the working form of the rule caught it exactly as written: the
+input must be the one the real change would produce, not the one the checker expects.
+
+### A DOC IN THE SAME FILE WAS CLAIMING A ROW THAT WAS DELIBERATELY NOT EMITTED
+
+The condition agreement test's heading read "the condition **and branch-pair** rows agree" and
+carried a section describing a branch's statement chain, while its comparison filters on the
+condition kind and nothing else. The prose was written while the branch pair was still expected
+to ship and survived the decision to withhold it.
+
+**A doc comment is not re-read when the code under it is cut.** Corrected in place with the
+history left visible, because the shape will recur.
+
+### Also folded in
+
+`scalar_tag_of_type_name` replaces two identical closures that a third caller would have made
+three. Its omission of `Float`, where the reference maps it, is now named in the tree with the
+direction of the error stated: unknown accepts, so the gap costs a check and cannot cause a
+rejection.
+
+---
+
 ## 2026-08-28 — A branch pair built, measured, and withheld; and the unit literal is refused
 
 **THE CONDITION MOVES. THE BRANCH PAIR DOES NOT, AND THE REASON IS THE FINDING.**

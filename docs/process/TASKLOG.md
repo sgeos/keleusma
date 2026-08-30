@@ -10,6 +10,29 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-29, session 57, first increment). THE FIFTH EXTRACTION IS AT THREE OF
+> ITS EIGHT KINDS.**
+>
+> Expression kind 8, the tail-versus-return claim, now reaches the type channel from the
+> pipeline, joining the binary operator and the condition. **The migrated-extraction count is
+> still FOUR of five and deliberately so**: `expression_rows_from_pipeline` does not match the
+> pattern the count pin searches for, because a partial migration counted as a whole one is the
+> failure that pin exists to prevent.
+>
+> **THE HAZARD THAT KILLED THE BRANCH PAIR WAS PRESENT AND WAS DISCHARGED, NOT ASSUMED AWAY.**
+> Kind 8 is an equality kind, so a row emitted where the reference emits none can reject a
+> correct program. A body with no tail expression reconstructs with a synthesised payload-0
+> unit — the same shape as the synthesised else arm. What separates it is that the only source
+> expression that would also land there, a written `()`, is refused by `reconstruct.kel`. That
+> refusal is pinned in the FAILING direction, so admitting `()` later breaks the test instead of
+> silently making the descent unsound.
+>
+> **AND THE COVERAGE ASSERTION IN THE NEW TEST ASSERTED NOTHING UNTIL IT WAS MUTATION-TESTED.**
+> It counted distinct statement forms before a tail. Dropping two of the six continuation kinds
+> left the suite green: those cases ended in a data read, which neither side can type, so
+> stopping the descent early produced the identical unknown row. The corpus now ends them in a
+> literal and the assertion demands a TYPABLE tail; all six kinds fire.
+
 > **Currency note (2026-08-28, session 56, sixth increment). ORDER 1 ITEM 3 IS AT FOUR OF FIVE.**
 >
 > `occurrence_rows_from_pipeline` carries the name occurrences; the declared half moved separately
