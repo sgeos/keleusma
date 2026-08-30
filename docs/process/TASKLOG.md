@@ -10,6 +10,22 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-30, session 57, fourth increment). THE ORIENTATION DOCUMENT WAS WRONG
+> IN THREE PLACES AND IS NOW GUARDED IN THREE MORE.**
+>
+> `CLAUDE.md` said `src/selfhost/kel/` holds TEN stage sources (twice) where it holds twelve; named
+> six workspace members where there are seven, omitting `keleusma-wire-derive` entirely; and
+> presented its `src/` tree as complete while eighteen files were unlisted. All corrected, all
+> guarded.
+>
+> **THE GUARD THAT COVERS THAT DOCUMENT PREDICTED THIS.** Its header said the remaining claims were
+> unguarded and called that luck rather than design. **A caveat naming an unguarded region is a
+> work item, not a disclaimer.**
+>
+> **Every new guard derives BOTH sides and pins NEITHER** -- expected from the prose, actual from
+> the tree -- so a branch adding a stage or a crate stays green if the document moves with it. That
+> is the repair for the earlier failure where a directory scan was pinned to a constant.
+
 > **Currency note (2026-08-30, session 57, third increment, second half). THE OP-TAG RESIDUE IS
 > CLOSED, AND THE BOUNDARY TABLE IS NOW 96 SOk / 1 Refuses / 3 Diverges / 1 RefRejects OVER 101
 > CASES.**
