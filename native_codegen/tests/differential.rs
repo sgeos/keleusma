@@ -212,7 +212,18 @@ fn an_unsupported_opcode_is_refused_rather_than_mislowered() {
     // boundary at all and would have made this test assert nothing about the
     // lowering. The probe distinguishes those two outcomes; a guess would not
     // have.
-    let src = "fn main(a: Word, b: Word) -> Word { let f = 1.5; a + b }";
+    //
+    // **THE FLOAT CONSTANT RETIRED ON 2026-08-30**, joining the list above for
+    // the same reason each of the others did: float slice two lowered it, and
+    // `float_witness.kel` now agrees with the virtual machine in the corpus
+    // differential.
+    //
+    // **The successor is a float in a chunk SIGNATURE**, which is a different
+    // route of the same guard and is still closed because the entry ABI is not
+    // built. It is the natural next subject rather than a hunted one: the guard
+    // closes four routes, slice two opened exactly one, and this is among the
+    // three that remain.
+    let src = "fn p(a: Float) -> Float { a }\nfn main(a: Word, b: Word) -> Word { a + b }";
     let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
 
     // **The vacuity guard is on the REFUSAL, not on a chunk search.** Three

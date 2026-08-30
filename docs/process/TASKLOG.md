@@ -652,6 +652,27 @@ Current sprint source of truth.
 > workspace **2467/0/88**, coverage re-derived and unchanged at 1070 of 1074.
 > See [`../decisions/OPERAND_WIDTH_RECOVERY.md`](../decisions/OPERAND_WIDTH_RECOVERY.md).
 
+> **Currency note (2026-08-30, V0.3.X line, second entry). FLOAT SLICE TWO: ONE GUARD ROUTE OPENED,
+> VERIFIED BY EXECUTION, AND THE CENSUSES MOVED FOR THE FIRST TIME IN MANY INCREMENTS.**
+>
+> The module float guard closes four routes and **only the CONSTANT route had a lowering behind it**,
+> so only it was opened. Its own message said it was closed because *"the integer arithmetic lowering
+> would silently miscompile it"* — no longer the lowering. The coarse route guard is replaced by the
+> finer **operand whitelist**, not removed. **Verified by EXECUTION**: `float_witness.kel` now runs in
+> the corpus differential against the virtual machine and **agrees**. Census movement, all from the one
+> cause: **opcodes lowered 61 → 63 of 66**, **UNPROVEN 3 → 1** (only `Reset`), **modules lowering
+> 66 → 67**, **chunks 1070 → 1072 of 1074**, **instances 89841 → 89854**, **differential agreeing
+> 61 → 62**, backend refusals 3 → 2. **Five pins went red, all correctly and all updated rather than
+> deleted**: the scope pin whose premise its own message anticipated spending; the guard-route pin
+> (renamed, since `..._refuses_...` asserting the opposite is a stale label); the refusal-set count;
+> and two assertions **inverted to assert zero**, because **the corpus now contains no module-level
+> refusal at all** — the float guard was the only one, and an unattributable refusal must announce
+> itself if it returns. `differential`'s unsupported-opcode subject **retired as its sixth
+> predecessor**, successor being a float in a SIGNATURE, still closed. **Still unbuilt**: the entry ABI
+> (no corpus witness), float slots, division, comparisons, `f32`. Absorption 34 (`f8232021`) complete,
+> prediction exact. Workspace **2497/0/92**, `native_codegen` **377/0/0 ignored/76**. See
+> [`../decisions/FLOAT_SLICE_TWO.md`](../decisions/FLOAT_SLICE_TWO.md).
+
 > **Currency note (2026-08-30, V0.3.X line). FLOAT SLICE ONE: THE KIND CHANNEL, A VERIFIED ROUND
 > TRIP, AND A HAZARD THE IMPLEMENTATION CREATED AND CLOSED.**
 >

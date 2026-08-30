@@ -1,5 +1,36 @@
 # Design Journal
 
+## 2026-08-30 — Slice two: one route opened, and every census moved from a single cause
+
+**Increment**: the module float guard closes four routes, and after slice one **only the constant route
+had a lowering behind it**. So only it was opened. Its own message said it was closed because *"the
+integer arithmetic lowering would silently miscompile it"* — which stopped being the lowering.
+
+**The verification is the point.** `float_witness.kel` now runs in the **corpus differential** against
+the virtual machine and agrees. That is materially stronger than slice one's hand-built chunk: it runs
+the whole module the way every other corpus subject runs.
+
+**Six figures moved, all from one cause** — opcodes lowered 61→63, UNPROVEN 3→1, modules 66→67, chunks
+1070→1072, instances 89841→89854, differential agreeing 61→62. Listing them together matters: a reader
+seeing six independent-looking gains should know they are one module entering every census that walks
+the corpus.
+
+**Five pins went red and every one was right to.** The scope pin's own message had anticipated spending
+its premise. The guard-route pin needed **renaming**, because a test called `..._refuses_...` that
+asserts the opposite is the stale label this line keeps finding. And two assertions were **inverted to
+assert zero**, because **the corpus now contains no module-level refusal at all** — the float guard was
+the only one, and `Len` and `Stream` are chunk-level. Deleting those would have discarded the check on
+the thing that makes a coverage figure overstate; asserting the zero keeps it announcing itself.
+
+**`differential`'s unsupported-opcode subject retired as its sixth predecessor.** That file already
+records five that retired as they entered the subset. Taking the successor — a float in a signature,
+still closed — is the established pattern rather than a hunt.
+
+**What I did not do**: open the other three routes. Each has nothing built behind it, and admitting a
+module through one would mean compiling it wrong rather than refusing it. The entry ABI, the piece the
+operator's ruling actually names, remains unbuilt and **has no corpus witness at all**.
+
+
 ## 2026-08-30 — Float slice one: the kind channel, and a hazard I created and then closed
 
 **Increment**: the operator's Option A ruling unblocked real capability work. Before writing any of it,

@@ -100,9 +100,15 @@ fn every_remaining_refusal_is_named_to_the_chunk_and_the_reason() {
     );
 
     // Pinned so a change announces itself. Not a claim that this number is good.
+    //
+    // **3 -> 2 on 2026-08-30**, and the cause is recorded rather than the number
+    // quietly edited: float slice two opened the module guard's CONSTANT route,
+    // so `float_witness.kel` lowers and agrees with the reference in the corpus
+    // differential. `Len` and `Stream` remain, each for its own established
+    // reason. See `docs/decisions/FLOAT_SLICE_TWO.md`.
     assert_eq!(
         refusals.len(),
-        3,
+        2,
         "the set of refusals changed: {refusals:?}. Re-derive the coverage \
          figures and say which chunks changed state before altering anything else."
     );
@@ -127,10 +133,20 @@ fn every_remaining_refusal_is_named_to_the_chunk_and_the_reason() {
     for r in &module_level {
         println!("    {}::{}", r.0, r.1);
     }
+    // **NONE REMAIN, and that is the result.** The float guard was the corpus's
+    // only module-level refusal; float slice two opened the route that fired it.
+    // `Len` and `Stream` are CHUNK-level and name their chunk, so the coverage
+    // census can attribute both.
+    //
+    // Asserted as zero rather than deleted: the unattributable case is the one
+    // that makes a coverage figure overstate, and it must announce itself if it
+    // returns.
     assert!(
-        !module_level.is_empty(),
-        "expected at least one module-level refusal, which is the case the \
-         coverage census cannot attribute to a chunk"
+        module_level.is_empty(),
+        "a module-level refusal is back: {module_level:?}. The coverage census \
+         cannot attribute it to a chunk, so the published chunk figure now \
+         overstates — say which module and by how much before changing anything \
+         else"
     );
 }
 
@@ -174,8 +190,24 @@ fn a_module_level_refusal_leaves_its_chunks_counted_as_lowerable() {
     println!(
         "  The published figure is therefore high by {overstated} chunk(s).\n================\n"
     );
-    assert!(
-        overstated > 0,
-        "no module-level refusal was found, so this test measures nothing"
+    // **THE CORPUS NO LONGER CONTAINS A MODULE-LEVEL REFUSAL, and that is a
+    // result rather than a breakage.** The only one was the float guard, and
+    // slice two opened the route that fired it; `Len` and `Stream` are
+    // CHUNK-level refusals, which name a chunk and so do not overstate anything.
+    //
+    // The overstatement this test measures is therefore **zero over the corpus
+    // today**. That is worth asserting explicitly: the effect is real and
+    // returns the moment a module-level refusal does, and a test that silently
+    // measured nothing would hide both.
+    println!(
+        "  NOTE: the corpus contains no module-level refusal today, so the
+           overstatement is zero. `Len` and `Stream` are chunk-level. This test
+           asserts the zero rather than requiring a subject that no longer exists."
+    );
+    assert_eq!(
+        overstated, 0,
+        "a module-level refusal is back, so the published chunk figure is high by \
+         {overstated}: {where_:?}. That is the effect this test exists to size — \
+         re-derive the coverage figures and say which module it is"
     );
 }

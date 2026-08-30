@@ -6,52 +6,45 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## Float slice one is built and differentially verified
+## The censuses moved, for the first time in many increments
 
-Your Option A ruling unblocked real capability work. **One measurement decided its shape before I wrote
-anything**: `width_of_declared_shape` discards the scalar kind, so a `Float` and a `Word` are both
-eight bytes and **no float arithmetic could be lowered until an operand's kind survived**. Starting
-from the phrase "entry ABI" would have built the wrong piece.
+Float slice two opened **one** route of the module float guard — the **constant** route, the only one
+of the four with a lowering behind it. `float_witness.kel` now runs in the **corpus differential**
+against the virtual machine and **agrees**.
 
-**Built**: an operand-kind channel beside the width channel, seeded by the producing opcode, with the
-stack staying homogeneous `i64` and floats riding it as bit patterns. Then a float constant, both
-conversions, and float `Add`/`Sub`/`Mul`.
+| figure | before | after |
+|---|---|---|
+| opcodes the backend lowers | 61 of 66 | **63 of 66** |
+| UNPROVEN opcodes | 3 | **1** — only `Reset` |
+| modules lowering end to end | 66 | **67** |
+| chunks fully lowerable | 1070 | **1072** of 1074 |
+| opcode instances | 89841 | **89854** |
+| differential executing and agreeing | 61 | **62** |
 
-**Verified by differential, not by acceptance**: the witness's exact shape — `w as Float`, `+ 1.5`,
-`as Word` — agrees with the reference across ten probes including negatives, with a must-fire control
-that the program computes something.
+**All from one cause**: the module is no longer refused, so its chunks and opcodes enter every census
+that walks the corpus. **Verified by execution, not by lowering** — that distinction is the whole
+reason to trust the movement.
 
-## The part I most want you to see: implementing this CREATED a hazard
+## What still refuses, and why that is deliberate
 
-A module whose float arises from `as Float`, with no float constant and no float in a signature, was
-previously refused **only because no float operation existed**. `float_guard_routes.rs` names that
-exactly — *"a property of what is unimplemented, not a guard"* — and it **stopped being true the moment
-I wrote the operations**. The module-level guard does not cover that shape.
+The other three routes — a float in a **signature**, a float **native return**, a float **data slot** —
+still refuse, because the entry ABI, a native float ABI and the float-slot ABI are all unbuilt.
+Opening a route with nothing behind it would admit a module compiled wrong rather than refused.
 
-**`Op::Div` was the sharp case**: I added float dispatch to `Add`/`Sub`/`Mul` only, so a division would
-have been an integer division of a double's bit pattern — a plausible wrong number, not a fault.
+The **operand whitelist** replaced the coarse route guard: a float reaching division, a comparison, a
+composite or a native still fails closed at the use.
 
-Closed with a **whitelist**: an opcode that consumes a float and was not written for one refuses. A
-blacklist would have to name every arm, and missing one is silent.
+## Five pins went red, all correctly
 
-## Four errors of mine, all caught inside the increment by my own guards
+The scope pin whose own message anticipated spending its premise; the guard-route pin, **renamed**
+because `..._refuses_...` asserting the opposite is a stale label; the refusal-set count; and **two
+assertions inverted to assert zero**, because **the corpus now contains no module-level refusal at
+all** — the float guard was the only one. An unattributable refusal is what makes a coverage figure
+overstate, so it must announce itself if it returns rather than the test being deleted.
 
-- the kind was lost across the local round trip — the mixed-pair refusal caught it;
-- I read the kind **after** popping, against a rule written at `SetLocal`;
-- the whitelist's first formulation checked the top two stack entries rather than the operands the
-  opcode **pops**, refusing `Op::Const` for a float below it;
-- a pin went red **three times**, correctly, and was renamed because a test called `..._is_refused_...`
-  that asserts the opposite is the stale label I keep finding.
-
-## What is NOT done, so it is not assumed
-
-**The entry ABI** — the piece your ruling names — is **not built**. No corpus module carries a float in
-a signature, so it has no witness here. Also not done: float shared slots, division, comparisons,
-`f32`.
-
-**The module guard is unchanged and censuses are unmoved.** Nothing float-carrying reaches
-`lower_module`, so the corpus witness is still refused and the conversions are still UNPROVEN — which
-is the correct result, not an oversight. **Relaxing that guard is the next decision.**
+`differential`'s unsupported-opcode subject **retired as its sixth predecessor** — the list already
+records composite construction, array indexing, nested reads, tuple fields and static strings retiring
+the same way. Its successor is a float in a signature.
 
 ## Verification
 
@@ -59,20 +52,20 @@ Both suites run **sequentially** (parallel invalidates the perf canary, 57x).
 
 | | result |
 |---|---|
-| workspace | **2496 passed, 0 failed, 92 binaries**, cargo exit 0 |
+| workspace | **2497 passed, 0 failed, 92 binaries**, cargo exit 0 |
 | `native_codegen` gate step | **377 passed, 0 failed, 0 ignored, 76 binaries**, exit 0 |
-| censuses | 61 of 66; `["Len"]`; 1070 of 1074; 89841 of 89940 — all unmoved |
 
-Gate timings this increment are contention figures; load peaked over 200 with a peer suite in the
-sibling worktree.
-
-**No absorption was needed**: already zero unabsorbed.
+**Absorption 34** (`f8232021`) complete, prediction exact.
 
 ## Still open, and yours
 
-[`ABI_RULINGS.md`](../decisions/ABI_RULINGS.md) — `Fixed` (three readings; the interop goal decides,
-and is unstated), `Text` (your supposition that it was covered is incorrect), `Opaque` (your intent is
+[`ABI_RULINGS.md`](../decisions/ABI_RULINGS.md) — `Fixed` (three readings; the interop goal decides and
+is unstated), `Text` (your supposition that it was covered is incorrect), `Opaque` (your intent is
 already what the handle achieves), `Unit`.
+
+**The entry ABI is the piece your float ruling names, and it is still unbuilt** — no corpus module
+carries a float in a signature, so it has no witness here. Building it means verifying against
+hand-written subjects only, which I have not done without saying so.
 
 ## Standing constraints, unchanged
 

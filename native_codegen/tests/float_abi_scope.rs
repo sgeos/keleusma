@@ -6,6 +6,13 @@
 //! line has three times in recent increments acted on a plausible guess about
 //! where work sat and been wrong.
 //!
+//! # OUTCOME, 2026-08-30: the constant route is open and the prediction held
+//!
+//! Slice two opened the CONSTANT route only. `float_witness.kel` lowers and
+//! agrees with the reference in the corpus differential. The signature, native
+//! return and data-slot routes still refuse, because nothing is built behind
+//! them.
+//!
 //! # The result sharpens the ruling
 //!
 //! The ruling names the **entry ABI**. The corpus's only float-carrying module is
@@ -120,10 +127,19 @@ fn what_a_float_abi_would_unblock() {
          entry ABI now has a corpus witness, which it did not when the float \
          ruling was scoped, so re-read that plan before building to it"
     );
+    // **THE PREMISE IS SPENT, AS THIS ASSERTION ANTICIPATED.** It used to require
+    // that some module was refused for a float. Slice two opened the CONSTANT
+    // route, and `float_witness.kel` now lowers and AGREES with the reference in
+    // the corpus differential — so nothing is refused for a float any more.
+    //
+    // **The scope measurement this file made was correct**: exactly one module,
+    // reached by a constant and not by a signature. That prediction is what the
+    // slice was planned from, and recording that it held is the reason to keep
+    // the file rather than delete it.
     assert!(
-        !refused_for_float.is_empty(),
-        "NO module is refused for a float any more. Either floats were implemented \
-         — in which case this file's premise is spent — or the witness stopped \
-         carrying one, which is the failure mode `witness_integrity.rs` exists for"
+        refused_for_float.is_empty(),
+        "a module is refused for a float again: {refused_for_float:?}. Slice two \
+         opened the constant route and verified the witness differentially, so a \
+         refusal here is a regression rather than the old guard"
     );
 }

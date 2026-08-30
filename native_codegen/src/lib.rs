@@ -1538,19 +1538,24 @@ fn lower_module_with<'ctx>(
     // read as coverage every time anyone checked, while being coverage for three
     // routes. `comment_citations.rs` now scans this package for exactly
     // that shape.
-    for (i, c) in program.chunks.iter().enumerate() {
-        if let Some(k) = c
-            .constants
-            .iter()
-            .position(|k| matches!(k, ConstValue::Float(_)))
-        {
-            return Err(LowerError::UnsupportedShape(format!(
-                "chunk {i} carries a Float CONSTANT at index {k}. A float reaches this \
-                 module without appearing in any signature, and the integer \
-                 arithmetic lowering would silently miscompile it"
-            )));
-        }
-    }
+    // **THE CONSTANT ROUTE IS OPEN, and it is the ONLY one of the four that is.**
+    //
+    // It was closed because "the integer arithmetic lowering would silently
+    // miscompile it". That is no longer the lowering: a float constant is pushed
+    // as its bit pattern tagged `OperandKind::Float`, the conversions and float
+    // `Add`/`Sub`/`Mul` are implemented, and **an opcode that consumes a float
+    // and was not written for one refuses at the operand**. The coarse route
+    // guard is therefore replaced by a finer check, not removed.
+    //
+    // **The other three routes stay closed because nothing is built behind
+    // them**: a float in a chunk signature needs the entry ABI, a float native
+    // return needs a native float ABI, and a float data slot is an open ABI
+    // question. Opening a route with no lowering behind it would admit a module
+    // that is compiled wrong rather than refused.
+    //
+    // Verified end to end rather than by lowering alone: `float_witness.kel` runs
+    // in the corpus differential against the virtual machine. See
+    // `docs/decisions/FLOAT_SLICE_TWO.md`.
     if let Some(i) = program
         .native_return_shapes
         .iter()

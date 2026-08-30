@@ -71,7 +71,7 @@ fn a_float_in_a_signature_refuses_the_module() {
 /// the guard was widened it was refused only because `Op::Add` was unsupported,
 /// which is not a guard at all.
 #[test]
-fn a_float_local_refuses_the_module_even_with_clean_signatures() {
+fn a_float_constant_no_longer_refuses_the_module() {
     let src =
         "fn p(w: Word) -> Word { let f = 1.5; let g = f + 2.5; w }\nfn main() -> Word { p(1) }";
     let m = build(src).expect("compiles");
@@ -90,12 +90,30 @@ fn a_float_local_refuses_the_module_even_with_clean_signatures() {
          rather than the constant route it exists for"
     );
 
-    let why = refused(&m).expect("a float constant must refuse the module");
+    // **SUPERSEDED 2026-08-30: THE CONSTANT ROUTE IS DELIBERATELY OPEN.**
+    //
+    // This asserted the module was refused, and by the constant route
+    // specifically. Slice two opened that route, because it is the only one of
+    // the four with a lowering behind it: a float constant is pushed tagged
+    // `Float`, the conversions and float `Add`/`Sub`/`Mul` are implemented, and
+    // `float_witness.kel` now LOWERS AND AGREES with the reference in the corpus
+    // differential.
+    //
+    // **What replaced the route guard is finer, not absent**: an opcode that
+    // consumes a float and was not written for one refuses at the operand. So
+    // this subject — whose floats only feed an `Add` — lowers, while the same
+    // float reaching a division still fails closed, pinned in
+    // `float_differential.rs`.
+    //
+    // **The other three routes are unchanged and still refuse**, each tested
+    // above and below, because the entry ABI, a native float return and float
+    // data slots are all unbuilt.
     assert!(
-        why.contains("CONSTANT"),
-        "the module was refused, but NOT by the constant route -- so the route \
-         may still be open and something else happened to catch this program. \
-         That is precisely the distinction this guard exists to make: {why}"
+        refused(&m).is_none(),
+        "a float constant refuses the module again. The constant route was opened \
+         deliberately and its witness verified differentially, so this is a \
+         regression rather than the guard working: {:?}",
+        refused(&m)
     );
 }
 
