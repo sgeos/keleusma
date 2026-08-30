@@ -701,6 +701,60 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-30 — Session 57, fourth increment: the orientation document was wrong in three places, and its own guard predicted it
+
+`tests/claimed_counts.rs` exists because `CLAUDE.md` once stated test counts that were three times
+wrong. It guards two figures and says plainly in its header that **the remaining claims are
+unguarded**, calling that luck rather than design.
+
+**Treated as a work item rather than a disclaimer, that sentence produced three defects.**
+
+| claim | reality |
+|---|---|
+| `src/selfhost/kel/` holds TEN stage sources, stated twice | it holds **twelve**, and the handoff, the `CONSTS` claim and the byte-identity corpus all say twelve |
+| the workspace has six members | it has **seven**; `keleusma-wire-derive` appeared nowhere in the document at all |
+| the `src/` tree ends in a leaf marker, reading as the whole directory | **eighteen** `src/*.rs` files were unlisted, and the document uses an ellipsis elsewhere for exactly this |
+
+Each is corrected and each is now guarded. A reader calibrated on ten stages would have believed
+the byte-identity corpus was two stages from complete when it is one; a crate an agent has never
+heard of is one it will not think to build, test or version.
+
+### EVERY GUARD DERIVES BOTH SIDES AND PINS NEITHER
+
+The expected value is read out of the prose and the actual out of the tree, so a branch that adds
+a stage or a crate stays green provided the document moves with it. **That shape is the repair for
+a failure this family already paid for**: a test that scanned a directory while pinning its answer
+as a constant was wrong on the other line's branch, in the direction its own message called a
+coverage gain. The lesson was "an invariant protects a region, and it was never going to protect an
+expectation whose widest input lay outside one" — deriving both sides is how that is obeyed rather
+than remembered.
+
+The source-listing guard does **not** demand an exhaustive listing. It demands the listing be
+either exhaustive **or marked partial**, which is the distinction that was actually missing.
+
+### THREE INSTRUMENT ERRORS IN ONE INCREMENT, AND THAT IS THE TRANSFERABLE PART
+
+I nearly reported three defects that were my own tooling:
+
+- **The opcode count.** An `awk` range ran past the `Op` enum into `OpCost` and returned 68 against
+  the documented 66. Counting the enum by brace depth gives 66. **The documentation was right.**
+- **Two missing source files.** A tree extractor matched at the wrong indentation depth and
+  reported `build.rs` and `piano_roll.rs` as absent from `src/`; both live under `examples/`.
+- **The guard's own counter.** It counted `include_str!` OCCURRENCES rather than distinct stage
+  names, so a stage embedded at two sites inflated the count to the directory's size — which would
+  have hidden the very gap the guard checks. The test failed, and the instrument was corrected
+  rather than the expectation.
+
+**The failing test was evidence about the counter, not about the tree.** That reading is the whole
+skill here, and the tree already records the rule as "check the instrument before doubting the
+result". Three chances to apply it in one sitting.
+
+A fourth near-miss: a handoff pin edit whose anchor had the wrong whitespace. The assertion aborted
+and wrote nothing, rather than silently mis-editing a document — which is why the edit scripts
+assert their anchors instead of using a permissive replace.
+
+---
+
 ## 2026-08-30 — Session 57, third increment: the frontier is measured, and the operator's ABI rulings surface
 
 Two unrelated findings, both from doing something the protocol already asked for.
