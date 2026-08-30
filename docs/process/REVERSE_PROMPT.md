@@ -6,42 +6,52 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## Your ABI rulings are recorded, and measuring one of them changed the plan
+## Float slice one is built and differentially verified
 
-**Settled**: float = Option A (which also settles the `Float` shared slot), string = Option B. The
-string one **cannot be implemented by this line** — it changes marshalling in `src/`, owned by the
-`v0.2.3` line.
+Your Option A ruling unblocked real capability work. **One measurement decided its shape before I wrote
+anything**: `width_of_declared_shape` discards the scalar kind, so a `Float` and a `Word` are both
+eight bytes and **no float arithmetic could be lowered until an operand's kind survived**. Starting
+from the phrase "entry ABI" would have built the wrong piece.
 
-**Measuring the float ruling before building to it was worth the one test it cost.** You named the
-**entry ABI**. The corpus's only float-carrying module is blocked by a float **constant**, and **no
-corpus module has a float in a signature at all** — so the entry-ABI change has **zero corpus
-witnesses** and, built alone, could not be verified against the corpus. Option A as you wrote it covers
-both, so the ruling is not wrong; but planning from the phrase "entry ABI" builds the wrong piece
-first. Gain when built: **66 → 67 modules**, plus the two conversion opcodes the census lists as
-UNPROVEN.
+**Built**: an operand-kind channel beside the width channel, seeded by the producing opcode, with the
+stack staying homogeneous `i64` and floats riding it as bit patterns. Then a float constant, both
+conversions, and float `Add`/`Sub`/`Mul`.
 
-## Two things in the record are mine, not yours, and are labelled so
+**Verified by differential, not by acceptance**: the witness's exact shape — `w as Float`, `+ 1.5`,
+`as Word` — agrees with the reference across ten probes including negatives, with a must-fire control
+that the program computes something.
 
-- **Float width.** `Float` is `f32` **or** `f64` under `narrow-float-32`, so "double" is incoherent in
-  a build with no `f64`. I am proceeding on **the FP type matches the runtime's float width**.
-- **`Unit`.** You asked what it is — a question, not a ruling. It is the empty type, **0 bytes**; a
-  zero-byte slot conveys nothing. My inference is a permanent refusal.
+## The part I most want you to see: implementing this CREATED a hazard
 
-## Three still need you
+A module whose float arises from `as Float`, with no float constant and no float in a signature, was
+previously refused **only because no float operation existed**. `float_guard_routes.rs` names that
+exactly — *"a property of what is unimplemented, not a guard"* — and it **stopped being true the moment
+I wrote the operations**. The module-level guard does not cover that shape.
 
-- **`Fixed`** — three readings, and one of them (a distinct slot tag per `N`) contradicts your own
-  *"without needing to store"*. Your phrasing points at the reading that **is** the recorded Option B,
-  but you framed it as distinct from the listed options, so I have not assumed it. **What you describe
-  is already exactly how `Fixed` works in-module**; the open question is only at the host boundary,
-  where the compiler cannot bake anything into a separately compiled host. **The interop goal —
-  convention-based or self-describing — still governs and is still unstated.**
-- **`Text`** — your supposition that it was covered is **incorrect**, and I have preserved that in the
-  record rather than silently correcting it. The string ruling settles static literals; the `Text` slot
-  is a two-word handle.
-- **`Opaque`** — your stated intent is **already what the existing handle achieves**. A literal raw
-  pointer would not fit under `narrow-word-8` or `-16`, where a word is 1–2 bytes and a pointer is 8.
+**`Op::Div` was the sharp case**: I added float dispatch to `Add`/`Sub`/`Mul` only, so a division would
+have been an integer division of a double's bit pattern — a plausible wrong number, not a fault.
 
-**Nothing was implemented on an ambiguous ruling.**
+Closed with a **whitelist**: an opcode that consumes a float and was not written for one refuses. A
+blacklist would have to name every arm, and missing one is silent.
+
+## Four errors of mine, all caught inside the increment by my own guards
+
+- the kind was lost across the local round trip — the mixed-pair refusal caught it;
+- I read the kind **after** popping, against a rule written at `SetLocal`;
+- the whitelist's first formulation checked the top two stack entries rather than the operands the
+  opcode **pops**, refusing `Op::Const` for a float below it;
+- a pin went red **three times**, correctly, and was renamed because a test called `..._is_refused_...`
+  that asserts the opposite is the stale label I keep finding.
+
+## What is NOT done, so it is not assumed
+
+**The entry ABI** — the piece your ruling names — is **not built**. No corpus module carries a float in
+a signature, so it has no witness here. Also not done: float shared slots, division, comparisons,
+`f32`.
+
+**The module guard is unchanged and censuses are unmoved.** Nothing float-carrying reaches
+`lower_module`, so the corpus witness is still refused and the conversions are still UNPROVEN — which
+is the correct result, not an oversight. **Relaxing that guard is the next decision.**
 
 ## Verification
 
@@ -49,14 +59,20 @@ Both suites run **sequentially** (parallel invalidates the perf canary, 57x).
 
 | | result |
 |---|---|
-| workspace | **2491 passed, 0 failed, 92 binaries**, cargo exit 0 |
-| `native_codegen` gate step | **373 passed, 0 failed, 0 ignored, 75 binaries**, exit 0 |
+| workspace | **2496 passed, 0 failed, 92 binaries**, cargo exit 0 |
+| `native_codegen` gate step | **377 passed, 0 failed, 0 ignored, 76 binaries**, exit 0 |
 | censuses | 61 of 66; `["Len"]`; 1070 of 1074; 89841 of 89940 — all unmoved |
 
-The native gate first aborted in 1s on `cargo fmt --check` for a new file; that pass is not reported as
-a result, and the figures above are from the re-run.
+Gate timings this increment are contention figures; load peaked over 200 with a peer suite in the
+sibling worktree.
 
 **No absorption was needed**: already zero unabsorbed.
+
+## Still open, and yours
+
+[`ABI_RULINGS.md`](../decisions/ABI_RULINGS.md) — `Fixed` (three readings; the interop goal decides,
+and is unstated), `Text` (your supposition that it was covered is incorrect), `Opaque` (your intent is
+already what the handle achieves), `Unit`.
 
 ## Standing constraints, unchanged
 

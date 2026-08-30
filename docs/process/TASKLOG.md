@@ -631,6 +631,33 @@ Current sprint source of truth.
 > workspace **2467/0/88**, coverage re-derived and unchanged at 1070 of 1074.
 > See [`../decisions/OPERAND_WIDTH_RECOVERY.md`](../decisions/OPERAND_WIDTH_RECOVERY.md).
 
+> **Currency note (2026-08-30, V0.3.X line). FLOAT SLICE ONE: THE KIND CHANNEL, A VERIFIED ROUND
+> TRIP, AND A HAZARD THE IMPLEMENTATION CREATED AND CLOSED.**
+>
+> The operator's Option A ruling unblocked capability work. **One measurement decided its shape**:
+> `width_of_declared_shape` **discards the scalar kind**, so a `Float` and a `Word` are both eight
+> bytes and no float arithmetic could be lowered until an operand's kind survived. Built: an
+> `OperandKind` channel beside the width channel, tracked per stack entry and per local and seeded by
+> the PRODUCING opcode, with the stack staying homogeneous `i64`; then a float constant, `IntToFloat`,
+> `FloatToInt`, and float `Add`/`Sub`/`Mul`. **Verified by DIFFERENTIAL, not by acceptance** — the
+> witness's shape agrees with the reference over ten probes including negatives, with a must-fire
+> control. **The implementation created a hazard and it is the part worth remembering**: float
+> operations **removed an accidental protection**, since a module whose float arises from `as Float`
+> with no constant or signature was refused only because no float operation existed —
+> `float_guard_routes.rs` calls that *"a property of what is unimplemented, not a guard"*. `Op::Div`
+> was the sharp case: an integer division of a double's bit pattern. Closed with a **whitelist** (an
+> opcode consuming a float that was not written for one refuses), whose **first formulation was wrong
+> and a control caught it** — it checked the top two stack entries rather than the operands the opcode
+> POPS, so the count now comes from `op_depth_effect`. **Three of my own errors were caught by my own
+> guards inside the increment**: the kind lost across the local round trip, the kind read AFTER popping
+> (against a rule written at `SetLocal`), and the too-tight whitelist. **A pin went red three times,
+> correctly**, and was renamed because `..._is_refused_...` asserting the opposite is a stale label.
+> **Censuses unmoved, which is the correct result**: the guard still refuses the corpus witness, so
+> nothing float-carrying reaches `lower_module`; relaxing it is the next decision. **Not done**: the
+> entry ABI (no corpus witness), float slots, division, comparisons, `f32`. No absorption needed.
+> Workspace **2496/0/92**, `native_codegen` **377/0/0 ignored/76**. See
+> [`../decisions/FLOAT_SLICE_ONE.md`](../decisions/FLOAT_SLICE_ONE.md).
+
 > **Currency note (2026-08-29, V0.3.X line, thirteenth entry). ABI RULINGS RECEIVED AND RECORDED;
 > MEASURING THE FLOAT RULING CHANGED WHICH PIECE IS BUILT FIRST.**
 >

@@ -92,6 +92,7 @@ pub mod region;
 /// an opcode arm states otherwise, and a composite operation that consumes an
 /// unknown is refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+
 pub enum Width {
     /// The operand IS the data: `bytes` of it, stored directly.
     Scalar(u32),
@@ -106,6 +107,31 @@ pub enum Width {
     /// looked correct, which is a silent wrong answer rather than a fault.
     Body(u32),
     /// Not statically determined here. Fails a composite operation closed.
+    Unknown,
+}
+
+/// Whether an operand is an integer or a floating-point value.
+///
+/// **Separate from [`Width`], and deliberately not folded into it.** A `Float`
+/// and a `Word` are both eight bytes, so a width alone cannot tell them apart —
+/// `width_of_declared_shape` collapses `WireShape::Scalar { kind }` to a size and
+/// discards exactly this. Every float operation therefore needs a channel width
+/// cannot provide, and overloading `Width::Scalar` would reinstate the collapse
+/// being repaired.
+///
+/// **`Unknown` is a real answer, never a default.** A bitcast is only correct
+/// when the tag is right; an operation on an operand of unknown kind refuses
+/// rather than guessing, which is the discipline the width model already
+/// applies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OperandKind {
+    /// An integer, which is every operand this backend produced before floats.
+    Int,
+    /// A floating-point value, held on the operand stack **bitcast to `i64`** so
+    /// the stack stays homogeneous. The alternative — a stack of value enums —
+    /// touches 46 pop sites for no gain the optimiser does not already give.
+    Float,
+    /// Not determined here. Fails a float-sensitive operation closed.
     Unknown,
 }
 
@@ -564,10 +590,17 @@ struct Lower<'ctx> {
     /// depth. Grown alongside `slots` and defaulted to [`Width::Unknown`], so an
     /// arm that does not state a width cannot be mistaken for one that did.
     widths: Vec<Width>,
+    /// Kind of each operand-stack entry, parallel to `widths`. Seeded by the
+    /// PRODUCING opcode — `IntToFloat` and a float `Const` push `Float` — so
+    /// this is local dataflow rather than signature threading.
+    kinds: Vec<OperandKind>,
     /// Packed width most recently stored into each local, so `GetLocal` can
     /// restore what `SetLocal` put there. A local never written in this chunk
     /// stays unknown.
     local_widths: Vec<Width>,
+    /// Kind most recently stored into each local, so `GetLocal` restores what
+    /// `SetLocal` put there — the same round-trip the widths already make.
+    local_kinds: Vec<OperandKind>,
 }
 
 impl<'ctx> Lower<'ctx> {
@@ -618,6 +651,29 @@ impl<'ctx> Lower<'ctx> {
     /// The unstated form defaults to [`Width::Unknown`] rather than to a word,
     /// so an unlabelled arm fails a composite operation closed instead of
     /// mispacking it. See [`Width`].
+    /// Push with an explicit kind. `push_w` is this with `Int`, which is what
+    /// every pre-float producer means.
+    fn push_k(&mut self, v: IntValue<'ctx>, w: Width, k: OperandKind) {
+        self.push_w(v, w);
+        if self.kinds.len() < self.widths.len() {
+            self.kinds.resize(self.widths.len(), OperandKind::Unknown);
+        }
+        if let Some(d) = self.depth.checked_sub(1) {
+            if self.kinds.len() <= d {
+                self.kinds.resize(d + 1, OperandKind::Unknown);
+            }
+            self.kinds[d] = k;
+        }
+    }
+
+    /// The kind of the operand `back` entries down, `Unknown` if untracked.
+    fn kind_at(&self, back: usize) -> OperandKind {
+        match self.depth.checked_sub(back + 1) {
+            Some(d) => self.kinds.get(d).copied().unwrap_or(OperandKind::Unknown),
+            None => OperandKind::Unknown,
+        }
+    }
+
     fn push_w(&mut self, v: IntValue<'ctx>, w: Width) {
         if self.depth >= MAX_STACK {
             self.stack_overflow.get_or_insert(self.depth);
@@ -627,6 +683,14 @@ impl<'ctx> Lower<'ctx> {
         if self.widths.len() <= self.depth {
             self.widths.resize(self.depth + 1, Width::Unknown);
         }
+        // **Mark the slot Int here, not only in `push_k`.** The stack reuses
+        // slots, so a `Float` tag left by an earlier operand would otherwise
+        // survive into an integer pushed at the same depth and make a later
+        // bitcast reinterpret it.
+        if self.kinds.len() <= self.depth {
+            self.kinds.resize(self.depth + 1, OperandKind::Unknown);
+        }
+        self.kinds[self.depth] = OperandKind::Int;
         self.widths[self.depth] = w;
         self.depth += 1;
     }
@@ -1143,6 +1207,7 @@ pub fn lower_chunk<'ctx>(
             natives: &[],
             native_shapes: &[],
             chunk_signatures: &[],
+            float_bytes: 8,
             // `lower_chunk` sees no module, so it resolves no call and needs no
             // per-site offsets; it refuses `Op::Call` for the same reason.
             call_regions: &[],
@@ -1551,6 +1616,7 @@ fn lower_module_with<'ctx>(
             natives: &program.native_names,
             native_shapes: &program.native_return_shapes,
             chunk_signatures: &program.signatures,
+            float_bytes: 1u32 << program.float_bits_log2 >> 3,
             call_regions: &call_regions,
             visited: visits.as_ref().map(|_| &seen),
         };
@@ -1675,6 +1741,15 @@ fn chunk_builds_composite(chunk: &Chunk) -> bool {
 #[derive(Clone, Copy)]
 struct BodyCfg<'a> {
     opts: LowerOptions,
+    /// Byte width of the runtime's `Float`, from the module header's
+    /// `float_bits_log2`.
+    ///
+    /// **Carried rather than assumed.** `Float` is `f32` under `narrow-float-32`
+    /// and `f64` otherwise, so a hard-coded `double` would be the wrong type in
+    /// a build that has no `f64`. Only 8 is lowered today; any other width is
+    /// REFUSED rather than approximated, because a float of the wrong width is a
+    /// silently wrong number and not a fault.
+    float_bytes: u32,
     /// `Some(ip)` when this is a degenerate stream chunk and `ip` is the
     /// `Op::Yield` that becomes the return. Computed by the caller, which holds
     /// the bytecode module; `lower_chunk` passes `None` for the same reason it
@@ -2158,6 +2233,7 @@ fn lower_chunk_body<'ctx>(
         chunk_signatures,
         call_regions,
         visited,
+        float_bytes,
     } = cfg;
     let i64t = ctx.i64_type();
     let i128t = ctx.i128_type();
@@ -2276,6 +2352,11 @@ fn lower_chunk_body<'ctx>(
         depth: 0,
         stack_overflow: None,
         widths: Vec::new(),
+        kinds: Vec::new(),
+        // **Parameter kinds start Unknown, not Int.** A float-typed parameter
+        // is exactly the case the entry ABI does not yet handle, and defaulting
+        // to `Int` would let it be read as an integer instead of refused.
+        local_kinds: vec![OperandKind::Unknown; local_widths.len()],
         local_widths,
     };
 
@@ -2432,6 +2513,58 @@ fn lower_chunk_body<'ctx>(
             other => other,
         };
 
+        // **A FLOAT MAY ONLY REACH AN OPCODE THAT KNOWS IT IS ONE — a WHITELIST,
+        // not a per-opcode patch.**
+        //
+        // Before floats were lowered, a module with a float local was refused
+        // only because no float OPERATION was supported. `float_guard_routes.rs`
+        // names that plainly: *"a property of what is unimplemented, not a
+        // guard"*. Implementing the operations REMOVED that accidental block, so
+        // a module whose float arises from `as Float` with no float constant or
+        // signature now reaches lowering — and the module-level guard does not
+        // cover it, because it scans signatures, constants, native shapes and
+        // data slots, none of which such a module has.
+        //
+        // A blacklist would have to name every arm that must refuse, and missing
+        // one is a silently wrong number: `Op::Div` on a double's bit pattern is
+        // an integer division that produces a plausible value. **So the default
+        // is refusal**, and only the arms that were written to understand a
+        // float operand are exempt. Moves are exempt because they copy bits
+        // without interpreting them.
+        {
+            // **Only the operands the opcode actually POPS.** A first attempt
+            // checked the top two stack entries regardless, which refused
+            // `Op::Const` for a float sitting *below* it — `Const` consumes
+            // nothing. The count comes from `op_depth_effect`, which returns
+            // (required, delta), rather than from a guess about each opcode.
+            let (required, _) = keleusma::verify::op_depth_effect(op, chunk);
+            let consumes_float =
+                (0..required as usize).any(|i| st.kind_at(i) == OperandKind::Float);
+            let float_aware = matches!(
+                op,
+                Op::Add
+                    | Op::Sub
+                    | Op::Mul
+                    | Op::FloatToInt
+                    | Op::SetLocal(_)
+                    | Op::GetLocal(_)
+                    | Op::Return
+                    | Op::PopN(_)
+                    | Op::Dup
+            );
+            if consumes_float && !float_aware {
+                return Err(LowerError::unsupported_op(
+                    &op_variant_name(op),
+                    format!(
+                        "{op:?} would consume a float operand, and this arm was not \
+                         written for one. Interpreting a double's bit pattern as an \
+                         integer is a plausible wrong number rather than a fault, so \
+                         the operand kind fails closed here"
+                    ),
+                ));
+            }
+        }
+
         match op {
             Op::GetLocal(n) => {
                 let v =
@@ -2463,12 +2596,25 @@ fn lower_chunk_body<'ctx>(
                         .copied()
                         .unwrap_or(Width::Unknown),
                 };
-                st.push_w(v, w);
+                // **Restore the kind on the same rule as the width.** Only a
+                // singly-written local carries a trusted tag; anything else is
+                // `Unknown` and refuses at the use rather than being read as an
+                // integer, which is what a float would silently become.
+                let k = match local_write_count.get(&idx).copied().unwrap_or(0) {
+                    0 | 1 => st
+                        .local_kinds
+                        .get(idx)
+                        .copied()
+                        .unwrap_or(OperandKind::Unknown),
+                    _ => OperandKind::Unknown,
+                };
+                st.push_k(v, w, k);
             }
             Op::SetLocal(n) => {
                 // Read the width BEFORE popping; `pop` lowers the depth and
                 // `width_at` is relative to it.
                 let w = st.width_at(0);
+                let k = st.kind_at(0);
                 let v = st.pop();
                 st.b.build_store(st.locals[*n as usize], v).unwrap();
                 let idx = *n as usize;
@@ -2477,6 +2623,16 @@ fn lower_chunk_body<'ctx>(
                         st.local_widths.resize(idx + 1, Width::Unknown);
                     }
                     st.local_widths[idx] = w;
+                    // **The KIND round-trips on the same rule as the width.** A
+                    // local written more than once could hold a float on one
+                    // path and an integer on another, and a tag that survived
+                    // only one of them would let a bitcast reinterpret the
+                    // other. Multiply-written locals therefore stay `Unknown`,
+                    // which refuses at the use.
+                    if st.local_kinds.len() <= idx {
+                        st.local_kinds.resize(idx + 1, OperandKind::Unknown);
+                    }
+                    st.local_kinds[idx] = k;
                 }
             }
             Op::PopN(n) => {
@@ -2901,7 +3057,23 @@ fn lower_chunk_body<'ctx>(
                 // and giving it a width would let it be packed into a body.
                 // A static string is a REFERENCE, not a packable scalar, so it
                 // cannot be produced as an `i64` literal like the others.
-                if let ConstValue::StaticStr(s) = cv {
+                // **A float constant is pushed as its BIT PATTERN**, tagged
+                // `Float` so a later operation knows to bitcast rather than to
+                // treat the bits as an integer. The stack stays homogeneous
+                // `i64`; the tag is what carries the difference a width cannot.
+                if let ConstValue::Float(f) = cv {
+                    if float_bytes != 8 {
+                        return Err(LowerError::UnsupportedShape(format!(
+                            "a float constant at a float width of {float_bytes} bytes; \
+                             only 8 is lowered, and another width is refused rather \
+                             than approximated because a float of the wrong width is a \
+                             silently wrong number, not a fault"
+                        )));
+                    }
+                    let bits = i64::from_ne_bytes(f.to_ne_bytes());
+                    let v = i64t.const_int(bits as u64, false);
+                    st.push_k(v, Width::Scalar(8), OperandKind::Float);
+                } else if let ConstValue::StaticStr(s) = cv {
                     let g = static_string_global(ctx, module, s);
                     let addr = st.b.build_ptr_to_int(g, i64t, "kstr").unwrap();
                     // Unknown width, deliberately. The operand is an address,
@@ -3251,33 +3423,133 @@ fn lower_chunk_body<'ctx>(
             // or mismatched pair is REFUSED rather than guessed, which costs
             // coverage and cannot mispack -- the same trade the composite
             // packing already makes.
+            // **The two conversions, which are what makes a float REACHABLE.**
+            //
+            // The operand stack is homogeneous `i64`, so a float lives on it as
+            // its bit pattern and the `OperandKind` tag says so. `IntToFloat`
+            // converts a real integer to a real double and stores the bits;
+            // `FloatToInt` reads the bits back as a double and truncates toward
+            // zero, which is what `as Word` means on the reference side.
+            Op::IntToFloat | Op::FloatToInt => {
+                if float_bytes != 8 {
+                    return Err(LowerError::UnsupportedShape(format!(
+                        "{op:?} at a float width of {float_bytes} bytes; only 8 is \
+                         lowered, and another width is refused rather than \
+                         approximated"
+                    )));
+                }
+                let f64t = ctx.f64_type();
+                // **Read the kind BEFORE popping.** `pop` lowers the depth and
+                // `kind_at` is relative to it, so checking after the pop asks
+                // about the wrong operand — or about an empty stack. The same
+                // rule is written at `SetLocal`, and this arm broke it.
+                let operand_kind = st.kind_at(0);
+                let v = st.pop();
+                if matches!(op, Op::IntToFloat) {
+                    let f = st.b.build_signed_int_to_float(v, f64t, "sitofp").unwrap();
+                    let bits =
+                        st.b.build_bit_cast(f, i64t, "fbits")
+                            .unwrap()
+                            .into_int_value();
+                    st.push_k(bits, Width::Scalar(8), OperandKind::Float);
+                } else {
+                    // **REFUSED unless the operand is KNOWN to be a float.** A
+                    // bitcast of an integer's bits to a double is a silently
+                    // wrong number, so an unknown or integer kind fails closed
+                    // here rather than reinterpreting.
+                    if operand_kind != OperandKind::Float {
+                        return Err(LowerError::unsupported_op(
+                            "FloatToInt",
+                            format!(
+                                "operand kind is {operand_kind:?}, not Float. \
+                                 Reading an integer's bits as a double would be a \
+                                 silently wrong number rather than a fault"
+                            ),
+                        ));
+                    }
+                    let f =
+                        st.b.build_bit_cast(v, f64t, "asf")
+                            .unwrap()
+                            .into_float_value();
+                    let i = st.b.build_float_to_signed_int(f, i64t, "fptosi").unwrap();
+                    st.push_w(i, Width::Scalar(8));
+                }
+            }
             Op::Add | Op::Sub | Op::Mul => {
-                let (wl, wr) = (st.width_at(1), st.width_at(0));
-                // `Op::Mul` on `Fixed` does not exist: the compiler emits
-                // `Op::FixedMul(n)` for it. Admitting an eight-byte operand here
-                // would add a lowering arm for a case that cannot occur, which
-                // is untested code that looks tested.
-                let byte_only = matches!(op, Op::Mul);
-                let out = arith_result_width(wl, wr, byte_only).ok_or_else(|| {
-                    LowerError::unsupported_op(
-                        &op_variant_name(op),
-                        format!(
-                            "{op:?} with operand widths {wl:?} and {wr:?}: this backend \
+                // **FLOAT DISPATCH COMES FIRST, and it is decided by KIND.**
+                // `Op::Add` is emitted for `Byte`, `Fixed` AND `Float`, and a
+                // width cannot separate the third: a float and a word are both
+                // eight bytes. If EITHER operand is a float, BOTH must be, or
+                // the pair is refused — a mixed pair would mean bitcasting an
+                // integer's bits to a double, which is a silently wrong number.
+                let (kl, kr) = (st.kind_at(1), st.kind_at(0));
+                if kl == OperandKind::Float || kr == OperandKind::Float {
+                    if float_bytes != 8 {
+                        return Err(LowerError::UnsupportedShape(format!(
+                            "float arithmetic at a float width of {float_bytes} \
+                             bytes; only 8 is lowered"
+                        )));
+                    }
+                    if kl != OperandKind::Float || kr != OperandKind::Float {
+                        return Err(LowerError::unsupported_op(
+                            "Add",
+                            format!(
+                                "{op:?} with operand kinds {kl:?} and {kr:?}: one \
+                                 side is a float and the other is not, so no \
+                                 lowering is correct for both. Refused rather \
+                                 than reinterpreted"
+                            ),
+                        ));
+                    }
+                    let f64t = ctx.f64_type();
+                    let rhs_bits = st.pop();
+                    let lhs_bits = st.pop();
+                    let l =
+                        st.b.build_bit_cast(lhs_bits, f64t, "lf")
+                            .unwrap()
+                            .into_float_value();
+                    let r =
+                        st.b.build_bit_cast(rhs_bits, f64t, "rf")
+                            .unwrap()
+                            .into_float_value();
+                    let res = match op {
+                        Op::Add => st.b.build_float_add(l, r, "fadd").unwrap(),
+                        Op::Sub => st.b.build_float_sub(l, r, "fsub").unwrap(),
+                        _ => st.b.build_float_mul(l, r, "fmul").unwrap(),
+                    };
+                    let bits =
+                        st.b.build_bit_cast(res, i64t, "resbits")
+                            .unwrap()
+                            .into_int_value();
+                    st.push_k(bits, Width::Scalar(8), OperandKind::Float);
+                } else {
+                    let (wl, wr) = (st.width_at(1), st.width_at(0));
+                    // `Op::Mul` on `Fixed` does not exist: the compiler emits
+                    // `Op::FixedMul(n)` for it. Admitting an eight-byte operand here
+                    // would add a lowering arm for a case that cannot occur, which
+                    // is untested code that looks tested.
+                    let byte_only = matches!(op, Op::Mul);
+                    let out = arith_result_width(wl, wr, byte_only).ok_or_else(|| {
+                        LowerError::unsupported_op(
+                            &op_variant_name(op),
+                            format!(
+                                "{op:?} with operand widths {wl:?} and {wr:?}: this backend \
                          lowers the generic arithmetic surface only for a matched \
                          Byte pair (1 byte each) or, for Add and Sub, a matched \
                          Fixed pair (8 bytes each). Refusing rather than guessing, \
                          since a wrong choice here is a silent wrong answer"
-                        ),
-                    )
-                })?;
-                let rhs = st.pop();
-                let lhs = st.pop();
-                let raw = match op {
-                    Op::Add => st.b.build_int_add(lhs, rhs, "gadd").unwrap(),
-                    Op::Sub => st.b.build_int_sub(lhs, rhs, "gsub").unwrap(),
-                    _ => st.b.build_int_mul(lhs, rhs, "gmul").unwrap(),
-                };
-                st.push_w(mask_if_byte(&st.b, i64t, raw, out), out);
+                            ),
+                        )
+                    })?;
+                    let rhs = st.pop();
+                    let lhs = st.pop();
+                    let raw = match op {
+                        Op::Add => st.b.build_int_add(lhs, rhs, "gadd").unwrap(),
+                        Op::Sub => st.b.build_int_sub(lhs, rhs, "gsub").unwrap(),
+                        _ => st.b.build_int_mul(lhs, rhs, "gmul").unwrap(),
+                    };
+                    st.push_w(mask_if_byte(&st.b, i64t, raw, out), out);
+                }
             }
             // The unary half of the same surface. The virtual machine negates a
             // `Byte` with `u8::wrapping_neg`, which is `(-a) & 0xFF`, and a

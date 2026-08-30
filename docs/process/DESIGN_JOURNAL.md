@@ -1,5 +1,55 @@
 # Design Journal
 
+## 2026-08-30 — Float slice one: the kind channel, and a hazard I created and then closed
+
+**Increment**: the operator's Option A ruling unblocked real capability work. Before writing any of it,
+one measurement decided its shape: **`width_of_declared_shape` discards the scalar kind**, collapsing
+`WireShape::Scalar { kind }` to a size. A `Float` and a `Word` are both eight bytes, so **no float
+arithmetic could be lowered until an operand's kind survived** — `Op::Add` is emitted for `Byte`,
+`Fixed` *and* `Float`. Starting from the phrase "entry ABI" would have built the wrong piece and met
+this mid-flight.
+
+**Built**: an `OperandKind` channel beside the width channel, tracked per stack entry and per local,
+seeded by the *producing* opcode. The stack stays homogeneous `i64` and a float rides it as its bit
+pattern; the alternative, a stack of value enums, touches 46 pop sites for nothing the optimiser does
+not already give. Then a float constant, both conversions, and float `Add`/`Sub`/`Mul`.
+
+**Verified by differential, not by acceptance.** The witness's exact shape agrees with the reference
+over ten probes including negatives, with a must-fire control that the program computes something.
+
+**Two errors of mine, both caught by my own guards inside the increment.** The kind was lost across the
+local round trip — `local_kinds` declared and never wired — and the mixed-pair refusal caught it rather
+than a bitcast quietly reinterpreting. Then I **read the kind after popping**; the diagnostic showed
+`depth=0` with `local_kinds=[Unknown, Float, Float]`, proving the save was right and the read was
+wrong. The rule is written at `SetLocal` — *"Read the width BEFORE popping"* — and the arm I wrote
+broke it.
+
+**Then the increment created a hazard, which is the part worth remembering.** Implementing float
+operations **removed an accidental protection**: a module whose float arises from `as Float`, with no
+float constant or signature, was previously refused only because no float operation existed.
+`float_guard_routes.rs` names that exactly — *"a property of what is unimplemented, not a guard"* — and
+it stopped being true the moment I wrote the operations. The module-level guard does not cover such a
+module. **`Op::Div` was the sharp case**: float dispatch went to `Add`/`Sub`/`Mul` only, so a division
+would have been an integer division of a double's bit pattern.
+
+**A blacklist would have to name every arm that must refuse, and missing one is silent, so the fix is a
+whitelist**: an opcode consuming a float that was not written for one refuses. **My first formulation
+was wrong and a control caught it** — it checked the top two stack entries rather than the operands the
+opcode POPS, refusing `Op::Const` for a float sitting below it. The count now comes from
+`op_depth_effect`, the documented API, rather than a per-opcode guess.
+
+**A pin of mine went red three times, correctly each time.** It asserted `IntToFloat` was refused by
+name; its own failure message said what to do if that changed, and the witness existed. My first
+correction then asserted the module guard still refused the subject — **measured, it does not**,
+because that subject has a float only as a local. The corpus witness is a *different* subject carrying
+a float constant, which is why the census still lists the conversions as UNPROVEN while this subject
+lowers. The test was renamed, because `..._is_refused_...` asserting the opposite is the stale label
+this line keeps finding.
+
+**Censuses unmoved, and that is the correct result**: the guard still refuses the corpus witness, so
+nothing float-carrying reaches `lower_module`. Relaxing it is the next decision, not this one.
+
+
 ## 2026-08-29 — Rulings arrived, and measuring them changed what the first piece of work is
 
 **Increment**: the operator ruled on the ABI questions — **the first substantive input in roughly

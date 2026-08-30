@@ -111,10 +111,26 @@ fn reset_is_reachable_and_its_module_lowers() {
     );
 }
 
-/// Each float conversion, asked separately, so one refusal does not stand in for
-/// the other.
+/// **SUPERSEDED 2026-08-29: the conversions are LOWERED now, and this records
+/// the transition rather than the old refusal.**
+///
+/// This test used to assert that `IntToFloat` was refused BY NAME. It is not:
+/// `native_codegen` gained a float constant, both conversions, and float
+/// arithmetic, verified against the reference in `float_differential.rs` over
+/// ten probes including negatives.
+///
+/// **The old assertion said what to do in this event** — *"If the backend now
+/// lowers one, it is no longer unproven and needs an execution witness rather
+/// than this test"* — and the witness exists, so the test is updated rather than
+/// deleted or weakened.
+///
+/// **What this now pins**: a program whose float arises only from `as Float`
+/// LOWERS. The ISA census still lists the conversions as UNPROVEN because the
+/// CORPUS witness (`float_witness.kel`) carries a float CONSTANT and is still
+/// refused by the module-level guard — a different subject, and that distinction
+/// is what the first correction of this pin got wrong.
 #[test]
-fn the_float_conversion_pair_is_refused_at_the_first_of_the_two() {
+fn the_float_conversions_are_lowered_and_this_subject_no_longer_refuses() {
     // **RENAMED from "each float conversion is refused BY NAME".** The body runs
     // one program, which emits both conversions, and the backend names only
     // `IntToFloat` because lowering stops at the first refusal. `FloatToInt` is
@@ -150,13 +166,24 @@ fn the_float_conversion_pair_is_refused_at_the_first_of_the_two() {
             !ops.is_empty(),
             "{label}: the subject emits no conversion, so it measures nothing"
         );
+        // **THIS SUBJECT NOW LOWERS, and that is the deliberate change.**
+        //
+        // A first correction of this pin asserted the module-level guard still
+        // refused it. **Measured: it does not.** That guard scans signatures,
+        // constants, native shapes and data slots; this program has a float only
+        // as a LOCAL arising from `as Float`, so none of its routes apply. Before
+        // the conversions were lowered it was refused anyway — by the absence of
+        // an implementation, which `float_guard_routes.rs` calls "a property of
+        // what is unimplemented, not a guard".
+        //
+        // What protects it now is the operand whitelist in `lower_chunk`: an
+        // opcode that consumes a float and was not written for one refuses. Both
+        // directions are pinned in `float_differential.rs`.
         assert!(
-            refusals
-                .iter()
-                .any(|r| r.contains("ToFloat") || r.contains("ToInt")),
-            "{label}: expected a refusal naming a float conversion, got {refusals:?}. \
-             If the backend now lowers one, it is no longer unproven and needs an \
-             execution witness rather than this test."
+            refusals.is_empty(),
+            "{label}: this subject is refused again. The conversions were lowered \
+             and differentially verified, so a refusal here is a regression \
+             rather than the old guard returning: {refusals:?}"
         );
     }
     println!("================\n");
