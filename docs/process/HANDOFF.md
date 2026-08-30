@@ -29,9 +29,10 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > only be consistent between the two channels the host supplies. **Any numbering the pipeline
 > chooses works.**
 >
-> Two of the eight expression kinds now move: the binary operator, across **all four** forest kinds
-> the lowering splits it into, and the condition a conditional tests. **`let d = 1 + 2` reaches the
-> bounded fixpoint from the pipeline**, which is the gap this file named for four sessions.
+> Three of the eight expression kinds now move: the binary operator, across **all four** forest
+> kinds the lowering splits it into; the condition a conditional tests; and, since 2026-08-29, the
+> tail-versus-return claim. **`let d = 1 + 2` reaches the bounded fixpoint from the pipeline**,
+> which is the gap this file named for four sessions.
 >
 > **THE BRANCH PAIR WAS BUILT AND WITHHELD, DELIBERATELY.** `push_if` synthesises an else arm, so
 > the pipeline cannot tell a one-armed conditional from a two-armed one; a spurious pair row feeds
@@ -189,7 +190,7 @@ git merge-base --is-ancestor 5c3ba628 HEAD    # must succeed
 # matches the MARGIN PIN line further down and reads 681 as a test count for
 # `tests/selfhost_wire.rs`, which is pinned at 178. That false DIFF has been produced three
 # times by three sessions writing the same careless one-liner. It is the checker being wrong.
-grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 30
+grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 35
 grep -c '^\s*#\[test\]' tests/selfhost_wire.rs              # 178
 grep -c '^\s*#\[test\]' tests/selfhost_parse.rs             # 89
 grep -c '^\s*#\[test\]' tests/selfhost_codegen.rs           # 142
@@ -365,12 +366,35 @@ flight. **Do not invent urgency.**
 |---|---|
 | `BINOP` | **MOVED**, across ALL FOUR forest kinds the lowering splits it into -- `Word` (3) and `Byte` bitwise (44), arithmetic (45), shifts (60) |
 | `CONDITION` | **MOVED** |
+| `TAIL_VS_RETURN` | **MOVED** 2026-08-29, with TWO losses pinned -- see below |
 | `BRANCH_PAIR` | **BUILT AND WITHHELD.** See below -- do not simply finish it |
-| `ARRAY_ELEM` | not moved |
+| `ARRAY_ELEM` | not moved. **The only non-composite one left** |
 | `FIELD_ON_VALUE` | not moved, **composite** |
 | `INDEX_ON_VALUE` | not moved, **composite** |
 | `STRUCT_LIT` | not moved, **composite** |
-| `TAIL_VS_RETURN` | not moved |
+
+**THE TAIL ROW CARRIES THE BRANCH PAIR'S HAZARD AND DISCHARGES IT, WHICH IS WORTH READING BEFORE
+TOUCHING THE REMAINING KINDS.** Kind 8 is an equality kind, so a row emitted where the reference
+emits none can REJECT A CORRECT PROGRAM. A body with no tail expression reconstructs with a
+**synthesised payload-0 unit**, the same shape as the synthesised else arm. What separates them is
+that the only source expression that would also land there is a written `()`, and the pipeline
+refuses it -- pinned in the FAILING direction by
+`a_written_unit_expression_is_refused_by_the_pipeline`, so admitting `()` later breaks the test
+rather than quietly making the descent unsound.
+
+**TWO LOSSES ARE PINNED RATHER THAN PAPERED OVER.** A multiheaded group emits NO tail row at all,
+because the reference has one tail per head and the pipeline has one fused body per group; the
+fused dispatch root typed as unknown on every program measured, and "unknown on the programs I
+tried" was not enough to risk an equality predicate on. And the pipeline's tag table has no
+`Float` arm where the reference's does. Both directions lose a check and neither can reject.
+
+**AND THE COVERAGE ASSERTION IN THE NEW TEST ASSERTED NOTHING UNTIL IT WAS MUTATION-TESTED.** It
+counted distinct statement forms before a tail. Dropping two of the six continuation kinds left
+the WHOLE SUITE GREEN: those corpus cases ended in a data read, which neither side can type, and
+stopping the descent early lands on a node that is also untypable, so both readings produced the
+identical unknown row. **A guard written specifically to prevent vacuous coverage was itself
+vacuous.** The corpus now ends those cases in a literal and the assertion demands a TYPABLE tail;
+all six kinds fire. Same defect the tree records in six other costumes.
 
 `expression_rows_from_pipeline` carries the moved kinds. **Its name deliberately does not match
 the pattern the count pin searches for**, which is each extraction's own name with the pipeline
