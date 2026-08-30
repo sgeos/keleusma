@@ -156,6 +156,18 @@ conservative direction; enriching the example is the other.
 And the two-pass parser work that would make `verify_types.kel` self-compile — taking the corpus to
 twelve — remains **yours to call**, not something I will start unilaterally.
 
+## One correction I made while writing this handoff
+
+The resume section still said session 56 **declined** to start the last extraction, and still
+carried the claim that the expression table's ORDER is content. **Both were false by the time I
+wrote them down** — the extraction is part-moved, and the consumer read showed order is free.
+
+I found it by running the handoff's own guidance against what actually happened, rather than
+trusting a section I had written a few hours earlier. **A check that passes is not a current
+document**, which this file has said for six sessions and which I have now proved on myself.
+
+The retraction is left visible beside the corrected text rather than edited away.
+
 ## What I would take up next
 
 The remaining six expression kinds, now that order is known to be free. Three are composite, where
