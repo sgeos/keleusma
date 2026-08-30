@@ -237,3 +237,43 @@ fn main(w: Word) -> Word {
          the agreement above would be vacuous"
     );
 }
+
+/// **THE FLOAT-TO-INT CONVERSION MUST SATURATE, NOT BE POISON.**
+///
+/// The reference converts with Rust's `as`, which **saturates**: NaN gives 0,
+/// and out-of-range gives `i64::MIN`/`MAX`. LLVM's plain `fptosi` is **poison**
+/// for exactly those inputs, so the two agree only by whatever the target
+/// happens to do.
+///
+/// **Measured: they DO agree on aarch64**, whose `fcvtzs` saturates — and that
+/// is the problem rather than the reassurance. On x86-64 `cvttsd2si` yields the
+/// integer-indefinite value for every out-of-range input, so `+inf` would give
+/// `MIN` where the reference gives `MAX`, and NaN would give `MIN` where the
+/// reference gives 0.
+///
+/// The lowering now uses `llvm.fptosi.sat`, which is DEFINED to saturate on
+/// every target and is what Rust lowers `as` to. **This test therefore passes
+/// both before and after that change on this machine**; what it guards is that
+/// the agreement stays true when the accident does not.
+///
+/// The probe uses a RUNTIME out-of-range value, not a constant: a constant is
+/// folded at compile time and never reaches the target's instruction.
+#[test]
+fn the_float_to_int_conversion_saturates_like_the_reference() {
+    // RUNTIME out of range, not a constant: a constant is folded at compile
+    // time, while this emits the target's conversion instruction.
+    const SRC: &str = "\
+fn main(w: Word) -> Word {
+  let f = w as Float;
+  let scale = 10000000000000000000000.0;
+  let big = f * scale;
+  big as Word
+}
+";
+    for arg in [1i64, 2, -1] {
+        let v = vm_result(SRC, arg);
+        let n = native_result(SRC, arg);
+        println!("  arg {arg}: reference {v}   native {n}");
+        assert_eq!(v, n, "runtime out-of-range float cast disagrees at {arg}");
+    }
+}

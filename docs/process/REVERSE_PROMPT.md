@@ -6,56 +6,58 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## The reference says NaN equals everything, and LLVM does not
+## I shipped a poison conversion one increment ago, and found it by scoping the next slice
 
-Float comparisons are implemented. The finding that shaped them came from reading the reference
-**before** writing anything:
+The reference converts a float to a word with Rust's `as`, which **saturates**: NaN → 0, out of range
+→ `i64::MIN`/`MAX`. **LLVM's plain `fptosi` is poison for exactly those inputs**, and that is what
+float slice one emitted.
 
-```rust
-x.partial_cmp(y).unwrap_or(core::cmp::Ordering::Equal)
-```
+**They agree on this machine — and that is the problem, not the reassurance.** aarch64's `fcvtzs`
+saturates, so the agreement is a hardware accident. On x86-64, `cvttsd2si` returns the
+integer-indefinite value for *every* out-of-range input: `+inf` would give `MIN` where the reference
+gives `MAX`, and NaN would give `MIN` where it gives `0`.
 
-**A NaN collapses to `Equal`** — equal to everything, rather than unordered. Emitting the obvious
-`fcmp oeq` would make `NaN == x` **true on the reference and false natively**. A silent divergence,
-which is the class the float guard exists to prevent.
+**It was reachable already**, not merely latent — a runtime out-of-range multiply produces one, and
+float multiplication landed last increment.
 
-Matching it is small **because it was checked first**: `olt`, `ogt` and `one` are already false for
-NaN, so only `Eq`, `Le` and `Ge` need forcing true. **Three of six predicates would otherwise have been
-wrong, and none of them noisily.**
+Fixed with `llvm.fptosi.sat`, which is **defined** to saturate on every target and is what Rust lowers
+`as` to. The pinned test passes both before and after on this machine, and says so: what it guards is
+the agreement surviving when the accident does not.
 
-## What is verified, and what is not
+## How it was found is the part worth keeping
 
-**Verified**: all six predicates against the reference, seven probes each, operands chosen so a
-comparison accidentally done on the integer bit pattern would disagree. A must-fire control confirms
-the probes discriminate.
+**By scoping float division, not by auditing.** Division produces `inf` and `NaN`, so I had to ask what
+the reference does with them — and the answer exposed a defect in code I had shipped one increment
+earlier.
 
-**Not verified — and I want this read as a limit, not a footnote**: the NaN adjustment itself. **No
-source construct produces a NaN**, because the route is division, and `Op::CheckedDiv` pushes three
-values and is a larger slice than it looks. I wrote it to match rather than leaving it to diverge,
-because relying on NaN being unreachable is the accidental protection this backend already lost once.
-Its correctness rests on reading the reference, not on a differential.
+**This is the third time in this backend that implementing a feature removed an accidental
+protection.** The pattern deserves its name: *a lowering that is correct only because its bad inputs
+are unreachable is a lowering waiting for the next feature.*
+
+## Division is still unimplemented, now for a stated reason
+
+`Op::CheckedDiv` pushes **three** values, and `push_triple` **traps when the flag is non-zero** under
+the trapping policy. For floats, flags 1, 2 and 4 mean `+inf`, `-inf` and NaN — **legitimate results**,
+because float division is total on the reference with no zero trap. Routing floats through the existing
+triple would turn valid values into faults. It needs a non-trapping triple with per-slot kinds, which
+is a slice of its own.
 
 ## Verification
 
-Both suites run **sequentially**.
-
 | | result |
 |---|---|
-| workspace | **2502 passed, 0 failed, 92 binaries**, cargo exit 0 |
-| `native_codegen` gate step | **379 passed, 0 failed, 0 ignored, 76 binaries**, exit 0 |
-| censuses | 63 of 66; `["Len"]`; 1072 of 1074; 89854 of 89940 — **unmoved, as expected** |
+| workspace | **2505 passed, 0 failed, 92 binaries**, cargo exit 0 |
+| `native_codegen` gate step | **380 passed, 0 failed, 0 ignored, 76 binaries**, exit 0 |
+| censuses | 63 of 66; `["Len"]`; 1072 of 1074; 89854 of 89940 — unmoved |
 
-Censuses were not expected to move: no corpus module compares floats. Division still refuses.
-
-**Absorption 35** (`defa9151`) complete, prediction exact.
+**Absorption 36** (`802f6b39`) complete, prediction exact.
 
 ## Still open, and yours
 
 [`ABI_RULINGS.md`](../decisions/ABI_RULINGS.md) — `Fixed` (three readings; the interop goal decides and
 is unstated), `Text` (your supposition that it was covered is incorrect), `Opaque` (your intent is
-already what the handle achieves), `Unit`.
-
-**The entry ABI your float ruling names is still unbuilt** and still has no corpus witness.
+already what the handle achieves), `Unit`. **The entry ABI your float ruling names is still unbuilt**
+and still has no corpus witness.
 
 ## Standing constraints, unchanged
 

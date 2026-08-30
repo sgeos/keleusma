@@ -3554,7 +3554,43 @@ fn lower_chunk_body<'ctx>(
                         st.b.build_bit_cast(v, f64t, "asf")
                             .unwrap()
                             .into_float_value();
-                    let i = st.b.build_float_to_signed_int(f, i64t, "fptosi").unwrap();
+                    // **SATURATING, via the intrinsic, NOT `fptosi`.**
+                    //
+                    // The reference converts with Rust's `as`, which SATURATES:
+                    // NaN gives 0, and out-of-range gives `i64::MIN`/`MAX`.
+                    // LLVM's plain `fptosi` is **poison** for those inputs, so
+                    // the two agree only by whatever the target happens to do.
+                    //
+                    // **Measured: they DO agree on aarch64**, whose `fcvtzs`
+                    // saturates — and that is exactly the problem. On x86-64
+                    // `cvttsd2si` yields the integer-indefinite value
+                    // (`i64::MIN`) for every out-of-range input, so `+inf` would
+                    // give `MIN` where the reference gives `MAX`, and NaN would
+                    // give `MIN` where the reference gives 0.
+                    //
+                    // `llvm.fptosi.sat` is DEFINED to saturate on every target
+                    // and is the intrinsic Rust itself lowers `as` to, so this
+                    // matches the reference by construction rather than by
+                    // hardware accident. **Reachable today** through a runtime
+                    // out-of-range multiply, and more so once division lands.
+                    let sat = inkwell::intrinsics::Intrinsic::find("llvm.fptosi.sat")
+                        .expect("llvm.fptosi.sat must exist");
+                    let decl = sat
+                        .get_declaration(module, &[i64t.into(), f64t.into()])
+                        .expect("fptosi.sat declaration");
+                    let i =
+                        st.b.build_call(decl, &[f.into()], "fptosisat")
+                            .unwrap()
+                            .try_as_basic_value();
+                    let i = match i {
+                        ValueKind::Basic(v) => v.into_int_value(),
+                        _ => {
+                            return Err(LowerError::Internal(String::from(
+                                "llvm.fptosi.sat returned no value, which is a \
+                                 defect in this crate rather than in the input",
+                            )));
+                        }
+                    };
                     st.push_w(i, Width::Scalar(8));
                 }
             }

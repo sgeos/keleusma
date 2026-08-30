@@ -1,5 +1,38 @@
 # Design Journal
 
+## 2026-08-30 — Scoping division found a poison conversion I shipped last increment
+
+**Increment**: I set out to implement float division. Scoping it required answering "what does the
+reference do with `inf` and `NaN`?" — and that question exposed a defect in code I had shipped one
+increment earlier.
+
+**`FloatToInt` used LLVM's plain `fptosi`, which is POISON for NaN and out-of-range values.** The
+reference uses Rust's `as`, which saturates: NaN → 0, out of range → `i64::MIN`/`MAX`.
+
+**They agree on this machine, and that is the finding rather than the reassurance.** aarch64's `fcvtzs`
+saturates. On x86-64, `cvttsd2si` returns the integer-indefinite value for every out-of-range input, so
+`+inf` would give `MIN` where the reference gives `MAX`. LLVM is entitled to either, because the value
+is poison. **It was reachable already** — a runtime out-of-range multiply produces one, and float
+multiplication landed last increment. I checked with a runtime value rather than a constant, because a
+constant is folded and never reaches the target's instruction.
+
+Fixed with `llvm.fptosi.sat`, defined on every target and what Rust itself lowers `as` to. **The pinned
+test passes both before and after on this machine**, which I state in the test: what it guards is the
+agreement surviving when the accident does not.
+
+**Third time in this backend that implementing a feature removed an accidental protection**, and the
+second where the protection was never recognised as accidental until the neighbouring feature was
+scoped. Worth naming: *a lowering that is correct only because its bad inputs are unreachable is a
+lowering waiting for the next feature.*
+
+**Division was not implemented, and now has a stated reason rather than an implicit one.**
+`Op::CheckedDiv` pushes three values and `push_triple` **traps when the flag is non-zero**; for floats
+flags 1, 2 and 4 mean `+inf`, `-inf` and NaN, which are legitimate results because float division is
+total on the reference. Routing floats through the existing triple would convert valid values into
+faults. Knowing that is worth more than a rushed attempt, and it is recorded so the next attempt starts
+from it.
+
+
 ## 2026-08-30 — Reading the reference first turned a three-of-six silent bug into three lines
 
 **Increment**: float comparisons. The finding that mattered came before any code: the reference

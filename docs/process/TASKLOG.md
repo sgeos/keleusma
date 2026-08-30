@@ -697,6 +697,28 @@ Current sprint source of truth.
 > workspace **2467/0/88**, coverage re-derived and unchanged at 1070 of 1074.
 > See [`../decisions/OPERAND_WIDTH_RECOVERY.md`](../decisions/OPERAND_WIDTH_RECOVERY.md).
 
+> **Currency note (2026-08-30, V0.3.X line, fourth entry). `FloatToInt` WAS POISON AND AGREED ONLY BY
+> HARDWARE ACCIDENT — FOUND WHILE SCOPING A DIFFERENT SLICE.**
+>
+> The reference converts a float to a word with Rust's `as`, which **saturates**: NaN → 0, out of range
+> → `i64::MIN`/`MAX`. **LLVM's plain `fptosi` is POISON for exactly those inputs**, and float slice one
+> used it. **Measured: they DO agree on this machine**, because aarch64's `fcvtzs` saturates — which is
+> the problem rather than the reassurance. **On x86-64 `cvttsd2si` returns the integer-indefinite value
+> for every out-of-range input**, so `+inf` would give `MIN` where the reference gives `MAX`, and NaN
+> would give `MIN` where the reference gives 0. **Reachable today**, not merely latent: a RUNTIME
+> out-of-range multiply produces one, and float multiplication landed last increment. Fixed with
+> `llvm.fptosi.sat`, which is DEFINED to saturate on every target and is what Rust lowers `as` to, so
+> the match is by construction rather than by accident. The pinned test passes both before and after on
+> this machine, and says so — what it guards is the agreement surviving when the accident does not.
+> **Found by SCOPING float division rather than by auditing**: division produces inf and NaN, so asking
+> what the reference does with them exposed a one-increment-old defect. **Third time in this backend
+> that implementing a feature removed an accidental protection.** Division stays unimplemented for a
+> now-stated reason: `Op::CheckedDiv` pushes THREE values and `push_triple` **traps when the flag is
+> non-zero**, but for floats flags 1/2/4 mean `+inf`/`-inf`/NaN — legitimate results, since float
+> division is total. Absorption 36 (`802f6b39`) complete, prediction exact. Censuses unmoved. Workspace
+> **2505/0/92**, `native_codegen` **380/0/0 ignored/76**. See
+> [`../decisions/FLOAT_TO_INT_SATURATION.md`](../decisions/FLOAT_TO_INT_SATURATION.md).
+
 > **Currency note (2026-08-30, V0.3.X line, third entry). FLOAT COMPARISONS: THE REFERENCE SAYS NaN
 > EQUALS EVERYTHING, AND LLVM DOES NOT.**
 >
