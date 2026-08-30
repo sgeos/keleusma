@@ -3595,22 +3595,30 @@ type ExprRowKey = (
     keleusma::selfhost::ExprOperand,
 );
 
-/// **THE CONDITION AND BRANCH-PAIR ROWS AGREE BETWEEN THE PIPELINE AND THE REFERENCE.**
+/// **THE CONDITION ROWS AGREE BETWEEN THE PIPELINE AND THE REFERENCE.**
 ///
-/// Two more of the eight expression kinds, and they share one forest node: `push_if` keeps the
-/// condition in `args` and the branches in `lhs`/`rhs`.
+/// One of the eight expression kinds. It shares a forest node with the branch pair: `push_if`
+/// keeps the condition in `args` and the branches in `lhs`/`rhs`.
 ///
-/// # The branch VALUE is the tail, not the head of a statement chain
+/// # THIS DOC USED TO CLAIM THE BRANCH PAIR TOO, AND THE TEST NEVER COMPARED IT
 ///
-/// The reference takes `then_block.tail_expr`. For a branch that is a bare expression the forest's
-/// child is that expression and the two coincide. **For a branch with a statement before its value
-/// they do not**: the forest's child is a `LetIn` whose continuation reaches the tail. The
-/// extraction follows that chain, and this corpus contains both shapes **and asserts it does**,
-/// because a corpus of only bare-expression branches would be silent about exactly the case that
-/// motivated the walk.
+/// The heading said "the condition AND BRANCH-PAIR rows agree" and a whole section described
+/// following a branch's statement chain to its tail — while the comparison below filters on
+/// `k == 3` and nothing else. **The branch pair was withheld deliberately** (see
+/// `a_one_armed_conditional_is_why_the_branch_pair_does_not_move`), so the doc was asserting
+/// agreement for exactly the row this slice refused to emit.
 ///
-/// That assertion exists because the previous slice in this family shipped covering only `Word`
+/// It is corrected rather than deleted because the shape recurs: the prose was written while
+/// the branch pair was still expected to ship, and survived the decision not to ship it. **A
+/// doc comment is not re-read when the code under it is cut**, which is how a test came to
+/// claim coverage it did not have. Found while adding kind 8 to the same file.
+///
+/// # The corpus still asserts its own coverage
+///
+/// That assertion exists because an earlier slice in this family shipped covering only `Word`
 /// operands while its corpus was all-`Word`, and passed while silent about three of four kinds.
+/// It is kept: the statement-before-value sources exercise the condition extraction over bodies
+/// of both shapes, which is worth having even though the walk they were written for is gone.
 ///
 /// # Compared as a MULTISET
 ///
@@ -3824,5 +3832,348 @@ fn the_unit_literal_is_refused_by_the_pipeline_and_accepted_by_the_reference() {
         message.contains("EMPTY work stack"),
         "the unit literal is still refused, but by a DIFFERENT cause than the underflow recorded \
          here, so the mechanism may have changed: {message}"
+    );
+}
+
+/// **THE TAIL-VERSUS-RETURN ROWS AGREE BETWEEN THE PIPELINE AND THE REFERENCE.**
+///
+/// The third of the eight expression kinds to move. Kind 8 pairs what a body YIELDS against
+/// what its signature PROMISES, and `ty_kind_is_equality` covers it, so this is the row that
+/// refuses `fn f() -> Word { true }`.
+///
+/// # Why this one was tractable when three of the remaining five are not
+///
+/// Both halves were already on the wire. `ParsedFn::return_type` carries the declared return
+/// type's name id, and the reconstructed body's root reaches the tail through the
+/// continuation chain. No stage change, no new record.
+///
+/// # THE CORPUS ASSERTS ITS OWN COVERAGE, AND THAT IS NOT DECORATION
+///
+/// The previous slice in this family shipped covering only `Word` operands while its corpus
+/// was all-`Word`, and PASSED while blind to three of the four forest kinds the reference
+/// calls one. It was caught at twenty of twenty-two CI checks. So this test requires its
+/// corpus to separate the things it claims to compare: more than one declared return type,
+/// and tails of more than one operand form — a literal, a name, and a shape neither side can
+/// type. It also requires a function with NO tail expression, because the whole soundness
+/// argument is about emitting nothing there.
+///
+/// # WHAT THIS CORPUS DELIBERATELY EXCLUDES
+///
+/// **Every source here is single-headed.** The two sides genuinely disagree for a multiheaded
+/// function — the reference has one tail per head, the pipeline one fused body per group — so
+/// including one would fail rather than inform. The disagreement is recorded separately by
+/// `a_multiheaded_function_contributes_no_tail_row`, in both directions, because a cap that is
+/// not written down reads as coverage.
+///
+/// # Compared as a MULTISET, by NAME
+///
+/// The two sides intern into different id spaces and the stage reads the table only through
+/// `ty.btag[b]` and a per-row predicate, so neither the numbering nor the order is content.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_tail_versus_return_rows_agree_between_the_pipeline_and_the_reference() {
+    use std::collections::BTreeMap;
+
+    const SOURCES: &[&str] = &[
+        // A literal tail against a `Word` return.
+        "fn main() -> Word { 7 }",
+        // A parameter name as the tail, and a CALL as another function's tail.
+        "fn f(a: Word) -> Word { a }\nfn main() -> Word { f(1) }",
+        // A `bool` return, so the corpus is not all-`Word`.
+        "fn g() -> bool { true }\nfn main() -> Word { if g() { 1 } else { 0 } }",
+        // A `Byte` return.
+        "fn b(x: Byte) -> Byte { x }\nfn main() -> Word { 0 }",
+        // A STATEMENT before the tail, so the continuation descent is exercised.
+        "fn main() -> Word { let a = 1; a }",
+        // NO TAIL EXPRESSION. The reference emits nothing for `s`; so must the pipeline.
+        "fn s() -> Word { let a = 1; }\nfn main() -> Word { s() }",
+        // An operator expression as the tail: unknown on both sides, which must still agree.
+        "fn main() -> Word { 1 + 2 }",
+        // ONE SOURCE PER CONTINUATION KIND THE DESCENT CROSSES, each with a tail the
+        // operand mapping can TYPE. **A tail neither side can type makes the case useless**:
+        // stopping the descent early also lands on an untypable node, so both readings
+        // produce the same unknown row and the difference is invisible. Two earlier cases
+        // here ended in a data read and were exactly that shape -- see the coverage
+        // assertion below, which now demands a typed tail rather than merely a statement.
+        //
+        // Expression statement, kind 21.
+        "fn t() -> Word { 1 }\nfn main() -> Word { t(); 2 }",
+        // Data assignment, kind 12.
+        "private data d { v: Word }\nfn main() -> Word { d.v = 1; 7 }",
+        // `for .. in`, kind 16.
+        "private data e { w: Word }\n\
+         fn main() -> Word { for i in 0..3 { e.w = e.w + 1; } 7 }",
+        // `for .. limit`, kind 23.
+        "fn f(n: Word) -> Word { for i in 0..n limit 8 { } 7 }\nfn main() -> Word { f(2) }",
+        // Indexed assignment, kind 14.
+        "private data g { a: [Word; 3] }\nfn main() -> Word { g.a[0] = 5; 7 }",
+    ];
+
+    let mut compared = 0usize;
+    let mut return_tags: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
+    let mut tail_forms: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
+    let mut saw_a_function_with_no_tail = false;
+    // The distinct STATEMENT FORMS standing before a tail the operand mapping can TYPE.
+    //
+    // **THE QUALIFIER IS THE WHOLE ASSERTION AND AN EARLIER REVISION LACKED IT.** Counting
+    // statement forms alone passed while two of the six continuation kinds were unguarded:
+    // those cases ended in a data read, which neither side can type, and stopping the descent
+    // early lands on a node that is also untypable — so removing the kind changed nothing
+    // observable. Mutation-tested: dropping kind 12 or kind 16 left the suite GREEN under the
+    // syntactic form of this count and fails under this one.
+    let mut statement_forms: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+
+    for src in SOURCES {
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+        let (names, _) = binding_rows(&ast);
+        let (nodes, _) = expression_nodes_and_derived(&ast, &names);
+        let by_id: BTreeMap<i64, String> = names.iter().map(|(k, v)| (*v, k.clone())).collect();
+        let render = |v: i64, f: i64| -> (i64, i64, String) {
+            if f == 0 {
+                (v, 0, String::new())
+            } else {
+                (0, 1, by_id.get(&v).cloned().unwrap_or_default())
+            }
+        };
+
+        let mut want: BTreeMap<ExprRowKey, usize> = BTreeMap::new();
+        for (k, a, af, b, bf) in nodes.iter().copied() {
+            if k == 8 {
+                return_tags.insert(b);
+                tail_forms.insert(af);
+                *want.entry((k, render(a, af), render(b, bf))).or_insert(0) += 1;
+            }
+        }
+        if ast.functions.iter().any(|f| f.body.tail_expr.is_none()) {
+            saw_a_function_with_no_tail = true;
+        }
+        for f in &ast.functions {
+            let typed_tail = matches!(
+                f.body.tail_expr.as_deref(),
+                Some(keleusma::ast::Expr::Literal { .. } | keleusma::ast::Expr::Ident { .. })
+            );
+            if typed_tail {
+                for st in &f.body.stmts {
+                    statement_forms.insert(format!("{:?}", core::mem::discriminant(st)));
+                }
+            }
+        }
+
+        let (rows, _) = keleusma::selfhost::expression_rows_from_pipeline(src);
+        let mut got: BTreeMap<ExprRowKey, usize> = BTreeMap::new();
+        for (k, l, r) in rows.iter().cloned() {
+            if k == 8 {
+                *got.entry((k, l, r)).or_insert(0) += 1;
+            }
+        }
+
+        assert_eq!(
+            got, want,
+            "{src:?}: the pipeline and the reference disagree on the tail-versus-return rows"
+        );
+        compared += want.values().sum::<usize>();
+    }
+
+    assert!(
+        compared >= 8,
+        "only {compared} tail-versus-return rows were compared"
+    );
+    assert!(
+        return_tags.len() >= 3,
+        "the corpus exercised only the return tags {return_tags:?}; a corpus that cannot \
+         separate one declared return type from another is silent about the claim this row makes"
+    );
+    assert!(
+        tail_forms.len() >= 2,
+        "the corpus exercised only the tail operand forms {tail_forms:?}; it must contain both \
+         a literal tail and a named one"
+    );
+    assert!(
+        statement_forms.len() >= 5,
+        "the corpus put only {} distinct statement form(s) before a TYPABLE tail expression. \
+         The descent crosses one node kind per form, and a form whose case ends in a tail \
+         neither side can type does not separate the descent from stopping early.",
+        statement_forms.len()
+    );
+    assert!(
+        saw_a_function_with_no_tail,
+        "no source in the corpus has a function without a tail expression, so this test is \
+         silent about the case the whole soundness argument rests on"
+    );
+}
+
+/// **A BODY WITH NO TAIL EXPRESSION YIELDS THE SYNTHESISED UNIT.** Measured, not assumed.
+///
+/// This is one half of why kind 8 could move where the branch pair could not. The forest puts
+/// a payload-0 `Unit` in the continuation slot for a block that ends in a statement, and a
+/// real value where the source has a tail expression. The two programs below differ by one
+/// token and the pipeline emits a row for exactly one of them.
+///
+/// **THE REFERENCE IS THE ORACLE HERE, NOT MY READING OF THE FOREST.** The assertion is that
+/// the pipeline emits a row precisely where `body.tail_expr` is `Some`, which is the property
+/// the extraction needs; how the forest happens to represent that is an implementation detail
+/// that may change underneath this test without invalidating it.
+#[cfg(feature = "self-host")]
+#[test]
+fn a_body_with_no_tail_expression_yields_the_synthesised_unit() {
+    const WITH: &str = "fn s() -> Word { let a = 1; a }\nfn main() -> Word { s() }";
+    const WITHOUT: &str = "fn s() -> Word { let a = 1; }\nfn main() -> Word { s() }";
+
+    for (src, expect) in [(WITH, 2usize), (WITHOUT, 1usize)] {
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+        let reference_tails = ast
+            .functions
+            .iter()
+            .filter(|f| f.body.tail_expr.is_some())
+            .count();
+        assert_eq!(
+            reference_tails, expect,
+            "{src:?}: the reference does not have the tail count this test assumes"
+        );
+
+        let (rows, _) = keleusma::selfhost::expression_rows_from_pipeline(src);
+        let emitted = rows.iter().filter(|(k, _, _)| *k == 8).count();
+        assert_eq!(
+            emitted, expect,
+            "{src:?}: the pipeline emitted {emitted} tail-versus-return rows where the \
+             reference has {expect} tail expressions"
+        );
+    }
+}
+
+/// **A WRITTEN `()` EXPRESSION IS REFUSED BY THE PIPELINE, AND KIND 8'S SOUNDNESS RESTS ON IT.**
+///
+/// The tail descent treats a payload-0 `Unit` in tail position as "this body has no tail
+/// expression". That inference is only valid while no SOURCE expression can produce one. The
+/// single candidate is a written `()`, and `reconstruct.kel` refuses it.
+///
+/// **THIS TEST IS PINNED IN THE FAILING DIRECTION ON PURPOSE.** If `()` ever becomes
+/// admissible, `body_tail_node` starts silently reporting "no tail" for a function that has
+/// one — a lost check rather than a wrong rejection, but a loss the tree should not absorb
+/// quietly. Closing the gap must therefore fail here and force the descent to be revisited.
+///
+/// The reference COMPILES the same program, so this is a genuine construct-support gap rather
+/// than a statement about the language.
+#[cfg(feature = "self-host")]
+#[test]
+fn a_written_unit_expression_is_refused_by_the_pipeline() {
+    const SRC: &str = "fn s() -> () { () }\nfn main() -> Word { s(); 0 }";
+
+    parse(&tokenize(SRC).expect("lex")).expect("the reference parses a written unit expression");
+
+    let refused = std::panic::catch_unwind(|| {
+        let _ = keleusma::selfhost::expression_rows_from_pipeline(SRC);
+    })
+    .is_err();
+    assert!(
+        refused,
+        "the pipeline now accepts a written `()` expression. `body_tail_node` reads a \
+         payload-0 unit in tail position as the SYNTHESISED continuation, which is only sound \
+         while no source expression can produce one. Revisit that descent before relaxing this."
+    );
+}
+
+/// **THE PIPELINE'S TAG TABLE OMITS `Float` AND THE REFERENCE'S DOES NOT.** Named, not hidden.
+///
+/// `scalar_tag_of_type_name` maps `Word`, `bool` and `Byte`; the reference's `type_tag` also
+/// maps `Float` to 4. A float-returning function therefore gets tag 0 from the pipeline and 4
+/// from the reference.
+///
+/// **THE DIRECTION IS THE SAFE ONE AND THAT IS WHY IT IS TOLERATED.** 0 is the type channel's
+/// unknown, and `ty_pair_disagrees` accepts whenever either side is unknown, so the gap costs
+/// a check that would otherwise have been made and cannot produce a rejection. Float
+/// arithmetic is `Diverges` at the construct-support boundary, so such a function is outside
+/// the self-hosted subset in any case.
+///
+/// Recorded here rather than left implicit because a reader comparing the two tables would
+/// otherwise have to decide for themselves whether the omission was deliberate.
+#[test]
+fn the_pipeline_tag_table_omits_float_and_the_reference_does_not() {
+    use keleusma::ast::{PrimType, TypeExpr};
+    let span = keleusma::token::Span {
+        start: 0,
+        end: 0,
+        line: 1,
+        column: 1,
+    };
+    assert_eq!(
+        type_tag(&TypeExpr::Prim(PrimType::Float, span)),
+        4,
+        "the reference maps `Float`; if it stops, this asymmetry is gone and the note should go"
+    );
+
+    let table = std::fs::read_to_string("src/selfhost/mod.rs").expect("read the driver");
+    let body = table
+        .split("fn scalar_tag_of_type_name")
+        .nth(1)
+        .expect("the shared tag table is declared");
+    let body = &body[..body.find("\n}").expect("the table has a body")];
+    assert!(
+        body.contains("\"Word\"") && body.contains("\"bool\"") && body.contains("\"Byte\""),
+        "the shared tag table no longer maps the three primitives this test describes"
+    );
+    assert!(
+        !body.contains("\"Float\""),
+        "the shared tag table now maps `Float`, so the asymmetry this test records is closed \
+         and the prose describing it in `scalar_tag_of_type_name` is stale"
+    );
+}
+
+/// **A MULTIHEADED FUNCTION CONTRIBUTES NO TAIL-VERSUS-RETURN ROW, AND THAT IS A KNOWN LOSS.**
+///
+/// The reference walks each head as its own function with its own tail expression, so a
+/// three-headed `f` contributes three kind-8 rows. The pipeline reconstructs the entire group
+/// into ONE fused body with a single dispatch root, and can therefore offer at most one.
+///
+/// # Why nothing rather than the group's own row
+///
+/// The fused root is a dispatch structure. On every program measured it types as unknown, which
+/// would accept — but "unknown on the programs I tried" is not the property required. Should any
+/// fused root ever type to a tag, that tag is not one any particular head promises, and kind 8
+/// feeds an EQUALITY predicate: it could **reject a correct program**. Emitting nothing costs a
+/// check; emitting the wrong thing costs a valid program. Same asymmetry that withheld the
+/// branch pair.
+///
+/// # This is recorded rather than left to the agreement test
+///
+/// The agreement corpus is single-headed, so it would be **silent** about this. A cap that is
+/// not written down reads as coverage. The assertion below states the loss in both directions:
+/// the reference really does produce a row per head, and the pipeline really does produce none.
+#[cfg(feature = "self-host")]
+#[test]
+fn a_multiheaded_function_contributes_no_tail_row() {
+    const SRC: &str = "fn f(0) -> Word { 1 }\n\
+                       fn f(1) -> Word { 2 }\n\
+                       fn f(n: Word) -> Word { n }\n\
+                       fn main() -> Word { f(2) }";
+
+    let ast = parse(&tokenize(SRC).expect("lex")).expect("parse");
+    let heads = ast
+        .functions
+        .iter()
+        .filter(|f| f.name == "f" && f.body.tail_expr.is_some())
+        .count();
+    assert_eq!(
+        heads, 3,
+        "the reference no longer treats each head as its own function, so the loss this test \
+         records may no longer exist"
+    );
+
+    let (names, _) = binding_rows(&ast);
+    let (nodes, _) = expression_nodes_and_derived(&ast, &names);
+    let reference_rows = nodes.iter().filter(|(k, ..)| *k == 8).count();
+    assert_eq!(
+        reference_rows, 4,
+        "the reference should contribute one tail row per head plus one for `main`"
+    );
+
+    let (rows, _) = keleusma::selfhost::expression_rows_from_pipeline(SRC);
+    let pipeline_rows = rows.iter().filter(|(k, _, _)| *k == 8).count();
+    assert_eq!(
+        pipeline_rows, 1,
+        "the pipeline should contribute a tail row for `main` alone. Emitting one for the \
+         multiheaded group means the fused dispatch root is being typed, which can reject a \
+         correct program; emitting three means per-head tails became reachable and this \
+         recorded loss is stale."
     );
 }

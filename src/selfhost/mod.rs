@@ -1053,6 +1053,105 @@ const NODE_LITERAL: i64 = 1;
 /// true, `2` false. Boolean literals ride this kind rather than a new one.
 const NODE_UNIT: i64 = 20;
 
+/// A declared type NAME to the type channel's scalar tag.
+///
+/// **THIS WAS TWO IDENTICAL CLOSURES BEFORE A THIRD CALLER WANTED IT**, one inside
+/// `binding_rows_from_pipeline` and one inside `decl_call_rows_from_pipeline`, the second
+/// already carrying a comment saying it was the first restated. A third copy is where a
+/// mapping starts to drift, so the rule this repository keeps rediscovering — reuse the
+/// table, do not re-derive it — is made structural here rather than repeated in prose.
+///
+/// **`bool` IS LOWERCASE AND IT IS THE ONLY PRIMITIVE THAT IS.** `Word`, `Byte` and `Float`
+/// are capitalised; `Bool` with a capital letter is an ordinary NAMED type, which the
+/// reference refuses to add to a `Word`. An earlier revision of this table mapped `Bool`
+/// here and so told the type channel that a value of some user type was a boolean.
+///
+/// # What it deliberately does NOT map, and the direction of that error
+///
+/// **`Float` HAS NO ARM, WHILE THE REFERENCE'S `type_tag` MAPS IT TO 4.** That is a real
+/// disagreement and it is named rather than hidden: float arithmetic is `Diverges` at the
+/// construct-support boundary, so a float-returning function is outside the self-hosted
+/// subset. The error direction is the safe one — an unmapped type reports 0, the type
+/// channel's UNKNOWN, and `ty_pair_disagrees` accepts whenever either side is unknown. So
+/// the gap costs a check that would have been made; it cannot cause a rejection.
+/// `the_pipeline_tag_table_omits_float_and_the_reference_does_not` pins it.
+fn scalar_tag_of_type_name(name: Option<&str>) -> i64 {
+    match name {
+        Some("Word") => 1,
+        Some("bool") => 2,
+        Some("Byte") => 3,
+        _ => 0,
+    }
+}
+
+/// Whether a node kind sequences a statement before a CONTINUATION held in `rhs`.
+///
+/// The list is the stage's own, not a second opinion: `reconstruct.kel` documents `LetIn` 5,
+/// `DataAssignIn` 12, `IndexAssignIn` 14 and `ExprStmt` 21 among the binary kinds that pop a
+/// right then a left child, and gives `ForIn` 16 and `ForLimit` 23 an explicit comment saying
+/// the continuation is in `rhs` with `lhs` unused.
+///
+/// **A KIND MISSING FROM THIS LIST AND A KIND WRONGLY IN IT ARE NOT SYMMETRIC.** A missing
+/// one stops the tail descent early on a node `operand` cannot type, which yields the type
+/// channel's unknown and therefore accepts — a lost check, and one the agreement test makes
+/// loud. A kind wrongly present would descend into something that is not a continuation, and
+/// could report a tail the function does not have. So this list only admits a kind the stage
+/// itself documents as carrying one.
+///
+/// `MatchIn` 22 and `EnumMatch` 39 are deliberately absent: their `rhs` is an ARM COUNT.
+fn is_statement_continuation(kind: i64) -> bool {
+    matches!(kind, 5 | 12 | 14 | 16 | 21 | 23)
+}
+
+/// The node a function body finally YIELDS, or `None` when it yields nothing.
+///
+/// The reference emits a tail-versus-return row only for a function whose body has a tail
+/// expression, so this has to answer the same question from the forest.
+///
+/// # Termination is structural, not a hope
+///
+/// `reconstruct.kel` emits every child before its parent, so a node's `rhs` is strictly
+/// smaller than its own index and the descent walks a strictly decreasing sequence. It
+/// therefore terminates in at most the node count. The explicit bound is a second belt: this
+/// function is reached with a forest the stage built, and a corrupt one must not hang.
+///
+/// # THE SYNTHESISED UNIT IS WHY THIS CAN BE DONE AT ALL, AND IT NEARLY WAS NOT
+///
+/// A block with no tail expression gets a **synthesised `Unit` continuation** — measured, not
+/// assumed: `fn s() -> Word { let a = 1; }` reconstructs to `[Literal, Unit, LetIn]` with the
+/// `Unit` in the `LetIn`'s `rhs`, where `fn main() -> Word { let a = 1; a }` puts a `Local`.
+/// That is exactly the shape that made the BRANCH PAIR unshippable: `push_if` synthesises an
+/// else arm, and the pipeline cannot tell a synthesised one from a written one.
+///
+/// **The difference here is that the ambiguity does not exist.** The only source expression
+/// that would also land on `Unit` with payload 0 is a written `()` tail, and `reconstruct.kel`
+/// REFUSES `()` as an expression outright — so within the subset the pipeline accepts, a
+/// payload-0 `Unit` in tail position is always the synthesised one. Both halves of that
+/// argument are pinned:
+/// `a_written_unit_expression_is_refused_by_the_pipeline` and
+/// `a_body_with_no_tail_expression_yields_the_synthesised_unit`. If the first ever starts
+/// passing — if `()` becomes admissible — this function becomes unsound and that test fails
+/// rather than going quiet.
+///
+/// A payload of 1 or 2 is a boolean literal riding the same kind and is a real tail.
+fn body_tail_node(body: &Body) -> Option<i64> {
+    let mut at = body.root;
+    for _ in 0..body.nodes.len() {
+        let n = body.nodes.get(usize::try_from(at).ok()?)?;
+        if is_statement_continuation(n.kind) {
+            at = n.rhs;
+        } else {
+            break;
+        }
+    }
+    let n = body.nodes.get(usize::try_from(at).ok()?)?;
+    if n.kind == NODE_UNIT && n.arg == 0 {
+        None
+    } else {
+        Some(at)
+    }
+}
+
 /// The declaration a record belongs to, or a diagnostic naming what arrived instead.
 ///
 /// **SIX BARE `unwrap()`s USED TO SIT HERE, AND THEY ALL FIRE FOR ONE REASON**: a record
@@ -2056,16 +2155,11 @@ pub fn decl_call_rows_from_pipeline(src: &str) -> (Vec<DeclRow>, Vec<CallSiteRow
     let (fns, names, ..) = parse_functions_fused(src);
     let name_of = |id: i64| -> Option<String> { names.get(id as usize).cloned() };
 
-    // The SAME tag mapping the binding rows use. Reused rather than restated: it already
-    // encodes the casing rule that an earlier revision got backwards, where `bool` is the
-    // primitive and `Bool` is an ordinary named type.
+    // The SAME tag mapping the binding rows use, and now literally the same function
+    // rather than a restatement of it: it already encodes the casing rule that an earlier
+    // revision got backwards, where `bool` is the primitive and `Bool` an ordinary named type.
     let tag_of = |type_name_id: i64| -> i64 {
-        match names.get(type_name_id as usize).map(String::as_str) {
-            Some("Word") => 1,
-            Some("bool") => 2,
-            Some("Byte") => 3,
-            _ => 0,
-        }
+        scalar_tag_of_type_name(names.get(type_name_id as usize).map(String::as_str))
     };
 
     let mut decls: Vec<DeclRow> = Vec::new();
@@ -2343,12 +2437,14 @@ pub type ExprRow = (i64, ExprOperand, ExprOperand);
 ///
 /// # What moves, and what does not
 ///
-/// **TWO OF THE EIGHT KINDS.** Kind 1, the binary operator — all of it, across the four forest
-/// kinds the lowering splits it into (see `is_binary_operator`) — plus kind 3, the CONDITION a
-/// conditional tests.
+/// **THREE OF THE EIGHT KINDS.** Kind 1, the binary operator — all of it, across the four
+/// forest kinds the lowering splits it into (see `is_binary_operator`); kind 3, the CONDITION a
+/// conditional tests; and kind 8, the TAIL-VERSUS-RETURN claim.
 ///
 /// Kind 1 is the one `tyb_node_tag` resolves, so it is what makes `let d = 1 + 2` reach the
-/// bounded fixpoint.
+/// bounded fixpoint. Kind 8 is the row that refuses `fn f() -> Word { true }`; it reaches the
+/// tail through `body_tail_node`, whose doc carries the argument for why a synthesised unit
+/// continuation is distinguishable here when the synthesised ELSE ARM below is not.
 ///
 /// # THE BRANCH PAIR WAS BUILT, MEASURED, AND WITHHELD
 ///
@@ -2364,9 +2460,9 @@ pub type ExprRow = (i64, ExprOperand, ExprOperand);
 /// directions are unsound, so the row is not emitted at all**, and
 /// `a_one_armed_conditional_is_why_the_branch_pair_does_not_move` pins the witness.
 ///
-/// **Six do not move**: the branch pair above, array elements, field and index access on a value,
-/// struct literals, and the tail-versus-return claim. Three of those are composite, where the
-/// occurrences slice already showed the two representations disagree about what a node IS.
+/// **Five do not move**: the branch pair above, array elements, field and index access on a
+/// value, and struct literals. Three of those are composite, where the occurrences slice already
+/// showed the two representations disagree about what a node IS.
 ///
 /// **THIS FUNCTION CARRIED A NARROWER NAME FOR ONE INCREMENT**, naming only the binary operator.
 /// Covering conditions made that name false, and a name that lies is precisely what several
@@ -2472,6 +2568,39 @@ pub fn expression_rows_from_pipeline(src: &str) -> (Vec<ExprRow>, Vec<(String, u
                 derived.push((name.clone(), row));
             }
         }
+
+        // --- THE TAIL-VERSUS-RETURN CLAIM, KIND 8 -------------------------------------
+        //
+        // One row per function that HAS a tail expression, pairing what the body yields
+        // against what the signature promises. `ty_kind_is_equality` covers kind 8, so this
+        // is the row that refuses `fn f() -> Word { true }`.
+        //
+        // **PUSHED AFTER THE GROUP'S OWN ROWS, and that is not arbitrary.** `row_of_node`
+        // maps a forest node to a position in `rows`, and the derived bindings above read
+        // it; appending here cannot disturb an index already handed out. The reference
+        // appends its tail row at the same point for the same reason.
+        //
+        // The return operand is always form 0 — a tag the signature states outright —
+        // exactly as the reference builds it.
+        // **A MULTIHEADED GROUP EMITS NOTHING, AND THAT IS A DELIBERATE LOSS.** The reference
+        // walks each head as its own function with its own tail, so a three-headed `f`
+        // contributes three rows there; the pipeline reconstructs the whole group into ONE
+        // fused body with a single dispatch root and can offer at most one. Measured: a
+        // two-headed `f` gives the reference three tails against the pipeline's two rows.
+        //
+        // Emitting the group's own row was the obvious alternative and it is refused on the
+        // same ground the branch pair was. The fused root is a DISPATCH structure, and on the
+        // cases measured it types as unknown, which would accept — but "unknown on the two
+        // programs I tried" is not the property needed. If any fused root ever types to a tag,
+        // it is a tag no head necessarily yields, feeding an EQUALITY predicate that can
+        // reject a correct program. **Emitting nothing loses a check; emitting the wrong thing
+        // loses a valid program.** `a_multiheaded_function_contributes_no_tail_row` pins it.
+        if !is_multihead_group(&group)
+            && let Some(tail) = body_tail_node(&body)
+        {
+            let ret = scalar_tag_of_type_name(name_of(group[0].return_type).as_deref());
+            rows.push((8, operand(tail), (ret, 0, String::new())));
+        }
     }
 
     (rows, derived)
@@ -2570,18 +2699,9 @@ pub fn binding_rows_from_pipeline(src: &str) -> (Vec<String>, Vec<BindingRow>) {
     let (fns, names, ..) = parse_functions_fused(src);
     // A type NAME id to the stage's scalar tag. The ids come from the same intern
     // table the records index, so this is a lookup rather than a second convention.
+    // The table itself is `scalar_tag_of_type_name`, shared with two other callers.
     let tag_of = |type_name_id: i64| -> i64 {
-        match names.get(type_name_id as usize).map(String::as_str) {
-            Some("Word") => 1,
-            // **LOWERCASE, AND IT IS THE ONLY PRIMITIVE THAT IS.** `Word`, `Byte`
-            // and `Float` are capitalised; `bool` is not. `Bool` with a capital
-            // letter is an ordinary NAMED type, which the reference refuses to add
-            // to a `Word`, and an earlier revision of this table mapped it here —
-            // telling the type channel that a value of some user type was a boolean.
-            Some("bool") => 2,
-            Some("Byte") => 3,
-            _ => 0,
-        }
+        scalar_tag_of_type_name(names.get(type_name_id as usize).map(String::as_str))
     };
     let name_of = |id: i64| -> Option<String> { names.get(id as usize).cloned() };
 
