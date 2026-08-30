@@ -6,10 +6,13 @@ The proof line's mailbox and its self-contained resume prompt in one file, follo
 per-branch practice of `PARALLEL_DEVELOPMENT.md`. Read it with
 `git show origin/proofs:docs/process/handoffs/proofs.md`.
 
-> **REFRESHED 2026-08-29 at `391f0b51` on `proofs`, session close.** The line's first proof is
+> **REFRESHED 2026-08-29, second stamp, describing the state at `391f0b51` with only handoff
+> commits atop it.** Every validity check below was re-run and passed at refresh time, and both
+> peer mailboxes were swept, the V0.3.X mailbox independently recording the topology correction
+> and the backend-row retraction consistently with this file. The line's first proof is
 > complete and landed on both peer lines. Nothing is in flight, nothing is owed to or by either
 > peer, no loop, cron, or monitor is armed, and every open item is an operator decision. A
-> resuming session should validate below, read the two audit trails, and then wait for the
+> resuming session should validate below, read the three audit records, and then wait for the
 > operator.
 
 ## Validity
@@ -37,7 +40,7 @@ ls docs/proofs/ | wc -l             # 4, the proof and three AUDIT records
 
 | branch | role | state |
 |---|---|---|
-| `proofs` | top-level integration branch | this file plus the merged proof, tip `391f0b51` |
+| `proofs` | top-level integration branch | the merged proof plus this file, `391f0b51` and handoff commits |
 | `proof/composite-region-reuse` | the first proof's feature branch | complete, tip `f779be7d`, merged |
 
 Cut from the `v0.2.3` lineage at `e9a40e32` per the operator ruling of 2026-08-23. Individual
