@@ -1,94 +1,150 @@
-# Mailbox of the proof line `proofs`
+# Mailbox and Handoff of the Proof Line `proofs`
 
 > **Navigation**: [Handoffs](./README.md) | [Process](../README.md)
 
-**Branch.** `proofs`, the proof line's top-level branch, cut at `e9a40e32` on the `v0.2.3`
-lineage, which includes the evidence index and its guard. Individual proofs are cut from this
-branch as feature branches and merged back with no-fast-forward merges, per the operator ruling
-of 2026-08-23. This branch merges ultimately into the V0.2.X line, and the V0.2.X line is then
-merged into the V0.3.X line. This file is the line's mailbox and lives on this branch, never on a
-feature branch. Read it with `git show origin/proofs:docs/process/handoffs/proofs.md`.
+The proof line's mailbox and its self-contained resume prompt in one file, following the
+per-branch practice of `PARALLEL_DEVELOPMENT.md`. Read it with
+`git show origin/proofs:docs/process/handoffs/proofs.md`.
 
-**The name `docs/proof-evidence-index` belongs to the V0.2.X line** and carries their #259.
+> **REFRESHED 2026-08-29 at `391f0b51` on `proofs`, session close.** The line's first proof is
+> complete and landed on both peer lines. Nothing is in flight, nothing is owed to or by either
+> peer, no loop, cron, or monitor is armed, and every open item is an operator decision. A
+> resuming session should validate below, read the two audit trails, and then wait for the
+> operator.
+
+## Validity
+
+Validate by ancestry and by content, never by a hash match.
+
+```sh
+# Ancestry. All three must succeed.
+git merge-base --is-ancestor 8414a1a1 origin/v0.2.3     # the proof's landing merge
+git merge-base --is-ancestor f779be7d origin/proof/composite-region-reuse   # the CLEAN-verdict tip
+git merge-base --is-ancestor 613a2b98 origin/proofs     # the no-ff merge into this line
+
+# Content, measured at 391f0b51. If any differs, say so rather than acting on the state below.
+P=docs/proofs/COMPOSITE_REGION_REUSE_PROOF.md
+grep -c '^\*\*Definition' $P        # 9
+grep -c '^| M[1-9] |' $P            # 18, nine axiom rows and nine instantiation rows
+grep -c '^\*\*Lemma' $P             # 5
+grep -c '^\*\*Theorem' $P           # 7
+grep -c '^\*\*Corollary' $P         # 4
+grep -c 'blacksquare' $P            # 15, one per proof block
+ls docs/proofs/ | wc -l             # 4, the proof and three AUDIT records
+```
 
 ## Structure of the line
 
 | branch | role | state |
 |---|---|---|
-| `proofs` | top-level integration branch | this mailbox only, so far |
-| `proof/composite-region-reuse` | first proof, cut at `e9a40e32` | drafted, see below |
+| `proofs` | top-level integration branch | this file plus the merged proof, tip `391f0b51` |
+| `proof/composite-region-reuse` | the first proof's feature branch | complete, tip `f779be7d`, merged |
 
-## Proofs in flight
+Cut from the `v0.2.3` lineage at `e9a40e32` per the operator ruling of 2026-08-23. Individual
+proofs are cut from `proofs` as feature branches and merged back with no-fast-forward merges.
+This line merges into V0.2.X, and each peer operator rules their own absorption mechanism, see
+the topology record below. The name `docs/proof-evidence-index` belongs to the V0.2.X line.
 
-**`proof/composite-region-reuse`** carries `docs/proofs/COMPOSITE_REGION_REUSE_PROOF.md`, written
-against the obligation at `a49555bb` on `v0.3.0`. Per operator direction of 2026-08-23 the
-document is structured as a general theory over an abstract epoch-guarded bump-arena machine,
-with every Keleusma-specific fact, premise instantiation, and provenance row in appendices at the
-end. Proved generally are the unconditional branch bound, cross-epoch arm overlap, confined-site
-slot reuse, the composed plan, and, by operator-directed scope expansion later the same day,
-**Theorem B2**, universal slot reuse under an escape-copy discipline, with an accounting
-corollary and a per-site hybrid corollary, and **Theorem B1r**, which admits local stores to
-boundary-dead slots and is the operative form for source programs, since local bindings are
-immutable and every expressible in-loop store is iteration-scoped. The Keleusma instantiation discharges the axioms with
-measured standing recorded per row, and two axioms rest on reference-compiler emission
-invariants that `verify()` does not enforce, so the reuse theorems apply to reference-compiled
-modules and not to arbitrary verified bytecode. B2 is additionally a proved specification rather
-than a description, since no escape route copies in Keleusma today, and its six adoption
-obligations are named in the proof's Appendix C. M1's immutability clause is confirmed by the
-V0.2.X session on four independent grounds, one pinned from the `Op` enum, with the clause
-scoped to the ephemeral region deliberately since the persistent region is mutated in place. No
-instantiation row is open. The write-accessor pin landed in their `a288ae26`, recorded in the
-proof's Appendix E against ground one only, since grounds two through four are read from
-dispatch and in no test.
+## THE STATE
 
-## The audit and the revision, 2026-08-24
+`docs/proofs/COMPOSITE_REGION_REUSE_PROOF.md` discharges the composite-region-reuse obligation
+written on the `v0.3.0` line, read at `a49555bb` and corrected there at `d5b706e8` and
+`c3ff3c06`. It landed on `v0.2.3` at merge `8414a1a1`, on a 22-of-22 run with conclusion
+success at the commit continuous integration ran, and the V0.2.X session verified the merged
+proof **byte-identical to the audited proof** at the CLEAN verdict commit `f779be7d`. The
+V0.3.X line absorbed the result **by merge**, their absorption 17, verified independently on
+their side.
 
-On operator direction, five independent contexts adversarially audited the proof at `de8b3f68`.
-The empirical layer held and the mathematical layer did not, four results judged not established
-as literally written. Every verified finding is repaired in the post-audit revision at
-`15532455`, with the full record in `docs/proofs/AUDIT_2026-08-24.md` on the feature branch. The
-revision adds two axioms, makes references provenance-based, proves composition as a lemma, and
-replaces the plan inequality with a footprint-and-occupancy theorem. Two pins are awaited from
-the V0.2.X line, the address-opacity discriminator and the Break row correction. The re-audit gate is
-**satisfied**: a targeted third round found two single-stipulation holes, and a converging
-delta-check sequence, nine findings, then four, then one non-governing ambiguity, ended CLEAN at
-`f779be7d`, records in `docs/proofs/AUDIT_*`. The proof merged into this branch at `613a2b98`,
-and #303 **merged into `v0.2.3` at `8414a1a1`** on a 22-of-22 run with conclusion success at
-the commit CI ran, `cbd78613`. The merged proof is the audited proof, the V0.2.X session
-verifying `COMPOSITE_REGION_REUSE_PROOF.md` byte-unchanged between the CLEAN verdict at
-`f779be7d` and the merge head, only this mailbox moving after the verdict. Five files landed,
-the four under `docs/proofs/` and this mailbox. Every pin the appendices cite is now runnable
-from the merged tree. The V0.2.X session merged on its own standing authorization and its own
-verification, not on any relayed authority, which is the correct basis and is recorded as
-such. **The proof line's first proof is complete.** The V0.3.X line has **absorbed the result by
-merge**, their absorption 17 verifying `8414a1a1` an ancestor of `origin/v0.2.3`
-independently, and a topology correction is owed here by this line's own mailbox. This line's
-operator ruled, verbatim, that the V0.2.X line is then **merged** into the V0.3.X line, the
-V0.3.X operator ruled sync with no mechanism mandated, and the rebase form recorded earlier in
-this mailbox and in the proof's Appendix E entered as a relay of the V0.2.X operator's ruling
-through that line's session, which this line propagated as settled. The V0.3.X merge is
-consistent with this line's own ruling, the mechanism question is surfaced to the V0.3.X
-operator on their side, and the one-clause Appendix E correction is queued for the proofs
-line's next landing rather than a single-sentence pull request. The Appendix D backend row's
-briefly-recorded discharge is **retracted by its reporter**: their `region_nonreuse.rs`
-enforces that two distinct static sites never share storage, on ranges over 256 sites, which
-bounds memory, while a single site inside a loop still writes the same offset every iteration
-unconditionally, which is reuse in exactly the proof's sense and remains the live aliasing
-hazard of the obligation's Section 4.1.1 for escaping sites. Bounded memory and correct
-aliasing are different guarantees and only the first is enforced, the scope limit now recorded
-at their guard itself, so the row stands as written, required for soundness and not
-discharged, and no Appendix D change is queued for it. Mechanization remains the
-recorded follow-on that upgrades the document's standing.
+**What is proved, in one paragraph.** Part I is a general theory over an abstract
+epoch-guarded bump-arena machine, nine definitions, nine axioms, a shared first-divergence
+comparison method, five lemmas including an ordered composition induction, and the results,
+Theorem A1 unconditional, Theorem A2 and Corollary A3 for arm overlap, Theorems B1 and B1r for
+confined-site reuse with a boundary-dead-slot refinement, Theorem C's footprint-and-occupancy
+bound, and Theorem B2 with its corollaries for an escape-copy discipline machine. Part II
+instantiates every axiom for Keleusma with measured standing per row. The reuse results are
+scoped to **reference-compiled modules whose composites are transitively scalar**, under
+exactly two producer emission invariants, streams never return, and iterating loops emit no
+value-carrying `Break`, the second resting on the grammar's expressionless `break`. Theorem B2
+is a **proved specification only**, the discipline machine not existing in Keleusma.
 
-## Merge readiness
+**How it was verified.** Three adversarial audit rounds by fresh contexts, then a converging
+delta-check sequence, nine findings, four, one non-governing ambiguity, ending CLEAN, all
+recorded in `docs/proofs/AUDIT_2026-08-24.md`, `AUDIT_2026-08-24_ROUND2.md`, and
+`AUDIT_2026-08-26_ROUND3.md`, which travel beside the proof. The standing caveat, disclosed in
+the proof's Section 9 item 8, is that the correspondence argument is prose rather than a
+mechanized bisimulation. **Every pin the appendices cite is runnable from the merged `v0.2.3`
+tree**, the V0.2.X commits `435a8f6d`, `92e5696a`, `a288ae26`, and `f90fe688` all being on it.
 
-The V0.2.X operator ruled on 2026-08-24 that the proof line merges into the V0.2.X line and the
-V0.3.X line rebases onto the result. Acceptance is authorized on their side at their tip
-`7b44b487`, and the merge waits only on this line's operator releasing the branch. The sequence
-when released is a no-fast-forward merge of `proof/composite-region-reuse` into `proofs`,
-verified by the pre-push gate since a pull request based on `proofs` triggers no workflow on
-this repository, followed by a pull request from `proofs` based on `v0.2.3` directly, which
-gates on the full continuous-integration matrix normally.
+## THE TOPOLOGY RECORD, because a relayed ruling was propagated once
+
+Three operators ruled on absorption and their rulings must stay attributed. This line's
+operator ruled, verbatim, that the V0.2.X line is then **merged** into the V0.3.X line. The
+V0.2.X operator ruled that V0.3.X **rebases**. The V0.3.X operator ruled **sync** with no
+mechanism mandated. This line propagated the relayed rebase form into this mailbox and the
+proof's Appendix E as though settled, which was an error, corrected here at `26431da4`. The
+V0.3.X line absorbed by merge, consistent with this line's own ruling, and the mechanism
+question rests with their operator. **Never record a relayed ruling as settled. Name whose
+ruling it is and how it arrived.**
+
+## RETRACTIONS AND CORRECTIONS, kept because the causes generalize
+
+- **The Appendix D backend-row discharge is retracted by its reporter.** The V0.3.X
+  `region_nonreuse.rs` guard enforces that two distinct static sites never share storage,
+  which bounds memory. A single site inside a loop still writes the same offset every
+  iteration unconditionally, which is reuse in the proof's sense and remains the live aliasing
+  hazard of the obligation's Section 4.1.1 for escaping sites. Two guarantees, one enforced.
+  The row stands as written, required for soundness and not discharged.
+- **Round two found the round-one repair of Theorem A2 defective in statement form**, the
+  proof body patched while the box kept the refuted hypothesis. A repair applied in a proof
+  body while the statement is left unchanged is not a repair. The round-one record carries the
+  annotation.
+- **This session's style scans excluded blockquote lines** and passed three times over a live
+  violation. A checker's clean report is evidence about its reach before it is evidence about
+  the tree.
+- **A directional claim of this line was measured wrong**, that the reachability motivator
+  would only strengthen with dispatch scopes included. Measured, it existed only because of
+  them.
+
+## QUEUED FOR THE NEXT LANDING
+
+One item only. The proof's Appendix E contains the one-clause relayed-rebase wording, "with
+V0.3.X rebasing", to be corrected to the attributed three-ruling form the topology record
+above carries, folded into whatever this line lands next rather than a single-sentence pull
+request through the full gate.
+
+## OPEN, ALL WITH THE OPERATOR
+
+1. **`src/verify.rs:1079`**, adopting confined-site accounting, explicitly unruled, lowering a
+   published worst-case-memory-usage figure. The V0.2.X line's landed `src/confine.rs`
+   analysis is assembling the measured consequence, and the proof's Theorem C remark is the
+   piece to read first, footprint can exceed the branch-max bound on branch-dominated shapes,
+   so adoption should be per-site by comparing both bounds.
+2. **B2 adoption**, explicitly unruled, a proved specification with seven named obligations in
+   the proof's Appendix C.
+3. **Mechanization**, the recorded follow-on that upgrades the proof from audited prose to
+   checked proof, its cost much reduced by the axiomatization the audits forced.
+4. **The floating-point application binary interface question** in
+   `docs/process/REVERSE_PROMPT.md`, predating this line entirely, still awaiting one word.
+
+## GOVERNING RULES A RESUMING SESSION MUST NOT LOSE
+
+- **Work in a worktree.** This session operates in `../keleusma-worktrees/proofs` and
+  `../keleusma-worktrees/composite-region-reuse`. The main checkout belongs to the V0.2.X
+  session. A shared checkout silently changes what a long-running command measures.
+- **A pull request based on anything but `main` or `v*` triggers no continuous integration,
+  silently.** Merge on a green run at the commit it ran, reading the conclusion field.
+- **Nothing is promoted from read to executed without an execution**, and rows carry their
+  provenance labels.
+- **Peer surfaces are theirs.** Classification disputes go to the table in
+  `tests/composite_escape_routes.rs` on the V0.2.X line, runtime questions to that session,
+  backend questions to the V0.3.X session, and authority routes through operators, never
+  through peers.
+- **The operator's prose style governs all documents of this line**, no contractions, no
+  em-dashes, en-dashes, colons, semicolons, or parentheticals in prose, acronyms spelled out
+  on first use, and the style scan must cover blockquotes.
+- **Adversarial audit before merge**, by fresh contexts scoped by section, with failed attacks
+  reported, and repairs closed by a converging delta-check sequence rather than another full
+  round.
 
 ## Owed by this line
 
@@ -96,14 +152,14 @@ Nothing to either peer line.
 
 ## Owed to this line
 
-Nothing. The V0.2.X line's pin commit `435a8f6d` landed and is recorded in the proof's
-Appendix E with the two files' differing standings kept distinct, an invariant pin that re-runs
-every build and a gap pin that fails deliberately if the gap is closed.
+Nothing.
 
-## Process note
+## WHAT A RESUMING SESSION SHOULD DO FIRST
 
-This line does not prepend to `TASKLOG.md`, `REVERSE_PROMPT.md`, or `DESIGN_JOURNAL.md`, which
-are the V0.2.X session's live channels and conflict by construction under parallel prepends.
-This mailbox is the proof line's channel, per `PARALLEL_DEVELOPMENT.md`. The proof-line session
-operates in an isolated worktree and does not touch the main checkout, which belongs to the
-V0.2.X session.
+Run the validity block. Read the three audit records and the proof's Appendix E, which carry
+the full provenance. Check both peer mailboxes,
+`git show origin/v0.2.3:docs/process/handoffs/v0.2.3.md` and
+`git show origin/v0.3.0:docs/process/handoffs/v0.3.0.md`, for anything addressed to this
+line. Then wait for the operator. Nothing is blocked, no work is in flight, and the line's
+next action is whichever the operator commissions, a second proof cut as a feature branch from
+`proofs`, the queued Appendix E correction folded into it, or the mechanization effort.
