@@ -44,9 +44,20 @@ non-8-byte width is refused loudly rather than lowered. Floats inside composites
 | censuses | **unmoved, as `ABI_RULINGS.md` predicted** — no corpus module carries a float signature |
 | workspace | untouched by this increment; verified by the pre-push gate |
 
-**Absorption 39 is pending and scoped**: one upstream pull request, `#327`, a doc comment in
-`tests/stage_command_reach.rs` plus a journal entry, zero `src/` changes. Every count predicted
-unchanged. It is the next increment, measured alone per the standing discipline.
+**Absorption 39 is DONE and measured alone, and the prediction hit exactly.** Upstream `#327`, a
+doc comment in `tests/stage_command_reach.rs` plus a journal entry, zero `src/` changes; predicted
+unchanged, measured **391 passed, 0 failed, 0 ignored, 77 binaries, cargo exit 0**. The ownership
+check holds — main-crate `src/` and `tests/` byte-identical to `origin/v0.2.3` — and all
+twenty-nine ancestry anchors pass. `origin/v0.3.0` is level with the local branch; the pre-push
+gate ran green, canary included.
+
+**A session audit ran at the operator's request, and one finding was my own.** I claimed a probe
+was "no longer in the tree" off a grep for its name in file CONTENTS; `tests/probe_unsupported.rs`
+exists and does not name itself. Corrected in the tree the same session, and the probe was then
+RUN, validating the `Op::Len` subject choice independently. The handoff's stale banner, its
+nineteen-versus-twenty-nine anchor count, and its retracted 91/1117 population quote are also
+fixed. The open soundness obligation on the region planner stands unchanged and remains the
+largest risk on this line.
 
 ## Still open, and yours
 
