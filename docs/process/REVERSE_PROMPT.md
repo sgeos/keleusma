@@ -6,45 +6,42 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## Your ABI question found a hole in the page I wrote for you
+## Your ABI rulings are recorded, and measuring one of them changed the plan
 
-**No, none of the ABI questions is resolved** — and `OPERATOR_DECISIONS_OPEN.md`, the page meant to let
-you act without reassembling context, **did not mention the `Fixed` shared-slot ABI at all.**
+**Settled**: float = Option A (which also settles the `Float` shared slot), string = Option B. The
+string one **cannot be implemented by this line** — it changes marshalling in `src/`, owned by the
+`v0.2.3` line.
 
-**The mechanism matters more than the omission.** The page said *"There is no fourth thing to fix."*
-That came from the module-lowering census and was written as exhaustive over **decisions**. It is not:
-**a coverage census can only surface a decision that blocks a corpus module**, and no corpus source
-declares a `Fixed`, `Float` or `Text` shared slot — so those refusals block nothing, appear in no
-figure, and were invisible to a list built from figures. **Sixth instance of this session's recurring
-defect, and the first where the claim was the summary I hand you rather than a test.**
+**Measuring the float ruling before building to it was worth the one test it cost.** You named the
+**entry ABI**. The corpus's only float-carrying module is blocked by a float **constant**, and **no
+corpus module has a float in a signature at all** — so the entry-ABI change has **zero corpus
+witnesses** and, built alone, could not be verified against the corpus. Option A as you wrote it covers
+both, so the ruling is not wrong; but planning from the phrase "entry ABI" builds the wrong piece
+first. Gain when built: **66 → 67 modules**, plus the two conversion opcodes the census lists as
+UNPROVEN.
 
-**I also had the disposition backwards.** Answering you, I said I would hold the amendment pending your
-interop answer. That is inverted — the page exists to *prompt* the answer.
+## Two things in the record are mine, not yours, and are labelled so
 
-## The page now carries six items in two parts
+- **Float width.** `Float` is `f32` **or** `f64` under `narrow-float-32`, so "double" is incoherent in
+  a build with no `f64`. I am proceeding on **the FP type matches the runtime's float width**.
+- **`Unit`.** You asked what it is — a question, not a ruling. It is the empty type, **0 bytes**; a
+  zero-byte slot conveys nothing. My inference is a permanent refusal.
 
-**Corpus-blocking**: 1 the `Stream` soundness obligation, 2 the float entry ABI, 3 the `lower_module`
-admissibility precondition.
+## Three still need you
 
-**Open regardless of the corpus**: 4 the `Fixed` shared-slot scale, 5 the string ABI, 6 the unsettled
-slot kinds (`Unit`, `Float`, `Text`, `Opaque`).
+- **`Fixed`** — three readings, and one of them (a distinct slot tag per `N`) contradicts your own
+  *"without needing to store"*. Your phrasing points at the reading that **is** the recorded Option B,
+  but you framed it as distinct from the listed options, so I have not assumed it. **What you describe
+  is already exactly how `Fixed` works in-module**; the open question is only at the host boundary,
+  where the compiler cannot bake anything into a separately compiled host. **The interop goal —
+  convention-based or self-describing — still governs and is still unstated.**
+- **`Text`** — your supposition that it was covered is **incorrect**, and I have preserved that in the
+  record rather than silently correcting it. The string ruling settles static literals; the `Text` slot
+  is a two-word handle.
+- **`Opaque`** — your stated intent is **already what the existing handle achieves**. A literal raw
+  pointer would not fit under `narrow-word-8` or `-16`, where a word is 1–2 bytes and a pointer is 8.
 
-Each has options and a default. **`Fixed`'s recorded preference is stated conditionally**, because it
-reverses on a question you asked and have not answered:
-
-> Is the interop goal **convention-based** (agree on Q15 out of band, like C DSP code) or
-> **self-describing** (a foreign toolchain reads it correctly with no side agreement)?
-
-**That single input settles items 2 and 4 together**, which is why you ruled they be taken together.
-The completeness of part two rests on **my search, not a measurement**, and the page says so.
-
-## One code action, which had been sitting unclaimed
-
-`FIXED_SHARED_SLOT_ABI.md` recorded an ACTION for *whichever line owns the message*. This line owns it.
-The `Fixed` slot refusal now names the **missing host-visible scale** instead of implying the
-representation is undecided — the old wording sent readers looking for a decision made long ago.
-**Wording only; the refusal is unchanged and was already correct.** Three stale present-tense
-quotations of it were corrected, history left visible.
+**Nothing was implemented on an ambiguous ruling.**
 
 ## Verification
 
@@ -53,12 +50,11 @@ Both suites run **sequentially** (parallel invalidates the perf canary, 57x).
 | | result |
 |---|---|
 | workspace | **2491 passed, 0 failed, 92 binaries**, cargo exit 0 |
-| `native_codegen` gate step | **372 passed, 0 failed, 0 ignored, 74 binaries**, exit 0 |
+| `native_codegen` gate step | **373 passed, 0 failed, 0 ignored, 75 binaries**, exit 0 |
 | censuses | 61 of 66; `["Len"]`; 1070 of 1074; 89841 of 89940 — all unmoved |
 
-Censuses unmoved is the check that the message change had no behavioural effect. The gate's 942s is a
-**contention** figure — load average was 45 at start and peaked over 200, with a peer suite running in
-the sibling worktree — not a property of the change.
+The native gate first aborted in 1s on `cargo fmt --check` for a new file; that pass is not reported as
+a result, and the figures above are from the re-run.
 
 **No absorption was needed**: already zero unabsorbed.
 

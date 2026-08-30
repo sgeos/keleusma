@@ -608,6 +608,28 @@ Current sprint source of truth.
 > workspace **2467/0/88**, coverage re-derived and unchanged at 1070 of 1074.
 > See [`../decisions/OPERAND_WIDTH_RECOVERY.md`](../decisions/OPERAND_WIDTH_RECOVERY.md).
 
+> **Currency note (2026-08-29, V0.3.X line, thirteenth entry). ABI RULINGS RECEIVED AND RECORDED;
+> MEASURING THE FLOAT RULING CHANGED WHICH PIECE IS BUILT FIRST.**
+>
+> The operator ruled on the ABI questions — **the first substantive input in roughly twelve
+> increments**. **Settled**: float = Option A (a real floating-point ABI, which also settles the `Float`
+> shared slot), and string = Option B (make the embeddings agree, revisit later) — **the latter is NOT
+> implementable by this line**, since it changes marshalling in `src/`. **Open**: `Fixed` (three
+> readings, one contradicting the ruling's own *"without needing to store"*; the interop goal is still
+> unstated and governs), `Text` (**the ruling's supposition that it was covered is incorrect** — the
+> string ruling settles static literals, while the `Text` slot is a two-word handle), `Opaque` (stated
+> intent is **already met** by the `Arc<dyn HostOpaque>` handle; a literal raw pointer would not fit
+> under `narrow-word-8`/`-16`), and `Unit` (the operator asked what it is, which is a question and not a
+> ruling). **Measured before building**, and it changed the plan: the ruling names the **entry ABI**,
+> but the corpus's only float module is blocked by a **CONSTANT** and **no corpus module has a float in
+> a signature at all**, so the entry-ABI change has **zero corpus witnesses** and could not be verified
+> against the corpus if built alone. Gain when built: 66→67 modules and the two UNPROVEN conversion
+> opcodes. **Two things are labelled as MY inference, not the operator's**: that the FP type matches the
+> runtime's float width (`Float` is `f32` or `f64` under `narrow-float-32`, so "double" is incoherent
+> in some builds), and that `Unit` should be permanently refused. **Nothing was implemented on an
+> ambiguous ruling.** No absorption needed. Workspace **2491/0/92**, `native_codegen` **373/0/0
+> ignored/75**, censuses unmoved. See [`../decisions/ABI_RULINGS.md`](../decisions/ABI_RULINGS.md).
+
 > **Currency note (2026-08-29, V0.3.X line, twelfth entry). THE OPERATOR-FACING DECISION PAGE WAS BUILT
 > FROM A COVERAGE MEASUREMENT AND INHERITED ITS BLIND SPOT.**
 >

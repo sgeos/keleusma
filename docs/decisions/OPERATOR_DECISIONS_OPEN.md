@@ -2,6 +2,12 @@
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
 
+> **⚠ RULINGS RECEIVED 2026-08-29 on items 2, 4, 5 and 6 — see
+> [`ABI_RULINGS.md`](./ABI_RULINGS.md).** Float and string are **settled**; `Fixed`, `Text`, `Opaque`
+> and `Unit` remain **open**, one of them because a supposition in the ruling was incorrect. The
+> sections below are kept as the standing statement of each question; the rulings document records
+> what was decided, what was assumed by me rather than ruled, and what is still needed.
+
 **One page, no arguments re-run.** Each case has its own record; this only says what is open, what it
 costs, and what I do by default. **Where the underlying record deliberately declined to recommend, so
 does this.**

@@ -1,5 +1,45 @@
 # Design Journal
 
+## 2026-08-29 — Rulings arrived, and measuring them changed what the first piece of work is
+
+**Increment**: the operator ruled on the ABI questions — **the first substantive input in roughly
+twelve increments**, and it arrived because a page I wrote turned out to omit one of the items.
+
+**Two are settled**: the float ABI is Option A, a real floating-point ABI; the string ABI is Option B,
+make the two embeddings agree. **Three remain open**, and one of those because a supposition inside the
+ruling was incorrect.
+
+**Measuring the float ruling before building to it changed what the first piece of work is.** The
+ruling names the **entry ABI**. The corpus's only float-carrying module is blocked by a float
+**CONSTANT**, and **no corpus module has a float in a signature at all** — so the entry-ABI change has
+**zero corpus witnesses** and, built alone, could not be verified against the corpus. Option A as
+recorded covers both, so the ruling is not wrong; but a reader planning from the phrase "entry ABI"
+builds the wrong piece first. **That is exactly the failure I have made three times recently by acting
+on a plausible guess about where work sits**, and the measurement cost one short test.
+
+**One assumption is mine and is labelled as mine.** `Float` is `f32` or `f64` under `narrow-float-32`,
+so "double" is incoherent in a build with no `f64`. The reading proceeded on is that the FP type
+matches the runtime's float width. The `Unit` disposition — permanent refusal, since a zero-byte slot
+conveys nothing — is likewise mine, not the operator's, who asked what `Unit` is rather than ruling on
+it.
+
+**A supposition in the ruling is preserved rather than silently corrected.** The operator wrote that
+`Float` and `Text` were "nominally addressed". Float, yes. **`Text`, no** — the string ruling settles
+the static-literal ABI, while the `Text` slot kind is a two-word handle, a different construct.
+Recording only the corrected state would lose the fact that a reasonable reader drew that conclusion,
+which is the confusion the record exists to prevent next time.
+
+**The `Opaque` ruling turned out to describe what already exists.** The stated intent — the host
+allocates and owns it, Keleusma carries it — is exactly what the `Arc<dyn HostOpaque>` handle achieves.
+Taken literally as a raw pointer it would not fit under `narrow-word-8` or `narrow-word-16`, where a
+word is one or two bytes and a host pointer is eight.
+
+**`Fixed` describes the in-module design that already holds**, and the open question was never
+in-module: the compiler cannot bake anything into a separately compiled host. Three readings are
+recorded and none is picked, because one of them contradicts the ruling's own "without needing to
+store". **Nothing was implemented on it.**
+
+
 ## 2026-08-29 — I built a decisions list out of a coverage measurement, and it inherited the blind spot
 
 **Increment**: the operator asked whether the ABI issues were resolved. Checking rather than answering
