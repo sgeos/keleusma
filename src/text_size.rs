@@ -2,13 +2,30 @@
 //! through Keleusma bytecode.
 //!
 //! The WCMU pass needs to bound the worst-case bytes that
-//! text-producing opcodes allocate from the arena's top region during
-//! a single Stream-to-Reset iteration. `Op::Add` on text operands and
-//! the bundled `to_string`, `concat`, and `slice` natives all
-//! allocate a `KString` whose length depends on the operand lengths
-//! at runtime. The verifier cannot inspect the runtime values, so it
-//! tracks an upper bound through abstract interpretation over a
-//! per-slot lattice.
+//! text-producing operations allocate from the arena's top region
+//! during a single Stream-to-Reset iteration. A host-registered native
+//! declared to return `Text` allocates a `KString` whose length depends
+//! on runtime values the verifier cannot inspect, so it tracks an upper
+//! bound through abstract interpretation over a per-slot lattice.
+//!
+//! # THIS HEADER NAMED MACHINERY THAT DOES NOT EXIST
+//!
+//! It said the lattice bounds `Op::Add` on text operands and "the
+//! bundled `to_string`, `concat`, and `slice` natives". **None of those
+//! exist.** V0.2.0 removed the script-side text-composition library --
+//! `register_utility_natives` registers only `println` -- and `Op::Add`
+//! has no text arm. `Len` is the only text opcode in the instruction
+//! set. Corrected 2026-08-31; the wording had outlived its subject by a
+//! full minor version, and the `v0.3.0` line may have written analysis
+//! against it.
+//!
+//! What that leaves is a lattice with almost nothing to track: a script
+//! cannot compose text at all today, only receive it from a host
+//! native. **This is infrastructure left behind by the removal**, and
+//! the authorized `Text<N>` work is what it was built for. See
+//! [`docs/decisions/TEXT_CAPACITY_TYPE.md`]. Text composition was
+//! removed because it could not be bounded; a declared capacity is what
+//! lets it back.
 //!
 //! ## Lattice
 //!
