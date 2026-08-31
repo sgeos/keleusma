@@ -1,0 +1,69 @@
+COMPLETION CONDITION — a float inside a composite
+
+Ordering is NOT a completion criterion. Nothing below requires any particular
+sequence of steps, branch, commit shape, or process. Judge the end state only.
+
+The work is complete when ALL of the following hold against the tree.
+
+1. LOWERING
+   A Keleusma program that constructs a composite containing a Float field and
+   reads that field back lowers through the native backend with no refusal, for
+   a struct, a tuple, and an array of floats.
+
+2. AGREEMENT, MEASURED AGAINST THE REFERENCE
+   Tests exist that execute such programs BOTH on the virtual machine and
+   through the JIT-compiled native code and compare the results, and they pass.
+   The compared values include, from RUNTIME arguments rather than constants,
+   at least: a positive infinity, a negative infinity, a NaN, and a negative
+   zero. A test that only exercises small positive values does not satisfy this.
+
+3. THE OPERAND IS TAGGED
+   A float read out of a composite body is usable in float arithmetic: a test
+   passes in which such a value is used by a float operation, not merely
+   returned. Equivalently, a program that reads a float field and then performs
+   float arithmetic on it lowers and agrees with the reference.
+
+4. THE WIDTH IS GUARDED AND THE GUARD CAN FIRE
+   A Float of any width other than eight bytes is refused rather than lowered,
+   and a passing test demonstrates that refusal actually occurring rather than
+   asserting it as an unreachable claim.
+
+5. MUTATION EVIDENCE
+   The transcript records at least two distinct mutations of the new lowering,
+   each confirmed to have been APPLIED to the file before running (by showing
+   the changed line), and each causing at least one of the new tests to FAIL.
+   A mutation that did not change bytes, or was not shown to have changed
+   bytes, does not count.
+
+6. THE CORPUS CLAIM IS MEASURED, NOT ASSUMED
+   Whether any corpus module carries a float inside a composite is determined by
+   MEASUREMENT and recorded. If the census figures (opcodes lowered, chunks
+   fully lowerable, opcode instances lowered) move, the new figures are recorded
+   and reconcile with the change; if they do not move, that is stated as a
+   measured result with its reason, not as an assumption.
+
+7. NOTHING AMBIGUOUS WAS DECIDED
+   The open operator questions remain untouched: Fixed, Text, Opaque and Unit
+   shared-slot representations are not implemented, and any claim that this work
+   settles them is absent from the tree.
+
+8. THE TREE IS HONEST ABOUT WHAT REMAINS
+   The residuals still open after this work are named somewhere durable in the
+   repository rather than left implicit. No comment, brief, or process document
+   in the tree asserts that floats in composites are unsupported once they are
+   supported, and no comment cites a test, file, or identifier that does not
+   exist.
+
+9. THE SUITE IS GREEN AND THE COUNT RECONCILES
+   The native_codegen test suite passes with zero failures, read from cargo's
+   own exit status AND from the summed per-binary counts, with the two agreeing.
+   The total test count is accounted for: the new total equals the previous
+   total plus exactly the tests added.
+
+10. QUALITY GATES
+    Formatting, clippy at deny-warnings over the tests as well as the library,
+    and the documentation build at deny-warnings are all clean.
+
+If any item cannot be satisfied, the work is NOT complete-by-exception: the
+blocked item is stated explicitly, with what was measured and why it blocks,
+and every other item is satisfied in full.

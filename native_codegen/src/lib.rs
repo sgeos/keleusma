@@ -2720,6 +2720,19 @@ fn lower_chunk_body<'ctx>(
             // operand. Storing one is therefore useful only to move it, which is
             // exactly what `s.x = h.f` does. Closing that would mean tracking
             // kinds per private slot, which this increment does not do.
+            // **COMPOSITE CONSTRUCTION IS A BIT COPY INTO THE BODY**, so it is
+            // admitted whole rather than positionally. The pack places each
+            // operand at the OPERAND'S OWN width, and a float already carries
+            // `Width::Scalar(8)` from `push_k`, which is exactly where the
+            // reference puts it: `struct { x: Float, n: Word }` compiles at
+            // `byte_size: 16`, a pair of slots. Nothing is interpreted.
+            //
+            // **The existing exactness check is what makes the whole admission
+            // safe**: the arm requires the operand widths to account for the
+            // baked `byte_size` EXACTLY, so a float of some other width refuses
+            // rather than mispacking. The width guard below is therefore a
+            // second line and not the only one.
+            let float_into_a_composite_body = float_bytes == 8 && matches!(op, Op::NewComposite(_));
             let float_store_into_a_float_slot = float_bytes == 8
                 && match op {
                     Op::SetData(slot) | Op::SetDataIndexed(slot, _) => {
@@ -2735,6 +2748,7 @@ fn lower_chunk_body<'ctx>(
                     _ => false,
                 };
             let float_aware = float_store_into_a_float_slot
+                || float_into_a_composite_body
                 || matches!(
                     op,
                     Op::Add
@@ -4537,6 +4551,24 @@ fn lower_chunk_body<'ctx>(
                     // Scaling lives in the opcodes that consume them.
                     SK::Int | SK::Fixed => 8,
                     SK::Byte | SK::Bool => 1,
+                    // **A FLOAT ELEMENT IS THE SAME EIGHT RAW BYTES.** A body
+                    // field is INTERNAL -- the compiler packs it, the same
+                    // program reads it back, nothing outside sees the layout --
+                    // so agreeing with the reference is a measured fact and not
+                    // an interface choice. That is the same ground on which
+                    // `Fixed` is lowered here and refused in a shared slot.
+                    SK::Float if float_bytes == 8 => 8,
+                    SK::Float => {
+                        return Err(LowerError::unsupported_op(
+                            "GetIndex",
+                            format!(
+                                "a Float array element in a module whose Float is \
+                                 {float_bytes} bytes wide; only an 8-byte Float is \
+                                 lowered, because the reference sizes the body by \
+                                 that width and a wrong one mispacks silently"
+                            ),
+                        ));
+                    }
                     other => {
                         return Err(LowerError::unsupported_op(
                             "GetIndex",
@@ -4582,7 +4614,15 @@ fn lower_chunk_body<'ctx>(
                     // Zero, not sign: a `Byte` holds `0..=255` in a full slot.
                     (st.b.build_int_z_extend(bv, i64t, "cizext").unwrap(), 1u32)
                 };
-                st.push_w(v, Width::Scalar(w));
+                // **THE TAG, WHICH IS THE HALF THAT KEEPS BEING FORGOTTEN.**
+                // Untagged, the element is packed and read correctly and then
+                // refused by every float operation downstream -- the same miss
+                // the entry ABI and the shared slot each made once.
+                if matches!(kind, SK::Float) {
+                    st.push_k(v, Width::Scalar(w), OperandKind::Float);
+                } else {
+                    st.push_w(v, Width::Scalar(w));
+                }
             }
             // Enum discriminant test. **PEEKS, like `BoundsCheck`**: the virtual
             // machine reads `stack.last()` and leaves the enum in place for the
@@ -4715,6 +4755,33 @@ fn lower_chunk_body<'ctx>(
                         let z = st.b.build_int_z_extend(bv, i64t, "cfzext").unwrap();
                         (z, 1u32)
                     }
+                    // **A FLOAT FIELD READS EXACTLY LIKE `Int`**, for the
+                    // reason a body field is not an interface: the layout is
+                    // internal and agreement with the reference is measured.
+                    // The width is guarded because the reference sizes the body
+                    // by `float_bytes`.
+                    SK::Float if float_bytes == 8 => {
+                        let iv =
+                            st.b.build_load(i64t, addr, "cffloat")
+                                .unwrap()
+                                .into_int_value();
+                        iv.as_instruction()
+                            .expect("a load is an instruction")
+                            .set_alignment(1)
+                            .expect("1 is a power of two");
+                        (iv, 8u32)
+                    }
+                    SK::Float => {
+                        return Err(LowerError::unsupported_op(
+                            "GetField",
+                            format!(
+                                "a Float field in a module whose Float is {float_bytes} \
+                                 bytes wide; only an 8-byte Float is lowered, because \
+                                 the reference sizes the body by that width and a wrong \
+                                 one mispacks silently"
+                            ),
+                        ));
+                    }
                     other => {
                         return Err(LowerError::unsupported_op(
                             "GetField",
@@ -4722,7 +4789,12 @@ fn lower_chunk_body<'ctx>(
                         ));
                     }
                 };
-                st.push_w(v, Width::Scalar(w));
+                // The tag, for the same reason as the array element above.
+                if matches!(kind, SK::Float) {
+                    st.push_k(v, Width::Scalar(w), OperandKind::Float);
+                } else {
+                    st.push_w(v, Width::Scalar(w));
+                }
             }
             // Suspension. **`Yield` is pop-one, push-one**: it pops the value
             // to yield and pushes the value the host resumes with. Treating it

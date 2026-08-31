@@ -1,5 +1,68 @@
 # Design Journal
 
+## 2026-08-31 — A float inside a composite, and the first increment in six where the plan matched the work
+
+**Increment**: floats inside composite bodies — struct fields, tuple members and array elements.
+**It needed no ruling**, and that is a claim rather than a convenience: a body field is INTERNAL, so
+the compiler packs it, the same program reads it back, nothing outside observes the layout, and
+agreement with the reference is a fact to be measured rather than an interface to be chosen. That is
+the ground the tree already records for lowering `Fixed` in a body while refusing it in a shared
+slot. See `../decisions/FLOAT_IN_COMPOSITE_BRIEF.md`.
+
+**THE PROBE WAS WRITTEN BEFORE THE BRIEF, DELIBERATELY.** The previous increment mis-sized itself by
+reading the component it was changing, for the fifth time on this line. So this one asked the
+boundary first: `probe_float_composite.rs` reported that all four shapes are refused at
+**`Op::NewComposite`** by the float whitelist, with a control that lowers. The implementation then
+touched exactly what the probe named — the whitelist and the two flat read arms — and nothing else.
+**First increment in six where the plan and the work agreed.**
+
+**The reference already lays a float field out at eight bytes**, measured rather than assumed:
+`struct { x: Float, n: Word }` compiles at `byte_size: 16`, a pair of slots. So there was no packing
+decision, only a width to stop calling unknown. Construction needed no arithmetic at all — the pack
+places each operand at the operand's OWN width, and a float already carries `Width::Scalar(8)`.
+
+**The existing exactness check is what makes admitting construction whole rather than positionally
+safe.** The arm requires the operand widths to account for the baked `byte_size` exactly, so a float
+of an unexpected width refuses rather than mispacking. The width guard added is a second line, not
+the only one.
+
+**THE PREDICTION WAS WRONG IN THE DIRECTION THAT MATTERED, AND MEASURING IS WHAT CAUGHT IT.** The
+instinct was that the censuses would MOVE, since `NewComposite`, `GetField` and `GetIndex` are corpus
+opcodes. Measured over the 69 compiling modules: **256 composite construction sites and ZERO float
+field or element reads.** The censuses stay put, and a movement would now be a regression rather than
+a gain. **The 256 is also an unplanned third confirmation** of a figure the tree carries from two
+other methods, over the same population.
+
+**A harness was promoted rather than copied.** `composite_return_aliasing.rs` held the only
+two-argument module driver supplying the trailing region pointer. Copying it is how two tests come to
+answer one question differently without either saying so; it now lives once in
+`common::vm_and_native_two_arg`, with the original file delegating.
+
+**The tag was again the half that would have been forgotten**, and the test that would not have
+caught it is the one that only RETURNS the field. `a_float_read_out_of_a_struct_is_usable_in_float_arithmetic`
+uses the value in float arithmetic instead, which is the difference between a layout that is correct
+and a value that is usable. Deleting the tag fails four of five tests; halving the array stride fails
+one. Both mutations were confirmed applied by printing the changed line before running.
+
+**AND THE PIPELINE-STATUS TRAP FIRED AGAIN, FOR THE FIFTH RECORDED TIME.** The verification run
+ended with `| grep -c "FAILED"` appended; it printed `0` and EXITED 1, so a green suite reported
+failure. The handoff already names this exact shape and already says *do not append a filter to a
+command whose status you intend to read* — and the rule was broken by the command written to
+summarise the run that proves the rule matters. **A rule recorded is not a rule applied**, and the
+only durable form of it is the invocation itself: read the status on its own line, put every filter
+on another.
+
+**Verified**: `native_codegen` **403 passed, 0 failed, 79 binaries**, cargo's own exit status 0 —
+396 plus five differentials plus two probe tests, and two new binaries. Censuses re-derived and
+**unmoved as measured**: `isa_lowering` 63 of 66 with `Len` the one named refusal; 1072 of 1074
+chunks and 89854 of 89940 opcode instances. `fmt --check`, `clippy --tests -D warnings` and
+`cargo doc -D warnings` clean.
+
+**Still absent**: a float in a NESTED composite body, which goes through the `FlatNested` arms; a
+composite carrying a float reaching a data slot; `f32`, refused loudly at every route; and a native
+declaring a float return, the one float route of four still closed and closed because no ruling
+settles it.
+
 ## 2026-08-30 — The float shared slot, and a guard I had not read refused three of four tests
 
 **Increment**: the `Float` shared data slot, kind tag 5. This is the settled half of the operator's

@@ -117,3 +117,91 @@ pub fn corpus_sources() -> Vec<std::path::PathBuf> {
     out.dedup();
     out
 }
+
+/// `(vm, native)` for a two-argument entry, driving the trailing pointers when
+/// the module builds composites or declares data slots.
+///
+/// # Why this lives here rather than in the file that first needed it
+///
+/// It began inside `composite_return_aliasing.rs`. A second file needing the
+/// same harness has exactly two options, and one of them is the failure this
+/// package keeps finding: a COPY that drifts from its original, after which two
+/// tests answer the same question differently and neither says so. The other is
+/// one definition, which is this. `composite_return_aliasing.rs` delegates here
+/// rather than keeping a private twin.
+///
+/// The parameter count is read off the lowered entry and asserted before the
+/// call, because a wrong signature is undefined behaviour that surfaces as a
+/// segmentation fault inside JIT-compiled code with no usable stack.
+#[allow(dead_code)]
+pub fn vm_and_native_two_arg(src: &str, a: i64, b: i64) -> (i64, i64) {
+    use inkwell::OptimizationLevel;
+    use inkwell::context::Context;
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for};
+    use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
+
+    let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    assert!(
+        keleusma_native::module_refusals(&m, keleusma_native::LowerOptions::default()).is_empty(),
+        "the case must LOWER for the comparison to mean anything"
+    );
+
+    let need = required_persistent_capacity_for(&m);
+    let cap = auto_arena_capacity_for(&m, &[]).expect("arena") + need + (1 << 20);
+    let mut arena = keleusma_arena::Arena::with_capacity(cap);
+    arena.resize_persistent(need).expect("persistent");
+    let mut vm = Vm::new(m.clone(), &arena).expect("vm");
+    let vv = match vm.call(&[Value::Int(a), Value::Int(b)]).expect("vm run") {
+        VmState::Finished(Value::Int(v)) | VmState::Yielded(Value::Int(v)) => v,
+        other => panic!("unexpected VM outcome: {other:?}"),
+    };
+
+    let ctx = Context::create();
+    let lm = ctx.create_module("k");
+    keleusma_native::lower_module(&ctx, &lm, &m, keleusma_native::LowerOptions::default())
+        .expect("lower");
+    maybe_optimize(&lm);
+    let ee = lm
+        .create_jit_execution_engine(OptimizationLevel::None)
+        .expect("jit");
+    let entry = m.entry_point.expect("entry");
+    let sym = format!("kel_chunk_{entry}");
+    let np = lm.get_function(&sym).expect("entry fn").count_params();
+
+    let n_region: usize = m
+        .chunks
+        .iter()
+        .map(|c| keleusma_native::region::plan_chunk_region(c).bytes as usize)
+        .sum();
+    let mut region = vec![0u64; n_region.div_ceil(8) + 4];
+    let mut shared = vec![0u8; 64];
+    let mut privs = vec![0u64; 8];
+
+    let nv = match np {
+        2 => {
+            let f = unsafe { ee.get_function::<unsafe extern "C" fn(i64, i64) -> i64>(&sym) }
+                .expect("symbol");
+            unsafe { f.call(a, b) }
+        }
+        5 => {
+            let f = unsafe {
+                ee.get_function::<unsafe extern "C" fn(i64, i64, *mut u8, *mut u8, *mut u8) -> i64>(
+                    &sym,
+                )
+            }
+            .expect("symbol");
+            unsafe {
+                f.call(
+                    a,
+                    b,
+                    shared.as_mut_ptr(),
+                    privs.as_mut_ptr() as *mut u8,
+                    region.as_mut_ptr() as *mut u8,
+                )
+            }
+        }
+        n => panic!("entry takes {n} parameters; this harness drives 2 or 5"),
+    };
+    (vv, nv)
+}

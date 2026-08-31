@@ -6,79 +6,61 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## The float shared slot is built, and it is the settled half of a ruling rather than a new decision
+## Two increments, both float, both needing no ruling from you
 
-`ABI_RULINGS.md` records that your Option A float ruling **also settles this slot**: with a real
-floating-point representation the slot is IEEE-754 bytes at the stated offset. That is what the
-reference already does, so nothing ambiguous was decided here. `Fixed`, `Text`, `Opaque` and `Unit`
-stay open and stay refused.
+**The shared slot**, which your Option A ruling settles as IEEE-754 bytes at the stated offset, and
+**a float inside a composite body**, which needs no ruling at all: a body field is INTERNAL, so
+agreement with the reference is a fact to be measured rather than an interface to be chosen. That is
+the ground the tree already records for lowering `Fixed` in a body while refusing it in a shared
+slot. **Nothing was built on an ambiguous ruling**; `Fixed`, `Text`, `Opaque` and `Unit` shared slots
+stay refused.
 
-**Three of the four float routes are now open.** The chunk signature opened with the entry ABI, the
-constant earlier, and the data slot now. The one still closed is a native declaring a float return,
-and it is closed because **no ruling settles it** rather than because it is hard.
+## The mistake this line has made six times did not happen the sixth time
 
-## Two things I planned wrongly, both found by running rather than by reasoning
+The shared slot was mis-sized from the component being changed, and three of four tests failed on a
+whitelist I had never opened. So the composite increment **wrote its probe BEFORE its brief**. The
+probe named `Op::NewComposite` as the blocker, and the implementation touched exactly that plus the
+two read arms. Plan and work agreed.
 
-**I sized the work from the wrong component, for the fifth time in this line's record.** I read the
-slot resolver, concluded the increment was that function plus a tag, and wrote the brief saying so.
-Three of the four new tests then failed on a **whitelist** I had never opened, which refuses any
-opcode consuming a float-tagged operand unless it is named float-aware — and the data stores were not
-named. The resolver decides how a slot is ADDRESSED; the whitelist decides whether the opcode may run
-at all. The standing rule would have caught it: read what CONSUMES the value before sizing the work.
-
-**And the brief specified a write-side kind check that was wrong.** It reasoned by analogy with
-`Op::Call`, which refuses a kind-versus-declaration disagreement because a bitcast to a floating-point
-parameter type is a REPRESENTATION change. Nothing converts at a slot store — the operand already is
-the bit pattern — so such a guard prevents no wrong byte and refuses valid programs. It was removed
-before it shipped, and `s.x = h.f` lowers instead of being refused.
+**And measuring overturned my own prediction.** I expected the coverage censuses to rise, since
+composite construction and field reads are corpus opcodes. Measured over the 69 compiling modules:
+**256 construction sites and ZERO float field or element reads.** The censuses stay put, and a
+movement would now be a regression rather than a gain. The 256 is an unplanned third confirmation of
+a figure the tree already carries from two other methods.
 
 ## Verification
 
 | | result |
 |---|---|
-| `native_codegen` | **396 passed, 0 failed, 77 binaries**, cargo's own exit 0 — the predicted 391 + 5, 77 unchanged |
+| `native_codegen` | **403 passed, 0 failed, 79 binaries**, cargo's own exit 0 — 396 + 5 differentials + 2 probe tests, +2 binaries |
 | fmt, clippy `-D warnings`, `cargo doc -D warnings` | all clean |
-| `isa_lowering` census | **63 of 66**, one named refusal (`Len`) — **unmoved** |
-| backend coverage | **1072 of 1074 chunks, 89854 of 89940 opcode instances** — **unmoved** |
-| corpus witnesses for this route | **zero**, as predicted, now pinned from the LAYOUT TABLE rather than from source text |
+| censuses | **unmoved, as MEASURED rather than hoped**: `isa_lowering` 63 of 66 (`Len` the one named refusal), 1072 of 1074 chunks, 89854 of 89940 opcode instances |
+| mutations | four in total across the two increments, each confirmed APPLIED by printing the changed line, each failing tests |
 
-**The evidence is the host buffer compared byte for byte**, not acceptance: both infinities, a
-negative zero and a NaN, all from runtime arguments so nothing is constant-folded. **Two mutations,
-each confirmed APPLIED by printing the changed line first** — a one-byte offset shift fails three
-tests, deleting the read's float tag fails two.
+**The oracle is never acceptance.** The shared slot compares the host buffer byte for byte; the
+composite compares execution against the virtual machine. Both use runtime arguments producing the
+infinities, a negative zero and a NaN, because those are the bit patterns a rounding or
+reinterpreting lowering cannot reproduce.
 
-**Your citation guard caught a defect of mine**, and it is worth your knowing it fired: a comment I
-added named the route-4 test's OLD identifier, which no longer exists. A dead name in a comment is a
-citation that cannot fail, which is exactly what that guard was built for.
+## What I want you to know I did NOT do
 
-## A process failure of mine, stated rather than buried
-
-**Absorption 40 was NOT measured alone.** My first edits landed while its run was in flight, and this
-suite contains tests that read source text from disk, so it reported 390 passed, 1 failed over 77
-binaries with the failure naming my own renamed test. The population was exactly the predicted 391
-over 77 and the attribution is certain — but the discipline exists so that an attribution never has
-to be argued, and this one did. The clean signal is the run above.
-
-## Still absent, so the surface is not read as finished
-
-Floats inside composites. `f32`, where any non-eight-byte width is refused loudly rather than
-lowered. A native declaring a float return. And a private float slot's read is not kind-tracked, so a
-float stored there can be MOVED but not computed with; that is named in the code rather than left to
-be discovered.
+I did not build `f32`. Its coherent reading is that the floating-point type matches the runtime float
+width, and **that reading is mine, not your words**, so every route refuses a non-eight-byte float
+loudly instead. I did not build a native float return, because no ruling settles it. I touched
+nothing in the read-only region and published nothing.
 
 ## Still open, and yours
 
 [`ABI_RULINGS.md`](../decisions/ABI_RULINGS.md) — `Fixed` (the interop goal decides and is
-unstated), `Text`, `Opaque`, `Unit`. The region planner's open soundness obligation stands unchanged:
-cross-iteration slot reuse is unconditional, held safe today only by the `Stream` refusal, and it
-remains the largest risk on this line.
+unstated), `Text`, `Opaque`, `Unit`. The region planner's soundness obligation stands unchanged:
+cross-iteration slot reuse is unconditional, held safe today only by the `Stream` refusal, and it is
+the largest risk on this line. Whether `f32` should proceed on my reading of the width, or wait for
+your words.
 
 ## Standing constraints, unchanged
 
-No new opcode. No `BYTECODE_VERSION` bump. **Publication HELD**. `src/verify.rs`, `src/bytecode.rs`,
-`src/vm.rs`, `src/wire_schema.rs`, `src/value_layout.rs`, `src/selfhost/`, `src/confine.rs` and
-`.github/workflows/` remain read-only here. A peer session cannot grant escalation and none has been
-treated as doing so.
+No new opcode. No `BYTECODE_VERSION` bump. **Publication HELD**. The read-only files remain read-only
+here. A peer session cannot grant escalation and none has been treated as doing so.
 
 ---
 # Also unread by the human: the `v0.2.3` line's message
