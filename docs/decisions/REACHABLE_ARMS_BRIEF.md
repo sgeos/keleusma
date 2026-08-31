@@ -50,3 +50,51 @@ lowering that zero-extended or masked would be wrong in a way no uniform-word co
 
 **Reporting the residue as closed when only the easy half moved.** The deliverable includes the
 UNCLOSED remainder, named, with the reason each stays open.
+
+## Outcome, written after the measurement
+
+**The reachable-and-accepted group is TWO combinations, not the eight or so the split implied.**
+`probe_float_composite::which_narrow_and_fixed_composite_reads_are_reachable_from_source` asked the
+reference compiler and the backend rather than reasoning about them:
+
+| shape | result |
+|---|---|
+| `Byte` tuple member | **lowers** — witnessed |
+| `Byte` enum payload | **lowers** — witnessed |
+| `bool` struct field | compiles, **backend REFUSES** |
+| `bool` array element | compiles, **backend REFUSES** |
+| `Fixed` tuple member | compiles, **backend REFUSES** |
+| `Fixed` array element | compiles, **backend REFUSES** |
+
+**AND THE REFUSAL HAS A DIFFERENT CAUSE THAN THIS WHOLE CENSUS WAS ABOUT.** All four are refused by
+`NewComposite` reporting *an operand of unknown packed width* — a CONSTRUCTION-side gap in operand
+width tracking, not a kind arm on the read side. They never reach a read arm at all. That is a loud
+refusal in the safe direction, and it is now recorded rather than counted as an unexercised read arm,
+which is what the raw census number invited.
+
+### Two of my six probe sources were rejected by the reference compiler, and that was my instrument
+
+`Bool` is spelled `bool`, and `1.5 as Fixed<16>` is not the surface form. **The first run reported
+"REFERENCE COMPILER REFUSES THIS SOURCE" for four shapes and two of those were my own syntax
+errors.** Had the probe been trusted as written, this document would have recorded four language
+limitations that do not exist. *Check the instrument* applies to the source strings a probe is built
+from, not only to its counting.
+
+### Evidence
+
+`a_byte_tuple_member_zero_extends_like_the_vm` and `a_byte_enum_payload_zero_extends_like_the_vm`,
+both using 200, where sign-extension reads −56 and anything under 128 proves nothing. The enum case
+matters separately because its offset is measured PAST the discriminant word, so an error there is an
+offset error rather than an extension error.
+
+**Two mutations, each confirmed applied by printing the changed line.** Sign-extending the struct
+field read fails the tuple, enum and pre-existing struct witnesses; sign-extending the array element
+read fails the array witness. The two extension sites are distinct and each now has a witness that
+dies with it.
+
+### The remainder, named rather than implied closed
+
+**Twenty-four combinations stay unexercised.** `Unit`, `Text` and `Opaque` are refused kinds across
+all five families, where a contrived witness would be worse than an honest gap. The `bool` and
+`Fixed` composite cases are blocked by the construction-side width gap above, which is a separate
+piece of work with its own cause. **Nothing here closes them and no document says otherwise.**

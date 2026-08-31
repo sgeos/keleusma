@@ -230,6 +230,16 @@ fn the_unreached_combinations_are_each_accounted_for() {
             "float_composite::a_byte_array_element_zero_extends_like_the_vm",
         ),
         (
+            "GetTupleField(Flat)",
+            "Byte",
+            "float_composite::a_byte_tuple_member_zero_extends_like_the_vm",
+        ),
+        (
+            "GetEnumField(Flat)",
+            "Byte",
+            "float_composite::a_byte_enum_payload_zero_extends_like_the_vm",
+        ),
+        (
             "GetField(Flat)",
             "Float",
             "float_composite::a_float_struct_field_agrees_with_the_vm",
@@ -292,6 +302,18 @@ fn the_unreached_combinations_are_each_accounted_for() {
     }
     assert!(unresolved.is_empty(), "{unresolved:#?}");
 
+    // **WHY THE REST STAY UNEXERCISED, MEASURED RATHER THAN ASSUMED.**
+    // `probe_float_composite::which_narrow_and_fixed_composite_reads_are_reachable_from_source`
+    // asked the reference compiler and the backend directly. Of the shapes that
+    // ordinary source can express, only the `Byte` tuple member and the `Byte`
+    // enum payload LOWER, and both are witnessed above. **A `Bool` field, a
+    // `Bool` element, a `Fixed` tuple member and a `Fixed` array element all
+    // compile and are then REFUSED** -- not by a kind arm, but by
+    // `NewComposite` reporting an operand of unknown packed width. That is a
+    // loud refusal in the safe direction, and it is a DIFFERENT cause from the
+    // one this table is about, which is why it is named here rather than
+    // silently counted as a coverage gap.
+    //
     // **THE UNEXERCISED SET IS NOT ASSERTED EMPTY.** Most of it is kinds this
     // backend refuses outright, and a contrived witness for a refused kind would
     // be worse than an honest gap. What is asserted is that the attribution

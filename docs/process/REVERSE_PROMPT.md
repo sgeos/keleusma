@@ -19,8 +19,17 @@ the four read families — and that arm ZERO-extends, a hazard the tree already 
 neighbour. `GetField × Byte` proved covered by a hand-written test after all; **`GetIndex × Byte` was
 covered by nothing**, and I closed that one, using 200 because sign-extension reads it as −56.
 
-**Twenty-six combinations remain unexercised and I did not manufacture witnesses for them.** Most are
-kinds this backend refuses outright, where a contrived witness would be worse than an honest gap.
+**The residue then split three ways, and the number had invited reading it as one backlog.** Only
+TWO combinations were the dangerous accepted-and-undriven class — a `Byte` tuple member and a `Byte`
+enum payload — and both are now witnessed. **Four more compile and are then REFUSED by
+`NewComposite` for an operand of unknown packed width**, which is a CONSTRUCTION-side gap rather than
+a read arm; counting them as unexercised read arms would have aimed the next increment at the wrong
+file. The rest are refused kinds where a contrived witness would be worse than the gap.
+**Twenty-four stay unexercised and nothing claims otherwise.**
+
+**Two of my six probe sources were my own syntax errors** — `Bool` is spelled `bool`, and my `Fixed`
+literal form was wrong — and the first run therefore reported four language limitations that do not
+exist. Trusting it would have put them in this document.
 
 **My own attribution table was wrong on its first draft**, listing `GetField × Byte` as unexercised.
 Corpus silence is not coverage, the second population has to be READ rather than assumed, and I
@@ -77,7 +86,7 @@ a figure the tree already carries from two other methods.
 
 | | result |
 |---|---|
-| `native_codegen` | **410 passed, 0 failed, 80 binaries**, cargo's own exit 0 — 396 + 5 flat + 2 probe (+2 binaries) + 3 nested + 1 residual reconciliation + 2 arm census (+1 binary) + 1 byte-array witness |
+| `native_codegen` | **413 passed, 0 failed, 80 binaries**, cargo's own exit 0 — 396 plus, across five increments, 17 tests and 3 binaries, each increment's delta recorded in its own commit |
 | fmt, clippy `-D warnings`, `cargo doc -D warnings` | all clean |
 | censuses | **unmoved, as MEASURED rather than hoped**: `isa_lowering` 63 of 66 (`Len` the one named refusal), 1072 of 1074 chunks, 89854 of 89940 opcode instances |
 | mutations | four in total across the two increments, each confirmed APPLIED by printing the changed line, each failing tests |

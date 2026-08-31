@@ -1,5 +1,38 @@
 # Design Journal
 
+## 2026-08-31 — The residue split three ways, and only two of it was what the number implied
+
+**Increment**: witnessing the unexercised kind arms that ordinary source can reach. See
+`../decisions/REACHABLE_ARMS_BRIEF.md`.
+
+**THE SPLIT IS THE FINDING.** The census left twenty-six combinations unexercised and the number
+invited reading them as one backlog. Measured, they are three different things:
+
+| group | what it is |
+|---|---|
+| `Byte` tuple member, `Byte` enum payload | **accepted and undriven** — the dangerous class; witnessed |
+| `bool` field, `bool` element, `Fixed` tuple member, `Fixed` array element | compile, then **REFUSED by `NewComposite` for an operand of unknown packed width** |
+| `Unit`, `Text`, `Opaque` across all families | refused kinds; a contrived witness would be worse than the gap |
+
+**The second group's cause is not what this census was about at all.** Those shapes never reach a
+read arm: they are stopped on the CONSTRUCTION side by operand width tracking. Counting them as
+unexercised read arms would have pointed the next increment at the wrong file.
+
+**TWO OF MY SIX PROBE SOURCES WERE MY OWN SYNTAX ERRORS.** The first run reported "REFERENCE COMPILER
+REFUSES THIS SOURCE" for four shapes; `Bool` is spelled `bool`, and `1.5 as Fixed<16>` is not the
+surface form. **Trusting that run would have recorded four language limitations that do not exist.**
+*Check the instrument* applies to the source strings a probe is built from, not only to its counting.
+
+**Evidence, and the mutations that make it non-vacuous.** Both witnesses use 200, where
+sign-extension reads −56 and anything below 128 proves nothing. The enum case earns its place
+separately because its offset is measured PAST the discriminant word, so an error there is an offset
+error rather than an extension error. Sign-extending the struct field read fails the tuple, enum and
+pre-existing struct witnesses; sign-extending the array element read fails the array witness. **The
+two extension sites are distinct and each now has a witness that dies with it** — which the earlier
+mutation had not established, since it left the array case passing.
+
+**Twenty-four combinations stay unexercised and nothing here claims otherwise.**
+
 ## 2026-08-31 — Hunting the accepted-but-unverified class on purpose, after finding one by accident
 
 **Increment**: a census of the KIND-DISCRIMINATED lowering arms, at a granularity finer than an

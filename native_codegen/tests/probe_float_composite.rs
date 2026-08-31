@@ -168,3 +168,63 @@ fn how_many_corpus_modules_carry_a_float_inside_a_composite() {
          modules, so its float population says nothing about floats"
     );
 }
+
+/// **WHICH UNEXERCISED ARMS CAN ORDINARY SOURCE REACH AT ALL?**
+///
+/// The kind-arm census left twenty-six combinations unexercised, and they are
+/// not one kind of thing: some are refused by the lowering, some are simply
+/// undriven. **Sizing witnesses for them without asking the reference compiler
+/// first would be the mistake this line has made six times.** This asks.
+#[test]
+fn which_narrow_and_fixed_composite_reads_are_reachable_from_source() {
+    let cases: &[(&str, &str)] = &[
+        (
+            "struct x Bool",
+            "struct P { b: bool, n: Word }
+             fn main(a: Word, b: Word) -> Word { let p = P { b: true, n: b }; if p.b { p.n } else { 0 } }",
+        ),
+        (
+            "array x Bool",
+            "fn main(a: Word, b: Word) -> Word { let xs = [true, false]; if xs[0] { b } else { 0 } }",
+        ),
+        (
+            "tuple x Byte",
+            "fn main(a: Word, b: Word) -> Word { let t = (200 as Byte, b); (t.0) as Word + t.1 }",
+        ),
+        (
+            "tuple x Fixed",
+            "fn main(a: Word, b: Word) -> Word { let t = (a as Fixed<16>, b); ((t.0) as Word) + t.1 }",
+        ),
+        (
+            "array x Fixed",
+            "fn main(a: Word, b: Word) -> Word { let xs = [a as Fixed<16>, b as Fixed<16>]; ((xs[1]) as Word) + b }",
+        ),
+        (
+            "enum x Byte",
+            "enum E { A(Byte), B }
+             fn main(a: Word, b: Word) -> Word { let e = E::A(200 as Byte); match e { E::A(x) => (x as Word) + b, E::B => 0 } }",
+        ),
+    ];
+
+    println!("\n================ REACHABILITY OF THE UNEXERCISED ARMS");
+    let mut compiled = 0usize;
+    for (name, src) in cases {
+        match build(src) {
+            None => println!("  {name}\n    REFERENCE COMPILER REFUSES THIS SOURCE"),
+            Some(m) => {
+                compiled += 1;
+                let r = keleusma_native::module_refusals(&m, LowerOptions::default());
+                if r.is_empty() {
+                    println!("  {name}\n    compiles and LOWERS");
+                } else {
+                    println!("  {name}\n    compiles, backend refuses: {}", r[0].1);
+                }
+            }
+        }
+    }
+    println!("================\n");
+    assert!(
+        compiled > 0,
+        "no case compiled, so this probe measures the harness rather than reachability"
+    );
+}

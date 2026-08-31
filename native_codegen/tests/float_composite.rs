@@ -239,3 +239,31 @@ fn a_byte_array_element_zero_extends_like_the_vm() {
         assert_eq!(vm, nat, "byte array element disagrees for ({a}, {b})");
     }
 }
+
+/// A `Byte` in a TUPLE, which reaches the same narrow arm through a different
+/// operand shape than the struct case does.
+#[test]
+fn a_byte_tuple_member_zero_extends_like_the_vm() {
+    // 200 discriminates: zero-extended it is 200, sign-extended −56.
+    let src = "fn main(a: Word, b: Word) -> Word { let t = (200 as Byte, b); (t.0) as Word + t.1 }";
+    for (a, b) in [(0, 0), (0, 1), (0, -5), (0, i64::MAX)] {
+        let (vm, nat) = both(src, a, b);
+        assert_eq!(vm, nat, "byte tuple member disagrees for ({a}, {b})");
+    }
+}
+
+/// A `Byte` in an ENUM PAYLOAD, which reaches the arm through the third of the
+/// four read families — the one whose offset is measured PAST the discriminant
+/// word, so a mistake there is an offset error rather than an extension error.
+#[test]
+fn a_byte_enum_payload_zero_extends_like_the_vm() {
+    let src = "enum E { A(Byte), B }
+         fn main(a: Word, b: Word) -> Word {
+             let e = E::A(200 as Byte);
+             match e { E::A(x) => (x as Word) + b, E::B => 0 }
+         }";
+    for (a, b) in [(0, 0), (0, 7), (0, -3)] {
+        let (vm, nat) = both(src, a, b);
+        assert_eq!(vm, nat, "byte enum payload disagrees for ({a}, {b})");
+    }
+}
