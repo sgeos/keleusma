@@ -336,3 +336,91 @@ fn an_out_of_range_private_index_faults_in_the_vm() {
         "index 3 into a 4-element array must not fault"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Float slots. The operator's Option A ruling settles the representation as
+// IEEE-754 bytes at the stated offset, which is what the reference's
+// `read_scalar_le` already does, so a slot access is an eight-byte load or store
+// plus a `Float` tag on the read. See `docs/decisions/FLOAT_SHARED_SLOT_BRIEF.md`.
+//
+// **THE BUFFER COMPARISON IS WHY THESE TESTS ARE HERE RATHER THAN ELSEWHERE.**
+// It pins the exact bit pattern, so the inputs chosen below are the ones a
+// value comparison would not discriminate: the infinities, a negative zero and
+// a NaN. A test over small positive values would prove almost nothing, which is
+// the symmetry trap this package has fallen into before.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_float_shared_slot_agrees_in_value_and_in_buffer() {
+    // Division supplies the interesting bit patterns from RUNTIME arguments, so
+    // nothing is constant-folded away before it reaches the target's
+    // instructions -- the trap that hid a poison `FloatToInt` for an increment.
+    let src = "shared data s { x: Float, tail: Word }
+               fn main(a: Word, b: Word) -> Word {
+                   s.tail = b; s.x = (a as Float) / (b as Float); (s.x) as Word
+               }";
+    for args in [
+        [7, 2],
+        [-7, 2],
+        [1, 0],  // +inf
+        [-1, 0], // -inf
+        [0, 0],  // NaN -- the buffer comparison pins its payload
+        [0, -1], // negative zero
+        [i64::MAX, 3],
+        [i64::MIN, 1],
+    ] {
+        assert_shared_agrees(src, &args);
+    }
+}
+
+#[test]
+fn a_float_slot_does_not_disturb_its_neighbours() {
+    // **THE WIDTH AND OFFSET CASE.** `flag` is one byte, `x` is eight, `tail` is
+    // eight. `x` is written LAST and `tail` is returned, so a float store of the
+    // wrong width or at the wrong offset overwrites a value that has already
+    // been written and is about to be read back. Writing `x` first would let the
+    // later `tail` store repair the damage and the test would pass on a broken
+    // lowering.
+    let src = "shared data s { flag: Byte, x: Float, tail: Word }
+               fn main(a: Word, b: Word) -> Word {
+                   s.flag = 255 as Byte; s.tail = b; s.x = a as Float; s.tail
+               }";
+    for args in [[1, 2], [-1, -1], [0, 0], [i64::MAX, i64::MIN]] {
+        assert_shared_agrees(src, &args);
+    }
+}
+
+#[test]
+fn a_shared_float_array_indexes_contiguously() {
+    // The contiguity proof in `resolve_shared_array` reads the element width
+    // from the kind, so a float array is the case that would break if the float
+    // element were sized as anything but eight bytes: the stride and the
+    // declared offsets would disagree and the module would be REFUSED rather
+    // than mispacked. That it lowers at all is therefore part of the evidence.
+    let src = "shared data s { xs: [Float; 4], tail: Word }
+               fn main(i: Word, v: Word) -> Word {
+                   s.tail = v; s.xs[i] = v as Float; (s.xs[0]) as Word + s.tail
+               }";
+    for args in [[0, 11], [1, 22], [2, 33], [3, 44], [0, -5]] {
+        assert_shared_agrees(src, &args);
+    }
+}
+
+#[test]
+fn an_untagged_float_from_a_private_slot_stores_correctly_into_a_shared_float_slot() {
+    // **THE CASE THAT DECIDED AGAINST A WRITE-SIDE KIND CHECK.** A private
+    // slot's read is not kind-tracked, so `h.f` reaches the store tagged `Int`
+    // while carrying correct float bits. A guard comparing the operand's kind
+    // against the slot's would refuse this program; nothing converts at the
+    // store, so refusing it would prevent no wrong byte and lose a program the
+    // reference runs. The buffer comparison is what makes "stores correctly" a
+    // measurement rather than an assertion.
+    let src = "private data h { f: Float }
+               shared data s { x: Float }
+               fn main(a: Word, b: Word) -> Word {
+                   h.f = (a as Float) / (b as Float); s.x = h.f; b
+               }";
+    for args in [[7, 2], [1, 0], [0, 0], [-3, 4]] {
+        assert_shared_agrees(src, &args);
+    }
+}

@@ -6,65 +6,72 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## The entry ABI is built, called through the real convention, and agrees bit-for-bit
+## The float shared slot is built, and it is the settled half of a ruling rather than a new decision
 
-Your Option A ruling is implemented as recorded in `ABI_RULINGS.md`. A float parameter or return
-now takes a real floating-point position in the declared function type, converted at the four
-boundary points the brief named: declaration, prologue, `Op::Return`, `Op::Call`. It is a
-`lower_module` feature, and `lower_chunk` keeps refusing a float signature, because a chunk carries
-no return type.
+`ABI_RULINGS.md` records that your Option A float ruling **also settles this slot**: with a real
+floating-point representation the slot is IEEE-754 bytes at the stated offset. That is what the
+reference already does, so nothing ambiguous was decided here. `Fixed`, `Text`, `Opaque` and `Unit`
+stay open and stay refused.
 
-The evidence is not acceptance. `entry_abi_float.rs` JITs a module and calls the symbol as
-`unsafe extern "C" fn(f64) -> f64` with runtime arguments, bit-comparing against the virtual
-machine — NaN, signed zero, infinities, a cross-call round trip, and a mixed float-parameter
-integer-return signature. A wrong convention would have lowered, verified, linked, and returned a
-plausible number from the wrong register, which is why acceptance was never going to be the check.
+**Three of the four float routes are now open.** The chunk signature opened with the entry ABI, the
+constant earlier, and the data slot now. The one still closed is a native declaring a float return,
+and it is closed because **no ruling settles it** rather than because it is hard.
 
-The session break landed mid-edit; the resume found one stray brace from the guard rewrite — the
-brace-splicing failure the brief itself warned about — deleted it, and every check ran.
+## Two things I planned wrongly, both found by running rather than by reasoning
 
-Four tests rotated their subjects because the signature route opened, each by its own standing
-instruction. The subset-boundary subject is now `Op::Len`; the float whitelist subject is now the
-uncalled native float return; the module-level-refusal pin now uses the word-width guard, made
-must-fire by overwriting the module's declared width; the width refusal itself is must-fire the
-same way.
+**I sized the work from the wrong component, for the fifth time in this line's record.** I read the
+slot resolver, concluded the increment was that function plus a tag, and wrote the brief saying so.
+Three of the four new tests then failed on a **whitelist** I had never opened, which refuses any
+opcode consuming a float-tagged operand unless it is named float-aware — and the data stores were not
+named. The resolver decides how a slot is ADDRESSED; the whitelist decides whether the opcode may run
+at all. The standing rule would have caught it: read what CONSUMES the value before sizing the work.
 
-## Still absent, so the surface is not read as finished
-
-Float shared slots — your ruling settles the layout, the lowering is not built. `f32`: the
-ruling's coherent reading wants the entry type to match the runtime float width, and today any
-non-8-byte width is refused loudly rather than lowered. Floats inside composites.
+**And the brief specified a write-side kind check that was wrong.** It reasoned by analogy with
+`Op::Call`, which refuses a kind-versus-declaration disagreement because a bitcast to a floating-point
+parameter type is a REPRESENTATION change. Nothing converts at a slot store — the operand already is
+the bit pattern — so such a guard prevents no wrong byte and refuses valid programs. It was removed
+before it shipped, and `s.x = h.f` lowers instead of being refused.
 
 ## Verification
 
 | | result |
 |---|---|
-| `native_codegen` | **391 passed, 0 failed, 0 ignored, 77 binaries**, cargo's own exit 0 — the predicted 385 + 6, 76 + 1 |
-| fmt, clippy `-D warnings`, `cargo doc -D warnings`, citation guard | all clean |
-| censuses | **unmoved, as `ABI_RULINGS.md` predicted** — no corpus module carries a float signature |
-| workspace | untouched by this increment; verified by the pre-push gate |
+| `native_codegen` | **396 passed, 0 failed, 77 binaries**, cargo's own exit 0 — the predicted 391 + 5, 77 unchanged |
+| fmt, clippy `-D warnings`, `cargo doc -D warnings` | all clean |
+| `isa_lowering` census | **63 of 66**, one named refusal (`Len`) — **unmoved** |
+| backend coverage | **1072 of 1074 chunks, 89854 of 89940 opcode instances** — **unmoved** |
+| corpus witnesses for this route | **zero**, as predicted, now pinned from the LAYOUT TABLE rather than from source text |
 
-**Absorption 39 is DONE and measured alone, and the prediction hit exactly.** Upstream `#327`, a
-doc comment in `tests/stage_command_reach.rs` plus a journal entry, zero `src/` changes; predicted
-unchanged, measured **391 passed, 0 failed, 0 ignored, 77 binaries, cargo exit 0**. The ownership
-check holds — main-crate `src/` and `tests/` byte-identical to `origin/v0.2.3` — and all
-twenty-nine ancestry anchors pass. `origin/v0.3.0` is level with the local branch; the pre-push
-gate ran green, canary included.
+**The evidence is the host buffer compared byte for byte**, not acceptance: both infinities, a
+negative zero and a NaN, all from runtime arguments so nothing is constant-folded. **Two mutations,
+each confirmed APPLIED by printing the changed line first** — a one-byte offset shift fails three
+tests, deleting the read's float tag fails two.
 
-**A session audit ran at the operator's request, and one finding was my own.** I claimed a probe
-was "no longer in the tree" off a grep for its name in file CONTENTS; `tests/probe_unsupported.rs`
-exists and does not name itself. Corrected in the tree the same session, and the probe was then
-RUN, validating the `Op::Len` subject choice independently. The handoff's stale banner, its
-nineteen-versus-twenty-nine anchor count, and its retracted 91/1117 population quote are also
-fixed. The open soundness obligation on the region planner stands unchanged and remains the
-largest risk on this line.
+**Your citation guard caught a defect of mine**, and it is worth your knowing it fired: a comment I
+added named the route-4 test's OLD identifier, which no longer exists. A dead name in a comment is a
+citation that cannot fail, which is exactly what that guard was built for.
+
+## A process failure of mine, stated rather than buried
+
+**Absorption 40 was NOT measured alone.** My first edits landed while its run was in flight, and this
+suite contains tests that read source text from disk, so it reported 390 passed, 1 failed over 77
+binaries with the failure naming my own renamed test. The population was exactly the predicted 391
+over 77 and the attribution is certain — but the discipline exists so that an attribution never has
+to be argued, and this one did. The clean signal is the run above.
+
+## Still absent, so the surface is not read as finished
+
+Floats inside composites. `f32`, where any non-eight-byte width is refused loudly rather than
+lowered. A native declaring a float return. And a private float slot's read is not kind-tracked, so a
+float stored there can be MOVED but not computed with; that is named in the code rather than left to
+be discovered.
 
 ## Still open, and yours
 
 [`ABI_RULINGS.md`](../decisions/ABI_RULINGS.md) — `Fixed` (the interop goal decides and is
-unstated), `Text`, `Opaque`, `Unit`. And the region planner's open soundness obligation stands
-unchanged: cross-iteration slot reuse is unconditional, held safe today only by the `Stream`
-refusal.
+unstated), `Text`, `Opaque`, `Unit`. The region planner's open soundness obligation stands unchanged:
+cross-iteration slot reuse is unconditional, held safe today only by the `Stream` refusal, and it
+remains the largest risk on this line.
 
 ## Standing constraints, unchanged
 

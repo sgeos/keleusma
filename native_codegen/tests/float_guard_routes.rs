@@ -19,21 +19,30 @@
 //! unimplemented, not a guard*. That is the same distinction the module-level
 //! float refusal was originally written to fix, one level down.
 //!
-//! # What each route is closed BY, which is not the same for all four
+//! # What each route is decided BY, which is not the same for all four
 //!
-//! | route | closed by |
-//! |---|---|
-//! | chunk signature | the signature scan |
-//! | chunk constant | the constant scan |
-//! | native return shape | the native-shape scan |
-//! | data-segment slot | **`resolve_shared_scalar`, at the ACCESS — see below** |
+//! | route | state | decided by |
+//! |---|---|---|
+//! | chunk signature | **OPEN at 8 bytes** | the signature scan, on width |
+//! | chunk constant | **OPEN** | the constant scan |
+//! | native return shape | closed | the native-shape scan |
+//! | data-segment slot | **OPEN at 8 bytes** | `resolve_shared_scalar`, at the ACCESS |
+//!
+//! **THREE OF THE FOUR ARE NOW OPEN, each on a ruling rather than a judgement**
+//! — the operator's Option A float ABI, recorded in
+//! `docs/decisions/ABI_RULINGS.md`. What the two width-guarded routes still
+//! refuse is a `Float` of any width other than eight bytes, where emitting a
+//! `double` would be a silently wrong number rather than a fault. Route 3 stays
+//! closed because no ruling settles a native float ABI and nothing is built
+//! behind it.
 //!
 //! The fourth is deliberately NOT re-checked in the guard, and its boundary is
-//! not where I first assumed. A module that DECLARES a float slot and never
-//! reads it LOWERS; every access refuses. That is safe by construction rather
-//! than by refusal, since an unread slot puts no float on the operand stack.
-//! `resolve_shared_scalar` predates this work, so a second check here would be a parallel
-//! model that could drift from it; this file tests the EXISTING refusal.
+//! not where I first assumed. A module that DECLARES a slot this backend cannot
+//! lower and never reads it LOWERS; the ACCESS is where a value would arrive, so
+//! the access is where the decision belongs. That placement is why opening the
+//! float case needed no module-level change at all. `resolve_shared_scalar`
+//! predates this work, so a second check here would be a parallel model that
+//! could drift from it; this file tests the EXISTING behaviour.
 use keleusma::bytecode::Module;
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 use keleusma_native::{LowerOptions, lower_module};
@@ -229,51 +238,74 @@ fn a_native_declaring_a_word_return_is_not_refused_by_the_float_guard() {
     }
 }
 
-/// **Route 4: a float data slot — and the boundary is the ACCESS, not the
-/// declaration.**
+/// **Route 4: a float data slot — OPEN at eight bytes, refused at any other.**
 ///
-/// I first asserted that declaring a float slot refuses the module. **It does
-/// not, and this test caught me.** Measured:
+/// **This route OPENED with the float shared slot.** The operator's Option A
+/// ruling settles the slot as IEEE-754 bytes at the stated offset, which is
+/// exactly what the reference's `read_scalar_le` does, so a read is an
+/// eight-byte load and a `Float` tag. See
+/// `docs/decisions/FLOAT_SHARED_SLOT_BRIEF.md`.
+///
+/// **The measurement that shaped this route is kept, because it is still the
+/// reason the guard sits where it does.** Before the route opened:
 ///
 /// | program | result |
 /// |---|---|
-/// | float slot, never read | **LOWERS** |
+/// | float slot, never read | **LOWERED** |
 /// | float slot, read | refused, `UnsupportedDataSlot` |
 ///
-/// **The corrected claim is stronger than the one I got wrong.** A declared but
-/// unread float slot puts no float on the operand stack, so there is nothing for
-/// the integer arithmetic to miscompile — it is safe by construction rather than
-/// by refusal. Every ACCESS refuses, which is the point at which a float would
-/// actually reach the stack.
+/// The boundary was the ACCESS and not the declaration, and that placement is
+/// why opening the float case needed no change at module level at all.
 ///
-/// Closed by `resolve_shared_scalar`, which predates this work, so this tests the EXISTING
-/// refusal rather than adding a parallel check that could drift from it.
+/// **What still refuses is the WIDTH**, and this build's `Float` is eight bytes,
+/// so the refusal is unreachable by compiling a program. The module's declared
+/// width is overwritten after compilation to make it a must-fire fact rather
+/// than an unreachable claim — the same technique route 1 uses, for the same
+/// reason.
+///
+/// The open half — that the lowered access agrees with the virtual machine
+/// **byte for byte in the host buffer** — is exercised by `shared_data.rs`,
+/// which is where the buffer-comparing oracle lives.
 #[test]
-fn reading_a_float_data_slot_refuses_the_module() {
+fn a_float_data_slot_lowers_at_eight_bytes_and_refuses_at_any_other_width() {
     let unread = "shared data s { x: Float }\nfn p() -> Word { 0 }\nfn main() -> Word { p() }";
     let read =
         "shared data s { x: Float }\nfn p() -> Word { s.x as Word }\nfn main() -> Word { p() }";
 
-    let Some(m_read) = build(read) else {
+    let Some(mut m_read) = build(read) else {
         println!("  the reference compiler will not build a Float shared slot; route 4 is");
         println!("  unreachable from source and cannot be tested through it");
         return;
     };
-    let why = refused(&m_read).expect("READING a float data slot must refuse the module");
+    assert_eq!(
+        1u32 << m_read.float_bits_log2 >> 3,
+        8,
+        "this build's Float is not 8 bytes, so both halves of this test \
+         describe a different build than the one running it"
+    );
+    assert!(
+        refused(&m_read).is_none(),
+        "READING an 8-byte float data slot refuses again; either the float \
+         shared slot was removed or another guard now fires first: {:?}",
+        refused(&m_read)
+    );
+
+    // The width refusal, made must-fire by overwriting the declared width.
+    m_read.float_bits_log2 = 5;
+    let why = refused(&m_read).expect("a 4-byte float data slot must refuse the module");
     assert!(
         why.to_lowercase().contains("float"),
         "refused, but not in a way naming the float slot: {why}"
     );
 
-    // The other half, asserted so the claim above stays honest: the unread case
-    // LOWERS, and that is recorded as safe-by-construction rather than quietly
-    // treated as if it were refused.
+    // The declaration-versus-access placement, kept asserted: an UNREAD slot
+    // lowers, which is what it did before the route opened and what it must
+    // still do now that reading it lowers too.
     if let Some(m_unread) = build(unread) {
         assert!(
             refused(&m_unread).is_none(),
-            "an UNREAD float slot is now refused too. That is a stricter guard \
-             than measured and not a defect, but this file documents the access \
-             as the boundary -- update the claim rather than deleting it"
+            "an UNREAD float slot is refused, which contradicts the placement \
+             this file records -- update the claim rather than deleting it"
         );
     }
 }

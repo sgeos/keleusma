@@ -30,13 +30,24 @@ use std::collections::BTreeSet;
 /// it does skip.
 const SKIPPABLE: &[&str] = &[
     "a_deeper_call_chain_raises_the_bound",
+    // **A RENAME, NOT AN ADDITION.** This entry replaced route 4's earlier
+    // refusal test when the float shared slot opened that route. The test kept
+    // its early return for a reference compiler that cannot build a `Float`
+    // slot, and changed only what it asserts once it gets past it. The
+    // population is unchanged at ten, which is the fact this pin exists to
+    // state.
+    //
+    // **The old name is deliberately not written here.** The citation guard
+    // caught this comment naming it: a citation that resolves to nothing reads
+    // as coverage while being none, and a dead test name in a comment is
+    // exactly that shape whether or not it was ever meant as a citation.
+    "a_float_data_slot_lowers_at_eight_bytes_and_refuses_at_any_other_width",
     "a_linked_native_object_agrees_with_the_vm",
     "a_linked_object_with_natives_and_a_data_segment_agrees_with_the_vm",
     "a_native_stack_bound_is_computable_end_to_end",
     "m2_a_buffer_large_enough_never_reaches_the_arena_at_run_time",
     "m2_a_retcon_coroutine_spawns_resumes_and_releases_when_linked",
     "m3_timing_a_resumption_against_an_equivalent_direct_call",
-    "reading_a_float_data_slot_refuses_the_module",
     "spike_report_real_native_frame",
     "trap_child_runs_one_module_natively",
 ];

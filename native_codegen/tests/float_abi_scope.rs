@@ -143,3 +143,60 @@ fn what_a_float_abi_would_unblock() {
          refusal here is a regression rather than the old guard"
     );
 }
+
+/// **THE FLOAT SLOT ROUTE'S CORPUS POPULATION, READ AS DATA.**
+///
+/// The prediction recorded before the float shared slot was built was that no
+/// corpus module declares one, so the route has zero corpus witnesses and every
+/// census stays where it is. **A crude scan of the corpus SOURCE TEXT agrees,
+/// and that instrument is exactly the one this package has already been wrong
+/// with**: a regular expression over source is a model of the compiler, and the
+/// fourth instrument error found on the sibling line was that shape. This reads
+/// the module's own layout table instead — the kind tags the backend itself
+/// dispatches on.
+#[test]
+fn the_float_shared_slot_route_has_no_corpus_witness() {
+    let mut modules = 0usize;
+    let mut with_float_slot: Vec<String> = Vec::new();
+    let mut shared_slots = 0usize;
+
+    for p in common::corpus_sources() {
+        let Ok(src) = std::fs::read_to_string(&p) else {
+            continue;
+        };
+        let Some(m) = compiled(&src) else { continue };
+        modules += 1;
+        let Some(dl) = m.data_layout.as_ref() else {
+            continue;
+        };
+        shared_slots += dl.shared_layout.len();
+        if dl.shared_layout.iter().any(|e| e.kind == FLOAT_TAG) {
+            with_float_slot.push(p.file_name().unwrap().to_string_lossy().to_string());
+        }
+    }
+
+    println!("\n================ FLOAT SHARED SLOT, corpus population");
+    println!("  corpus modules compiled  : {modules}");
+    println!("  shared slots declared    : {shared_slots}");
+    println!(
+        "  modules with a FLOAT slot: {} {with_float_slot:?}",
+        with_float_slot.len()
+    );
+    println!("================\n");
+
+    // **NON-VACUITY.** A sweep that found no shared slots at all would report an
+    // empty float population for the wrong reason, and would keep reporting it
+    // if the layout table moved or the corpus roots broke.
+    assert!(
+        shared_slots > 0,
+        "the sweep found no shared slots anywhere in {modules} modules, so its \
+         empty float population says nothing about floats"
+    );
+    assert!(
+        with_float_slot.is_empty(),
+        "a corpus module now declares a FLOAT shared slot: {with_float_slot:?}. \
+         The float slot route acquired a corpus witness it did not have when it \
+         was built, so the censuses may legitimately move -- re-derive them \
+         rather than reading a movement as a regression"
+    );
+}

@@ -16,9 +16,15 @@
 //! not the same set of opcodes it looks like. `Op::Add`, `Op::Sub`, `Op::Mul`
 //! and `Op::Neg` do **not** implement `Word` arithmetic; consolidation B
 //! narrowed them away from `Int` operands and the compiler emits
-//! `Checked{Add,Sub,Mul,Neg}; PopN(2)` instead. Those four unchecked opcodes
-//! remain unsupported here because they are reachable only for `Byte`, `Fixed`
-//! and `Float`, none of whose representations are settled.
+//! `Checked{Add,Sub,Mul,Neg}; PopN(2)` instead. Those four unchecked opcodes are
+//! reachable only for `Byte`, `Fixed` and `Float`.
+//!
+//! **The clause that used to follow -- that none of those three representations
+//! is settled -- EXPIRED when the float slices landed.** `Float` is settled by
+//! the operator's Option A ruling and lowered, and these arms dispatch on the
+//! operand's kind tag rather than refusing wholesale. `Byte` and `Fixed` are not
+//! restated here, because the increment that corrected this sentence measured
+//! neither.
 //!
 //! All 66 opcodes are emitted by the reference compiler, so there is no dead
 //! region of the instruction set to skip. Verified by enumeration, 2026-08-08.
@@ -180,9 +186,14 @@ fn width_of_tag(t: TypeTag) -> Width {
         TypeTag::Fixed => Width::Scalar(8),
         TypeTag::Word => Width::Scalar(8),
         // `Composite` stays unknown because a body length is genuinely not
-        // carried on the tag. `Float` stays unknown because this backend has no
-        // float representation at all -- redundant with the module-level guard
-        // that refuses a float by every route, and kept as a second line.
+        // carried on the tag. `Float` stays unknown too, but **the REASON has
+        // changed and the old one is now false on both halves**: it read "this
+        // backend has no float representation at all -- redundant with the
+        // module-level guard that refuses a float by every route", and the
+        // backend does have one while three of the four routes are open. What
+        // is still absent is a float INSIDE A COMPOSITE, so a body width for a
+        // float field would be a guess, which is the one thing this function
+        // exists not to do.
         _ => Width::Unknown,
     }
 }
@@ -948,6 +959,7 @@ fn resolve_shared_scalar<'ctx>(
     slot: u32,
     i8t: IntType<'ctx>,
     i64t: IntType<'ctx>,
+    float_bytes: u32,
 ) -> Result<(u32, IntType<'ctx>, u8), LowerError> {
     if slot >= data.shared_count {
         return Err(LowerError::UnsupportedDataSlot {
@@ -973,9 +985,17 @@ fn resolve_shared_scalar<'ctx>(
     match e.kind {
         SCALAR_INT => Ok((e.offset, i64t, e.kind)),
         SCALAR_BYTE | SCALAR_BOOL => Ok((e.offset, i8t, e.kind)),
+        // **A FLOAT SLOT IS AN EIGHT-BYTE LOAD AND A TAG.** The operator's
+        // Option A ruling settles this slot as IEEE-754 bytes at the stated
+        // offset, and the reference agrees: `read_scalar_le`'s `Float` arm at
+        // eight bytes is `f64::from_le_bytes` over exactly this offset. The
+        // operand stack already carries a float as its bit pattern in an `i64`,
+        // so no conversion happens here at all -- what the caller must do is
+        // TAG the pushed operand `Float`, which the returned kind says.
+        SCALAR_FLOAT_TAG if float_bytes == 8 => Ok((e.offset, i64t, e.kind)),
         other => Err(LowerError::UnsupportedDataSlot {
             slot,
-            why: alloc_format_kind(other),
+            why: alloc_format_kind(other, float_bytes),
         }),
     }
 }
@@ -994,7 +1014,7 @@ fn resolve_shared_scalar<'ctx>(
 /// though the identical-looking exclusion on `GetField` and `GetIndex` was
 /// lifted. Settling a host-visible layout by writing whichever version compiles
 /// is the trade this line refuses.
-fn alloc_format_kind(tag: u8) -> String {
+fn alloc_format_kind(tag: u8, float_bytes: u32) -> String {
     match tag {
         0 => String::from("Unit slot; the flat representation of Unit is unsettled"),
         // **The REPRESENTATION is settled; the host-visible SCALE is not.**
@@ -1013,7 +1033,16 @@ fn alloc_format_kind(tag: u8) -> String {
             "Fixed slot; the host-visible fraction-bit scale is unspecified, so two \
              programs whose values differ by a factor of 2^N share one layout",
         ),
-        5 => String::from("Float slot; float support is a later workstream"),
+        // **REACHED ONLY AT A NON-EIGHT-BYTE FLOAT.** The eight-byte case is
+        // lowered above, per the operator's Option A ruling as recorded in
+        // `docs/decisions/ABI_RULINGS.md`. A narrower `Float` is refused rather
+        // than widened, on the same ground as every other float route on this
+        // branch: a float of the wrong width is a silently wrong number and not
+        // a fault.
+        SCALAR_FLOAT_TAG => format!(
+            "Float slot in a module whose Float is {float_bytes} bytes wide; only an \
+             8-byte Float has a settled slot ABI here"
+        ),
         6 => String::from("Text slot; string representation is Workstream C"),
         7 => String::from("Opaque slot; host handles are Workstream D"),
         n => format!("unknown scalar kind tag {n}"),
@@ -1021,10 +1050,11 @@ fn alloc_format_kind(tag: u8) -> String {
 }
 
 /// Width in bytes of a shared scalar kind this backend lowers.
-fn shared_scalar_width(kind: u8) -> Option<u32> {
+fn shared_scalar_width(kind: u8, float_bytes: u32) -> Option<u32> {
     match kind {
         SCALAR_INT => Some(8),
         SCALAR_BYTE | SCALAR_BOOL => Some(1),
+        SCALAR_FLOAT_TAG if float_bytes == 8 => Some(8),
         _ => None,
     }
 }
@@ -1043,6 +1073,7 @@ fn resolve_shared_array(
     data: &DataCtx<'_>,
     base: u32,
     count: u32,
+    float_bytes: u32,
 ) -> Result<(u32, u32, u8), LowerError> {
     let refuse = |why: String| LowerError::UnsupportedDataSlot { slot: base, why };
     if count == 0 {
@@ -1057,8 +1088,8 @@ fn resolve_shared_array(
             "shared array of composite bodies; Workstream C",
         )));
     }
-    let width =
-        shared_scalar_width(first.kind).ok_or_else(|| refuse(alloc_format_kind(first.kind)))?;
+    let width = shared_scalar_width(first.kind, float_bytes)
+        .ok_or_else(|| refuse(alloc_format_kind(first.kind, float_bytes)))?;
     for i in 1..count {
         let e = data
             .shared_layout
@@ -1580,11 +1611,18 @@ fn lower_module_with<'ctx>(
     // and was not written for one refuses at the operand**. The coarse route
     // guard is therefore replaced by a finer check, not removed.
     //
-    // **The other three routes stay closed because nothing is built behind
-    // them**: a float in a chunk signature needs the entry ABI, a float native
-    // return needs a native float ABI, and a float data slot is an open ABI
-    // question. Opening a route with no lowering behind it would admit a module
-    // that is compiled wrong rather than refused.
+    // **ROUTES 1 AND 4 ARE NOW OPEN TOO, each on a ruling rather than on a
+    // judgement.** The chunk signature opened with the entry ABI, and the DATA
+    // SLOT opened with the float shared slot -- the operator's Option A ruling
+    // settles that slot as IEEE-754 bytes at the stated offset, which is what
+    // the reference's `read_scalar_le` already does. See
+    // `docs/decisions/ABI_RULINGS.md` and
+    // `docs/decisions/FLOAT_SHARED_SLOT_BRIEF.md`.
+    //
+    // **Route 3 stays closed because nothing is built behind it**: a float
+    // native return needs a native float ABI, which no ruling settles. Opening a
+    // route with no lowering behind it would admit a module that is compiled
+    // wrong rather than refused.
     //
     // Verified end to end rather than by lowering alone: `float_witness.kel` runs
     // in the corpus differential against the virtual machine. See
@@ -1599,21 +1637,23 @@ fn lower_module_with<'ctx>(
              operand stack as a float this backend cannot represent"
         )));
     }
-    // Route 4, the data segment, is closed AT THE ACCESS rather than at the
-    // declaration, and deliberately not re-checked here. `resolve_shared_scalar` admits
-    // only `SCALAR_INT`, `SCALAR_BYTE` and `SCALAR_BOOL`, refusing anything else
-    // as `UnsupportedDataSlot`.
+    // Route 4, the data segment, is decided AT THE ACCESS rather than at the
+    // declaration, and deliberately not re-checked here. `resolve_shared_scalar`
+    // admits `SCALAR_INT`, `SCALAR_BYTE`, `SCALAR_BOOL` and -- since the float
+    // shared slot landed -- `SCALAR_FLOAT_TAG` at an eight-byte `Float`,
+    // refusing everything else as `UnsupportedDataSlot`. `Fixed` is among the
+    // refusals and stays there: its gap is the host-visible SCALE, not the
+    // representation.
     //
-    // **Measured, because the obvious statement is wrong**: a module that
-    // DECLARES a float slot and never reads it LOWERS. That is safe by
-    // construction rather than by refusal -- an unread slot puts no float on the
-    // operand stack, so there is nothing for the integer arithmetic below to
-    // miscompile. Every ACCESS refuses, which is the point where a float would
-    // actually arrive.
+    // **The measured fact that shaped this placement still holds**: a module
+    // that DECLARES a slot this backend cannot lower and never reads it LOWERS,
+    // because an unread slot puts nothing on the operand stack. The access is
+    // where a value would actually arrive, so the access is where the decision
+    // belongs -- which is also why opening the float case needed no change here.
     //
     // A second check here would be a parallel model of a guard that already
     // exists and the two could drift. `float_guard_routes.rs` tests this route
-    // through the EXISTING refusal.
+    // through the EXISTING behaviour.
 
     // A delegated suspension affects exactly TWO chunks: the entry, whose tail
     // call becomes the return, and the callee, whose yields become returns.
@@ -2649,9 +2689,55 @@ fn lower_chunk_body<'ctx>(
             let (required, _) = keleusma::verify::op_depth_effect(op, chunk);
             let consumes_float =
                 (0..required as usize).any(|i| st.kind_at(i) == OperandKind::Float);
-            let float_aware = matches!(
-                op,
-                Op::Add
+            // **A DATA STORE IS FLOAT-AWARE ONLY WHEN THE SLOT IS A FLOAT
+            // SLOT**, which is the same POSITIONAL shape as `Op::Call` and is
+            // handled the same way: not a blanket entry in the list below,
+            // because a blanket entry would also admit a float stored into a
+            // `Word` or `Byte` slot, where the reference writes a different
+            // number of bytes with a different meaning.
+            //
+            // A float into a FLOAT slot is a pure bit copy -- the reference's
+            // `write_scalar_le` stores IEEE-754 little-endian at the same
+            // offset, and the operand already IS that bit pattern -- so nothing
+            // is interpreted and there is nothing to get wrong.
+            //
+            // The converse direction needs no entry at all: an untagged operand
+            // carrying float bits, which is what a PRIVATE float slot's read
+            // produces, never reaches this check because it is not tagged
+            // `Float`.
+            //
+            // **A PRIVATE SLOT IS ADMITTED TOO, on a DIFFERENT ground, and the
+            // two reasons are kept apart on purpose.** A shared slot's layout is
+            // host-visible and the admission above rests on the reference
+            // writing the same bytes. A private slot's layout is this backend's
+            // own, unobservable from outside a running program, and the store is
+            // a full-width `i64` bit copy at `PRIVATE_SLOT_BYTES` -- it
+            // truncates nothing and interprets nothing.
+            //
+            // **The residual is named rather than left implicit**: a private
+            // slot's READ is not kind-tracked, so a float stored there comes
+            // back tagged `Int` and every float OPERATION on it refuses at the
+            // operand. Storing one is therefore useful only to move it, which is
+            // exactly what `s.x = h.f` does. Closing that would mean tracking
+            // kinds per private slot, which this increment does not do.
+            let float_store_into_a_float_slot = float_bytes == 8
+                && match op {
+                    Op::SetData(slot) | Op::SetDataIndexed(slot, _) => {
+                        data.has_data
+                            && if *slot < data.shared_count {
+                                data.shared_layout
+                                    .get(*slot as usize)
+                                    .is_some_and(|e| e.kind == SCALAR_FLOAT_TAG)
+                            } else {
+                                *slot < data.slot_count && PRIVATE_SLOT_BYTES == 8
+                            }
+                    }
+                    _ => false,
+                };
+            let float_aware = float_store_into_a_float_slot
+                || matches!(
+                    op,
+                    Op::Add
                     | Op::Sub
                     | Op::Mul
                     | Op::FloatToInt
@@ -2683,7 +2769,7 @@ fn lower_chunk_body<'ctx>(
                     // and is caught below rather than by this list — a blanket
                     // entry here would admit both.
                     | Op::Call(_, _)
-            );
+                );
             // The positional half of the `Op::Call` admission.
             if let Op::Call(idx, arg_count) = op
                 && consumes_float
@@ -4095,7 +4181,8 @@ fn lower_chunk_body<'ctx>(
                     // proves the whole range contiguous and uniform first, then
                     // computes `first + index * width`.
                     let (addr, width, kind) = if let Some(ix) = index {
-                        let (first_off, w, k) = resolve_shared_array(&data, slot, bound)?;
+                        let (first_off, w, k) =
+                            resolve_shared_array(&data, slot, bound, float_bytes)?;
                         let byte =
                             st.b.build_int_add(
                                 i64t.const_int(u64::from(first_off), false),
@@ -4114,7 +4201,8 @@ fn lower_chunk_body<'ctx>(
                         };
                         (a, if w == 8 { i64t } else { i8t }, k)
                     } else {
-                        let (byte_off, w, k) = resolve_shared_scalar(&data, slot, i8t, i64t)?;
+                        let (byte_off, w, k) =
+                            resolve_shared_scalar(&data, slot, i8t, i64t, float_bytes)?;
                         let a = unsafe {
                             st.b.build_in_bounds_gep(
                                 i8t,
@@ -4149,8 +4237,34 @@ fn lower_chunk_body<'ctx>(
                         } else {
                             v
                         };
-                        st.push(v);
+                        // **THE TAG IS THE WHOLE OF THE FLOAT WORK ON THIS
+                        // PATH.** The eight bytes loaded are already the value:
+                        // the reference stores IEEE-754 little-endian at this
+                        // offset and the operand stack carries a float as its
+                        // bit pattern. Push it untagged and the application
+                        // binary interface is correct while every float
+                        // operation downstream refuses the operand -- the same
+                        // detail a float PARAMETER's local needed.
+                        if kind == SCALAR_FLOAT_TAG {
+                            st.push_k(v, Width::Scalar(8), OperandKind::Float);
+                        } else {
+                            st.push(v);
+                        }
                     } else {
+                        // **THE WRITE SIDE NEEDS NO KIND CHECK, AND THAT IS A
+                        // CONCLUSION RATHER THAN AN OMISSION.** `Op::Call`
+                        // refuses a kind-versus-declaration disagreement because
+                        // the bitcast to the callee's floating-point parameter
+                        // type is a REPRESENTATION change, and the wrong one
+                        // produces a plausible number. Nothing converts here:
+                        // the operand already IS the bit pattern, and the same
+                        // eight bytes are stored whatever the tag says. A guard
+                        // would therefore prevent no wrong byte while REFUSING
+                        // valid programs -- concretely `s.x = h.f` for a private
+                        // float slot `h.f`, whose read is not kind-tracked and so
+                        // arrives tagged `Int` while carrying correct float bits.
+                        // That program lowers, and `shared_data.rs` pins it
+                        // agreeing with the reference byte for byte.
                         let v = st.pop();
                         let narrowed = if width == i64t {
                             v

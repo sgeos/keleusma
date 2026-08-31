@@ -1,5 +1,72 @@
 # Design Journal
 
+## 2026-08-30 — The float shared slot, and a guard I had not read refused three of four tests
+
+**Increment**: the `Float` shared data slot, kind tag 5. This is the settled half of the operator's
+Option A ruling: `ABI_RULINGS.md` records that a real floating-point representation **also settles
+this slot**, as IEEE-754 bytes at the stated offset. Nothing ambiguous was decided. See
+`../decisions/FLOAT_SHARED_SLOT_BRIEF.md`.
+
+**Why it looked small, and why that reading was right about the mechanism**: there is no
+representation change at this boundary. The reference decodes the slot with `read_scalar_le`, whose
+float arm at eight bytes is `f64::from_le_bytes`, and the operand stack already carries a float as
+its bit pattern in an `i64`. So the load is the same eight-byte load a `Word` slot gets. The only
+float-specific work on the read is the **TAG** — push it untagged and the application binary
+interface is correct while every float operation downstream refuses the operand, which is the same
+detail the entry ABI's parameter locals needed and which neither plan named.
+
+**THE SIZING WAS STILL WRONG, IN THE EXACT SHAPE THIS FILE HAS RECORDED FIVE TIMES.** I read
+`resolve_shared_scalar`, concluded the work was that function plus a tag, and wrote a brief saying
+so. Three of the four new tests then failed on a guard I had never opened: a **whitelist** ahead of
+the opcode dispatch refuses any opcode that consumes a `Float`-tagged operand unless it is named
+float-aware, and `SetData` and `SetDataIndexed` are not named. The resolver decides how a slot is
+addressed; the whitelist decides whether the opcode may run at all. **I reasoned from the component I
+was changing about what gates the operation, and the requirement lived at neither — it lived where
+the operand is admitted.** The rule this line already carries would have found it: read what
+CONSUMES the value before sizing work to produce it.
+
+**And the brief's write-side design was wrong, which running it is what showed.** It specified a kind
+check in both directions, by analogy with `Op::Call`. **The analogy is false.** `Op::Call` refuses a
+kind-versus-declaration disagreement because the bitcast to a floating-point parameter type is a
+representation change and the wrong one yields a plausible number. Nothing converts at a slot store:
+the operand already IS the bit pattern and the same eight bytes are written whatever the tag says. A
+guard there prevents no wrong byte and refuses valid programs. It was removed before it shipped.
+
+**What replaced it is POSITIONAL, like `Op::Call`'s admission and for the same reason.** A data store
+is float-aware only when the target is a float slot — a blanket entry would also admit a float
+stored into a `Word` or `Byte` slot, where the reference writes different bytes with a different
+meaning.
+
+**A private slot is admitted too, and the two grounds are deliberately kept apart.** A shared slot's
+layout is host-visible and its admission rests on the reference writing the same bytes. A private
+slot's layout is this backend's own, unobservable from outside a running program, and the store is a
+full-width bit copy at `PRIVATE_SLOT_BYTES` that truncates and interprets nothing. **The residual is
+named**: a private slot's read is not kind-tracked, so a float stored there returns tagged `Int` and
+every float operation on it refuses. Storing one is useful only to move it, which is what
+`s.x = h.f` does — and that program is now pinned agreeing with the reference rather than asserted.
+
+**The evidence is the buffer, not acceptance.** `shared_data.rs` compares the host buffer byte for
+byte after both runs, which pins the exact bit pattern — so the inputs are the ones a value
+comparison would not discriminate: both infinities, a negative zero, and a NaN, all produced by
+dividing RUNTIME arguments so nothing is constant-folded before it reaches the target's
+instructions. The neighbour test writes the float LAST and returns the neighbour, because writing it
+first would let the later store repair the damage and pass on a broken lowering.
+
+**Two mutations, each confirmed APPLIED by printing the changed line before running** — the
+three-failure-point rule the sibling line paid for. Shifting the float slot's offset by one byte
+fails three tests; deleting the `Float` tag on the read fails two. Neither guard is believed.
+
+**A process failure of my own, stated rather than buried.** The absorption-40 measurement and my
+first edits overlapped, and the suite has tests that read source text from disk, so the run reported
+**390 passed, 1 failed, 77 binaries** with the failure naming my own renamed test in its diff. The
+population is exactly the predicted 391 over 77 binaries and the single failure is fully attributed —
+but "measure absorptions ALONE" exists precisely so an attribution does not have to be argued, and
+this one has to be. The clean signal is the post-increment run.
+
+**Still absent, so the surface is not read as finished**: floats inside composites; `f32`, where any
+non-eight-byte width is refused loudly rather than lowered; a native declaring a float return, the
+one float route of four still closed, and closed because no ruling settles it.
+
 ## 2026-08-30 — The entry ABI lands at the four boundary points, and four tests rotate their subjects
 
 **Increment**: the float entry ABI, implementing the operator's Option A ruling as recorded in
