@@ -141,6 +141,23 @@ fn constant_loads_in_a_loop_stay_fast() {
          your own worktree, an unscoped pattern kills a sibling session's live \
          run).\n\
          \n\
+         AND CHECK `uptime` FIRST: \"ALONE\" MEANS THE MACHINE IS IDLE, NOT THAT \
+         YOU STOPPED YOUR OWN WORK. On 2026-08-30 an agent satisfied every \
+         instruction above -- no cargo processes of its own, no sibling worktree \
+         binaries -- and still measured under a load average of 15, because a \
+         game and a browser were consuming more processor than everything else \
+         combined. It then reported the red as \"confirmed false\" on that \
+         measurement, and separately reported a \"thin 1.8x margin\" that was \
+         pure artifact. Measured on the same tree minutes apart: 1.196s idle, \
+         16.51s, 35.23s and 36.79s under load -- a 31x spread saying nothing \
+         about the code. A load average above about 4 makes this number \
+         meaningless whoever owns the processes.\n\
+         \n\
+         THE HEALTHY FIGURE IS ABOUT 1.2s, a 25x margin under the ceiling, and \
+         the `v0.3.0` line independently recorded 1.20s for its equivalent. If \
+         you measure single-digit seconds you are still under load; if you \
+         measure ~1.2s and it still fails, that is real.\n\
+         \n\
          If it still fails alone: do NOT raise the ceiling as a first response. \
          This guard exists because the wire-format v2 cutover shipped a runtime \
          forty times slower with every correctness test passing. Profile the VM's \

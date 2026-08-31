@@ -843,6 +843,111 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-30 — Session 58, first increment: resumption, an audit, and the string ruling received
+
+No new capability. Three deliverables: the stranded increment landed, the line audited, and the
+string ABI ruling converted from a claim read off another branch into a ruling of record.
+
+### The stranded increment
+
+Session 57's eighth increment was committed on an unpushed feature branch and the session ended
+before it moved. Resumption found it, verified the branch was cut from the current tip, pushed it
+through the pre-push gate, opened pull request #328, confirmed a CI run actually started by counting
+runs rather than checks, and merged at the CI-verified commit on 22 of 22 green. The merge count on
+`origin/v0.2.3` is 178.
+
+### The audit, and what it found
+
+Everything CI checks was left to CI, which was running on the exact tree; the audit covered what CI
+cannot see. The handoff's full validity block passed, every pin matching. The findings that
+survived:
+
+- **49 local branches fully merged into `origin/v0.2.3` were pruned**, safe-delete only, with a
+  hash-bearing manifest at `tmp/branch-prune-manifest-20260830.txt` per the two earlier manifests.
+  Origin-side pruning of the 97 merged remote branches is recommended, not taken, because remote
+  refs are outward-facing and the other line rebases from origin.
+- **`feat/native-coverage-spike` holds 29 commits on neither origin branch.** The hypothesis, not
+  verified, is pre-rebase duplicates of `v0.3.0` work relanded under new hashes. The branch is the
+  other line's domain and is flagged to them rather than judged here.
+- **Appendix B hygiene is clean.** One tracked-file match for the held-back context, in
+  `docs/decisions/BACKLOG.md`, and it is the engineering-property class the tracked documents may
+  carry. The same line says the opcode count is 69, a claim true when written and undated, against
+  the actual 66. Cosmetic, recorded here rather than edited, because that document is an
+  implementation history.
+- **The document guards carry no feature gate**, so they run in every CI job.
+
+### The ruling
+
+The operator confirmed directly, in session, that the string ABI ruling binds this line. The
+provenance discipline mattered twice over: the ruling was deliberately not acted on while it was
+only readable on `origin/v0.3.0`, and the receipt is now recorded with both events distinguished in
+`docs/decisions/STRING_ABI_OPTION_B.md`, named distinctly from the other line's file because they
+rebase onto this branch and an add-add collision would conflict on every sync. The operator also
+asked whether the proof work is merged; verified against the tree, merge commit `8414a1a1` is an
+ancestor of `origin/v0.2.3` and `docs/proofs/` is byte-unchanged from the audited commit
+`f779be7d`.
+
+### The queue after this increment
+
+The string ABI work is first, ahead of the region-kind wiring scouted at resumption. That scout
+established the six skipped region kinds have their formatters already dispatched in the stage, so
+wiring `SHARED_LAYOUT` and `DATA_INIT`, the two kinds carrying no name index, is driver-only work
+with no byte-identity perturbation. A model handoff for routine work is anticipated; the channels
+are written for a successor that derives figures rather than trusts them, which is the only
+property a handoff across models needs.
+
+---
+
+## 2026-08-30 — Session 57, eighth increment: the canary's guidance gains the one instruction it lacked, learned by violating it three times
+
+The perf canary's failure message is excellent and was missing one line. It tells the reader to rule
+out concurrent load, to re-run alone, and to reap orphaned binaries **scoped to their own worktree**.
+It never says to look at the machine.
+
+**I satisfied every instruction it gives and still measured under a load average of fifteen.**
+
+### THE THREE FAILURES, BECAUSE THE GUIDANCE IS ONLY CREDIBLE WITH THEM ATTACHED
+
+1. Declared the red **"false, confirmed rather than assumed"** on a 16.51s measurement taken with no
+   cargo processes of my own running. That was not a control: the check was for MY processes, never
+   for the machine.
+2. Reported a **"thin 1.8x margin, not much headroom"** as a finding worth flagging to a future
+   session. Pure artifact. **It was one iteration from entering the handoff as a durable
+   observation**, where a later reader would have treated it as evidence.
+3. Wrote the guidance about checking load, then **immediately measured under a load average of 22**
+   with my own segment C running, and got 71s.
+
+### THE NUMBERS, WHICH ARE THE ACTUAL DELIVERABLE
+
+| condition | measured |
+|---|---|
+| machine genuinely idle | **1.196s** |
+| under load | 16.51s, 35.23s, 36.79s, 71.04s |
+
+**A 31x spread on one unchanged tree.** The healthy figure is ~1.2s against a 30s ceiling -- a 25x
+margin, not a thin one -- and the `v0.3.0` line independently recorded 1.20s for its equivalent.
+Two sessions, same machine, same figure to three digits.
+
+**That corroboration is what makes the number safe to publish.** A single measurement of my own,
+after this record, would not have been.
+
+### WHY THE NUMBER MATTERS MORE THAN THE INSTRUCTION
+
+"Re-run it alone" is advice a reader can follow **completely** and still get a meaningless answer,
+because "alone" is ambiguous between *my processes stopped* and *the machine is idle*. With the
+healthy figure recorded, a reader measuring single-digit seconds knows they are still under load
+rather than looking at a regression. The instruction disambiguates itself only once it carries a
+scale.
+
+### THE PATTERN, STATED WITHOUT FLATTERING MYSELF
+
+Nine instrument or measurement errors this session; the last three are one error repeated after
+writing it down. **Knowing a rule and applying it are separate skills, and the gap is not closed by
+stating the rule more emphatically.** What actually caught all three was re-measuring when
+conditions changed -- not vigilance, and not the rule.
+
+---
+
 ## 2026-08-30 — Session 57, seventh increment: a measurement identified, attempted, and recorded as unsupportable
 
 No new capability. The deliverable is a number NOT reported and the reason written down.

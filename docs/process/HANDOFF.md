@@ -227,8 +227,10 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > ruling read off another branch is not a ruling received, and Option B is an embedder-visible ABI
 > change to the shipping crate whose benefit lands on the OTHER line. The underlying technical
 > claim WAS verified here rather than trusted: `String::from_value` clones an owned `String` out
-> of a `StaticStr`, so the source-incompatibility is real. **The open question for the operator is
-> whether the string ruling binds this line as recorded.**
+> of a `StaticStr`, so the source-incompatibility is real. **RESOLVED 2026-08-30: the operator
+> confirmed directly, in session, that the string ruling binds this line.** The receipt and its
+> provenance are recorded in [`../decisions/STRING_ABI_OPTION_B.md`](../decisions/STRING_ABI_OPTION_B.md),
+> and the implementing increment is queued.
 
 > **THE ORIENTATION DOCUMENT WAS WRONG IN THREE PLACES, AND THE GUARD THAT COVERS IT SAID SO IN
 > ADVANCE.** `tests/claimed_counts.rs` guarded two figures in `CLAUDE.md` and stated in its own

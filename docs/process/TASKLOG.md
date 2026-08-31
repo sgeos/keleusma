@@ -10,6 +10,17 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-30, session 58, first increment). THE STRING ABI RULING IS RECEIVED AND
+> BINDING, AND THE LINE IS AUDITED.**
+>
+> The operator confirmed directly, in session, that the string ruling binds this line. Provenance
+> and scope are in `docs/decisions/STRING_ABI_OPTION_B.md`; the implementing increment is queued
+> FIRST, ahead of the region-kind wiring. Session 57's stranded eighth increment merged as #328 at
+> 22 of 22 green. The audit pruned 49 merged local branches (manifest in `tmp/`), flagged the
+> other line's local-only `feat/native-coverage-spike` for their disposition, and found the
+> Appendix B hygiene clean. A model handoff for routine work is anticipated; nothing in the
+> channels depends on which model resumes.
+
 > **Currency note (2026-08-30, session 57, sixth increment). THE HANDOFF ASSERTED A MERGE COUNT AND
 > A PULL-REQUEST STATE, AND BOTH WENT STALE WITHIN THE SESSION.**
 >
