@@ -213,3 +213,29 @@ fn a_float_read_out_of_a_nested_struct_is_usable_in_float_arithmetic() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// **NOT A FLOAT TEST, AND HERE FOR A MEASURED REASON.** The kind-arm census
+// found that the corpus never produces a `Byte` or `Bool` composite element read
+// at all, and that no hand-written test drove `GetIndex(Flat) x Byte` either —
+// an arm with a KNOWN hazard, since the tree already records that changing the
+// narrow load from zero-extension to sign-extension left every other test
+// passing. It lives beside the float cases because they share the harness and
+// the same `GetIndex` arm.
+// ---------------------------------------------------------------------------
+
+/// A byte array element must ZERO-extend, not sign-extend.
+#[test]
+fn a_byte_array_element_zero_extends_like_the_vm() {
+    // `200` is the discriminating value: zero-extended it is 200, sign-extended
+    // it is -56. Anything below 128 agrees under both and proves nothing, which
+    // is the symmetry trap this package has fallen into repeatedly.
+    let src = "fn main(a: Word, b: Word) -> Word {
+             let xs = [200 as Byte, 255 as Byte, 127 as Byte];
+             (xs[1]) as Word + (xs[0]) as Word + b
+         }";
+    for (a, b) in [(0, 0), (0, 1), (0, -5)] {
+        let (vm, nat) = both(src, a, b);
+        assert_eq!(vm, nat, "byte array element disagrees for ({a}, {b})");
+    }
+}

@@ -6,6 +6,26 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
+## And the class that produced the best finding, hunted on purpose
+
+Nested float bodies were accepted-and-unverified and I found that by luck. So I went looking for the
+rest of that class deliberately, at a granularity FINER than an opcode — the (read family, scalar
+kind) arms the lowering branches on. **Opcode-level accounting could not have found the original
+case**: `GetField` was counted as a covered opcode while its `Float` arm had no witness at all.
+
+Over 69 modules and 1074 chunks there are 40 such combinations and **the corpus reaches eight**.
+**The corpus never produces a `Byte` or `Bool` composite field or element read at all**, in any of
+the four read families — and that arm ZERO-extends, a hazard the tree already records in its
+neighbour. `GetField × Byte` proved covered by a hand-written test after all; **`GetIndex × Byte` was
+covered by nothing**, and I closed that one, using 200 because sign-extension reads it as −56.
+
+**Twenty-six combinations remain unexercised and I did not manufacture witnesses for them.** Most are
+kinds this backend refuses outright, where a contrived witness would be worse than an honest gap.
+
+**My own attribution table was wrong on its first draft**, listing `GetField × Byte` as unexercised.
+Corpus silence is not coverage, the second population has to be READ rather than assumed, and I
+failed that in the very file built to keep the two apart.
+
 ## The coverage residual is two chunks, and chasing it would have been the wrong work
 
 Backend coverage has read **1072 of 1074 chunks and 89854 of 89940 opcode instances** for several
@@ -57,7 +77,7 @@ a figure the tree already carries from two other methods.
 
 | | result |
 |---|---|
-| `native_codegen` | **407 passed, 0 failed, 79 binaries**, cargo's own exit 0 — 396 + 5 flat differentials + 2 probe tests (+2 binaries) + 3 nested differentials + 1 residual reconciliation |
+| `native_codegen` | **410 passed, 0 failed, 80 binaries**, cargo's own exit 0 — 396 + 5 flat + 2 probe (+2 binaries) + 3 nested + 1 residual reconciliation + 2 arm census (+1 binary) + 1 byte-array witness |
 | fmt, clippy `-D warnings`, `cargo doc -D warnings` | all clean |
 | censuses | **unmoved, as MEASURED rather than hoped**: `isa_lowering` 63 of 66 (`Len` the one named refusal), 1072 of 1074 chunks, 89854 of 89940 opcode instances |
 | mutations | four in total across the two increments, each confirmed APPLIED by printing the changed line, each failing tests |

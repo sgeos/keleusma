@@ -1,5 +1,49 @@
 # Design Journal
 
+## 2026-08-31 — Hunting the accepted-but-unverified class on purpose, after finding one by accident
+
+**Increment**: a census of the KIND-DISCRIMINATED lowering arms, at a granularity finer than an
+opcode. See `../decisions/UNEXERCISED_ARMS_BRIEF.md`.
+
+**Why this class.** Nested float composite bodies were accepted and unverified, and I found that by
+luck one increment after recording them as "still absent". A refusal is loud; an accepted path that
+no test executes ships a plausible wrong number. **The opcode-level accounting could not have caught
+it** — `GetField` was counted as a covered opcode while its `Float` arm had no witness at all.
+
+**The measurement, over 69 modules and 1074 chunks.** Five families carry a scalar kind, over eight
+kinds: forty combinations, of which **the corpus reaches eight**. `Int` everywhere, `Fixed` in two
+read families, `Byte` in shared slots. **`GetField` and `GetIndex` are both counted as covered
+opcodes while six of their eight kind arms have no corpus witness.**
+
+**THE FINDING: the corpus never produces a `Byte` or `Bool` composite field or element read at all**,
+in any of the four read families — and the lowering has a `Byte | Bool` arm that zero-extends, whose
+hazard the tree already records in its neighbour: *changing the narrow load from zero-extension to
+sign-extension left every other test passing.* `GetField × Byte` turned out covered after all;
+**`GetIndex × Byte` was covered by nothing.** Closed with one witness using 200, because
+sign-extension reads that as −56 while anything under 128 agrees under both.
+
+**MY ATTRIBUTION TABLE WAS WRONG ON ITS FIRST DRAFT, AND THAT IS THE HONEST HALF.** It listed
+`GetField × Byte` as unexercised. **Corpus silence is not coverage**, and the second population has
+to be READ rather than assumed — the exact distinction the census exists to keep, applied to the
+census itself and failed at the first attempt.
+
+**A `cfg` that was evaluated against the wrong crate.** The first draft guarded the `Float` arm with
+`#[cfg(feature = "floats")]`, which in a test of THIS package is evaluated against this package's
+features, not `keleusma`'s. The arm silently vanished and the match stopped being exhaustive. The
+type-driven enumeration is what caught it — as a COMPILE error, which is the whole reason the
+enumeration is a `match` rather than a list.
+
+**AND THE CITATION GUARD CAUGHT ME A SECOND TIME IN ONE SESSION.** This file's header named
+`every_scalar_kind_is_accounted_for` as the thing enforcing the type-driven enumeration. **No such
+test exists** — the enforcement is an exhaustive `match` in `kind_name`. A dead name in a comment is a
+citation that cannot fail, so it reads as coverage while being none, whether or not it was meant as
+one. Both catches this session were prose I wrote about my own work, which is the place the guard is
+least redundant and where I am apparently least reliable.
+
+**Deliberately not done**: closing the other twenty-six. Most are kinds this backend refuses
+outright, where a contrived witness would be worse than an honest gap, and the brief named a
+coverage-closing spree as the likeliest wrong turn.
+
 ## 2026-08-31 — The coverage residual is two chunks, and the report named the wrong work
 
 **Increment**: a MEASUREMENT rather than a feature. Backend coverage has read **1072 of 1074 chunks
