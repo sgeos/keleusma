@@ -1,5 +1,42 @@
 # Design Journal
 
+## 2026-08-31 — Three producers dropped a width, and the third one only a failing test could find
+
+**Increment**: the composite operand width gap. Four shapes — a `bool` field, a `bool` element, a
+`Fixed` tuple member and a `Fixed` array element — compiled and were then refused by `NewComposite`
+for *an operand of unknown packed width*. See `../decisions/OPERAND_WIDTH_GAP_BRIEF.md`.
+
+**THE REFUSAL NAMED AN OPERAND POSITION, NOT AN OPCODE**, so the probe asked what produced each
+operand rather than reasoning backwards from the packer: `[1, 2]` uses `Const`, which carries a
+width; `[true, false]` uses `PushImmediate`, which did not; the fixed case uses `WordToFixed`, which
+did not. **The gap was in producers, not in composite construction** — which is why every integer
+composite in the corpus worked and nothing noticed.
+
+**THE THIRD PRODUCER SURFACED ONLY WHEN THE TESTS RAN.** A COMPUTED boolean, `a > 0`, still had no
+width after the first two were fixed, so `[true, false]` lowered while `[a > 0, a > 5]` did not.
+**The integer half of the comparison arm dropped the width while its float twin, six lines away, had
+always set it**, with no reason recorded for the asymmetry — the sort that survives because each half
+reads correctly on its own. Found by a test failing, not by reading the code, which is the third time
+this session that writing the test was what found the defect.
+
+**`Unit` stays widthless and that is a decision, not an omission.** Its flat width is ZERO and the
+pushed value is a placeholder sound only because nothing consumes it. It sits in the same match arm
+as the values that were widened, which is exactly why the brief named "widening every width-losing
+producer at once because they look alike" as the likeliest wrong turn.
+
+**The neighbour test earned its design.** Widening the boolean immediate to eight bytes fails
+`a_bool_struct_field_does_not_disturb_its_neighbour` and **only** that test — a one-byte value
+written eight wide overwrites what follows, and every test that reads only the boolean back passes
+happily through it.
+
+**Censuses UNMOVED, measured rather than predicted**: 1072 of 1074 chunks, 89854 of 89940 instances.
+The kind-arm accounting goes from eight resolved to eleven, twenty-one still unexercised and not
+implied closed.
+
+**And an expired warning was corrected in passing**: the comparison arm still said the NaN path was
+unexercised because division was not lowered. It is, and the NaN path was wrong on two predicates
+when first tested. Kept as history rather than deleted.
+
 ## 2026-08-31 — The residue split three ways, and only two of it was what the number implied
 
 **Increment**: witnessing the unexercised kind arms that ordinary source can reach. See

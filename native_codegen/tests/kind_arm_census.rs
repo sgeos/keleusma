@@ -241,6 +241,21 @@ fn the_unreached_combinations_are_each_accounted_for() {
         ),
         (
             "GetField(Flat)",
+            "Bool",
+            "narrow_composite::a_bool_struct_field_reads_back_on_both_paths",
+        ),
+        (
+            "GetIndex(Flat)",
+            "Bool",
+            "narrow_composite::a_bool_array_element_agrees_with_the_vm",
+        ),
+        (
+            "GetTupleField(Flat)",
+            "Fixed",
+            "narrow_composite::a_fixed_tuple_member_agrees_with_the_vm",
+        ),
+        (
+            "GetField(Flat)",
             "Float",
             "float_composite::a_float_struct_field_agrees_with_the_vm",
         ),
@@ -302,6 +317,14 @@ fn the_unreached_combinations_are_each_accounted_for() {
     }
     assert!(unresolved.is_empty(), "{unresolved:#?}");
 
+    // **THE FOUR CONSTRUCTION-SIDE REFUSALS BELOW WERE CLOSED, NOT WORKED
+    // AROUND.** They were refused by `NewComposite` for an operand of unknown
+    // packed width, which turned out to be three PRODUCERS dropping it —
+    // `PushImmediate`, `WordToFixed`, and the integer half of the comparison
+    // arm, whose float twin had always set it. See
+    // `docs/decisions/OPERAND_WIDTH_GAP_BRIEF.md`. The `Fixed` ARRAY element is
+    // covered by the corpus and so never appears in this table.
+    //
     // **WHY THE REST STAY UNEXERCISED, MEASURED RATHER THAN ASSUMED.**
     // `probe_float_composite::which_narrow_and_fixed_composite_reads_are_reachable_from_source`
     // asked the reference compiler and the backend directly. Of the shapes that

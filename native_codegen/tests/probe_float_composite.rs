@@ -228,3 +228,36 @@ fn which_narrow_and_fixed_composite_reads_are_reachable_from_source() {
         "no case compiled, so this probe measures the harness rather than reachability"
     );
 }
+
+/// **WHERE DOES A COMPOSITE OPERAND'S WIDTH COME FROM?** Measured, because the
+/// refusal message names an operand position and not an opcode, and reasoning
+/// backwards from the packer is the mistake this line keeps making.
+#[test]
+fn what_pushes_a_composite_operand_for_each_element_kind() {
+    for (name, src) in [
+        (
+            "[1, 2]",
+            "fn main(a: Word, b: Word) -> Word { let xs = [1, 2]; xs[0] + b }",
+        ),
+        (
+            "[true, false]",
+            "fn main(a: Word, b: Word) -> Word { let xs = [true, false]; if xs[0] { b } else { 0 } }",
+        ),
+        (
+            "[a as Fixed<16>, b as Fixed<16>]",
+            "fn main(a: Word, b: Word) -> Word { let xs = [a as Fixed<16>, b as Fixed<16>]; ((xs[1]) as Word) + b }",
+        ),
+    ] {
+        let Some(m) = build(src) else {
+            println!("  {name}: reference compiler refuses");
+            continue;
+        };
+        let ops: Vec<String> = m.chunks[0]
+            .ops
+            .iter()
+            .take(8)
+            .map(|o| format!("{o:?}").chars().take(28).collect::<String>())
+            .collect();
+        println!("  {name}\n    {ops:?}");
+    }
+}

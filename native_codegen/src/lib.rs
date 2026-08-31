@@ -3117,12 +3117,16 @@ fn lower_chunk_body<'ctx>(
                 // NaN, which is what NaN-as-Equal implies, so **only `Eq`, `Le`
                 // and `Ge` need forcing true**.
                 //
-                // **⚠ THE NaN PATH IS UNEXERCISED.** No source construct produces
-                // a NaN today: the route is division, and `Op::CheckedDiv` is not
-                // lowered. It is written to MATCH rather than left to diverge,
-                // because relying on NaN being unreachable is the accidental
-                // protection this backend already lost once — see
-                // `FLOAT_SLICE_ONE.md`. Its correctness rests on reading the
+                // **⚠ THAT WARNING HAS EXPIRED, AND IS KEPT ONLY AS HISTORY.**
+                // It read *"the NaN path is unexercised; no source construct
+                // produces a NaN today: the route is division, and
+                // `Op::CheckedDiv` is not lowered"*. **Division lowers now**, the
+                // NaN path is exercised, and writing it to MATCH rather than
+                // leaving it to diverge is what made the first NaN test pass on
+                // four of six predicates and fail on the two that were wrong.
+                // Relying on NaN being unreachable is the accidental protection
+                // this backend already lost once — see `FLOAT_SLICE_ONE.md`. The
+                // original reasoning rested on reading the
                 // reference, not on a differential.
                 if st.kind_at(0) == OperandKind::Float || st.kind_at(1) == OperandKind::Float {
                     if float_bytes != 8 {
@@ -3211,7 +3215,14 @@ fn lower_chunk_body<'ctx>(
                     let lhs = st.pop();
                     let c = st.b.build_int_compare(pred, lhs, rhs, "cmp").unwrap();
                     let v = st.b.build_int_z_extend(c, i64t, "cmpz").unwrap();
-                    st.push(v);
+                    // **ONE BYTE, MATCHING THE FLOAT TWIN ABOVE.** A comparison
+                    // yields a `Bool`, which is one byte in the canonical flat
+                    // layout, and without the width a computed boolean cannot be
+                    // placed in a composite body: `[a > 0, a > 5]` compiled and
+                    // was then refused at `NewComposite` while `[true, false]`
+                    // worked. The float path already did this and the integer
+                    // path did not, with no reason recorded for the asymmetry.
+                    st.push_w(v, Width::Scalar(1));
                 }
             }
             // Logical NOT. The VM applies it only to `Bool` and raises a type
@@ -3453,7 +3464,17 @@ fn lower_chunk_body<'ctx>(
                     st.b.build_select(under, min, clamped_hi, "w2fx.sello")
                         .unwrap()
                         .into_int_value();
-                st.push(st.b.build_int_truncate(clamped, i64t, "w2fx").unwrap());
+                // **EIGHT BYTES, AND THAT IS THE TREE'S OWN MEASUREMENT.** A
+                // Q-format value is an `i64` of fixed-point bits occupying a
+                // full slot; `width_of_tag` records the same fact from the
+                // reference packing `struct { a: Fixed<16>, b: Fixed<16> }` at
+                // sixteen bytes. Dropping the width here is why
+                // `[a as Fixed<16>, b as Fixed<16>]` compiled and was then
+                // refused at `NewComposite`.
+                st.push_w(
+                    st.b.build_int_truncate(clamped, i64t, "w2fx").unwrap(),
+                    Width::Scalar(8),
+                );
             }
             Op::Dup => {
                 let v = st.pop();
@@ -3542,7 +3563,27 @@ fn lower_chunk_body<'ctx>(
                     }
                 };
                 let c = i64t.const_int(v as u64, true);
-                st.push(c);
+                // **THE PACKED WIDTH, WHICH THIS ARM USED TO DROP.** An operand
+                // with no width cannot be placed in a composite body, so
+                // `let xs = [true, false]` compiled and was then REFUSED at
+                // `NewComposite` -- a loud refusal, but for a width the flat
+                // layout already fixes. `Bool` is one byte there, and an `Int`
+                // immediate is a `Word`, which is eight throughout this backend.
+                //
+                // **`Unit` DELIBERATELY STAYS UNKNOWN.** Its flat width is ZERO
+                // and the zero pushed above is a placeholder, sound only because
+                // nothing consumes it; giving it a scalar width would invent a
+                // representation. `None` never reaches here -- it is refused
+                // above -- for the same class of reason.
+                //
+                // Safe to widen because the construction arm requires the
+                // operand widths to account for the baked `byte_size` EXACTLY,
+                // so a width that is wrong refuses rather than mispacking.
+                match *imm {
+                    1 | 2 => st.push_w(c, Width::Scalar(1)),
+                    4..=19 => st.push_w(c, Width::Scalar(8)),
+                    _ => st.push(c),
+                }
             }
             // `Loop` is a runtime no-op. Its operand is the exit index, carried
             // for `Break` and `BreakIf`, and the block for it is created from

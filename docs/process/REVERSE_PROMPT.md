@@ -86,7 +86,7 @@ a figure the tree already carries from two other methods.
 
 | | result |
 |---|---|
-| `native_codegen` | **413 passed, 0 failed, 80 binaries**, cargo's own exit 0 — 396 plus, across five increments, 17 tests and 3 binaries, each increment's delta recorded in its own commit |
+| `native_codegen` | **420 passed, 0 failed, 81 binaries**, cargo's own exit 0 — 396 plus, across six increments, 24 tests and 4 binaries, each increment's delta recorded in its own commit |
 | fmt, clippy `-D warnings`, `cargo doc -D warnings` | all clean |
 | censuses | **unmoved, as MEASURED rather than hoped**: `isa_lowering` 63 of 66 (`Len` the one named refusal), 1072 of 1074 chunks, 89854 of 89940 opcode instances |
 | mutations | four in total across the two increments, each confirmed APPLIED by printing the changed line, each failing tests |

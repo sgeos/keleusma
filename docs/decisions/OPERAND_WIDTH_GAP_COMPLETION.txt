@@ -1,0 +1,71 @@
+COMPLETION CONDITION — the composite operand width gap
+
+Ordering is NOT a completion criterion. No particular sequence of steps, branch,
+commit shape, or process is required. Judge the end state only.
+
+Complete when ALL of the following hold.
+
+1. THE SHAPES LOWER
+   A program that builds a composite containing a boolean, and one that builds a
+   composite containing a fixed-point value, both lower through the native
+   backend with no refusal, for at least a struct or tuple member and an array
+   element.
+
+2. AGREEMENT, MEASURED AGAINST THE REFERENCE
+   Tests exist that execute such programs BOTH on the virtual machine and
+   through JIT-compiled native code and compare results, and they pass.
+
+3. THE NEIGHBOUR IS PROTECTED
+   At least one test places a narrow member beside a wider one and reads the
+   WIDER one back, so a narrow value written at the wrong width would corrupt a
+   value the test actually observes. A test reading only the narrow field itself
+   does not satisfy this.
+
+4. FIXED-POINT VALUES DISCRIMINATE
+   The fixed-point cases use values whose bit pattern differs from their integer
+   reading, so a lowering that confused the two would fail.
+
+5. UNIT IS UNCHANGED AND THE REASON IS RECORDED
+   The unit immediate is not given a scalar width, and the tree records why:
+   its flat width is zero and the pushed value is a placeholder. A document or
+   comment stating this is present.
+
+6. MUTATION EVIDENCE
+   The transcript records at least one mutation of the newly assigned widths,
+   confirmed applied by showing the changed line, causing at least one new test
+   to fail.
+
+7. CENSUS FIGURES ARE MEASURED, NOT ASSUMED
+   Whether the coverage or kind-arm figures move is determined by measurement
+   and recorded. If they move, the new values are recorded and reconcile with
+   the change; if not, that is stated as a measured result.
+
+8. THE ARM CENSUS AGREES WITH THE TREE
+   Any combination this work newly witnesses is attributed in the kind-arm
+   accounting to a test that exists, and combinations still unexercised are not
+   implied closed.
+
+9. NOTHING AMBIGUOUS WAS DECIDED
+   The open operator questions stay untouched: the Fixed, Text, Opaque and Unit
+   SHARED-SLOT representations remain unimplemented, and the region planner's
+   soundness obligation is not discharged or restated as discharged. Note that
+   lowering a fixed-point value inside a composite BODY is not a shared-slot
+   decision; if any document could be read as conflating them, it is corrected.
+
+10. THE SUITE IS GREEN AND THE COUNT RECONCILES
+    The native_codegen suite passes with zero failures, read from cargo's own
+    exit status AND from the summed per-binary counts, with the two agreeing and
+    the binary count matching expectation. The total is accounted for as the
+    previous total plus exactly the tests added.
+
+11. QUALITY GATES
+    Formatting, clippy at deny-warnings over tests as well as the library, and
+    the documentation build at deny-warnings are all clean.
+
+12. NO DEAD CITATIONS AND NO EXPIRED CLAIMS
+    Nothing added or changed names a test, file, function, or identifier that
+    does not exist, and no document left in the tree asserts a state this work
+    has made false.
+
+If any item cannot be satisfied, say so explicitly with what was measured and
+why it blocks, and satisfy every other item in full.
