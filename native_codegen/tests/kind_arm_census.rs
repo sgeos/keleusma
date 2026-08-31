@@ -255,6 +255,31 @@ fn the_unreached_combinations_are_each_accounted_for() {
             "narrow_composite::a_fixed_tuple_member_agrees_with_the_vm",
         ),
         (
+            "GetTupleField(Flat)",
+            "Bool",
+            "narrow_composite::a_bool_tuple_member_agrees_with_the_vm",
+        ),
+        (
+            "GetEnumField(Flat)",
+            "Bool",
+            "narrow_composite::a_bool_enum_payload_agrees_with_the_vm",
+        ),
+        (
+            "GetEnumField(Flat)",
+            "Fixed",
+            "narrow_composite::a_fixed_enum_payload_agrees_with_the_vm",
+        ),
+        (
+            "GetEnumField(Flat)",
+            "Float",
+            "float_composite::a_float_enum_payload_agrees_with_the_vm",
+        ),
+        (
+            "shared slot",
+            "Bool",
+            "shared_data::a_bool_shared_slot_agrees_in_value_and_in_buffer",
+        ),
+        (
             "GetField(Flat)",
             "Float",
             "float_composite::a_float_struct_field_agrees_with_the_vm",
@@ -336,6 +361,14 @@ fn the_unreached_combinations_are_each_accounted_for() {
     // loud refusal in the safe direction, and it is a DIFFERENT cause from the
     // one this table is about, which is why it is named here rather than
     // silently counted as a coverage gap.
+    //
+    // **WHAT REMAINS IS NOW ENTIRELY REFUSED KINDS, PLUS ONE OPERATOR
+    // QUESTION.** `Unit`, `Text` and `Opaque` are refused across all five
+    // families; the `Fixed` SHARED SLOT is refused because the host-visible
+    // fraction-bit scale is unspecified, which is an open ruling and not a gap
+    // in evidence. **Every combination this backend accepts is now driven by
+    // something**, which is the state this census was built to reach and is a
+    // claim that will decay the moment a new arm lands.
     //
     // **THE UNEXERCISED SET IS NOT ASSERTED EMPTY.** Most of it is kinds this
     // backend refuses outright, and a contrived witness for a refused kind would

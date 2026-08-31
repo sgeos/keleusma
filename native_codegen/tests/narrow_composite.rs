@@ -131,3 +131,53 @@ fn a_unit_valued_composite_is_refused_rather_than_given_a_width() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// The last reachable residue of the kind-arm census. Each of these arms exists,
+// is reachable from ordinary source, and was exercised by nothing.
+// `probe_float_composite::which_of_the_last_residue_is_reachable` measured which
+// ones lower before any of them was written.
+// ---------------------------------------------------------------------------
+
+/// A boolean TUPLE member, reaching the arm through a different operand shape
+/// than the struct case.
+#[test]
+fn a_bool_tuple_member_agrees_with_the_vm() {
+    let src =
+        "fn main(a: Word, b: Word) -> Word { let t = (a > 0, b); if t.0 { t.1 } else { 0 - t.1 } }";
+    for (a, b) in [(1, 7), (-1, 7), (0, 5), (3, -3)] {
+        let (vm, nat) = both(src, a, b);
+        assert_eq!(vm, nat, "bool tuple member disagrees for ({a}, {b})");
+    }
+}
+
+/// A boolean ENUM PAYLOAD, whose offset is measured PAST the discriminant word,
+/// so a mistake here is an offset error rather than a width error.
+#[test]
+fn a_bool_enum_payload_agrees_with_the_vm() {
+    let src = "enum E { A(bool), B }
+         fn main(a: Word, b: Word) -> Word {
+             let e = E::A(a > 0);
+             match e { E::A(x) => if x { b } else { 0 - b }, E::B => 0 }
+         }";
+    for (a, b) in [(1, 7), (-1, 7), (0, 5), (9, -2)] {
+        let (vm, nat) = both(src, a, b);
+        assert_eq!(vm, nat, "bool enum payload disagrees for ({a}, {b})");
+    }
+}
+
+/// A fixed-point ENUM PAYLOAD. The value differs from its integer reading by a
+/// factor of 65536, so a lowering confusing the two returns a wildly wrong
+/// number rather than a plausible one.
+#[test]
+fn a_fixed_enum_payload_agrees_with_the_vm() {
+    let src = "enum E { A(Fixed<16>), B }
+         fn main(a: Word, b: Word) -> Word {
+             let e = E::A(a as Fixed<16>);
+             match e { E::A(x) => (x as Word) + b, E::B => 0 }
+         }";
+    for (a, b) in [(3, 5), (-3, 5), (0, 0), (12345, 7)] {
+        let (vm, nat) = both(src, a, b);
+        assert_eq!(vm, nat, "fixed enum payload disagrees for ({a}, {b})");
+    }
+}

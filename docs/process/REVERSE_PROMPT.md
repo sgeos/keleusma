@@ -6,6 +6,54 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
+## WHERE THIS SESSION STOPPED, AND WHY IT STOPPED THERE
+
+**Seven increments landed and every one is pushed behind a green gate.** I stopped because the
+unblocked work ran out, not because I ran out of things I could type. **What remains needs a
+decision from you**, and manufacturing witnesses for arms this backend refuses is the exact wrong
+turn my own briefs named three times.
+
+**The float surface is closed except where a ruling is missing.** Shared slots, entry ABI, scalar
+arithmetic, composites flat and nested — all built and all compared against the virtual machine.
+Absent: `f32`, which rests on MY reading of the width rather than your words; a native float return,
+which no ruling settles; and floats in a composite reaching a data slot, which is the shared
+composite-body workstream.
+
+**Coverage is measured saturated, and its residual is load-bearing.** 1072 of 1074 chunks and 89854
+of 89940 opcode instances, and those two figures are ONE finding: two chunks, 45 and 41 opcodes,
+refused for `Stream` and `Len`. **The `Stream` refusal is what keeps the region planner's unsound
+cross-iteration slot reuse quiet.** Lowering it for 0.09% of instances would retire an accidental
+safety. That is your call, with a cost the handoff states.
+
+**Every kind arm this backend accepts is now driven by something.** Sixteen of forty combinations
+resolve to a named test; the other sixteen are `Unit`, `Text` and `Opaque` across all five families,
+plus a shared-slot `Fixed` refused because your fraction-bit-scale question is open.
+
+## WHAT I WANT FROM YOU, IN ORDER OF WHAT IT UNBLOCKS
+
+1. **The region planner tension.** Discharging the soundness obligation needs the planner to consume
+   a confinement verdict, and consuming none is exactly why a wrong verdict cannot miscompile today.
+   Both cannot be had for free. This is the largest risk on the line and the only thing standing
+   between the backend and the last 0.1% of coverage.
+2. **`f32`.** The coherent reading of your Option A ruling is that the floating-point type matches
+   the runtime float width. **That reading is mine.** Say whether it stands and I will build it;
+   today every route refuses a non-eight-byte float loudly rather than lowering it.
+3. **`Fixed`, `Text`, `Opaque`, `Unit` shared slots**, unchanged from `ABI_RULINGS.md`. The `Fixed`
+   one now blocks a measured, named test rather than a hypothetical.
+
+## THE PATTERN THIS SESSION KEPT REPRODUCING, WHICH IS WORTH MORE THAN ANY INCREMENT
+
+**Six defects were found by writing a test, and none by reading the code.** The comparison arm's
+width asymmetry, the poison-adjacent nested path, the vacuous reconciliation, the array mutation gap,
+and two attribution errors of my own. **Three of them were in prose I had written about my own work
+within the hour.**
+
+**And the guards caught me repeatedly**: the citation guard twice, for naming tests that do not
+exist; clippy once, for an assertion that was `x == x`; the type system once, for a `cfg` evaluated
+against the wrong crate's features; and my own totals twice, for listings that were plausible and
+wrong. **A passing check is evidence about the checker before it is evidence about the tree**, and
+this session is the strongest evidence for that rule that the line has produced.
+
 ## And the class that produced the best finding, hunted on purpose
 
 Nested float bodies were accepted-and-unverified and I found that by luck. So I went looking for the
@@ -86,7 +134,7 @@ a figure the tree already carries from two other methods.
 
 | | result |
 |---|---|
-| `native_codegen` | **420 passed, 0 failed, 81 binaries**, cargo's own exit 0 — 396 plus, across six increments, 24 tests and 4 binaries, each increment's delta recorded in its own commit |
+| `native_codegen` | **426 passed, 0 failed, 81 binaries**, cargo's own exit 0 — 396 plus, across seven increments, 30 tests and 4 binaries, each increment's delta recorded in its own commit |
 | fmt, clippy `-D warnings`, `cargo doc -D warnings` | all clean |
 | censuses | **unmoved, as MEASURED rather than hoped**: `isa_lowering` 63 of 66 (`Len` the one named refusal), 1072 of 1074 chunks, 89854 of 89940 opcode instances |
 | mutations | four in total across the two increments, each confirmed APPLIED by printing the changed line, each failing tests |

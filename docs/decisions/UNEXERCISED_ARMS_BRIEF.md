@@ -86,3 +86,23 @@ worse than an honest gap.
 **The table is hand-maintained in one direction only, and says so.** A row that the corpus starts
 reaching fails an assertion; a row that a new test starts covering needs a human. That asymmetry is
 recorded rather than hidden.
+
+## Final state, after the residue was worked through
+
+**Sixteen of forty combinations resolve to a named test; sixteen remain unexercised, and their
+composition is now uniform:**
+
+| remaining | why |
+|---|---|
+| `Unit`, `Text`, `Opaque` across all five families — 15 | **refused kinds.** A contrived witness would be worse than the gap |
+| shared slot × `Fixed` — 1 | **refused, and the reason is an OPEN RULING**: the host-visible fraction-bit scale is unspecified, so `Fixed<16>` and `Fixed<8>` share one layout |
+
+**Every combination this backend ACCEPTS is now driven by something.** That is the state the census
+was built to reach, and it is a claim that decays the moment a new arm lands — which is why the
+accounting is a test rather than a paragraph.
+
+**The eight remaining read-family rows are `Unit`, `Text` and `Opaque` only**, verified by listing
+rather than asserted from the count. **The listing itself needed correcting twice**: a `grep -A 1`
+took the line AFTER each marker rather than before, and a character class excluding a space silently
+dropped the whole shared-slot family. Both were caught by the totals failing to reconcile, which is
+the same discipline as checking a binary count against an expectation.

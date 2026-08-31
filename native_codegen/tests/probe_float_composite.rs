@@ -261,3 +261,64 @@ fn what_pushes_a_composite_operand_for_each_element_kind() {
         println!("  {name}\n    {ops:?}");
     }
 }
+
+/// **THE LAST REACHABLE RESIDUE, ASKED RATHER THAN ASSUMED.** After the operand
+/// width gap closed, a handful of kind arms remain unexercised and look
+/// reachable. Two of the six shapes in the earlier reachability probe turned out
+/// to be my own syntax errors, so this one asks the reference compiler first.
+#[test]
+fn which_of_the_last_residue_is_reachable() {
+    let cases: &[(&str, &str)] = &[
+        (
+            "tuple x Bool",
+            "fn main(a: Word, b: Word) -> Word { let t = (a > 0, b); if t.0 { t.1 } else { 0 } }",
+        ),
+        (
+            "enum x Bool",
+            "enum E { A(bool), B }
+             fn main(a: Word, b: Word) -> Word { let e = E::A(a > 0); match e { E::A(x) => if x { b } else { 0 }, E::B => 0 } }",
+        ),
+        (
+            "enum x Fixed",
+            "enum E { A(Fixed<16>), B }
+             fn main(a: Word, b: Word) -> Word { let e = E::A(a as Fixed<16>); match e { E::A(x) => (x as Word) + b, E::B => 0 } }",
+        ),
+        (
+            "enum x Float",
+            "enum E { A(Float), B }
+             fn main(a: Word, b: Word) -> Word { let e = E::A(a as Float); match e { E::A(x) => (x as Word) + b, E::B => 0 } }",
+        ),
+        (
+            "shared slot x Bool",
+            "shared data s { f: bool, n: Word }
+             fn main(a: Word, b: Word) -> Word { s.f = a > 0; s.n = b; if s.f { s.n } else { 0 } }",
+        ),
+        (
+            "shared slot x Fixed",
+            "shared data s { f: Fixed<16>, n: Word }
+             fn main(a: Word, b: Word) -> Word { s.f = a as Fixed<16>; s.n = b; ((s.f) as Word) + s.n }",
+        ),
+    ];
+
+    println!("\n================ THE LAST RESIDUE, REACHABILITY");
+    let mut compiled = 0usize;
+    for (name, src) in cases {
+        match build(src) {
+            None => println!("  {name}\n    REFERENCE COMPILER REFUSES THIS SOURCE"),
+            Some(m) => {
+                compiled += 1;
+                let r = keleusma_native::module_refusals(&m, LowerOptions::default());
+                if r.is_empty() {
+                    println!("  {name}\n    compiles and LOWERS");
+                } else {
+                    println!("  {name}\n    compiles, backend refuses: {}", r[0].1);
+                }
+            }
+        }
+    }
+    println!("================\n");
+    assert!(
+        compiled > 0,
+        "no case compiled, so this probe measures the harness rather than reachability"
+    );
+}

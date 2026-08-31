@@ -1,5 +1,32 @@
 # Design Journal
 
+## 2026-08-31 — The residue closes, and what is left is refusals and one open ruling
+
+**Increment**: the last reachable kind arms — a boolean tuple member and enum payload, a fixed-point
+enum payload, a float enum payload, and a boolean shared slot. All five existed, were reachable from
+ordinary source, and were exercised by nothing.
+
+**Asked before written.** A probe measured which of six candidate shapes lower; five do, and the
+sixth — a `Fixed` SHARED SLOT — is refused for the reason already on record, that the host-visible
+fraction-bit scale is unspecified. **That one is an open ruling and not a gap in evidence**, so it
+stays refused.
+
+**FINAL STATE: sixteen of forty combinations resolve to a named test, and the other sixteen are
+uniform** — `Unit`, `Text` and `Opaque` across all five families, plus that one shared-slot `Fixed`.
+**Every combination this backend ACCEPTS is now driven by something.**
+
+**The mutation separates two mechanisms that look alike.** Widening the computed boolean to eight
+bytes fails four composite tests and **not** the shared-slot boolean, because a slot's width comes
+from the layout table rather than from an operand. Worth knowing before assuming one guard covers
+both.
+
+**MY OWN LISTING WAS WRONG TWICE, AND THE TOTALS ARE WHAT CAUGHT IT.** A `grep -A 1` took the line
+AFTER each marker rather than before, reporting combinations that were in fact covered; then a
+character class with no space in it silently dropped the entire shared-slot family. Neither produced
+an error — both produced a plausible list. **The arithmetic failing to reconcile is what exposed
+them**, which is the same discipline as checking a binary count against an expectation rather than
+reading the pass count alone.
+
 ## 2026-08-31 — Three producers dropped a width, and the third one only a failing test could find
 
 **Increment**: the composite operand width gap. Four shapes — a `bool` field, a `bool` element, a

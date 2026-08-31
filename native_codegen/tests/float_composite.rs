@@ -267,3 +267,19 @@ fn a_byte_enum_payload_zero_extends_like_the_vm() {
         assert_eq!(vm, nat, "byte enum payload disagrees for ({a}, {b})");
     }
 }
+
+/// A float ENUM PAYLOAD — the fourth read family, and the one whose offset is
+/// measured PAST the discriminant word. The float arms were witnessed in the
+/// other three families and not this one.
+#[test]
+fn a_float_enum_payload_agrees_with_the_vm() {
+    let src = "enum E { A(Float), B }
+         fn main(a: Word, b: Word) -> Word {
+             let e = E::A((a as Float) / (b as Float));
+             match e { E::A(x) => (x as Word) + b, E::B => 0 }
+         }";
+    for (a, b) in [(7, 2), (-7, 2), (1, 0), (0, 0), (-1, 0)] {
+        let (vm, nat) = both(src, a, b);
+        assert_eq!(vm, nat, "float enum payload disagrees for ({a}, {b})");
+    }
+}

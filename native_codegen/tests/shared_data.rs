@@ -424,3 +424,21 @@ fn an_untagged_float_from_a_private_slot_stores_correctly_into_a_shared_float_sl
         assert_shared_agrees(src, &args);
     }
 }
+
+#[test]
+fn a_bool_shared_slot_agrees_in_value_and_in_buffer() {
+    // **THE LAST REACHABLE SHARED-SLOT KIND.** `Byte` slots are reached by the
+    // corpus in their hundreds of thousands; `Bool` by nothing. The slot is one
+    // byte, so the neighbouring word is what a wrong width would damage — hence
+    // `n` is written first and read back, and the buffer is compared as well.
+    //
+    // Both branches are exercised, because a boolean that is always true passes
+    // through a lowering that ignores the stored value entirely.
+    let src = "shared data s { f: bool, n: Word }
+               fn main(a: Word, b: Word) -> Word {
+                   s.n = b; s.f = a > 0; if s.f { s.n } else { 0 - s.n }
+               }";
+    for args in [[1, 7], [-1, 7], [0, 5], [3, -3], [0, i64::MIN]] {
+        assert_shared_agrees(src, &args);
+    }
+}
