@@ -42,3 +42,62 @@ workstream, or a refusal that should stay.
 **Turning a measurement into an implementation halfway through.** If the residual turns out to be
 cheap, the temptation is to fix it in the same breath and report a coverage gain. The measurement is
 the deliverable; a fix is a separate decision that a recorded measurement makes cheap to take later.
+
+## Outcome, written after the measurement
+
+**The residual is two chunks, and the two published figures are ONE finding rather than two.**
+
+| | |
+|---|---|
+| population | **69 modules, 1074 chunks** |
+| refused chunks | **2** |
+| | `13_telemetry_stream.kel::main` — 45 opcodes — refused for `Stream` |
+| | `refused_witness.kel::len_witness` — 41 opcodes — refused for `Len` |
+| blocking opcode instances | **86 = 45 + 41, exactly** |
+
+**86 IS THE SUM OF THOSE TWO CHUNKS' LENGTHS.** An opcode instance counts as blocking when it merely
+SITS IN a refused chunk, so the instance figure is the refused chunks' combined size and carries no
+information the chunk count does not. Confirmed by reading the instrument and then pinned as a
+measured identity by `the_blocking_instances_are_exactly_the_contents_of_the_refused_chunks`, with
+non-vacuity in both directions.
+
+### The report was readable as a work queue, and it named the wrong work
+
+Three tables were headed as causes — *blocking opcode instances by workstream*, *chunks whose first
+blocker is*, *top blocking opcodes by instance count*. The last put `GetLocal` at 18, `Const` at 17
+and `SetLocal` at 16 **at the head of what reads like a list of things to implement.** All three
+already lower. They top the table because they are the commonest opcodes in any chunk, and these two
+chunks are ordinary apart from one opcode each.
+
+Renamed rather than deleted, since the composition is worth seeing once it cannot be mistaken for a
+diagnosis. **This is the same class as the four instrument errors already recorded: a signal
+answering a narrower question than its label claims.**
+
+### The recommendation, which follows from the numbers rather than from prior belief
+
+**Coverage is saturated under the current design, and further gain is not a matter of effort.**
+
+- `Stream` is refused deliberately, and the refusal is **load-bearing**: the handoff records that the
+  region planner's cross-iteration slot reuse is unsound for a composite escaping by `yield`, and
+  that the only thing keeping it quiet is that every chunk carrying the shape opens with `Stream`.
+  Lowering `Stream` to gain 0.09% of instances would **retire an accidental safety** whose
+  replacement needs the planner to consume a confinement verdict — a design decision with a stated
+  cost, and the operator's to take.
+- `Len` was re-checked against `for .. limit` and holds.
+
+**So the honest next move is NOT to chase the last 0.1%.** Two figures quoted for several increments
+turn out to describe two deliberate refusals, one of which should not move without a decision. That
+is a better outcome than a coverage gain, because it removes a target that looked available and was
+not.
+
+### And the guard's first draft was vacuous, which clippy caught
+
+The reconciliation was first written with both sides computed as `c.ops.len()`, making the assertion
+`x == x`. **Clippy's `iter_count` lint is what surfaced it**, which is a lint about style catching a
+defect about meaning. The identity really is definitional, so the guard was rewritten to earn its
+place differently: the two sides are now computed by different traversals, so it fires if the
+report's rule ever changes to count only the CAUSING opcode — the change after which the tables'
+labels would need revisiting again.
+
+**The rule this line already carries applied to me**: a passing check is evidence about the checker
+before it is evidence about the tree.

@@ -1,5 +1,46 @@
 # Design Journal
 
+## 2026-08-31 — The coverage residual is two chunks, and the report named the wrong work
+
+**Increment**: a MEASUREMENT rather than a feature. Backend coverage has read **1072 of 1074 chunks
+and 89854 of 89940 opcode instances** for several increments, quoted repeatedly, and **nobody had
+read what the residual IS.** See `../decisions/COVERAGE_RESIDUAL_BRIEF.md`.
+
+**The two figures are ONE finding.** The residual is two chunks —
+`13_telemetry_stream.kel::main` at 45 opcodes, refused for `Stream`, and
+`refused_witness.kel::len_witness` at 41 opcodes, refused for `Len` — over a population of 69 modules
+and 1074 chunks. **86 is 45 + 41, exactly.** An opcode instance counts as blocking when it merely
+SITS IN a refused chunk, so the instance figure is the refused chunks' combined size and carries no
+information the chunk count does not.
+
+**AND THE REPORT WAS READABLE AS A WORK QUEUE THAT NAMED THE WRONG WORK.** Three tables were headed
+as causes, the last of them *"TOP BLOCKING OPCODES BY INSTANCE COUNT"*, with `GetLocal` at 18,
+`Const` at 17 and `SetLocal` at 16 at its head. **All three already lower.** They top the table
+because they are the commonest opcodes in any chunk, and these two chunks are ordinary apart from one
+opcode each. Renamed rather than deleted — the composition is worth seeing once it cannot be mistaken
+for a diagnosis. **Same class as the four instrument errors already recorded: a signal answering a
+narrower question than its label claims.**
+
+**THE RECOMMENDATION FOLLOWS FROM THE NUMBERS AND IT IS TO STOP.** Coverage is saturated under the
+current design. `Stream` is refused deliberately and the refusal is **load-bearing**: the region
+planner's cross-iteration slot reuse is unsound for a composite escaping by `yield`, and the only
+thing keeping that quiet is that every chunk carrying the shape opens with `Stream`. Lowering it to
+gain 0.09% of instances would retire an accidental safety whose replacement needs the planner to
+consume a confinement verdict — the operator's decision, with a stated cost. `Len` was re-checked
+against `for .. limit` and holds. **Removing a target that looked available and was not is a better
+outcome than a coverage gain.**
+
+**MY OWN GUARD'S FIRST DRAFT WAS VACUOUS, AND A STYLE LINT CAUGHT IT.** The reconciliation was written
+with both sides computed as `c.ops.len()`, so the assertion was `x == x`. Clippy's `iter_count` fired
+on the expression I had used to disguise that from myself. Rewritten so the two sides come from
+different traversals, which makes it fire if the report's rule ever changes to count only the CAUSING
+opcode — the change after which the labels would need revisiting again. **A passing check is evidence
+about the checker before it is evidence about the tree**, and the rule applied to me.
+
+**What this increment deliberately did NOT do**: close the residual. The brief said the measurement
+is the deliverable and that turning it into an implementation halfway through was the likeliest wrong
+turn. Both remaining refusals are deliberate, so there was nothing to close.
+
 ## 2026-08-31 — A float inside a composite, and the first increment in six where the plan matched the work
 
 **Increment**: floats inside composite bodies — struct fields, tuple members and array elements.

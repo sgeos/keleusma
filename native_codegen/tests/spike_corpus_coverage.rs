@@ -348,21 +348,28 @@ fn spike_report_corpus_coverage() {
     // code, not that the code is right. That is the differential's job, and the
     // census banner says so in its own words.
 
-    println!("\nBLOCKING OPCODE INSTANCES BY WORKSTREAM");
+    // **THESE THREE TABLES DESCRIBE THE CONTENTS OF THE REFUSED CHUNKS, NOT
+    // THE CAUSES OF THE REFUSALS**, because an instance counts as blocking when
+    // it merely SITS IN a refused chunk. Headed as causes, the last of them
+    // reads as a work queue naming opcodes that already lower. Renamed rather
+    // than removed: the composition is still worth seeing, provided nobody
+    // mistakes it for a diagnosis. The identity behind this is pinned by
+    // `the_blocking_instances_are_exactly_the_contents_of_the_refused_chunks`.
+    println!("\nWHAT THE REFUSED CHUNKS CONTAIN, BY WORKSTREAM (composition, not cause)");
     let mut ws: Vec<_> = by_workstream.iter().collect();
     ws.sort_by_key(|(_, n)| std::cmp::Reverse(**n));
     for (w, n) in ws {
         println!("  {n:6}  {w}");
     }
 
-    println!("\nCHUNKS WHOSE FIRST BLOCKER IS");
+    println!("\nCHUNKS BY THE WORKSTREAM OF THEIR FIRST OPCODE (a proxy, not a cause)");
     let mut cb: Vec<_> = chunk_first_blocker.iter().collect();
     cb.sort_by_key(|(_, n)| std::cmp::Reverse(**n));
     for (w, n) in cb {
         println!("  {n:6}  {w}");
     }
 
-    println!("\nTOP BLOCKING OPCODES BY INSTANCE COUNT");
+    println!("\nCOMMONEST OPCODES INSIDE THE REFUSED CHUNKS (NOT what blocks them)");
     let mut bl: Vec<_> = blocking.iter().collect();
     bl.sort_by_key(|(_, n)| std::cmp::Reverse(**n));
     for (name, n) in bl.iter().take(15) {
@@ -777,5 +784,108 @@ fn the_shared_walk_matches_this_spikes_own() {
         shared.len(),
         corpus_sources().len(),
         "this spike and the canonical walk disagree about the corpus population"
+    );
+}
+
+/// **THE 86 BLOCKING INSTANCES ARE NOT 86 BLOCKERS, AND THE REPORT ABOVE READS
+/// AS IF THEY WERE.**
+///
+/// `spike_report_corpus_coverage` counts an opcode instance as "blocking" when
+/// it sits inside a chunk that is refused — every instance in the chunk, not the
+/// one that caused the refusal. So its per-opcode table is the **composition of
+/// the refused chunks**, and `GetLocal`, `Const` and `SetLocal` head it purely
+/// because they are the commonest opcodes in any chunk. A reader taking that
+/// table as a work queue would set out to implement opcodes that already lower.
+///
+/// This test states the relationship as a MEASURED identity rather than leaving
+/// it to be inferred from reading the loop: the blocking instance count equals
+/// the summed length of the refused chunks, exactly.
+///
+/// It also pins the residual to the chunks that produce it, so that a coverage
+/// movement announces which chunk moved rather than only that a number changed.
+#[test]
+fn the_blocking_instances_are_exactly_the_contents_of_the_refused_chunks() {
+    let mut refused_chunk_ops = 0usize;
+    let mut blocking_instances = 0usize;
+    let mut named: Vec<(String, String, usize)> = Vec::new();
+    let mut modules = 0usize;
+    let mut chunks = 0usize;
+
+    for path in corpus_sources() {
+        let Ok(src) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Some(m) = tokenize(&src)
+            .ok()
+            .and_then(|t| parse(&t).ok())
+            .and_then(|a| compile(&a).ok())
+        else {
+            continue;
+        };
+        modules += 1;
+        let refused = refused_chunks(&m);
+        for c in &m.chunks {
+            chunks += 1;
+            // **THE TWO SIDES ARE COMPUTED BY DIFFERENT TRAVERSALS ON PURPOSE.**
+            // The first accumulates per OPCODE with a membership test, which is
+            // how the report derives its blocking count; the second sums the
+            // LENGTHS of the refused subset. Writing both as `c.ops.len()` makes
+            // the assertion `x == x`, which is what the first draft of this test
+            // did and what clippy caught. What the guard is really for is a
+            // future change to the report's rule -- counting only the CAUSING
+            // opcode, say -- after which these diverge and the tables' labels
+            // need revisiting.
+            for _op in &c.ops {
+                if refused.contains(&c.name) {
+                    blocking_instances += 1;
+                }
+            }
+            if refused.contains(&c.name) {
+                refused_chunk_ops += c.ops.len();
+                named.push((
+                    path.file_name().unwrap().to_string_lossy().to_string(),
+                    c.name.clone(),
+                    c.ops.len(),
+                ));
+            }
+        }
+    }
+
+    println!("\n================ THE RESIDUAL, NAMED TO THE CHUNK");
+    println!("  population: {modules} modules, {chunks} chunks");
+    println!("  refused chunks: {}", named.len());
+    for (file, chunk, len) in &named {
+        println!("    {file}::{chunk}  ({len} opcodes)");
+    }
+    println!(
+        "  blocking opcode instances: {blocking_instances}, which is the SUM of \
+         those chunks' lengths"
+    );
+    println!(
+        "  => the chunk count and the instance count are ONE finding, not two. \
+         The per-opcode\n     table in the report above lists what those chunks \
+         CONTAIN, not what blocks them."
+    );
+    println!("================\n");
+
+    // **NON-VACUITY, BOTH WAYS.** A sweep that found no chunks would satisfy the
+    // identity trivially, and one that found no refusals would report an empty
+    // residual for the wrong reason.
+    assert!(
+        chunks > 100,
+        "the sweep saw only {chunks} chunks, so it is measuring the harness \
+         rather than the corpus"
+    );
+    assert!(
+        !named.is_empty(),
+        "no refused chunk was found. If the residual really is closed that is a \
+         RESULT and this assertion should be replaced by one recording it — but \
+         a silently empty sweep is the likelier cause and must be excluded first"
+    );
+    assert_eq!(
+        blocking_instances, refused_chunk_ops,
+        "the blocking instance count and the refused chunks' summed length \
+         disagree, which would mean the two published figures have different \
+         causes after all"
     );
 }

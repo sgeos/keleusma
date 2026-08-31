@@ -6,6 +6,31 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
+## The coverage residual is two chunks, and chasing it would have been the wrong work
+
+Backend coverage has read **1072 of 1074 chunks and 89854 of 89940 opcode instances** for several
+increments, quoted repeatedly, and **nobody had read what the residual IS.** Measured, over a
+population of 69 modules and 1074 chunks:
+
+| refused chunk | opcodes | cause |
+|---|---|---|
+| `13_telemetry_stream.kel::main` | 45 | `Stream` |
+| `refused_witness.kel::len_witness` | 41 | `Len` |
+
+**86 is 45 + 41, exactly.** An instance counts as blocking when it merely SITS IN a refused chunk, so
+the two published figures are ONE finding and the instance count carries nothing the chunk count does
+not.
+
+**The report was readable as a work queue and it named the wrong work.** Its table headed *top
+blocking opcodes* put `GetLocal` at 18, `Const` at 17 and `SetLocal` at 16 at the head. **All three
+already lower.** Relabelled rather than deleted.
+
+**MY RECOMMENDATION IS TO STOP CHASING THE LAST 0.1%, and one part of that is yours.** The `Stream`
+refusal is **load-bearing**: the region planner's cross-iteration slot reuse is unsound for a
+composite escaping by `yield`, and the only thing keeping it quiet is that every chunk carrying the
+shape opens with `Stream`. Lowering it for 0.09% of instances would retire an accidental safety whose
+replacement needs the planner to consume a confinement verdict. `Len` was re-checked and holds.
+
 ## Two increments, both float, both needing no ruling from you
 
 **The shared slot**, which your Option A ruling settles as IEEE-754 bytes at the stated offset, and
@@ -32,10 +57,15 @@ a figure the tree already carries from two other methods.
 
 | | result |
 |---|---|
-| `native_codegen` | **406 passed, 0 failed, 79 binaries**, cargo's own exit 0 — 396 + 5 flat differentials + 2 probe tests (+2 binaries) + 3 nested differentials |
+| `native_codegen` | **407 passed, 0 failed, 79 binaries**, cargo's own exit 0 — 396 + 5 flat differentials + 2 probe tests (+2 binaries) + 3 nested differentials + 1 residual reconciliation |
 | fmt, clippy `-D warnings`, `cargo doc -D warnings` | all clean |
 | censuses | **unmoved, as MEASURED rather than hoped**: `isa_lowering` 63 of 66 (`Len` the one named refusal), 1072 of 1074 chunks, 89854 of 89940 opcode instances |
 | mutations | four in total across the two increments, each confirmed APPLIED by printing the changed line, each failing tests |
+
+**One run was red and it was NOT the code.** A full sweep reported 398 passed, 0 failed, 78 binaries
+with cargo exiting 101: `corpus_differential` was killed by SIGTERM mid-run, which is external
+termination rather than an assertion failure, and the short binary count is what betrayed it — the
+same reason the binary count is checked against an expectation rather than merely read. Re-run clean.
 
 **The oracle is never acceptance.** The shared slot compares the host buffer byte for byte; the
 composite compares execution against the virtual machine. Both use runtime arguments producing the
