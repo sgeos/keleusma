@@ -74,6 +74,25 @@ no handle**, because the native backend already packs and reads flat composites 
 representation at all. If it carries a reference field instead, that dependency breaks and the
 backend work is no longer free.
 
+> ### `Text<N>` RETIRES THE REASON `ScalarKind::Text` MUST BE TWO WORDS
+>
+> This was understated in the first version of this document, and it is the strongest argument for
+> the design rather than a side effect.
+>
+> `TYPE_SYSTEM.md` already records the representation that would let a static text field be one
+> reference, and records that it does not yet exist. It also records what today's two-word arena
+> field costs: **a value that transitively contains a flat `Text` field cannot cross the yield
+> boundary at all**, because the iteration `RESET` reclaims the arena.
+>
+> **A bounded `Text<N>` has no arena residency, no handle and no epoch.** So once dynamic text is a
+> bounded composite, `ScalarKind::Text` has no dynamic case left to represent, the one-reference
+> static form becomes reachable without splitting the kind, and the cross-yield restriction on
+> text-bearing composites dissolves with it.
+>
+> **Hence the sequencing.** Changing `ScalarKind::Text` now would move bytes the typed verifier
+> validates and the wire format carries, which is a `BYTECODE_VERSION` question and the operator's
+> to authorize. Doing it now and again after `Text<N>` would spend that authorization twice.
+
 **R3. Concatenation total, with the result capacity computed by const arithmetic.** `Text<A>` and
 `Text<B>` yielding `Text<A + B>` is the natural form and is already expressible.
 
@@ -83,7 +102,28 @@ pointer is unnecessary.
 
 **R5. `ScalarKind::size_in_bytes` gains an ADDRESS width.** It takes a word width and a float width
 today and sizes `Opaque` as one word and `Text` as two words. Per the operator's ruling `Opaque` is
-sized by `addr_bits_log2`, and R4 makes static `Text` one address as well.
+sized by `addr_bits_log2`.
+
+> ### ⚠ R5 ORIGINALLY CARRIED A SECOND CLAUSE AND IT WAS WRONG. RETRACTED 2026-08-31.
+>
+> It read *"and R4 makes static `Text` one address as well"*, proposing that `ScalarKind::Text` be
+> sized as one address. **The `v0.2.3` line caught it before building to it.**
+>
+> **`ScalarKind::Text` is the FLAT COMPOSITE FIELD kind, and a flat `Text` field is always dynamic.**
+> `docs/spec/TYPE_SYSTEM.md` says so in as many words, and `src/marshall.rs` agrees: the field is a
+> two-word arena reference, a data pointer and a byte length. A static string packed into a composite
+> is PROMOTED into the arena, which is why.
+>
+> **R4's justification does not reach it.** The string ABI puts the length in the blob for a static
+> LITERAL. An arena string has no such prefix, so its length lives in the field's second word and
+> nowhere else. **Sizing that field as one address loses the length with nothing to recover it from**,
+> which is a silent wrong read rather than a refusal, over the sites in this tree that declare a
+> composite with a `Text` field.
+>
+> **R4 stands and governs the static literal's VALUE representation only. The clause that generalised
+> it to the field kind drops out, and `ScalarKind::Text` stays two words.** `Opaque` is unaffected.
+>
+> **Do not spend a `BYTECODE_VERSION` authorization on this.** See the note under R2 below.
 
 **R6. Record the `Opaque` trust boundary explicitly**, in the operator's terms: *"An `Opaque` is a
 handle to memory the host has provided. The host is responsible for making sure this handle is valid
