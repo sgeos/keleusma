@@ -271,7 +271,7 @@ git merge-base --is-ancestor 5c3ba628 HEAD    # must succeed
 grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 39
 grep -c '^\s*#\[test\]' tests/selfhost_wire.rs              # 178
 grep -c '^\s*#\[test\]' tests/selfhost_parse.rs             # 89
-grep -c '^\s*#\[test\]' tests/selfhost_codegen.rs           # 145
+grep -c '^\s*#\[test\]' tests/selfhost_codegen.rs           # 146
 grep -c '^\s*#\[test\]' tests/selfhost_pool_tags.rs          # 8
 grep -c '^\s*#\[test\]' tests/selfhost_driver_parity.rs      # 4
 grep -c '^\s*#\[test\]' tests/selfhost_chained_index.rs      # 3
@@ -316,6 +316,9 @@ grep -c '^\s*#\[test\]' tests/forest_child_channels.rs        # 2
 grep -c '^\s*#\[test\]' tests/example_index_claims.rs         # 2
 grep -c '^\s*#\[test\]' tests/claimed_counts.rs               # 5
 grep -c '^\s*#\[test\]' tests/documentation_links.rs         # 2
+# THE STRING ABI, session 58. Pins the four properties the agreed contract consists of; the
+# other four are pinned on the `v0.3.0` line and NO test here sees both embodiments at once.
+grep -c '^\s*#\[test\]' tests/string_abi_borrowed.rs       # 10
 
 # THE BYTE-IDENTITY CORPUS IS ELEVEN STAGES. `wire.kel` joined 2026-08-27.
 grep -c 'fn self_host_compiles_.*_kel_byte_identically' tests/selfhost_codegen.rs   # 11

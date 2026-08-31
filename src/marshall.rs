@@ -469,6 +469,74 @@ impl<W: Word, F: Float> KeleusmaType<W, F> for alloc::string::String {
     }
 }
 
+// -- The agreed string ABI: a borrowed byte view (Option B) --
+
+/// Extract a borrowed string view from a native argument value.
+///
+/// This is the reader behind the agreed string marshalling contract recorded
+/// in `docs/decisions/STRING_ABI_OPTION_B.md`: a string-taking native observes
+/// a `&str` that borrows for the duration of the call, which is the same thing
+/// the ahead-of-time native backend hands its native (the address of a
+/// length-prefixed byte block). The owned [`alloc::string::String`] argument
+/// remains supported and is unchanged, but it is a virtual-machine-only
+/// convenience: no ahead-of-time lowering can produce an owned `String`
+/// without copying, so a native declared against `String` is not portable
+/// between the two embeddings.
+///
+/// Both string representations resolve without copying. A `StaticStr` borrows
+/// its owned buffer directly; a `KStr` borrows the arena region, exactly as
+/// `Vm::decode` reads it. A stale `KStr` (the arena was reset
+/// since the handle was issued) is a clean error rather than a dangling read.
+///
+/// The borrow is live only for the call, which is the same use-before-`resume`
+/// discipline that already governs every arena read at this boundary. The
+/// lifetime makes that discipline checked by the compiler rather than
+/// documented, which the owned path could not do.
+fn borrowed_str_arg<'a, W: Word, F: Float>(
+    v: &'a GenericValue<W, F>,
+    ctx: &RefContext<'a>,
+) -> Result<&'a str, VmError> {
+    match v {
+        GenericValue::StaticStr(s) => Ok(s.as_str()),
+        GenericValue::KStr(ks) => ks.get(ctx.arena).map_err(|_| {
+            VmError::TypeError(alloc::string::String::from(
+                "dynamic string is stale (arena reset since it was produced)",
+            ))
+        }),
+        other => Err(VmError::TypeError(format!(
+            "expected Text, got {}",
+            other.type_name()
+        ))),
+    }
+}
+
+/// Marker occupying the `Args` position of [`IntoNativeFn`] and
+/// [`IntoFallibleNativeFn`] for a native with at least one borrowed argument.
+///
+/// It exists to keep the borrowed impl family from overlapping the owned one.
+/// `T` is a tuple of per-slot markers, [`OwnedArg`] or [`BorrowedStr`]. None of
+/// these types is ever constructed; they only make each argument shape a
+/// distinct type so the impls do not overlap. A borrowed slot's real lifetime
+/// is the call's, bound by the higher-ranked `Fn` bound on each impl.
+pub struct ByRef<T>(core::marker::PhantomData<T>);
+
+/// An owned argument slot inside a [`ByRef`] marker, carrying the Rust type
+/// the slot marshalls to through [`KeleusmaType`].
+///
+/// The slot kinds are wrapped in distinct local types rather than written as
+/// the bare argument types, because coherence must be able to see that two
+/// shapes differ. With a bare `&'static str` for a borrowed slot and a bare
+/// type parameter for an owned one, `(&'static str, B)` and `(A, &'static str)`
+/// unify at `A = B = &'static str`, and the overlap check reports a conflict
+/// it cannot discharge, since a downstream crate could in principle implement
+/// [`KeleusmaType`] for `&'static str`. `OwnedArg<A>` and [`BorrowedStr`] are
+/// distinct type constructors, so no substitution makes two shapes equal.
+pub struct OwnedArg<T>(core::marker::PhantomData<T>);
+
+/// A borrowed string argument slot inside a [`ByRef`] marker. See
+/// [`OwnedArg`] for why the slot kinds are wrapped.
+pub struct BorrowedStr;
+
 /// An opaque host reference is a flat pass-through: the host receives the
 /// `Arc` and downcasts it through [`dyn HostOpaque::downcast_ref`]. In a
 /// flat body it is a one-word index into the VM's ephemeral opaque
@@ -1322,6 +1390,141 @@ impl_into_native_fn!(1; A: 0);
 impl_into_native_fn!(2; A: 0, B: 1);
 impl_into_native_fn!(3; A: 0, B: 1, C: 2);
 impl_into_native_fn!(4; A: 0, B: 1, C: 2, D: 3);
+
+// -- The borrowed-argument native family (the agreed string ABI, Option B) --
+//
+// A slot is `O` (owned, marshalled through `KeleusmaType` exactly as before)
+// or `R` (borrowed, a `&str` view resolved by `borrowed_str_arg`). One impl is
+// generated per shape, and only shapes with at least one `R` slot are
+// generated: the all-owned shapes are the pre-existing family above and
+// generating them again would overlap it.
+//
+// The shapes are enumerated explicitly rather than derived, because the
+// selection that makes this infer at a bare `register_fn` call site is the
+// CONCRETE `Fn` bound. Routing the slot types through an associated type
+// would make the argument marker unrecoverable from the closure's signature
+// (an associated type is not injective), and inference would fail. That was
+// measured before this family was written, not assumed.
+
+macro_rules! ref_slot_marker {
+    (O $name:ident) => { OwnedArg<$name> };
+    (R $name:ident) => { BorrowedStr };
+}
+
+macro_rules! ref_slot_param {
+    (O $name:ident) => { $name };
+    (R $name:ident) => { &'x str };
+}
+
+macro_rules! ref_slot_bind {
+    (O $name:ident, $args:ident, $idx:tt, $rc:ident) => {
+        <$name as KeleusmaType<W, FloatT>>::from_value_ctx(&$args[$idx], &$rc)?
+    };
+    (R $name:ident, $args:ident, $idx:tt, $rc:ident) => {
+        borrowed_str_arg(&$args[$idx], &$rc)?
+    };
+}
+
+macro_rules! impl_into_native_fn_ref {
+    ($arity:expr; ($($g:ident),*); $([$k:ident $n:ident $i:tt]),+) => {
+        impl<W: Word, FloatT: Float, Func, $($g,)* R>
+            IntoNativeFn<W, FloatT, ByRef<($(ref_slot_marker!($k $n),)+)>, R> for Func
+        where
+            Func: for<'x> Fn($(ref_slot_param!($k $n),)+) -> R + 'static,
+            $($g: KeleusmaType<W, FloatT>,)*
+            R: KeleusmaType<W, FloatT>,
+        {
+            #[allow(unused_variables, non_snake_case)]
+            fn into_native_fn(self) -> BoxedNativeFn<W, FloatT> {
+                alloc::boxed::Box::new(
+                    move |__ctx: &crate::vm::NativeCtx<'_>, args: &[GenericValue<W, FloatT>]|
+                        -> Result<GenericValue<W, FloatT>, VmError> {
+                        if args.len() != $arity {
+                            return Err(VmError::NativeError(format!(
+                                "native function expected {} argument(s), got {}",
+                                $arity,
+                                args.len()
+                            )));
+                        }
+                        let __rc = __ctx.ref_context();
+                        let _ = &__rc;
+                        // The borrowed arguments are extracted inline into the
+                        // call rather than bound to locals first, so the borrow
+                        // of `args` and of the arena plainly ends with the call.
+                        <R as KeleusmaType<W, FloatT>>::into_value_ctx(
+                            self($(ref_slot_bind!($k $n, args, $i, __rc),)+),
+                            &__rc,
+                        )
+                    },
+                )
+            }
+        }
+
+        impl<W: Word, FloatT: Float, Func, $($g,)* R>
+            IntoFallibleNativeFn<W, FloatT, ByRef<($(ref_slot_marker!($k $n),)+)>, R> for Func
+        where
+            Func: for<'x> Fn($(ref_slot_param!($k $n),)+) -> Result<R, VmError> + 'static,
+            $($g: KeleusmaType<W, FloatT>,)*
+            R: KeleusmaType<W, FloatT>,
+        {
+            #[allow(unused_variables, non_snake_case)]
+            fn into_native_fn(self) -> BoxedNativeFn<W, FloatT> {
+                alloc::boxed::Box::new(
+                    move |__ctx: &crate::vm::NativeCtx<'_>, args: &[GenericValue<W, FloatT>]|
+                        -> Result<GenericValue<W, FloatT>, VmError> {
+                        if args.len() != $arity {
+                            return Err(VmError::NativeError(format!(
+                                "native function expected {} argument(s), got {}",
+                                $arity,
+                                args.len()
+                            )));
+                        }
+                        let __rc = __ctx.ref_context();
+                        let _ = &__rc;
+                        self($(ref_slot_bind!($k $n, args, $i, __rc),)+)
+                            .and_then(|__r| {
+                                <R as KeleusmaType<W, FloatT>>::into_value_ctx(__r, &__rc)
+                            })
+                    },
+                )
+            }
+        }
+    };
+}
+
+// Arity 1: one shape.
+impl_into_native_fn_ref!(1; (); [R S0 0]);
+
+// Arity 2: three shapes.
+impl_into_native_fn_ref!(2; ();    [R S0 0], [R S1 1]);
+impl_into_native_fn_ref!(2; (B);   [R S0 0], [O B 1]);
+impl_into_native_fn_ref!(2; (A);   [O A 0], [R S1 1]);
+
+// Arity 3: seven shapes.
+impl_into_native_fn_ref!(3; ();      [R S0 0], [R S1 1], [R S2 2]);
+impl_into_native_fn_ref!(3; (C);     [R S0 0], [R S1 1], [O C 2]);
+impl_into_native_fn_ref!(3; (B);     [R S0 0], [O B 1], [R S2 2]);
+impl_into_native_fn_ref!(3; (A);     [O A 0], [R S1 1], [R S2 2]);
+impl_into_native_fn_ref!(3; (B, C);  [R S0 0], [O B 1], [O C 2]);
+impl_into_native_fn_ref!(3; (A, C);  [O A 0], [R S1 1], [O C 2]);
+impl_into_native_fn_ref!(3; (A, B);  [O A 0], [O B 1], [R S2 2]);
+
+// Arity 4: fifteen shapes.
+impl_into_native_fn_ref!(4; ();         [R S0 0], [R S1 1], [R S2 2], [R S3 3]);
+impl_into_native_fn_ref!(4; (D);        [R S0 0], [R S1 1], [R S2 2], [O D 3]);
+impl_into_native_fn_ref!(4; (C);        [R S0 0], [R S1 1], [O C 2], [R S3 3]);
+impl_into_native_fn_ref!(4; (B);        [R S0 0], [O B 1], [R S2 2], [R S3 3]);
+impl_into_native_fn_ref!(4; (A);        [O A 0], [R S1 1], [R S2 2], [R S3 3]);
+impl_into_native_fn_ref!(4; (C, D);     [R S0 0], [R S1 1], [O C 2], [O D 3]);
+impl_into_native_fn_ref!(4; (B, D);     [R S0 0], [O B 1], [R S2 2], [O D 3]);
+impl_into_native_fn_ref!(4; (B, C);     [R S0 0], [O B 1], [O C 2], [R S3 3]);
+impl_into_native_fn_ref!(4; (A, D);     [O A 0], [R S1 1], [R S2 2], [O D 3]);
+impl_into_native_fn_ref!(4; (A, C);     [O A 0], [R S1 1], [O C 2], [R S3 3]);
+impl_into_native_fn_ref!(4; (A, B);     [O A 0], [O B 1], [R S2 2], [R S3 3]);
+impl_into_native_fn_ref!(4; (B, C, D);  [R S0 0], [O B 1], [O C 2], [O D 3]);
+impl_into_native_fn_ref!(4; (A, C, D);  [O A 0], [R S1 1], [O C 2], [O D 3]);
+impl_into_native_fn_ref!(4; (A, B, D);  [O A 0], [O B 1], [R S2 2], [O D 3]);
+impl_into_native_fn_ref!(4; (A, B, C);  [O A 0], [O B 1], [O C 2], [R S3 3]);
 
 // Tests live alongside the trait. Integration tests across vm.rs cover
 // register_fn registration end to end.

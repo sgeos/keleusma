@@ -4318,9 +4318,16 @@ fn parse_into_codegen_multihead_matches_the_reference() {
 /// reference's ops. The result is a runnable module whose every source-defined chunk was
 /// emitted by the self-hosted pipeline.
 /// Unescape a raw string-literal body (the bytes between the quotes, backslashes intact) into the
-/// StaticStr content the reference bakes: `\n` newline, `\t` tab, `\"` quote, `\\` backslash; any
-/// other escape passes the second byte through. The self-host lexer interns the raw bytes (it only
-/// skips the escape pair so a `\"` does not terminate), so the host performs the unescape here.
+/// StaticStr content the reference bakes. All SIX escapes the reference handles are handled here:
+/// `\n` newline, `\t` tab, `\r` carriage return, `\"` quote, `\\` backslash, and `\0` NUL. The
+/// self-host lexer interns the raw bytes (it only skips the escape pair so a `\"` does not
+/// terminate), so the host performs the unescape here.
+///
+/// **This handled four and was missing `\r` and `\0`**, so a literal carrying either compiled to
+/// different bytes under the two pipelines. No stage source uses any escape at all, so the
+/// byte-identity corpus could not witness it. The passthrough arm is an unreachable default, not a
+/// match for the reference's behaviour: the reference REJECTS an unknown escape with a lex error,
+/// so no literal carrying one ever reaches codegen.
 fn unescape_string(raw: &str) -> String {
     let bytes = raw.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -4330,8 +4337,10 @@ fn unescape_string(raw: &str) -> String {
             out.push(match bytes[i + 1] {
                 b'n' => b'\n',
                 b't' => b'\t',
+                b'r' => b'\r',
                 b'"' => b'"',
                 b'\\' => b'\\',
+                b'0' => 0,
                 other => other,
             });
             i += 2;
@@ -4341,6 +4350,57 @@ fn unescape_string(raw: &str) -> String {
         }
     }
     String::from_utf8(out).expect("unescaped string is valid UTF-8")
+}
+
+#[test]
+fn the_host_unescape_agrees_with_the_reference_on_every_accepted_escape() {
+    // The self-hosted lexer interns a literal's RAW bytes and the host unescapes them, so the
+    // two pipelines agree on a literal only if this routine reproduces the reference lexer
+    // exactly. Nothing checked that: no stage source uses any escape, so the byte-identity
+    // corpus is silent here, and the routine had been missing `\r` and `\0` for as long as it
+    // has existed.
+    //
+    // The escape set is derived from the reference rather than restated. Every byte the
+    // reference ACCEPTS after a backslash must round-trip; every byte it REJECTS must be a lex
+    // error, which is what makes the passthrough arm unreachable rather than wrong.
+    let mut accepted = 0usize;
+    let mut rejected = 0usize;
+    for b in 0u8..=127 {
+        let esc = b as char;
+        let src = format!("fn main() -> Text {{ \"x\\{esc}y\" }}");
+        let raw = format!("x\\{esc}y");
+        match tokenize(&src) {
+            Ok(tokens) => {
+                let baked = tokens
+                    .iter()
+                    .find_map(|t| match &t.kind {
+                        keleusma::token::TokenKind::StringLit(v) => Some(v.clone()),
+                        _ => None,
+                    })
+                    .expect("the reference lexed a string literal");
+                assert_eq!(
+                    unescape_string(&raw),
+                    baked,
+                    "the host unescape and the reference disagree on the escape {esc:?}"
+                );
+                accepted += 1;
+            }
+            Err(_) => rejected += 1,
+        }
+    }
+    // NON-VACUITY, in both directions. A loop that accepted nothing would compare nothing, and
+    // one that rejected nothing would mean the reference had stopped refusing unknown escapes
+    // and the passthrough arm had become reachable.
+    assert_eq!(
+        accepted, 6,
+        "the reference accepts {accepted} escapes, not the six this routine implements; the \
+         unescape must be extended to match before the count is relaxed"
+    );
+    assert!(
+        rejected > 0,
+        "the reference rejected no escape, so the passthrough arm is reachable and the \
+         disagreement it hides is real"
+    );
 }
 
 fn self_host_compile(src: &str) -> Module {

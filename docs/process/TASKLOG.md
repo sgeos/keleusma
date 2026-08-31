@@ -10,6 +10,30 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-30, session 58, second increment). THE STRING ABI IS IMPLEMENTED AND
+> SPECIFIED, AND IT UNCOVERED TWO DIVERGENCES NOTHING COULD SEE.**
+>
+> A string-taking native may now be declared against a borrowed `&str`, in any argument position at
+> arities one through four, which is the same view the ahead-of-time backend hands its native. The
+> owned `String` argument is RETAINED and is recorded as virtual-machine-only rather than
+> deprecated, because deprecation is the operator's call. Specified in
+> `docs/spec/NATIVE_STRING_ABI.md`; the chapter on registering natives is updated.
+>
+> **The reference lexer corrupted every non-ASCII string literal.** `lex_string` pushed each scanned
+> byte as `c as char`, re-encoding every byte at or above `0x80`; a six-byte literal baked as eleven
+> bytes of well-formed but WRONG text. `lexer.kel` interns raw bytes and was correct, so the
+> REFERENCE was the divergent side. No `.kel` file in the tree carries a non-ASCII literal, so the
+> byte-identity oracle compares only inputs that cannot exhibit it.
+>
+> **The self-hosted `unescape_string` handled four escapes where the reference handles six**, missing
+> `\r` and `\0`, and its comment claimed passthrough "matches the reference" when the reference
+> REJECTS an unknown escape. Both copies fixed; the new pin derives the escape set from the reference
+> by scanning all 128 ASCII bytes, with non-vacuity in both directions.
+>
+> **A spike in a binary crate proved the wrong thing.** The impl family compiled there and produced 44
+> coherence errors in the library, where a downstream crate must be defended against. A spike whose
+> crate type differs from the target is measuring something else.
+
 > **Currency note (2026-08-30, session 58, first increment). THE STRING ABI RULING IS RECEIVED AND
 > BINDING, AND THE LINE IS AUDITED.**
 >

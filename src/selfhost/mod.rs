@@ -1920,9 +1920,20 @@ fn pool_to_constants(pool: &[(i64, i64)], names: &[String]) -> Vec<ConstValue> {
 ///
 /// The lexer's name table holds a string literal's content **as written**, so `\n` is a
 /// backslash followed by an `n`. The reference bakes the escaped byte, so comparing the two
-/// requires this. Handling the four the reference handles — newline, tab, quote, backslash —
-/// and passing anything else through unchanged, which matches the reference's own behaviour
-/// on an unknown escape.
+/// requires this. All SIX the reference handles are handled here: newline, tab, carriage
+/// return, quote, backslash, and NUL.
+///
+/// **This routine handled four and claimed the missing two did not exist.** Its comment said
+/// it matched the reference by passing an unknown escape through unchanged. That was false in
+/// two directions at once: the reference REJECTS an unknown escape with a lex error rather
+/// than passing it through, and `\r` and `\0` are not unknown to it at all, so a literal
+/// containing either compiled to different bytes under the two pipelines. No stage source
+/// uses any escape, so the byte-identity corpus could not witness it -- the same
+/// unwitnessed-because-unexercised shape this tree keeps recording.
+///
+/// The passthrough arm is retained as an unreachable default rather than a panic: a literal
+/// carrying an unknown escape never reaches codegen, because the reference lexer refuses it
+/// first.
 fn unescape_string(raw: &str) -> String {
     let bytes = raw.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -1932,8 +1943,10 @@ fn unescape_string(raw: &str) -> String {
             out.push(match bytes[i + 1] {
                 b'n' => b'\n',
                 b't' => b'\t',
+                b'r' => b'\r',
                 b'"' => b'"',
                 b'\\' => b'\\',
+                b'0' => 0,
                 other => other,
             });
             i += 2;
