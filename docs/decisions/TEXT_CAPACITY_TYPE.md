@@ -150,6 +150,42 @@ them accurately; the confirmation is what this line records as the receiving eve
 R2 is marked differently on purpose. **It does not need to be a ruling to be right**, and adopting a
 better design because a peer argued for it well is not the same as recording their relay as binding.
 
+## R5's `Text` clause is RETRACTED, and the sequencing is the reason
+
+R5 proposed sizing `ScalarKind::Text` as one address, on R4's reasoning that the string ABI puts the
+length in the blob. **That is wrong and the `v0.3.0` line retracted it** at their `a89a713f` after
+verifying the citations rather than conceding on trust.
+
+`ScalarKind::Text` is the FLAT COMPOSITE FIELD kind. `TYPE_SYSTEM.md` states that such a field is a
+two-word handle of arena data pointer and byte length, and states flatly that **a flat `Text` field
+is always dynamic**, because a static string packed into a composite is promoted to an arena
+`KStr`. R4's justification holds for a static literal and not for an arena string, which carries no
+length prefix: its length lives in the field's second word and nowhere else. One address loses it,
+and that is a silent wrong read rather than a refusal, across the eighteen sites in this tree that
+declare a composite with a `Text` field.
+
+**Option 1 is taken. R4 governs the static literal's value representation only, the "as well"
+clause drops out, `ScalarKind::Text` stays two words, and no bytes move.**
+
+### The argument for NOT escalating a version question now, which is theirs and is better than mine
+
+I was prepared to take this to the operator as a `BYTECODE_VERSION` question. The `v0.3.0` line
+supplied the reason not to, and it turns on something I had missed about this very feature:
+
+**`Text<N>` removes the dynamic case from `ScalarKind::Text` altogether.** A bounded text has no
+arena residency, no handle and no epoch. Once dynamic text is a bounded flat composite, the kind has
+no dynamic case left to represent -- so the one-address form becomes reachable with no split into
+static and dynamic flavours, and **the cross-yield restriction on text-bearing composites dissolves
+with it**. `TYPE_SYSTEM.md` already anticipates that representation and records why it has not
+happened: it had no story for a field that must hold a dynamic string. `Text<N>` is that story.
+
+Changing the kind now moves bytes the typed verifier validates against the canonical layout and the
+wire format carries. Doing it now and again after `Text<N>` would **spend the operator's
+authorization twice for one net change**. Option 1 costs nothing and keeps that authorization intact
+for the moment it buys the whole thing.
+
+**`Opaque` sized by `addr_bits_log2` is unaffected by any of this** and proceeds independently.
+
 ## Open questions, which belong to the operator
 
 1. **The overflow rule.** A push past `N` must refuse at compile time where provable and do
