@@ -6527,6 +6527,185 @@ fn signature_fields(module: &Module) -> Vec<i64> {
 ///
 /// [`SelfHostError::Unsupported`] when the field stream is not a whole number of
 /// records, when the stage refuses one, or when the stage faults.
+/// The `SHARED_LAYOUT` record fields, seven per record, grouped into runs exactly as the
+/// reference encoder groups them.
+///
+/// # The grouping is the caller's job, and it must match byte for byte
+///
+/// `wire.kel`'s emitter writes whatever fields it is handed; forming runs is the host's. A run is
+/// consecutive entries sharing `kind` and `len` whose `offset` advances by a CONSTANT delta, and a
+/// run forms only when that delta fits `u16` -- a wider one falls back to single-slot records
+/// rather than truncating, which would place every later slot in the run at a wrong offset. Each
+/// run is then chunked at `u16::MAX` slots per record. This mirrors `SchemaBuilder::add_data_layout`
+/// and any divergence from it is a wrong artifact rather than a missing one.
+///
+/// # The batch bound does not bind, and that was measured rather than assumed
+///
+/// The scouting for this increment named the field-buffer capacity as the live constraint, on the
+/// reasoning that a stage with a large shared layout would overflow it. **That was wrong.** The
+/// grouping is enormously effective because a shared layout is overwhelmingly uniform arrays:
+/// measured 2026-08-31 across the twelve stage sources, `lexer.kel`'s 395,778 slots collapse to
+/// NINE records and `wire.kel`'s 144,391 to eight; every other stage produces one. Nine records is
+/// 63 field words against a `fin` of 1024. The guard below is still written correctly, but nothing
+/// in the corpus approaches it.
+fn shared_slot_fields(module: &Module) -> Vec<i64> {
+    let mut out = Vec::new();
+    let Some(layout) = module.data_layout.as_ref() else {
+        return out;
+    };
+    let sl = &layout.shared_layout;
+    let mut i = 0usize;
+    while i < sl.len() {
+        let a = &sl[i];
+        let mut n = 1usize;
+        let mut stride: u32 = 0;
+        if i + 1 < sl.len() {
+            let b = &sl[i + 1];
+            if b.kind == a.kind && b.len == a.len {
+                let d = b.offset.wrapping_sub(a.offset);
+                if d <= u32::from(u16::MAX) {
+                    stride = d;
+                    n = 2;
+                    while i + n < sl.len() {
+                        let c = &sl[i + n];
+                        let p = &sl[i + n - 1];
+                        if c.kind != a.kind
+                            || c.len != a.len
+                            || c.offset.wrapping_sub(p.offset) != d
+                        {
+                            break;
+                        }
+                        n += 1;
+                    }
+                }
+            }
+        }
+        let mut done = 0usize;
+        while done < n {
+            let take = (n - done).min(u16::MAX as usize);
+            out.push(i64::from(a.offset + (done as u32) * stride));
+            out.push(i64::from(a.kind));
+            out.push(0);
+            out.push(i64::from(a.len));
+            out.push((i + done) as i64);
+            out.push(take as i64);
+            out.push(i64::from(stride));
+            done += take;
+        }
+        i += n;
+    }
+    out
+}
+
+/// The `DATA_INIT` record fields, two per record, or `None` when this module's pool is one the
+/// driver cannot yet place.
+///
+/// # Only the elided form is driven, and the other case is NAMED rather than guessed
+///
+/// The reference elides a wholly-default private-initialiser pool, writing the [`ABSENT`] sentinel
+/// as `first` and the slot count as `count`. That case needs nothing from the constant table and is
+/// what eleven of the twelve stage sources produce.
+///
+/// The remaining form stores the pool in the shared constant table and records the index it landed
+/// at. Predicting that index means modelling the encoder's constant ordering, which is the `CONSTS`
+/// problem and a separate increment. Rather than guess it, this returns `None` and the caller
+/// leaves the region as an honest zeroed gap -- `Skipped` in
+/// `tests/selfhost_region_coverage.rs`'s vocabulary, which is deliberately not `Differs`.
+///
+/// Measured 2026-08-31: the one corpus stage taking this path is `verify_datalayout.kel`, whose
+/// pool is EMPTY. An empty pool is deliberately not reported as elided, so that the sentinel stands
+/// for one situation only; that is the predicate behaving as documented, not an edge case to work
+/// around.
+///
+/// **The elision test calls the shared predicate rather than restating its condition.** The
+/// predicate exists precisely so the encoder and any other producer cannot drift, and its own
+/// documentation records that a disagreement here is not a state anything would notice.
+fn data_init_fields(module: &Module) -> Option<Vec<i64>> {
+    let layout = module.data_layout.as_ref()?;
+    if crate::wire_schema::private_init_is_elided(layout) {
+        Some(alloc::vec![
+            i64::from(crate::wire_schema::ABSENT),
+            layout.private_init.len() as i64,
+        ])
+    } else {
+        None
+    }
+}
+
+/// Emit `n` records of one region kind into the window through the generic `emit_in_window`
+/// command, which takes the kind, the record count and the window offset as arguments.
+///
+/// # The length is checked, never truncated
+///
+/// The sibling paths that write `&win[..len]` silently discard a disagreement between what the
+/// stage produced and what the reference reserved. Here a mismatch is reported, on the same ground
+/// as the `CONSTS` and `SHAPES` paths: a short write would turn an honest `Skipped` region into a
+/// `Differs` one, and `tests/selfhost_region_coverage.rs` separates those two precisely so a gap is
+/// never mistaken for a defect.
+fn window_emit_kind(
+    stage: &Module,
+    kind: u16,
+    fields: &[i64],
+    per_record: usize,
+    want: usize,
+    label: &str,
+) -> Result<Vec<u8>, SelfHostError> {
+    use wire_slots::{FIN as FIN_SLOT, WARG as WARG_SLOT};
+
+    if !fields.len().is_multiple_of(per_record) {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!(
+                "the {label} field stream is {} words, not a multiple of {per_record}",
+                fields.len()
+            ),
+        });
+    }
+    let records = fields.len() / per_record;
+
+    let m = stage.clone();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify wire.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+
+    vm.set_shared(&mut shared, WARG_SLOT, Value::Int(i64::from(kind)))
+        .expect("kind");
+    vm.set_shared(&mut shared, WARG_SLOT + 1, Value::Int(records as i64))
+        .expect("count");
+    vm.set_shared(&mut shared, WARG_SLOT + 2, Value::Int(0))
+        .expect("offset");
+    for (i, &v) in fields.iter().enumerate() {
+        vm.set_shared(&mut shared, FIN_SLOT + i, Value::Int(v))
+            .expect("record field");
+    }
+
+    let wrote = enter_wire(&mut vm, &mut shared, 164)?;
+    if wrote < 0 {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!("wire.kel refused {label} ({records} record(s)) with {wrote}"),
+        });
+    }
+    if wrote as usize != want {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!(
+                "the self-hosted {label} region is {wrote} bytes and the reference reserved \
+                 {want}; the host's record model and the encoder disagree"
+            ),
+        });
+    }
+    let mut out = Vec::with_capacity(wrote as usize);
+    for k in 0..wrote as usize {
+        out.push(
+            match vm.get_shared(&shared, wire_slots::BYTES + k).expect("read") {
+                Value::Byte(b) => b,
+                other => panic!("shared byte slot held {other:?}"),
+            },
+        );
+    }
+    Ok(out)
+}
+
 fn window_emit_records(
     stage: &Module,
     fields: &[i64],
@@ -6659,6 +6838,30 @@ pub fn wire_windowed_via_kel(
             out[base..base + len].copy_from_slice(&win);
             continue;
         }
+        // SHARED_LAYOUT AND DATA_INIT TAKE THE GENERIC WINDOW EMITTER. Both formatters have
+        // existed in the stage all along, dispatched by `emit_at`; what was missing was the
+        // DRIVER supplying their fields, which is why both sat in the catch-all below and were
+        // left as zeros. Neither carries a name index, which is what makes them reachable
+        // without the interning route the remaining four kinds still wait on.
+        if kind == crate::wire_schema::kind::SHARED_LAYOUT {
+            let fields = shared_slot_fields(module);
+            // A module with no shared slots reserves no region; emitting zero records would ask
+            // the stage for an empty write rather than skipping, so fall through to the gap.
+            if !fields.is_empty() {
+                let win = window_emit_kind(&stage, kind, &fields, 7, len, "SHARED_LAYOUT")?;
+                out[base..base + len].copy_from_slice(&win);
+                continue;
+            }
+        }
+        if kind == crate::wire_schema::kind::DATA_INIT {
+            // `None` is the pool form whose constant-table index the driver cannot yet predict;
+            // leaving it zeroed keeps it an honest `Skipped` rather than a wrong `Differs`.
+            if let Some(fields) = data_init_fields(module) {
+                let win = window_emit_kind(&stage, kind, &fields, 2, len, "DATA_INIT")?;
+                out[base..base + len].copy_from_slice(&win);
+                continue;
+            }
+        }
         let cmd = match kind {
             k if k == crate::wire_schema::kind::NAMES => 170,
             k if k == crate::wire_schema::kind::STRING_POOL => 171,
@@ -6670,6 +6873,13 @@ pub fn wire_windowed_via_kel(
             // side. `tests/selfhost_region_coverage.rs` measures which kinds land
             // and which are skipped, so the coverage claim is a figure rather
             // than a sentence.
+            //
+            // FIVE KINDS REACH HERE NOW, down from six on 2026-08-31 when
+            // `SHARED_LAYOUT` was routed above: `ENUM_VARIANTS`, `ENUM_LAYOUTS`,
+            // `DATA_SLOTS`, `PARAM_TYPES`, and `DATA_INIT` for the single stage
+            // whose private-initialiser pool is not elided. The first four wait on
+            // the name-interning route; the fifth waits on a model of the
+            // encoder's constant ordering.
             _ => continue,
         };
         if len > WINDOW {
