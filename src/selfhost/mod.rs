@@ -6718,6 +6718,10 @@ pub fn wire_windowed_via_kel(
 /// the emitted bytecode is genuinely self-hosted; when the two agree (an in-subset
 /// program) that agreement is the [construct-support boundary]'s guarantee. On any
 /// divergence the CLI prints a clean error suggesting `--compiler rust`.
+///
+/// "Oracle" here means the yardstick this check compares against, not an implementation
+/// assumed correct. A divergence establishes that the two disagree and not which is wrong;
+/// see the cross-check below for the case where the reference was the wrong side.
 pub fn self_hosted_compile(
     src: &str,
     target: &crate::target::Target,
@@ -6749,8 +6753,22 @@ pub fn self_hosted_compile(
         SelfHostError::Unsupported { detail }
     })?;
     // Correctness cross-check: the self-hosted compiled code (each chunk's ops, constant
-    // pool, and local count) must match the reference. A divergence means the program is
-    // outside the self-hosted subset; reject it rather than emit a wrong module.
+    // pool, and local count) must match the reference. Reject a divergence rather than emit
+    // a module neither side vouches for.
+    //
+    // **A DIVERGENCE DOES NOT SAY WHICH SIDE IS WRONG**, and this comment used to claim it
+    // meant the program was outside the self-hosted subset. That is the usual cause and is
+    // not the only one. On 2026-08-31 the REFERENCE was the divergent side: `lex_string`
+    // re-encoded every byte at or above `0x80`, so a six-byte non-ASCII literal baked as
+    // eleven bytes, while `lexer.kel`, which interns raw bytes, was right. Before the fix a
+    // program carrying such a literal diverged here, was refused, and the caller was pointed
+    // at `--compiler rust`, which compiled it silently and wrongly -- the tool steering a
+    // user from a safe refusal toward a corrupt artifact.
+    //
+    // The behaviour is unchanged and correct: refuse, and recommend the reference, which is
+    // the far more mature implementation and will be the right side in almost every case.
+    // What changed is the claim, because "the cause is already known" is what stops someone
+    // investigating the case where it is not.
     let diverges = module.chunks.len() != reference.chunks.len()
         || module
             .chunks

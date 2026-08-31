@@ -13,6 +13,142 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-31 — CORRECTION to the third increment's stated test figures
+
+**The string-ABI increment's commit message and pull-request body say its default-features gate pass
+was "179 binaries and 2904 tests". Both figures are WRONG.** The default-features pass is
+**113 binaries and 2708 tests**.
+
+The instrument summed every `test result:` line in the whole gate log, which by then had run past
+the default-features section into the no-default-features one. It conflated two feature passes into
+a total that looked like a measurement of one.
+
+Recorded rather than quietly dropped, for two reasons. The commit and the pull request are merged
+and cannot be corrected in place, so the only honest fix is a correction that travels with the
+record. And this is the SAME instrument error the increment it describes spends several pages
+cataloguing in other people's tests -- a figure produced by a plausible one-liner that nobody
+checked against a second route. Six in one session, and the sixth is in a durable artifact.
+
+The correct comparison, measured per-section rather than cumulatively:
+
+| gate | default-features binaries | tests |
+|---|---|---|
+| before this increment's tests | 113 | 2708 |
+| with them | 114 | 2710 |
+
+Exactly one new binary and two new tests, which is what was added. **The per-section figure is the
+one to quote; a running total across a multi-pass gate log is not a test count.**
+
+## 2026-08-31 — Session 58, fourth increment: what the oracle's corpus actually exercises
+
+The lexical census established that the byte-identity corpus contains no string literal. This asks
+the obvious next question -- what else is at zero -- and the answer is larger than the question.
+
+### The measurement
+
+Over all twelve stage sources, established by two independent instruments because a zero is a
+strong claim and this session produced five instrument errors:
+
+| | |
+|---|---|
+| declared functions | **861** |
+| distinct return types | **exactly one: `Word`** |
+| declared parameters | **733** |
+| distinct parameter types | **exactly one: `Word`** |
+
+Comment-stripped text matching said it; the project's own lexer and parser, run over the same
+twelve files, said the same. `Text`, `Float`, `Fixed`, `bool`, tuples, arrays, structs, enums and
+`impl` blocks appear at no function boundary anywhere in the corpus. Composites and `Byte` live
+inside bodies, through `private data` and indexing, but never cross a signature.
+
+**The byte-identity oracle exercises exactly one type at every function boundary.** Yesterday's
+string-literal hole was not a corner case; it was one instance of a corpus that is `Word`-shaped
+throughout.
+
+### A claim I made and then refuted
+
+The first draft of this said the construct-support boundary table is the ONLY coverage for
+non-`Word` types. **Testing the claim refuted it.** Fourteen test files drive the self-hosted
+compiler; counting lines that declare a non-`Word` parameter or return, `selfhost_codegen.rs` has
+299 and `selfhost_pool_tags.rs` has 22. Non-`Word` coverage is real and not confined to one table.
+
+The surviving statement is narrower and is the true one: the oracle over REAL PROGRAMS is
+`Word`-only, and every non-`Word` signature the pipeline is tested against is a hand-written
+snippet, typically one to three lines. The distinction is not synthetic-versus-absent but
+synthetic-versus-SCALE. A 200-kilobyte stage exercises interactions between constructs that a
+three-line snippet cannot reach, and those interactions are what a byte-identity oracle exists to
+catch. For `Word` the project has both instruments; for everything else it has only the snippets.
+
+### The boundary table's shape, which nothing had examined
+
+Its 101 cases: **43 equality**, 11 scalar, 10 bool, 8 op, 8 comp, 5 prec, 5 ctrl, 3 nested, 3 cast,
+2 scope, and **one each for `literal`, `tuple`, `removed`**.
+
+The single `literal` case is `let s = "hi"` -- ASCII, no escape, three bytes. **That is the
+degenerate case that let both string defects through.** The family existed, so the surface looked
+covered; the case was too thin to touch anything the defects lived in.
+
+A distribution like this measures where attention has been, not where risk is. That is not a
+criticism of the table, which was built case by case as constructs landed. It is a statement about
+what the table can find.
+
+### What the tests enforce, and what they deliberately do not
+
+The type-surface check derives signatures through the lexer and parser, never by matching source
+text. The distribution check calls `boundary_cases()` rather than reading its file, because a
+regular expression over that exact table already produced a false 99-against-101 reading once.
+
+The distribution check is a RATCHET, not a quota. It does not demand that families be large: some
+constructs genuinely have one shape worth testing, and a rule demanding more would produce padding,
+which is worse than a thin family honestly recorded. It fails when the set of single-case families
+CHANGES, so a newly thin family is noticed while someone is already there.
+
+Both type-surface assertions fail in the good direction too. If a stage source ever gains a
+non-`Word` signature, that is the oracle getting STRONGER, and the message says so and asks for the
+reasoning to be updated rather than the check deleted.
+
+### Also recorded: a divergence does not say which side is wrong
+
+`self_hosted_compile`'s cross-check says "a divergence means the program is outside the self-hosted
+subset". Too strong, and this session is the counterexample: the reference was the divergent side
+for any non-ASCII literal. Before the fix, `fn f() -> Word { let s = "é"; 1 }` under
+`--compiler self-hosted` would diverge, be refused, and hint at `--compiler rust`, which compiled it
+silently and wrongly -- the tool steering a user from a safe refusal to a corrupted artifact.
+
+**The behaviour stays.** Refusing on divergence is right, and pointing at the reference is right,
+because it is the more mature implementation and will be the correct side almost always. Only the
+CLAIM changes, because the current wording invites a reader who hits a divergence to stop
+investigating, which is exactly what would have hidden the lexer defect.
+
+### The census's efficacy, measured rather than assumed
+
+Run in a detached worktree at `ba11f69a`, so the shipping tree was never touched. Both defects the
+census was built in response to were reintroduced one at a time, and the census was run unchanged.
+
+| mutation | census result | probes named |
+|---|---|---|
+| `lex_string` pushes each byte as `c as char` (the original defect, reproduced) | **FAIL** -- 44 agree, **5 diverge** | the five `string/nonascii/*` probes, and only those |
+| `unescape_string` loses its `\r` and `\0` arms | **FAIL** -- 47 agree, **2 diverge** | `string/escape/30` and `string/escape/72`, which are `\0` and `\r`, and only those |
+| neither (the shipped tree) | **PASS** -- 49 agree, 0 diverge | -- |
+
+## Why this was worth doing
+
+The census's positive controls prove the classifier CAN report a non-agreement. They do not prove it
+WOULD HAVE caught the two real defects, and "this test would have caught it" is exactly the kind of
+plausible story this tree keeps having to retract. Now it is a measurement: both defects are caught,
+and each names precisely the probes that carry it and no others.
+
+The precision matters as much as the failure. A census that went red on all 49 probes for either
+mutation would be nearly useless for diagnosis, and would suggest the probes are not independent.
+Five and two, exactly on the axis mutated, is the behaviour a diagnostic instrument should have.
+
+## What this does NOT establish
+
+That the probe set is sufficient. It establishes that the probes covering the two known defects
+detect them. A defect on an axis the census does not probe remains invisible, which is why the
+coverage assertions exist alongside.
+
+
 ## 2026-08-31 — Session 58, third increment: the lexical divergence census
 
 The generalisation of the previous increment. Two divergences were found in one afternoon by
