@@ -13,6 +13,71 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-31 — Session 58, fifth increment: SHARED_LAYOUT routed, and a brief corrected by measurement
+
+The operator's queued item. Both region kinds had their formatters in the stage all along; what was
+missing was the driver supplying their fields, so both fell into the windowed assembler's catch-all
+and were left as zeros.
+
+### The outcome
+
+**`SHARED_LAYOUT` is routed for every stage and byte-matches the reference. Skipped region kinds
+6 -> 5.** `DATA_INIT` is routed and correct for the eleven stages whose private-initialiser pool is
+elided; the twelfth keeps the kind on the skipped list, deliberately.
+
+### THE BRIEF WAS WRONG ABOUT THE ONLY RISK IT NAMED
+
+Scouting identified the field-buffer batch bound as the live constraint, reasoning that a stage with
+a large shared layout would overflow it, and made the `-204` refusal path the increment's central
+care. **Measuring it destroyed that.** The run grouping is enormously effective because a shared
+layout is overwhelmingly uniform arrays:
+
+| stage | shared slots | records after grouping |
+|---|---:|---:|
+| `lexer.kel` | 395,778 | **9** |
+| `wire.kel` | 144,391 | **8** |
+| every other stage | 3,084 - 56,134 | 1 |
+
+Nine records is 63 field words against a `fin` of 1024. **Nothing in the corpus approaches the
+bound.** The brief would have spent the increment's attention on a constraint that does not bind.
+Third time this session that measurement overturned my reasoning about a structure.
+
+### WHY DATA_INIT IS PARTIAL, AND WHY THAT IS THE RIGHT ANSWER
+
+Eleven of twelve stages elide, so the record is the `ABSENT` sentinel and a count -- nothing from the
+constant table. The twelfth, `verify_datalayout.kel`, stores its pool and records the index it landed
+at, and predicting that index means modelling the encoder's constant ordering. That is the `CONSTS`
+problem and a separate increment.
+
+**I could have guessed the index.** Guessing would convert an honest `Skipped` into a possible
+`Differs`, and `tests/selfhost_region_coverage.rs` separates those two precisely so a gap is never
+mistaken for a defect. The driver returns `None` and the region stays zeroed.
+
+Measured detail worth keeping: that stage's pool is EMPTY, and an empty pool is deliberately not
+reported as elided so the sentinel stands for one situation only. That is the predicate behaving as
+documented, and it is exactly the case a hand-rolled condition would get wrong -- which is why the
+driver calls `private_init_is_elided` rather than restating it.
+
+### A GREEN SUITE WAS NOT EVIDENCE, AND MY OWN COMPLETION CONDITION SAID SO
+
+All five region-coverage tests passed **before** I had any evidence the increment did anything. The
+skipped-kind test asserts `<= 6`, so it stays green whether two kinds are routed or none. The
+completion condition written hours earlier had a clause demanding that the measurement MOVE and the
+movement be VISIBLE, and only that clause stopped me accepting a pass as a result.
+
+Forcing the assertion to `<= 0` made it name the list: `[18, 19, 1a, 1d, 1e]`. `SHARED_LAYOUT` is
+`0x1b` and is absent from it. The bound is now 5, and the test's comment records that **a kind is
+listed if it is skipped for ANY stage**, so the figure moves only when a kind is routed for every
+stage. A kind routed for most inputs is not a kind the driver covers.
+
+### `scripts/gate-summary.sh`, which exists because of my own error
+
+The gate log holds nine sections, each with its own `test result:` lines, and no summary. That
+invites a one-liner summing across all of them, which is what produced the wrong "179 binaries and
+2904 tests" figure in the previous increment's merged commit message. The script reads per-section
+and says in its own output that a cross-step total is not a test count; it refuses non-gate input
+rather than printing zeros, which would look like a clean result.
+
 ## 2026-08-31 — CORRECTION to the third increment's stated test figures
 
 **The string-ABI increment's commit message and pull-request body say its default-features gate pass

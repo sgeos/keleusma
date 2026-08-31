@@ -10,6 +10,26 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-31, session 58, fifth increment). SHARED_LAYOUT IS ROUTED; SKIPPED 6 -> 5.**
+>
+> The operator's queued item. `SHARED_LAYOUT` is emitted for every stage and byte-matches the
+> reference; `DATA_INIT` is emitted and correct for the eleven stages that elide. The twelfth,
+> `verify_datalayout.kel`, needs the encoder's constant ordering to place its pool -- the `CONSTS`
+> problem -- so it is left as an honest zeroed gap rather than a guessed index that could turn a
+> `Skipped` into a `Differs`.
+>
+> **THE BRIEF WAS WRONG ABOUT ITS ONLY NAMED RISK.** It called the field-buffer batch bound the live
+> constraint. Measured: `lexer.kel`'s 395,778 shared slots collapse to NINE records and `wire.kel`'s
+> 144,391 to eight, because a shared layout is overwhelmingly uniform arrays. Nine records is 63
+> field words against a `fin` of 1024, so nothing in the corpus approaches the bound.
+>
+> **A GREEN SUITE WAS NOT EVIDENCE.** All five region-coverage tests passed before the increment had
+> demonstrated anything, because the skipped-kind test asserts `<= 6`. Only the completion
+> condition's clause demanding visible movement stopped a pass being read as a result.
+>
+> **`scripts/gate-summary.sh` lands with this**, because the wrong test figure in the third
+> increment's merged commit message came from an ad-hoc total across a multi-pass gate log.
+
 > **Currency note (2026-08-31, session 58, fourth increment). THE ORACLE EXERCISES ONE TYPE.**
 >
 > **All 861 functions in the twelve stage sources return `Word`, and all 733 parameters are `Word`.**

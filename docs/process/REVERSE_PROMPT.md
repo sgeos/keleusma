@@ -137,9 +137,30 @@ instrument error of this session and the only one to reach a durable artifact --
 increment that spends several pages cataloguing this exact failure in other people's tests. **A
 running total across a multi-pass gate log is not a test count**; quote the per-section figure.
 
+## SHARED_LAYOUT IS ROUTED, AND THE BRIEF'S ONLY NAMED RISK DID NOT EXIST
+
+Your queued item is done, partly. **`SHARED_LAYOUT` is emitted for every stage and byte-matches the
+reference; skipped region kinds went 6 -> 5.** `DATA_INIT` is emitted and correct for the eleven
+stages that elide their private-initialiser pool. The twelfth needs the encoder's constant ordering
+to place its pool, which is the `CONSTS` problem, so it is left zeroed -- an honest `Skipped` rather
+than a guessed index that could become a `Differs`.
+
+**The brief called the field-buffer batch bound the live constraint. It does not bind at all.**
+Measured: `lexer.kel`'s 395,778 shared slots collapse to NINE records, `wire.kel`'s 144,391 to
+eight, because a shared layout is overwhelmingly uniform arrays. Sixty-three field words against a
+buffer of 1024. The increment would have spent its care in the wrong place.
+
+**And a green suite was not evidence.** All five region-coverage tests passed before anything was
+demonstrated, because the skipped-kind test asserts `<= 6` and stays green whether two kinds are
+routed or none. Only the completion condition's clause demanding VISIBLE movement caught that.
+Forcing the bound to zero named the list, and `SHARED_LAYOUT` was absent from it.
+
 ## THE QUEUE, IN ORDER
 
-1. **The region-kind wiring**, next and scouted to the MECHANISM, with no material unknown left.
+1. **`DATA_INIT` for the one stage that does not elide**, which needs a model of the encoder's
+   constant ordering. That is the `CONSTS` problem and the same blocker the remaining four kinds
+   have in a different form. The rest of the region-kind wiring is DONE.
+   ORIGINAL ENTRY, kept because its reasoning still applies to the remainder:
    `Module.data_layout` carries `shared_layout` and `private_init` directly, so the driver needs no
    layout computation. The run-grouping algorithm to mirror is in `src/wire_schema.rs`. **The
    second risk is `DATA_INIT`'s ELISION**, not its two-field record: the driver must CALL
