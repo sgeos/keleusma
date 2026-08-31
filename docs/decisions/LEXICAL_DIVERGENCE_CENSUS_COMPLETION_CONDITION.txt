@@ -1,0 +1,62 @@
+COMPLETION CONDITION — the lexical divergence census
+
+Ordering is NOT a completion criterion. The properties below may be reached in
+any order, by any route. Judge only the end state of the tree.
+
+A. A census exists and is executed.
+   A test in the repository compares, for each of a set of probe programs, the
+   module produced by the reference compiler against the module produced by the
+   self-hosted pipeline, and asserts byte agreement. The probe set covers the
+   lexical surface of string literals and integer literals at minimum,
+   including inputs absent from the eleven stage sources: at least one
+   non-ASCII string literal, and at least one escape sequence.
+
+B. The census cannot pass vacuously.
+   It asserts a non-zero count of probes that actually reached comparison, and
+   fails if that count is zero. Probes the self-hosted subset refuses are
+   counted and reported separately from probes that agreed; a refusal is never
+   counted as an agreement.
+
+C. Every axis the census claims to cover is derived from the implementation,
+   not restated. Where the census asserts a set (for example, which escapes the
+   reference accepts), that set is computed by exercising the implementation
+   rather than written as a literal list, OR a test fails if the implementation
+   and the literal list disagree.
+
+D. Divergences found are disposed of, none silently.
+   For each divergence the census surfaces, exactly one of the following holds
+   in the tree:
+     - it is fixed, and a test pins the fixed behaviour; or
+     - it is pinned in the failing direction by a test whose message names what
+       the divergence is and states that the correct answer is an open
+       question, and it is recorded in a tracked document.
+   No divergence is left both unfixed and unpinned.
+
+E. The two defects already found are pinned.
+   A test fails if a string literal's baked bytes stop being its source bytes
+   for a multi-byte character. A test fails if the self-hosted unescape routine
+   and the reference lexer disagree on any escape the reference accepts.
+
+F. The string ABI contract is specified and pinned.
+   A tracked specification states the representation a string-taking native
+   observes, its ownership and lifetime rules, and the status of the owned
+   String argument. Tests pin, at minimum: an interior NUL is not truncated;
+   length is counted in bytes and not characters; an empty literal yields a
+   live zero-length view; a borrowed view and an owned copy of the same value
+   carry identical bytes.
+
+G. Claims match the tree.
+   Any count, boundary figure, or test name stated in a document added or
+   modified during this work resolves to something that exists. No document
+   asserts a verification that was not performed. Where agreement between the
+   two embeddings of the native ABI cannot be observed from this repository,
+   the documents say so explicitly rather than implying a stronger result.
+
+H. The tree is green under the checks this project already runs, with no new
+   warnings, and the byte-identity agreement of the existing eleven stage
+   sources is unchanged.
+
+Not required for completion: any particular branch, commit, merge, or review
+state; any particular file layout or naming; any particular number of probes
+beyond the coverage named in A; resolution of questions explicitly recorded as
+belonging to the operator.
