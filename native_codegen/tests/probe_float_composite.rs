@@ -40,6 +40,30 @@ fn what_refuses_a_float_inside_a_composite() {
             "fn main(a: Word, b: Word) -> Word { let xs = [a as Float, b as Float]; (xs[0]) as Word }",
         ),
         (
+            "NESTED: a struct holding a struct that holds a float",
+            "struct Inner { x: Float }
+             struct Outer { i: Inner, n: Word }
+             fn main(a: Word, b: Word) -> Word {
+                 let o = Outer { i: Inner { x: a as Float }, n: b }; (o.i.x) as Word
+             }",
+        ),
+        (
+            "NESTED: an array of structs each holding a float",
+            "struct Inner { x: Float }
+             fn main(a: Word, b: Word) -> Word {
+                 let xs = [Inner { x: a as Float }, Inner { x: b as Float }];
+                 (xs[1].x) as Word
+             }",
+        ),
+        (
+            "NESTED control: the same nesting with no float",
+            "struct J { x: Word }
+             struct K { i: J, n: Word }
+             fn main(a: Word, b: Word) -> Word {
+                 let k = K { i: J { x: a }, n: b }; k.i.x
+             }",
+        ),
+        (
             "control: the same struct with no float",
             "struct Q { x: Word, n: Word }
              fn main(a: Word, b: Word) -> Word { let q = Q { x: a, n: b }; q.n }",

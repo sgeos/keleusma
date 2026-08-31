@@ -58,10 +58,21 @@ on another.
 chunks and 89854 of 89940 opcode instances. `fmt --check`, `clippy --tests -D warnings` and
 `cargo doc -D warnings` clean.
 
-**Still absent**: a float in a NESTED composite body, which goes through the `FlatNested` arms; a
-composite carrying a float reaching a data slot; `f32`, refused loudly at every route; and a native
-declaring a float return, the one float route of four still closed and closed because no ruling
-settles it.
+**THE FIRST RESIDUAL I NAMED WAS WRONG, AND MEASURING IT WITHIN THE HOUR IS WHAT CAUGHT IT.** I
+recorded "a float in a NESTED composite body" as still absent. Nested bodies were never a separate
+implementation: the outer read yields a body and the LEAF read goes through the very flat arms this
+increment added, so nesting lowered the moment the flat case did. **What was missing was evidence,
+not code** — and an accepted-but-unverified path is the more dangerous of the two shapes, because a
+refusal is loud while a wrong float is a plausible number. Three nested cases now agree with the
+reference, and the tag mutation fails them too, so the coverage is not vacuous.
+
+**The general form, which is the part worth keeping**: when writing a residual, ask whether the thing
+is REFUSED or merely UNTESTED. Those are different risks and the second is the worse one, so calling
+an untested path "absent" understates it.
+
+**Still absent**: a composite carrying a float reaching a data slot; `f32`, refused loudly at every
+route; and a native declaring a float return, the one float route of four still closed and closed
+because no ruling settles it.
 
 ## 2026-08-30 — The float shared slot, and a guard I had not read refused three of four tests
 

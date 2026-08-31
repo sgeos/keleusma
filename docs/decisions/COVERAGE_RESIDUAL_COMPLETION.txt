@@ -1,0 +1,59 @@
+COMPLETION CONDITION — the coverage residual is named
+
+Ordering is NOT a completion criterion. No particular sequence of steps, branch,
+commit shape, or process is required. Judge the end state only.
+
+Complete when ALL of the following hold.
+
+1. THE RESIDUAL IS NAMED, NOT COUNTED
+   The tree records WHICH opcodes account for the opcode instances that do not
+   lower, and WHICH chunks are the ones not fully lowerable, together with the
+   modules they belong to. A bare count does not satisfy this.
+
+2. THE TWO COUNTS ARE RECONCILED OR THEIR DIVERGENCE IS STATED
+   Whether the non-lowering opcode instances and the non-lowerable chunks arise
+   from the same cause is stated as a measured finding, not assumed. If they do
+   not line up, that is recorded explicitly.
+
+3. EACH FIGURE CARRIES ITS POPULATION
+   Every number recorded says what set it is over (how many modules, how many
+   chunks). No figure appears without one.
+
+4. MEASURED AS DATA
+   The finding is derived from the compiled modules themselves rather than from
+   parsing source text of the corpus or of the tooling.
+
+5. THE INSTRUMENT'S REACH IS ESTABLISHED
+   The measurement includes a check that it is capable of reporting a non-empty
+   result, so an empty or trivial finding cannot be mistaken for a clean tree.
+
+6. A RECOMMENDATION FOLLOWS FROM THE NUMBERS
+   The tree records what the residual implies for the next target: a cheap gap
+   worth closing, a genuine workstream, or a refusal that should stay, with the
+   reason tied to the measured breakdown rather than to prior belief.
+
+7. NO SILENT SCOPE CHANGE
+   If the residual is closed as part of this work rather than only measured,
+   that is stated plainly along with the resulting figures. If it is not closed,
+   no document claims or implies that it was.
+
+8. NOTHING AMBIGUOUS WAS DECIDED
+   The open operator questions are untouched: the Fixed, Text, Opaque and Unit
+   shared-slot representations remain unimplemented, and the region planner's
+   soundness obligation is not silently discharged or restated as discharged.
+
+9. THE SUITE IS GREEN AND THE COUNT RECONCILES
+   The native_codegen suite passes with zero failures, read from cargo's own
+   exit status AND from the summed per-binary counts, with the two agreeing, and
+   the total is accounted for as the previous total plus exactly the tests added.
+
+10. QUALITY GATES
+    Formatting, clippy at deny-warnings over tests as well as the library, and
+    the documentation build at deny-warnings are all clean.
+
+11. NO DEAD CITATIONS
+    No comment or document added or changed names a test, file, function, or
+    identifier that does not exist.
+
+If any item cannot be satisfied, say so explicitly with what was measured and
+why it blocks, and satisfy every other item in full.

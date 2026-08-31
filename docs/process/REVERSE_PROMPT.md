@@ -32,7 +32,7 @@ a figure the tree already carries from two other methods.
 
 | | result |
 |---|---|
-| `native_codegen` | **403 passed, 0 failed, 79 binaries**, cargo's own exit 0 — 396 + 5 differentials + 2 probe tests, +2 binaries |
+| `native_codegen` | **406 passed, 0 failed, 79 binaries**, cargo's own exit 0 — 396 + 5 flat differentials + 2 probe tests (+2 binaries) + 3 nested differentials |
 | fmt, clippy `-D warnings`, `cargo doc -D warnings` | all clean |
 | censuses | **unmoved, as MEASURED rather than hoped**: `isa_lowering` 63 of 66 (`Len` the one named refusal), 1072 of 1074 chunks, 89854 of 89940 opcode instances |
 | mutations | four in total across the two increments, each confirmed APPLIED by printing the changed line, each failing tests |
@@ -42,7 +42,24 @@ composite compares execution against the virtual machine. Both use runtime argum
 infinities, a negative zero and a NaN, because those are the bit patterns a rounding or
 reinterpreting lowering cannot reproduce.
 
+## A residual I wrote was wrong within the hour, and measuring it is what caught it
+
+I recorded "a float in a NESTED composite body" as still absent. **It was not absent, it was
+untested** — nesting was never a separate implementation, since the leaf read goes through the very
+arms the increment added. **An accepted-but-unverified path is the more dangerous of the two shapes**,
+because a refusal is loud while a wrong float is a plausible number. Three nested cases now agree
+with the reference and the tag mutation fails them, so the coverage is not vacuous.
+
+**The general form**: when writing a residual, ask whether the thing is REFUSED or merely UNTESTED.
+Calling an untested path "absent" understates the risk.
+
 ## What I want you to know I did NOT do
+
+**I did not touch the region planner's soundness obligation, and the reason is yours rather than
+mine.** Discharging it needs the planner to consume a confinement verdict, and consuming none is
+exactly why a wrong verdict cannot miscompile today. The handoff already names that tension. Building
+it unasked would be the same error as acting on an ambiguous ruling, so I left it and took work that
+needed no decision.
 
 I did not build `f32`. Its coherent reading is that the floating-point type matches the runtime float
 width, and **that reading is mine, not your words**, so every route refuses a non-eight-byte float

@@ -96,6 +96,18 @@ negative zero and a NaN.
 stride from eight to four fails the array test; deleting the field read's `Float` tag fails four of
 the five.
 
-**Not covered, so a green file is not read as more than it is**: a float inside a NESTED composite
-body, which goes through the `FlatNested` arms; a composite carrying a float reaching a data slot;
-and any `Float` width other than eight, which is refused.
+### The nested case was mis-stated, and measuring it corrected the statement
+
+This section first read *"not covered: a float inside a NESTED composite body, which goes through the
+`FlatNested` arms"*. **That was wrong in a way worth naming.** Nested bodies were never a separate
+implementation: the outer read yields a body and the LEAF read goes through the very flat arms this
+increment added, so nesting lowered the moment the flat case did. What was missing was **evidence,
+not code** — and an accepted-but-unverified path is the more dangerous of the two shapes, because a
+refusal is loud while a wrong float is a plausible number.
+
+Measured: a struct holding a struct holding a float, an array of structs each holding a float, and a
+nested read used in float ARITHMETIC all **agree with the reference** over the same discriminating
+values. The tag mutation fails the nested tests too, so the coverage is not vacuous.
+
+**Not covered, so a green file is not read as more than it is**: a composite carrying a float
+reaching a data slot, and any `Float` width other than eight, which is refused.

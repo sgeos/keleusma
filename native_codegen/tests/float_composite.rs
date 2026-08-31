@@ -146,3 +146,70 @@ fn a_float_field_at_any_other_width_is_refused() {
         "refused, but not in a way naming the float: {why}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// NESTED bodies. **These LOWERED BEFORE ANY TEST EXERCISED THEM**, which is the
+// more dangerous shape than a refusal: a refusal is loud, an unverified accepted
+// path ships a plausible wrong number. The probe measured that they lower; these
+// measure whether they AGREE.
+// ---------------------------------------------------------------------------
+
+/// A struct holding a struct holding a float, read through two field accesses.
+#[test]
+fn a_float_in_a_nested_struct_agrees_with_the_vm() {
+    let src = "struct Inner { x: Float }
+         struct Outer { i: Inner, n: Word }
+         fn main(a: Word, b: Word) -> Word {
+             let o = Outer { i: Inner { x: (a as Float) / (b as Float) }, n: b };
+             (o.i.x) as Word + o.n
+         }";
+    for (a, b) in [
+        (7, 2),
+        (-7, 2),
+        (1, 0),
+        (-1, 0),
+        (0, 0),
+        (0, -1),
+        (i64::MAX, 3),
+    ] {
+        let (vm, nat) = both(src, a, b);
+        assert_eq!(vm, nat, "nested float struct disagrees for ({a}, {b})");
+    }
+}
+
+/// An array of structs each holding a float, which combines a stride over
+/// nested bodies with a float field read inside one.
+#[test]
+fn a_float_in_an_array_of_structs_agrees_with_the_vm() {
+    let src = "struct Inner { x: Float }
+         fn main(a: Word, b: Word) -> Word {
+             let xs = [Inner { x: a as Float }, Inner { x: (a as Float) / (b as Float) }];
+             (xs[1].x) as Word
+         }";
+    for (a, b) in [(7, 2), (1, 0), (0, 0), (-9, 4), (i64::MIN, 1)] {
+        let (vm, nat) = both(src, a, b);
+        assert_eq!(
+            vm, nat,
+            "float in an array of structs disagrees for ({a}, {b})"
+        );
+    }
+}
+
+/// A float read out of a NESTED body used in float arithmetic, so the tag
+/// survives the nested read rather than only the flat one.
+#[test]
+fn a_float_read_out_of_a_nested_struct_is_usable_in_float_arithmetic() {
+    let src = "struct Inner { x: Float }
+         struct Outer { i: Inner, n: Word }
+         fn main(a: Word, b: Word) -> Word {
+             let o = Outer { i: Inner { x: a as Float }, n: b };
+             (o.i.x * (b as Float) - o.i.x) as Word
+         }";
+    for (a, b) in [(3, 4), (-3, 4), (0, 0), (7, -2)] {
+        let (vm, nat) = both(src, a, b);
+        assert_eq!(
+            vm, nat,
+            "arithmetic on a nested float read disagrees for ({a}, {b})"
+        );
+    }
+}
