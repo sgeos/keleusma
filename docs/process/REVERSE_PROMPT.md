@@ -87,16 +87,73 @@ arithmetic that compiles on both sides and produces different bytes. Both report
   the census's no-op hook ate the other test's reason and the run reported `FAILED` with nothing
   said. Merged into one test.
 
+## THE ORACLE EXERCISES ONE TYPE, AND THAT BOUNDS WHAT IT CAN DETECT
+
+Asking what else was at zero produced the session's largest finding. **All 861 functions in the
+twelve stage sources return `Word`, and all 733 parameters are `Word`.** Nothing else crosses a
+function boundary anywhere in the corpus. Established by two independent instruments and pinned by
+`tests/corpus_type_surface.rs`.
+
+So the byte-identity oracle over REAL PROGRAMS is `Word`-only. **A first draft of this claim said
+the construct-support boundary table was the only non-`Word` coverage, and testing it refuted
+that** -- two test files carry substantial non-`Word` material. The distinction that survives is
+synthetic-versus-SCALE: a 200-kilobyte stage exercises interactions a three-line snippet cannot
+reach, and those interactions are what a byte-identity oracle exists to catch.
+
+The boundary table's own shape had never been examined: **43 equality cases against one each for
+`literal`, `tuple` and `removed`**, and the single `literal` case is `let s = "hi"`, the degenerate
+case that let both string defects through. Pinned as a ratchet rather than a quota, because
+demanding larger families produces padding and padding looks like coverage.
+
+## A DIVERGENCE DOES NOT SAY WHICH SIDE IS WRONG
+
+`self_hosted_compile` claimed a divergence meant the program was outside the self-hosted subset.
+Too strong, and this session is the counterexample. Before the lexer fix,
+`fn f() -> Word { let s = "é"; 1 }` under `--compiler self-hosted` diverged, was refused, and the
+caller was pointed at `--compiler rust`, which compiled it **silently and wrongly**. The tool would
+have steered a user from a safe refusal toward a corrupt artifact.
+
+**The behaviour is unchanged and correct**: refuse, and recommend the reference, which is far more
+mature and will be the right side almost always. Only the claim changed, because "the cause is
+already known" is what stops someone investigating the case where it is not.
+
+## THE CENSUS WAS MUTATION-TESTED, SO ITS REACH IS MEASURED
+
+Both defects were reintroduced one at a time in a detached worktree. The lexer defect fails the
+census on exactly the five `string/nonascii/*` probes; the missing escapes fail it on exactly
+`string/escape/30` and `string/escape/72`, which are `\0` and `\r`. Precision matters as much as
+failure: a census going red on all 49 for either mutation would be useless for diagnosis.
+
+## A FIGURE I PUBLISHED IS WRONG, AND THE CORRECTION TRAVELS WITH THE RECORD
+
+The string-ABI increment's commit message and pull-request body state its default-features gate pass
+as "179 binaries and 2904 tests". **Both are wrong. It is 113 binaries and 2708 tests.** The
+instrument summed every `test result:` line in the whole gate log, which had already run past the
+default-features section into the next one, so it conflated two feature passes into a total that
+looked like a measurement of one.
+
+Both are merged and cannot be corrected in place, so this is the correction. It is also the SIXTH
+instrument error of this session and the only one to reach a durable artifact -- in the very
+increment that spends several pages cataloguing this exact failure in other people's tests. **A
+running total across a multi-pass gate log is not a test count**; quote the per-section figure.
+
 ## THE QUEUE, IN ORDER
 
-1. **The region-kind wiring**, next and scouted to the mechanism. Both emitters already exist in the
+1. **The region-kind wiring**, next and scouted to the MECHANISM, with no material unknown left.
+   `Module.data_layout` carries `shared_layout` and `private_init` directly, so the driver needs no
+   layout computation. The run-grouping algorithm to mirror is in `src/wire_schema.rs`. **The
+   second risk is `DATA_INIT`'s ELISION**, not its two-field record: the driver must CALL
+   `private_init_is_elided` rather than re-derive the condition, and that predicate exists
+   precisely because a disagreement there is invisible. Both emitters already exist in the
    stage (`emit_shared_slot_records`, `emit_data_init_records`, both dispatched by `emit_at`). The
    driver needs a batch path through `emit_in_window` (command 164, seeding kind/count/offset) plus
    two field builders. **The risk is the run-length grouping**, which the stage's comment says is
    the caller's job, so it must match the reference encoder exactly or the divergence hides there.
-2. **A coverage census of the rest of the oracle**, which the lexical one implies. The string path
-   was at zero; nothing has audited what else is. This is measurable the same way and is the
-   natural successor.
+2. **The discard-arm reachability census.** `src/selfhost/mod.rs` carries 19 silent-discard match
+   arms and exactly one is measured. **Do not audit them by reading** -- nineteen judgements formed
+   that way produce a list of "probably fine" that looks like coverage. Instrument which arms are
+   REACHED while compiling the corpus, as the 2026-08-14 emit-command census did. And do not turn
+   it into a rule that `_ =>` arms are defects: most exhaustive matches want one.
 3. The expression-kind extraction family remains exhausted pending your call, since every remaining
    kind perturbs the byte-identity oracle. The two-pass parser for the twelfth stage likewise.
 

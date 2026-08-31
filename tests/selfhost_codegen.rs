@@ -8217,6 +8217,78 @@ fn the_shipping_compiler_matches_the_boundary_it_is_recorded_against() {
 /// miscompiles in the shipping compiler sat unreported behind that, because nothing ever ran the
 /// table against `keleusma::selfhost::self_host_compile`. Copying the table into a second file
 /// would have been the nine-copies defect again, so it is hoisted instead.
+/// **A FAMILY WITH ONE CASE LOOKS COVERED AND IS NOT.**
+///
+/// The construct-support boundary is the principal non-`Word` coverage the self-hosted pipeline
+/// has, because the byte-identity corpus exercises `Word` and nothing else at a function boundary
+/// (`tests/corpus_type_surface.rs`). That makes the SHAPE of this table load-bearing, and its shape
+/// has never been examined.
+///
+/// Measured 2026-08-31 over the 101 cases: **43 equality cases**, then 11 scalar, 10 bool, 8 op,
+/// 8 comp, 5 prec, 5 ctrl, 3 nested, 3 cast, 2 scope, and **exactly one each for `literal`,
+/// `tuple` and `removed`**.
+///
+/// The single `literal` case is `let s = "hi"` — ASCII, no escape, three bytes. **That is the
+/// degenerate case which let both string defects of 2026-08-30 through.** The family existed, so
+/// the surface looked covered; the case was too thin to exercise anything the defects touched.
+///
+/// A distribution like this measures where attention has been, not where risk is. It is not
+/// evidence that anything is wrong — it is evidence about what this table can find.
+///
+/// # What this test does and does not enforce
+///
+/// It does NOT require every family to have many cases. Some constructs genuinely have one shape
+/// worth testing, and a rule demanding more would produce padding, which is worse than a thin
+/// family honestly recorded.
+///
+/// It enforces a RATCHET: the set of single-case families is derived from the table and compared
+/// against the acknowledged set. A NEW thin family fails, so it is noticed while someone is
+/// looking at it, rather than years later through a defect. Widening a family also fails, which is
+/// the good direction and asks only that the record be updated.
+///
+/// The derivation calls `boundary_cases()` rather than reading this file's text. A regular
+/// expression over this same table already produced a false 99-against-101 reading once; when the
+/// data is reachable AS DATA, parsing its source is choosing an instrument that can be wrong.
+#[test]
+fn the_boundary_tables_thin_families_are_the_ones_on_record() {
+    use std::collections::BTreeMap;
+
+    let mut per_family: BTreeMap<&str, usize> = BTreeMap::new();
+    for (label, _, _) in boundary_cases() {
+        let family = label.split('/').next().unwrap_or(label);
+        *per_family.entry(family).or_default() += 1;
+    }
+
+    // NON-VACUITY. An empty or tiny table would satisfy every comparison below by having no
+    // families to compare.
+    let total: usize = per_family.values().sum();
+    assert!(
+        total >= 90 && per_family.len() >= 10,
+        "the table has {total} cases across {} families, which is far below its size; this \
+         derivation has broken rather than the table having shrunk",
+        per_family.len()
+    );
+
+    let thin: Vec<&str> = per_family
+        .iter()
+        .filter(|(_, n)| **n == 1)
+        .map(|(f, _)| *f)
+        .collect();
+
+    // The acknowledged thin families. `literal` is the one that cost something: its single case is
+    // `let s = "hi"`, and the string defects of 2026-08-30 lived exactly where that case does not
+    // reach.
+    let acknowledged = ["literal", "removed", "tuple"];
+    assert_eq!(
+        thin.as_slice(),
+        acknowledged.as_slice(),
+        "the families represented by a SINGLE case are now {thin:?}, not {acknowledged:?}.\n\
+         A family that just became thin is worth a look now rather than after a defect.\n\
+         A family that just stopped being thin is good news; update the list and the measured \
+         distribution in this comment."
+    );
+}
+
 fn boundary_cases() -> &'static [(&'static str, Support, &'static str)] {
     use Support::{Diverges, Ok as SOk, RefRejects, Refuses};
     &[

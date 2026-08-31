@@ -10,6 +10,28 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-31, session 58, fourth increment). THE ORACLE EXERCISES ONE TYPE.**
+>
+> **All 861 functions in the twelve stage sources return `Word`, and all 733 parameters are `Word`.**
+> Established by two independent instruments, because a zero is a strong claim and this session
+> produced five instrument errors. `Text`, `Float`, `Fixed`, `bool`, tuples, arrays, structs, enums
+> and `impl` blocks cross no function boundary in the corpus at all.
+>
+> The byte-identity oracle over REAL PROGRAMS is therefore `Word`-only. A first draft said the
+> construct-support boundary table was the only non-`Word` coverage; **testing that claim refuted
+> it** -- `selfhost_codegen.rs` and `selfhost_pool_tags.rs` carry substantial non-`Word` material.
+> The surviving statement is synthetic-versus-SCALE, not synthetic-versus-absent.
+>
+> **The boundary table's shape had never been examined**: 43 equality cases against ONE each for
+> `literal`, `tuple` and `removed`. The single `literal` case is `let s = "hi"` -- the degenerate
+> case that let both string defects through. Pinned as a RATCHET, not a quota: demanding larger
+> families would produce padding, and padding looks like coverage.
+>
+> **Also corrected: a divergence does not say which side is wrong.** `self_hosted_compile` claimed
+> it meant the program was outside the subset. Before the lexer fix, a non-ASCII literal diverged,
+> was refused, and the caller was pointed at `--compiler rust`, which compiled it silently and
+> wrongly. The behaviour stays; only the claim changes.
+
 > **Currency note (2026-08-30, session 58, second increment). THE STRING ABI IS IMPLEMENTED AND
 > SPECIFIED, AND IT UNCOVERED TWO DIVERGENCES NOTHING COULD SEE.**
 >
