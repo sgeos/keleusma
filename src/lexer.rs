@@ -804,13 +804,35 @@ impl<'a> Lexer<'a> {
         })
     }
 
+    /// Lex a double-quoted string literal.
+    ///
+    /// # The literal's bytes are the source's bytes
+    ///
+    /// The accumulator is a byte buffer, not a `String`, because the scan is
+    /// byte-wise. Pushing a scanned byte as `c as char` would reinterpret it
+    /// as a Unicode scalar and re-encode it, so every byte at or above `0x80`
+    /// -- that is, every byte of every multi-byte character -- would expand
+    /// into two. A literal was silently corrupted that way: six source bytes
+    /// became eleven, and the damage was invisible because the result was
+    /// still well-formed text, merely the wrong text.
+    ///
+    /// Scanning bytes is safe here because every delimiter this loop tests for
+    /// (`"`, `\n`, `\\`) is ASCII, and no byte of a multi-byte UTF-8 sequence
+    /// is ever equal to an ASCII byte. A multi-byte character therefore passes
+    /// through untouched rather than being split.
+    ///
+    /// The final conversion cannot fail: `tokenize` takes a `&str`, so the
+    /// source is valid UTF-8 by construction, and this loop copies whole
+    /// characters and inserts only ASCII. It is still handled rather than
+    /// unwrapped, so a future caller that supplies raw bytes gets a clean lex
+    /// error instead of a panic.
     fn lex_string(
         &mut self,
         start: usize,
         start_line: u32,
         start_col: u32,
     ) -> Result<Token, LexError> {
-        let mut value = String::new();
+        let mut value: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
         loop {
             match self.advance() {
                 None => {
@@ -831,12 +853,12 @@ impl<'a> Lexer<'a> {
                     ));
                 }
                 Some(b'\\') => match self.advance() {
-                    Some(b'n') => value.push('\n'),
-                    Some(b't') => value.push('\t'),
-                    Some(b'r') => value.push('\r'),
-                    Some(b'\\') => value.push('\\'),
-                    Some(b'"') => value.push('"'),
-                    Some(b'0') => value.push('\0'),
+                    Some(b'n') => value.push(b'\n'),
+                    Some(b't') => value.push(b'\t'),
+                    Some(b'r') => value.push(b'\r'),
+                    Some(b'\\') => value.push(b'\\'),
+                    Some(b'"') => value.push(b'"'),
+                    Some(b'0') => value.push(0),
                     Some(c) => {
                         return Err(self.error(
                             {
@@ -859,9 +881,17 @@ impl<'a> Lexer<'a> {
                         ));
                     }
                 },
-                Some(c) => value.push(c as char),
+                Some(c) => value.push(c),
             }
         }
+        let value = String::from_utf8(value).map_err(|_| {
+            self.error(
+                String::from("string literal is not valid UTF-8"),
+                start,
+                start_line,
+                start_col,
+            )
+        })?;
         Ok(Token {
             kind: TokenKind::StringLit(value),
             span: self.span_from(start, start_line, start_col),
@@ -1487,6 +1517,50 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.message.contains("unterminated"));
+    }
+
+    #[test]
+    fn a_string_literal_keeps_the_source_bytes_of_a_multibyte_character() {
+        // The literal's bytes ARE the source's bytes. Scanning byte-wise and
+        // pushing each byte as `c as char` re-encoded every byte at or above
+        // 0x80, so a six-byte literal became eleven bytes of well-formed but
+        // WRONG text. Nothing caught it: the corrupted result was still valid
+        // UTF-8, no `.kel` source in the tree carries a non-ASCII literal, and
+        // the byte-identity oracle compares only sources that do not.
+        //
+        // Byte length alone would not pin this. A double-encoding that
+        // happened to preserve the length would pass, so the bytes themselves
+        // are compared.
+        let literal = "aé漢";
+        assert_eq!(literal.len(), 6, "the fixture is six source bytes");
+        assert_eq!(literal.chars().count(), 3, "and three characters");
+
+        let tokens = tokenize("fn main() -> Text { \"aé漢\" }").expect("lex");
+        let baked = tokens
+            .iter()
+            .find_map(|t| match &t.kind {
+                TokenKind::StringLit(v) => Some(v.clone()),
+                _ => None,
+            })
+            .expect("a string literal token");
+        assert_eq!(baked.as_bytes(), literal.as_bytes());
+    }
+
+    #[test]
+    fn a_string_literal_escape_bakes_one_byte_each() {
+        // The six escapes the lexer accepts, each baking exactly one byte.
+        // `\0` is in the set, so a literal is a BYTE string that may carry an
+        // interior NUL, which is what makes the length-delimited host contract
+        // load-bearing rather than a preference.
+        let tokens = tokenize("fn main() -> Text { \"\\n\\t\\r\\\"\\\\\\0\" }").expect("lex");
+        let baked = tokens
+            .iter()
+            .find_map(|t| match &t.kind {
+                TokenKind::StringLit(v) => Some(v.clone()),
+                _ => None,
+            })
+            .expect("a string literal token");
+        assert_eq!(baked.as_bytes(), b"\n\t\r\"\\\0");
     }
 
     #[test]

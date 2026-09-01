@@ -1166,6 +1166,378 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-31 — Session 58, fifth increment: SHARED_LAYOUT routed, and a brief corrected by measurement
+
+The operator's queued item. Both region kinds had their formatters in the stage all along; what was
+missing was the driver supplying their fields, so both fell into the windowed assembler's catch-all
+and were left as zeros.
+
+### The outcome
+
+**`SHARED_LAYOUT` is routed for every stage and byte-matches the reference. Skipped region kinds
+6 -> 5.** `DATA_INIT` is routed and correct for the eleven stages whose private-initialiser pool is
+elided; the twelfth keeps the kind on the skipped list, deliberately.
+
+### THE BRIEF WAS WRONG ABOUT THE ONLY RISK IT NAMED
+
+Scouting identified the field-buffer batch bound as the live constraint, reasoning that a stage with
+a large shared layout would overflow it, and made the `-204` refusal path the increment's central
+care. **Measuring it destroyed that.** The run grouping is enormously effective because a shared
+layout is overwhelmingly uniform arrays:
+
+| stage | shared slots | records after grouping |
+|---|---:|---:|
+| `lexer.kel` | 395,778 | **9** |
+| `wire.kel` | 144,391 | **8** |
+| every other stage | 3,084 - 56,134 | 1 |
+
+Nine records is 63 field words against a `fin` of 1024. **Nothing in the corpus approaches the
+bound.** The brief would have spent the increment's attention on a constraint that does not bind.
+Third time this session that measurement overturned my reasoning about a structure.
+
+### WHY DATA_INIT IS PARTIAL, AND WHY THAT IS THE RIGHT ANSWER
+
+Eleven of twelve stages elide, so the record is the `ABSENT` sentinel and a count -- nothing from the
+constant table. The twelfth, `verify_datalayout.kel`, stores its pool and records the index it landed
+at, and predicting that index means modelling the encoder's constant ordering. That is the `CONSTS`
+problem and a separate increment.
+
+**I could have guessed the index.** Guessing would convert an honest `Skipped` into a possible
+`Differs`, and `tests/selfhost_region_coverage.rs` separates those two precisely so a gap is never
+mistaken for a defect. The driver returns `None` and the region stays zeroed.
+
+Measured detail worth keeping: that stage's pool is EMPTY, and an empty pool is deliberately not
+reported as elided so the sentinel stands for one situation only. That is the predicate behaving as
+documented, and it is exactly the case a hand-rolled condition would get wrong -- which is why the
+driver calls `private_init_is_elided` rather than restating it.
+
+### A GREEN SUITE WAS NOT EVIDENCE, AND MY OWN COMPLETION CONDITION SAID SO
+
+All five region-coverage tests passed **before** I had any evidence the increment did anything. The
+skipped-kind test asserts `<= 6`, so it stays green whether two kinds are routed or none. The
+completion condition written hours earlier had a clause demanding that the measurement MOVE and the
+movement be VISIBLE, and only that clause stopped me accepting a pass as a result.
+
+Forcing the assertion to `<= 0` made it name the list: `[18, 19, 1a, 1d, 1e]`. `SHARED_LAYOUT` is
+`0x1b` and is absent from it. The bound is now 5, and the test's comment records that **a kind is
+listed if it is skipped for ANY stage**, so the figure moves only when a kind is routed for every
+stage. A kind routed for most inputs is not a kind the driver covers.
+
+### `scripts/gate-summary.sh`, which exists because of my own error
+
+The gate log holds nine sections, each with its own `test result:` lines, and no summary. That
+invites a one-liner summing across all of them, which is what produced the wrong "179 binaries and
+2904 tests" figure in the previous increment's merged commit message. The script reads per-section
+and says in its own output that a cross-step total is not a test count; it refuses non-gate input
+rather than printing zeros, which would look like a clean result.
+
+## 2026-08-31 — CORRECTION to the third increment's stated test figures
+
+**The string-ABI increment's commit message and pull-request body say its default-features gate pass
+was "179 binaries and 2904 tests". Both figures are WRONG.** The default-features pass is
+**113 binaries and 2708 tests**.
+
+The instrument summed every `test result:` line in the whole gate log, which by then had run past
+the default-features section into the no-default-features one. It conflated two feature passes into
+a total that looked like a measurement of one.
+
+Recorded rather than quietly dropped, for two reasons. The commit and the pull request are merged
+and cannot be corrected in place, so the only honest fix is a correction that travels with the
+record. And this is the SAME instrument error the increment it describes spends several pages
+cataloguing in other people's tests -- a figure produced by a plausible one-liner that nobody
+checked against a second route. Six in one session, and the sixth is in a durable artifact.
+
+The correct comparison, measured per-section rather than cumulatively:
+
+| gate | default-features binaries | tests |
+|---|---|---|
+| before this increment's tests | 113 | 2708 |
+| with them | 114 | 2710 |
+
+Exactly one new binary and two new tests, which is what was added. **The per-section figure is the
+one to quote; a running total across a multi-pass gate log is not a test count.**
+
+## 2026-08-31 — Session 58, fourth increment: what the oracle's corpus actually exercises
+
+The lexical census established that the byte-identity corpus contains no string literal. This asks
+the obvious next question -- what else is at zero -- and the answer is larger than the question.
+
+### The measurement
+
+Over all twelve stage sources, established by two independent instruments because a zero is a
+strong claim and this session produced five instrument errors:
+
+| | |
+|---|---|
+| declared functions | **861** |
+| distinct return types | **exactly one: `Word`** |
+| declared parameters | **733** |
+| distinct parameter types | **exactly one: `Word`** |
+
+Comment-stripped text matching said it; the project's own lexer and parser, run over the same
+twelve files, said the same. `Text`, `Float`, `Fixed`, `bool`, tuples, arrays, structs, enums and
+`impl` blocks appear at no function boundary anywhere in the corpus. Composites and `Byte` live
+inside bodies, through `private data` and indexing, but never cross a signature.
+
+**The byte-identity oracle exercises exactly one type at every function boundary.** Yesterday's
+string-literal hole was not a corner case; it was one instance of a corpus that is `Word`-shaped
+throughout.
+
+### A claim I made and then refuted
+
+The first draft of this said the construct-support boundary table is the ONLY coverage for
+non-`Word` types. **Testing the claim refuted it.** Fourteen test files drive the self-hosted
+compiler; counting lines that declare a non-`Word` parameter or return, `selfhost_codegen.rs` has
+299 and `selfhost_pool_tags.rs` has 22. Non-`Word` coverage is real and not confined to one table.
+
+The surviving statement is narrower and is the true one: the oracle over REAL PROGRAMS is
+`Word`-only, and every non-`Word` signature the pipeline is tested against is a hand-written
+snippet, typically one to three lines. The distinction is not synthetic-versus-absent but
+synthetic-versus-SCALE. A 200-kilobyte stage exercises interactions between constructs that a
+three-line snippet cannot reach, and those interactions are what a byte-identity oracle exists to
+catch. For `Word` the project has both instruments; for everything else it has only the snippets.
+
+### The boundary table's shape, which nothing had examined
+
+Its 101 cases: **43 equality**, 11 scalar, 10 bool, 8 op, 8 comp, 5 prec, 5 ctrl, 3 nested, 3 cast,
+2 scope, and **one each for `literal`, `tuple`, `removed`**.
+
+The single `literal` case is `let s = "hi"` -- ASCII, no escape, three bytes. **That is the
+degenerate case that let both string defects through.** The family existed, so the surface looked
+covered; the case was too thin to touch anything the defects lived in.
+
+A distribution like this measures where attention has been, not where risk is. That is not a
+criticism of the table, which was built case by case as constructs landed. It is a statement about
+what the table can find.
+
+### What the tests enforce, and what they deliberately do not
+
+The type-surface check derives signatures through the lexer and parser, never by matching source
+text. The distribution check calls `boundary_cases()` rather than reading its file, because a
+regular expression over that exact table already produced a false 99-against-101 reading once.
+
+The distribution check is a RATCHET, not a quota. It does not demand that families be large: some
+constructs genuinely have one shape worth testing, and a rule demanding more would produce padding,
+which is worse than a thin family honestly recorded. It fails when the set of single-case families
+CHANGES, so a newly thin family is noticed while someone is already there.
+
+Both type-surface assertions fail in the good direction too. If a stage source ever gains a
+non-`Word` signature, that is the oracle getting STRONGER, and the message says so and asks for the
+reasoning to be updated rather than the check deleted.
+
+### Also recorded: a divergence does not say which side is wrong
+
+`self_hosted_compile`'s cross-check says "a divergence means the program is outside the self-hosted
+subset". Too strong, and this session is the counterexample: the reference was the divergent side
+for any non-ASCII literal. Before the fix, `fn f() -> Word { let s = "é"; 1 }` under
+`--compiler self-hosted` would diverge, be refused, and hint at `--compiler rust`, which compiled it
+silently and wrongly -- the tool steering a user from a safe refusal to a corrupted artifact.
+
+**The behaviour stays.** Refusing on divergence is right, and pointing at the reference is right,
+because it is the more mature implementation and will be the correct side almost always. Only the
+CLAIM changes, because the current wording invites a reader who hits a divergence to stop
+investigating, which is exactly what would have hidden the lexer defect.
+
+### The census's efficacy, measured rather than assumed
+
+Run in a detached worktree at `ba11f69a`, so the shipping tree was never touched. Both defects the
+census was built in response to were reintroduced one at a time, and the census was run unchanged.
+
+| mutation | census result | probes named |
+|---|---|---|
+| `lex_string` pushes each byte as `c as char` (the original defect, reproduced) | **FAIL** -- 44 agree, **5 diverge** | the five `string/nonascii/*` probes, and only those |
+| `unescape_string` loses its `\r` and `\0` arms | **FAIL** -- 47 agree, **2 diverge** | `string/escape/30` and `string/escape/72`, which are `\0` and `\r`, and only those |
+| neither (the shipped tree) | **PASS** -- 49 agree, 0 diverge | -- |
+
+## Why this was worth doing
+
+The census's positive controls prove the classifier CAN report a non-agreement. They do not prove it
+WOULD HAVE caught the two real defects, and "this test would have caught it" is exactly the kind of
+plausible story this tree keeps having to retract. Now it is a measurement: both defects are caught,
+and each names precisely the probes that carry it and no others.
+
+The precision matters as much as the failure. A census that went red on all 49 probes for either
+mutation would be nearly useless for diagnosis, and would suggest the probes are not independent.
+Five and two, exactly on the axis mutated, is the behaviour a diagnostic instrument should have.
+
+## What this does NOT establish
+
+That the probe set is sufficient. It establishes that the probes covering the two known defects
+detect them. A defect on an axis the census does not probe remains invisible, which is why the
+coverage assertions exist alongside.
+
+
+## 2026-08-31 — Session 58, third increment: the lexical divergence census
+
+The generalisation of the previous increment. Two divergences were found in one afternoon by
+writing a test that asserted a contract; the question this increment asks is how much else the
+byte-identity oracle cannot see, and it answers it by measuring rather than by reasoning.
+
+### The finding, and it is larger than the increment that prompted it
+
+The blind spot was first stated as "no `.kel` source contains a non-ASCII literal or an escape
+sequence". **The measurement came back stronger: every double quote in all twelve stage sources is
+inside a line comment. The corpus contains ZERO STRING LITERALS.**
+
+Not "no escapes" -- nothing. Escapes, non-ASCII content, interning and deduplication, the empty
+literal, and the constant pool's string tag are all entirely unwitnessed by the oracle. The two
+defects found on 2026-08-30 were therefore not near-misses in otherwise-covered code. They were in
+a region the oracle has never once exercised, and the surprise is not that two were there but that
+only two have surfaced.
+
+### The census, and what makes its clean result mean anything
+
+49 probes across six axes -- non-ASCII literal content, every escape the reference accepts, literal
+shape, interning, integer radix forms, comments, and file whitespace -- classified against the
+SHIPPING `keleusma::selfhost::self_host_compile` rather than the copy in `tests/selfhost_codegen.rs`.
+The shipping driver is the target deliberately: for as long as only the copy was measured, four
+defects in the shipping one were invisible.
+
+Result: **49 agree, 0 diverge, 0 refused, 0 rejected**, in roughly two minutes.
+
+**That shape of result is indistinguishable from a broken classifier**, which is the whole reason
+the file also carries two positive controls, checked BEFORE the census so a broken instrument is
+reported as a broken instrument rather than as a clean lexer. They are drawn from the
+construct-support boundary, which records their outcomes independently: a generic function, which
+the subset refuses, and float arithmetic, which compiles on both sides and produces different
+bytes. Both report as recorded. Without the second in particular, a `classify` that always returned
+agreement would print exactly the same summary.
+
+### THE FOURTH INSTRUMENT ERROR, AND THIS ONE CAUGHT ITSELF
+
+The census's own coverage guard scanned source text character by character, toggling an
+"inside a string" flag on every double quote and counting backslashes while set. It reported ONE
+escape in the stage sources. There are none: the line it found is a COMMENT in `lexer.kel`
+describing how the lexer treats backslashes, and the quotes inside that comment flipped the flag.
+
+**The hand-written grep I checked it against was also wrong**, and in the opposite direction --
+inside single quotes `'\\\\[nrt0...]'` searches for two literal backslashes, so it reported zero.
+Two instruments disagreed and neither was right. The claim happened to be true; nothing that had
+been run established it.
+
+The remedy is the one this tree has now recorded four times: the lexer that CAN see comments is
+right there. The check tokenizes each stage and counts string-literal tokens, which is exact,
+comment-immune, and derived from the implementation rather than imitating it. **When the data is
+reachable through its real reader, parsing its source text is choosing to have an instrument that
+can be wrong.**
+
+The non-vacuity assertion then fired on the corrected instrument and was right to: it demanded at
+least one string literal, and there are none. That assertion was itself wrong-headed -- the zero is
+the FINDING, not a broken measurement -- so it now asserts on tokens READ rather than on literals
+found. A lexer returning nothing would also report zero literals, and that is the confusion worth
+excluding.
+
+### A defect in the test file's own structure
+
+The census silences the panic hook around `catch_unwind`, and the hook is PROCESS-GLOBAL. Split
+across two tests in one binary, the harness ran them concurrently and the census's no-op hook
+swallowed the other test's failure message: the run reported `FAILED` with no reason at all. Merged
+into one test. A test that fails without saying why is barely better than one that does not run,
+and this cost two cycles to diagnose.
+
+### What is deliberately not claimed
+
+The census does not claim the lexical surface is exhausted. It is a sample, and the probe set is a
+choice. What it adds over the corpus is that the sample was chosen to contain what the corpus
+lacks, and a second block of assertions fails if a future edit trims it back to what the corpus
+already covers.
+
+## 2026-08-30 — Session 58, second increment: the string ABI, and two divergences it uncovered
+
+The ruled string ABI, implemented and specified. The increment also found two defects that were
+invisible to every existing check, both in what a string literal's bytes ARE, and both found by
+writing a test that asserted the contract rather than by reading the code.
+
+### What "make the two embeddings agree" had to mean, and why it was not a choice
+
+The ruling's own wording does not name a representation, so the first work was establishing what
+agreement is available rather than picking one. Read off `origin/v0.3.0` rather than assumed:
+
+- The three options were never lettered on that line. They are an unlettered three-row table in
+  `docs/decisions/OPERATOR_DECISIONS_OPEN.md`; the lettering exists only in `ABI_RULINGS.md`, which
+  identifies the choice by its text. **A reader searching that branch for "Option B" finds the
+  ruling and not the option it names.**
+- The native backend already lowers a string literal to a constant global of layout
+  `{ i64 len, [n+1 x i8] }` and passes its ADDRESS in an `i64` parameter slot. It supports
+  string-taking natives today; it does not refuse them.
+- **That branch tip carries two contradictory records.** `handoffs/v0.3.0.md` records a 2026-08-20
+  ruling of the length-prefixed struct, explicitly provisional, which is "ratify the current shape";
+  `ABI_RULINGS.md` records the 2026-08-29 "make the embeddings agree". The operator's in-session
+  confirmation to this line is later than both and is what was implemented. Flagged rather than
+  reconciled, because reconciling another line's records is not this line's call.
+
+Given a native that observes a pointer and a length on one side, only two agreements exist: teach
+the other side to observe a pointer and a length, or teach the native side to allocate and copy into
+an owned `String`. **The second is available and was rejected on engineering grounds**, not on
+preference: it puts an allocation and a copy on every native call in a language whose value
+proposition is a definitive worst-case memory bound. So the agreed representation is a borrowed,
+length-delimited view, expressed as `&str` under this embedding.
+
+### The shape of the implementation, and the two things that were measured
+
+`KeleusmaType::from_value_ctx` returns an owned `Self`, so `&str` is not expressible through it.
+Two design questions followed, and reasoning got both wrong before measurement corrected them.
+
+**One: whether a bare `register_fn` call site can still infer.** Reasoning said no, on the ground
+that recovering the argument shape from a closure's signature requires inverting an associated type,
+which is not injective. **A spike said yes**, provided the `Fn` bound is CONCRETE and the shape is
+carried by a marker in the trait's `Args` position. The associated-type formulation is the one that
+fails; the enumerated one does not. This is why the family is 26 explicitly enumerated shapes rather
+than one generic impl per arity, and the comment above it records that as measured.
+
+**Two: whether the shapes collide.** The spike compiled, so the shapes were taken to be disjoint.
+**They are not, and the spike could not have shown it**: the spike was a BINARY crate, where
+coherence has no downstream to defend against. In the library the same code produced 44 overlap
+errors, because `(&'static str, B)` and `(A, &'static str)` unify at `A = B = &'static str` and the
+compiler will not assume a downstream crate never implements `KeleusmaType` for `&'static str`.
+Fixed by wrapping each slot in a distinct local marker so no substitution makes two shapes equal.
+**A spike that does not match the crate type of the thing it is sizing is measuring something else.**
+
+### The defect the ABI test found: a string literal was not its own bytes
+
+The multi-byte test failed at eleven bytes against a six-byte literal. Eleven is exactly the
+double-encoded length, and the cause is one line: `lex_string` scanned bytes and pushed each as
+`c as char`, so every byte at or above `0x80` was reinterpreted as a Unicode scalar and re-encoded
+into two. **Every non-ASCII string literal in the language was silently corrupted**, and had been.
+
+Why nothing caught it, which is the more useful half:
+
+- The corrupted result is still well-formed UTF-8. It is not invalid text, it is the WRONG text, and
+  no invariant in the tree distinguishes those.
+- **No `.kel` source in this repository contains a non-ASCII string literal.** The only non-ASCII
+  bytes in any `.kel` file at all are two section signs, both inside comments. So the byte-identity
+  oracle compares only inputs that cannot exhibit the defect.
+
+And the direction is worth stating precisely: `lexer.kel` interns the RAW content bytes and the
+driver's `unescape_string` is byte-faithful, so **the self-hosted pipeline was correct and the
+REFERENCE compiler was the divergent one.** For any non-ASCII literal the two pipelines produced
+different modules, and the corpus could not see it.
+
+### The second divergence, in the routine the first one made me read
+
+`unescape_string` handles four escapes. The reference lexer handles six. `\r` and `\0` were missing
+in both copies of the routine, so a literal carrying either compiled to different bytes under the two
+pipelines. Its comment also asserted that passing an unknown escape through "matches the reference's
+own behaviour", which is **false**: the reference rejects an unknown escape with a lex error. The
+passthrough arm is unreachable, not equivalent.
+
+No stage source uses ANY escape, so again the corpus was silent. Both copies are fixed, and the new
+pin derives the escape set from the reference by scanning all 128 ASCII bytes rather than restating
+it, with non-vacuity assertions in both directions: if the reference ever accepts a seventh escape
+the test fails, and if it ever stops rejecting anything the test fails.
+
+### What is deliberately not claimed
+
+**No test in this repository observes both embeddings.** The native backend is on the other line.
+What is pinned here is the four observable properties the contract consists of, each independently
+pinned on the other side. Agreement is the conjunction of two one-sided pins, which is weaker than a
+differential oracle, and the specification says so in those words rather than implying a stronger
+result.
+
+The owned `String` argument is RETAINED, not deprecated. Deprecating it is an embedder-visible call
+the operator has not made. The specification records that it is virtual-machine-only and does not
+carry to the native embedding, which is the honest position and leaves the decision open.
+
 ## 2026-08-30 — Session 58, first increment: resumption, an audit, and the string ruling received
 
 No new capability. Three deliverables: the stranded increment landed, the line audited, and the

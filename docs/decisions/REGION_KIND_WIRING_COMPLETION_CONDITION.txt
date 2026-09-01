@@ -1,0 +1,47 @@
+COMPLETION CONDITION — wiring SHARED_LAYOUT and DATA_INIT
+
+Ordering is NOT a completion criterion. The properties below may be reached in
+any order, by any route. Judge only the end state of the tree.
+
+A. The driver routes both kinds.
+   The self-hosted windowed assembler supplies per-record fields for the
+   SHARED_LAYOUT and DATA_INIT region kinds rather than leaving them to the
+   catch-all that zeroes a region. Field construction reads the module's own
+   data layout; it does not recompute a layout the module already carries.
+
+B. The coverage measurement moves, and the movement is visible.
+   The test that classifies each region kind as identical, skipped, or
+   differing reports fewer skipped kinds than before for at least one stage,
+   and no kind that previously reported identical now reports differing. The
+   figure the tree records for skipped kinds matches what the test derives.
+
+C. Elision is predicted by the shared predicate, not re-derived.
+   Wherever the driver decides whether a private-initialiser pool is elided, it
+   calls the existing shared predicate. No second implementation of that
+   condition exists in the tree.
+
+D. A size overflow is an error, never a short write.
+   If the fields for a region exceed what the stage's window or field buffer
+   can hold, the driver returns an error naming the region. No path truncates
+   the emitted bytes to the reserved length, and no path emits fewer records
+   than the reference reserved while reporting success.
+
+E. Refusals are reported as refusals.
+   If any stage's region cannot be emitted because of the batch bound, that
+   outcome is recorded in the tree as an unreached kind for that stage, stated
+   as a limit rather than presented as coverage.
+
+F. Claims match the tree.
+   Any count or region-kind figure stated in a document added or modified by
+   this work is either recomputed by a test or carries the date it was
+   measured. No document claims a kind is emitted that the coverage test does
+   not report as identical.
+
+G. The tree is green under the checks this project already runs, with no new
+   warnings, and the byte-identity agreement of the existing stage sources is
+   unchanged.
+
+Not required for completion: any particular branch, commit, merge, or review
+state; wiring the remaining region kinds that depend on the name-interning
+route; emitting these kinds for every stage if a stage exceeds the batch bound;
+any particular file layout or naming.

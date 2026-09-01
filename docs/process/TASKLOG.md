@@ -10,6 +10,72 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-31, session 58, fifth increment). SHARED_LAYOUT IS ROUTED; SKIPPED 6 -> 5.**
+>
+> The operator's queued item. `SHARED_LAYOUT` is emitted for every stage and byte-matches the
+> reference; `DATA_INIT` is emitted and correct for the eleven stages that elide. The twelfth,
+> `verify_datalayout.kel`, needs the encoder's constant ordering to place its pool -- the `CONSTS`
+> problem -- so it is left as an honest zeroed gap rather than a guessed index that could turn a
+> `Skipped` into a `Differs`.
+>
+> **THE BRIEF WAS WRONG ABOUT ITS ONLY NAMED RISK.** It called the field-buffer batch bound the live
+> constraint. Measured: `lexer.kel`'s 395,778 shared slots collapse to NINE records and `wire.kel`'s
+> 144,391 to eight, because a shared layout is overwhelmingly uniform arrays. Nine records is 63
+> field words against a `fin` of 1024, so nothing in the corpus approaches the bound.
+>
+> **A GREEN SUITE WAS NOT EVIDENCE.** All five region-coverage tests passed before the increment had
+> demonstrated anything, because the skipped-kind test asserts `<= 6`. Only the completion
+> condition's clause demanding visible movement stopped a pass being read as a result.
+>
+> **`scripts/gate-summary.sh` lands with this**, because the wrong test figure in the third
+> increment's merged commit message came from an ad-hoc total across a multi-pass gate log.
+
+> **Currency note (2026-08-31, session 58, fourth increment). THE ORACLE EXERCISES ONE TYPE.**
+>
+> **All 861 functions in the twelve stage sources return `Word`, and all 733 parameters are `Word`.**
+> Established by two independent instruments, because a zero is a strong claim and this session
+> produced five instrument errors. `Text`, `Float`, `Fixed`, `bool`, tuples, arrays, structs, enums
+> and `impl` blocks cross no function boundary in the corpus at all.
+>
+> The byte-identity oracle over REAL PROGRAMS is therefore `Word`-only. A first draft said the
+> construct-support boundary table was the only non-`Word` coverage; **testing that claim refuted
+> it** -- `selfhost_codegen.rs` and `selfhost_pool_tags.rs` carry substantial non-`Word` material.
+> The surviving statement is synthetic-versus-SCALE, not synthetic-versus-absent.
+>
+> **The boundary table's shape had never been examined**: 43 equality cases against ONE each for
+> `literal`, `tuple` and `removed`. The single `literal` case is `let s = "hi"` -- the degenerate
+> case that let both string defects through. Pinned as a RATCHET, not a quota: demanding larger
+> families would produce padding, and padding looks like coverage.
+>
+> **Also corrected: a divergence does not say which side is wrong.** `self_hosted_compile` claimed
+> it meant the program was outside the subset. Before the lexer fix, a non-ASCII literal diverged,
+> was refused, and the caller was pointed at `--compiler rust`, which compiled it silently and
+> wrongly. The behaviour stays; only the claim changes.
+
+> **Currency note (2026-08-30, session 58, second increment). THE STRING ABI IS IMPLEMENTED AND
+> SPECIFIED, AND IT UNCOVERED TWO DIVERGENCES NOTHING COULD SEE.**
+>
+> A string-taking native may now be declared against a borrowed `&str`, in any argument position at
+> arities one through four, which is the same view the ahead-of-time backend hands its native. The
+> owned `String` argument is RETAINED and is recorded as virtual-machine-only rather than
+> deprecated, because deprecation is the operator's call. Specified in
+> `docs/spec/NATIVE_STRING_ABI.md`; the chapter on registering natives is updated.
+>
+> **The reference lexer corrupted every non-ASCII string literal.** `lex_string` pushed each scanned
+> byte as `c as char`, re-encoding every byte at or above `0x80`; a six-byte literal baked as eleven
+> bytes of well-formed but WRONG text. `lexer.kel` interns raw bytes and was correct, so the
+> REFERENCE was the divergent side. No `.kel` file in the tree carries a non-ASCII literal, so the
+> byte-identity oracle compares only inputs that cannot exhibit it.
+>
+> **The self-hosted `unescape_string` handled four escapes where the reference handles six**, missing
+> `\r` and `\0`, and its comment claimed passthrough "matches the reference" when the reference
+> REJECTS an unknown escape. Both copies fixed; the new pin derives the escape set from the reference
+> by scanning all 128 ASCII bytes, with non-vacuity in both directions.
+>
+> **A spike in a binary crate proved the wrong thing.** The impl family compiled there and produced 44
+> coherence errors in the library, where a downstream crate must be defended against. A spike whose
+> crate type differs from the target is measuring something else.
+
 > **Currency note (2026-08-30, session 58, first increment). THE STRING ABI RULING IS RECEIVED AND
 > BINDING, AND THE LINE IS AUDITED.**
 >
