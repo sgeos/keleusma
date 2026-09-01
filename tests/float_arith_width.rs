@@ -256,3 +256,50 @@ fn checked_div_narrows_to_the_declared_width() {
     ));
     assert_eq!(got, want as f32 as f64, "checked Div was not narrowed");
 }
+
+// ---------------------------------------------------------------------------
+// The refusal and the narrowing must agree about which widths are implemented.
+// ---------------------------------------------------------------------------
+
+/// A module declaring an unimplemented float width is refused, not approximated.
+///
+/// Silently computing wide while declaring narrow is the defect this whole file
+/// exists to remove. Fixing it at one rung while reintroducing it at two others
+/// would be worse than not starting.
+#[test]
+fn an_unimplemented_float_width_is_refused_at_load() {
+    use keleusma::bytecode::float_width_narrowing_is_implemented as implemented;
+    for bits in [3u8, 4] {
+        assert!(
+            !implemented(bits),
+            "width 2^{bits} is claimed implemented; if a rung landed, this test and the \
+             narrowing must move together"
+        );
+    }
+}
+
+/// The no-floats sentinel must NOT be refused.
+///
+/// `Target::embedded_8` and `embedded_16` declare `float_bits_log2: 0` with
+/// `has_floats: false`. Zero is the sentinel, not a one-bit format. A blanket
+/// "narrower than 32 bits" refusal would reject every module built for those
+/// targets, which is the mistake this guards.
+#[test]
+fn the_no_floats_sentinel_is_not_treated_as_an_unimplemented_width() {
+    use keleusma::bytecode::float_width_narrowing_is_implemented as implemented;
+    assert!(
+        implemented(0),
+        "zero is the no-floats sentinel and must not be refused as an unimplemented width"
+    );
+}
+
+/// Every width the runtime can actually be built at is implemented.
+///
+/// Must-fire: without it the predicate could return false everywhere and the
+/// two tests above would still pass.
+#[test]
+fn the_implemented_widths_include_the_ones_the_runtime_uses() {
+    use keleusma::bytecode::float_width_narrowing_is_implemented as implemented;
+    assert!(implemented(5), "f32 must be implemented");
+    assert!(implemented(6), "f64 must be implemented");
+}
