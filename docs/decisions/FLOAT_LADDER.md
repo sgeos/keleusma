@@ -115,24 +115,152 @@ a native-versus-virtual-machine mismatch attributable to the lowering**, which i
 search. Their record marks it inferred from those sites rather than witnessed by a test. Constructing
 that differential is this line's instrument to offer once the arithmetic width is live.
 
-## The double-rounding hazard is real at one end of the range and probably vacuous at the other
+## The double-rounding question is settled, and neither of us was right first
 
-**This is an inference, not a measurement, and it has not been tested.** It is recorded because the
-rule it concerns is about to be implemented on the other line, and because the reason for a rule
-determines where the rule can be relaxed.
+**Resolved with the `v0.2.3` line on 2026-09-01.** Their record required narrowing directly from the
+wide value and never through an intermediate rung. This file replied that the standard innocuous
+double-rounding condition, an intermediate carrying at least `2p + 2` significand bits for a target
+precision `p`, is **met exactly** at binary32 into binary16, so the chain is safe for normals and the
+prohibition is over-broad. **They withdrew the prohibition. The replacement is better than either
+version**, and it is theirs.
 
-Their record requires narrowing **directly from the wide value to the declared format, never through
-an intermediate rung**, on the grounds that a 64 to 32 to 16 chain rounds twice. **Keep the rule.**
-The reason offered here differs.
+> **Narrow from an intermediate carrying at least `2p + 2` significand bits for the target `p`.**
 
-The standard condition for double rounding to be innocuous over addition, subtraction,
-multiplication, division and square root is that the intermediate precision be at least **twice the
-target precision plus two**. Binary32 carries 24 significand bits and binary16 requires 24, so the
-condition is **met exactly**, and a 64 to 32 to 16 chain should agree with a direct narrowing for
-normal numbers. `E5M2` requires 8 against binary16's 11 and clears it with margin.
+**Stated as a condition on the intermediate rather than a prohibition on chaining, it forbids the one
+case that actually threatens this ladder, and neither line had named it.** Routing 64 to **bfloat16**
+to binary16, on hardware that has bf16 and not f16, is a plausible implementation choice on
+machine-learning silicon. **bfloat16 carries 8 significand bits against a requirement of 24 and fails
+by two thirds.** A prohibition on chaining would have been withdrawn as over-broad before it ever
+caught this.
 
-**The condition assumes no underflow.** Binary16's exponent range is narrow, so results at and below
-the smallest normal lose effective precision, and that is exactly where the guarantee lapses. **The
-rule survives and is load-bearing at the bottom of the exponent range rather than in general**, which
-is a sharper claim than "chains round twice" and a testable one. That test belongs on the line that
-builds the narrowing.
+### My underflow caveat is vacuous at the rung I raised it for
+
+I argued the condition assumes no underflow and that binary16's narrow exponent range is where it
+would lapse. **They showed it does not lapse at 64 to 32 to 16**: binary32's exponent range covers
+every binary16-representable magnitude, subnormals included, as a **normal** with the full 24 bits, so
+the theorem's hypothesis holds across the whole target range. I cannot construct a witness either.
+
+**The rung where the ranges do touch is 16 to 8**, and for the reason this file gives for choosing
+`E5M2`. The shared five-bit exponent that makes the ladder one family also puts the two subnormal
+ranges in contact, since `E5M2`'s subnormals at `2^-16` to `2^-14` sit inside binary16's. They worked
+it and it holds, with the margin shrinking from three to roughly two.
+
+**Recorded position, weaker than either line started with**: the caveat is real in form and neither
+line can construct a witness for it on this ladder. Held deliberately in preference to a tidier claim.
+
+### The larger hazard is not double rounding at all
+
+**Their observation, and it is the one worth spending test effort on.** The likely defect is not
+rounding twice. It is rounding **once, at the end of a computation, instead of after every
+operation**. That is missing rounding, and it is what the tree does today, with three storage sites
+narrowing and no arithmetic site narrowing. **At `E5M2`'s three significand bits, round-at-the-end
+against round-per-operation is a different function rather than a precision detail.**
+
+## Why the two implementations may be compared at all
+
+**Established with the `v0.2.3` line on 2026-09-01, and it is the justification for this line's
+differential being a proof rather than a coincidence.**
+
+The two sides do not compute the same way. This backend lowers float arithmetic **natively at the
+declared width**, because LLVM has the type. The reference **widens to `f64`, computes, and narrows**.
+
+They agree by the same condition. **`f64` carries 53 significand bits against a requirement of
+`2 x 24 + 2 = 50` for an `f32` target, so computing in `f64` and rounding once per operation to `f32`
+is equivalent to native `f32` arithmetic.** Margin 3. It holds a fortiori at `f16`, which needs 24,
+and at `E5M2`, which needs 8. **Widen-compute-narrow from `f64` is therefore sound at every rung on
+this ladder.**
+
+**Two limits, on the record.** The equivalence covers **five operations** — addition, subtraction,
+multiplication, division and square root. It does **not** cover a fused multiply-add, whose purpose is
+to round once where the theorem assumes twice, and it does not cover transcendentals. And it assumes
+the intermediate neither overflows nor underflows, which `f64` makes remote but not impossible.
+
+## The five-operation precondition is now pinned, and the obvious instrument for it reads green
+
+`native_codegen/tests/float_no_contraction.rs`. **The backend sets no fast-math flags**, so nothing
+downstream is licensed to fuse, and the equivalence above applies to what is emitted.
+
+> ⚠ **AN IR-LEVEL SEARCH FOR CONTRACTION IS A FALSE NEGATIVE.** The first version of that file looked
+> for an FMA intrinsic and for fast-math flags in the emitted LLVM IR after a full `default<O2>`
+> pipeline. **It passed on the first run and it was measuring nothing.** Fusion is not an IR
+> transform. Granting `contract` to the `fmul` and the `fadd` and changing nothing else leaves both
+> instructions flagged and **still separate** after O2. The fusion happens in code generation, and the
+> **machine instruction is the first place it is visible**. Only after emitting assembly did the
+> mutation produce an `fmadd` while the unmutated backend produced none.
+
+**The mutation is what exposed it**, and it perturbs the lowering rather than the probe. Without it,
+"no FMA found" would have been indistinguishable from "this shape does not fuse here" and from "the
+instrument cannot see fusion" — and the third was the true one.
+
+**Two defects in the guard's own machinery, both caught before it landed.** The mutation first
+replaced `"fmul "`, which also matches the `%fmul` on the left of the assignment, because the backend
+names its values after the mnemonic. And the flag detector sliced a span from the first occurrence of
+the mnemonic and bounded it on `" float"`, when the default float type prints as `double`. It returned
+the right answer for the wrong reason, which is the least useful way to be wrong.
+
+**Handed back to the `v0.2.3` line**, and answered by them the same day. Their construction rounds per
+operation only if the Rust compiler does not itself contract a multiply feeding an add inside the
+arithmetic path. **Measured from generated code**, at `-O` and at `-C opt-level=3 -C
+target-cpu=native` on `aarch64-apple-darwin`: **zero fused instructions** for a plain `a * b + c` at
+either width, and **one** for an explicit `mul_add` as a must-fire control.
+
+**The target makes the null result mean something.** On aarch64 the fused multiply-add is **baseline
+rather than a target feature**, so the compiler had the instruction throughout and the control proves
+it emitted one in the same compilation unit. It cannot be that the feature was unavailable, which is
+the ambiguity the same measurement would carry on x86. **Their stated limit: one target measured.**
+Rust's freedom from fast-math is a language-level property, so it is expected to generalise, and
+expectation is not measurement.
+
+They also verified something neither line had checked: `(a * b) as f32 as f64` emits **two `fcvt`
+instructions**, narrow then widen, neither elided. **That single operation is what their whole
+construction rests on**, and had the round trip been treated as a no-op the per-operation rounding
+would have vanished silently while every test at equal widths stayed green.
+
+**Pinned portably on this line** in `float_no_contraction.rs`, because assembly inspection establishes
+a fact and is a poor instrument for keeping it true. Two numeric witnesses assert that a two-step
+multiply-then-add differs from an explicit fused one, which fails the moment a toolchain starts
+contracting. **Both were re-derived here rather than taken on report**, and the second is **2 ulps**
+apart where their message said one. **The operands must pass through a black box**, their caution: the
+compiler otherwise constant-folds the expression and the test pins its constant evaluator instead of
+its code generation, and since constant folding does not contract either, **it would still pass while
+testing nothing**.
+
+## A prediction recorded before the format-fingerprint absorption
+
+**The `v0.2.3` line gave advance notice on 2026-09-01** that `origin/v0.2.3` will shortly carry a
+format fingerprint in the auxiliary header's reserved word, refused at load on mismatch. It exists
+because `BYTECODE_VERSION` is frozen at 2 across releases, so the version check admits every release
+declaring 2.
+
+> ⚠ **THEY RETRACTED THE MECHANISM AFTER THE OPERATOR REDIRECTED IT, AND THIS RECORD IS CORRECTED
+> RATHER THAN LEFT.** It is **not** derived from the scalar size table. It is a **random value rolled
+> once per release**, held in a constant beside `BYTECODE_VERSION`, with a script to read the working
+> tree's value, read any commit's or tag's, and roll a new one. **A derived value only ever covers
+> what it hashes**, so a release that changed an opcode's meaning or the reading of an existing field
+> would leave it unmoved while genuinely differing. Per-release covers the release rather than a proxy
+> for it.
+
+**Prediction: zero movement in the `native_codegen` figures.** The backend consumes a module through
+the runtime's own reader and derives everything from opcodes and the auxiliary tables rather than from
+the header's reserved word, and both sides of every differential are produced by the same reference
+compiler, so a changed header reaches them identically. `corpus_fingerprint.rs` pins the CONTENT of the
+corpus source roots and states in its own header that it does not cover the reference compiler's
+behaviour, so it should not fire.
+
+**Falsifier, named in advance**: any test on this line that pins an encoded module length or hashes
+emitted bytes. **Swept, and none found.** The only fingerprint on this line is over corpus SOURCE
+files; the single test that reads emitted bytes is `aot_linkage.rs`, which searches an object file for
+a symbol needle and does not read the Keleusma module encoding at all. **A named falsifier nobody
+looked for is a weaker claim than one that has been looked for**, so the sweep is part of the
+prediction rather than a follow-up. **If the absorption moves a figure anyway, the movement is
+reported and the pin named rather than the figure adjusted.**
+
+**The prediction is unaffected by the redirect**, because the mechanism is one changed word in the
+header either way. Only the description of what moves the word changes.
+
+> ⚠ **A CONSEQUENCE THEY TOLD THIS LINE AND THEN WITHDREW.** That `Text<N>` collapsing
+> `ScalarKind::Text` from two words to one address would move the fingerprint, and that this would be
+> the detector's first evidence against a real change. **False under the redirected design.** The
+> fingerprint moves at RELEASE, and two builds within one release cycle share it deliberately. What
+> catches an unintended layout change is the golden wire-byte test, which fired on the fingerprint's
+> own arrival twice at exactly eight changed bytes.
