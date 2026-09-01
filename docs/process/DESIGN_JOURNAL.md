@@ -1,5 +1,56 @@
 # Design Journal
 
+## 2026-08-31 — The confinement verdict is consumed to refuse, and the plan for it was wrong twice over
+
+**Increment**: discharging the region planner's soundness obligation by analysis, per the operator's
+ruling. See `../decisions/CONFINEMENT_CONSUMPTION_BRIEF.md`.
+
+**THE PLAN WAS BUILT ON A MISREADING AND READING THE CONSUMER CAUGHT IT.** I intended to consume the
+verdict to *decline in-place reuse*. **There is no site-to-site reuse to decline**: every static site
+already gets its own offset, `region_nonreuse.rs` enforces it on ranges, and `region.rs` says in as
+many words that nothing in it consults liveness, escape, aliasing or confinement. The cross-iteration
+hazard is that one site has ONE offset, so a loop writes the same bytes every iteration.
+
+**That is the exact conflation this line's handoff records making once before**, when it wrongly told
+the proof line the obligation was discharged — static-site disjointness against cross-iteration
+reuse. I came within an increment of repeating it inside the increment meant to fix it.
+
+**The verdict has two uses and bundling them is the trap.** Refusing a site the analysis says escapes
+costs nothing. OVERLAPPING confined sites to share bytes closes the measured arena gap and **takes on
+an exposure that does not exist today**, which `region.rs` warns about in the same breath as the
+immunity. **Only the first is taken.** The refusal is placed AFTER the syntactic hazard check, so the
+verdict may only ADD a refusal, never remove one, and a verdict wrong in the unsafe direction leaves
+the lowering exactly where it was. **The ordering IS the safety argument**, so it is stated in the
+code rather than intended.
+
+**The acceptance criterion the operator set holds exactly**: 67 modules end to end, 1072 of 1074
+chunks, 89854 of 89940 instances, same two refusals with the same reasons.
+
+**AND IT ADDS NOTHING TODAY, WITH THE REASON MEASURED RATHER THAN ASSUMED.** The reference compiler
+refuses an early return inside a loop and refuses reassignment, so `yield` is the only route by which
+a loop-built composite escapes its iteration, and every such chunk is refused for `Stream` first.
+**That is the accidental protection the obligation names, now measured**, and it expires the day
+`Stream` lowers.
+
+**Reach proved by mutating real bytecode**, since no source program the language accepts will reach
+it. Replacing `Stream` and `Reset` with `PopN(0)`, which preserves op indices, leaves the site refused
+by the pre-existing syntactic check; disabling that check makes the confinement refusal fire on the
+same site as `Escapes its iteration (Yielded { ip: 25 })`. **So its unique contribution is the
+interprocedural case**, which is the residual the obligation names and which nothing reaches today.
+Stated rather than dressed up as coverage.
+
+**A `git add -A` cost a red push and the pin caught it.** A documentation commit swept in a 152-line
+test file, which went out behind a hook that does not cover this package; the baseline for that tree
+came back 427 passed, 1 failed. **The population was exactly as predicted and the tree was still
+red**, which is the whole argument for measuring before pushing. Staging explicitly from here.
+
+**And the skippable-tests scanner had its THIRD false positive, the first from another language.** It
+matched `for c in ch { return [c, c]; }` — **Keleusma source inside a Rust string literal**. Its
+earlier two were prose in comments and a `return` in a closure, and the recorded repair for the
+closure was to rewrite the source. **This one is different in kind**: rewriting a fixture to dodge an
+instrument, or adding the test to the pin, would record a false claim that the test can skip. The
+scanner strips string literals now, which fixes the class.
+
 ## 2026-08-31 — The residue closes, and what is left is refusals and one open ruling
 
 **Increment**: the last reachable kind arms — a boolean tuple member and enum payload, a fixed-point

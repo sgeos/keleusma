@@ -478,6 +478,24 @@ pub enum LowerError {
     /// is unbounded in the iteration count and gives up the bounded-memory
     /// property this backend exists to provide. Refusal is the disposition that
     /// keeps the bound and loses the defect.
+    /// A composite construction site the shipped confinement analysis reports
+    /// as not confined to its iteration.
+    ///
+    /// **Distinct from [`LowerError::YieldEscapingLoopComposite`] on purpose.**
+    /// That one is a per-chunk SYNTACTIC finding: a site in a loop body whose
+    /// value reaches a `Yield` in the same chunk. This one is the ANALYSIS's
+    /// answer, which carries callee summaries and therefore covers the
+    /// interprocedural shape -- built in a loop, returned, yielded by the
+    /// caller -- that the syntactic check cannot see and that the region
+    /// planner's soundness obligation names as its open residual.
+    EscapesItsIteration {
+        /// Address of the `Op::NewComposite`.
+        site_op: usize,
+        /// The analysis's verdict, rendered.
+        verdict: String,
+        /// The route the analysis found, rendered.
+        reason: String,
+    },
     YieldEscapingLoopComposite {
         /// Index into the chunk's `ops` of the construction site.
         site_op: usize,
@@ -550,6 +568,17 @@ impl core::fmt::Display for LowerError {
             LowerError::UnsupportedDataSlot { slot, why } => {
                 write!(f, "data slot {slot} is not lowerable: {why}")
             }
+            LowerError::EscapesItsIteration {
+                site_op,
+                verdict,
+                reason,
+            } => write!(
+                f,
+                "composite built at op {site_op} is {verdict} its iteration ({reason}); the \
+                 region places one offset per site, so the next iteration overwrites those \
+                 bytes and a value that outlives the iteration would be read wrong rather \
+                 than faulted"
+            ),
             LowerError::YieldEscapingLoopComposite { site_op, yield_op } => write!(
                 f,
                 "the composite built at op {site_op} is yielded at op {yield_op} from inside \
@@ -1235,6 +1264,7 @@ pub fn lower_chunk<'ctx>(
             opts,
             degenerate_yield: None,
             delegated_call: None,
+            confinement: None,
             natives: &[],
             native_shapes: &[],
             chunk_signatures: &[],
@@ -1655,6 +1685,17 @@ fn lower_module_with<'ctx>(
     // exists and the two could drift. `float_guard_routes.rs` tests this route
     // through the EXISTING behaviour.
 
+    // **THE CONFINEMENT VERDICTS, COMPUTED ONCE FOR THE WHOLE MODULE.**
+    // `module_confinement` is the form that carries callee summaries, which is
+    // the only form worth consuming: the per-chunk form assumes every call leaks
+    // and would refuse sites this one confines. The interprocedural shape --
+    // built in a loop, returned, yielded by the caller -- is exactly the residual
+    // the region planner's soundness obligation names as open, and it is
+    // reachable only through the summaries.
+    //
+    // Indexed by chunk, parallel to `program.chunks`.
+    let confinement = keleusma::confine::module_confinement(program);
+
     // A delegated suspension affects exactly TWO chunks: the entry, whose tail
     // call becomes the return, and the callee, whose yields become returns.
     let delegated = if opts.delegated_suspension {
@@ -1691,6 +1732,7 @@ fn lower_module_with<'ctx>(
             opts,
             degenerate_yield: tail.as_deref(),
             delegated_call,
+            confinement: confinement.get(i).map(|v| v.as_slice()),
             natives: &program.native_names,
             native_shapes: &program.native_return_shapes,
             chunk_signatures: &program.signatures,
@@ -1833,6 +1875,17 @@ struct BodyCfg<'a> {
     /// the bytecode module; `lower_chunk` passes `None` for the same reason it
     /// refuses `Op::Call`.
     degenerate_yield: Option<&'a [usize]>,
+    /// This chunk's confinement verdicts, when the caller has a module to
+    /// compute them from.
+    ///
+    /// **`None` for [`lower_chunk`], and that is deliberate rather than a
+    /// limitation.** The verdicts worth consuming are the ones carrying callee
+    /// summaries, which need the whole module; the per-chunk form assumes every
+    /// call leaks and would refuse sites the module-level answer confines. A
+    /// single-chunk lowering therefore adds no refusal here and keeps exactly
+    /// the behaviour it had, which is the same reason it refuses `Op::Call`
+    /// outright rather than guessing at one.
+    confinement: Option<&'a [keleusma::confine::SiteVerdict]>,
     /// Op index of a tail-position `Call` whose result is RETURNED rather than
     /// pushed, because the callee suspends on the caller's behalf. See
     /// [`delegated_suspension_plan`].
@@ -2349,6 +2402,7 @@ fn lower_chunk_body<'ctx>(
         opts,
         degenerate_yield,
         delegated_call,
+        confinement,
         natives,
         native_shapes,
         chunk_signatures,
@@ -4432,6 +4486,40 @@ fn lower_chunk_body<'ctx>(
                     return Err(LowerError::YieldEscapingLoopComposite {
                         site_op: h.site_op,
                         yield_op: h.yield_op,
+                    });
+                }
+
+                // **THE CONFINEMENT VERDICT, CONSUMED TO REFUSE AND ONLY TO
+                // REFUSE.** The operator ruled the region planner's soundness
+                // obligation discharged by analysis, with an inconclusive
+                // verdict declining. See
+                // `docs/decisions/CONFINEMENT_CONSUMPTION_BRIEF.md`.
+                //
+                // **THE PLACEMENT IS THE SAFETY ARGUMENT.** This sits AFTER the
+                // syntactic hazard check above, and adds a refusal without ever
+                // removing one. So a verdict wrong in the unsafe direction --
+                // `Confined` for a site that escapes -- costs a refusal this
+                // pass would have added and leaves the lowering exactly where it
+                // was before the analysis was consulted. Nothing that is refused
+                // today can be admitted by a wrong verdict. That is what buys
+                // the soundness half of the obligation without the exposure that
+                // OVERLAPPING sites on a verdict would take on, which
+                // `region.rs` warns about and which this does not do.
+                //
+                // **`Scope::Iteration` only.** `Scope::Invocation` asks about
+                // reuse across calls, where the region is caller-provided per
+                // call and the composite-return ABI governs; 144 of 252 corpus
+                // sites decline at that scope, so consuming it here would refuse
+                // a large part of a corpus that must keep lowering.
+                if let Some(verdicts) = confinement
+                    && let Some(v) = verdicts.iter().find(|v| v.ip == i)
+                    && matches!(v.scope, keleusma::confine::Scope::Iteration { .. })
+                    && !matches!(v.verdict, keleusma::confine::Confinement::Confined)
+                {
+                    return Err(LowerError::EscapesItsIteration {
+                        site_op: i,
+                        verdict: format!("{:?}", v.verdict),
+                        reason: format!("{:?}", v.reason),
                     });
                 }
 

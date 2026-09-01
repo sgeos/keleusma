@@ -145,6 +145,25 @@ fn align_up(n: u32) -> u32 {
 /// correct one, not a conservative one, not any. **The conservatism that costs
 /// the bytes is what buys the immunity.**
 ///
+/// # ⚠ THE LOWERING NOW CONSUMES A VERDICT. THIS PLANNER STILL DOES NOT.
+///
+/// Added 2026-08-31, and the distinction is the whole of why the paragraph above
+/// still stands. `lower_module` consults `keleusma::confine` and REFUSES a site
+/// the analysis reports as escaping its iteration. **Placement is unchanged**:
+/// nothing here consults a verdict, no two sites share storage, and
+/// `region_nonreuse.rs` is unweakened.
+///
+/// **The immunity survives in an exact form rather than in general.** The
+/// refusal is placed AFTER the syntactic hazard check in the `NewComposite` arm,
+/// so a verdict can only ADD a refusal and never remove one. A verdict wrong in
+/// the unsafe direction therefore costs a refusal that would have been added and
+/// leaves the lowering exactly where it was; it cannot admit a site that is
+/// refused today. **What would forfeit the immunity is the OTHER use** — the
+/// overlap described below, where a wrong `Confined` becomes a miscompile rather
+/// than a wasted byte. That is still not done here.
+///
+/// See `docs/decisions/CONFINEMENT_CONSUMPTION_BRIEF.md`.
+///
 /// **AND THAT NON-REUSE IS NOW ENFORCED, not merely stated here.**
 /// `region_nonreuse.rs` fails if any chunk plans two sites into overlapping
 /// storage — on RANGES, not offsets, since distinct offsets can still overlap.

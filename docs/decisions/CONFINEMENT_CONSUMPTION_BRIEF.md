@@ -78,3 +78,53 @@ report, not a thing to absorb.
 **And each site the verdict newly refuses is to be CLASSIFIED, not counted**: whether its loop has a
 static trip bound, in which case per-iteration placement is expressible later, or is divergent, in
 which case reclamation is the only route and that is a separate increment.
+
+## Outcome, written after the build
+
+**Landed as scoped, and the interesting result is what it does NOT do.**
+
+`lower_module` computes `module_confinement` once, the form carrying callee summaries, and passes each
+chunk's verdicts through `BodyCfg`. The `NewComposite` arm refuses a site whose iteration-scope
+verdict is anything but `Confined`. `lower_chunk` passes `None`, deliberately: the per-chunk form
+assumes every call leaks and would refuse sites the module-level answer confines, so a single-chunk
+lowering keeps exactly the behaviour it had.
+
+**The acceptance criterion holds exactly.** 67 modules lower end to end, 1072 of 1074 chunks, 89854 of
+89940 opcode instances, and the same two refusals with the same reasons. Nothing shrank.
+
+### It adds nothing today, and the reason is measured rather than assumed
+
+**The reference compiler refuses an early return inside a loop, and refuses reassignment.** So
+`yield` is the only route by which a loop-built composite escapes its iteration, every chunk carrying
+that shape is refused for `Stream` first, and the new refusal is unreachable from source.
+
+**That is the accidental protection the obligation names, now measured.** It expires the day `Stream`
+lowers, which is exactly when this guard starts earning its place.
+
+### Reach, proved by mutating real bytecode rather than by a source program the language will not accept
+
+Replacing `Stream` and `Reset` with `PopN(0)` in the telemetry module — index-preserving, so site
+addresses stay valid — leaves the site refused, **by the pre-existing syntactic check**, which
+precedes the verdict check by design. Disabling that check makes the confinement refusal fire on the
+same site, naming it `Escapes its iteration (Yielded { ip: 25 })`.
+
+**So the guard has reach, and its UNIQUE contribution is the interprocedural case** — built in a loop,
+returned, yielded by the caller — which is the residual the obligation names and which no source shape
+currently reaches. Stated rather than dressed up as coverage.
+
+### The planner's documentation was corrected, not deleted
+
+It said this lowering needs no verdict at all, and that a wrong verdict cannot miscompile anything
+here. **Placement still consults no verdict and nothing shares storage**, so the property survives —
+but in an exact form that had to be written down, because the refusal ordering is what preserves it
+and the overlap use would forfeit it.
+
+### And the skippable-tests scanner had its third false positive
+
+The probe carries **Keleusma source inside Rust string literals**, including
+`for c in ch { return [c, c]; }`, and the scanner matched another language's `return` as a Rust
+statement. Its two earlier false positives were prose in comments and a `return` in a closure, and
+the recorded repair for the closure was to rewrite the source. **This one is different in kind**:
+rewriting a fixture to dodge an instrument, or adding the test to the pin, would record a false claim
+that the test can skip. The scanner now strips string literals before inspecting a line, which fixes
+the class.

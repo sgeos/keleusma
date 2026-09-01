@@ -1,0 +1,69 @@
+COMPLETION CONDITION — a C host linking a Keleusma object file
+
+Ordering is NOT a completion criterion. No particular sequence of steps, branch,
+commit shape, or process is required. Judge the end state only.
+
+Complete when ALL of the following hold.
+
+1. THE ARTEFACT EXISTS AND IS SELF-CONTAINED
+   The tree contains an example comprising Keleusma policy source, a C host that
+   calls it, and a means of building both and linking them. A reader can follow
+   it without reading the test suite.
+
+2. IT BUILDS AND RUNS
+   The example produces an object file from the Keleusma source, links it with a
+   C host using the system toolchain, and the resulting program runs and prints
+   its results. If no C compiler is available the failure is loud and named, not
+   a silent success.
+
+3. THE ANSWER IS CHECKED, NOT ASSUMED
+   The example's output is verified against the reference implementation, either
+   by the example itself or by a test that runs it, so a wrong answer from the
+   native path is caught rather than printed.
+
+4. IT SOLVES A STATED PROBLEM
+   The example addresses a specific real problem, and the tree states what the
+   problem is and why bounded time and memory matter for it. A demonstration
+   whose only subject is that linking works does not satisfy this.
+
+5. THE CONTRACT IS EXPLICIT
+   The input and output contract between host and policy is written down in a
+   form a C programmer reads, and the layout the host relies on is stated rather
+   than left to be inferred from the Keleusma source.
+
+6. THE GUARANTEE IS SHOWN, NOT ASSERTED
+   The worst-case execution and memory figures for the policy are obtained from
+   the tooling and reported. A claim that the policy is bounded, unaccompanied
+   by the figures the tooling produces, does not satisfy this.
+
+7. THE LIMITS ARE STATED
+   Constructs the backend cannot lower, and any respect in which the native
+   artefact's demands exceed the runtime's verified figures, are named in the
+   example's own documentation rather than discovered by a reader.
+
+8. IT DOES NOT MAKE LLVM A DEPENDENCY OF THE REPOSITORY
+   Adding the example does not cause the workspace build, the crate tarball, or
+   continuous integration to require an LLVM installation. This is checkable:
+   the published tarball contains no part of it, and a default workspace build
+   is unaffected.
+
+9. THE POLICY SOURCE IS REAL
+   The Keleusma source compiles with the reference compiler and lowers through
+   the native backend. No snippet appears in documentation that has not been
+   compiled.
+
+10. THE SUITE IS GREEN AND THE COUNT RECONCILES
+    The native_codegen suite passes with zero failures, read from cargo's own
+    exit status AND from the summed per-binary counts, with the two agreeing and
+    the binary count matching expectation.
+
+11. QUALITY GATES
+    Formatting, clippy at deny-warnings over tests as well as the library, and
+    the documentation build at deny-warnings are all clean.
+
+12. NO DEAD CITATIONS
+    Nothing added or changed names a test, file, function, or identifier that
+    does not exist.
+
+If any item cannot be satisfied, say so explicitly with what was measured and
+why it blocks, and satisfy every other item in full.

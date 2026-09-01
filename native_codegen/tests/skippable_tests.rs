@@ -72,7 +72,53 @@ const SKIPPABLE: &[&str] = &[
 /// 33 tests where a second instrument counted 10.** The difference was entirely
 /// comments — `// while still returning the right low word.` matched. Two
 /// instruments disagreeing is what surfaced it; either alone looked reasonable.
+/// Remove double-quoted string literals from a line before it is inspected.
+///
+/// # ⚠ THE THIRD FALSE POSITIVE IN THIS SCANNER, AND THE FIRST FROM ANOTHER
+/// LANGUAGE
+///
+/// The first version matched the word `return` in PROSE COMMENTS. The second
+/// matched a `return` inside a Rust CLOSURE, and the repair recorded there was
+/// to rewrite the closure rather than to grow the pin.
+///
+/// This one is different in kind and the difference decides the repair.
+/// `probe_confine_reach.rs` carries **Keleusma source in Rust string literals**,
+/// including `for c in ch { return [c, c]; }` as a shape the reference compiler
+/// is asked about. That is not a Rust `return` at all, and it never executes.
+/// Rewriting the fixture to dodge the scanner would contort a test to suit an
+/// instrument that is simply wrong, and adding the test to the pin would record
+/// a false claim that it can skip.
+///
+/// **So the scanner is fixed instead**, at the class rather than the instance:
+/// a `return` inside a string literal is not a statement, whatever language the
+/// string holds. Escaped quotes are honoured so a literal containing `\"` does
+/// not unbalance the scan.
+fn strip_string_literals(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut in_str = false;
+    let mut escaped = false;
+    for c in line.chars() {
+        if in_str {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+        } else if c == '"' {
+            in_str = true;
+            // Leave a space so `x"return"y` cannot fuse into a new token.
+            out.push(' ');
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 fn is_early_return(line: &str) -> bool {
+    let line = &strip_string_literals(line);
     let t = line.trim();
     if t.starts_with("//") || t.starts_with("///") {
         return false;
