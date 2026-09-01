@@ -10,6 +10,29 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-31, session 59, CLOSE). `Text<N>` AUTHORIZED AND DESIGNED; ONE REFACTOR
+> COMMITTED BUT UNVERIFIED; ONE LIVE DEFECT AWAITING THE OPERATOR.**
+>
+> **UNPUSHED WORK EXISTS.** `feat/opaque-address-width` is one commit (`32d058b8`) in a worktree at
+> `../keleusma-worktrees/opaque-address-width`, never pushed. It COMPILES -- library, derive macro,
+> every test target -- but its workspace run never completed. Not verified. Finish it first.
+>
+> `feat/text-capacity-design` is pushed at `5194047d`, six commits, no pull request yet.
+>
+> **The `Text<N>` design is SETTLED** in `docs/decisions/TEXT_CAPACITY_TYPE.md` and nothing is
+> implemented. Static text is a `.rodata` pointer; dynamic text is `Text<N>`, a flat composite with
+> no handle. A literal is STATIC and contributes its length, so `"ab" + "cd"` is `Text<4>`. `N`
+> counts content bytes, no terminator. Static too-narrow is a compile error; runtime overflow
+> truncates by default with an optional arm, following `CheckedArmKind`.
+>
+> **A LIVE DEFECT NEEDS THE OPERATOR.** Under `narrow-float-32` the module declares a four-byte
+> float and the bundled `Vm` computes in `f64`, because `pub type Vm = GenericVm<i64, u64, f64>`
+> carries no `#[cfg]`. Reported by the `v0.3.0` line, verified here. **The suite is green at 2610/0
+> and the configuration is still incoherent** -- that green is true and insufficient.
+>
+> Also landed: `Text + Text` REFUSED at compile time, closing a program that verified and could not
+> run; `narrow-float-32` from 5 failures to 0 without hollowing out the test that guards floats.
+
 > **Currency note (2026-08-31, session 58, fifth increment). SHARED_LAYOUT IS ROUTED; SKIPPED 6 -> 5.**
 >
 > The operator's queued item. `SHARED_LAYOUT` is emitted for every stage and byte-matches the
