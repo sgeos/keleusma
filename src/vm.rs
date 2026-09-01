@@ -374,6 +374,9 @@ pub struct NativeCtx<'a> {
     pub word_bytes: usize,
     /// The module's packed float byte width, paired with `word_bytes`.
     pub float_bytes: usize,
+    /// The module's packed ADDRESS byte width, which sizes an `Opaque` field.
+    /// Declared independently of `word_bytes`; they agree only by default.
+    pub addr_bytes: usize,
 }
 
 impl<'a> NativeCtx<'a> {
@@ -385,6 +388,7 @@ impl<'a> NativeCtx<'a> {
             opaques: self.opaques,
             word_bytes: self.word_bytes,
             float_bytes: self.float_bytes,
+            addr_bytes: self.addr_bytes,
             // A native argument is materialised at the current epoch and read
             // synchronously within the call, before any RESET, so the current
             // arena epoch is the argument body's originating epoch (B28 P3
@@ -974,6 +978,10 @@ struct AuxResolved {
     word_bits_log2: Option<u8>,
     /// Base-2 log of the module's float width. `None` as above.
     float_bits_log2: Option<u8>,
+    /// Base-2 log of the module's ADDRESS width, which sizes an `Opaque`.
+    /// `None` as above. Carried separately from `word_bits_log2` because the
+    /// two are declared independently and coincide only by default.
+    addr_bits_log2: Option<u8>,
     chunk_count: usize,
     /// Size of the module's shared-data segment. Read once per host call by
     /// `enter_shared`, which is frequent enough that rebuilding the whole view
@@ -1008,6 +1016,7 @@ impl AuxResolved {
         Ok(Self {
             word_bits_log2: view.word_bits_log2(),
             float_bits_log2: view.float_bits_log2(),
+            addr_bits_log2: view.addr_bits_log2(),
             chunk_count,
             shared_data_bytes: view.shared_data_bytes().unwrap_or(0),
             op_record_counts,
@@ -1431,6 +1440,15 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// [`Self::module_word_bytes`] for floating-point fields.
     fn module_float_bytes(&self) -> usize {
         (1usize << self.aux_resolved.float_bits_log2.unwrap_or(6)) / 8
+    }
+
+    /// Module-declared ADDRESS width in bytes, which sizes an `Opaque`.
+    ///
+    /// Separate from [`Self::module_word_bytes`] because the two widths are
+    /// declared independently; they agree at eight bytes by default, which is
+    /// why sizing an `Opaque` by the word width was latent rather than broken.
+    fn module_addr_bytes(&self) -> usize {
+        (1usize << self.aux_resolved.addr_bits_log2.unwrap_or(6)) / 8
     }
 
     /// The discriminant and padded-body payload size for `variant` of enum
@@ -3037,9 +3055,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         buf: &mut [u8],
     ) -> Result<(), VmError> {
         let wb = self.module_word_bytes();
+        let ab = self.module_addr_bytes();
         let fb = self.module_float_bytes();
-        self.check_shared_marshal_layout::<T>(buf, wb, fb)?;
-        <T as crate::marshall::KeleusmaType<W, F>>::to_flat_bytes(value, buf, wb, fb)
+        self.check_shared_marshal_layout::<T>(buf, wb, fb, ab)?;
+        <T as crate::marshall::KeleusmaType<W, F>>::to_flat_bytes(value, buf, wb, fb, ab)
     }
 
     /// Read a host value mirroring the whole `shared data` segment from the
@@ -3050,9 +3069,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         buf: &[u8],
     ) -> Result<T, VmError> {
         let wb = self.module_word_bytes();
+        let ab = self.module_addr_bytes();
         let fb = self.module_float_bytes();
-        self.check_shared_marshal_layout::<T>(buf, wb, fb)?;
-        <T as crate::marshall::KeleusmaType<W, F>>::from_flat_bytes(buf, wb, fb)
+        self.check_shared_marshal_layout::<T>(buf, wb, fb, ab)?;
+        <T as crate::marshall::KeleusmaType<W, F>>::from_flat_bytes(buf, wb, fb, ab)
     }
 
     /// Validate that `T`'s flat layout matches the module's shared segment and
@@ -3064,15 +3084,15 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         buf: &[u8],
         wb: usize,
         fb: usize,
+        ab: usize,
     ) -> Result<(), VmError> {
         let need = self.shared_data_bytes();
-        let have = <T as crate::marshall::KeleusmaType<W, F>>::flat_byte_size(wb, fb).ok_or_else(
-            || {
+        let have = <T as crate::marshall::KeleusmaType<W, F>>::flat_byte_size(wb, fb, ab)
+            .ok_or_else(|| {
                 VmError::TypeError(String::from(
                     "host type is not flat-eligible for shared-data marshalling",
                 ))
-            },
-        )?;
+            })?;
         if have != need {
             return Err(VmError::TypeError(format!(
                 "host type flat size {} does not match module's shared_data_bytes {}",
@@ -3145,6 +3165,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             opaques: &self.ephemeral_opaques,
             word_bytes: self.module_word_bytes(),
             float_bytes: self.module_float_bytes(),
+            addr_bytes: self.module_addr_bytes(),
             // A decoded value may be held across a RESET (a returned or
             // yielded composite). Reattach the composite body's originating
             // epoch so a flat Text field resolves Stale after a reset rather
@@ -4487,11 +4508,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // returned unchanged.
         let arena = self.arena;
         let wb = self.module_word_bytes();
+        let ab = self.module_addr_bytes();
         let fb = self.module_float_bytes();
         for arg in args {
             let arg = self
                 .correct_native_enum_hints(arg.clone())
-                .into_arena_canonical(wb, fb, arena)
+                .into_arena_canonical(wb, fb, ab, arena)
                 .map_err(|_| out_of_arena_push("composite argument", arena.capacity()))?;
             // Intern a host-supplied opaque argument to the POD index form
             // before it reaches the operand stack (B33).
@@ -4601,10 +4623,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // through unchanged.
         let arena = self.arena;
         let wb = self.module_word_bytes();
+        let ab = self.module_addr_bytes();
         let fb = self.module_float_bytes();
         let input = self
             .correct_native_enum_hints(input)
-            .into_arena_canonical(wb, fb, arena)
+            .into_arena_canonical(wb, fb, ab, arena)
             .map_err(|_| out_of_arena_push("composite resume value", arena.capacity()))?;
         // Intern a host-supplied opaque resume value to the POD index form (B33).
         let input = self.intern_opaque_arcs(input);
@@ -5465,6 +5488,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let mut values: Vec<crate::bytecode::GenericValue<W, F>> =
                         self.stack.drain(self.stack.len() - count..).collect();
                     let wb = self.module_word_bytes();
+                    let ab = self.module_addr_bytes();
                     let fb = self.module_float_bytes();
                     // Intern opaque fields on the flat construction path
                     // (B28 P3). Decide flatness first. A struct/enum Flat
@@ -5498,7 +5522,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         // compiler bakes, so construction and access agree.
                         NCO::Flat { .. } => values
                             .iter()
-                            .all(|v| crate::bytecode::flat_tuple_element_with_refs(v, wb, fb)),
+                            .all(|v| crate::bytecode::flat_tuple_element_with_refs(v, wb, fb, ab)),
                         NCO::Boxed { .. } => false,
                     };
                     if flat {
@@ -5561,7 +5585,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             NCO::Boxed { .. } => 0usize,
                         };
                         let packed = crate::bytecode::GenericValue::pack_flat_in_arena(
-                            &values, min_bytes, wb, fb, arena,
+                            &values, min_bytes, wb, fb, ab, arena,
                         )
                         .map_err(|_| out_of_arena_push("composite body", arena.capacity()))?;
                         let kind = operand.kind();
@@ -5758,7 +5782,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                     let wb = self.module_word_bytes();
                                     let fb = self.module_float_bytes();
                                     let ep = fc.ref_epoch();
-                                    let esize = kind.size_in_bytes(wb, fb);
+                                    let esize =
+                                        kind.size_in_bytes(wb, fb, self.module_addr_bytes());
                                     let bytes =
                                         fc.resolve(self.arena).map_err(|_| stale_arena_body())?;
                                     match bytes.len().checked_div(esize) {
@@ -7198,12 +7223,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             ))
                         })?;
                     let wb = self.module_word_bytes();
+                    let ab = self.module_addr_bytes();
                     let fb = self.module_float_bytes();
                     let ctx = NativeCtx {
                         arena: self.arena,
                         opaques: &self.ephemeral_opaques,
                         word_bytes: wb,
                         float_bytes: fb,
+                        addr_bytes: ab,
                     };
                     let result = (entry.func)(&ctx, &args);
                     if reify {
@@ -7223,7 +7250,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 // boxed is returned unchanged.
                                 let v = self
                                     .correct_native_enum_hints(v)
-                                    .into_arena_canonical(wb, fb, arena)
+                                    .into_arena_canonical(wb, fb, ab, arena)
                                     .map_err(|_| {
                                         out_of_arena_push("native result", arena.capacity())
                                     })?;
@@ -7267,7 +7294,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         // already-flat, or reference-bearing boxed value.
                         let v = self
                             .correct_native_enum_hints(result?)
-                            .into_arena_canonical(wb, fb, arena)
+                            .into_arena_canonical(wb, fb, ab, arena)
                             .map_err(|_| out_of_arena_push("native result", arena.capacity()))?;
                         // Intern host `Opaque(Arc)` values to the POD index
                         // form for the operand stack (B33).

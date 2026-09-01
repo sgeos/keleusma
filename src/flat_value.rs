@@ -529,7 +529,7 @@ mod tests {
             LayoutDescriptor::Scalar(ScalarKind::Int),
             LayoutDescriptor::Scalar(ScalarKind::Bool),
         ]);
-        let size = layout.size_in_bytes(I64_BYTES, F64_BYTES);
+        let size = layout.size_in_bytes(I64_BYTES, F64_BYTES, I64_BYTES);
         let comp = FlatComposite::build_in_arena(&arena, size, |dst| {
             dst.fill(0);
             Ok(())
@@ -551,13 +551,13 @@ mod tests {
                 ("y".to_string(), LayoutDescriptor::Scalar(ScalarKind::Int)),
             ],
         };
-        let size = layout.size_in_bytes(I64_BYTES, F64_BYTES);
+        let size = layout.size_in_bytes(I64_BYTES, F64_BYTES, I64_BYTES);
         assert_eq!(size, 16);
         let x_off = layout
-            .struct_field_offset("x", I64_BYTES, F64_BYTES)
+            .struct_field_offset("x", I64_BYTES, F64_BYTES, I64_BYTES)
             .unwrap();
         let y_off = layout
-            .struct_field_offset("y", I64_BYTES, F64_BYTES)
+            .struct_field_offset("y", I64_BYTES, F64_BYTES, I64_BYTES)
             .unwrap();
         let comp = FlatComposite::build_in_arena(&arena, size, |dst| {
             dst.fill(0);
@@ -579,10 +579,14 @@ mod tests {
             element: Box::new(LayoutDescriptor::Scalar(ScalarKind::Int)),
             count: 4,
         };
-        let size = layout.size_in_bytes(I64_BYTES, F64_BYTES);
+        let size = layout.size_in_bytes(I64_BYTES, F64_BYTES, I64_BYTES);
         assert_eq!(size, 32);
         let offsets: alloc::vec::Vec<usize> = (0..4)
-            .map(|i| layout.field_offset(i, I64_BYTES, F64_BYTES).unwrap())
+            .map(|i| {
+                layout
+                    .field_offset(i, I64_BYTES, F64_BYTES, I64_BYTES)
+                    .unwrap()
+            })
             .collect();
         let comp = FlatComposite::build_in_arena(&arena, size, |dst| {
             dst.fill(0);
@@ -607,11 +611,17 @@ mod tests {
             LayoutDescriptor::Scalar(ScalarKind::Int),
             LayoutDescriptor::Scalar(ScalarKind::Byte),
         ]);
-        let size = layout.size_in_bytes(I64_BYTES, F64_BYTES);
+        let size = layout.size_in_bytes(I64_BYTES, F64_BYTES, I64_BYTES);
         assert_eq!(size, 1 + 8 + 1);
-        let off_bool = layout.field_offset(0, I64_BYTES, F64_BYTES).unwrap();
-        let off_int = layout.field_offset(1, I64_BYTES, F64_BYTES).unwrap();
-        let off_byte = layout.field_offset(2, I64_BYTES, F64_BYTES).unwrap();
+        let off_bool = layout
+            .field_offset(0, I64_BYTES, F64_BYTES, I64_BYTES)
+            .unwrap();
+        let off_int = layout
+            .field_offset(1, I64_BYTES, F64_BYTES, I64_BYTES)
+            .unwrap();
+        let off_byte = layout
+            .field_offset(2, I64_BYTES, F64_BYTES, I64_BYTES)
+            .unwrap();
         let comp = FlatComposite::build_in_arena(&arena, size, |dst| {
             dst.fill(0);
             write_bool(dst, off_bool, true);

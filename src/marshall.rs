@@ -77,6 +77,12 @@ pub struct RefContext<'a> {
     pub word_bytes: usize,
     /// The module's float byte width, paired with `word_bytes`.
     pub float_bytes: usize,
+    /// The module's ADDRESS byte width, which sizes an `Opaque` field.
+    ///
+    /// Distinct from `word_bytes`: the two widths are declared independently
+    /// and coincide only in the default configuration, so an `Opaque` sized by
+    /// the word width was reading the wrong field wherever they differ.
+    pub addr_bytes: usize,
     /// The originating arena epoch of the flat composite being decoded
     /// (B28 P3 item 1). A flat `Text` field's `KString` is rebuilt against
     /// this epoch, not the current arena epoch, so a decode after a `RESET`
@@ -153,8 +159,8 @@ pub trait KeleusmaType<W: Word, F: Float>: Sized {
     /// return its total flat body size, so it can be read from and written
     /// to a parent body inline. A type that returns `None` keeps the boxed
     /// representation and is not inlined.
-    fn flat_byte_size(word_bytes: usize, float_bytes: usize) -> Option<usize> {
-        Self::flat_field_kind().map(|k| k.size_in_bytes(word_bytes, float_bytes))
+    fn flat_byte_size(word_bytes: usize, float_bytes: usize, addr_bytes: usize) -> Option<usize> {
+        Self::flat_field_kind().map(|k| k.size_in_bytes(word_bytes, float_bytes, addr_bytes))
     }
 
     /// Reconstruct the Rust type from a flat byte slice that holds exactly
@@ -168,6 +174,7 @@ pub trait KeleusmaType<W: Word, F: Float>: Sized {
         bytes: &[u8],
         word_bytes: usize,
         float_bytes: usize,
+        _addr_bytes: usize,
     ) -> Result<Self, VmError> {
         match Self::flat_field_kind() {
             Some(kind) => {
@@ -198,10 +205,11 @@ pub trait KeleusmaType<W: Word, F: Float>: Sized {
         bytes: &[u8],
         word_bytes: usize,
         float_bytes: usize,
+        addr_bytes: usize,
         ctx: &RefContext<'_>,
     ) -> Result<Self, VmError> {
         let _ = ctx;
-        Self::from_flat_bytes(bytes, word_bytes, float_bytes)
+        Self::from_flat_bytes(bytes, word_bytes, float_bytes, addr_bytes)
     }
 
     /// Write this type's flat body into `dst` starting at offset 0 (B34), the
@@ -220,6 +228,7 @@ pub trait KeleusmaType<W: Word, F: Float>: Sized {
         dst: &mut [u8],
         word_bytes: usize,
         float_bytes: usize,
+        _addr_bytes: usize,
     ) -> Result<(), VmError>
     where
         Self: Sized,
@@ -402,6 +411,7 @@ impl<W: Word, F: Float> KeleusmaType<W, F> for alloc::string::String {
         _bytes: &[u8],
         _word_bytes: usize,
         _float_bytes: usize,
+        _addr_bytes: usize,
     ) -> Result<Self, VmError> {
         // A flat Text field is a (ptr, len) arena reference; resolving it
         // needs the arena epoch. Direct the caller to the context path
@@ -434,6 +444,7 @@ impl<W: Word, F: Float> KeleusmaType<W, F> for alloc::string::String {
         bytes: &[u8],
         word_bytes: usize,
         _float_bytes: usize,
+        _addr_bytes: usize,
         ctx: &RefContext<'_>,
     ) -> Result<Self, VmError> {
         let read_word = |o: usize| -> Result<usize, VmError> {
@@ -585,6 +596,7 @@ impl<W: Word, F: Float> KeleusmaType<W, F> for Arc<dyn HostOpaque> {
         _bytes: &[u8],
         _word_bytes: usize,
         _float_bytes: usize,
+        _addr_bytes: usize,
     ) -> Result<Self, VmError> {
         Err(VmError::TypeError(alloc::string::String::from(
             "flat opaque field requires a resolution context; decode through Vm::decode",
@@ -595,6 +607,7 @@ impl<W: Word, F: Float> KeleusmaType<W, F> for Arc<dyn HostOpaque> {
         bytes: &[u8],
         word_bytes: usize,
         _float_bytes: usize,
+        _addr_bytes: usize,
         ctx: &RefContext<'_>,
     ) -> Result<Self, VmError> {
         let mut buf = [0u8; 8];
@@ -657,7 +670,13 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F>> KeleusmaType<W, F> for Option<T> 
             // `None` correctly (audit finding 25).
             GenericValue::Enum(crate::bytecode::EnumBody::Flat(fc)) => {
                 let bytes = fc.resolve(ctx.arena).map_err(|_| stale_flat_decode())?;
-                Self::from_flat_bytes_ctx(bytes, ctx.word_bytes, ctx.float_bytes, ctx)
+                Self::from_flat_bytes_ctx(
+                    bytes,
+                    ctx.word_bytes,
+                    ctx.float_bytes,
+                    ctx.addr_bytes,
+                    ctx,
+                )
             }
             GenericValue::Enum(crate::bytecode::EnumBody::Boxed(be))
                 if be.type_name == "Option" && be.variant == "Some" && be.fields.len() == 1 =>
@@ -692,13 +711,14 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F>> KeleusmaType<W, F> for Option<T> 
         //     1), matching the compiler's boxed access for `Option<non-flat>`.
         let wb = ctx.word_bytes;
         let fb = ctx.float_bytes;
+        let ab = ctx.addr_bytes;
         if matches!(self, Option::None) {
             return Ok(GenericValue::None);
         }
-        match Self::flat_byte_size(wb, fb) {
+        match Self::flat_byte_size(wb, fb, ab) {
             Some(size) => {
                 let fc = crate::flat_value::FlatComposite::build_in_arena(ctx.arena, size, |dst| {
-                    self.to_flat_bytes(dst, wb, fb).map_err(|_| ())
+                    self.to_flat_bytes(dst, wb, fb, ab).map_err(|_| ())
                 })
                 .map_err(|_| {
                     VmError::OutOfArena(alloc::string::String::from(
@@ -733,23 +753,25 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F>> KeleusmaType<W, F> for Option<T> 
     // write that disc-tagged flat form, so a host struct with an `Option` field
     // round-trips through the shared-data buffer and a flat composite with an
     // `Option` field decodes at the host boundary.
-    fn flat_byte_size(word_bytes: usize, float_bytes: usize) -> Option<usize> {
-        Some(word_bytes + T::flat_byte_size(word_bytes, float_bytes)?)
+    fn flat_byte_size(word_bytes: usize, float_bytes: usize, addr_bytes: usize) -> Option<usize> {
+        Some(word_bytes + T::flat_byte_size(word_bytes, float_bytes, addr_bytes)?)
     }
 
     fn from_flat_bytes(
         bytes: &[u8],
         word_bytes: usize,
         float_bytes: usize,
+        addr_bytes: usize,
     ) -> Result<Self, VmError> {
         match read_flat_disc::<W, F>(bytes, word_bytes, float_bytes)? {
             0 => Ok(Option::None),
             1 => {
-                let psize = option_payload_size::<W, F, T>(word_bytes, float_bytes)?;
+                let psize = option_payload_size::<W, F, T>(word_bytes, float_bytes, addr_bytes)?;
                 Ok(Some(T::from_flat_bytes(
                     flat_subslice(bytes, word_bytes, psize)?,
                     word_bytes,
                     float_bytes,
+                    addr_bytes,
                 )?))
             }
             other => Err(VmError::TypeError(format!(
@@ -764,6 +786,7 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F>> KeleusmaType<W, F> for Option<T> 
         dst: &mut [u8],
         word_bytes: usize,
         float_bytes: usize,
+        addr_bytes: usize,
     ) -> Result<(), VmError> {
         match self {
             Option::None => {
@@ -775,11 +798,12 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F>> KeleusmaType<W, F> for Option<T> 
             }
             Some(t) => {
                 write_flat_disc::<W, F>(dst, 1, word_bytes, float_bytes)?;
-                let psize = option_payload_size::<W, F, T>(word_bytes, float_bytes)?;
+                let psize = option_payload_size::<W, F, T>(word_bytes, float_bytes, addr_bytes)?;
                 t.to_flat_bytes(
                     &mut dst[word_bytes..word_bytes + psize],
                     word_bytes,
                     float_bytes,
+                    addr_bytes,
                 )?;
                 for b in dst[word_bytes + psize..].iter_mut() {
                     *b = 0;
@@ -793,16 +817,18 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F>> KeleusmaType<W, F> for Option<T> 
         bytes: &[u8],
         word_bytes: usize,
         float_bytes: usize,
+        addr_bytes: usize,
         ctx: &RefContext<'_>,
     ) -> Result<Self, VmError> {
         match read_flat_disc::<W, F>(bytes, word_bytes, float_bytes)? {
             0 => Ok(Option::None),
             1 => {
-                let psize = option_payload_size::<W, F, T>(word_bytes, float_bytes)?;
+                let psize = option_payload_size::<W, F, T>(word_bytes, float_bytes, addr_bytes)?;
                 Ok(Some(T::from_flat_bytes_ctx(
                     flat_subslice(bytes, word_bytes, psize)?,
                     word_bytes,
                     float_bytes,
+                    addr_bytes,
                     ctx,
                 )?))
             }
@@ -875,8 +901,9 @@ fn write_flat_disc<W: Word, F: Float>(
 fn option_payload_size<W: Word, F: Float, T: KeleusmaType<W, F>>(
     word_bytes: usize,
     float_bytes: usize,
+    addr_bytes: usize,
 ) -> Result<usize, VmError> {
-    T::flat_byte_size(word_bytes, float_bytes).ok_or_else(|| {
+    T::flat_byte_size(word_bytes, float_bytes, addr_bytes).ok_or_else(|| {
         VmError::TypeError(alloc::string::String::from(
             "Option payload type is not flat-eligible",
         ))
@@ -951,31 +978,36 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F> + Clone, const N: usize> KeleusmaT
             .into_iter()
             .map(|t| t.into_value_ctx(ctx))
             .collect::<Result<Vec<GenericValue<W, F>>, VmError>>()?;
-        GenericValue::array_in_arena(elems, ctx.word_bytes, ctx.float_bytes, ctx.arena).map_err(
-            |_| {
-                VmError::OutOfArena(alloc::string::String::from(
-                    "arena exhausted building a native array result",
-                ))
-            },
+        GenericValue::array_in_arena(
+            elems,
+            ctx.word_bytes,
+            ctx.float_bytes,
+            ctx.addr_bytes,
+            ctx.arena,
         )
+        .map_err(|_| {
+            VmError::OutOfArena(alloc::string::String::from(
+                "arena exhausted building a native array result",
+            ))
+        })
     }
 
-    fn flat_byte_size(word_bytes: usize, float_bytes: usize) -> Option<usize> {
-        Some(N * <T as KeleusmaType<W, F>>::flat_byte_size(word_bytes, float_bytes)?)
+    fn flat_byte_size(word_bytes: usize, float_bytes: usize, addr_bytes: usize) -> Option<usize> {
+        Some(N * <T as KeleusmaType<W, F>>::flat_byte_size(word_bytes, float_bytes, addr_bytes)?)
     }
 
     fn from_flat_bytes(
         bytes: &[u8],
         word_bytes: usize,
         float_bytes: usize,
+        addr_bytes: usize,
     ) -> Result<Self, VmError> {
-        let esize = <T as KeleusmaType<W, F>>::flat_byte_size(word_bytes, float_bytes).ok_or_else(
-            || {
+        let esize = <T as KeleusmaType<W, F>>::flat_byte_size(word_bytes, float_bytes, addr_bytes)
+            .ok_or_else(|| {
                 VmError::TypeError(alloc::string::String::from(
                     "flat array element type is not flat-eligible",
                 ))
-            },
-        )?;
+            })?;
         // A zero-size element (`Unit`) stores no bytes, so the length is not
         // byte-derivable; trust the static `N`.
         let len = bytes.len().checked_div(esize).unwrap_or(N);
@@ -992,6 +1024,7 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F> + Clone, const N: usize> KeleusmaT
                 &bytes[lo..lo + esize],
                 word_bytes,
                 float_bytes,
+                addr_bytes,
             )?);
         }
         converted
@@ -1004,17 +1037,22 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F> + Clone, const N: usize> KeleusmaT
         dst: &mut [u8],
         word_bytes: usize,
         float_bytes: usize,
+        addr_bytes: usize,
     ) -> Result<(), VmError> {
-        let esize = <T as KeleusmaType<W, F>>::flat_byte_size(word_bytes, float_bytes).ok_or_else(
-            || {
+        let esize = <T as KeleusmaType<W, F>>::flat_byte_size(word_bytes, float_bytes, addr_bytes)
+            .ok_or_else(|| {
                 VmError::TypeError(alloc::string::String::from(
                     "flat array element type is not flat-eligible",
                 ))
-            },
-        )?;
+            })?;
         for (i, t) in self.into_iter().enumerate() {
             let lo = i * esize;
-            t.to_flat_bytes(&mut dst[lo..lo + esize], word_bytes, float_bytes)?;
+            t.to_flat_bytes(
+                &mut dst[lo..lo + esize],
+                word_bytes,
+                float_bytes,
+                addr_bytes,
+            )?;
         }
         Ok(())
     }
@@ -1045,7 +1083,13 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F> + Clone, const N: usize> KeleusmaT
                 // B28 P3 item 5 C3). A stale body (read after a RESET) is a
                 // clean error, not a panic.
                 let bytes = fc.resolve(ctx.arena).map_err(|_| stale_flat_decode())?;
-                Self::from_flat_bytes_ctx(bytes, ctx.word_bytes, ctx.float_bytes, ctx)
+                Self::from_flat_bytes_ctx(
+                    bytes,
+                    ctx.word_bytes,
+                    ctx.float_bytes,
+                    ctx.addr_bytes,
+                    ctx,
+                )
             }
             other => Err(VmError::TypeError(format!(
                 "expected array, got {}",
@@ -1058,15 +1102,15 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F> + Clone, const N: usize> KeleusmaT
         bytes: &[u8],
         word_bytes: usize,
         float_bytes: usize,
+        addr_bytes: usize,
         ctx: &RefContext<'_>,
     ) -> Result<Self, VmError> {
-        let esize = <T as KeleusmaType<W, F>>::flat_byte_size(word_bytes, float_bytes).ok_or_else(
-            || {
+        let esize = <T as KeleusmaType<W, F>>::flat_byte_size(word_bytes, float_bytes, addr_bytes)
+            .ok_or_else(|| {
                 VmError::TypeError(alloc::string::String::from(
                     "flat array element type is not flat-eligible",
                 ))
-            },
-        )?;
+            })?;
         let len = bytes.len().checked_div(esize).unwrap_or(N);
         if len != N {
             return Err(VmError::TypeError(format!(
@@ -1081,6 +1125,7 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F> + Clone, const N: usize> KeleusmaT
                 &bytes[lo..lo + esize],
                 word_bytes,
                 float_bytes,
+                addr_bytes,
                 ctx,
             )?);
         }
@@ -1161,6 +1206,7 @@ macro_rules! impl_tuple {
                     ::alloc::vec![$($name.into_value_ctx(__ctx)?,)*],
                     __ctx.word_bytes,
                     __ctx.float_bytes,
+                    __ctx.addr_bytes,
                     __ctx.arena,
                 )
                 .map_err(|_| {
@@ -1171,16 +1217,16 @@ macro_rules! impl_tuple {
             }
 
             #[allow(unused_assignments, unused_mut, unused_variables)]
-            fn flat_byte_size(word_bytes: usize, float_bytes: usize) -> Option<usize> {
+            fn flat_byte_size(word_bytes: usize, float_bytes: usize, addr_bytes: usize) -> Option<usize> {
                 let mut total = 0usize;
                 $(
-                    total += <$name as KeleusmaType<W, FloatT>>::flat_byte_size(word_bytes, float_bytes)?;
+                    total += <$name as KeleusmaType<W, FloatT>>::flat_byte_size(word_bytes, float_bytes, addr_bytes)?;
                 )*
                 Some(total)
             }
 
             #[allow(unused_assignments, unused_mut, unused_variables, non_snake_case)]
-            fn from_flat_bytes(bytes: &[u8], word_bytes: usize, float_bytes: usize)
+            fn from_flat_bytes(bytes: &[u8], word_bytes: usize, float_bytes: usize, addr_bytes: usize)
                 -> Result<Self, VmError>
             {
                 let mut offset = 0usize;
@@ -1188,12 +1234,12 @@ macro_rules! impl_tuple {
                 // offset advances in declaration order (B28 P2).
                 Ok(($(
                     {
-                        let size = <$name as KeleusmaType<W, FloatT>>::flat_byte_size(word_bytes, float_bytes)
+                        let size = <$name as KeleusmaType<W, FloatT>>::flat_byte_size(word_bytes, float_bytes, addr_bytes)
                             .ok_or_else(|| VmError::TypeError(::alloc::string::String::from(
                                 "flat tuple field is not flat-eligible",
                             )))?;
                         let val = <$name as KeleusmaType<W, FloatT>>::from_flat_bytes(
-                            flat_subslice(bytes, offset, size)?, word_bytes, float_bytes,
+                            flat_subslice(bytes, offset, size)?, word_bytes, float_bytes, addr_bytes,
                         )?;
                         offset += size;
                         val
@@ -1202,7 +1248,7 @@ macro_rules! impl_tuple {
             }
 
             #[allow(unused_assignments, unused_mut, unused_variables, non_snake_case)]
-            fn to_flat_bytes(self, dst: &mut [u8], word_bytes: usize, float_bytes: usize)
+            fn to_flat_bytes(self, dst: &mut [u8], word_bytes: usize, float_bytes: usize, addr_bytes: usize)
                 -> Result<(), VmError>
             {
                 let ($($name,)*) = self;
@@ -1211,11 +1257,11 @@ macro_rules! impl_tuple {
                 // packed offset in declaration order (B34).
                 $(
                     {
-                        let size = <$name as KeleusmaType<W, FloatT>>::flat_byte_size(word_bytes, float_bytes)
+                        let size = <$name as KeleusmaType<W, FloatT>>::flat_byte_size(word_bytes, float_bytes, addr_bytes)
                             .ok_or_else(|| VmError::TypeError(::alloc::string::String::from(
                                 "flat tuple field is not flat-eligible",
                             )))?;
-                        $name.to_flat_bytes(&mut dst[offset..offset + size], word_bytes, float_bytes)?;
+                        $name.to_flat_bytes(&mut dst[offset..offset + size], word_bytes, float_bytes, addr_bytes)?;
                         offset += size;
                     }
                 )*
@@ -1238,7 +1284,7 @@ macro_rules! impl_tuple {
                     }
                     GenericValue::Tuple(crate::bytecode::TupleBody::Flat(fc)) => {
                         let bytes = fc.resolve(__ctx.arena).map_err(|_| crate::marshall::stale_flat_decode())?;
-                        Self::from_flat_bytes_ctx(bytes, __ctx.word_bytes, __ctx.float_bytes, __ctx)
+                        Self::from_flat_bytes_ctx(bytes, __ctx.word_bytes, __ctx.float_bytes, __ctx.addr_bytes, __ctx)
                     }
                     other => Err(VmError::TypeError(format!(
                         "expected tuple, got {}",
@@ -1248,18 +1294,18 @@ macro_rules! impl_tuple {
             }
 
             #[allow(unused_assignments, unused_mut, unused_variables, non_snake_case)]
-            fn from_flat_bytes_ctx(bytes: &[u8], word_bytes: usize, float_bytes: usize, __ctx: &RefContext<'_>)
+            fn from_flat_bytes_ctx(bytes: &[u8], word_bytes: usize, float_bytes: usize, addr_bytes: usize, __ctx: &RefContext<'_>)
                 -> Result<Self, VmError>
             {
                 let mut offset = 0usize;
                 Ok(($(
                     {
-                        let size = <$name as KeleusmaType<W, FloatT>>::flat_byte_size(word_bytes, float_bytes)
+                        let size = <$name as KeleusmaType<W, FloatT>>::flat_byte_size(word_bytes, float_bytes, addr_bytes)
                             .ok_or_else(|| VmError::TypeError(::alloc::string::String::from(
                                 "flat tuple field is not flat-eligible",
                             )))?;
                         let val = <$name as KeleusmaType<W, FloatT>>::from_flat_bytes_ctx(
-                            flat_subslice(bytes, offset, size)?, word_bytes, float_bytes, __ctx,
+                            flat_subslice(bytes, offset, size)?, word_bytes, float_bytes, addr_bytes, __ctx,
                         )?;
                         offset += size;
                         val
@@ -1724,6 +1770,7 @@ mod tests {
             opaques: &[],
             word_bytes: 8,
             float_bytes: 8,
+            addr_bytes: 8,
         }
     }
 

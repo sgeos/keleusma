@@ -109,7 +109,7 @@ fn decode_arena_resident_flat_struct() {
     );
     // Canonicalise the host-built (boxed) struct into a flat arena body.
     let v = v
-        .into_arena_canonical(8, 8, &arena)
+        .into_arena_canonical(8, 8, 8, &arena)
         .expect("canonicalise into arena");
     assert!(
         matches!(&v, GenericValue::Struct(StructBody::Flat(_))),
@@ -120,6 +120,7 @@ fn decode_arena_resident_flat_struct() {
         opaques: &[],
         word_bytes: 8,
         float_bytes: 8,
+        addr_bytes: 8,
         ref_epoch: arena.epoch(),
     };
     let p = Pair::from_value_ctx(&v, &ctx).expect("decode arena-resident flat struct");

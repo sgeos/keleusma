@@ -30,7 +30,7 @@ use keleusma::{KeleusmaError, KeleusmaType, RefContext, Value, VmError};
 /// requires an arena.
 fn flatten_in_arena<T: KeleusmaType<i64, f64>>(v: T, arena: &Arena) -> Value {
     v.into_value()
-        .into_arena_canonical(8, 8, arena)
+        .into_arena_canonical(8, 8, 8, arena)
         .expect("canonicalise host value into arena")
 }
 
@@ -42,6 +42,7 @@ fn bundled_ctx(arena: &Arena) -> RefContext<'_> {
         opaques: &[],
         word_bytes: 8,
         float_bytes: 8,
+        addr_bytes: 8,
         ref_epoch: arena.epoch(),
     }
 }
@@ -107,7 +108,7 @@ fn flat_decode_rejects_a_short_body() {
     // buffer is missing the second field.
     assert!(
         matches!(
-            <Pair as KeleusmaType<i64, f64>>::from_flat_bytes(&[0u8; 12], 8, 8),
+            <Pair as KeleusmaType<i64, f64>>::from_flat_bytes(&[0u8; 12], 8, 8, 8),
             Err(VmError::TypeError(_))
         ),
         "a 12-byte buffer is too short for a 16-byte Pair",
@@ -116,7 +117,7 @@ fn flat_decode_rejects_a_short_body() {
     // A buffer shorter than the leading discriminant word: the disc read is
     // total (it propagates the scalar-codec error rather than panicking).
     assert!(
-        <Signal as KeleusmaType<i64, f64>>::from_flat_bytes(&[0u8; 4], 8, 8).is_err(),
+        <Signal as KeleusmaType<i64, f64>>::from_flat_bytes(&[0u8; 4], 8, 8, 8).is_err(),
         "4 bytes is too short for the 8-byte discriminant word",
     );
 
@@ -126,7 +127,7 @@ fn flat_decode_rejects_a_short_body() {
     disc_only[0] = 1;
     assert!(
         matches!(
-            <Signal as KeleusmaType<i64, f64>>::from_flat_bytes(&disc_only, 8, 8),
+            <Signal as KeleusmaType<i64, f64>>::from_flat_bytes(&disc_only, 8, 8, 8),
             Err(VmError::TypeError(_))
         ),
         "On(i64) needs a payload word past the discriminant",
@@ -151,7 +152,7 @@ fn c1_null_text_pointer_marshals_to_empty_string_not_ub() {
     // A flat Text body at the bundled 64-bit widths is two words: the data
     // pointer and the length. Both zero models the cleared body.
     let body = [0u8; 16];
-    let s = <String as KeleusmaType<i64, f64>>::from_flat_bytes_ctx(&body, 8, 8, &ctx)
+    let s = <String as KeleusmaType<i64, f64>>::from_flat_bytes_ctx(&body, 8, 8, 8, &ctx)
         .expect("a null Text pointer must decode, not error or trap");
     assert_eq!(s, "", "a null Text pointer decodes to the empty string");
 }

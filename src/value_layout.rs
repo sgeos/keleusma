@@ -106,7 +106,7 @@ impl ScalarKind {
     /// `Float` type. Both are supplied by the caller rather
     /// than baked into the descriptor so the same descriptor
     /// can serve runtimes with different word and float widths.
-    pub fn size_in_bytes(&self, word_bytes: usize, float_bytes: usize) -> usize {
+    pub fn size_in_bytes(&self, word_bytes: usize, float_bytes: usize, addr_bytes: usize) -> usize {
         let _ = float_bytes;
         match self {
             Self::Unit => 0,
@@ -116,8 +116,23 @@ impl ScalarKind {
             Self::Fixed => word_bytes,
             #[cfg(feature = "floats")]
             Self::Float => float_bytes,
+            // TEXT IS TWO WORDS AND STAYS THAT WAY FOR NOW. A flat `Text` field is an arena
+            // `(ptr, len)` handle and `TYPE_SYSTEM.md` states such a field is ALWAYS DYNAMIC, so
+            // an arena string's length lives in the second word and nowhere else -- there is no
+            // length prefix to recover it from. Sizing this by one address would drop the length
+            // and produce a silent wrong read. See `docs/decisions/TEXT_CAPACITY_TYPE.md`: the
+            // one-address form becomes correct only once `Text<N>` removes the dynamic case from
+            // this kind, and doing it in one step spends a single `BYTECODE_VERSION` authorization
+            // rather than two.
             Self::Text => 2 * word_bytes,
-            Self::Opaque => word_bytes,
+            // OPAQUE IS SIZED BY THE ADDRESS WIDTH, NOT THE WORD WIDTH. It is a handle to memory
+            // the host provided; the runtime never dereferences it and only hands it back. Sizing
+            // it by the word width was latent rather than broken, because the default
+            // configuration makes both widths sixty-four bits and they agree. They are selected
+            // independently -- `narrow-address-8`, `-16` and `-32` exist apart from the
+            // `narrow-word-*` family -- so on any build where they differ the old sizing was
+            // simply the wrong field.
+            Self::Opaque => addr_bytes,
         }
     }
 
@@ -267,24 +282,24 @@ pub enum LayoutDescriptor {
 impl LayoutDescriptor {
     /// Total byte size of this composite under the supplied
     /// word and float widths.
-    pub fn size_in_bytes(&self, word_bytes: usize, float_bytes: usize) -> usize {
+    pub fn size_in_bytes(&self, word_bytes: usize, float_bytes: usize, addr_bytes: usize) -> usize {
         // Saturating arithmetic throughout: a composite whose element
         // count or field sum would overflow `usize` saturates to
         // `usize::MAX` rather than wrapping to a small value that would
         // under-allocate or mis-bound a slice downstream. A saturated
         // size fails the next arena allocation cleanly (audit finding 28).
         match self {
-            Self::Scalar(kind) => kind.size_in_bytes(word_bytes, float_bytes),
+            Self::Scalar(kind) => kind.size_in_bytes(word_bytes, float_bytes, addr_bytes),
             Self::Tuple(elems) => elems
                 .iter()
-                .map(|e| e.size_in_bytes(word_bytes, float_bytes))
+                .map(|e| e.size_in_bytes(word_bytes, float_bytes, addr_bytes))
                 .fold(0usize, |a, b| a.saturating_add(b)),
             Self::Array { element, count } => element
-                .size_in_bytes(word_bytes, float_bytes)
+                .size_in_bytes(word_bytes, float_bytes, addr_bytes)
                 .saturating_mul(*count),
             Self::Struct { fields, .. } => fields
                 .iter()
-                .map(|(_, t)| t.size_in_bytes(word_bytes, float_bytes))
+                .map(|(_, t)| t.size_in_bytes(word_bytes, float_bytes, addr_bytes))
                 .fold(0usize, |a, b| a.saturating_add(b)),
             Self::Enum { variants, .. } => {
                 let payload_max = variants
@@ -292,7 +307,7 @@ impl LayoutDescriptor {
                     .map(|(_, payload)| {
                         payload
                             .iter()
-                            .map(|t| t.size_in_bytes(word_bytes, float_bytes))
+                            .map(|t| t.size_in_bytes(word_bytes, float_bytes, addr_bytes))
                             .fold(0usize, |a, b| a.saturating_add(b))
                     })
                     .max()
@@ -322,6 +337,7 @@ impl LayoutDescriptor {
         index: usize,
         word_bytes: usize,
         float_bytes: usize,
+        addr_bytes: usize,
     ) -> Option<usize> {
         match self {
             Self::Tuple(elems) => {
@@ -332,7 +348,7 @@ impl LayoutDescriptor {
                         elems
                             .iter()
                             .take(index)
-                            .map(|e| e.size_in_bytes(word_bytes, float_bytes))
+                            .map(|e| e.size_in_bytes(word_bytes, float_bytes, addr_bytes))
                             .fold(0usize, |a, b| a.saturating_add(b)),
                     )
                 }
@@ -345,7 +361,7 @@ impl LayoutDescriptor {
                         fields
                             .iter()
                             .take(index)
-                            .map(|(_, t)| t.size_in_bytes(word_bytes, float_bytes))
+                            .map(|(_, t)| t.size_in_bytes(word_bytes, float_bytes, addr_bytes))
                             .fold(0usize, |a, b| a.saturating_add(b)),
                     )
                 }
@@ -356,7 +372,7 @@ impl LayoutDescriptor {
                 } else {
                     Some(
                         element
-                            .size_in_bytes(word_bytes, float_bytes)
+                            .size_in_bytes(word_bytes, float_bytes, addr_bytes)
                             .saturating_mul(index),
                     )
                 }
@@ -395,6 +411,7 @@ impl LayoutDescriptor {
         name: &str,
         word_bytes: usize,
         float_bytes: usize,
+        addr_bytes: usize,
     ) -> Option<usize> {
         match self {
             Self::Struct { fields, .. } => {
@@ -408,8 +425,11 @@ impl LayoutDescriptor {
                     if field_name == name {
                         return Some(offset);
                     }
-                    offset =
-                        offset.checked_add(field_type.size_in_bytes(word_bytes, float_bytes))?;
+                    offset = offset.checked_add(field_type.size_in_bytes(
+                        word_bytes,
+                        float_bytes,
+                        addr_bytes,
+                    ))?;
                 }
                 None
             }
@@ -483,7 +503,12 @@ impl LayoutDescriptor {
     /// to the largest variant. The built-in `Option<T>` follows the same rule
     /// (B28 P3 item 5 C4): its `Some(T)` payload flattens when `T` is flat;
     /// `None` is the scalar `Value::None`.
-    pub fn flat_byte_size(&self, word_bytes: usize, float_bytes: usize) -> Option<usize> {
+    pub fn flat_byte_size(
+        &self,
+        word_bytes: usize,
+        float_bytes: usize,
+        addr_bytes: usize,
+    ) -> Option<usize> {
         match self {
             Self::Scalar(_) => self.flat_scalar_kind().and_then(|k| {
                 // A flat `Text` field stores a host data pointer in its
@@ -493,24 +518,32 @@ impl LayoutDescriptor {
                 if matches!(k, ScalarKind::Text) && word_bytes < core::mem::size_of::<usize>() {
                     return None;
                 }
-                Some(k.size_in_bytes(word_bytes, float_bytes))
+                Some(k.size_in_bytes(word_bytes, float_bytes, addr_bytes))
             }),
             Self::Tuple(elems) => {
                 let mut total = 0usize;
                 for e in elems {
-                    total = total.saturating_add(e.flat_byte_size(word_bytes, float_bytes)?);
+                    total = total.saturating_add(e.flat_byte_size(
+                        word_bytes,
+                        float_bytes,
+                        addr_bytes,
+                    )?);
                 }
                 Some(total)
             }
             Self::Array { element, count } => Some(
                 element
-                    .flat_byte_size(word_bytes, float_bytes)?
+                    .flat_byte_size(word_bytes, float_bytes, addr_bytes)?
                     .saturating_mul(*count),
             ),
             Self::Struct { fields, .. } => {
                 let mut total = 0usize;
                 for (_, t) in fields {
-                    total = total.saturating_add(t.flat_byte_size(word_bytes, float_bytes)?);
+                    total = total.saturating_add(t.flat_byte_size(
+                        word_bytes,
+                        float_bytes,
+                        addr_bytes,
+                    )?);
                 }
                 Some(total)
             }
@@ -527,7 +560,11 @@ impl LayoutDescriptor {
                 for (_, payload) in variants {
                     let mut sum = 0usize;
                     for p in payload {
-                        sum = sum.saturating_add(p.flat_byte_size(word_bytes, float_bytes)?);
+                        sum = sum.saturating_add(p.flat_byte_size(
+                            word_bytes,
+                            float_bytes,
+                            addr_bytes,
+                        )?);
                     }
                     if sum > payload_max {
                         payload_max = sum;
@@ -552,56 +589,104 @@ mod tests {
 
     #[test]
     fn scalar_unit_is_zero_bytes() {
-        assert_eq!(ScalarKind::Unit.size_in_bytes(I64_BYTES, F64_BYTES), 0);
-        assert_eq!(ScalarKind::Unit.size_in_bytes(I32_BYTES, F32_BYTES), 0);
+        assert_eq!(
+            ScalarKind::Unit.size_in_bytes(I64_BYTES, F64_BYTES, I64_BYTES),
+            0
+        );
+        assert_eq!(
+            ScalarKind::Unit.size_in_bytes(I32_BYTES, F32_BYTES, I32_BYTES),
+            0
+        );
     }
 
     #[test]
     fn scalar_bool_is_one_byte() {
-        assert_eq!(ScalarKind::Bool.size_in_bytes(I64_BYTES, F64_BYTES), 1);
-        assert_eq!(ScalarKind::Bool.size_in_bytes(I32_BYTES, F32_BYTES), 1);
+        assert_eq!(
+            ScalarKind::Bool.size_in_bytes(I64_BYTES, F64_BYTES, I64_BYTES),
+            1
+        );
+        assert_eq!(
+            ScalarKind::Bool.size_in_bytes(I32_BYTES, F32_BYTES, I32_BYTES),
+            1
+        );
     }
 
     #[test]
     fn scalar_byte_is_one_byte() {
-        assert_eq!(ScalarKind::Byte.size_in_bytes(I64_BYTES, F64_BYTES), 1);
-        assert_eq!(ScalarKind::Byte.size_in_bytes(I32_BYTES, F32_BYTES), 1);
+        assert_eq!(
+            ScalarKind::Byte.size_in_bytes(I64_BYTES, F64_BYTES, I64_BYTES),
+            1
+        );
+        assert_eq!(
+            ScalarKind::Byte.size_in_bytes(I32_BYTES, F32_BYTES, I32_BYTES),
+            1
+        );
     }
 
     #[test]
     fn scalar_int_follows_word_width() {
-        assert_eq!(ScalarKind::Int.size_in_bytes(I64_BYTES, F64_BYTES), 8);
-        assert_eq!(ScalarKind::Int.size_in_bytes(I32_BYTES, F32_BYTES), 4);
-        assert_eq!(ScalarKind::Int.size_in_bytes(2, F32_BYTES), 2);
-        assert_eq!(ScalarKind::Int.size_in_bytes(1, F32_BYTES), 1);
+        assert_eq!(
+            ScalarKind::Int.size_in_bytes(I64_BYTES, F64_BYTES, I64_BYTES),
+            8
+        );
+        assert_eq!(
+            ScalarKind::Int.size_in_bytes(I32_BYTES, F32_BYTES, I32_BYTES),
+            4
+        );
+        assert_eq!(ScalarKind::Int.size_in_bytes(2, F32_BYTES, 2), 2);
+        assert_eq!(ScalarKind::Int.size_in_bytes(1, F32_BYTES, 1), 1);
     }
 
     #[test]
     fn scalar_fixed_follows_word_width() {
-        assert_eq!(ScalarKind::Fixed.size_in_bytes(I64_BYTES, F64_BYTES), 8);
-        assert_eq!(ScalarKind::Fixed.size_in_bytes(I32_BYTES, F32_BYTES), 4);
+        assert_eq!(
+            ScalarKind::Fixed.size_in_bytes(I64_BYTES, F64_BYTES, I64_BYTES),
+            8
+        );
+        assert_eq!(
+            ScalarKind::Fixed.size_in_bytes(I32_BYTES, F32_BYTES, I32_BYTES),
+            4
+        );
     }
 
     #[cfg(feature = "floats")]
     #[test]
     fn scalar_float_follows_float_width() {
-        assert_eq!(ScalarKind::Float.size_in_bytes(I64_BYTES, F64_BYTES), 8);
-        assert_eq!(ScalarKind::Float.size_in_bytes(I32_BYTES, F32_BYTES), 4);
+        assert_eq!(
+            ScalarKind::Float.size_in_bytes(I64_BYTES, F64_BYTES, I64_BYTES),
+            8
+        );
+        assert_eq!(
+            ScalarKind::Float.size_in_bytes(I32_BYTES, F32_BYTES, I32_BYTES),
+            4
+        );
     }
 
     #[test]
     fn scalar_text_is_two_words() {
-        assert_eq!(ScalarKind::Text.size_in_bytes(I64_BYTES, F64_BYTES), 16);
-        assert_eq!(ScalarKind::Text.size_in_bytes(I32_BYTES, F32_BYTES), 8);
-        assert_eq!(ScalarKind::Text.size_in_bytes(2, F32_BYTES), 4);
-        assert_eq!(ScalarKind::Text.size_in_bytes(1, F32_BYTES), 2);
+        assert_eq!(
+            ScalarKind::Text.size_in_bytes(I64_BYTES, F64_BYTES, I64_BYTES),
+            16
+        );
+        assert_eq!(
+            ScalarKind::Text.size_in_bytes(I32_BYTES, F32_BYTES, I32_BYTES),
+            8
+        );
+        assert_eq!(ScalarKind::Text.size_in_bytes(2, F32_BYTES, 2), 4);
+        assert_eq!(ScalarKind::Text.size_in_bytes(1, F32_BYTES, 1), 2);
     }
 
     #[test]
     fn scalar_opaque_is_one_word() {
-        assert_eq!(ScalarKind::Opaque.size_in_bytes(I64_BYTES, F64_BYTES), 8);
-        assert_eq!(ScalarKind::Opaque.size_in_bytes(I32_BYTES, F32_BYTES), 4);
-        assert_eq!(ScalarKind::Opaque.size_in_bytes(2, F32_BYTES), 2);
+        assert_eq!(
+            ScalarKind::Opaque.size_in_bytes(I64_BYTES, F64_BYTES, I64_BYTES),
+            8
+        );
+        assert_eq!(
+            ScalarKind::Opaque.size_in_bytes(I32_BYTES, F32_BYTES, I32_BYTES),
+            4
+        );
+        assert_eq!(ScalarKind::Opaque.size_in_bytes(2, F32_BYTES, 2), 2);
     }
 
     #[test]
@@ -611,14 +696,20 @@ mod tests {
             LayoutDescriptor::Scalar(ScalarKind::Bool),
             LayoutDescriptor::Scalar(ScalarKind::Byte),
         ]);
-        assert_eq!(layout.size_in_bytes(I64_BYTES, F64_BYTES), 8 + 1 + 1);
-        assert_eq!(layout.size_in_bytes(I32_BYTES, F32_BYTES), 4 + 1 + 1);
+        assert_eq!(
+            layout.size_in_bytes(I64_BYTES, F64_BYTES, I64_BYTES),
+            8 + 1 + 1
+        );
+        assert_eq!(
+            layout.size_in_bytes(I32_BYTES, F32_BYTES, I32_BYTES),
+            4 + 1 + 1
+        );
     }
 
     #[test]
     fn empty_tuple_is_zero_bytes() {
         let layout = LayoutDescriptor::Tuple(vec![]);
-        assert_eq!(layout.size_in_bytes(I64_BYTES, F64_BYTES), 0);
+        assert_eq!(layout.size_in_bytes(I64_BYTES, F64_BYTES, I64_BYTES), 0);
     }
 
     #[test]
@@ -627,8 +718,8 @@ mod tests {
             element: Box::new(LayoutDescriptor::Scalar(ScalarKind::Int)),
             count: 8,
         };
-        assert_eq!(layout.size_in_bytes(I64_BYTES, F64_BYTES), 64);
-        assert_eq!(layout.size_in_bytes(I32_BYTES, F32_BYTES), 32);
+        assert_eq!(layout.size_in_bytes(I64_BYTES, F64_BYTES, I64_BYTES), 64);
+        assert_eq!(layout.size_in_bytes(I32_BYTES, F32_BYTES, I32_BYTES), 32);
     }
 
     #[test]
@@ -640,8 +731,14 @@ mod tests {
             element: Box::new(LayoutDescriptor::Scalar(ScalarKind::Int)),
             count: usize::MAX,
         };
-        assert_eq!(huge.size_in_bytes(I64_BYTES, F64_BYTES), usize::MAX);
-        assert_eq!(huge.flat_byte_size(I64_BYTES, F64_BYTES), Some(usize::MAX));
+        assert_eq!(
+            huge.size_in_bytes(I64_BYTES, F64_BYTES, I64_BYTES),
+            usize::MAX
+        );
+        assert_eq!(
+            huge.flat_byte_size(I64_BYTES, F64_BYTES, I64_BYTES),
+            Some(usize::MAX)
+        );
     }
 
     #[test]
@@ -650,7 +747,7 @@ mod tests {
             element: Box::new(LayoutDescriptor::Scalar(ScalarKind::Int)),
             count: 0,
         };
-        assert_eq!(layout.size_in_bytes(I64_BYTES, F64_BYTES), 0);
+        assert_eq!(layout.size_in_bytes(I64_BYTES, F64_BYTES, I64_BYTES), 0);
     }
 
     #[test]
@@ -661,7 +758,7 @@ mod tests {
         ]);
         let outer =
             LayoutDescriptor::Tuple(vec![inner, LayoutDescriptor::Scalar(ScalarKind::Bool)]);
-        assert_eq!(outer.size_in_bytes(I64_BYTES, F64_BYTES), 16 + 1);
+        assert_eq!(outer.size_in_bytes(I64_BYTES, F64_BYTES, I64_BYTES), 16 + 1);
     }
 
     #[test]
@@ -673,7 +770,7 @@ mod tests {
                 ("y".to_string(), LayoutDescriptor::Scalar(ScalarKind::Int)),
             ],
         };
-        assert_eq!(layout.size_in_bytes(I64_BYTES, F64_BYTES), 16);
+        assert_eq!(layout.size_in_bytes(I64_BYTES, F64_BYTES, I64_BYTES), 16);
     }
 
     #[test]
@@ -689,7 +786,7 @@ mod tests {
             ],
         };
         // Discriminant is a full word (B28 P2): 8-byte disc + 8-byte payload.
-        assert_eq!(layout.size_in_bytes(I64_BYTES, F64_BYTES), 8 + 8);
+        assert_eq!(layout.size_in_bytes(I64_BYTES, F64_BYTES, I64_BYTES), 8 + 8);
     }
 
     #[test]
@@ -703,7 +800,7 @@ mod tests {
             ],
         };
         // Word-sized discriminant, empty payload (B28 P2).
-        assert_eq!(layout.size_in_bytes(I64_BYTES, F64_BYTES), 8);
+        assert_eq!(layout.size_in_bytes(I64_BYTES, F64_BYTES, I64_BYTES), 8);
     }
 
     #[test]
@@ -713,7 +810,7 @@ mod tests {
             variants: vec![],
         };
         // Word-sized discriminant, empty payload (B28 P2).
-        assert_eq!(layout.size_in_bytes(I64_BYTES, F64_BYTES), 8);
+        assert_eq!(layout.size_in_bytes(I64_BYTES, F64_BYTES, I64_BYTES), 8);
     }
 
     #[test]
@@ -723,10 +820,22 @@ mod tests {
             LayoutDescriptor::Scalar(ScalarKind::Bool),
             LayoutDescriptor::Scalar(ScalarKind::Int),
         ]);
-        assert_eq!(layout.field_offset(0, I64_BYTES, F64_BYTES), Some(0));
-        assert_eq!(layout.field_offset(1, I64_BYTES, F64_BYTES), Some(8));
-        assert_eq!(layout.field_offset(2, I64_BYTES, F64_BYTES), Some(9));
-        assert_eq!(layout.field_offset(3, I64_BYTES, F64_BYTES), None);
+        assert_eq!(
+            layout.field_offset(0, I64_BYTES, F64_BYTES, I64_BYTES),
+            Some(0)
+        );
+        assert_eq!(
+            layout.field_offset(1, I64_BYTES, F64_BYTES, I64_BYTES),
+            Some(8)
+        );
+        assert_eq!(
+            layout.field_offset(2, I64_BYTES, F64_BYTES, I64_BYTES),
+            Some(9)
+        );
+        assert_eq!(
+            layout.field_offset(3, I64_BYTES, F64_BYTES, I64_BYTES),
+            None
+        );
     }
 
     #[test]
@@ -739,10 +848,22 @@ mod tests {
                 ("z".to_string(), LayoutDescriptor::Scalar(ScalarKind::Int)),
             ],
         };
-        assert_eq!(layout.field_offset(0, I64_BYTES, F64_BYTES), Some(0));
-        assert_eq!(layout.field_offset(1, I64_BYTES, F64_BYTES), Some(8));
-        assert_eq!(layout.field_offset(2, I64_BYTES, F64_BYTES), Some(16));
-        assert_eq!(layout.field_offset(3, I64_BYTES, F64_BYTES), None);
+        assert_eq!(
+            layout.field_offset(0, I64_BYTES, F64_BYTES, I64_BYTES),
+            Some(0)
+        );
+        assert_eq!(
+            layout.field_offset(1, I64_BYTES, F64_BYTES, I64_BYTES),
+            Some(8)
+        );
+        assert_eq!(
+            layout.field_offset(2, I64_BYTES, F64_BYTES, I64_BYTES),
+            Some(16)
+        );
+        assert_eq!(
+            layout.field_offset(3, I64_BYTES, F64_BYTES, I64_BYTES),
+            None
+        );
     }
 
     #[test]
@@ -751,10 +872,22 @@ mod tests {
             element: Box::new(LayoutDescriptor::Scalar(ScalarKind::Int)),
             count: 4,
         };
-        assert_eq!(layout.field_offset(0, I64_BYTES, F64_BYTES), Some(0));
-        assert_eq!(layout.field_offset(1, I64_BYTES, F64_BYTES), Some(8));
-        assert_eq!(layout.field_offset(3, I64_BYTES, F64_BYTES), Some(24));
-        assert_eq!(layout.field_offset(4, I64_BYTES, F64_BYTES), None);
+        assert_eq!(
+            layout.field_offset(0, I64_BYTES, F64_BYTES, I64_BYTES),
+            Some(0)
+        );
+        assert_eq!(
+            layout.field_offset(1, I64_BYTES, F64_BYTES, I64_BYTES),
+            Some(8)
+        );
+        assert_eq!(
+            layout.field_offset(3, I64_BYTES, F64_BYTES, I64_BYTES),
+            Some(24)
+        );
+        assert_eq!(
+            layout.field_offset(4, I64_BYTES, F64_BYTES, I64_BYTES),
+            None
+        );
     }
 
     #[test]
@@ -768,19 +901,19 @@ mod tests {
             ],
         };
         assert_eq!(
-            layout.struct_field_offset("x", I64_BYTES, F64_BYTES),
+            layout.struct_field_offset("x", I64_BYTES, F64_BYTES, I64_BYTES),
             Some(0)
         );
         assert_eq!(
-            layout.struct_field_offset("y", I64_BYTES, F64_BYTES),
+            layout.struct_field_offset("y", I64_BYTES, F64_BYTES, I64_BYTES),
             Some(8)
         );
         assert_eq!(
-            layout.struct_field_offset("z", I64_BYTES, F64_BYTES),
+            layout.struct_field_offset("z", I64_BYTES, F64_BYTES, I64_BYTES),
             Some(9)
         );
         assert_eq!(
-            layout.struct_field_offset("missing", I64_BYTES, F64_BYTES),
+            layout.struct_field_offset("missing", I64_BYTES, F64_BYTES, I64_BYTES),
             None
         );
     }
@@ -805,9 +938,15 @@ mod tests {
     #[test]
     fn scalar_layout_has_no_fields() {
         let layout = LayoutDescriptor::Scalar(ScalarKind::Int);
-        assert_eq!(layout.field_offset(0, I64_BYTES, F64_BYTES), None);
+        assert_eq!(
+            layout.field_offset(0, I64_BYTES, F64_BYTES, I64_BYTES),
+            None
+        );
         assert_eq!(layout.field_layout(0), None);
-        assert_eq!(layout.struct_field_offset("x", I64_BYTES, F64_BYTES), None);
+        assert_eq!(
+            layout.struct_field_offset("x", I64_BYTES, F64_BYTES, I64_BYTES),
+            None
+        );
     }
 
     #[test]
@@ -819,29 +958,33 @@ mod tests {
                 ("y".to_string(), LayoutDescriptor::Scalar(ScalarKind::Int)),
             ],
         };
-        assert_eq!(layout.struct_field_offset("x", 2, F64_BYTES), Some(0));
-        assert_eq!(layout.struct_field_offset("y", 2, F64_BYTES), Some(2));
+        assert_eq!(layout.struct_field_offset("x", 2, F64_BYTES, 2), Some(0));
+        assert_eq!(layout.struct_field_offset("y", 2, F64_BYTES, 2), Some(2));
     }
 
     #[test]
     fn flat_byte_size_scalar_eligibility() {
         assert_eq!(
-            LayoutDescriptor::Scalar(ScalarKind::Int).flat_byte_size(I64_BYTES, F64_BYTES),
+            LayoutDescriptor::Scalar(ScalarKind::Int)
+                .flat_byte_size(I64_BYTES, F64_BYTES, I64_BYTES),
             Some(8)
         );
         assert_eq!(
-            LayoutDescriptor::Scalar(ScalarKind::Bool).flat_byte_size(I64_BYTES, F64_BYTES),
+            LayoutDescriptor::Scalar(ScalarKind::Bool)
+                .flat_byte_size(I64_BYTES, F64_BYTES, I64_BYTES),
             Some(1)
         );
         // Text is flat-eligible as a two-word `(data_ptr, len)` arena
         // reference (B28 P3), so its flat size is `2 * word_bytes`.
         assert_eq!(
-            LayoutDescriptor::Scalar(ScalarKind::Text).flat_byte_size(I64_BYTES, F64_BYTES),
+            LayoutDescriptor::Scalar(ScalarKind::Text)
+                .flat_byte_size(I64_BYTES, F64_BYTES, I64_BYTES),
             Some(16)
         );
         // Opaque is flat-eligible as a `word_bytes` registry index (B28 P3).
         assert_eq!(
-            LayoutDescriptor::Scalar(ScalarKind::Opaque).flat_byte_size(I64_BYTES, F64_BYTES),
+            LayoutDescriptor::Scalar(ScalarKind::Opaque)
+                .flat_byte_size(I64_BYTES, F64_BYTES, I64_BYTES),
             Some(8)
         );
         // A Float is flat-eligible (B28 P3 item 5): it occupies `float_bytes`
@@ -849,7 +992,8 @@ mod tests {
         // compiler, so the flat residence preserves its IEEE equality.
         #[cfg(feature = "floats")]
         assert_eq!(
-            LayoutDescriptor::Scalar(ScalarKind::Float).flat_byte_size(I64_BYTES, F64_BYTES),
+            LayoutDescriptor::Scalar(ScalarKind::Float)
+                .flat_byte_size(I64_BYTES, F64_BYTES, I64_BYTES),
             Some(8)
         );
     }
@@ -867,7 +1011,10 @@ mod tests {
                 ("tag".to_string(), LayoutDescriptor::Scalar(ScalarKind::Int)),
             ],
         };
-        assert_eq!(outer.flat_byte_size(I64_BYTES, F64_BYTES), Some(8 + 8 + 8));
+        assert_eq!(
+            outer.flat_byte_size(I64_BYTES, F64_BYTES, I64_BYTES),
+            Some(8 + 8 + 8)
+        );
     }
 
     #[test]
@@ -884,7 +1031,10 @@ mod tests {
         };
         // Text is flat as a two-word reference (B28 P3): one word for the
         // Int field plus two words for the Text field.
-        assert_eq!(layout.flat_byte_size(I64_BYTES, F64_BYTES), Some(8 + 16));
+        assert_eq!(
+            layout.flat_byte_size(I64_BYTES, F64_BYTES, I64_BYTES),
+            Some(8 + 16)
+        );
     }
 
     #[test]
@@ -907,7 +1057,10 @@ mod tests {
             ],
         };
         // Word discriminant plus the largest variant payload (two words).
-        assert_eq!(layout.flat_byte_size(I64_BYTES, F64_BYTES), Some(8 + 16));
+        assert_eq!(
+            layout.flat_byte_size(I64_BYTES, F64_BYTES, I64_BYTES),
+            Some(8 + 16)
+        );
         assert_eq!(layout.flat_composite_kind(), Some(CompositeKind::Enum));
     }
 
@@ -926,7 +1079,7 @@ mod tests {
             ],
         };
         assert_eq!(
-            layout.flat_byte_size(I64_BYTES, F64_BYTES),
+            layout.flat_byte_size(I64_BYTES, F64_BYTES, I64_BYTES),
             Some(I64_BYTES + I64_BYTES)
         );
     }
@@ -949,7 +1102,10 @@ mod tests {
         // Both payloads are flat now (Text is a two-word reference, B28 P3),
         // so the enum is uniformly flat: word discriminant plus the largest
         // payload (the two-word Text in `Err`).
-        assert_eq!(layout.flat_byte_size(I64_BYTES, F64_BYTES), Some(8 + 16));
+        assert_eq!(
+            layout.flat_byte_size(I64_BYTES, F64_BYTES, I64_BYTES),
+            Some(8 + 16)
+        );
     }
 
     #[test]
