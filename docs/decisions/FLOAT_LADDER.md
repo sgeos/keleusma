@@ -75,11 +75,9 @@ ships costs a `BYTECODE_VERSION` authorization.
 
 ## Preconditions, in order
 
-1. **The runtime's arithmetic width must track its declared width.** Under `narrow-float-32` the
-   module declares four bytes and the virtual machine computes in `f64`, because
-   `pub type Vm<'a, 'arena> = GenericVm<'a, 'arena, i64, u64, f64>` carries no `#[cfg]`. **Until that
-   is fixed the differential oracle cannot validate any new rung**, at any width. Escalated by the
-   `v0.2.3` line; the mechanism was verified on this branch rather than relayed.
+1. **The runtime's arithmetic width must track its declared width.** **Until that is fixed the
+   differential oracle cannot validate any new rung**, at any width. **This precondition is assigned
+   to the `v0.2.3` line, and their record of it is now the better one.** See the retraction below.
 2. **Each rung costs a full float differential surface.** `f32` surfaced four real defects on this
    line, every one a plausible wrong number rather than a fault. `f8` costs more than `f16` because
    emulation adds the narrowing question above.
@@ -87,3 +85,54 @@ ships costs a `BYTECODE_VERSION` authorization.
    float operations to compiler runtime calls. A linked C host will need those symbols, which is a
    packaging question the JIT path never asks. Worth checking when `f16` lands rather than at the
    link failure.
+
+## A retraction on precondition 1, and where the authoritative statement now lives
+
+**Ownership.** On 2026-09-01 the operator stated to this line that their understanding is that the
+V0.2.X line has been assigned the runtime `f64` to `f32` and `f16` support, and `f16` as IEEE
+`binary16`. **They framed it as their understanding rather than as a fresh instruction**, so it may
+be a recollection of an assignment made elsewhere. Relayed to `keleusma-39` on the same day with that
+qualification attached, and recorded here as received rather than as confirmed.
+
+**The mechanism as this file first stated it was too narrow, and the correction is theirs.**
+`docs/decisions/FLOAT_FORMAT_LADDER.md` on `origin/v0.2.3` is the authoritative statement of what the
+ladder demands of the runtime. That reference is plain prose and not a link because the file does not
+exist on this branch and a link would fail the Markdown link gate.
+
+**Two things it establishes that this file had wrong or missing.**
+
+**The defect is not confined to `narrow-float-32`.** `check_runtime_widths` rejects only bytecode
+declaring *wider* than the runtime and admits narrower deliberately, so a **stock build with no
+features**, loading a module that declares a 32-bit float, computes in `f64` as well. Naming the
+bundled alias and scoping the symptom to the feature described how the defect was noticed rather than
+what causes it, and a fix scoped to the feature would leave the common case untouched.
+
+**Storage already narrows and arithmetic does not.** Three sites in `src/bytecode.rs` write and read
+a declared four-byte float through `f32` while no site narrows an arithmetic result, so the same
+expression can yield two answers depending on whether an intermediate passed through a composite
+field. **That is the class of divergence this line's oracle exists to catch, and it would present as
+a native-versus-virtual-machine mismatch attributable to the lowering**, which is the wrong package to
+search. Their record marks it inferred from those sites rather than witnessed by a test. Constructing
+that differential is this line's instrument to offer once the arithmetic width is live.
+
+## The double-rounding hazard is real at one end of the range and probably vacuous at the other
+
+**This is an inference, not a measurement, and it has not been tested.** It is recorded because the
+rule it concerns is about to be implemented on the other line, and because the reason for a rule
+determines where the rule can be relaxed.
+
+Their record requires narrowing **directly from the wide value to the declared format, never through
+an intermediate rung**, on the grounds that a 64 to 32 to 16 chain rounds twice. **Keep the rule.**
+The reason offered here differs.
+
+The standard condition for double rounding to be innocuous over addition, subtraction,
+multiplication, division and square root is that the intermediate precision be at least **twice the
+target precision plus two**. Binary32 carries 24 significand bits and binary16 requires 24, so the
+condition is **met exactly**, and a 64 to 32 to 16 chain should agree with a direct narrowing for
+normal numbers. `E5M2` requires 8 against binary16's 11 and clears it with margin.
+
+**The condition assumes no underflow.** Binary16's exponent range is narrow, so results at and below
+the smallest normal lose effective precision, and that is exactly where the guarantee lapses. **The
+rule survives and is load-bearing at the bottom of the exponent range rather than in general**, which
+is a sharper claim than "chains round twice" and a testable one. That test belongs on the line that
+builds the narrowing.
