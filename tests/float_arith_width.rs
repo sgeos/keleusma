@@ -303,3 +303,66 @@ fn the_implemented_widths_include_the_ones_the_runtime_uses() {
     assert!(implemented(5), "f32 must be implemented");
     assert!(implemented(6), "f64 must be implemented");
 }
+
+/// Every width the predicate CLAIMS implemented must actually load and compute.
+///
+/// # Why the asymmetry claim needed this
+///
+/// The commit message for the predicate claims adding a rung is two edits, and
+/// that the dangerous omission is the loud one: teach the narrowing but forget
+/// the predicate and modules are refused (loud); remove the width from the
+/// predicate but forget the narrowing and modules are admitted and computed
+/// wide (silent).
+///
+/// **That second half was not true when it was written.** The narrowing's
+/// catch-all carries a `debug_assert`, which fires only if something actually
+/// constructs a module at the newly-claimed width -- and nothing did, because
+/// no test builds a module declaring binary16 or E5M2. Adding `4` to the
+/// predicate without teaching the narrowing would have passed the entire suite.
+///
+/// This closes it by construction: the test enumerates the widths the predicate
+/// claims, and builds a module at each. A width claimed but unimplemented fails
+/// here rather than silently computing at the wrong precision.
+#[test]
+fn every_width_claimed_implemented_can_actually_be_loaded() {
+    use keleusma::bytecode::float_width_narrowing_is_implemented as implemented;
+
+    let mut checked = 0usize;
+    for bits in 0u8..=6 {
+        if !implemented(bits) {
+            continue;
+        }
+        // 0 is the no-floats sentinel: a module declaring it has no float
+        // operations to narrow, so there is nothing to exercise.
+        if bits == 0 {
+            continue;
+        }
+        let target = Target {
+            word_bits_log2: 6,
+            addr_bits_log2: 6,
+            float_bits_log2: bits,
+            has_floats: true,
+            has_strings: false,
+        };
+        let src = "fn main() -> Float { 1.5 + 2.25 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let Ok(module) = compile_with_target(&program, &target) else {
+            panic!("width 2^{bits} is claimed implemented but will not compile");
+        };
+        let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        type WideVm<'a, 'arena> = GenericVm<'a, 'arena, i64, u64, f64>;
+        let mut vm: WideVm<'_, '_> = WideVm::new(module, &arena).unwrap_or_else(|e| {
+            panic!("width 2^{bits} is claimed implemented but was refused at load: {e:?}")
+        });
+        match vm.call(&[]).expect("call") {
+            GenericVmState::Finished(GenericValue::Float(f)) => assert_eq!(f, 3.75),
+            other => panic!("width 2^{bits}: unexpected result {other:?}"),
+        }
+        checked += 1;
+    }
+    assert!(
+        checked >= 2,
+        "non-vacuity: only {checked} widths exercised, so this proves nothing"
+    );
+}

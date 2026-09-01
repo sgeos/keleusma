@@ -3724,7 +3724,19 @@ pub const BYTECODE_VERSION: u16 = 2;
 /// are the only two edits, and forgetting the second refuses working modules
 /// while forgetting the first admits wrong numbers.
 pub const fn float_width_narrowing_is_implemented(bits_log2: u8) -> bool {
-    !matches!(bits_log2, 3 | 4)
+    // AN ALLOWLIST, NOT A DENYLIST, AND THE FIRST VERSION WAS THE LATTER.
+    //
+    // It read `!matches!(bits_log2, 3 | 4)`, which is the same thing for the two
+    // rungs anyone was thinking about and wrong for everything else: it claimed
+    // widths 1 and 2 -- two-bit and four-bit floats, which are not formats --
+    // were implemented. Such a module would have loaded and computed at full
+    // runtime precision while declaring otherwise, which is the defect the
+    // narrowing exists to remove.
+    //
+    // A denylist for a safety predicate defaults to admitting the unknown. This
+    // codebase's stated posture is default-deny, and the test enumerating every
+    // width claimed implemented is what caught the inversion.
+    matches!(bits_log2, 0 | 5 | 6)
 }
 
 /// This release's format fingerprint, carried in the auxiliary header's
