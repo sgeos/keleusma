@@ -129,6 +129,38 @@ publish is not, and it waits for the maintainer's word.
   published tarball should carry a dated, stamped changelog, not `[Unreleased]`.
 - Update the `**Status**` line in `CLAUDE.md`.
 
+## 1b. Roll the format fingerprint — every release, without exception
+
+```bash
+scripts/fingerprint.sh          # what this tree currently uses
+scripts/fingerprint.sh --new    # roll it
+```
+
+Then update the pinned value wherever a test asserts it, and the golden wire bytes.
+**Both are supposed to move.** A gate failure here is the mechanism reporting the
+change, not a regression.
+
+**Why this step exists.** `BYTECODE_VERSION` is frozen at 2 and does not move between
+releases, by operator policy set on 2026-09-01: it stays at 2 until a hardware compiler
+exists or the language sees notable adoption. The accepted consequence is that early
+releases are **not compatible with one another**, and the version check cannot tell them
+apart, because it is exact equality against a number every release declares.
+
+The fingerprint is what tells them apart. Skipping this step does not produce a warning
+or a test failure. It produces two releases that silently accept each other's bytecode
+and read it under the wrong meaning, which is the failure the version number would
+otherwise have caught. **There is no automated guard for skipping it**, which is why it
+is a numbered step here rather than a note.
+
+To read what any past release used, pass a commit or tag:
+
+```bash
+scripts/fingerprint.sh v0.2.2
+```
+
+This occupies space the wire format reserves. If that space is ever assigned a real
+meaning, this step is deleted rather than moved.
+
 ## 1a. Sync grammar-derived tooling
 
 Any artifact that *mirrors* the grammar drifts silently when a release adds or removes

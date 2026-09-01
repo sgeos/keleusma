@@ -946,6 +946,19 @@ pub enum SchemaError {
     UnknownTag(u16),
     /// A name slice lies outside the string pool, or is not valid UTF-8.
     BadName,
+    /// The module's format fingerprint is not this build's.
+    ///
+    /// `BYTECODE_VERSION` is held at 2 across releases, so the version
+    /// check admits every release that declares 2. This refuses a module
+    /// whose flat-layout format differs from the one this build reads,
+    /// rather than reading it under the wrong meaning. Carries `(got,
+    /// expected)`.
+    FormatFingerprint(u32, u32),
+    /// A header flag bit this build does not define is set.
+    ///
+    /// Refused rather than ignored, so that a future additive change is
+    /// detected by an older reader instead of silently dropped.
+    UnknownHeaderFlags(u8),
 }
 
 impl From<WireError> for SchemaError {
@@ -3047,7 +3060,22 @@ impl<'a> ModuleTable<'a> {
 ///
 /// Propagates a [`WireError`] from the container builder.
 pub fn encode_aux_body(aux: &crate::wire_format::WireAuxBody) -> Result<Vec<u8>, WireError> {
-    encode_aux_body_opt(aux, false)
+    encode_aux_body_opt(aux, false, crate::bytecode::FORMAT_FINGERPRINT)
+}
+
+/// Encodes an auxiliary body carrying a chosen format fingerprint.
+///
+/// **A test seam, and the only caller should be a test.** The rejection path
+/// for a foreign fingerprint cannot be reached by editing bytes: the artifact
+/// carries two CRC layers and both refuse a patched artifact before the header
+/// is read. A genuinely foreign artifact is well-formed and carries correct
+/// checksums, which is what this reproduces.
+#[cfg(test)]
+pub(crate) fn encode_aux_body_with_fingerprint(
+    aux: &crate::wire_format::WireAuxBody,
+    fingerprint: u32,
+) -> Result<Vec<u8>, WireError> {
+    encode_aux_body_opt(aux, false, fingerprint)
 }
 
 /// Encodes an auxiliary body with a (72,64) SECDED parity plane per region.
@@ -3070,12 +3098,13 @@ pub fn encode_aux_body(aux: &crate::wire_format::WireAuxBody) -> Result<Vec<u8>,
 pub fn encode_aux_body_with_ecc(
     aux: &crate::wire_format::WireAuxBody,
 ) -> Result<Vec<u8>, WireError> {
-    encode_aux_body_opt(aux, true)
+    encode_aux_body_opt(aux, true, crate::bytecode::FORMAT_FINGERPRINT)
 }
 
 fn encode_aux_body_opt(
     aux: &crate::wire_format::WireAuxBody,
     ecc: bool,
+    fingerprint: u32,
 ) -> Result<Vec<u8>, WireError> {
     let mut b = SchemaBuilder::new();
     if ecc {
@@ -3121,7 +3150,10 @@ fn encode_aux_body_opt(
         shared_data_bytes: aux.shared_data_bytes,
         private_data_bytes: aux.private_data_bytes,
         schema_hash: aux.schema_hash,
-        reserved: 0,
+        // The reserved word carries the format fingerprint. See
+        // `crate::value_layout::format_fingerprint` for what it does and,
+        // more importantly, what it does not do.
+        reserved: fingerprint,
     })?;
 
     b.finish()
@@ -3398,6 +3430,51 @@ impl<'a> AuxView<'a> {
     #[inline]
     pub fn word_bits_log2(&self) -> Option<u8> {
         Some(self.module.header()?.word_bits_log2)
+    }
+
+    /// The module's format fingerprint, carried in the header's reserved
+    /// word.
+    ///
+    /// `None` when the header is absent. A module written before the
+    /// fingerprint existed carries zero here, which no live fingerprint
+    /// can equal, so such a module is refused rather than mis-read.
+    pub fn format_fingerprint(&self) -> Option<u32> {
+        Some(self.module.header()?.reserved)
+    }
+
+    /// The module's header flag byte.
+    pub fn header_flags(&self) -> Option<u8> {
+        Some(self.module.header()?.flags)
+    }
+
+    /// Refuses a module whose flat-layout format is not this build's, or which
+    /// sets a header flag bit this build does not define.
+    ///
+    /// Called on the single path every load and hot swap takes. The version
+    /// check cannot do this job: `BYTECODE_VERSION` is held at 2 across
+    /// releases by operator policy, so it admits every release that declares 2.
+    ///
+    /// A module with no header is not refused; there is nothing to compare.
+    ///
+    /// # Errors
+    ///
+    /// [`SchemaError::FormatFingerprint`] when the fingerprint is not this
+    /// build's, and [`SchemaError::UnknownHeaderFlags`] for an undefined flag
+    /// bit.
+    pub fn check_format(&self) -> Result<(), SchemaError> {
+        if let Some(got) = self.format_fingerprint() {
+            let expected = crate::bytecode::FORMAT_FINGERPRINT;
+            if got != expected {
+                return Err(SchemaError::FormatFingerprint(got, expected));
+            }
+        }
+        if let Some(flags) = self.header_flags() {
+            let unknown = flags & !crate::bytecode::KNOWN_HEADER_FLAGS;
+            if unknown != 0 {
+                return Err(SchemaError::UnknownHeaderFlags(unknown));
+            }
+        }
+        Ok(())
     }
 
     /// Runtime float width, log2 form.
@@ -3703,5 +3780,129 @@ impl<'a> AuxView<'a> {
             data,
             param_types: opt_span(offsets.param_types)?.map(ParamTypeTable::from_bytes),
         })
+    }
+}
+
+#[cfg(test)]
+mod format_check_tests {
+    use super::*;
+    use crate::wire_format::WireAuxBody;
+
+    /// A minimal well-formed auxiliary body. Nothing in these tests depends on
+    /// its contents, only on its header being present and its checksums being
+    /// correct.
+    fn minimal_aux() -> WireAuxBody {
+        WireAuxBody {
+            chunks: Vec::new(),
+            native_names: Vec::new(),
+            entry_point: None,
+            data_layout: None,
+            word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
+            addr_bits_log2: crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
+            float_bits_log2: crate::bytecode::RUNTIME_FLOAT_BITS_LOG2,
+            wcet_cycles: 0,
+            wcmu_bytes: 0,
+            flags: 0,
+            shared_data_bytes: 0,
+            private_data_bytes: 0,
+            schema_hash: 0,
+            enum_layouts: Vec::new(),
+            signatures: Vec::new(),
+            native_return_shapes: Vec::new(),
+        }
+    }
+
+    /// The rejection path, exercised through a WELL-FORMED artifact.
+    ///
+    /// This cannot be tested by editing bytes. The artifact carries two CRC
+    /// layers and a patched artifact is refused by a checksum before the
+    /// header is ever read, so such a test passes for the wrong reason and
+    /// proves nothing about this check. A genuinely foreign artifact is
+    /// well-formed and correctly checksummed, which the encoder seam here
+    /// reproduces.
+    #[test]
+    fn a_foreign_fingerprint_is_refused_by_the_format_check() {
+        let aux = minimal_aux();
+        let live = crate::bytecode::FORMAT_FINGERPRINT;
+        let foreign = live.wrapping_add(1);
+        let bytes = encode_aux_body_with_fingerprint(&aux, foreign).expect("encode");
+
+        let offsets = AuxOffsets::resolve(&bytes).expect("well-formed artifact");
+        let view = AuxView::from_offsets(&bytes, &offsets).expect("view");
+
+        match view.check_format() {
+            Err(SchemaError::FormatFingerprint(got, expected)) => {
+                assert_eq!(got, foreign);
+                assert_eq!(expected, live);
+            }
+            other => panic!("expected FormatFingerprint, got {other:?}"),
+        }
+    }
+
+    /// Zero must never be a live fingerprint.
+    ///
+    /// It is what a module written before the fingerprint existed carries, and
+    /// what a hand-built fixture carries if it forgets. Accepting it would make
+    /// exactly the artifacts this mechanism exists to refuse look valid.
+    #[test]
+    fn zero_is_not_a_live_fingerprint() {
+        assert_ne!(crate::bytecode::FORMAT_FINGERPRINT, 0);
+    }
+
+    /// All-ones must not be one either. It is where a wiped, padded, or
+    /// erased-flash field lands, and the same argument applies.
+    #[test]
+    fn all_ones_is_not_a_live_fingerprint() {
+        assert_ne!(crate::bytecode::FORMAT_FINGERPRINT, u32::MAX);
+    }
+
+    /// An undefined flag bit is refused rather than ignored.
+    ///
+    /// This is the half of forward detection that costs no discipline: a newer
+    /// writer that sets a bit an older reader does not know about is refused
+    /// automatically, with nobody having to remember to bump anything.
+    #[test]
+    fn an_undefined_header_flag_bit_is_refused() {
+        let mut aux = minimal_aux();
+        let undefined = !crate::bytecode::KNOWN_HEADER_FLAGS;
+        assert_ne!(undefined, 0, "no undefined flag bit is left to test with");
+        let bit = 1u8 << undefined.trailing_zeros();
+        aux.flags = bit;
+        let live = crate::bytecode::FORMAT_FINGERPRINT;
+        let bytes = encode_aux_body_with_fingerprint(&aux, live).expect("encode");
+        let offsets = AuxOffsets::resolve(&bytes).expect("well-formed artifact");
+        let view = AuxView::from_offsets(&bytes, &offsets).expect("view");
+        match view.check_format() {
+            Err(SchemaError::UnknownHeaderFlags(got)) => assert_eq!(got, bit),
+            other => panic!("expected UnknownHeaderFlags, got {other:?}"),
+        }
+    }
+
+    /// Every flag the build DOES define must still be accepted. Without this,
+    /// a mask that was too narrow would look correct: the rejection test above
+    /// would pass, and every signed module would silently stop loading.
+    #[test]
+    fn every_defined_header_flag_is_accepted() {
+        let mut aux = minimal_aux();
+        aux.flags = crate::bytecode::KNOWN_HEADER_FLAGS;
+        let live = crate::bytecode::FORMAT_FINGERPRINT;
+        let bytes = encode_aux_body_with_fingerprint(&aux, live).expect("encode");
+        let offsets = AuxOffsets::resolve(&bytes).expect("well-formed artifact");
+        let view = AuxView::from_offsets(&bytes, &offsets).expect("view");
+        view.check_format()
+            .expect("a module setting only defined flags must load");
+    }
+
+    /// The must-fire control. Without it the test above could pass against a
+    /// check that refuses everything.
+    #[test]
+    fn the_live_fingerprint_is_accepted() {
+        let aux = minimal_aux();
+        let live = crate::bytecode::FORMAT_FINGERPRINT;
+        let bytes = encode_aux_body_with_fingerprint(&aux, live).expect("encode");
+        let offsets = AuxOffsets::resolve(&bytes).expect("well-formed artifact");
+        let view = AuxView::from_offsets(&bytes, &offsets).expect("view");
+        view.check_format()
+            .expect("the live fingerprint must be accepted");
     }
 }
