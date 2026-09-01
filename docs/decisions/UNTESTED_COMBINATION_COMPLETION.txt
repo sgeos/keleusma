@@ -1,0 +1,58 @@
+COMPLETION CONDITION — the untested combination (V0.3.X)
+
+Ordering is NOT a completion criterion. The properties below may be reached in
+any order, by any route. Judge the end state of the tree and the transcript, not
+the sequence, the branch, or the process used to get there.
+
+DONE when all of the following hold.
+
+1. THE WORKSPACE IS EXERCISED AGAINST THIS BRANCH'S OWN INPUTS.
+   The workspace test suite is run on this branch, with this branch's corpus
+   present, and its outcome is reported. A result carried from an earlier tree
+   or from another branch does not satisfy this.
+
+2. THE RESULT IS READ FROM THE TOOL, NOT FROM A PIPELINE.
+   The reported pass, fail and count figures come from the test runner's own
+   status and its own summary lines. A status produced by a pipe, a filter, or a
+   wrapper is not accepted as the result.
+
+3. THE GAP IS STATED AS A COMBINATION, NOT AS A COMPONENT.
+   The record says that the source and the corpus were each verified separately
+   and that their pairing was not, rather than implying either component was
+   unverified.
+
+4. THE EVIDENCE FOR THE GAP IS MEASURED.
+   The record names which paths differ between this branch and the branch it
+   absorbs from, and that some workspace tests read those paths. Both are
+   established by inspection of the tree rather than by recollection.
+
+5. A FAILURE, IF ANY, IS REPORTED BEFORE IT IS REPAIRED.
+   If the run is red, the record names each failure and its cause, and says
+   whether the cause belongs to this line. Repairing without recording what was
+   revealed does not satisfy this.
+
+6. A TIMING FAILURE IS NOT ACCEPTED WITHOUT AN ISOLATED RE-RUN.
+   If a performance check fails while other heavy work is running, it is re-run
+   alone before being reported as a regression, and the record says which
+   reading is being reported.
+
+7. CONCURRENT WORK IS ACCOUNTED FOR.
+   The record states whether other heavy jobs were running during the
+   measurement, since that bears on any timing-sensitive result.
+
+8. NO CONFIGURATION IS REPORTED THAT IS NOT AMONG THE SUPPORTED ONES.
+   Results are reported only for configurations the project actually supports.
+   A failure produced by an unsupported combination of features is not presented
+   as a finding.
+
+9. NOTHING IS CLAIMED THAT WAS NOT RUN.
+   Every count and pass/fail claim corresponds to a command whose output appears
+   in the transcript. Carried figures are marked as carried and dated.
+
+10. EVERY FIGURE CARRIES ITS POPULATION.
+    Each count says what it ranges over — which package, which feature
+    configuration — so a reader cannot mistake one scope for another.
+
+NOT completion criteria: which branch anything sits on, whether work is
+committed, how many commits were made, the order of the ten properties above, or
+whether any other goal in the same session advanced.

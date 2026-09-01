@@ -85,6 +85,48 @@ them.** It arrived from three directions:
 This is the same class one level up: **the scope of a coverage claim, deleted.** The cell says
 covered; what is true is covered-by-the-instruments-that-exist.
 
+## THE FOURTH INSTANCE OF THE SIBLING SHAPE, AND IT WAS IN THE TOOL THAT JUDGES THE OTHERS
+
+Found 2026-09-01 while checking a condition on the release gate. `scripts/gate-summary.sh` renders one
+row per gate step. A step that **ran and had no tests** and a step that **never ran** both render as:
+
+```text
+  Detached native_codegen/ subproject — SKIPPED   0 binaries      0 tests
+  Relative Markdown links                         0 binaries      0 tests
+```
+
+**Identical apart from a word the step chose to put in its own name.** A step whose author did not
+think to write `SKIPPED` would be indistinguishable from one that legitimately reports nothing.
+
+**Found by RUNNING the tool over a synthetic log rather than reading it.** Reading showed a row
+appearing, which was the condition being checked. Only running showed the row was indistinguishable
+from its neighbour.
+
+### The `v0.2.3` line's diagnosis is sharper than the fix that was proposed for it
+
+The suggestion was a generic marker: render a resultless step as `SKIPPED`. **They refused it, and
+correctly.** The tool *cannot tell* the two apart — both leave the same absence in the log — so
+rendering either as `SKIPPED` would **invent information**, and be confidently wrong rather than
+merely ambiguous.
+
+> **The defect is that `0 binaries 0 tests` LOOKS LIKE A MEASUREMENT.** Zero and zero is a count. It
+> reads as *we looked and found none*, when what happened is *there was nothing to look at*. **The
+> tool asserts a result it does not have.**
+
+So the fix is `-- no test results --`, plus a footer stating that such a step either ran without tests
+or did not run, **and that the summary cannot distinguish them.** It says what the tool knows and
+stops.
+
+### The subclass this names
+
+**An absence rendered as a zero.** A count is a claim that something was measured; a null is a claim
+that nothing was. Formatting the second as the first is scope deletion at the level of a single cell,
+and it is harder to see than the sentence-level form because **a number looks like evidence.**
+
+The step's own `SKIPPED` label survives on top of the generic fix and is strictly better than it,
+because it carries the reason the tool cannot recover — **which is the pattern's own lesson: the
+reason has to be recorded beside the cell, and only the party who knows it can record it.**
+
 ## What is mechanised, and what is not
 
 Recorded because "we have no instrument" was said on this line and was wrong.

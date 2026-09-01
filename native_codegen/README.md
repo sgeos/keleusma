@@ -114,3 +114,27 @@ The attribute is set on defined functions only. Declarations of host-provided na
 unmarked, because this backend does not generate that code and does not assert on its behalf.
 
 Rationale and the measurement behind it: `docs/decisions/NOUNWIND.md`.
+
+## Release rule: a skipped native gate step is NO-GO for a release that ships this backend
+
+`scripts/release-gate.sh` builds this package in a step **conditional on an LLVM 22.1 development
+install**. Without one the step does not run, and the gate can be green having never built the native
+backend at all.
+
+**The skip is loud** — it prints a warning naming what was not verified, and `scripts/gate-summary.sh`
+shows it as a row reading `SKIPPED` with `0 binaries 0 tests`.
+
+> ⚠ **A `0 binaries 0 tests` row is not self-explanatory, and this is worth knowing before trusting
+> one.** A step that ran and had no tests to report prints the same shape as a step that never ran.
+> **The only thing distinguishing them is the word `SKIPPED` in the step's own name.** Verified
+> against a synthetic gate log: the markdown-link step and a skipped native step render identically
+> apart from that word.
+
+**Therefore**: green-with-a-skip is acceptable for routine development, and **is not acceptable for a
+publication that ships the native backend.** A release built on a gate whose native step was skipped
+has shipped a backend nothing in the release gate ever compiled.
+
+The condition was set by the `v0.2.3` line, which owns the release process, when agreeing that this
+step joins the release gate at the back-merge. **The corresponding rule in
+`docs/process/RELEASE_PROCESS.md` is theirs to write**; this note records the requirement on the side
+that owns the step.
