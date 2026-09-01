@@ -119,6 +119,7 @@ impl Census {
 /// silently reports nothing on a machine without the tool is exactly the shape
 /// of a test that passes without testing.
 fn undefined_symbols(obj: &Path) -> Vec<String> {
+    let format = object_format(obj);
     let out = Command::new("nm")
         .arg("-u")
         .arg(obj)
@@ -133,10 +134,22 @@ fn undefined_symbols(obj: &Path) -> Vec<String> {
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty())
-        // Mach-O prefixes every symbol with an underscore; ELF does not. Strip
-        // ONE leading underscore so both platforms yield the same name, and note
-        // that a genuine `__`-prefixed toolchain symbol keeps its second.
-        .map(|l| l.strip_prefix('_').unwrap_or(l).to_string())
+        // **`nm -u` DOES NOT PRINT THE SAME SHAPE ON BOTH FORMATS.** On Mach-O
+        // it emits a bare name; on ELF it emits `U <name>`. Taking the line
+        // verbatim put every ELF symbol into the UNCLASSIFIED bucket, because
+        // `"U __divdi3"` matches neither the host-contract prefix nor a
+        // toolchain one. Take the
+        // last field, which is the name under both.
+        .filter_map(|l| l.split_whitespace().next_back())
+        // **Decoration is a property of the OBJECT FORMAT, not of a habit.**
+        // Mach-O prefixes every symbol with an underscore and ELF does not, so
+        // stripping unconditionally would turn a genuine `__aeabi_ldivmod` on an
+        // ELF object into `_aeabi_ldivmod` — a name no linker would resolve, and
+        // a silent corruption of the very thing the census reports.
+        .map(|l| match format {
+            ObjFormat::MachO => l.strip_prefix('_').unwrap_or(l).to_string(),
+            ObjFormat::Elf => l.to_string(),
+        })
         .collect()
 }
 
@@ -426,4 +439,263 @@ fn fixed_division_is_the_construct_that_reaches_for_the_compiler_runtime() {
              the record naming it as the single cause is wrong."
         );
     }
+}
+
+// ── The target the value proposition is actually written for ──────────────────
+//
+// Everything above measures `aarch64-apple-darwin`: an operating system, a C
+// library, hardware double-precision floating point, and a hardware 64-bit
+// divide. **It is the least representative target this project has.**
+//
+// `examples/rtos/` targets `thumbv8m.main-none-eabihf` — bare metal, no
+// operating system, no C library unless one is linked, and a single-precision
+// floating-point unit. If linking a Keleusma object there needs symbols nobody
+// has named, that is a defect in a shipped example rather than a hypothesis.
+
+/// The bare-metal target measured, chosen because `examples/rtos/` builds for it
+/// rather than because it is convenient.
+const NARROW_TRIPLE: &str = "thumbv8m.main-none-eabihf";
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum ObjFormat {
+    MachO,
+    Elf,
+}
+
+/// Reads the object's magic rather than assuming a format from the target.
+///
+/// **Decoration differs by FORMAT, not by habit.** Mach-O prefixes every symbol
+/// with an underscore and ELF does not, so stripping one unconditionally — which
+/// the host-only version did — would corrupt a genuine `__aeabi_ldivmod` into
+/// `_aeabi_ldivmod` and report a name no linker would resolve.
+fn object_format(obj: &Path) -> ObjFormat {
+    let bytes = std::fs::read(obj).unwrap_or_else(|e| panic!("read {obj:?}: {e}"));
+    assert!(bytes.len() >= 4, "object {obj:?} is too short to identify");
+    match &bytes[..4] {
+        [0x7f, b'E', b'L', b'F'] => ObjFormat::Elf,
+        // Mach-O, 32- and 64-bit, little-endian.
+        [0xce, 0xfa, 0xed, 0xfe] | [0xcf, 0xfa, 0xed, 0xfe] => ObjFormat::MachO,
+        other => panic!(
+            "object {obj:?} is in an unrecognised format (magic {other:02x?}); \
+             refusing to guess its symbol decoration"
+        ),
+    }
+}
+
+fn emit_object_for_target(
+    src: &str,
+    dir: &Path,
+    name: &str,
+    triple_str: Option<&str>,
+) -> Option<std::path::PathBuf> {
+    use inkwell::targets::TargetTriple;
+    let m = compile(&parse(&tokenize(src).ok()?).ok()?).ok()?;
+    // `initialize_native` registers only the host. Registering everything is
+    // what makes a cross-target object possible at all.
+    Target::initialize_all(&InitializationConfig::default());
+    // **DO NOT ROUND-TRIP THE HOST TRIPLE THROUGH A STRING.** A first version
+    // passed `get_default_triple().to_string()` and emitted ZERO host objects,
+    // silently, so the comparison ran between an empty set and a full one and
+    // reported the prediction refuted. `None` means "the machine's own default",
+    // which is the thing that actually works.
+    let triple = match triple_str {
+        Some(t) => TargetTriple::create(t),
+        None => TargetMachine::get_default_triple(),
+    };
+    let target = Target::from_triple(&triple).ok()?;
+    let machine = target.create_target_machine(
+        &triple,
+        "generic",
+        "",
+        OptimizationLevel::Default,
+        RelocMode::PIC,
+        CodeModel::Default,
+    )?;
+    let ctx = Context::create();
+    let lm = ctx.create_module("kel");
+    lm.set_triple(&triple);
+    lower_module(&ctx, &lm, &m, LowerOptions::default()).ok()?;
+    lm.verify().ok()?;
+    lm.run_passes("default<O2>", &machine, PassBuilderOptions::create())
+        .ok()?;
+    let obj = dir.join(format!("{name}.o"));
+    machine.write_to_file(&lm, FileType::Object, &obj).ok()?;
+    Some(obj)
+}
+
+/// Sweeps the corpus at a chosen target, returning the classified census.
+fn sweep_target(triple_str: Option<&str>, tag: &str) -> Census {
+    let dir = scratch(tag);
+    let mut census = Census::default();
+    for (i, path) in common::corpus_sources().into_iter().enumerate() {
+        let Ok(src) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Some(obj) = emit_object_for_target(&src, &dir, &format!("m{i}"), triple_str) else {
+            continue;
+        };
+        census.objects += 1;
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| format!("m{i}"));
+        for sym in undefined_symbols(&obj) {
+            census.classify(&sym, &name);
+        }
+        let _ = std::fs::remove_file(&obj);
+    }
+    census
+}
+
+/// **NON-VACUITY FOR THE NEW FORMAT, and it must come first.**
+///
+/// Every comparison below is about set membership, and all of it holds trivially
+/// if no narrow-target object was produced or if the reader cannot read ELF.
+///
+/// **A target absent from the linked LLVM is a FINDING, not an error to route
+/// around.** Reporting a host measurement under a narrow-sounding name would be
+/// worse than reporting that the census cannot be taken here.
+#[test]
+fn a_bare_metal_object_is_produced_and_its_symbols_are_readable() {
+    let dir = scratch("narrow_probe");
+    let src = "fn main(w: Word) -> Word {\n  let d = w + 1;\n  w / d\n}\n";
+    let obj =
+        emit_object_for_target(src, &dir, "probe", Some(NARROW_TRIPLE)).unwrap_or_else(|| {
+            panic!(
+                "no object could be emitted for {NARROW_TRIPLE}. If the linked LLVM \
+             lacks that target, THAT is the result to record — the census cannot \
+             be taken on this machine — and it must not be replaced by a host \
+             measurement under a narrow-sounding name."
+            )
+        });
+
+    assert_eq!(
+        object_format(&obj),
+        ObjFormat::Elf,
+        "the bare-metal object is not ELF, so either the triple was ignored and \
+         a host object was produced, or the format detection is wrong. Either \
+         way the comparison below would be between two host measurements."
+    );
+
+    let syms = undefined_symbols(&obj);
+    println!("\n  {NARROW_TRIPLE} Word division -> {syms:?}");
+    assert!(
+        !syms.is_empty(),
+        "the reader returned no symbol from an ELF object. Every absence this \
+         file reports about the narrow target would be a property of the reader \
+         rather than of the object."
+    );
+}
+
+/// **THE COMPARISON, WHICH IS THE POINT.** Two unrelated lists answer nothing.
+#[test]
+fn the_narrow_target_needs_more_of_the_toolchain_than_the_host_does() {
+    let host = sweep_target(None, "host_cmp");
+    let narrow = sweep_target(Some(NARROW_TRIPLE), "narrow_cmp");
+
+    let only_narrow: BTreeSet<&String> = narrow.toolchain.difference(&host.toolchain).collect();
+    let only_host: BTreeSet<&String> = host.toolchain.difference(&narrow.toolchain).collect();
+    let shared: BTreeSet<&String> = host.toolchain.intersection(&narrow.toolchain).collect();
+
+    println!("\n  host objects   : {}", host.objects);
+    println!("  narrow objects : {}", narrow.objects);
+    println!(
+        "  host toolchain   ({:2}) : {:?}",
+        host.toolchain.len(),
+        host.toolchain
+    );
+    println!(
+        "  narrow toolchain ({:2}) : {:?}",
+        narrow.toolchain.len(),
+        narrow.toolchain
+    );
+    println!("  shared           ({:2}) : {shared:?}", shared.len());
+    println!(
+        "  NARROW ONLY      ({:2}) : {only_narrow:?}",
+        only_narrow.len()
+    );
+    println!("  host only        ({:2}) : {only_host:?}", only_host.len());
+    println!("  narrow unclassified   : {:?}", narrow.unclassified);
+
+    assert!(
+        narrow.objects > 0,
+        "no narrow-target objects were emitted; the comparison is vacuous"
+    );
+    assert!(
+        !only_narrow.is_empty(),
+        "the bare-metal target requires NO toolchain symbol the host does not. \
+         That refutes the recorded prediction — say so and re-derive the record \
+         rather than adjusting it. host={:?} narrow={:?}",
+        host.toolchain,
+        narrow.toolchain
+    );
+}
+
+/// **WHICH CONSTRUCTS COST WHAT, ON THE TARGET THAT MATTERS.**
+///
+/// The corpus sweep says the narrow target needs eleven toolchain symbols. It
+/// does not say which language construct reaches for which, and an embedder
+/// cannot act on a list alone.
+#[test]
+fn the_narrow_target_attributes_its_runtime_calls_to_constructs() {
+    let dir = scratch("narrow_construct");
+    let cases: [(&str, &str); 6] = [
+        (
+            "Word division",
+            "fn main(w: Word) -> Word {\n  let d = w + 1;\n  w / d\n}\n",
+        ),
+        (
+            "Word multiplication",
+            "fn main(w: Word) -> Word {\n  let d = w + 1;\n  w * d\n}\n",
+        ),
+        (
+            "Float addition",
+            "fn main(w: Word) -> Word {\n  let a = w as Float;\n  let s = a + 1.5;\n  s as Word\n}\n",
+        ),
+        (
+            "Float comparison",
+            "fn main(w: Word) -> Word {\n  let a = w as Float;\n  if a > 1.5 { 1 } else { 0 }\n}\n",
+        ),
+        (
+            "Fixed division",
+            "fn main(w: Word) -> Word {\n  let a = w as Fixed<8>;\n  let b = (w + 1) as Fixed<8>;\n  let q = a / b;\n  q as Word\n}\n",
+        ),
+        (
+            "Fixed multiplication",
+            "fn main(w: Word) -> Word {\n  let a = w as Fixed<8>;\n  let b = (w + 1) as Fixed<8>;\n  let q = a * b;\n  q as Word\n}\n",
+        ),
+    ];
+
+    let mut float_needs_runtime = false;
+    let mut word_div_needs_runtime = false;
+    for (label, src) in cases {
+        let o = emit_object_for_target(src, &dir, "c", Some(NARROW_TRIPLE))
+            .unwrap_or_else(|| panic!("{label} must lower for {NARROW_TRIPLE}"));
+        let u: Vec<String> = undefined_symbols(&o)
+            .into_iter()
+            .filter(|s| s.starts_with("__"))
+            .collect();
+        println!("  {label:24} -> {u:?}");
+        if label.starts_with("Float") && !u.is_empty() {
+            float_needs_runtime = true;
+        }
+        if label == "Word division" && !u.is_empty() {
+            word_div_needs_runtime = true;
+        }
+    }
+
+    // These two are falsifiers 2 and 3 of the recorded prediction, checked
+    // explicitly rather than read off the corpus aggregate.
+    assert!(
+        word_div_needs_runtime,
+        "Word division is clean on the bare-metal target. That is falsifier 2 of \
+         the recorded prediction and it has fired; say so and re-derive the \
+         record rather than adjusting it."
+    );
+    assert!(
+        float_needs_runtime,
+        "float arithmetic is clean on the bare-metal target. That is falsifier 3 \
+         of the recorded prediction and it has fired; say so and re-derive the \
+         record rather than adjusting it."
+    );
 }
