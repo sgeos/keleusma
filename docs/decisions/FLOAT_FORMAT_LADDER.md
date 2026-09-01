@@ -1,110 +1,72 @@
-# The float format ladder, and the header field that cannot name it
+# The float ladder as it constrains the V0.2.X runtime
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
 
-**Status**: the plan is stated by the operator and recorded here. Nothing is implemented. One
-gap in the wire format is identified and is **cheap to close before publication and expensive
-after**.
+**This is not the record of the ruling.** The ruling is recorded by the V0.3.X line in
+`docs/decisions/FLOAT_LADDER.md` on branch `v0.3.0`, commit `92cdaeda`, received directly from
+the operator in session on 2026-08-31. Read that first. It carries the ladder itself, the reason
+`E5M2` was chosen over `E4M3`, the arithmetic strategy as ruled, the rounding-mode sub-decision,
+and the guidance separating `f8` from `Fixed<8>`.
 
-## Provenance
+That reference is deliberately plain prose and not a link, because the file does not exist on
+this branch yet and a link to it would fail the Markdown link gate.
 
-Stated by the operator directly, in session, on 2026-08-31, to this line. The operator noted a
-belief that the `v0.3.0` line had already documented it. **It had not.** A search of every
-remote branch for `E5M2`, `E4M3`, `OFP8` and `OPF8` returned no match, so this file is the
-first record. The operator's own wording carried a hedge, and the hedge was correct.
+This file records only what the ladder demands of **this** line's runtime, which the ruling
+record does not cover and should not have to.
 
-This matters because a plan believed to be written down is a plan nobody writes down.
+## A retraction, first
 
-## The plan as stated
+An earlier revision of this file stated that the plan was undocumented and that this was the
+first record of it. **That was wrong.** The document existed, first untracked and then committed
+as `92cdaeda`, and it was unpushed throughout, so no search of remote branches could have found
+it. The search was sound. The conclusion drawn from it was not, because existence is a wider
+claim than any search of the remotes can support.
 
-The runtime is to support a ladder of float formats, narrowing from the present 64-bit and
-32-bit pair:
+It also stated the width-versus-format ambiguity as an open gap. **The ruling closes it** by
+pinning one format per width, which makes `float_bits_log2 = 3` unambiguously `E5M2`, and
+reserves discriminator space against a later `E4M3` regardless. Nothing is open there.
 
-| Declared width | Format |
-|---|---|
-| 64 | IEEE 754 binary64 |
-| 32 | IEEE 754 binary32 |
-| 16 | IEEE 754 binary16 |
-| 8 | OFP8 E5M2 |
+## What this line must fix before any new rung is reachable
 
-With 8-bit Q-format fixed point available at the low end as a separate option, riding on the
-`Word` axis rather than the float axis.
+The ruling record names the arithmetic-width defect as its first precondition and attributes it
+to the bundled alias carrying no `#[cfg]`. That is true and it is not the whole mechanism. Two
+refinements, both measured on this branch.
 
-Both the storage width and the arithmetic width follow the module header. The operator
-confirmed that reading on 2026-08-31.
+**The defect is not confined to `narrow-float-32`.** `check_runtime_widths` in `src/vm.rs`
+rejects only bytecode declaring *wider* than the runtime, and admits narrower deliberately. So a
+stock build with no features, loading a module that declares a 32-bit float, computes in `f64`.
+The feature is how the defect was noticed rather than what causes it, and a fix scoped to the
+feature would leave the common case untouched.
 
-## The gap: the header records a width, not a format
+**Storage already narrows and arithmetic does not, so the two disagree.** Three sites in
+`src/bytecode.rs` write and read a declared four-byte float through `f32`. No site narrows an
+arithmetic result. The consequence is that a value rounds when it passes through a composite
+field and does not when it stays on the operand stack, so the same expression can yield two
+answers depending on whether an intermediate was stored. This is inferred from those sites
+rather than witnessed by a test.
 
-`HeaderRecord` in `src/wire_schema.rs` carries `float_bits_log2` as a bare log2 width. There is
-no format discriminant anywhere in the header.
+## Why widen-compute-narrow is forced here, and not merely preferred
 
-**A width does not determine a format at either of the two new rungs.**
+The ruling states widen-calculate-truncate as the preferred strategy where a floating-point unit
+exists. On this line it is the **only** available construction below 32 bits, for a reason
+specific to the implementation language.
 
-- At 8 bits, OFP8 standardises **two** formats, E5M2 and E4M3. They differ in exponent and
-  mantissa split and are not interconvertible without loss.
-- At 16 bits, IEEE binary16 and bfloat16 are both in wide use and differ likewise.
+`src/float.rs` reaches a declared width by pairing it with a real Rust type, with `impl Float for
+f32` at `BITS_LOG2 = 5` and `impl Float for f64` at 6. **Rust has no `f16` on stable**, confirmed
+against rustc 1.98.0, which rejects the type as unstable, and no `f8` of any kind exists or will.
+So `GenericVm` cannot be instantiated at either new rung. The trait-per-width model does not
+extend, and no amount of preference enters into it.
 
-The plan names E5M2 and IEEE binary16, so the mapping is unambiguous **today**, by convention
-rather than by encoding. It stops being unambiguous the moment a second format at either width
-is wanted, and at that point the header must change.
+The shape to follow already exists on the integer axis. `checked_arith_outputs` in `src/vm.rs`
+reads `word_bits_log2` from the module header and narrows each result to the declared width at
+runtime, on a wider runtime type. The float axis needs the same thing and has half of it.
 
-The header has a spare `flags: u8` byte that is a candidate site. Whether the discriminant
-belongs there or in a new field is a design question this document does not settle.
+## One implementation hazard the ruling does not cover
 
-**Why the timing is the point.** `BYTECODE_VERSION` is 2 and nothing has been published at 2.
-Header changes accumulate under the current number for free until the next publication and cost
-a version 3 afterwards. Deciding whether the format is encoded or conventional is therefore a
-pre-publication decision, and it is grouped with the `ScalarKind::Text` change that `Text<N>`
-enables for the same reason.
+The ruling settles the rounding **mode**, taking each toolchain's round-to-nearest-ties-to-even
+default so the reference and the backend agree for free. A separate hazard survives that choice.
 
-## What the ladder forces, and it is not a preference
-
-**Rust has no `f16` on stable.** Confirmed against rustc 1.98.0, which rejects the type as
-unstable. There is no `f8` of any kind and there will not be one.
-
-The `Float` trait currently works by pairing each declared width with a real Rust type, with
-`impl Float for f32` at `BITS_LOG2 = 5` and `impl Float for f64` at 6. **That model cannot
-reach 16 or 8**, because there is no type to implement the trait for.
-
-So the ladder can only be built the way the `Word` axis is already built. Compute in the widest
-type the build offers, then narrow the result to the declared format after each operation. For
-words this already exists as `checked_arith_outputs` in `src/vm.rs`, which reads
-`word_bits_log2` from the header and narrows to the declared width at runtime.
-
-This converts the float-width question from a design preference into a constraint. Header-driven
-narrowing is not the more elegant of two options for floats. Below 32 bits it is the only option.
-
-## Specific wrong turns to avoid
-
-**Do not chain narrowing steps.** Rounding a 64-bit intermediate to the declared format must go
-directly from the wide value to that format. Narrowing through an intermediate rung, as in a
-64-to-32-to-16 chain, is a double rounding and produces results that differ from correct single
-rounding. This is the most likely way to get a plausible-looking implementation that is wrong in
-the low bits.
-
-**Do not treat rounding after each operation as an optimisation to skip.** At E5M2 the mantissa
-is two bits, giving roughly three significant bits. The difference between rounding per
-operation and rounding once at the end is not a precision nicety at that width. It is the whole
-semantics of the format.
-
-**Do not assume the storage path already covers this.** Storage narrowing exists and arithmetic
-narrowing does not. Three sites in `src/bytecode.rs` write and read a declared 4-byte float
-through `f32`, and no site narrows an arithmetic result. The present consequence is that a
-32-bit float rounds when it passes through a composite field and does not when it stays on the
-operand stack.
-
-**Do not read the existing narrow presets as ready.** `Target::embedded_16` and
-`Target::embedded_8` both declare `has_floats: false`. Adding the two new rungs changes what
-those presets mean, rather than filling in something they already promised.
-
-## Open questions, none of them settled here
-
-1. Whether the format is encoded in the header or fixed by convention at each width.
-2. What a native registered as `fn(f64) -> f64` observes when it serves a module declaring an
-   8-bit float. Rounding at the boundary is required or the ABI launders precision, which is the
-   same shape as the string ABI question.
-3. How the per-operation narrowing cost enters the calibrated cost models in `keleusma-bench`.
-   The cost is deterministic and therefore bounded, so this is calibration rather than a threat
-   to the worst-case-execution-time claim.
-4. Whether 8-bit Q-format fixed point needs anything beyond the existing `Word` axis, which
-   already reaches 8 bits.
+**Narrow directly from the wide value to the declared format. Never through an intermediate
+rung.** A 64-to-32-to-16 chain rounds twice and can differ from correct single rounding, and it
+is the natural way to write the code, since each step is one `as` cast. Agreeing on
+round-to-nearest-even does not help if the two sides chain differently.
