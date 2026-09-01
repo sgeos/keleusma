@@ -4458,7 +4458,7 @@ fn real_header_case(src: &str) -> (Vec<i64>, Vec<u8>) {
         // The reserved word carries the format fingerprint. Read from the same
         // function the reference emitter uses, so this fixture cannot drift
         // away from it.
-        i64::from(keleusma::value_layout::format_fingerprint()),
+        i64::from(keleusma::bytecode::FORMAT_FINGERPRINT),
     ];
     (fields, want)
 }

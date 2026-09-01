@@ -36,14 +36,33 @@ operator has explicitly accepted as unguaranteed.
 
 ## The two design decisions that determine whether it works
 
-**Derive it; do not hand-maintain it.** A constant someone bumps per release fails the way a frozen
-version fails, by being forgotten. Hashing the canonical flat-layout table means it moves on its own.
+**A fresh random value per release, not a derived one.** This reverses the first
+implementation and the operator's redirect is the reason.
 
-**Evaluate at pairwise-distinct reference widths.** This is the trap. Hashed at 64/64/64, the
-`Opaque` change from `word_bytes` to `addr_bytes` produces an identical number, because those
-widths are equal there, so the fingerprint would miss precisely the change now in flight. Feed it
-distinct values instead. They need not be supported configurations; the fingerprint needs
-determinism, not runnability.
+The original derived the fingerprint from the scalar size table, on the argument that a
+hand-written constant fails by being forgotten. That argument is real but it answers the
+wrong question. A derived value covers only what it hashes, so a release that changed an
+opcode's meaning, a wire encoding, or the interpretation of an existing field would leave
+it unmoved while genuinely differing. A per-release value covers the release itself
+instead of a proxy for it.
+
+Forgetting is answered by making it a numbered release-checklist step rather than
+something anyone must notice mid-cycle. Releases are rare and deliberate; layout changes
+are neither.
+
+**Random, so equality means something.** A derived value can coincide across releases
+whose hashed inputs happen to match while other things changed. Random values make a
+match evidence of sameness rather than of similar inputs.
+
+Two values are excluded. Zero is what a module written before the fingerprint existed
+carries, and what a hand-built fixture carries if it forgets. All-ones is where a wiped,
+padded, or erased-flash field lands. Neither may ever be live, and both are guarded.
+
+**What is given up, stated plainly.** The derived version moved automatically on an
+unintended layout change; this one does not, and two builds within one release cycle
+share a fingerprint by design. That loss is covered: the golden wire-byte test catches an
+unintended layout change, and it demonstrably does — it caught the fingerprint's own
+arrival, twice, reporting exactly eight changed bytes each time.
 
 ## The interaction that nearly made this expensive
 

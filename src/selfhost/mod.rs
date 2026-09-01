@@ -5601,7 +5601,7 @@ fn header_fields_of(module: &Module) -> [i64; 11] {
         // same function the reference emitter calls, never a copied literal:
         // a duplicated constant would drift silently, whereas this cannot
         // disagree with the reference by construction.
-        i64::from(crate::value_layout::format_fingerprint()),
+        i64::from(crate::bytecode::FORMAT_FINGERPRINT),
     ]
 }
 

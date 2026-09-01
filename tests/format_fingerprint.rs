@@ -44,7 +44,7 @@ fn compiled_bytes(src: &str) -> Vec<u8> {
 #[test]
 fn a_byte_edit_to_the_fingerprint_is_refused_at_some_layer() {
     let mut bytes = compiled_bytes("fn main() -> Word { 1 }");
-    let live = keleusma::value_layout::format_fingerprint();
+    let live = keleusma::bytecode::FORMAT_FINGERPRINT;
     let needle = live.to_le_bytes();
 
     // Locate the fingerprint by value. Asserting it occurs EXACTLY once is the
@@ -84,7 +84,7 @@ fn the_live_fingerprint_is_present_in_a_real_artifact() {
     // field. If the emitter regressed to a zero, the rejection test above
     // could still pass while the mechanism did nothing.
     let bytes = compiled_bytes("fn main() -> Word { 1 }");
-    let needle = keleusma::value_layout::format_fingerprint().to_le_bytes();
+    let needle = keleusma::bytecode::FORMAT_FINGERPRINT.to_le_bytes();
     assert!(
         bytes.windows(4).any(|w| w == needle),
         "the emitted artifact does not carry the live format fingerprint"
@@ -98,7 +98,7 @@ fn the_refusal_is_reported_and_named() {
     // and a test that only asserts "some error" would pass while the
     // fingerprint check never ran at all.
     let mut bytes = compiled_bytes("fn main() -> Word { 1 }");
-    let live = keleusma::value_layout::format_fingerprint();
+    let live = keleusma::bytecode::FORMAT_FINGERPRINT;
     let at = bytes
         .windows(4)
         .position(|w| w == live.to_le_bytes())

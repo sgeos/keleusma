@@ -3060,7 +3060,7 @@ impl<'a> ModuleTable<'a> {
 ///
 /// Propagates a [`WireError`] from the container builder.
 pub fn encode_aux_body(aux: &crate::wire_format::WireAuxBody) -> Result<Vec<u8>, WireError> {
-    encode_aux_body_opt(aux, false, crate::value_layout::format_fingerprint())
+    encode_aux_body_opt(aux, false, crate::bytecode::FORMAT_FINGERPRINT)
 }
 
 /// Encodes an auxiliary body carrying a chosen format fingerprint.
@@ -3098,7 +3098,7 @@ pub(crate) fn encode_aux_body_with_fingerprint(
 pub fn encode_aux_body_with_ecc(
     aux: &crate::wire_format::WireAuxBody,
 ) -> Result<Vec<u8>, WireError> {
-    encode_aux_body_opt(aux, true, crate::value_layout::format_fingerprint())
+    encode_aux_body_opt(aux, true, crate::bytecode::FORMAT_FINGERPRINT)
 }
 
 fn encode_aux_body_opt(
@@ -3463,7 +3463,7 @@ impl<'a> AuxView<'a> {
     /// bit.
     pub fn check_format(&self) -> Result<(), SchemaError> {
         if let Some(got) = self.format_fingerprint() {
-            let expected = crate::value_layout::format_fingerprint();
+            let expected = crate::bytecode::FORMAT_FINGERPRINT;
             if got != expected {
                 return Err(SchemaError::FormatFingerprint(got, expected));
             }
@@ -3823,7 +3823,7 @@ mod format_check_tests {
     #[test]
     fn a_foreign_fingerprint_is_refused_by_the_format_check() {
         let aux = minimal_aux();
-        let live = crate::value_layout::format_fingerprint();
+        let live = crate::bytecode::FORMAT_FINGERPRINT;
         let foreign = live.wrapping_add(1);
         let bytes = encode_aux_body_with_fingerprint(&aux, foreign).expect("encode");
 
@@ -3839,6 +3839,23 @@ mod format_check_tests {
         }
     }
 
+    /// Zero must never be a live fingerprint.
+    ///
+    /// It is what a module written before the fingerprint existed carries, and
+    /// what a hand-built fixture carries if it forgets. Accepting it would make
+    /// exactly the artifacts this mechanism exists to refuse look valid.
+    #[test]
+    fn zero_is_not_a_live_fingerprint() {
+        assert_ne!(crate::bytecode::FORMAT_FINGERPRINT, 0);
+    }
+
+    /// All-ones must not be one either. It is where a wiped, padded, or
+    /// erased-flash field lands, and the same argument applies.
+    #[test]
+    fn all_ones_is_not_a_live_fingerprint() {
+        assert_ne!(crate::bytecode::FORMAT_FINGERPRINT, u32::MAX);
+    }
+
     /// An undefined flag bit is refused rather than ignored.
     ///
     /// This is the half of forward detection that costs no discipline: a newer
@@ -3851,7 +3868,7 @@ mod format_check_tests {
         assert_ne!(undefined, 0, "no undefined flag bit is left to test with");
         let bit = 1u8 << undefined.trailing_zeros();
         aux.flags = bit;
-        let live = crate::value_layout::format_fingerprint();
+        let live = crate::bytecode::FORMAT_FINGERPRINT;
         let bytes = encode_aux_body_with_fingerprint(&aux, live).expect("encode");
         let offsets = AuxOffsets::resolve(&bytes).expect("well-formed artifact");
         let view = AuxView::from_offsets(&bytes, &offsets).expect("view");
@@ -3868,7 +3885,7 @@ mod format_check_tests {
     fn every_defined_header_flag_is_accepted() {
         let mut aux = minimal_aux();
         aux.flags = crate::bytecode::KNOWN_HEADER_FLAGS;
-        let live = crate::value_layout::format_fingerprint();
+        let live = crate::bytecode::FORMAT_FINGERPRINT;
         let bytes = encode_aux_body_with_fingerprint(&aux, live).expect("encode");
         let offsets = AuxOffsets::resolve(&bytes).expect("well-formed artifact");
         let view = AuxView::from_offsets(&bytes, &offsets).expect("view");
@@ -3881,7 +3898,7 @@ mod format_check_tests {
     #[test]
     fn the_live_fingerprint_is_accepted() {
         let aux = minimal_aux();
-        let live = crate::value_layout::format_fingerprint();
+        let live = crate::bytecode::FORMAT_FINGERPRINT;
         let bytes = encode_aux_body_with_fingerprint(&aux, live).expect("encode");
         let offsets = AuxOffsets::resolve(&bytes).expect("well-formed artifact");
         let view = AuxView::from_offsets(&bytes, &offsets).expect("view");
