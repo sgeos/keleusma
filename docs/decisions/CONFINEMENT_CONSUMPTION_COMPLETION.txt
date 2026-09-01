@@ -1,0 +1,71 @@
+COMPLETION CONDITION — the confinement verdict is consumed to refuse
+
+Ordering is NOT a completion criterion. No particular sequence of steps, branch,
+commit shape, or process is required. Judge the end state only.
+
+Complete when ALL of the following hold.
+
+1. THE VERDICT IS CONSULTED
+   The native lowering consults the shipped confinement analysis for composite
+   construction sites and refuses a site whose verdict against its iteration
+   scope is anything other than confined. An inconclusive verdict refuses.
+
+2. THE REFUSAL SET ONLY WIDENS
+   The verdict can add a refusal and can never remove one. Any site refused
+   before this work is still refused after it. This is checkable by comparing
+   the set of refusals over the corpus before and after, and the tree records
+   that comparison rather than asserting the property.
+
+3. THE CORPUS STILL LOWERS
+   The corpus lowering set does not shrink: the same modules lower end to end,
+   the same chunks are fully lowerable, and the same opcode instance count
+   lowers, as before this work. If any figure moves, it is recorded with the
+   site that caused it and the reason, and the shrink is reported rather than
+   accepted.
+
+4. NEWLY REFUSED SITES ARE CLASSIFIED
+   Any site the verdict newly refuses is recorded as sitting in a loop with a
+   static trip bound or in a divergent loop. A count alone does not satisfy
+   this, because the two imply different repairs.
+
+5. THE INTERPROCEDURAL CASE IS ADDRESSED OR ITS LIMIT IS STATED
+   The analysis is consulted in the form that carries callee summaries, or the
+   tree records why not and what remains uncovered. The obligation names the
+   interprocedural case explicitly, so silence about it does not satisfy this.
+
+6. THE KNOWN SITE IS STILL NAMED
+   A test demonstrates that the escaping site in the module written to carry
+   that shape is reported as escaping its iteration. If that module or that
+   site changes, the test fails rather than passing quietly.
+
+7. MUTATION EVIDENCE
+   The transcript records at least one mutation of the new consumption,
+   confirmed applied by showing the changed line, causing at least one test to
+   fail. A guard that cannot fire does not satisfy this.
+
+8. THE PLANNER'S OWN DOCUMENTATION IS TRUE
+   No comment or document left in the tree states that this lowering consults
+   no verdict, or that a wrong verdict cannot affect it, if this work makes
+   that false. Where the property still holds in a narrower form, the narrower
+   form is stated rather than the old one deleted.
+
+9. NOTHING AMBIGUOUS WAS DECIDED
+   Sites are not overlapped to share storage, and no document implies the arena
+   bound gap is closed. The open operator questions remain untouched.
+
+10. THE SUITE IS GREEN AND THE COUNT RECONCILES
+    The native_codegen suite passes with zero failures, read from cargo's own
+    exit status AND from the summed per-binary counts, with the two agreeing and
+    the binary count matching expectation. The total is the previous total plus
+    exactly the tests added.
+
+11. QUALITY GATES
+    Formatting, clippy at deny-warnings over tests as well as the library, and
+    the documentation build at deny-warnings are all clean.
+
+12. NO DEAD CITATIONS
+    Nothing added or changed names a test, file, function, or identifier that
+    does not exist.
+
+If any item cannot be satisfied, say so explicitly with what was measured and
+why it blocks, and satisfy every other item in full.

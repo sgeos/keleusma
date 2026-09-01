@@ -84,10 +84,26 @@ backend work is no longer free.
 > field costs: **a value that transitively contains a flat `Text` field cannot cross the yield
 > boundary at all**, because the iteration `RESET` reclaims the arena.
 >
-> **A bounded `Text<N>` has no arena residency, no handle and no epoch.** So once dynamic text is a
-> bounded composite, `ScalarKind::Text` has no dynamic case left to represent, the one-reference
-> static form becomes reachable without splitting the kind, and the cross-yield restriction on
-> text-bearing composites dissolves with it.
+> **⚠ TWO CLAUSES OF THIS PARAGRAPH WERE WRONG. RETRACTED 2026-08-31, on the `v0.2.3` line's report
+> of operator rulings received in their session.**
+>
+> It read *"a bounded `Text<N>` has no arena residency, no handle and no epoch … and the cross-yield
+> restriction on text-bearing composites dissolves with it"*. **Both halves are unsupported.**
+>
+> **Residency.** The operator settled that a `Text<N>` local is an ordinary ephemeral arena value,
+> just larger. It IS arena-resident. What it plausibly lacks is a HANDLE and an EPOCH, since it is a
+> value rather than a reference, and that narrower claim is the only part that survives.
+>
+> **Cross-yield.** My stated reason was that nothing would be arena-resident. **Residence was never
+> the barrier.** An epoch-tagged arena value already crosses safely, because a post-`RESET` read
+> resolves stale rather than dangling. The `v0.2.3` line reports the real barrier as the ephemeral
+> region being WRITE-ONCE while `Text<N>` is mutable — which is an open design question for that
+> line rather than something this document settles.
+>
+> **What survives is conditional and narrower.** IF dynamic text becomes a bounded composite, THEN
+> `ScalarKind::Text` has no dynamic case left to represent and the one-reference static form becomes
+> reachable without splitting the kind. **The sequencing argument below rests only on that**, and it
+> is unaffected.
 >
 > **Hence the sequencing.** Changing `ScalarKind::Text` now would move bytes the typed verifier
 > validates and the wire format carries, which is a `BYTECODE_VERSION` question and the operator's
@@ -174,3 +190,43 @@ moment the planner consumes it, a wrong verdict is a miscompilation rather than 
 It will not edit `src/`. Its share is the backend half of each item, and under R2 that share is close
 to nothing, which is the point of the design. It will consume the address width once
 `size_in_bytes` carries it, and it will consume the confinement verdict at iteration scope.
+
+
+---
+
+## Semantics reported by the `v0.2.3` line, 2026-08-31 — NOT RECEIVED HERE
+
+**Recorded with the same provenance discipline this document asks of its reader, applied in the
+opposite direction.** The `v0.2.3` line reports that the operator settled the following in their
+session. **This line did not receive these rulings** and records them as their report rather than as
+rulings of record here.
+
+| point | as reported |
+|---|---|
+| static text | a `.rodata` pointer, with no capacity in its type |
+| dynamic text | `Text<N>` |
+| a literal | STATIC, and contributes its known length to capacity arithmetic |
+| `"ab" + "cd"` | `Text<4>`, because a concatenation result cannot live in `.rodata` |
+| `N` | counts content bytes, with no terminator |
+| a statically-too-narrow assignment | a compile error |
+| runtime overflow | truncates by default, with an optional arm on the existing `CheckedArmKind` shape |
+| locals | ordinary ephemeral arena values, just larger |
+
+**These sharpen R2 rather than change it.** R2 asks for a flat layout carrying no reference field,
+and a length plus content bytes with no terminator is exactly that.
+
+## Also reported: `Text + Text` is now refused, and a witness went with it
+
+The `v0.2.3` line reports refusing `Text + Text` and, in doing so, stranding
+`exponential_text_concat_rejected_at_safe_constructor` — the sixty-doublings example that existed to
+prove the worst-case-memory analysis rejects unbounded text growth at the safe constructor. **That
+gate is no longer reached, so the property is now untested**, and they report the test says so rather
+than having been quietly re-pointed.
+
+**Checked on this line rather than assumed: nothing here is downstream of that witness.** The backend
+package contains no reference to it, and no corpus source concatenates text literals.
+
+**The corpus module count is the binding check and it is a NAMED PREDICTION rather than a
+conclusion.** A crude scan cannot see a variable-to-variable concatenation, only a literal one, so
+the honest statement is that the corpus should still compile 69 modules at the next absorption. If it
+compiles 68, a corpus source used text concatenation and the scan missed it.
