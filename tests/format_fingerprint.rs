@@ -11,6 +11,12 @@
 //! release which reinterprets a field both readers already read. It does not.
 //! Only a version bump does.
 
+//! **Feature guard.** `lexer`, `parser` and `compiler` are gated behind the
+//! `compile` feature, so this file cannot exist in a no-default-features build.
+//! The gate runs that configuration and it is not one of the three feature sets
+//! a routine check covers.
+#![cfg(feature = "compile")]
+
 use keleusma::bytecode::Module;
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
