@@ -5,250 +5,63 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-08-29 (session 56 CLOSE) on `origin/v0.2.3` ITSELF, not a branch head.**
+> **REFRESHED 2026-08-31 (session 59 CLOSE).** Validate by the ANCESTRY and CONTENT block below, not
+> by a hash: a refresh takes more than one commit, so any hash written here is stale by one the
+> moment it is written. Three sessions have written one and had a reader treat the off-by-one as
+> staleness.
 >
-> **NO COMMIT HASH IS NAMED HERE, AND THAT IS DELIBERATE.** A refresh takes more than one commit --
-> the correction, then the stamp -- so any hash written in is stale by one the moment it is written,
-> and chasing it recurses forever. Three sessions have written a hash here and had a reader treat
-> the off-by-one as staleness. **Validate by the ANCESTRY and CONTENT block below**, which is what
-> the Validity section has said to do all along.
-> Not a branch head. Every pinned value below was DERIVED on that tree, not recalled, and the
-> whole check block was executed against it: **37 test-count pins, all matching.**
-> **THIS FILE HAS GONE STALE WITHIN HOURS SIX TIMES**; if the dates here disagree with the three
-> channels, trust the channels.
+> ## READ THIS FIRST: THERE IS UNPUSHED WORK IN A WORKTREE
 >
-> **DO NOT READ A PULL-REQUEST STATE OR A MERGE COUNT OUT OF THIS FILE. DERIVE THEM** -- see item
-> ONE of the resume section. Both figures moved several times within single sessions, which is the
-> same reason no commit hash is named above. Thirteen pull requests merged in session 56 and six in
-> session 57, each at 22 of 22 green; those are HISTORY and do not go stale. Two of session 56's came from
-> a CROSS-LINE EXCHANGE rather than from the plan: the `v0.3.0` line reported one of this line's
-> tests red on their branch with the cause named, and declined to fix it.
+> **`feat/region-kind-wiring` is merged, but `feat/opaque-address-width` is NOT.** It lives in a
+> separate worktree at `../keleusma-worktrees/opaque-address-width`, its head is a single commit,
+> and **it has never been pushed**. `git branch -a` from the primary directory will not show you a
+> remote for it. `scripts/worktree.sh list` will show you the tree.
 >
-> ## ORDER 1 ITEM 3: FOUR OF FIVE, AND THE FIFTH IS PART-MOVED
+> **IT DOES NOT COMPILE.** Session 60 corrected this. The branch was pushed with `--no-verify` and
+> is RED on purpose, so that a feature branch is not stranded in a worktree a second time.
 >
-> The last extraction is no longer blocked. **Its obstacle was measured and it was not what three
-> sizings said.** `verify_types.kel` reads the expression table only through `ty.btag[b]` for a
-> form-2 binding and through a per-row predicate; **nothing sweeps it in order**, so the index need
-> only be consistent between the two channels the host supplies. **Any numbering the pipeline
-> chooses works.**
+> Session 59 wrote here that it compiled against library, derive macro and every test target. That
+> claim was measured under the DEFAULT feature set and generalised without being re-measured.
+> Re-measured under the three sets continuous integration actually runs, it fails two of them at
+> **six unmigrated call sites**, all of them the same mechanical omission of the new `addr_bytes`
+> argument.
 >
-> Four of the eight expression kinds now move: the binary operator, across **all four** forest
-> kinds the lowering splits it into; the condition a conditional tests; the tail-versus-return
-> claim; and the array elements. **`let d = 1 + 2` reaches the bounded fixpoint from the
-> pipeline**, which is the gap this file named for four sessions.
+> - `--features self-host`, five sites, `src/selfhost/mod.rs` lines 4056, 4121, 4138, 4156, 4438,
+>   each a `size_in_bytes(wb, fb)` that now needs a third argument.
+> - `--features signatures,shell` **with `--tests`**, one site, `src/stddsl/shell.rs:782`, a
+>   `NativeCtx` initialiser missing the `addr_bytes` field. The library alone is clean under that
+>   set, so a `cargo check` without `--tests` reports success and hides it.
 >
-> **THE EXTRACTION HAS REACHED A REAL BOUNDARY, AND IT IS MEASURED RATHER THAN GUESSED.** All four
-> remaining kinds are blocked, and **none of them on work in the driver**:
+> Default features are clean. **Repairing those six sites, then completing a real workspace run, is
+> the highest-value first action available.** Do not report the branch as verified until then.
 >
-> | kind | blocker |
-> |---|---|
-> | branch pair | the forest synthesises an else arm; a spurious row can reject a valid program |
-> | field on value | needs a `let`'s TYPE ANNOTATION, which the record stream does not carry |
-> | index on value | the same annotation |
-> | struct literal | needs the STRUCT'S IDENTITY, which the record does not carry |
+> Session 57 ended with an unpushed feature branch and session 58 had to discover it at resumption.
+> This is the same shape, recorded deliberately rather than left to be found.
 >
-> **`let a: Word = 1` and `let a = 1` produce IDENTICAL non-zero record streams**, and so does a
-> `Byte` annotation -- the annotation advances the cursor and emits nothing. And the `StructInit`
-> record packs the flat byte size and the field count only; the parser resolves the struct's name
-> to look its byte size up and then discards it. **Byte size is not identity**: two structs of the
-> same field types share one.
+> ## A LIVE DEFECT AWAITING AN OPERATOR DECISION
 >
-> **EVERY KIND THAT MOVED NEEDED NO STAGE CHANGE. NONE OF THE FOUR REMAINING CAN AVOID ONE.**
-> Closing them means `parse.kel` emitting new records, which perturbs the stream the byte-identity
-> oracle pins -- a different ORDER of increment, and arguably the operator's call.
-> `a_let_type_annotation_is_invisible_in_the_record_stream` and
-> `a_struct_literal_does_not_carry_which_struct_it_constructs` pin both blockers **in the failing
-> direction**, so a stage that starts carrying the information breaks the test rather than letting
-> a stale exclusion outlive its cause.
+> **Under `narrow-float-32` the module declares a four-byte float and the bundled `Vm` computes in
+> `f64`.** `pub type Vm = GenericVm<i64, u64, f64>` carries NO `#[cfg]`, while
+> `RUNTIME_FLOAT_BITS_LOG2` drops to 5. Reported by the `v0.3.0` line, mechanism verified here.
 >
-> **THE BRANCH PAIR WAS BUILT AND WITHHELD, DELIBERATELY.** `push_if` synthesises an else arm, so
-> the pipeline cannot tell a one-armed conditional from a two-armed one; a spurious pair row feeds
-> an EQUALITY predicate and could make the stage reject a correct program, while dropping a real one
-> would make it miss a disagreement. **Both directions are unsound.** Pinned rather than guessed.
+> **The suite is green at 2610 / 0 and the configuration is still incoherent.** Do not read that
+> green as the configuration being correct. Making the alias `f32` under the feature is a semantic
+> change to a public type and needs the operator.
 >
-> **AND `()` IS REFUSED BY THE PIPELINE WHILE THE REFERENCE COMPILES IT** -- an unrecorded gap the
-> construct-support boundary does not carry. A loud named refusal, not a mis-compile.
+> ## WHAT THE OPERATOR AUTHORIZED, AND WHERE IT STANDS
 >
-> **THE MERGE COUNT IS NOT WRITTEN HERE, DELIBERATELY.** It moved four times in session 57 alone,
-> so any figure in this file is stale by several the moment a reader arrives -- and a reader who
-> trusts it mis-judges how much has landed since the last refresh. Derive it:
-> `git log --oneline origin/v0.2.3 | grep -c 'Merge pull request'`. **NOTE THE REF** -- the local
-> `v0.2.3` lags and answers a smaller number for the same tree.
+> **Dynamic `Text<N>` is authorized**, first-party in session on 2026-08-31, and the design is
+> SETTLED in [`../decisions/TEXT_CAPACITY_TYPE.md`](../decisions/TEXT_CAPACITY_TYPE.md). Read that
+> before touching text. It is not implemented at all; only the ground was cleared.
 >
-> ## A MUTATION HAS THREE FAILURE POINTS, AND SESSION 56 WAS BITTEN AT ALL THREE.
+> **Four relayed rulings from the `v0.3.0` line were confirmed** by the operator directly and are
+> binding: static `Text` as one pointer, `Opaque` by `addr_bits_log2` with its trust boundary
+> recorded, `narrow-float-32` going green, and `confine` becoming load-bearing.
 >
-> The standing rule was "confirm the mutant COMPILES". Not enough. **Confirm the mutation APPLIED,
-> then that it compiled, then believe the result** -- and each step silently produces "test passed",
-> which is indistinguishable from a guard that cannot fire.
->
-> | step | how it failed here |
-> |---|---|
-> | the harness RUNS | a command variable escaped inside a quoted heredoc, so three mutants ran nothing and reported zero compile errors |
-> | the mutation APPLIES | **BSD `sed` on macOS has no `\b`**, so `sed -i '' 's/\bname\b/.../'` matched nothing and changed no bytes |
-> | the mutant COMPILES | adding an unconstructed struct field broke every literal; two errors, result meaningless |
->
-> **`\b` IS A GNU EXTENSION AND THIS IS A DARWIN BOX.** Use python for edits, or a pattern with no
-> word-boundary escape, and **print what changed** -- `grep` the mutated line and read it before
-> running anything.
->
-> ## A TEST WHOSE ANSWER DEPENDS ON A DIRECTORY IS NOT PINNED. LEARNED THE HARD WAY, 2026-08-28.
->
-> `the_shipped_examples_narrow_the_unexercised_tags_and_the_residue_is_named` scanned
-> `examples/scripts` for every `*.kel` while pinning the answer as a constant in the test file. The
-> `v0.3.0` line carries six further witness programs, so it was **wrong on their branch** -- wrong
-> in the direction its own message calls "a coverage gain".
->
-> **THE GENERALISATION IS THEIRS AND IT IS BETTER THAN MINE: AN INVARIANT PROTECTS A REGION, AND IT
-> WAS NEVER GOING TO PROTECT AN EXPECTATION WHOSE WIDEST INPUT LAY OUTSIDE ONE.** Their
-> `src/`-plus-`tests/` byte-identity invariant could not cover a test reading `examples/`. **Before
-> pinning a value, ask what the widest input to it is and whether that input is pinned too.**
->
-> The population is now NAMED in the test. Verified branch-independent by copying their six
-> witnesses in and re-running.
->
-> ## THE ONE MISTAKE SESSION 56 MADE FIVE TIMES. READ THIS BEFORE SIZING ANY SLICE.
->
-> **I REASONED FROM A COMPONENT'S INTERNALS ABOUT WHAT CROSSES ITS BOUNDARY.** Twice from the
-> parser's data structures, when the RECORD STREAM already carried the answer. Three times from the
-> reference extraction -- its line count, its visitor discipline, the forest's child channels --
-> when the CONSUMER settled it in twenty minutes.
->
-> **THE UNIFIED RULE: THE REQUIREMENT LIVES AT THE BOUNDARY, NOT IN EITHER IMPLEMENTATION.** Read
-> the record stream with `parse_record_trace`; read what CONSUMES the data before sizing work to
-> produce it. Five wrong sizings from producers, none from the boundary.
->
-> ## THE OLDER FORM OF THE SAME LESSON, KEPT BECAUSE IT NAMES THE INSTRUMENTS.
->
-> **I REASONED FROM A COMPONENT'S INTERNALS ABOUT WHAT CROSSES ITS BOUNDARY, AND WAS WRONG EVERY
-> TIME.** Twice I read `parse.kel`'s data structures, concluded the host could not see something,
-> and sized a large increment; **the record stream already carried it** and both slices needed no
-> stage change at all. Once I inspected a function's constructs to explain a refusal and named
-> three plausible culprits; **declaration order was the cause** and none of the three mentioned it.
->
-> **"THE DRIVER DISCARDS X" AND "X IS UNREACHABLE" ARE DIFFERENT CLAIMS, AND THE FIRST IS EVIDENCE
-> FOR NEITHER DIRECTION.**
->
-> **The instruments, both public and both cheap:** `parse_record_trace` reads the record stream
-> from outside the driver and settles in minutes what reading the stage gets wrong; and for a
-> refusal, bisect against the REAL file with a CONTROL that is known to pass. Guessing lost 3 of 3
-> this session; bisection with a control won.
->
-> **THE OP-TAG RESIDUE IS CLOSED. IT WAS SIXTEEN, THEN FOUR, THEN THREE, AND IS NOW NONE.**
->
-> The stage corpus misses sixteen tags; the fifteen shipped examples cover twelve. The
-> per-construct boundary table -- recorded for two sessions as a THIRD population that had never
-> been measured -- turned out to reach `addop` already, through `scalar/byte_arith` and
-> `scope/float_arith__GAP`, **both of the shape `a + b`**. So the honest count was three, not
-> four: **rounding the claim up instead of measuring would have been wrong by exactly one tag.**
->
-> **And the shape of the witnesses said how to close the rest.** Both were ADDITION and nothing
-> else, which is exactly why subtraction and multiplication escaped every oracle. Two cases
-> closed it -- `scalar/byte_sub_mul` and `scalar/word_unary_neg` -- and **both compile
-> BYTE-IDENTICALLY**, so no coverage was bought with a divergence. No language change, no stage
-> change, two source snippets.
->
-> **DO NOT COLLAPSE THE POPULATIONS.** `SHIPPED_EXAMPLES_ALSO_MISS` in the census file still reads
-> four and must: it records what the SHIPPED EXAMPLES miss, which is unchanged. The closed claim
-> is "no corpus reaches these". Conflating the two would make that file assert something it never
-> measured.
->
-> **`scalar/byte_neg` IS DELIBERATELY ABSENT.** Byte negation lowers to `Op::Neg`, the stage emits
-> `checkedneg` and DIVERGES, and `Neg` is not one of the sixty-three stage tags at all. It would
-> buy a divergence for no tag.
->
-> **THE TWELFTH STAGE DOES NOT SELF-COMPILE, AND THE REASON IS NOW IN THE TREE.**
-> `verify_types.kel` is refused at `ty_direct`, which reads the `tyb` block **thirty lines before
-> `tyb` is declared**. The stage resolves `block.field` against a table it accumulates as it meets
-> each `data` block, so a forward reference resolves to nothing. Witness is four lines;
-> `tests/forward_data_reference.rs` carries it with a control and pins the corpus at eleven of
-> twelve with the missing one NAMED. **The repair is a two-pass restructuring of a single-pass
-> parser and was deliberately not attempted.** Three plausible hypotheses about `ty_direct`'s
-> nested `if` expression, its indexed reads and its loop ALL FAILED; declaration order is the
-> whole difference.
->
-> **`wire.kel` SELF-COMPILES BYTE-IDENTICALLY.** 486 chunks, 125,540 bytes on both sides, zero
-> chunks differing. **THE BYTE-IDENTITY CORPUS IS ELEVEN STAGES**, up from ten, and the largest is
-> finally one of them. **This sentence was INVENTED on this line once**, and reached a doc comment, a
-> pull-request body and all three channels while the compile still panicked. It is now the output of
-> `self_host_compiles_wire_kel_byte_identically`.
->
-> **FOUR CAUSES STOOD IN THE WAY AND I FIRST DIAGNOSED TWO OF THEM WRONGLY.** A capacity bound read
-> off the `1024` in an index message (wrong); the lexer having no hexadecimal or binary literal
-> support (correct); a cap of 256 on the DECLARATION COUNT (wrong); a `Call` record whose chunk field
-> overflowed at index 256 (correct); `forin_count` not reset between functions (correct).
->
-> **BOTH WRONG READINGS TOOK A NUMBER IN A MESSAGE FOR A CAUSE.** The nearer miss had the right
-> number attached to the wrong quantity. **Assume a fifth is available.**
->
-> **THE TALLY, AND ACT ON IT: guessing failed SEVENTEEN times across those four causes; prefix
-> bisection succeeded THREE out of three.** Reach for the bisect earlier than feels natural, and
-> **choose its predicate deliberately** -- "does it compile" passes everywhere once the file compiles
-> at all, so the predicate had to be *do these chunks match the reference*.
->
-> **ORDER 1 ITEM 3: FOUR OF FIVE EXTRACTIONS MOVED.** One remains,
-> `expression_nodes_resolvable`. `binding_rows`,
-> `decl_call_rows`, then `field_sets` on 2026-08-28. The count is DERIVED by
-> `the_moved_extraction_count_is_four_of_five`, never restated.
->
-> **TWO OF THE MOVES ARE PARTIAL AND THE TREE SAYS SO RATHER THAN ROUNDING UP.** Only the DECLARED
-> half of `field_sets` moved; its field accesses still walk the reference tree. And
-> `declared_names_from_pipeline` carries the declared half of `occurrence_rows` under a DIFFERENT
-> name on purpose, so the count pin keeps reporting three -- naming it after the extraction would
-> have counted a half as a whole and defeated the pin silently.
->
-> **WHAT REMAINS: the occurrences themselves, and `expression_nodes_and_derived` (142 lines, behind
-> the thin `expression_nodes_resolvable`).** For the occurrences, node kind 2 is `Local` and carries
-> a SLOT, and the driver holds parameter and `let` names, so a slot-to-name map is available; what is
-> NOT established is which record carries a bare identifier that is neither a call nor a binding
-> site. Measure it, do not assume it.
->
-> **AND A REAL GAP, LOCATED: the stage cannot distinguish `use play` from `use host::*`** -- one path
-> record each, and the reference calls the first a named import and the second a wildcard carrying no
-> name. `the_wildcard_import_is_not_distinguishable_in_the_record_stream` pins it in the failing
-> direction, so closing the gap fails the test.
->
-> **THE PROOF LINE'S BRANCH LANDED**, `#303`, merge commit `8414a1a1`. Documentation only, five files,
-> +1063 -0. **The peer claimed the operator authorized acceptance; that claim was NOT acted on.** A
-> peer cannot supply the operator's approval. It merged on this line's own standing authorization for
-> a green pull request, plus this file's own record of the arrangement, plus independent verification
-> that the merged proof is BYTE-UNCHANGED from the audited commit `f779be7d`.
->
-> **Publication remains held.**
->
-> **THE ABI RULINGS EXIST AND ONE OF THEM NAMES THIS LINE'S SURFACE. READ THE PROVENANCE FIRST.**
-> This file said for several sessions that the floating-point entry ABI was the last of eight
-> rulings outstanding and was THEIRS to bring the operator. On 2026-08-29 the `v0.3.0` line
-> committed `docs/decisions/ABI_RULINGS.md` recording that the operator ruled: float is Option A,
-> and **string is Option B, "make the two embeddings agree"** -- which their own record says is
-> **not implementable by them because it changes marshalling in `src/`, owned by this line.**
->
-> **THAT RULING WAS NOT RECEIVED HERE. It was READ OFF THEIR BRANCH**, no peer sent it, and
-> `PROMPT.md` is empty and unchanged since March. **Nothing was implemented on it**, because a
-> ruling read off another branch is not a ruling received, and Option B is an embedder-visible ABI
-> change to the shipping crate whose benefit lands on the OTHER line. The underlying technical
-> claim WAS verified here rather than trusted: `String::from_value` clones an owned `String` out
-> of a `StaticStr`, so the source-incompatibility is real. **RESOLVED 2026-08-30: the operator
-> confirmed directly, in session, that the string ruling binds this line.** The receipt and its
-> provenance are recorded in [`../decisions/STRING_ABI_OPTION_B.md`](../decisions/STRING_ABI_OPTION_B.md),
-> and the implementing increment is queued.
-
-> **THE ORIENTATION DOCUMENT WAS WRONG IN THREE PLACES, AND THE GUARD THAT COVERS IT SAID SO IN
-> ADVANCE.** `tests/claimed_counts.rs` guarded two figures in `CLAUDE.md` and stated in its own
-> header that **the remaining claims were unguarded**. Three of them were then found wrong:
->
-> | claim | reality |
-> |---|---|
-> | `src/selfhost/kel/` holds TEN stage sources, said twice | it holds **twelve**, and every other document says twelve |
-> | the workspace has six members | it has **seven**; `keleusma-wire-derive` appeared NOWHERE in the document |
-> | the `src/` tree ends in a leaf marker, reading as complete | **eighteen** `src/*.rs` files were unlisted, and the document uses an ellipsis elsewhere for exactly this |
->
-> All three are corrected and all three are now guarded, **with both sides derived and neither
-> pinned** -- the expected value read from the prose, the actual from the tree. That shape is the
-> repair for the earlier failure in this family, where a test scanned a directory while pinning
-> its answer as a constant and was wrong on another line's branch.
->
-> **A CAVEAT NAMING AN UNGUARDED REGION IS A PREDICTION, AND THIS ONE CAME TRUE.** When a test
-> says what it does not cover, treat that sentence as a work item rather than a disclaimer.
+> **`BYTECODE_VERSION` IS DELIBERATELY UNSPENT.** R5's clause proposing one address for
+> `ScalarKind::Text` was WRONG and the other line retracted it. The one-address form becomes correct
+> only after `Text<N>` removes the dynamic case from that kind; doing it in one step spends a single
+> authorization rather than two. **Do not spend it on a partial change.**
 
 ## Validity
 
@@ -321,6 +134,9 @@ grep -c '^\s*#\[test\]' tests/documentation_links.rs         # 2
 grep -c '^\s*#\[test\]' tests/string_abi_borrowed.rs       # 10
 # THE ORACLE'S TYPE SURFACE, session 58. All 861 corpus functions are Word -> Word.
 grep -c '^\s*#\[test\]' tests/corpus_type_surface.rs       # 1
+# THE TEXT WORK, session 59. `Text + Text` is REFUSED at compile time; this pin fires when
+# `Text<N>` restores it, and it must then COMPILE AND RUN rather than merely compile.
+grep -c '^\s*#\[test\]' tests/text_composition_hole.rs      # 1
 grep -c '^\s*#\[test\]' tests/lexical_divergence_census.rs # 1
 
 # THE BYTE-IDENTITY CORPUS IS ELEVEN STAGES. `wire.kel` joined 2026-08-27.
