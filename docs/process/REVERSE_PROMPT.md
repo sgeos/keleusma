@@ -6,60 +6,70 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## Eight increments landed. `native_codegen` is 433 passed, 0 failed, 84 binaries.
+## Seven increments and absorption 43. `native_codegen` is 454 passed, 0 failed, 87 binaries.
 
-**The float surface is closed through `f32`** — shared slots, composites flat and nested, tuple
-members, enum payloads, the entry ABI. **The region planner's soundness obligation is discharged by
-analysis**, narrowly. **A C host links a native object and runs a real protection policy**, checked
-byte for byte against the reference.
+That figure is over the **`native_codegen` package only**, cargo's exit status and the summed
+per-binary counts agreeing, measured with no edits in flight.
 
-## Four rulings of yours are now recorded, and one of them I had not acted on
+## The standing prediction is discharged, and it held
 
-`f16` as IEEE `binary16` and `f8` as OFP8 `E5M2` are in `docs/decisions/FLOAT_LADDER.md`, received
-directly rather than relayed. **I corrected a figure I gave you there**: two mantissa bits give up to
-a **25 per cent** relative step, not the 12.5 I said, which was the best case quoted as the worst.
+**69 modules still compile** through the `v0.2.3` line's `Text + Text` refusal. It had been open since
+before absorption 42 because the refusal sat on a feature branch. The scan behind it still could not
+see a variable-to-variable concatenation, so the caveat retires with the prediction rather than
+outliving it.
 
-**Building the C-host example found that your `Fixed` ruling had not been acted on in my own
-package.** The backend still refused `Fixed` shared slots for "the fraction-bit scale is
-unspecified" — the exact question you settled. **Trying to use the language for a real job found what
-reading had not.** Lifted, with a differential and a mutation.
+## Three things worth your attention
 
-## What I refused to do, and why it matters more than what I did
+**The host and bare-metal toolchain requirements are DISJOINT.** The host needs two symbols, the
+bare-metal target eleven others, and the intersection is empty. **A host measurement is not even a
+conservative guide to an embedded link.** I would have assumed otherwise, and so would the other line.
 
-**The `f32` configuration is one test from green and I left it red.** The runtime declares a
-four-byte float and computes in `f64`, because `pub type Vm` is pinned with no feature gate. I could
-have gone green two ways: drive the oracle through the parameterised machine, or pick values where
-the widths agree. **Both hide the defect**, and the second is the cheating you ruled out. The cause
-is named in the test rather than re-pointed.
+**A single `f64` addition pulls six runtime symbols on `thumbv8m`.** So `f32` and `f16` buy native
+instructions on the target the value proposition is written for — an argument for the float ladder
+about what is *linkable*, not what is smaller, and one absent from its original reasoning.
 
-**And I did not overlap confined sites to close the arena gap.** That is the use of a confinement
-verdict that takes on a real exposure — a wrong verdict becomes a miscompile rather than a wasted
-byte. Refusing on it costs nothing. **The two uses must not be bundled**, and the ordering in the code
-is what keeps them apart.
+**Half the bound transfers and half does not.** The memory figures describe the emitted object and are
+measured against it. The cost-unit figure is a bytecode count under a virtual-machine cost model, and
+nothing relates it to native execution. They were printed under one heading reading "PROVEN BOUNDS";
+they are not any more. **The figure is kept, because it is true about the bytecode** — only its
+subject was unstated.
+
+## What I refused, and one decision I reversed
+
+**No native worst-case-time model was started.** What one would require is named and explicitly not
+begun: it is a workstream, not an increment.
+
+**I recorded a decision and reversed it the same day, and both are in the record.** I concluded
+"change nothing" about a suspicious default arm. The `v0.2.3` line pointed out that their equivalent
+sites refuse at the same junction, so the convention I was contradicting locally is one this codebase
+already follows. **The superseded reasoning is kept beside the reversal**, because a decision that
+quietly becomes its opposite teaches nothing.
+
+## The methodological finding, which I think outranks the code
+
+`docs/decisions/SCOPE_DELETION.md`. Both lines produced the same error six times in one day: **a true
+measurement quoted with its scope deleted.** Not wrong numbers, not careless checks — correct results
+quoted as ranging over more than they did. The scoped and unscoped sentences differ by a clause, so
+nothing looks missing.
+
+**The worst instance is mine, and it had three falsifiers written to catch it.** All three passed,
+because they tested containment in one direction and the claim was about containment. **A falsifier
+that shares its claim's framing cannot falsify the framing.**
 
 ## Yours
 
-1. **The `Vm` alias**, escalated by the `v0.2.3` line. One line, no `#[cfg]`, and it blocks `f16` as
-   well as `f32`, since the oracle cannot validate a rung whose declared width the runtime ignores.
-2. **`f16`**, ruled and buildable once (1) lands.
-3. **Publication**, held.
+1. **Publication**, still held.
+2. **`f16`**, ruled and now buildable once the arithmetic width is absorbed.
 
 ## What is blocked on the other line
 
-`Text<N>`, and `Opaque` sized by `addr_bits_log2` — which they report as **committed but unpushed and
-unverified**, so nothing here builds on it. My share of both is small IF `Text<N>` is a flat composite
-carrying no reference field, which is the one requirement I actually depend on.
+The arithmetic width is **implemented and pending their gate**. When I absorb it, the one red `f32`
+test here should go green — and they asked me to check that rung specifically rather than read a green
+as floats-in-general, because nothing implements binary16 or E5M2 yet.
 
-## Five process failures, because they recur and the lessons are cheap
+`Text<N>` and `Opaque` remain theirs.
 
-The pipeline-status trap fired **three times**, every one in a command written to verify work. A
-`git add -A` pushed an unverified test file and turned a baseline red. A duplicate suite ran at load
-21 against the same log files. A mutation perturbed the subject rather than the lowering and proved
-nothing. And `git push` died with SIGPIPE **after the gate passed**, three times, caught only by
-checking the remote rather than believing "all checks passed".
-
-**Every one was in the machinery meant to prevent errors rather than in the code.**
-
+---
 ---
 # Also unread by the human: the `v0.2.3` line's message
 
