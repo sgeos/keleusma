@@ -112,10 +112,19 @@ fn the_known_escaping_site_is_named_by_the_analysis() {
         p.file_name()
             .is_some_and(|n| n == "13_telemetry_stream.kel")
     });
-    let Some(path) = path else {
-        println!("  13_telemetry_stream.kel is not in this corpus; nothing to check");
-        return;
-    };
+    // **NO EARLY RETURN HERE, DELIBERATELY.** The first draft returned quietly
+    // when the file was absent, which put this test into the population of
+    // tests that can pass without asserting -- pinned at ten, and it failed
+    // that pin. The other members of that population skip on a real capability
+    // question, a C toolchain or a construct the reference will not build.
+    // "Is a shipped corpus file present" is not a capability question, and its
+    // absence would itself be a finding rather than a reason to say nothing.
+    let path = path.expect(
+        "13_telemetry_stream.kel is not in the corpus. It is the module written to \
+         CARRY the escaping shape, and the region planner's soundness argument \
+         refers to it by name, so its disappearance is a finding rather than a \
+         reason for this test to pass quietly",
+    );
     let src = std::fs::read_to_string(&path).expect("read");
     let m = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
     let per_chunk = module_confinement(&m);
