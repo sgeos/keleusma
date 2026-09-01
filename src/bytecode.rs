@@ -3648,6 +3648,17 @@ pub struct Module {
 /// Unused bits are reserved.
 pub const FLAG_EPHEMERAL: u8 = 0x01;
 
+/// Every header flag bit this build defines, across both the framing header
+/// and the auxiliary body's header record, which carry the same byte.
+///
+/// **Measured, not inferred.** A first draft of this mask held only
+/// [`FLAG_EPHEMERAL`] and would have rejected every signed module, because
+/// signing sets [`crate::wire_format::FLAG_REQUIRES_SIGNATURE`] into this same
+/// byte. Any new flag must be added here or loading its modules fails.
+pub const KNOWN_HEADER_FLAGS: u8 = FLAG_EPHEMERAL
+    | crate::wire_format::FLAG_REQUIRES_SIGNATURE
+    | crate::wire_format::FLAG_ENCRYPTED;
+
 /// Magic prefix identifying serialized Keleusma bytecode (`KELE`).
 pub const BYTECODE_MAGIC: [u8; 4] = *b"KELE";
 

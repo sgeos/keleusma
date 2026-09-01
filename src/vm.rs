@@ -1005,6 +1005,15 @@ impl AuxResolved {
             op_record_counts.push(view.op_record_count(i).unwrap_or(0));
             local_counts.push(view.local_count(i).unwrap_or(0));
         }
+        // The format fingerprint and the header flag bits are checked here,
+        // on the single path every load and hot swap takes, because the
+        // version check cannot help: `BYTECODE_VERSION` is held at 2 across
+        // releases by policy, so it admits every release that declares 2.
+        //
+        // Absent header: nothing to check. A header that is present but
+        // carries a stale fingerprint is refused rather than read under the
+        // wrong meaning.
+        view.check_format()?;
         Ok(Self {
             word_bits_log2: view.word_bits_log2(),
             float_bits_log2: view.float_bits_log2(),
@@ -11413,11 +11422,11 @@ mod tests {
             0, 0, 0, 0, 0, 0, 31, 0, 0, 0, 106, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 0, 112,
             0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 17, 0, 0, 0, 113, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0,
-            0, 0, 0, 0, 0, 2, 0, 3, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 0, 0,
-            0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 1, 109, 97, 105, 110, 0, 0, 0, 0, 0, 0, 0, 0, 4,
-            0, 0, 0, 236, 14, 11, 135
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 52, 4, 192, 222, 3, 0, 0, 0, 0, 0, 0, 0, 1,
+            0, 0, 0, 0, 0, 0, 0, 2, 0, 3, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255,
+            0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 1, 109, 97, 105, 110, 0, 0, 0, 0, 0, 0, 0,
+            0, 4, 0, 0, 0, 219, 35, 15, 119
         ];
         let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");

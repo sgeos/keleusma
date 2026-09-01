@@ -97,6 +97,109 @@ pub enum ScalarKind {
     Opaque,
 }
 
+/// Word width at which the format fingerprint evaluates the layout
+/// table.
+///
+/// The three fingerprint reference widths are **pairwise distinct on
+/// purpose**. A scalar kind that switches from one runtime width to
+/// another must change the fingerprint, and on a 64-bit host the word
+/// and address widths are equal, so evaluating the table at the host's
+/// own widths would miss exactly that class of change. `Opaque` moving
+/// from the word width to the address width is a queued change of
+/// precisely that shape.
+///
+/// These are not a supported runtime configuration and do not need to
+/// be. The fingerprint requires determinism, not runnability.
+pub const FINGERPRINT_WORD_BYTES: usize = 8;
+
+/// Float width for the fingerprint. See [`FINGERPRINT_WORD_BYTES`].
+pub const FINGERPRINT_FLOAT_BYTES: usize = 2;
+
+/// A best-effort fingerprint of the canonical flat-layout format.
+///
+/// # What this is for
+///
+/// `BYTECODE_VERSION` is held at 2 across releases by operator policy,
+/// so the version check cannot distinguish two releases that both
+/// declare 2 while meaning different things. This value is carried in
+/// the module header's otherwise-unused reserved word so that such a
+/// mismatch is refused at load rather than read under the wrong
+/// meaning.
+///
+/// # What this is NOT
+///
+/// **This is not cross-release compatibility and must not be described
+/// as such.** It catches a release that *sets* a bit or field an older
+/// reader did not know about. It does **not** catch a release that
+/// *reinterprets* a field both readers already read, such as changing
+/// which eight-bit float format a declared width denotes. Only a
+/// version bump catches that.
+///
+/// The operator authorized this as a temporary, explicitly unguaranteed
+/// mechanism, on the expectation that a version bump will likely arrive
+/// before the reserved word is properly assigned to anything.
+///
+/// # Why it is derived rather than written down
+///
+/// A constant bumped by hand each release fails the same way a frozen
+/// version fails, by being forgotten. Deriving it from the size table
+/// means it moves on its own when the table moves.
+///
+/// The `Float` contribution is included whether or not the `floats`
+/// feature is compiled in, for the same reason
+/// [`ScalarKind::to_tag`] fixes `Float` at tag 5 regardless: a
+/// no-floats runtime and a default runtime describe the same wire
+/// format, and making them disagree here would stop them sharing
+/// bytecode that uses no floats at all.
+pub fn format_fingerprint() -> u32 {
+    fingerprint_at(FINGERPRINT_WORD_BYTES, FINGERPRINT_FLOAT_BYTES)
+}
+
+/// The fingerprint computation, parameterised by the reference widths so a
+/// test can demonstrate that the value actually tracks each width rather than
+/// merely asserting today's number.
+fn fingerprint_at(word_bytes: usize, float_bytes: usize) -> u32 {
+    let mut buf: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+    buf.extend_from_slice(b"keleusma.flat-layout\n");
+
+    let scalars = [
+        ScalarKind::Unit,
+        ScalarKind::Bool,
+        ScalarKind::Byte,
+        ScalarKind::Int,
+        ScalarKind::Fixed,
+        ScalarKind::Text,
+        ScalarKind::Opaque,
+    ];
+    for k in scalars {
+        buf.push(k.to_tag());
+        let size = k.size_in_bytes(word_bytes, float_bytes) as u32;
+        buf.extend_from_slice(&size.to_le_bytes());
+    }
+
+    // `Float` is contributed unconditionally. When the feature is on the
+    // size is derived like every other kind; when it is off the same
+    // expression is mirrored, because the variant does not exist to ask.
+    // The mirror is a duplication hazard and is deliberately one line.
+    buf.push(5);
+    #[cfg(feature = "floats")]
+    let float_size = ScalarKind::Float.size_in_bytes(word_bytes, float_bytes) as u32;
+    #[cfg(not(feature = "floats"))]
+    let float_size = float_bytes as u32;
+    buf.extend_from_slice(&float_size.to_le_bytes());
+
+    for c in [
+        CompositeKind::Tuple,
+        CompositeKind::Array,
+        CompositeKind::Struct,
+        CompositeKind::Enum,
+    ] {
+        buf.push(0x80 | c.to_tag());
+    }
+
+    crate::bytecode::crc32(&buf)
+}
+
 impl ScalarKind {
     /// Byte size of this scalar under the supplied word and
     /// float widths.
@@ -963,5 +1066,65 @@ mod tests {
             Some(ScalarKind::Text)
         );
         assert_eq!(LayoutDescriptor::Tuple(vec![]).flat_scalar_kind(), None);
+    }
+}
+
+#[cfg(test)]
+mod fingerprint_tests {
+    use super::*;
+
+    /// The value itself, pinned as a RATCHET rather than as a fact worth
+    /// knowing. Its only job is to make a layout change move a number in a
+    /// diff, so that changing the format is a decision somebody takes rather
+    /// than something that happens.
+    ///
+    /// **If this test fails, the flat layout changed.** Update the number
+    /// deliberately, and check whether the Keleusma emitter's seed and the
+    /// golden wire bytes need the same treatment.
+    #[test]
+    fn format_fingerprint_value_is_pinned() {
+        assert_eq!(format_fingerprint(), 0xDEC0_0434);
+    }
+
+    /// The reference widths must stay pairwise distinct.
+    ///
+    /// This is the guard against a plausible tidy-up. Setting them all to the
+    /// host's own widths looks harmless and silently destroys the mechanism:
+    /// a kind that moves from the word width to the address width would then
+    /// produce an identical fingerprint, because those widths are equal on a
+    /// 64-bit host. That is exactly the shape of the queued `Opaque` change.
+    #[test]
+    fn fingerprint_reference_widths_are_pairwise_distinct() {
+        assert_ne!(
+            FINGERPRINT_WORD_BYTES, FINGERPRINT_FLOAT_BYTES,
+            "reference widths collapsed; a kind swapping between them would \
+             no longer move the fingerprint"
+        );
+    }
+
+    /// Demonstrates the sensitivity rather than asserting it. Each reference
+    /// width must independently affect the value, or a change to a kind that
+    /// uses only that width would pass unnoticed.
+    #[test]
+    fn fingerprint_tracks_each_reference_width_independently() {
+        let base = fingerprint_at(FINGERPRINT_WORD_BYTES, FINGERPRINT_FLOAT_BYTES);
+        assert_ne!(
+            base,
+            fingerprint_at(FINGERPRINT_WORD_BYTES + 1, FINGERPRINT_FLOAT_BYTES),
+            "word width does not reach the fingerprint"
+        );
+        assert_ne!(
+            base,
+            fingerprint_at(FINGERPRINT_WORD_BYTES, FINGERPRINT_FLOAT_BYTES + 1),
+            "float width does not reach the fingerprint"
+        );
+    }
+
+    /// A zero is what a module written before the fingerprint existed carries,
+    /// and what a hand-built test fixture carries if it forgets. It must not
+    /// be mistaken for a valid fingerprint.
+    #[test]
+    fn zero_is_not_a_live_fingerprint() {
+        assert_ne!(format_fingerprint(), 0);
     }
 }
