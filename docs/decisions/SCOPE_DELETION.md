@@ -140,6 +140,31 @@ Recorded because "we have no instrument" was said on this line and was wrong.
 **The expensive half is the checkable half**, and that is the reason to use it: a name asserting
 coverage is precisely the name a reader trusts when deciding **not** to write another test.
 
+## ⚠ A SUBCLASS WHERE "WRITE THE POPULATION INTO THE SENTENCE" DOES NOT WORK
+
+**The `v0.2.3` line's observation, and it corrects a wrong generalisation of the rule above.**
+
+The prediction for absorption 44 was recorded as a **named test** — that
+`the_parameter_is_operated_on_rather_than_only_passed_through` goes from failed to passed — rather
+than as a count. The reason: **"457 passed" would have read identically before and after** if some
+other test had gone red in exchange.
+
+**That is scope deletion by CONSTRUCTION rather than by carelessness.** Every other instance in this
+record is a true statement with a clause dropped, and a reader could in principle have asked "true of
+what?" and recovered it. **A total has no clause to drop.** The population is destroyed by the
+aggregation itself.
+
+> **"457 passed under `narrow-float-32` on 88 binaries at commit X" is fully scoped and still cannot
+> express "this specific test passes."**
+
+**So the defence is different.** Everywhere else the fix is to write the population into the sentence.
+Here the fix is **not to use the instrument**: predict a named member, because no amount of scoping
+makes a sum say something about one of its terms.
+
+**This matters because the earlier lesson generalises wrongly if taken alone.** "Attach the
+population" would have produced a carefully scoped 457 that still could not have told anyone what
+they needed to know.
+
 ## No rate is given here, and the reason is stronger than caution
 
 **Six instances in one day is a count over an unbounded denominator.** Neither line knows how many
