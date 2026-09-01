@@ -1389,6 +1389,36 @@ fn mark_nounwind<'ctx>(ctx: &'ctx Context, func: FunctionValue<'ctx>) {
     func.add_attribute(AttributeLoc::Function, ctx.create_enum_attribute(kind, 0));
 }
 
+/// The natives a lowered module requires of its host: symbol, arity, and whether
+/// the return is a float.
+///
+/// **Read off the LOWERED MODULE rather than recomputed.** A module records
+/// native NAMES and return shapes; the argument count comes from the call sites
+/// and is resolved during lowering, so it exists nowhere else. Deriving the list
+/// from the module about to be written to the object means a generated header
+/// cannot disagree with the object it describes — there is nothing to disagree
+/// with.
+///
+/// Only declarations are returned. A function this backend defines is not part
+/// of the host's contract.
+pub fn host_native_declarations<'ctx>(lm: &LlvmModule<'ctx>) -> Vec<(String, u32, bool)> {
+    let mut out = Vec::new();
+    let mut f = lm.get_first_function();
+    while let Some(func) = f {
+        let name = func.get_name().to_string_lossy().into_owned();
+        if func.count_basic_blocks() == 0 && name.starts_with(NATIVE_SYMBOL_PREFIX) {
+            let returns_float = func
+                .get_type()
+                .get_return_type()
+                .is_some_and(|t| t.is_float_type());
+            out.push((name, func.count_params(), returns_float));
+        }
+        f = func.get_next_function();
+    }
+    out.sort();
+    out
+}
+
 pub fn lower_chunk<'ctx>(
     ctx: &'ctx Context,
     module: &LlvmModule<'ctx>,
@@ -2171,8 +2201,12 @@ fn mask_if_byte<'ctx>(
     }
 }
 
+/// The one spelling of the host-contract prefix. Two copies of this string
+/// is the drift this package spent a day removing elsewhere.
+pub const NATIVE_SYMBOL_PREFIX: &str = "kel_native_";
+
 fn native_symbol(name: &str) -> String {
-    let mut s = String::from("kel_native_");
+    let mut s = String::from(NATIVE_SYMBOL_PREFIX);
     for c in name.chars() {
         s.push(if c.is_ascii_alphanumeric() || c == '_' {
             c

@@ -129,6 +129,69 @@ fn main() {
     h.push_str("(int64_t a, int64_t b, unsigned char *shared,\n");
     h.push_str("                          unsigned char *private_region,\n");
     h.push_str("                          unsigned char *composite_region);\n");
+    // ── The host's half of the contract ───────────────────────────────────
+    //
+    // **DERIVED FROM THE LOWERED MODULE, NOT FROM A PARALLEL COMPUTATION.**
+    //
+    // What this buys was MEASURED rather than assumed, and the obvious claim
+    // is false: a declaration does NOT turn a missing definition into a
+    // compile error. It turns a MISMATCHED definition into one. Without the
+    // header, a host defining a native with the wrong arity compiles clean
+    // and passes garbage across the ABI; with it, `conflicting types`. That
+    // mirrors the backend's own refusal when two call sites disagree on a
+    // native's arity, so both sides of the boundary now check the same thing.
+    // The brief for this proposed exposing the backend's name-mangling function
+    // so the header could call it. Implementing it found a better source: the
+    // module about to be written to the object already carries each native's
+    // declaration — mangled name, arity and return type — so reading them here
+    // means the header is derived from the artefact rather than computed
+    // alongside it. It cannot drift, because there is nothing to drift from.
+    //
+    // **Arity is not available any other way.** A module records native NAMES
+    // and return shapes; the argument count comes from the call sites and is
+    // resolved during lowering. Emitting a prototype from the name alone would
+    // have been the invented signature the brief forbids — and C would have
+    // accepted the mismatched call and passed the wrong thing.
+    //
+    // **This covers the HOST half only.** A linked object also needs
+    // compiler-runtime and C-library symbols — `__divti3` and `bzero` on this
+    // host, eleven others on `thumbv8m.main-none-eabihf` — which an embedder
+    // does not declare. Those are recorded in
+    // `docs/decisions/LINKAGE_SYMBOL_CENSUS.md` and
+    // `docs/decisions/NARROW_TARGET_LINKAGE.md`.
+    let natives = keleusma_native::host_native_declarations(&lm);
+
+    if natives.is_empty() {
+        h.push_str("\n/* This policy requires no host natives. */\n");
+    } else {
+        h.push_str(concat!(
+            "\n/* THE HOST MUST DEFINE THESE. Each is a native this policy calls.\n",
+            "\n",
+            "   MEASURED, because the obvious claim is false. Declaring these does\n",
+            "   NOT make a MISSING definition a compile error -- that stays a link\n",
+            "   error. What it catches is a MISMATCHED one: a definition with the\n",
+            "   wrong arity or return type is a `conflicting types` error here,\n",
+            "   where without the declaration it compiles clean and passes garbage\n",
+            "   across the ABI. Verified both ways with a C compiler.\n",
+            "\n",
+            "   Arity and return type are read from the emitted object's own\n",
+            "   declarations, so they cannot disagree with it.\n",
+            "\n",
+            "   This is the HOST half of the contract only. A linked binary also\n",
+            "   needs compiler-runtime and C-library symbols, which you do not\n",
+            "   declare; see docs/decisions/LINKAGE_SYMBOL_CENSUS.md. */\n",
+        ));
+        for (name, argc, returns_float) in &natives {
+            let ret = if *returns_float { "double" } else { "int64_t" };
+            let args = if *argc == 0 {
+                String::from("void")
+            } else {
+                (0..*argc).map(|_| "int64_t").collect::<Vec<_>>().join(", ")
+            };
+            h.push_str(&format!("{ret} {name}({args});\n"));
+        }
+    }
+
     h.push_str("\n#endif\n");
     std::fs::write(format!("{out_dir}/policy.h"), h).expect("write header");
 
