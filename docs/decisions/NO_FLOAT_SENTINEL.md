@@ -44,7 +44,34 @@ falsifier needed an instrument rather than a reading of the call sites.** The re
 unreachable. **The instrument disagreed with the reading, which is the whole reason the brief demanded
 one.**
 
-## The decision: change nothing in the whitelist, and record why
+## ⚠ THE DECISION BELOW WAS REVERSED THE SAME DAY, AND THE REVERSAL IS RECORDED RATHER THAN SUBSTITUTED
+
+**What follows was this line's conclusion, and it was changed by an argument from the `v0.2.3` line.**
+It is kept because a decision that quietly becomes its opposite teaches nothing, and because the
+argument that moved it is worth more than either position.
+
+**Their argument, which is reciprocal rather than abstract:** both storage sites in their
+`src/bytecode.rs` use `_ => return Err(UnsupportedWidth)` **at the same junction.** So the convention
+being contradicted locally is one this codebase already follows elsewhere — a far stronger objection
+than the doc comment it was being weighed against.
+
+**And their design showed the way past the dilemma below.** They could not return a `Result` from
+`narrow_float` without threading errors through ten hot-path sites, so **they moved the refusal to
+load and left the hot path total.** The analogue here turned out smaller than assumed, and the fix is
+recorded in [`REACHABILITY_AND_RESUME_BRIEF.md`](./REACHABILITY_AND_RESUME_BRIEF.md): hoist the
+entry-ABI refusal above the declarations, and build the module-level float type only inside the
+branches that hold a float shape.
+
+**Measured after the change**: replacing the default arm with a panic and running the whole package
+gives **454 passed, 0 failed over 87 binaries with zero panics**. The arm is unreachable **by
+execution**, not by a reading of six call sites — and the reading had already been wrong once the same
+day, which is why the mutation was run at all.
+
+**The panic was reverted.** A lowering that cannot proceed is a fault in this codebase and not an
+abort of the host, on the same ground that `FlatComposite::nested_view` was hardened from a
+`debug_assert` into a real error.
+
+## THE SUPERSEDED DECISION, kept for its reasoning: change nothing in the whitelist
 
 `float_type`'s default arm widens any unrecognised width to `f64`, which looks like the
 silently-wrong-number hazard the same file warns against two functions above it.

@@ -166,6 +166,21 @@ impl Width {
 fn float_type<'ctx>(ctx: &'ctx Context, float_bytes: u32) -> inkwell::types::FloatType<'ctx> {
     match float_bytes {
         4 => ctx.f32_type(),
+        8 => ctx.f64_type(),
+        // **UNREACHABLE, AND THAT IS MEASURED RATHER THAN ARGUED.** Replacing
+        // this arm with a panic and running the whole package gave 454 passed,
+        // 0 failed over 87 binaries with zero panics, so nothing in the corpus
+        // reaches it. Two changes made that true: the entry-ABI refusal is
+        // hoisted above the declarations, and the module-level type is built
+        // only inside the branches holding a float shape.
+        //
+        // It stays an `f64` rather than a panic because a lowering that cannot
+        // proceed is a fault in this codebase, not an abort of the host — the
+        // same reason `FlatComposite::nested_view` was hardened from a
+        // `debug_assert` into a real error. Eight is spelled out above so the
+        // supported set is visible in the code rather than hidden in a
+        // catch-all, which is how five refusal messages came to name the wrong
+        // set after `f32` landed.
         _ => ctx.f64_type(),
     }
 }
@@ -1582,10 +1597,46 @@ fn lower_module_with<'ctx>(
     // further down, which was fine while the entry ABI's type was hard-coded
     // `f64` and stopped being fine the moment that type became width-derived.
     let float_bytes = 1u32 << program.float_bits_log2 >> 3;
-    // The entry ABI's floating-point type, matching the runtime's float width
-    // per the operator's ruling. A width this backend does not lower is refused
-    // below rather than widened.
-    let f64t = float_type(ctx, float_bytes);
+
+    // **THE SIGNATURE ROUTE IS NOW OPEN — for the one float width that is built.**
+    // A float parameter or return takes a real floating-point position in the
+    // declared function type, converted at the four boundary points (declaration,
+    // prologue, return, call). What stays refused is a float of a width this
+    // lowering does not emit: `Float` is `f32` under `narrow-float-32`, and
+    // declaring a `double` there would be a silently wrong number rather than a
+    // fault. Approximating a width is exactly the failure this guard exists for.
+    if !float_width_lowered(float_bytes)
+        && let Some((idx, _)) = program
+            .signatures
+            .iter()
+            .enumerate()
+            .find(|(_, sg)| shape_is_float(&sg.ret) || sg.params.iter().any(shape_is_float))
+    {
+        return Err(LowerError::UnsupportedShape(format!(
+            "chunk {idx} has a Float in its signature and this module's Float is \
+                 {float_bytes} bytes wide; only 4- and 8-byte Floats have an entry ABI \
+                 here. \
+                 Refused rather than declared as a `double`, because a float of the \
+                 wrong width is a wrong number and not a fault"
+        )));
+    }
+
+    // **THE FLOAT TYPE IS NOT BUILT HERE, AND THAT IS THE POINT.** It used to be,
+    // eagerly, which meant `float_type` was called with the NO-FLOATS SENTINEL
+    // width of zero for every float-free module and quietly returned `f64`. The
+    // value was never consumed on that path, so nothing was wrong — but a
+    // recorded prediction that the width never reaches the type function was
+    // refuted by measurement, and the default arm contradicted a comment two
+    // functions above it.
+    //
+    // The fix is not to thread an error through the call sites. It is to arrange
+    // that the function is never reached with a width it cannot serve: the
+    // signature refusal above now runs BEFORE any declaration, and the type is
+    // built only in the branches that have a float shape in hand. Both remaining
+    // callers are therefore past a `shape_is_float` guard AND past the refusal.
+    //
+    // This mirrors the `v0.2.3` line's arithmetic-width design, which moved its
+    // refusal to load rather than returning a `Result` from ten hot-path sites.
     let ptrt = ctx.ptr_type(AddressSpace::default());
 
     // Shared slots occupy the low indices of the unified slot space, so their
@@ -1655,7 +1706,7 @@ fn lower_module_with<'ctx>(
             // REFUSED until this existed.
             let mut params: Vec<_> = (0..c.param_count as usize)
                 .map(|p| match sig.and_then(|s| s.params.get(p)) {
-                    Some(sh) if shape_is_float(sh) => f64t.into(),
+                    Some(sh) if shape_is_float(sh) => float_type(ctx, float_bytes).into(),
                     _ => i64t.into(),
                 })
                 .collect();
@@ -1680,7 +1731,7 @@ fn lower_module_with<'ctx>(
             // return type, which lives only in the module-level signature — which
             // is why the entry ABI is a module-level feature.
             let fnty = if sig.is_some_and(|s| shape_is_float(&s.ret)) {
-                f64t.fn_type(&params, false)
+                float_type(ctx, float_bytes).fn_type(&params, false)
             } else {
                 i64t.fn_type(&params, false)
             };
@@ -1723,29 +1774,6 @@ fn lower_module_with<'ctx>(
     // the wire tag is stable regardless of which features the READER was built
     // with.
     //
-    // **THE SIGNATURE ROUTE IS NOW OPEN — for the one float width that is built.**
-    // A float parameter or return takes a real floating-point position in the
-    // declared function type, converted at the four boundary points (declaration,
-    // prologue, return, call). What stays refused is a float of a width this
-    // lowering does not emit: `Float` is `f32` under `narrow-float-32`, and
-    // declaring a `double` there would be a silently wrong number rather than a
-    // fault. Approximating a width is exactly the failure this guard exists for.
-    if !float_width_lowered(float_bytes)
-        && let Some((idx, _)) = program
-            .signatures
-            .iter()
-            .enumerate()
-            .find(|(_, sg)| shape_is_float(&sg.ret) || sg.params.iter().any(shape_is_float))
-    {
-        return Err(LowerError::UnsupportedShape(format!(
-            "chunk {idx} has a Float in its signature and this module's Float is \
-                 {float_bytes} bytes wide; only 4- and 8-byte Floats have an entry ABI \
-                 here. \
-                 Refused rather than declared as a `double`, because a float of the \
-                 wrong width is a wrong number and not a fault"
-        )));
-    }
-
     // **A SIGNATURE IS NOT THE ONLY ROUTE A FLOAT TAKES, and the other routes
     // used to be closed only by accident.**
     //

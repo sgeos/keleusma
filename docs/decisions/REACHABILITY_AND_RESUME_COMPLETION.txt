@@ -1,0 +1,62 @@
+COMPLETION CONDITION — reachability fix and resume refresh (V0.3.X, native_codegen)
+
+Ordering is NOT a completion criterion. The properties below may be reached in
+any order, by any route. Judge the end state of the tree and the transcript, not
+the sequence, the branch, or the process used to get there.
+
+DONE when all of the following hold.
+
+1. THE FLOAT TYPE FUNCTION IS NOT REACHABLE WITH A WIDTH IT CANNOT SERVE.
+   For a module with no floating point, and for a module declaring a float width
+   the backend does not lower, no float type is constructed for that width. The
+   record states how this is established.
+
+2. THE GUARD THAT MAKES IT TRUE PRECEDES THE CODE IT PROTECTS.
+   The refusal covering a float signature at an unlowered width takes effect
+   before any function is declared. If a case remains where the type function is
+   reached before that refusal, it is named rather than left implicit.
+
+3. NO ERROR IS THREADED THROUGH THE OPERAND CALL SITES.
+   The fix arranges for the bad value not to arrive, rather than propagating a
+   failure from each place it could be used.
+
+4. THE EARLIER PREDICTION IS DESCRIBED AS IT STOOD.
+   The record says the prediction was refuted by measurement and subsequently
+   made true. It does not present it as having been correct when written.
+
+5. A CHANGED REFUSAL ORDER IS REPORTED IF IT OCCURS.
+   If hoisting the guard changes which error a module with several faults
+   reports first, that is stated with evidence, not adjusted away.
+
+6. THE RESUME DOCUMENT DESCRIBES THE CURRENT TREE.
+   Its summary matches what is on the branch: the absorptions completed, the
+   work landed since the last stamp, and the open items with their owners.
+
+7. ITS VALIDITY CHECK IS EXECUTED, NOT ASSERTED.
+   The transcript shows the ancestry check being run and its result. A statement
+   that it passes, unaccompanied by the run, does not satisfy this.
+
+8. THE VALIDITY CHECK COVERS THE WORK SINCE THE LAST STAMP.
+   New anchors correspond to the increments landed since the previous refresh,
+   so a rewritten history fails the check rather than passing it silently.
+
+9. NO FIGURE APPEARS WITHOUT ITS POPULATION.
+   Every count in the resume document says what it counts over. A figure carried
+   from an earlier state is marked as carried and dated rather than presented as
+   current.
+
+10. WHAT WAS REFUSED AND WHAT WAS GOT WRONG ARE BOTH PRESENT.
+    The resume document records decisions taken against doing something, and
+    errors made and corrected, alongside what was built.
+
+11. NOTHING IS CLAIMED THAT WAS NOT RUN.
+    Every count and pass/fail claim corresponds to a command whose output
+    appears in the transcript.
+
+12. THE PACKAGE IS GREEN, OR THE RED IS OWNED AND EXPLAINED.
+    The native_codegen suite passes, or each failure is named with its cause and
+    with a statement of whether the cause belongs to this package.
+
+NOT completion criteria: which branch anything sits on, whether work is
+committed, how many commits were made, the order of the twelve properties above,
+or whether any other goal in the same session advanced.
