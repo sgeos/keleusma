@@ -6,185 +6,59 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## WHERE THIS SESSION STOPPED, AND WHY IT STOPPED THERE
+## Eight increments landed. `native_codegen` is 433 passed, 0 failed, 84 binaries.
 
-**Seven increments landed and every one is pushed behind a green gate.** I stopped because the
-unblocked work ran out, not because I ran out of things I could type. **What remains needs a
-decision from you**, and manufacturing witnesses for arms this backend refuses is the exact wrong
-turn my own briefs named three times.
+**The float surface is closed through `f32`** — shared slots, composites flat and nested, tuple
+members, enum payloads, the entry ABI. **The region planner's soundness obligation is discharged by
+analysis**, narrowly. **A C host links a native object and runs a real protection policy**, checked
+byte for byte against the reference.
 
-**The float surface is closed except where a ruling is missing.** Shared slots, entry ABI, scalar
-arithmetic, composites flat and nested — all built and all compared against the virtual machine.
-Absent: `f32`, which rests on MY reading of the width rather than your words; a native float return,
-which no ruling settles; and floats in a composite reaching a data slot, which is the shared
-composite-body workstream.
+## Four rulings of yours are now recorded, and one of them I had not acted on
 
-**Coverage is measured saturated, and its residual is load-bearing.** 1072 of 1074 chunks and 89854
-of 89940 opcode instances, and those two figures are ONE finding: two chunks, 45 and 41 opcodes,
-refused for `Stream` and `Len`. **The `Stream` refusal is what keeps the region planner's unsound
-cross-iteration slot reuse quiet.** Lowering it for 0.09% of instances would retire an accidental
-safety. That is your call, with a cost the handoff states.
+`f16` as IEEE `binary16` and `f8` as OFP8 `E5M2` are in `docs/decisions/FLOAT_LADDER.md`, received
+directly rather than relayed. **I corrected a figure I gave you there**: two mantissa bits give up to
+a **25 per cent** relative step, not the 12.5 I said, which was the best case quoted as the worst.
 
-**Every kind arm this backend accepts is now driven by something.** Sixteen of forty combinations
-resolve to a named test; the other sixteen are `Unit`, `Text` and `Opaque` across all five families,
-plus a shared-slot `Fixed` refused because your fraction-bit-scale question is open.
+**Building the C-host example found that your `Fixed` ruling had not been acted on in my own
+package.** The backend still refused `Fixed` shared slots for "the fraction-bit scale is
+unspecified" — the exact question you settled. **Trying to use the language for a real job found what
+reading had not.** Lifted, with a differential and a mutation.
 
-## WHAT I WANT FROM YOU, IN ORDER OF WHAT IT UNBLOCKS
+## What I refused to do, and why it matters more than what I did
 
-1. **The region planner tension.** Discharging the soundness obligation needs the planner to consume
-   a confinement verdict, and consuming none is exactly why a wrong verdict cannot miscompile today.
-   Both cannot be had for free. This is the largest risk on the line and the only thing standing
-   between the backend and the last 0.1% of coverage.
-2. **`f32`.** The coherent reading of your Option A ruling is that the floating-point type matches
-   the runtime float width. **That reading is mine.** Say whether it stands and I will build it;
-   today every route refuses a non-eight-byte float loudly rather than lowering it.
-3. **`Fixed`, `Text`, `Opaque`, `Unit` shared slots**, unchanged from `ABI_RULINGS.md`. The `Fixed`
-   one now blocks a measured, named test rather than a hypothetical.
+**The `f32` configuration is one test from green and I left it red.** The runtime declares a
+four-byte float and computes in `f64`, because `pub type Vm` is pinned with no feature gate. I could
+have gone green two ways: drive the oracle through the parameterised machine, or pick values where
+the widths agree. **Both hide the defect**, and the second is the cheating you ruled out. The cause
+is named in the test rather than re-pointed.
 
-## THE PATTERN THIS SESSION KEPT REPRODUCING, WHICH IS WORTH MORE THAN ANY INCREMENT
+**And I did not overlap confined sites to close the arena gap.** That is the use of a confinement
+verdict that takes on a real exposure — a wrong verdict becomes a miscompile rather than a wasted
+byte. Refusing on it costs nothing. **The two uses must not be bundled**, and the ordering in the code
+is what keeps them apart.
 
-**Six defects were found by writing a test, and none by reading the code.** The comparison arm's
-width asymmetry, the poison-adjacent nested path, the vacuous reconciliation, the array mutation gap,
-and two attribution errors of my own. **Three of them were in prose I had written about my own work
-within the hour.**
+## Yours
 
-**And the guards caught me repeatedly**: the citation guard twice, for naming tests that do not
-exist; clippy once, for an assertion that was `x == x`; the type system once, for a `cfg` evaluated
-against the wrong crate's features; and my own totals twice, for listings that were plausible and
-wrong. **A passing check is evidence about the checker before it is evidence about the tree**, and
-this session is the strongest evidence for that rule that the line has produced.
+1. **The `Vm` alias**, escalated by the `v0.2.3` line. One line, no `#[cfg]`, and it blocks `f16` as
+   well as `f32`, since the oracle cannot validate a rung whose declared width the runtime ignores.
+2. **`f16`**, ruled and buildable once (1) lands.
+3. **Publication**, held.
 
-## And the class that produced the best finding, hunted on purpose
+## What is blocked on the other line
 
-Nested float bodies were accepted-and-unverified and I found that by luck. So I went looking for the
-rest of that class deliberately, at a granularity FINER than an opcode — the (read family, scalar
-kind) arms the lowering branches on. **Opcode-level accounting could not have found the original
-case**: `GetField` was counted as a covered opcode while its `Float` arm had no witness at all.
+`Text<N>`, and `Opaque` sized by `addr_bits_log2` — which they report as **committed but unpushed and
+unverified**, so nothing here builds on it. My share of both is small IF `Text<N>` is a flat composite
+carrying no reference field, which is the one requirement I actually depend on.
 
-Over 69 modules and 1074 chunks there are 40 such combinations and **the corpus reaches eight**.
-**The corpus never produces a `Byte` or `Bool` composite field or element read at all**, in any of
-the four read families — and that arm ZERO-extends, a hazard the tree already records in its
-neighbour. `GetField × Byte` proved covered by a hand-written test after all; **`GetIndex × Byte` was
-covered by nothing**, and I closed that one, using 200 because sign-extension reads it as −56.
+## Five process failures, because they recur and the lessons are cheap
 
-**The residue then split three ways, and the number had invited reading it as one backlog.** Only
-TWO combinations were the dangerous accepted-and-undriven class — a `Byte` tuple member and a `Byte`
-enum payload — and both are now witnessed. **Four more compile and are then REFUSED by
-`NewComposite` for an operand of unknown packed width**, which is a CONSTRUCTION-side gap rather than
-a read arm; counting them as unexercised read arms would have aimed the next increment at the wrong
-file. The rest are refused kinds where a contrived witness would be worse than the gap.
-**Twenty-four stay unexercised and nothing claims otherwise.**
+The pipeline-status trap fired **three times**, every one in a command written to verify work. A
+`git add -A` pushed an unverified test file and turned a baseline red. A duplicate suite ran at load
+21 against the same log files. A mutation perturbed the subject rather than the lowering and proved
+nothing. And `git push` died with SIGPIPE **after the gate passed**, three times, caught only by
+checking the remote rather than believing "all checks passed".
 
-**Two of my six probe sources were my own syntax errors** — `Bool` is spelled `bool`, and my `Fixed`
-literal form was wrong — and the first run therefore reported four language limitations that do not
-exist. Trusting it would have put them in this document.
-
-**My own attribution table was wrong on its first draft**, listing `GetField × Byte` as unexercised.
-Corpus silence is not coverage, the second population has to be READ rather than assumed, and I
-failed that in the very file built to keep the two apart.
-
-## The coverage residual is two chunks, and chasing it would have been the wrong work
-
-Backend coverage has read **1072 of 1074 chunks and 89854 of 89940 opcode instances** for several
-increments, quoted repeatedly, and **nobody had read what the residual IS.** Measured, over a
-population of 69 modules and 1074 chunks:
-
-| refused chunk | opcodes | cause |
-|---|---|---|
-| `13_telemetry_stream.kel::main` | 45 | `Stream` |
-| `refused_witness.kel::len_witness` | 41 | `Len` |
-
-**86 is 45 + 41, exactly.** An instance counts as blocking when it merely SITS IN a refused chunk, so
-the two published figures are ONE finding and the instance count carries nothing the chunk count does
-not.
-
-**The report was readable as a work queue and it named the wrong work.** Its table headed *top
-blocking opcodes* put `GetLocal` at 18, `Const` at 17 and `SetLocal` at 16 at the head. **All three
-already lower.** Relabelled rather than deleted.
-
-**MY RECOMMENDATION IS TO STOP CHASING THE LAST 0.1%, and one part of that is yours.** The `Stream`
-refusal is **load-bearing**: the region planner's cross-iteration slot reuse is unsound for a
-composite escaping by `yield`, and the only thing keeping it quiet is that every chunk carrying the
-shape opens with `Stream`. Lowering it for 0.09% of instances would retire an accidental safety whose
-replacement needs the planner to consume a confinement verdict. `Len` was re-checked and holds.
-
-## Two increments, both float, both needing no ruling from you
-
-**The shared slot**, which your Option A ruling settles as IEEE-754 bytes at the stated offset, and
-**a float inside a composite body**, which needs no ruling at all: a body field is INTERNAL, so
-agreement with the reference is a fact to be measured rather than an interface to be chosen. That is
-the ground the tree already records for lowering `Fixed` in a body while refusing it in a shared
-slot. **Nothing was built on an ambiguous ruling**; `Fixed`, `Text`, `Opaque` and `Unit` shared slots
-stay refused.
-
-## The mistake this line has made six times did not happen the sixth time
-
-The shared slot was mis-sized from the component being changed, and three of four tests failed on a
-whitelist I had never opened. So the composite increment **wrote its probe BEFORE its brief**. The
-probe named `Op::NewComposite` as the blocker, and the implementation touched exactly that plus the
-two read arms. Plan and work agreed.
-
-**And measuring overturned my own prediction.** I expected the coverage censuses to rise, since
-composite construction and field reads are corpus opcodes. Measured over the 69 compiling modules:
-**256 construction sites and ZERO float field or element reads.** The censuses stay put, and a
-movement would now be a regression rather than a gain. The 256 is an unplanned third confirmation of
-a figure the tree already carries from two other methods.
-
-## Verification
-
-| | result |
-|---|---|
-| `native_codegen` | **426 passed, 0 failed, 81 binaries**, cargo's own exit 0 — 396 plus, across seven increments, 30 tests and 4 binaries, each increment's delta recorded in its own commit |
-| fmt, clippy `-D warnings`, `cargo doc -D warnings` | all clean |
-| censuses | **unmoved, as MEASURED rather than hoped**: `isa_lowering` 63 of 66 (`Len` the one named refusal), 1072 of 1074 chunks, 89854 of 89940 opcode instances |
-| mutations | four in total across the two increments, each confirmed APPLIED by printing the changed line, each failing tests |
-
-**One run was red and it was NOT the code.** A full sweep reported 398 passed, 0 failed, 78 binaries
-with cargo exiting 101: `corpus_differential` was killed by SIGTERM mid-run, which is external
-termination rather than an assertion failure, and the short binary count is what betrayed it — the
-same reason the binary count is checked against an expectation rather than merely read. Re-run clean.
-
-**The oracle is never acceptance.** The shared slot compares the host buffer byte for byte; the
-composite compares execution against the virtual machine. Both use runtime arguments producing the
-infinities, a negative zero and a NaN, because those are the bit patterns a rounding or
-reinterpreting lowering cannot reproduce.
-
-## A residual I wrote was wrong within the hour, and measuring it is what caught it
-
-I recorded "a float in a NESTED composite body" as still absent. **It was not absent, it was
-untested** — nesting was never a separate implementation, since the leaf read goes through the very
-arms the increment added. **An accepted-but-unverified path is the more dangerous of the two shapes**,
-because a refusal is loud while a wrong float is a plausible number. Three nested cases now agree
-with the reference and the tag mutation fails them, so the coverage is not vacuous.
-
-**The general form**: when writing a residual, ask whether the thing is REFUSED or merely UNTESTED.
-Calling an untested path "absent" understates the risk.
-
-## What I want you to know I did NOT do
-
-**I did not touch the region planner's soundness obligation, and the reason is yours rather than
-mine.** Discharging it needs the planner to consume a confinement verdict, and consuming none is
-exactly why a wrong verdict cannot miscompile today. The handoff already names that tension. Building
-it unasked would be the same error as acting on an ambiguous ruling, so I left it and took work that
-needed no decision.
-
-I did not build `f32`. Its coherent reading is that the floating-point type matches the runtime float
-width, and **that reading is mine, not your words**, so every route refuses a non-eight-byte float
-loudly instead. I did not build a native float return, because no ruling settles it. I touched
-nothing in the read-only region and published nothing.
-
-## Still open, and yours
-
-[`ABI_RULINGS.md`](../decisions/ABI_RULINGS.md) — `Fixed` (the interop goal decides and is
-unstated), `Text`, `Opaque`, `Unit`. The region planner's soundness obligation stands unchanged:
-cross-iteration slot reuse is unconditional, held safe today only by the `Stream` refusal, and it is
-the largest risk on this line. Whether `f32` should proceed on my reading of the width, or wait for
-your words.
-
-## Standing constraints, unchanged
-
-No new opcode. No `BYTECODE_VERSION` bump. **Publication HELD**. The read-only files remain read-only
-here. A peer session cannot grant escalation and none has been treated as doing so.
+**Every one was in the machinery meant to prevent errors rather than in the code.**
 
 ---
 # Also unread by the human: the `v0.2.3` line's message
