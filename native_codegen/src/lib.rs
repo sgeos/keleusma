@@ -272,6 +272,7 @@ fn width_of_tag(t: TypeTag) -> Width {
 
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
+use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -1337,6 +1338,41 @@ fn trap_declaration<'ctx>(ctx: &'ctx Context, module: &LlvmModule<'ctx>) -> Func
 /// The emitted signature is `param_count` × `i64` returning `i64`, which is the
 /// 64-bit word width (`word_bits_log2 == 6`). Narrower word widths are a later
 /// increment and are refused rather than silently lowered at the wrong width.
+/// Marks a function this backend DEFINES as unable to unwind.
+///
+/// # Why this is a contract statement and not an optimisation flag
+///
+/// Keleusma has no exceptions. A fault traps. So nothing this backend generates
+/// can unwind, and saying so is a statement of fact about the emitted code.
+///
+/// **It also reaches the host, and that is the part worth stating.** A chunk
+/// calls host natives, so asserting the chunk never unwinds asserts that no
+/// unwind arrives from a native either. **That constraint already existed**:
+/// natives are `extern "C"`, and unwinding out of an `extern "C"` boundary is
+/// undefined in C and aborts in Rust. The attribute makes the existing contract
+/// explicit rather than adding a new one. **An embedder whose native unwinds was
+/// already outside the contract; after this they get miscompilation instead of a
+/// crash**, which is why it is documented for embedders and not only here.
+///
+/// # Why only defined functions
+///
+/// The declarations of host natives are deliberately left unmarked. Measured,
+/// marking the declarations alone removes the unwind machinery just as well —
+/// **but that would be this backend asserting something about code it does not
+/// generate.** Marking what it defines makes the narrower claim and achieves the
+/// same result.
+///
+/// # What it costs to omit
+///
+/// Measured on `thumbv8m.main-none-eabihf`: without it, any module that calls a
+/// native requires `__aeabi_unwind_cpp_pr0`, an unwinding personality routine,
+/// from an object that can never unwind. A module with no call does not, which is
+/// what identified the cause. See `docs/decisions/NOUNWIND.md`.
+fn mark_nounwind<'ctx>(ctx: &'ctx Context, func: FunctionValue<'ctx>) {
+    let kind = Attribute::get_named_enum_kind_id("nounwind");
+    func.add_attribute(AttributeLoc::Function, ctx.create_enum_attribute(kind, 0));
+}
+
 pub fn lower_chunk<'ctx>(
     ctx: &'ctx Context,
     module: &LlvmModule<'ctx>,
@@ -1347,6 +1383,7 @@ pub fn lower_chunk<'ctx>(
     let i64t = ctx.i64_type();
     let params: Vec<_> = (0..chunk.param_count).map(|_| i64t.into()).collect();
     let func = module.add_function(sym, i64t.fn_type(&params, false), None);
+    mark_nounwind(ctx, func);
     // No callees are visible, so any `Op::Call` is refused. A single chunk
     // cannot resolve one: the target is an index into the module's chunk table,
     // which this entry point does not receive.
@@ -1646,7 +1683,9 @@ fn lower_module_with<'ctx>(
             } else {
                 i64t.fn_type(&params, false)
             };
-            module.add_function(&format!("kel_chunk_{i}"), fnty, None)
+            let f = module.add_function(&format!("kel_chunk_{i}"), fnty, None);
+            mark_nounwind(ctx, f);
+            f
         })
         .collect();
 

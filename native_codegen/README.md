@@ -95,3 +95,22 @@ word survives. That is wrapping addition and it is total. `OverflowPolicy::Trap`
 exists for Workstream F, and it **diverges from the VM**: with it enabled,
 `add(i64::MAX, 1)` aborts where the VM returns a value. It is not the default
 for that reason.
+
+## Host contract: a native must not unwind
+
+Every function this backend defines is emitted with LLVM's `nounwind` attribute. **Nothing generated
+here can unwind** — Keleusma has no exceptions and a fault traps.
+
+**That assertion covers the natives a chunk calls.** If a host native unwinds through a Keleusma
+frame, the behaviour is undefined.
+
+**This is not a new restriction.** Natives are `extern "C"`, and unwinding out of an `extern "C"`
+boundary is already undefined in C and aborts in Rust, so a native that unwinds was outside the
+contract before this attribute existed. **What changes is the failure mode**: previously such a
+native would most likely have crashed, and now it may miscompile instead. A C++ host must not let an
+exception escape into a native, and a Rust host must not let a panic escape one.
+
+The attribute is set on defined functions only. Declarations of host-provided natives are left
+unmarked, because this backend does not generate that code and does not assert on its behalf.
+
+Rationale and the measurement behind it: `docs/decisions/NOUNWIND.md`.

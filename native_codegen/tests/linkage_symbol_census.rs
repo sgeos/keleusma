@@ -699,3 +699,87 @@ fn the_narrow_target_attributes_its_runtime_calls_to_constructs() {
          record rather than adjusting it."
     );
 }
+
+/// **NO UNWIND PERSONALITY IS REQUIRED, AND THE ATTRIBUTE IS WHY.**
+///
+/// Keleusma has no exceptions and a fault traps, so nothing this backend emits
+/// can unwind. Before `mark_nounwind`, any module calling a host native pulled
+/// `__aeabi_unwind_cpp_pr0` into a bare-metal link — an unwinding personality
+/// routine, for an object that can never unwind, on a target with no unwinder.
+///
+/// **The mutation is in the test rather than in a transcript**, because "the
+/// symbol is absent" is exactly the claim that holds for a dozen uninteresting
+/// reasons. Stripping the attribute and nothing else must bring it back.
+#[test]
+fn no_unwind_personality_is_required_and_removing_the_attribute_brings_it_back() {
+    use inkwell::attributes::{Attribute, AttributeLoc};
+
+    let dir = scratch("unwind");
+    // A module that CALLS A NATIVE. A module with no call never needed the
+    // personality, so it could not distinguish the attribute working from the
+    // probe being the wrong shape.
+    let witness = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../examples/scripts/external_native_witness.kel"),
+    )
+    .expect("the external-native witness module");
+
+    let obj = emit_object_for_target(&witness, &dir, "kept", Some(NARROW_TRIPLE))
+        .expect("the witness must lower for the bare-metal target");
+    let kept = undefined_symbols(&obj);
+    println!("\n  with nounwind    -> {kept:?}");
+    assert!(
+        !kept.iter().any(|s| s.contains("unwind")),
+        "a bare-metal object still requires an unwinding personality routine \
+         despite the attribute: {kept:?}"
+    );
+
+    // The mutation: same module, same pipeline, attribute stripped.
+    let m = compile(&parse(&tokenize(&witness).expect("lex")).expect("parse")).expect("compile");
+    Target::initialize_all(&InitializationConfig::default());
+    let triple = inkwell::targets::TargetTriple::create(NARROW_TRIPLE);
+    let machine = Target::from_triple(&triple)
+        .expect("target")
+        .create_target_machine(
+            &triple,
+            "generic",
+            "",
+            OptimizationLevel::Default,
+            RelocMode::PIC,
+            CodeModel::Default,
+        )
+        .expect("target machine");
+    let ctx = Context::create();
+    let lm = ctx.create_module("kel");
+    lm.set_triple(&triple);
+    lower_module(&ctx, &lm, &m, LowerOptions::default()).expect("lower");
+    let kind = Attribute::get_named_enum_kind_id("nounwind");
+    let mut f = lm.get_first_function();
+    let mut stripped = 0;
+    while let Some(func) = f {
+        if func.count_basic_blocks() > 0 {
+            func.remove_enum_attribute(AttributeLoc::Function, kind);
+            stripped += 1;
+        }
+        f = func.get_next_function();
+    }
+    assert!(
+        stripped > 0,
+        "the mutation stripped nothing, so it changed nothing"
+    );
+    lm.run_passes("default<O2>", &machine, PassBuilderOptions::create())
+        .expect("O2");
+    let mutated = dir.join("stripped.o");
+    machine
+        .write_to_file(&lm, FileType::Object, &mutated)
+        .expect("write");
+    let without = undefined_symbols(&mutated);
+    println!("  without nounwind -> {without:?}");
+
+    assert!(
+        without.iter().any(|s| s.contains("unwind")),
+        "stripping the attribute did NOT bring the personality routine back, so \
+         the absence above is not evidence that the attribute is what removes \
+         it. The recorded cause is wrong and must be re-derived: {without:?}"
+    );
+}
