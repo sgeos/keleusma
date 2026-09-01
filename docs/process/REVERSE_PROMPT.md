@@ -170,7 +170,9 @@ Forcing the bound to zero named the list, and `SHARED_LAYOUT` was absent from it
    driver needs a batch path through `emit_in_window` (command 164, seeding kind/count/offset) plus
    two field builders. **The risk is the run-length grouping**, which the stage's comment says is
    the caller's job, so it must match the reference encoder exactly or the divergence hides there.
-2. **The discard-arm reachability census.** `src/selfhost/mod.rs` carries 19 silent-discard match
+2. **The discard-arm reachability census**, now specified in
+   [`../decisions/DISCARD_ARM_REACHABILITY_BRIEF.md`](../decisions/DISCARD_ARM_REACHABILITY_BRIEF.md)
+   with a completion condition beside it, so it can be picked up without re-deriving anything. `src/selfhost/mod.rs` carries 19 silent-discard match
    arms and exactly one is measured. **Do not audit them by reading** -- nineteen judgements formed
    that way produce a list of "probably fine" that looks like coverage. Instrument which arms are
    REACHED while compiling the corpus, as the 2026-08-14 emit-command census did. And do not turn
