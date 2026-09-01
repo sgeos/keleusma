@@ -1,5 +1,55 @@
 # Design Journal
 
+## 2026-08-31 — `f32` lowers, four defects found by the differential, and the blocker is not in this package
+
+**Increment**: lowering `f32`, per the operator's ruling that the floating-point type matches the
+runtime's float width, and their instruction that the narrow configuration stop being red with tests
+that pass meaningfully rather than being cheated into passing. See
+`../decisions/F32_LOWERING_BRIEF.md`.
+
+**Those two instructions together forbade the cheap repair.** Making the failing tests derive the
+width would have turned them green by asserting a REFUSAL, which is a green that means nothing. The
+configuration stops being red by the backend actually lowering `f32`.
+
+**The convention is the one thing here that could produce a plausible wrong number.** The operand
+stack carries a float as its bit pattern in an `i64`, and at four bytes a direct bitcast is illegal.
+**A 32-bit float occupies the LOW 32 BITS, ZERO-EXTENDED** — sign-extension would fill the upper word
+for any negative value and be observable at the next store or comparison.
+
+**FOUR DEFECTS, ALL MINE, ALL FOUND BY THE DIFFERENTIAL AND NONE BY REVIEW.**
+
+| defect | what it did |
+|---|---|
+| the composite packer knew 8 and 1 bytes | a four-byte float field was REFUSED — the safe direction, and why it surfaced |
+| the indexed shared-slot path mapped any non-8 width to ONE byte | a float array element loaded a single byte; native returned 11 where the reference returned 22 |
+| `GetIndex` had the same two-way branch | same shape, different arm |
+| float constants took the `f64` bit pattern unconditionally | the low 32 bits of a small double are ZERO, so `x * 2.0 + 1.0` silently lost its `+ 1.0` |
+
+**Every one was a plausible wrong number rather than a fault**, which is the argument for exercising a
+configuration rather than compiling it.
+
+**THE REMAINING RED IS NOT IN THIS PACKAGE.** Under `narrow-float-32` the module declares four bytes
+and the virtual machine computes in `f64`, because `pub type Vm<'a, 'arena> = GenericVm<..., f64>`
+carries no `#[cfg]` while `RUNTIME_FLOAT_BITS_LOG2` drops to 5. Reported by this line with the
+witness, mechanism supplied by the `v0.2.3` line and **verified here rather than relayed**, escalated
+by them because it changes a public type's meaning for every embedder in that configuration.
+
+**A green route existed and was refused.** `GenericVm` is public, so this package could drive the
+oracle at `f32` and go green today. Embedders get the bundled `Vm`, so that would pass while the
+shipping runtime still disagreed with this backend. **It would hide the defect.** One test stays red
+with its cause named.
+
+**AND THE PIPELINE-STATUS TRAP FIRED AGAIN, IN THE COMMAND WRITTEN TO VERIFY THE WORK.** My gate chain
+piped clippy into `tail` and read `tail`'s status, so it walked past two real lint failures — one of
+them introduced by my own rewrite. **Second time this session, both in verification commands.** The
+rule is not "remember it"; the rule is that a status you intend to read gets its own line.
+
+**And I left a duplicate suite running.** A replacement verification was launched without confirming
+the previous one had finished, so two full runs contended at load 21 and **both wrote the same two log
+files**. No wrong result was recorded, because the stale log was never read — but a partial log with
+credible contents and nothing behind it is the same shape as the stale gate display cleared earlier
+today. Same lesson, different artefact.
+
 ## 2026-08-31 — The confinement verdict is consumed to refuse, and the plan for it was wrong twice over
 
 **Increment**: discharging the region planner's soundness obligation by analysis, per the operator's

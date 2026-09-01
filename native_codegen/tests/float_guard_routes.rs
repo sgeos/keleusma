@@ -80,11 +80,14 @@ fn refused(m: &Module) -> Option<String> {
 #[test]
 fn a_float_in_a_signature_lowers_at_eight_bytes_and_refuses_at_any_other_width() {
     let mut m = build("fn p(a: Float) -> Float { a }\nfn main() -> Word { 0 }").expect("compiles");
-    assert_eq!(
-        1u32 << m.float_bits_log2 >> 3,
-        8,
-        "this build's Float is not 8 bytes, so both halves of this test \
-         describe a different build than the one running it"
+    assert!(
+        // **WIDTH-DERIVED, NOT PINNED.** This asserted eight, which made the
+        // test describe one of the two builds and announce a mismatch in the
+        // other. Both four and eight lower now, so the premise is that the
+        // build's width is one the backend lowers.
+        matches!(1u32 << m.float_bits_log2 >> 3, 4 | 8),
+        "this build's Float is not a width this backend lowers, so this \
+         test describes a different build than the one running it"
     );
     assert!(
         refused(&m).is_none(),
@@ -92,7 +95,12 @@ fn a_float_in_a_signature_lowers_at_eight_bytes_and_refuses_at_any_other_width()
          removed or another guard now fires first: {:?}",
         refused(&m)
     );
-    m.float_bits_log2 = 5;
+    // **THE SUBJECT ROTATED WHEN `f32` LANDED.** This used to overwrite the
+    // width to 5, meaning four bytes, which was refused. Four bytes now LOWERS,
+    // so the subject moves to a width that is still refused: 7, meaning sixteen
+    // bytes. The rotation is forced rather than optional -- left at 5 this test
+    // would assert a refusal that no longer happens.
+    m.float_bits_log2 = 7;
     let why = refused(&m).expect("a 4-byte float in a signature must refuse the module");
     assert!(
         why.contains("signature"),
@@ -277,11 +285,10 @@ fn a_float_data_slot_lowers_at_eight_bytes_and_refuses_at_any_other_width() {
         println!("  unreachable from source and cannot be tested through it");
         return;
     };
-    assert_eq!(
-        1u32 << m_read.float_bits_log2 >> 3,
-        8,
-        "this build's Float is not 8 bytes, so both halves of this test \
-         describe a different build than the one running it"
+    assert!(
+        matches!(1u32 << m_read.float_bits_log2 >> 3, 4 | 8),
+        "this build's Float is not a width this backend lowers, so this \
+         test describes a different build than the one running it"
     );
     assert!(
         refused(&m_read).is_none(),
@@ -291,7 +298,12 @@ fn a_float_data_slot_lowers_at_eight_bytes_and_refuses_at_any_other_width() {
     );
 
     // The width refusal, made must-fire by overwriting the declared width.
-    m_read.float_bits_log2 = 5;
+    // **THE SUBJECT ROTATED WHEN `f32` LANDED.** This used to overwrite the
+    // width to 5, meaning four bytes, which was refused. Four bytes now LOWERS,
+    // so the subject moves to a width that is still refused: 7, meaning sixteen
+    // bytes. The rotation is forced rather than optional -- left at 5 this test
+    // would assert a refusal that no longer happens.
+    m_read.float_bits_log2 = 7;
     let why = refused(&m_read).expect("a 4-byte float data slot must refuse the module");
     assert!(
         why.to_lowercase().contains("float"),

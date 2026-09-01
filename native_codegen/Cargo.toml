@@ -26,5 +26,14 @@ license = "0BSD"
 keleusma = { path = "..", features = ["compile", "self-host"] }
 inkwell = { version = "0.9", features = ["llvm22-1"] }
 
+# **THE NARROW-FLOAT CONFIGURATION, MADE SELECTABLE.**
+#
+# `narrow-float-32` belongs to the `keleusma` crate, so without a forwarding
+# feature here the four-byte build is reachable only by editing this manifest by
+# hand -- which is exactly why it went unmeasured until 2026-08-31, when it was
+# found red. Selecting it is now `cargo test --features narrow-float-32`.
+[features]
+narrow-float-32 = ["keleusma/narrow-float-32"]
+
 [dev-dependencies]
 keleusma-arena = { path = "../keleusma-arena" }

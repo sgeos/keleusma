@@ -38,6 +38,18 @@ fn compile_src(src: &str) -> Module {
 /// symbol through a signature it does not have is undefined behaviour that
 /// presents as a SIGSEGV inside JIT-compiled code with no indication of which
 /// side is wrong, and this harness's whole subject is signature agreement.
+/// The C type the entry actually takes, which follows the runtime's float
+/// width per the operator's ruling.
+///
+/// **This was hard-coded `f64` and it made these tests undefined behaviour in a
+/// narrow build rather than merely wrong.** Calling a symbol declared `float`
+/// through an `f64` signature is not a comparison that fails, it is a call
+/// through a signature the function does not have.
+#[cfg(feature = "narrow-float-32")]
+type CFloat = f32;
+#[cfg(not(feature = "narrow-float-32"))]
+type CFloat = f64;
+
 fn native_float_entry(m: &Module, arg: f64) -> Result<f64, String> {
     let ctx = Context::create();
     let entry = m.entry_point.expect("entry point");
@@ -73,9 +85,9 @@ fn native_float_entry(m: &Module, arg: f64) -> Result<f64, String> {
     let ee = lm
         .create_jit_execution_engine(OptimizationLevel::None)
         .map_err(|e| format!("jit: {e}"))?;
-    let callable = unsafe { ee.get_function::<unsafe extern "C" fn(f64) -> f64>(&sym) }
+    let callable = unsafe { ee.get_function::<unsafe extern "C" fn(CFloat) -> CFloat>(&sym) }
         .map_err(|e| format!("symbol: {e}"))?;
-    Ok(unsafe { callable.call(arg) })
+    Ok(unsafe { callable.call(arg as CFloat) } as f64)
 }
 
 fn vm_float_entry(m: &Module, arg: f64) -> f64 {
@@ -92,6 +104,19 @@ fn vm_float_entry(m: &Module, arg: f64) -> f64 {
 fn assert_float_entry_agrees(src: &str, args: &[f64]) {
     let m = compile_src(src);
     for &a in args {
+        // **ROUND THE ARGUMENT TO THE BUILD'S FLOAT WIDTH FIRST.** Otherwise
+        // the two sides are given different values: `1e300` is not
+        // representable in `f32`, so the native side correctly answers infinity
+        // while the reference keeps its `f64` precision. That is a harness
+        // fault, not a divergence, and comparing it as one would report a defect
+        // that is not there.
+        // **THE LINT IS CONFIGURATION-BLIND AND THIS CAST IS NOT REDUNDANT.**
+        // In the default build `CFloat` is `f64` and the round trip is an
+        // identity, which clippy correctly observes. In a `narrow-float-32`
+        // build it rounds the argument to the width the entry actually takes,
+        // without which the two sides are handed different values.
+        #[allow(clippy::unnecessary_cast)]
+        let a = a as CFloat as f64;
         let want = vm_float_entry(&m, a);
         match native_float_entry(&m, a) {
             Ok(got) if got.to_bits() == want.to_bits() => {}
@@ -184,7 +209,7 @@ fn a_float_argument_with_an_integer_return_is_not_conflated() {
         .create_jit_execution_engine(OptimizationLevel::None)
         .expect("jit");
     let callable =
-        unsafe { ee.get_function::<unsafe extern "C" fn(f64) -> i64>(&sym) }.expect("symbol");
+        unsafe { ee.get_function::<unsafe extern "C" fn(CFloat) -> i64>(&sym) }.expect("symbol");
     for &a in &[0.5f64, 1.0, 2.0] {
         let cap = keleusma::vm::auto_arena_capacity_for(&m, &[]).expect("cap");
         let arena = keleusma_arena::Arena::with_capacity(cap);
@@ -193,7 +218,7 @@ fn a_float_argument_with_an_integer_return_is_not_conflated() {
             VmState::Finished(Value::Int(v)) => v,
             other => panic!("unexpected VM outcome: {other:?}"),
         };
-        assert_eq!(unsafe { callable.call(a) }, want, "arg {a}");
+        assert_eq!(unsafe { callable.call(a as CFloat) }, want, "arg {a}");
     }
 }
 
@@ -204,11 +229,14 @@ fn narrow_float_is_refused_rather_than_widened() {
     // MODULE's declared width rather than assuming one — the module carries
     // `float_bits_log2`, and a build with `narrow-float-32` would set it to 5.
     let m = compile_src("fn main(x: Float) -> Float { x }");
-    assert_eq!(
-        1u32 << m.float_bits_log2 >> 3,
-        8,
-        "this build's Float is not 8 bytes, so the signature route should be \
-         refused and these tests do not describe it"
+    assert!(
+        // **WIDTH-DERIVED, NOT PINNED.** This asserted eight, which made the
+        // test describe one of the two builds and announce a mismatch in the
+        // other. Both four and eight lower now, so the premise is that the
+        // build's width is one the backend lowers.
+        matches!(1u32 << m.float_bits_log2 >> 3, 4 | 8),
+        "this build's Float is not a width this backend lowers, so this \
+         test describes a different build than the one running it"
     );
     let ctx = Context::create();
     let lm = ctx.create_module("kel");

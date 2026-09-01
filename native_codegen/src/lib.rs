@@ -157,6 +157,78 @@ impl Width {
     }
 }
 
+/// The floating-point type for a module's declared float width.
+///
+/// **The operator ruled that the floating-point type matches the runtime's
+/// float width.** "Double" is incoherent in a build with no `f64`, so a
+/// hard-coded `f64_type()` was wrong in a `narrow-float-32` build rather than
+/// merely narrow.
+fn float_type<'ctx>(ctx: &'ctx Context, float_bytes: u32) -> inkwell::types::FloatType<'ctx> {
+    match float_bytes {
+        4 => ctx.f32_type(),
+        _ => ctx.f64_type(),
+    }
+}
+
+/// Whether this backend lowers a float of `float_bytes`.
+///
+/// Four and eight. Any other width is refused rather than approximated,
+/// because a float of the wrong width is a silently wrong number and not a
+/// fault.
+fn float_width_lowered(float_bytes: u32) -> bool {
+    matches!(float_bytes, 4 | 8)
+}
+
+/// A float value as the operand stack carries it: its bit pattern in an `i64`.
+///
+/// # ⚠ THE CONVENTION, AND IT IS THE ONE THING HERE THAT CAN PRODUCE A
+/// PLAUSIBLE WRONG NUMBER
+///
+/// At eight bytes this is a direct `bitcast`. **At four bytes that bitcast is
+/// illegal**, so a 32-bit float occupies the **LOW 32 BITS, ZERO-EXTENDED**.
+///
+/// **Zero-extension rather than sign-extension, and the difference is
+/// observable.** A negative float has its sign bit set, so sign-extending would
+/// fill the upper word with ones, and any later store or comparison of the raw
+/// operand would see a different number. The reference writes four bytes
+/// little-endian, so a buffer comparison pins it.
+fn float_to_bits<'ctx>(
+    b: &inkwell::builder::Builder<'ctx>,
+    f: inkwell::values::FloatValue<'ctx>,
+    i64t: IntType<'ctx>,
+    float_bytes: u32,
+) -> IntValue<'ctx> {
+    if float_bytes == 8 {
+        b.build_bit_cast(f, i64t, "fbits").unwrap().into_int_value()
+    } else {
+        let i32t = i64t.get_context().i32_type();
+        let narrow = b
+            .build_bit_cast(f, i32t, "fbits32")
+            .unwrap()
+            .into_int_value();
+        b.build_int_z_extend(narrow, i64t, "fbitsz").unwrap()
+    }
+}
+
+/// The inverse of [`float_to_bits`]: an operand's bit pattern read back as a
+/// float of the module's width.
+fn bits_to_float<'ctx>(
+    b: &inkwell::builder::Builder<'ctx>,
+    v: IntValue<'ctx>,
+    ft: inkwell::types::FloatType<'ctx>,
+    float_bytes: u32,
+) -> inkwell::values::FloatValue<'ctx> {
+    if float_bytes == 8 {
+        b.build_bit_cast(v, ft, "asf").unwrap().into_float_value()
+    } else {
+        let i32t = v.get_type().get_context().i32_type();
+        let narrow = b.build_int_truncate(v, i32t, "astrunc").unwrap();
+        b.build_bit_cast(narrow, ft, "asf32")
+            .unwrap()
+            .into_float_value()
+    }
+}
+
 /// A vector of `n` unknown widths.
 fn alloc_vec_unknown(n: usize) -> Vec<Width> {
     vec![Width::Unknown; n]
@@ -1021,7 +1093,18 @@ fn resolve_shared_scalar<'ctx>(
         // operand stack already carries a float as its bit pattern in an `i64`,
         // so no conversion happens here at all -- what the caller must do is
         // TAG the pushed operand `Float`, which the returned kind says.
-        SCALAR_FLOAT_TAG if float_bytes == 8 => Ok((e.offset, i64t, e.kind)),
+        // **THE LOAD WIDTH FOLLOWS THE MODULE'S FLOAT WIDTH.** The reference
+        // stores `float_bytes` little-endian bytes at this offset, so an
+        // eight-byte load in a four-byte build would read the neighbour.
+        SCALAR_FLOAT_TAG if float_width_lowered(float_bytes) => Ok((
+            e.offset,
+            if float_bytes == 8 {
+                i64t
+            } else {
+                i64t.get_context().i32_type()
+            },
+            e.kind,
+        )),
         other => Err(LowerError::UnsupportedDataSlot {
             slot,
             why: alloc_format_kind(other, float_bytes),
@@ -1083,7 +1166,7 @@ fn shared_scalar_width(kind: u8, float_bytes: u32) -> Option<u32> {
     match kind {
         SCALAR_INT => Some(8),
         SCALAR_BYTE | SCALAR_BOOL => Some(1),
-        SCALAR_FLOAT_TAG if float_bytes == 8 => Some(8),
+        SCALAR_FLOAT_TAG if float_width_lowered(float_bytes) => Some(float_bytes),
         _ => None,
     }
 }
@@ -1443,9 +1526,14 @@ fn lower_module_with<'ctx>(
 ) -> Result<Vec<FunctionValue<'ctx>>, LowerError> {
     check_word_width(program.word_bits_log2)?;
     let i64t = ctx.i64_type();
-    // The entry ABI's floating-point type. Only an 8-byte `Float` reaches a
-    // signature position; a narrower one is refused below rather than widened.
-    let f64t = ctx.f64_type();
+    // **The module's float width, hoisted above its first use.** It was computed
+    // further down, which was fine while the entry ABI's type was hard-coded
+    // `f64` and stopped being fine the moment that type became width-derived.
+    let float_bytes = 1u32 << program.float_bits_log2 >> 3;
+    // The entry ABI's floating-point type, matching the runtime's float width
+    // per the operator's ruling. A width this backend does not lower is refused
+    // below rather than widened.
+    let f64t = float_type(ctx, float_bytes);
     let ptrt = ctx.ptr_type(AddressSpace::default());
 
     // Shared slots occupy the low indices of the unified slot space, so their
@@ -1588,8 +1676,7 @@ fn lower_module_with<'ctx>(
     // lowering does not emit: `Float` is `f32` under `narrow-float-32`, and
     // declaring a `double` there would be a silently wrong number rather than a
     // fault. Approximating a width is exactly the failure this guard exists for.
-    let float_bytes = 1u32 << program.float_bits_log2 >> 3;
-    if float_bytes != 8
+    if !float_width_lowered(float_bytes)
         && let Some((idx, _)) = program
             .signatures
             .iter()
@@ -2382,7 +2469,11 @@ fn build_typed_return<'ctx>(b: &Builder<'ctx>, func: FunctionValue<'ctx>, v: Int
         .get_return_type()
         .expect("every lowered chunk returns a value, never void");
     if rt.is_float_type() {
-        let f = b.build_bit_cast(v, rt.into_float_type(), "ret_f").unwrap();
+        // **WIDTH-AWARE.** A direct bitcast is only legal at eight bytes; a
+        // four-byte float takes the low half of the operand.
+        let ft = rt.into_float_type();
+        let fw = ft.get_bit_width() / 8;
+        let f = bits_to_float(b, v, ft, fw);
         b.build_return(Some(&f)).unwrap();
     } else {
         b.build_return(Some(&v)).unwrap();
@@ -2431,9 +2522,9 @@ fn lower_chunk_body<'ctx>(
         // the declaration is what the caller obeyed.
         let raw = func.get_nth_param(i as u32).unwrap();
         let stored = if raw.is_float_value() {
-            b.build_bit_cast(raw.into_float_value(), i64t, &format!("p{i}_bits"))
-                .unwrap()
-                .into_int_value()
+            let fv = raw.into_float_value();
+            let fw = fv.get_type().get_bit_width() / 8;
+            float_to_bits(&b, fv, i64t, fw)
         } else {
             raw.into_int_value()
         };
@@ -2786,8 +2877,9 @@ fn lower_chunk_body<'ctx>(
             // baked `byte_size` EXACTLY, so a float of some other width refuses
             // rather than mispacking. The width guard below is therefore a
             // second line and not the only one.
-            let float_into_a_composite_body = float_bytes == 8 && matches!(op, Op::NewComposite(_));
-            let float_store_into_a_float_slot = float_bytes == 8
+            let float_into_a_composite_body =
+                float_width_lowered(float_bytes) && matches!(op, Op::NewComposite(_));
+            let float_store_into_a_float_slot = float_width_lowered(float_bytes)
                 && match op {
                     Op::SetData(slot) | Op::SetDataIndexed(slot, _) => {
                         data.has_data
@@ -3038,7 +3130,7 @@ fn lower_chunk_body<'ctx>(
                 // dividend — exactly `frem`. Verified with negative dividends,
                 // where a floor-style remainder would disagree.
                 if st.kind_at(0) == OperandKind::Float || st.kind_at(1) == OperandKind::Float {
-                    if float_bytes != 8 {
+                    if !float_width_lowered(float_bytes) {
                         return Err(LowerError::UnsupportedShape(format!(
                             "float division at a float width of {float_bytes} \
                              bytes; only 8 is lowered"
@@ -3054,27 +3146,18 @@ fn lower_chunk_body<'ctx>(
                             ),
                         ));
                     }
-                    let f64t = ctx.f64_type();
+                    let f64t = float_type(ctx, float_bytes);
                     let rb = st.pop();
                     let lb = st.pop();
-                    let l =
-                        st.b.build_bit_cast(lb, f64t, "ldf")
-                            .unwrap()
-                            .into_float_value();
-                    let r =
-                        st.b.build_bit_cast(rb, f64t, "rdf")
-                            .unwrap()
-                            .into_float_value();
+                    let l = bits_to_float(&st.b, lb, f64t, float_bytes);
+                    let r = bits_to_float(&st.b, rb, f64t, float_bytes);
                     let q = if matches!(op, Op::Div) {
                         st.b.build_float_div(l, r, "fdiv").unwrap()
                     } else {
                         st.b.build_float_rem(l, r, "frem").unwrap()
                     };
-                    let bits =
-                        st.b.build_bit_cast(q, i64t, "qbits")
-                            .unwrap()
-                            .into_int_value();
-                    st.push_k(bits, Width::Scalar(8), OperandKind::Float);
+                    let bits = float_to_bits(&st.b, q, i64t, float_bytes);
+                    st.push_k(bits, Width::Scalar(float_bytes), OperandKind::Float);
                 } else {
                     let rhs = st.pop();
                     let lhs = st.pop();
@@ -3183,7 +3266,7 @@ fn lower_chunk_body<'ctx>(
                 // original reasoning rested on reading the
                 // reference, not on a differential.
                 if st.kind_at(0) == OperandKind::Float || st.kind_at(1) == OperandKind::Float {
-                    if float_bytes != 8 {
+                    if !float_width_lowered(float_bytes) {
                         return Err(LowerError::UnsupportedShape(format!(
                             "float comparison at a float width of {float_bytes} \
                              bytes; only 8 is lowered"
@@ -3200,17 +3283,11 @@ fn lower_chunk_body<'ctx>(
                             ),
                         ));
                     }
-                    let f64t = ctx.f64_type();
+                    let f64t = float_type(ctx, float_bytes);
                     let rhs_bits = st.pop();
                     let lhs_bits = st.pop();
-                    let l =
-                        st.b.build_bit_cast(lhs_bits, f64t, "lcf")
-                            .unwrap()
-                            .into_float_value();
-                    let r =
-                        st.b.build_bit_cast(rhs_bits, f64t, "rcf")
-                            .unwrap()
-                            .into_float_value();
+                    let l = bits_to_float(&st.b, lhs_bits, f64t, float_bytes);
+                    let r = bits_to_float(&st.b, rhs_bits, f64t, float_bytes);
                     use inkwell::FloatPredicate as FP;
                     // **THE REFERENCE USES TWO DIFFERENT PATHS, WITH DIFFERENT
                     // NaN SEMANTICS. Measured, after getting it wrong.**
@@ -3554,17 +3631,27 @@ fn lower_chunk_body<'ctx>(
                 // treat the bits as an integer. The stack stays homogeneous
                 // `i64`; the tag is what carries the difference a width cannot.
                 if let ConstValue::Float(f) = cv {
-                    if float_bytes != 8 {
+                    if !float_width_lowered(float_bytes) {
                         return Err(LowerError::UnsupportedShape(format!(
                             "a float constant at a float width of {float_bytes} bytes; \
-                             only 8 is lowered, and another width is refused rather \
-                             than approximated because a float of the wrong width is a \
-                             silently wrong number, not a fault"
+                             only 4 and 8 are lowered, and another width is refused \
+                             rather than approximated because a float of the wrong \
+                             width is a silently wrong number, not a fault"
                         )));
                     }
-                    let bits = i64::from_ne_bytes(f.to_ne_bytes());
-                    let v = i64t.const_int(bits as u64, false);
-                    st.push_k(v, Width::Scalar(8), OperandKind::Float);
+                    // **THE CONSTANT IS BUILT AT THE MODULE'S FLOAT WIDTH.** It
+                    // took the `f64` pattern unconditionally, and the low 32
+                    // bits of a small double are ZERO -- so under a four-byte
+                    // float every modest constant became 0.0 and `x * 2.0 + 1.0`
+                    // silently lost its `+ 1.0`. Caught by the differential, not
+                    // by review.
+                    let bits: u64 = if float_bytes == 4 {
+                        u64::from((*f as f32).to_bits())
+                    } else {
+                        (*f).to_bits()
+                    };
+                    let v = i64t.const_int(bits, false);
+                    st.push_k(v, Width::Scalar(float_bytes), OperandKind::Float);
                 } else if let ConstValue::StaticStr(s) = cv {
                     let g = static_string_global(ctx, module, s);
                     let addr = st.b.build_ptr_to_int(g, i64t, "kstr").unwrap();
@@ -3729,9 +3816,10 @@ fn lower_chunk_body<'ctx>(
                     .enumerate()
                     .map(|(p, a)| match callee_params.get(p) {
                         Some(t) if t.is_float_type() => {
-                            st.b.build_bit_cast(a, t.into_float_type(), "arg_f")
-                                .unwrap()
-                                .into()
+                            // Width-aware: a direct bitcast is legal only at
+                            // eight bytes, and the argument carries its value in
+                            // the low half of the operand at four.
+                            bits_to_float(&st.b, a, t.into_float_type(), float_bytes).into()
                         }
                         _ => a.into(),
                     })
@@ -3778,9 +3866,7 @@ fn lower_chunk_body<'ctx>(
                     // homogeneous operand stack as its bits, mirroring the
                     // prologue.
                     ValueKind::Basic(v) if v.is_float_value() => {
-                        st.b.build_bit_cast(v.into_float_value(), i64t, "call_f_bits")
-                            .unwrap()
-                            .into_int_value()
+                        float_to_bits(&st.b, v.into_float_value(), i64t, float_bytes)
                     }
                     ValueKind::Basic(v) => v.into_int_value(),
                     ValueKind::Instruction(_) => {
@@ -3975,14 +4061,14 @@ fn lower_chunk_body<'ctx>(
             // `FloatToInt` reads the bits back as a double and truncates toward
             // zero, which is what `as Word` means on the reference side.
             Op::IntToFloat | Op::FloatToInt => {
-                if float_bytes != 8 {
+                if !float_width_lowered(float_bytes) {
                     return Err(LowerError::UnsupportedShape(format!(
                         "{op:?} at a float width of {float_bytes} bytes; only 8 is \
                          lowered, and another width is refused rather than \
                          approximated"
                     )));
                 }
-                let f64t = ctx.f64_type();
+                let f64t = float_type(ctx, float_bytes);
                 // **Read the kind BEFORE popping.** `pop` lowers the depth and
                 // `kind_at` is relative to it, so checking after the pop asks
                 // about the wrong operand — or about an empty stack. The same
@@ -3991,11 +4077,8 @@ fn lower_chunk_body<'ctx>(
                 let v = st.pop();
                 if matches!(op, Op::IntToFloat) {
                     let f = st.b.build_signed_int_to_float(v, f64t, "sitofp").unwrap();
-                    let bits =
-                        st.b.build_bit_cast(f, i64t, "fbits")
-                            .unwrap()
-                            .into_int_value();
-                    st.push_k(bits, Width::Scalar(8), OperandKind::Float);
+                    let bits = float_to_bits(&st.b, f, i64t, float_bytes);
+                    st.push_k(bits, Width::Scalar(float_bytes), OperandKind::Float);
                 } else {
                     // **REFUSED unless the operand is KNOWN to be a float.** A
                     // bitcast of an integer's bits to a double is a silently
@@ -4011,10 +4094,7 @@ fn lower_chunk_body<'ctx>(
                             ),
                         ));
                     }
-                    let f =
-                        st.b.build_bit_cast(v, f64t, "asf")
-                            .unwrap()
-                            .into_float_value();
+                    let f = bits_to_float(&st.b, v, f64t, float_bytes);
                     // **SATURATING, via the intrinsic, NOT `fptosi`.**
                     //
                     // The reference converts with Rust's `as`, which SATURATES:
@@ -4064,7 +4144,7 @@ fn lower_chunk_body<'ctx>(
                 // integer's bits to a double, which is a silently wrong number.
                 let (kl, kr) = (st.kind_at(1), st.kind_at(0));
                 if kl == OperandKind::Float || kr == OperandKind::Float {
-                    if float_bytes != 8 {
+                    if !float_width_lowered(float_bytes) {
                         return Err(LowerError::UnsupportedShape(format!(
                             "float arithmetic at a float width of {float_bytes} \
                              bytes; only 8 is lowered"
@@ -4081,27 +4161,18 @@ fn lower_chunk_body<'ctx>(
                             ),
                         ));
                     }
-                    let f64t = ctx.f64_type();
+                    let f64t = float_type(ctx, float_bytes);
                     let rhs_bits = st.pop();
                     let lhs_bits = st.pop();
-                    let l =
-                        st.b.build_bit_cast(lhs_bits, f64t, "lf")
-                            .unwrap()
-                            .into_float_value();
-                    let r =
-                        st.b.build_bit_cast(rhs_bits, f64t, "rf")
-                            .unwrap()
-                            .into_float_value();
+                    let l = bits_to_float(&st.b, lhs_bits, f64t, float_bytes);
+                    let r = bits_to_float(&st.b, rhs_bits, f64t, float_bytes);
                     let res = match op {
                         Op::Add => st.b.build_float_add(l, r, "fadd").unwrap(),
                         Op::Sub => st.b.build_float_sub(l, r, "fsub").unwrap(),
                         _ => st.b.build_float_mul(l, r, "fmul").unwrap(),
                     };
-                    let bits =
-                        st.b.build_bit_cast(res, i64t, "resbits")
-                            .unwrap()
-                            .into_int_value();
-                    st.push_k(bits, Width::Scalar(8), OperandKind::Float);
+                    let bits = float_to_bits(&st.b, res, i64t, float_bytes);
+                    st.push_k(bits, Width::Scalar(float_bytes), OperandKind::Float);
                 } else {
                     let (wl, wr) = (st.width_at(1), st.width_at(0));
                     // `Op::Mul` on `Fixed` does not exist: the compiler emits
@@ -4142,24 +4213,21 @@ fn lower_chunk_body<'ctx>(
                 // integer — which flips the sign bit of the mantissa's neighbour
                 // rather than the number.
                 if st.kind_at(0) == OperandKind::Float {
-                    if float_bytes != 8 {
+                    if !float_width_lowered(float_bytes) {
                         return Err(LowerError::UnsupportedShape(format!(
                             "float negation at a float width of {float_bytes} \
                              bytes; only 8 is lowered"
                         )));
                     }
-                    let f64t = ctx.f64_type();
+                    let f64t = float_type(ctx, float_bytes);
                     let bits = st.pop();
-                    let f =
-                        st.b.build_bit_cast(bits, f64t, "nf")
-                            .unwrap()
-                            .into_float_value();
+                    let f = bits_to_float(&st.b, bits, f64t, float_bytes);
                     let n = st.b.build_float_neg(f, "fneg").unwrap();
                     let out =
                         st.b.build_bit_cast(n, i64t, "nbits")
                             .unwrap()
                             .into_int_value();
-                    st.push_k(out, Width::Scalar(8), OperandKind::Float);
+                    st.push_k(out, Width::Scalar(float_bytes), OperandKind::Float);
                 } else {
                     let w = st.width_at(0);
                     let out = arith_result_width(w, w, false).ok_or_else(|| {
@@ -4308,7 +4376,21 @@ fn lower_chunk_body<'ctx>(
                             st.b.build_in_bounds_gep(i8t, base, &[byte], "sdataptr")
                                 .unwrap()
                         };
-                        (a, if w == 8 { i64t } else { i8t }, k)
+                        // **THREE WIDTHS, NOT TWO.** This mapped anything but
+                        // eight to ONE BYTE, so a four-byte float element loaded
+                        // a single byte of its value once `f32` gave shared
+                        // slots a four-byte width. Caught by the differential
+                        // rather than by review: native returned 11 where the
+                        // reference returned 22.
+                        (
+                            a,
+                            match w {
+                                8 => i64t,
+                                4 => ctx.i32_type(),
+                                _ => i8t,
+                            },
+                            k,
+                        )
                     } else {
                         let (byte_off, w, k) =
                             resolve_shared_scalar(&data, slot, i8t, i64t, float_bytes)?;
@@ -4355,7 +4437,7 @@ fn lower_chunk_body<'ctx>(
                         // operation downstream refuses the operand -- the same
                         // detail a float PARAMETER's local needed.
                         if kind == SCALAR_FLOAT_TAG {
-                            st.push_k(v, Width::Scalar(8), OperandKind::Float);
+                            st.push_k(v, Width::Scalar(float_bytes), OperandKind::Float);
                         } else {
                             st.push(v);
                         }
@@ -4628,6 +4710,16 @@ fn lower_chunk_body<'ctx>(
                     }
                     let store = match n_bytes {
                         8 => st.b.build_store(addr, *v).unwrap(),
+                        // **FOUR BYTES ARRIVED WITH `f32`.** The packer handled
+                        // eight and one, so a narrow float field was refused
+                        // rather than mispacked -- the conservative direction,
+                        // and the reason this surfaced as a refusal instead of a
+                        // wrong number. The operand carries the value in its LOW
+                        // 32 BITS, per `float_to_bits`, so the store truncates.
+                        4 => {
+                            let t = st.b.build_int_truncate(*v, ctx.i32_type(), "pk32").unwrap();
+                            st.b.build_store(addr, t).unwrap()
+                        }
                         1 => {
                             let t = st.b.build_int_truncate(*v, i8t, "cfbyte").unwrap();
                             st.b.build_store(addr, t).unwrap()
@@ -4686,7 +4778,7 @@ fn lower_chunk_body<'ctx>(
                     // so agreeing with the reference is a measured fact and not
                     // an interface choice. That is the same ground on which
                     // `Fixed` is lowered here and refused in a shared slot.
-                    SK::Float if float_bytes == 8 => 8,
+                    SK::Float if float_width_lowered(float_bytes) => u64::from(float_bytes),
                     SK::Float => {
                         return Err(LowerError::unsupported_op(
                             "GetIndex",
@@ -4731,6 +4823,20 @@ fn lower_chunk_body<'ctx>(
                         .set_alignment(1)
                         .expect("1 is a power of two");
                     (iv, 8u32)
+                } else if elem == 4 {
+                    // **THE FOUR-BYTE CASE, WHICH THIS BRANCH DID NOT HAVE.**
+                    // It read eight bytes or one, so a narrow float element
+                    // would have loaded a SINGLE BYTE of its value. Added with
+                    // `f32`; zero-extended, per the operand convention.
+                    let iv =
+                        st.b.build_load(ctx.i32_type(), addr, "cif32")
+                            .unwrap()
+                            .into_int_value();
+                    iv.as_instruction()
+                        .expect("a load is an instruction")
+                        .set_alignment(1)
+                        .expect("1 is a power of two");
+                    (st.b.build_int_z_extend(iv, i64t, "cif32z").unwrap(), 4u32)
                 } else {
                     let bv =
                         st.b.build_load(i8t, addr, "cibyte")
@@ -4889,16 +4995,30 @@ fn lower_chunk_body<'ctx>(
                     // internal and agreement with the reference is measured.
                     // The width is guarded because the reference sizes the body
                     // by `float_bytes`.
-                    SK::Float if float_bytes == 8 => {
+                    SK::Float if float_width_lowered(float_bytes) => {
+                        // **THE LOAD IS `float_bytes` WIDE.** A four-byte float
+                        // loaded as eight would read its neighbour, and the
+                        // narrow value is ZERO-extended into the operand, which
+                        // is the convention `float_to_bits` states.
+                        let lt = if float_bytes == 8 {
+                            i64t
+                        } else {
+                            ctx.i32_type()
+                        };
                         let iv =
-                            st.b.build_load(i64t, addr, "cffloat")
+                            st.b.build_load(lt, addr, "cffloat")
                                 .unwrap()
                                 .into_int_value();
                         iv.as_instruction()
                             .expect("a load is an instruction")
                             .set_alignment(1)
                             .expect("1 is a power of two");
-                        (iv, 8u32)
+                        let iv = if float_bytes == 8 {
+                            iv
+                        } else {
+                            st.b.build_int_z_extend(iv, i64t, "cffloatz").unwrap()
+                        };
+                        (iv, float_bytes)
                     }
                     SK::Float => {
                         return Err(LowerError::unsupported_op(

@@ -283,14 +283,18 @@ fn which_opcodes_does_the_backend_refuse() {
 /// guard reads the module's `float_bits_log2`, and this build's `Float` is
 /// 8 bytes, so the refusal path is unreachable by compiling a program here.
 #[test]
-fn an_eight_byte_float_signature_lowers_with_no_refusal() {
+fn a_float_signature_lowers_with_no_refusal_at_any_lowered_width() {
     let identity = module_of("fn p(a: Float) -> Float { a }\nfn main() -> Word { 0 }")
         .expect("the float identity compiles");
-    assert_eq!(
-        1u32 << identity.float_bits_log2 >> 3,
-        8,
-        "this build's Float is not 8 bytes, so the signature route should be \
-         refused and this test's claim does not describe it"
+    assert!(
+        // **WIDTH-DERIVED, NOT PINNED.** This asserted eight, which described
+        // one of the two builds and announced a mismatch in the other. Both
+        // four and eight lower now, and the subject of this test is that a
+        // float SIGNATURE lowers, which is a fact about the route rather than
+        // about a width.
+        matches!(1u32 << identity.float_bits_log2 >> 3, 4 | 8),
+        "this build's Float is not a width this backend lowers, so this \
+         test describes a different build than the one running it"
     );
     let refusals = module_refusals(&identity, LowerOptions::default());
     println!("\n  FLOAT SIGNATURE REFUSALS: {refusals:?}");
