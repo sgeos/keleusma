@@ -4455,7 +4455,10 @@ fn real_header_case(src: &str) -> (Vec<i64>, Vec<u8>) {
         i64::from(HDR_SHARED),
         i64::from(HDR_PRIVATE),
         i64::from(HDR_SCHEMA_HASH),
-        0,
+        // The reserved word carries the format fingerprint. Read from the same
+        // function the reference emitter uses, so this fixture cannot drift
+        // away from it.
+        i64::from(keleusma::bytecode::FORMAT_FINGERPRINT),
     ];
     (fields, want)
 }
