@@ -1160,15 +1160,16 @@ fn alloc_format_kind(tag: u8, float_bytes: u32) -> String {
             "Fixed slot; the host-visible fraction-bit scale is unspecified, so two \
              programs whose values differ by a factor of 2^N share one layout",
         ),
-        // **REACHED ONLY AT A NON-EIGHT-BYTE FLOAT.** The eight-byte case is
-        // lowered above, per the operator's Option A ruling as recorded in
+        // **REACHED ONLY AT A WIDTH THIS BACKEND DOES NOT LOWER.** Four and
+        // eight are both lowered above, per the operator's Option A ruling as
+        // recorded in
         // `docs/decisions/ABI_RULINGS.md`. A narrower `Float` is refused rather
         // than widened, on the same ground as every other float route on this
         // branch: a float of the wrong width is a silently wrong number and not
         // a fault.
         SCALAR_FLOAT_TAG => format!(
-            "Float slot in a module whose Float is {float_bytes} bytes wide; only an \
-             8-byte Float has a settled slot ABI here"
+            "Float slot in a module whose Float is {float_bytes} bytes wide; only \
+             4- and 8-byte Floats have a settled slot ABI here"
         ),
         6 => String::from("Text slot; string representation is Workstream C"),
         7 => String::from("Opaque slot; host handles are Workstream D"),
@@ -1738,7 +1739,8 @@ fn lower_module_with<'ctx>(
     {
         return Err(LowerError::UnsupportedShape(format!(
             "chunk {idx} has a Float in its signature and this module's Float is \
-                 {float_bytes} bytes wide; only an 8-byte Float has an entry ABI here. \
+                 {float_bytes} bytes wide; only 4- and 8-byte Floats have an entry ABI \
+                 here. \
                  Refused rather than declared as a `double`, because a float of the \
                  wrong width is a wrong number and not a fault"
         )));
@@ -2006,7 +2008,7 @@ struct BodyCfg<'a> {
     ///
     /// **Carried rather than assumed.** `Float` is `f32` under `narrow-float-32`
     /// and `f64` otherwise, so a hard-coded `double` would be the wrong type in
-    /// a build that has no `f64`. Only 8 is lowered today; any other width is
+    /// a build that has no `f64`. Four and eight are lowered; any other width is
     /// REFUSED rather than approximated, because a float of the wrong width is a
     /// silently wrong number and not a fault.
     float_bytes: u32,
@@ -3186,7 +3188,7 @@ fn lower_chunk_body<'ctx>(
                     if !float_width_lowered(float_bytes) {
                         return Err(LowerError::UnsupportedShape(format!(
                             "float division at a float width of {float_bytes} \
-                             bytes; only 8 is lowered"
+                             bytes; only 4 and 8 are lowered"
                         )));
                     }
                     let (kl, kr) = (st.kind_at(1), st.kind_at(0));
@@ -3322,7 +3324,7 @@ fn lower_chunk_body<'ctx>(
                     if !float_width_lowered(float_bytes) {
                         return Err(LowerError::UnsupportedShape(format!(
                             "float comparison at a float width of {float_bytes} \
-                             bytes; only 8 is lowered"
+                             bytes; only 4 and 8 are lowered"
                         )));
                     }
                     let (kl, kr) = (st.kind_at(1), st.kind_at(0));
@@ -4116,8 +4118,8 @@ fn lower_chunk_body<'ctx>(
             Op::IntToFloat | Op::FloatToInt => {
                 if !float_width_lowered(float_bytes) {
                     return Err(LowerError::UnsupportedShape(format!(
-                        "{op:?} at a float width of {float_bytes} bytes; only 8 is \
-                         lowered, and another width is refused rather than \
+                        "{op:?} at a float width of {float_bytes} bytes; only 4 and 8 \
+                         are lowered, and another width is refused rather than \
                          approximated"
                     )));
                 }
@@ -4200,7 +4202,7 @@ fn lower_chunk_body<'ctx>(
                     if !float_width_lowered(float_bytes) {
                         return Err(LowerError::UnsupportedShape(format!(
                             "float arithmetic at a float width of {float_bytes} \
-                             bytes; only 8 is lowered"
+                             bytes; only 4 and 8 are lowered"
                         )));
                     }
                     if kl != OperandKind::Float || kr != OperandKind::Float {
@@ -4269,7 +4271,7 @@ fn lower_chunk_body<'ctx>(
                     if !float_width_lowered(float_bytes) {
                         return Err(LowerError::UnsupportedShape(format!(
                             "float negation at a float width of {float_bytes} \
-                             bytes; only 8 is lowered"
+                             bytes; only 4 and 8 are lowered"
                         )));
                     }
                     let f64t = float_type(ctx, float_bytes);
@@ -4837,8 +4839,8 @@ fn lower_chunk_body<'ctx>(
                             "GetIndex",
                             format!(
                                 "a Float array element in a module whose Float is \
-                                 {float_bytes} bytes wide; only an 8-byte Float is \
-                                 lowered, because the reference sizes the body by \
+                                 {float_bytes} bytes wide; only 4- and 8-byte Floats \
+                                 are lowered, because the reference sizes the body by \
                                  that width and a wrong one mispacks silently"
                             ),
                         ));
@@ -5078,8 +5080,9 @@ fn lower_chunk_body<'ctx>(
                             "GetField",
                             format!(
                                 "a Float field in a module whose Float is {float_bytes} \
-                                 bytes wide; only an 8-byte Float is lowered, because \
-                                 the reference sizes the body by that width and a wrong \
+                                 bytes wide; only 4- and 8-byte Floats are lowered, \
+                                 because the reference sizes the body by that width and a \
+                                 wrong \
                                  one mispacks silently"
                             ),
                         ));
