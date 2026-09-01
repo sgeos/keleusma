@@ -81,7 +81,7 @@ ships costs a `BYTECODE_VERSION` authorization.
 2. **Each rung costs a full float differential surface.** `f32` surfaced four real defects on this
    line, every one a plausible wrong number rather than a fault. `f8` costs more than `f16` because
    emulation adds the narrowing question above.
-3. **Linkage, for the ahead-of-time path.** On a target without hardware support LLVM lowers narrow
+3. **Linkage, for the ahead-of-time path.** ⚠ **MEASURED 2026-09-01 AND THE DEFERRAL BELOW IS REFUTED — see `LINKAGE_SYMBOL_CENSUS.md`. A compiler-runtime dependency ALREADY EXISTS at the shipped `f64` rung: `Fixed` division reaches for `__divti3`. The original text follows.** On a target without hardware support LLVM lowers narrow
    float operations to compiler runtime calls. A linked C host will need those symbols, which is a
    packaging question the JIT path never asks. Worth checking when `f16` lands rather than at the
    link failure.
