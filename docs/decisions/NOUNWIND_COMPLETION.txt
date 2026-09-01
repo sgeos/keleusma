@@ -1,0 +1,64 @@
+COMPLETION CONDITION — the unwind personality requirement (V0.3.X, native_codegen)
+
+Ordering is NOT a completion criterion. The properties below may be reached in
+any order, by any route. Judge the end state of the tree and the transcript, not
+the sequence, the branch, or the process used to get there.
+
+DONE when all of the following hold.
+
+1. THE ORIGIN IS ESTABLISHED OR THE ATTEMPT IS REPORTED.
+   The record states why a bare-metal object required an unwind personality
+   routine, supported by a measurement in which exactly one thing changed. If
+   the cause was not established, the record says so and says what was ruled
+   out. A hypothesis is not reported as a cause.
+
+2. THE BEFORE AND AFTER SYMBOL SETS ARE BOTH SHOWN.
+   The record names the toolchain symbols required on the bare-metal target
+   before and after the change, as sets. A statement that a symbol "went away"
+   without both sets does not satisfy this.
+
+3. THE PREDICTION IS RESOLVED AGAINST EACH NAMED FALSIFIER.
+   The record states, for each falsifier, whether it fired. If any fired, that is
+   stated plainly and the prediction is not restated to match the measurement.
+
+4. BEHAVIOUR IS MEASURED, NOT ONLY THE SYMBOL TABLE.
+   The differential tests that compare native execution against the virtual
+   machine are run after the change and their result is reported. A shorter
+   symbol list unaccompanied by a behavioural result does not satisfy this.
+
+5. IF AN ATTRIBUTE IS SET, ITS SCOPE IS DELIBERATE AND STATED.
+   The record says which functions carry it and which do not, and why. In
+   particular it states whether declarations of host-provided functions carry it,
+   and justifies that choice rather than leaving it incidental.
+
+6. THE HOST CONTRACT CHANGE IS WRITTEN DOWN WHERE AN EMBEDDER WOULD FIND IT.
+   If the change asserts anything about what host natives may do, that assertion
+   appears in documentation addressed to embedders, not only in a commit message
+   or a test comment. If no contract changed, the record says that explicitly.
+
+7. EFFECT IS CHECKED AT THE OBJECT, NOT ONLY IN THE INTERMEDIATE FORM.
+   Any claim that the change took effect is supported by reading an emitted
+   object or its assembly. An assertion that an attribute appears in the
+   intermediate representation is not sufficient on its own.
+
+8. NEW OR CHANGED TESTS SURVIVE ORDINARY PARALLELISM.
+   Any test added or modified is observed passing under the harness's default
+   threading, not only in isolation or under a single thread.
+
+9. NOTHING IS CLAIMED THAT WAS NOT RUN.
+   Every symbol name, count, and pass/fail claim corresponds to a command whose
+   output appears in the transcript. Carried figures are marked as carried.
+
+10. THE PACKAGE IS GREEN, OR THE RED IS OWNED AND EXPLAINED.
+    The native_codegen suite passes, or each failure is named with its cause and
+    with a statement of whether the cause belongs to this package.
+
+11. A DECISION IS RECORDED EVEN IF NOTHING CHANGES.
+    If the conclusion is that the requirement should stand, or that the change is
+    unsafe, that conclusion is recorded with its reasoning. Leaving the question
+    open after investigating it does not satisfy this; reporting that it remains
+    open, with what was learned, does.
+
+NOT completion criteria: which branch anything sits on, whether work is
+committed, how many commits were made, the order of the eleven properties above,
+or whether any other goal in the same session advanced.
