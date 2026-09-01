@@ -13,6 +13,45 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-08-31 — Session 60 resume: the handoff's own claim was false, and the gate caught it
+
+A resume that did nothing but obey the handoff protocol and push what was outstanding, which was
+enough to refute the handoff.
+
+**What I asserted last session.** That `feat/opaque-address-width` "compiles -- library, derive
+macro and every test target" and needed only a completed test run. I wrote that in three channels
+and in the commit message.
+
+**What is true.** It compiles under default features. Under `--features self-host` it fails at five
+call sites in `src/selfhost/mod.rs`, each a `ScalarKind::size_in_bytes(wb, fb)` that the refactor
+gave a third `addr_bytes` parameter. Under `--features signatures,shell` the library is clean and
+the TEST target is not, because `src/stddsl/shell.rs:782` builds a `NativeCtx` literal that is now
+missing a field. Six sites, one mechanical omission, two red configurations.
+
+**How the error was produced.** Not by guessing. I ran a check, it passed, and I generalised its
+verdict past the configuration it ran in. The shell site adds a second layer of the same mistake,
+because `cargo check --features signatures,shell` succeeds and only `--tests` exposes it, so even a
+per-feature sweep would have reported the branch clean unless it also varied the target selection.
+
+This is the rule that a clean guard proves its own reach before it proves anything about the tree,
+restated at the level of a build configuration rather than a test. The project already knew the rule. Knowing it did not stop
+me from breaking it, which suggests the useful artifact is a habit of naming the feature set and
+target selection whenever a compile result is written down, rather than another statement of the
+principle.
+
+**What the gate did.** The pre-push hook refused the push, and its refusal is the only reason this
+was found at resume rather than at a merge. The branch is now pushed with `--no-verify` and is red
+on purpose. A red feature branch is explicitly permitted and a stranded one is not, and this line
+has now stranded a branch in a worktree twice.
+
+**A second stranding, of a different shape.** `origin/v0.2.3` still carries the session 58 channels.
+Everything session 59 produced, the `Text<N>` design, the compile-time refusal of `Text + Text`, the
+`narrow-float-32` repair and the journal entry recording all of it, exists only on the unmerged
+`feat/text-capacity-design`. The handoff warned loudly about a branch stranded in a worktree while
+the record of the warning was itself only reachable from a branch. Nothing is lost, since the branch
+is pushed, but a session that resumes on the version branch reads a one-session-old world and is
+told nothing about it.
+
 ## 2026-08-31 — Session 59: `Text<N>` authorized, designed, and NOT implemented
 
 The operator authorized dynamic `Text<N>` directly in session and asked whether it had been

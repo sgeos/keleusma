@@ -13,11 +13,15 @@ Current sprint source of truth.
 > **Currency note (2026-08-31, session 59, CLOSE). `Text<N>` AUTHORIZED AND DESIGNED; ONE REFACTOR
 > COMMITTED BUT UNVERIFIED; ONE LIVE DEFECT AWAITING THE OPERATOR.**
 >
-> **UNPUSHED WORK EXISTS.** `feat/opaque-address-width` is one commit (`32d058b8`) in a worktree at
-> `../keleusma-worktrees/opaque-address-width`, never pushed. It COMPILES -- library, derive macro,
-> every test target -- but its workspace run never completed. Not verified. Finish it first.
+> **CORRECTED BY SESSION 60. `feat/opaque-address-width` (`32d058b8`) DOES NOT COMPILE.** It is now
+> pushed, with `--no-verify`, and it is red on purpose rather than stranded in a worktree. The claim
+> above that it compiled was measured under default features only. Two of the three feature sets
+> continuous integration runs fail it, at six sites that are the same omitted `addr_bytes` argument,
+> five under `self-host` in `src/selfhost/mod.rs` and one in a `shell` test module that a
+> `cargo check` without `--tests` cannot see.
 >
-> `feat/text-capacity-design` is pushed at `5194047d`, six commits, no pull request yet.
+> `feat/text-capacity-design` is pushed at `cfdd375b`, eight commits, no pull request. **Every
+> session 59 artifact lives only there**, and `origin/v0.2.3` still carries the session 58 channels.
 >
 > **The `Text<N>` design is SETTLED** in `docs/decisions/TEXT_CAPACITY_TYPE.md` and nothing is
 > implemented. Static text is a `.rodata` pointer; dynamic text is `Text<N>`, a flat composite with

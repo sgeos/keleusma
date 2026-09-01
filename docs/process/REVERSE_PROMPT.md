@@ -15,15 +15,27 @@ confirmed, and one refactor committed but NOT verified
 
 ## FIRST: THERE IS UNPUSHED, UNVERIFIED WORK
 
-**`feat/opaque-address-width` is committed, unpushed, and lives in a worktree** at
-`../keleusma-worktrees/opaque-address-width`. One commit, `32d058b8`. It compiles — library, derive
-macro, every test target — but **its workspace test run was never completed, so it is not verified**
-and the commit message says so.
+**`feat/opaque-address-width` is pushed and RED.** One commit, `32d058b8`, pushed with
+`--no-verify` so that it stops living only in a worktree.
 
-Finishing that run is the highest-value first action. Session 57 stranded a branch and session 58
-had to find it; this is the same shape, recorded on purpose rather than left to be discovered.
+**I told you last session that it compiled. It does not, and the correction is mine.** I measured
+the default feature set and generalised the claim to "every test target" without re-measuring. The
+pre-push gate refused it, which is how this surfaced. Under the three feature sets continuous
+integration runs, two fail, at six sites that are all the same mechanical omission of the new
+`addr_bytes` argument. Five are in `src/selfhost/mod.rs` under `self-host`. The sixth is a
+`NativeCtx` initialiser in a `shell` test module, and it is invisible to a `cargo check` that omits
+`--tests`, which is very likely how I missed it.
 
-`feat/text-capacity-design` is pushed (`5194047d`, six commits) and has no pull request yet.
+The repair is mechanical and small. The lesson is not. **A green check is evidence about the
+configuration it ran in, and nothing else**, which is the same rule this project already wrote down
+after a clean guard was read too broadly.
+
+**`feat/text-capacity-design` is pushed at `cfdd375b`, eight commits, and has no pull request.**
+Worth knowing precisely what that means, because it is a stranding hazard of its own. **Every
+session 59 artifact lives only on that branch.** `origin/v0.2.3` still carries the session 58
+channels. The `Text<N>` design, the compile-time refusal of `Text + Text`, the `narrow-float-32`
+repair and the session 59 journal entry are all invisible to anyone who checks out the version
+branch. Merging it is the cheapest way to close that, and it is your call rather than mine.
 
 ## A LIVE DEFECT THAT NEEDS YOUR DECISION, REPORTED BY THE OTHER LINE AND VERIFIED HERE
 

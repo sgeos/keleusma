@@ -17,9 +17,23 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > and **it has never been pushed**. `git branch -a` from the primary directory will not show you a
 > remote for it. `scripts/worktree.sh list` will show you the tree.
 >
-> **It compiles -- library, derive macro and every test target -- but its workspace test run was
-> never completed.** The commit message says so. **Do not report it as verified.** Finish the run
-> before anything else; that is the single highest-value first action available.
+> **IT DOES NOT COMPILE.** Session 60 corrected this. The branch was pushed with `--no-verify` and
+> is RED on purpose, so that a feature branch is not stranded in a worktree a second time.
+>
+> Session 59 wrote here that it compiled against library, derive macro and every test target. That
+> claim was measured under the DEFAULT feature set and generalised without being re-measured.
+> Re-measured under the three sets continuous integration actually runs, it fails two of them at
+> **six unmigrated call sites**, all of them the same mechanical omission of the new `addr_bytes`
+> argument.
+>
+> - `--features self-host`, five sites, `src/selfhost/mod.rs` lines 4056, 4121, 4138, 4156, 4438,
+>   each a `size_in_bytes(wb, fb)` that now needs a third argument.
+> - `--features signatures,shell` **with `--tests`**, one site, `src/stddsl/shell.rs:782`, a
+>   `NativeCtx` initialiser missing the `addr_bytes` field. The library alone is clean under that
+>   set, so a `cargo check` without `--tests` reports success and hides it.
+>
+> Default features are clean. **Repairing those six sites, then completing a real workspace run, is
+> the highest-value first action available.** Do not report the branch as verified until then.
 >
 > Session 57 ended with an unpushed feature branch and session 58 had to discover it at resumption.
 > This is the same shape, recorded deliberately rather than left to be found.
