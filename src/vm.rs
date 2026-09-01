@@ -10448,8 +10448,7 @@ mod tests {
         let program = parse(&tokens).expect("parse error");
 
         let err = compile(&program)
-            .err()
-            .expect("exponential text growth must be rejected somewhere; it now compiles");
+            .expect_err("exponential text growth must be rejected somewhere; it now compiles");
         assert!(
             err.message.contains("text concatenation is not available"),
             "rejected, but not by the concatenation refusal this now expects: {}",
