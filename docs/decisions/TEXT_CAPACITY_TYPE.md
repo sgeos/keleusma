@@ -186,6 +186,65 @@ for the moment it buys the whole thing.
 
 **`Opaque` sized by `addr_bits_log2` is unaffected by any of this** and proceeds independently.
 
+## THE SETTLED SEMANTICS, ruled in session 2026-08-31
+
+Everything below was decided directly by the operator and supersedes the open questions this
+document previously carried.
+
+### Static and dynamic are DIFFERENT TYPES, not one parameterised family
+
+> *"Static text should essentially be a pointer to bytes in `.rodata`. It is dynamic text that needs
+> to take the form `Text<N>`. Conceptually, this is similar to `limit` loops, just with space
+> instead of iterations."*
+
+**Static text** is a `.rodata` pointer: immortal, immutable, no capacity in its type. **Dynamic
+text** is `Text<N>`: a flat buffer whose runtime length lives under a static capacity. The analogy
+governs -- `for .. limit <const>` is a runtime range under a static cap; `Text<N>` is a runtime
+length under a static cap. Space instead of iterations.
+
+A literal is therefore STATIC text, not a `Text<N>`. It contributes its compile-time-known length to
+a capacity computation, which is why `"ab" + "cd"` is `Text<4>`: concatenation's result cannot live
+in `.rodata`, so it is dynamic and bounded.
+
+### `N` counts CONTENT BYTES, with no terminator
+
+Ruled after this document proposed counting a NUL. It does not, for three reasons the tree already
+carries: a Keleusma string is length-delimited and an interior NUL is CONTENT, pinned by
+`an_interior_nul_is_not_truncated`; the native ABI's trailing NUL is a C convenience explicitly
+excluded from the length; and counting a terminator would make the type arithmetic `A + B - 1`
+rather than the clean `A + B` that B40 const arithmetic already provides.
+
+A trailing NUL may still be allocated in the LAYOUT for C hosts. It does not appear in the type.
+
+### Overflow: refuse what is static, truncate what is not
+
+**A statically-too-narrow assignment is a compile error.** After monomorphization the capacities are
+literals, so `let r: Text<2> = "ab" + "cd"` is known to be wrong with full information. Silently
+truncating there is a wrong answer where a refusal was available, which is the one thing the
+conservative-verification stance exists to prevent.
+
+**Runtime overflow truncates by default, with an optional arm.** This is not an exception invented
+for text: it is the language's existing shape for a partial operation. `CheckedArmKind` already
+gives checked arithmetic optional outcome arms over a wrapping default, and text overflow follows
+it. Every operation stays total, and a program that cares handles the arm.
+
+### Residence: locals are ordinary ephemeral values
+
+> *"`Text` defined in the `.data` or `.rodata` region lives there. Locals live ephemerally in the
+> arena. This is the same as any other value, except more bytes are nominally used."*
+
+**There is no special residency rule and this document previously over-thought one.** A `Text<N>`
+local is an ephemeral arena value exactly as any other flat composite is, occupying more bytes. A
+`Text` in a `.data` or `.rodata` region lives in that region.
+
+The reasoning that produced the over-thinking is still worth keeping, because the CORRECTION to it
+is load-bearing. This document claimed the cross-yield prohibition on text-bearing composites
+dissolves BECAUSE nothing would be arena-resident. **That was wrong.** The operator's account is
+that an epoch-tagged arena value can already cross safely, since a post-`RESET` read resolves stale
+rather than dangling -- residence was never the barrier, and `TYPE_SYSTEM.md` concedes as much by
+saying prohibiting it structurally "is simpler" rather than necessary. What actually prevents
+arena-resident mutable text is that the ephemeral region is write-once.
+
 ## Open questions, which belong to the operator
 
 1. **The overflow rule.** A push past `N` must refuse at compile time where provable and do

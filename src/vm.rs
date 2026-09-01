@@ -10412,14 +10412,32 @@ mod tests {
     }
 
     #[test]
-    fn exponential_text_concat_rejected_at_safe_constructor() {
-        // The FAQ exponential-string-concat example expressed as a
-        // Stream block, which is the form subject to the per-iteration
-        // WCMU bound. Sixty doublings of a 1-byte string allocate
-        // more than u32::MAX bytes cumulatively. The text-size
-        // abstract interpretation pass saturates the chunk's heap
-        // bound; the WCMU resource-bounds check rejects the module
-        // because the bound exceeds any feasible arena capacity.
+    fn exponential_text_concat_is_rejected() {
+        // The FAQ exponential-string-concat example: sixty doublings of a one-byte string, whose
+        // cumulative allocation exceeds `u32::MAX` bytes.
+        //
+        // # THE GATE MOVED, AND THE PROPERTY IT GUARDED IS TEMPORARILY UNREACHABLE
+        //
+        // This asserted a rejection at the SAFE CONSTRUCTOR: the text-size abstract interpretation
+        // saturated the chunk's heap bound and the worst-case-memory check refused the module.
+        // That gate is no longer reached, because `Text + Text` is now refused by the type checker
+        // -- it had no runtime implementation, so admitting it produced a program that verified and
+        // could not run.
+        //
+        // **So the worst-case-memory rejection this test was written for is currently untested**,
+        // and saying so is the point of this comment. It is not lost to a regression; it is
+        // unreachable because the expression that reached it is refused earlier.
+        //
+        // # WHEN `Text<N>` LANDS, THIS MUST BE REVISITED RATHER THAN LEFT
+        //
+        // Bounded composition restores concatenation, and the interesting part is that this
+        // example then fails EARLIER STILL and for a better reason. Each `let s = s + s` shadows
+        // with a doubled capacity -- `Text<1>`, `Text<2>`, `Text<4>` -- so sixty doublings demand
+        // `Text<2^60>`, which the const arithmetic cannot represent. The FAQ example becomes a
+        // TYPE error rather than a resource one, refused before any analysis runs.
+        //
+        // At that point restore a resource-bound case that the type system cannot pre-empt, or the
+        // worst-case-memory path loses its exponential witness entirely.
         let mut src =
             alloc::string::String::from("loop main(input: Word) -> Text {\n    let s = \"a\";\n");
         for _ in 0..60 {
@@ -10428,12 +10446,15 @@ mod tests {
         src.push_str("    let _ = yield s;\n    s\n}\n");
         let tokens = tokenize(&src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
-        let module = compile(&program).expect("compile error");
-        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
-        let err = Vm::new(module, &arena)
+
+        let err = compile(&program)
             .err()
-            .expect("expected rejection from exponential text growth");
-        assert!(matches!(err, VmError::VerifyError(_)));
+            .expect("exponential text growth must be rejected somewhere; it now compiles");
+        assert!(
+            err.message.contains("text concatenation is not available"),
+            "rejected, but not by the concatenation refusal this now expects: {}",
+            err.message
+        );
     }
 
     // -- For-in over array expressions --
