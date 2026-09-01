@@ -20,18 +20,35 @@ The policy is **total**, so it terminates by construction. Its memory is **stati
 cannot exhaust the controller. And the verifier **rejects a policy whose bound cannot be proved**,
 which is the guarantee the firmware team needs before accepting a field-updatable rule at all.
 
-The build prints the bounds rather than claiming them:
+The build prints the bounds rather than claiming them, and **keeps two different kinds of claim
+apart**:
 
 ```
-PROVEN BOUNDS, from the verifier rather than from prose:
-  chunk 0 (derate_for  ) WCET     19 cost units
-  chunk 1 (main        ) WCET    134 cost units
+TWO DIFFERENT KINDS OF CLAIM, KEPT APART:
+
+MEMORY, which describes THIS OBJECT. The backend's provisioning is
+checked against these figures by the bound-transfer tests.
   worst case over all chunks: stack 352 B, heap 24 B
   shared segment 58 B, preallocated by the host and never grown
   NOTHING GROWS AT RUN TIME: the host supplies every region up front.
+
+BYTECODE COST, from the verifier's virtual-machine cost model:
+  chunk 0 (derate_for  )     19 cost units
+  chunk 1 (main        )    134 cost units
+  ^ NOT A BOUND ON NATIVE EXECUTION TIME. It counts bytecode under the
+    interpreter's cost model. No measurement in this project relates it
+    to the machine code emitted above, and that code may call
+    compiler-runtime routines with no bytecode counterpart at all.
 ```
 
-**The point is not that the policy runs. It is that its worst case was known before it ran.**
+**The point is not that the policy runs. It is that its worst-case MEMORY was known before it ran.**
+
+> ⚠ **An earlier version of this file quoted both figures under one heading, `PROVEN BOUNDS`.** The
+> memory half transfers to the emitted object and is measured against it; the cost half is a bytecode
+> count under the interpreter's model and **nothing in this project relates it to native execution**.
+> Presenting them together invited the second to be read as the first. The figure is kept because it
+> is true about the bytecode; only its subject is now stated. See
+> [`NATIVE_WCET_ASYMMETRY.md`](../../../docs/decisions/NATIVE_WCET_ASYMMETRY.md).
 
 ## The contract
 

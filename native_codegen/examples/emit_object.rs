@@ -135,19 +135,32 @@ fn main() {
     // **THE GUARANTEE, SHOWN RATHER THAN ASSERTED.** The point of this example
     // is not that the policy runs but that its worst case was known before it
     // ran. These come from the verifier, not from a claim in prose.
+    //
+    // # ⚠ THE TWO HALVES ARE NOT THE SAME KIND OF CLAIM, AND THIS BLOCK USED TO
+    // # PRESENT THEM AS THOUGH THEY WERE
+    //
+    // The MEMORY figures transfer to the object emitted here, and
+    // `tests/bound_transfer.rs` measures that: provisioned operand slots against
+    // `max_operand_slots`, and `region_total_bytes` against `max_heap_bytes`.
+    //
+    // **The TIME figure is measured against nothing.** It is a bytecode-level
+    // count under a cost model calibrated for the VIRTUAL MACHINE. Printing it
+    // beside bounds that genuinely transfer, under one heading, in an example
+    // whose subject is a C host linking a NATIVE object, invited it to be read
+    // as a bound on native execution. **Nothing establishes that.**
+    //
+    // The figure is kept because it is TRUE ABOUT THE BYTECODE and useful. Only
+    // its subject is now stated. See `docs/decisions/NATIVE_WCET_ASYMMETRY.md`.
     println!();
-    println!("PROVEN BOUNDS, from the verifier rather than from prose:");
-    for (i, c) in module.chunks.iter().enumerate() {
-        match keleusma::verify::wcet_whole_chunk(c) {
-            Ok(t) => println!("  chunk {i} ({:<12}) WCET {t:>6} cost units", c.name),
-            Err(e) => println!("  chunk {i} ({}) WCET unprovable: {}", c.name, e.message),
-        }
-    }
+    println!("TWO DIFFERENT KINDS OF CLAIM, KEPT APART:");
+    println!();
     // **MODULE-LEVEL MEMORY, NOT THE STREAM-ITERATION CALL.** This policy is a
     // plain function called once per control cycle rather than a stream, so
     // `wcmu_stream_iteration` correctly refuses it for want of a `Stream` block.
     // Reporting that refusal as a limitation would have been a misread of the
     // tool rather than a fact about the policy.
+    println!("MEMORY, which describes THIS OBJECT. The backend's provisioning is");
+    println!("checked against these figures by the bound-transfer tests.");
     match keleusma::verify::module_wcmu(&module, &[]) {
         Ok(per_chunk) => {
             let stack = per_chunk.iter().map(|(s, _)| *s).max().unwrap_or(0);
@@ -158,6 +171,19 @@ fn main() {
     }
     println!("  shared segment {shared_bytes} B, preallocated by the host and never grown");
     println!("  NOTHING GROWS AT RUN TIME: the host supplies every region up front.");
+    println!();
+    println!("BYTECODE COST, from the verifier's virtual-machine cost model:");
+    for (i, c) in module.chunks.iter().enumerate() {
+        match keleusma::verify::wcet_whole_chunk(c) {
+            Ok(t) => println!("  chunk {i} ({:<12}) {t:>6} cost units", c.name),
+            Err(e) => println!("  chunk {i} ({}) cost unprovable: {}", c.name, e.message),
+        }
+    }
+    println!("  ^ NOT A BOUND ON NATIVE EXECUTION TIME. It counts bytecode under the");
+    println!("    interpreter's cost model. No measurement in this project relates it");
+    println!("    to the machine code emitted above, and that code may call");
+    println!("    compiler-runtime routines with no bytecode counterpart at all.");
+    println!();
     println!();
 
     println!("wrote {obj}");
