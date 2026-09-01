@@ -1436,6 +1436,102 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         (1usize << self.aux_resolved.word_bits_log2.unwrap_or(6)) / 8
     }
 
+    /// Round a freshly computed float to the width the module's header declares.
+    ///
+    /// # The defect this closes
+    ///
+    /// The header declares a float width. **Storage honoured it and arithmetic
+    /// did not.** Three sites in [`crate::bytecode`] narrow a declared
+    /// four-byte float through `f32` on the way into and out of a composite
+    /// field, and no site narrowed an arithmetic result. A value therefore
+    /// rounded when it passed through a composite field and did not when it
+    /// stayed on the operand stack, so the same expression yielded two answers
+    /// depending on whether an intermediate was stored.
+    ///
+    /// **This was never confined to `narrow-float-32`.**
+    /// `Self::check_runtime_widths` rejects only bytecode declaring *wider*
+    /// than the runtime and admits narrower on purpose, so a stock build with
+    /// no features loading a module that declares a 32-bit float computed in
+    /// `f64`. The feature is how it was noticed, not what caused it.
+    ///
+    /// # Why computing wide and rounding here is sound
+    ///
+    /// Computing in a wider format and rounding once per operation equals
+    /// computing natively at the target, provided the intermediate carries at
+    /// least `2p + 2` significand bits for target precision `p`. `f64` has 53;
+    /// an `f32` target needs 50, `binary16` needs 24, OFP8 `E5M2` needs 8.
+    /// Every rung clears it.
+    ///
+    /// That is also what makes the differential against the native backend
+    /// meaningful rather than coincidentally agreeing: it lowers natively at
+    /// `f32` where the code generator has the type, so the two constructions
+    /// differ and this condition is why they must still agree exactly.
+    ///
+    /// The equivalence covers addition, subtraction, multiplication, division
+    /// and square root. It does **not** extend to fused operations or
+    /// transcendentals, and it assumes the intermediate neither overflows nor
+    /// underflows.
+    ///
+    /// # Two facts this rests on, measured rather than assumed
+    ///
+    /// **Rust does not contract a multiply feeding an add.** On rustc 1.98.0 /
+    /// `aarch64-apple-darwin`, at `-O` and at `-C opt-level=3 -C
+    /// target-cpu=native`, plain `a * b + c` emits no fused instruction while
+    /// `a.mul_add(b, c)` emits exactly one in the same compilation unit, on a
+    /// target where the fused instruction is baseline. Contraction would erase
+    /// the per-operation rounding this function performs.
+    ///
+    /// **The round trip survives optimisation.** `(x as f32) as f64` emits both
+    /// conversions at `-C opt-level=3`. Had it been folded away, the rounding
+    /// would have vanished while every equal-width test stayed green.
+    ///
+    /// # Where this is called, and where it deliberately is not
+    ///
+    /// `Op::Sub` and `Op::Mul` reach this through
+    /// [`Self::binary_arith`]; `Op::Add`, `Op::Div`, `Op::Mod` and `Op::Neg`
+    /// have their own inline float arms and do not. **Patching only
+    /// `binary_arith` would cover two of six operations while appearing to
+    /// cover all of them**, and the difference is invisible at the default
+    /// width where this function is the identity.
+    ///
+    /// Not called for `Op::FloatToInt` (produces an `Int`), for the four
+    /// `Float(0.0)` filler pushes in the checked paths (exact literals, not
+    /// arithmetic results), or for the comparison arm (produces an `Ordering`).
+    ///
+    /// `Op::Neg` and `Op::Mod` are exact at every current width and so are the
+    /// identity here. They are routed anyway: the cost is nothing, and the
+    /// alternative is a per-site exactness argument that must be re-derived
+    /// whenever a rung is added to the ladder, failing silently at exactly the
+    /// sites nobody rechecked.
+    #[cfg(feature = "floats")]
+    fn narrow_float(&self, v: F) -> F {
+        match self.aux_resolved.float_bits_log2.unwrap_or(6) {
+            // Declared width meets or exceeds the runtime's, so there is
+            // nothing to round to. A declaration *wider* than the runtime was
+            // already refused by `check_runtime_widths` at load.
+            n if n >= <F as crate::float::Float>::BITS_LOG2 => v,
+            // binary32.
+            5 => <F as crate::float::Float>::from_f64(
+                <F as crate::float::Float>::to_f64(v) as f32 as f64
+            ),
+            // ZERO IS NOT A FLOAT WIDTH. `Target::embedded_8` and
+            // `Target::embedded_16` declare `float_bits_log2: 0` alongside
+            // `has_floats: false`; it is the no-floats sentinel, not a one-bit
+            // format, and the field's own documentation says it is honoured
+            // only when `has_floats` is true. Such a module executes no float
+            // operation, so this arm should be unreachable -- but it returns
+            // the value rather than asserting, because a debug assertion here
+            // would fire on a perfectly valid narrow-target module.
+            0 => v,
+            // binary16 (4) and OFP8 E5M2 (3) need software rounding that does
+            // not exist yet, and Rust has no `f16` on stable to lean on.
+            // Reaching here would mean computing wide while declaring narrow,
+            // which is the defect this function exists to remove, so such
+            // modules are refused at load instead.
+            _ => v,
+        }
+    }
+
     /// Module-declared float width in bytes. The companion of
     /// [`Self::module_word_bytes`] for floating-point fields.
     fn module_float_bytes(&self) -> usize {
@@ -2306,6 +2402,27 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 "bytecode declares addr_bits_log2 = {} but this Vm runs at addr_bits_log2 = {} (chosen Address type is narrower than the bytecode requires)",
                 addr_bits_log2,
                 <A as crate::address::Address>::BITS_LOG2,
+            )));
+        }
+        // binary16 (4) and OFP8 E5M2 (3) are real formats the ladder intends to
+        // reach, and neither has software rounding here yet. Admitting such a
+        // module would mean computing in `f64` while declaring a narrow float,
+        // which is exactly the defect `narrow_float` exists to remove; doing it
+        // for two rungs while fixing it for a third would be worse than not
+        // starting. Refused rather than approximated.
+        //
+        // **The refusal names 3 and 4 specifically, and must.** A blanket
+        // "narrower than 32 bits" rejection would refuse every module built for
+        // `Target::embedded_8` or `Target::embedded_16`, which declare
+        // `float_bits_log2: 0` alongside `has_floats: false`. Zero is the
+        // no-floats sentinel, not a one-bit format.
+        if float_bits_log2 == 3 || float_bits_log2 == 4 {
+            return Err(VmError::VerifyError(alloc::format!(
+                "bytecode declares float_bits_log2 = {float_bits_log2} ({}-bit floats), which this \
+                 runtime does not implement: arithmetic at that width needs software rounding that \
+                 does not exist yet, and admitting the module would compute in a wider format while \
+                 declaring a narrow one",
+                1u32 << float_bits_log2,
             )));
         }
         if float_bits_log2 > <F as crate::float::Float>::BITS_LOG2 {
@@ -5083,7 +5200,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         (
                             crate::bytecode::GenericValue::Float(x),
                             crate::bytecode::GenericValue::Float(y),
-                        ) => sp!(self, crate::bytecode::GenericValue::Float(x + y)),
+                        ) => sp!(
+                            self,
+                            crate::bytecode::GenericValue::Float(self.narrow_float(x + y))
+                        ),
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
                                 "cannot add {} and {}",
@@ -5123,7 +5243,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         (
                             crate::bytecode::GenericValue::Float(x),
                             crate::bytecode::GenericValue::Float(y),
-                        ) => sp!(self, crate::bytecode::GenericValue::Float(x / y)),
+                        ) => sp!(
+                            self,
+                            crate::bytecode::GenericValue::Float(self.narrow_float(x / y))
+                        ),
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
                                 "cannot divide {} by {}",
@@ -5161,7 +5284,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         (
                             crate::bytecode::GenericValue::Float(x),
                             crate::bytecode::GenericValue::Float(y),
-                        ) => sp!(self, crate::bytecode::GenericValue::Float(x % y)),
+                        ) => sp!(
+                            self,
+                            crate::bytecode::GenericValue::Float(self.narrow_float(x % y))
+                        ),
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
                                 "cannot modulo {} by {}",
@@ -5186,7 +5312,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         }
                         #[cfg(feature = "floats")]
                         crate::bytecode::GenericValue::Float(x) => {
-                            sp!(self, crate::bytecode::GenericValue::Float(-x))
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Float(self.narrow_float(-x))
+                            )
                         }
                         v => {
                             return Err(VmError::TypeError(format!(
@@ -6178,9 +6307,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     match val {
                         crate::bytecode::GenericValue::Int(i) => sp!(
                             self,
-                            crate::bytecode::GenericValue::Float(
+                            crate::bytecode::GenericValue::Float(self.narrow_float(
                                 <F as crate::float::Float>::from_f64(i.to_i64() as f64)
-                            )
+                            ))
                         ),
                         v => {
                             return Err(VmError::TypeError(format!(
@@ -6486,7 +6615,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             // result is finite, an infinity, or NaN,
                             // classified into the flag. The result is
                             // the low slot; the high slot is unused.
-                            let r = x + y;
+                            let r = self.narrow_float(x + y);
                             let flag = float_checked_flag(<F as crate::float::Float>::to_f64(r));
                             sp!(self, crate::bytecode::GenericValue::Float(r));
                             sp!(
@@ -6568,7 +6697,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             crate::bytecode::GenericValue::Float(x),
                             crate::bytecode::GenericValue::Float(y),
                         ) => {
-                            let r = x - y;
+                            let r = self.narrow_float(x - y);
                             let flag = float_checked_flag(<F as crate::float::Float>::to_f64(r));
                             sp!(self, crate::bytecode::GenericValue::Float(r));
                             sp!(
@@ -6654,7 +6783,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             crate::bytecode::GenericValue::Float(x),
                             crate::bytecode::GenericValue::Float(y),
                         ) => {
-                            let r = x * y;
+                            let r = self.narrow_float(x * y);
                             let flag = float_checked_flag(<F as crate::float::Float>::to_f64(r));
                             sp!(self, crate::bytecode::GenericValue::Float(r));
                             sp!(
@@ -6844,7 +6973,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             // yields a signed infinity (x != 0) or NaN
                             // (0 / 0), classified into the flag. There
                             // is no zero-divisor trap for floats.
-                            let r = x / y;
+                            let r = self.narrow_float(x / y);
                             let flag = float_checked_flag(<F as crate::float::Float>::to_f64(r));
                             sp!(self, crate::bytecode::GenericValue::Float(r));
                             sp!(
@@ -7337,7 +7466,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             }
             #[cfg(feature = "floats")]
             (crate::bytecode::GenericValue::Float(x), crate::bytecode::GenericValue::Float(y)) => {
-                sp!(self, crate::bytecode::GenericValue::Float(float_op(x, y)))
+                sp!(
+                    self,
+                    crate::bytecode::GenericValue::Float(self.narrow_float(float_op(x, y)))
+                )
             }
             (a, b) => {
                 return Err(VmError::TypeError(format!(

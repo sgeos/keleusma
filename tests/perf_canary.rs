@@ -54,6 +54,50 @@
 //! | wire format v2, as first committed | 67.3 s |
 //! | wire format v2, repaired | 1.2 s |
 //!
+//! # THE CONTENDED FIGURE IMPERSONATES THE REGRESSION, SO THIS TABLE CANNOT TRIAGE IT
+//!
+//! The `v0.3.0` line measured this canary at **69.04 s under concurrent load and
+//! 1.20 s alone**, a 57x spread, on a run whose only fault was another suite
+//! compiling at the same time.
+//!
+//! Put that beside the table above. The regression row is **67.3 s**. The
+//! contended figure is **69.04 s**. Three per cent apart, on the same side of
+//! the ceiling, by a similar multiple.
+//!
+//! **So the table does not merely fail to discriminate the two causes, it
+//! corroborates the wrong one.** A reader with a red canary, doing exactly what
+//! this file tells them to do, compares against the reference points, lands on
+//! the wire-format-v2 read-path regression, and starts bisecting something that
+//! did not happen. Every signal available to them agrees.
+//!
+//! Nothing in the number distinguishes them. **Re-run alone. That is the only
+//! discriminator**, and it costs 1.2 seconds.
+//!
+//! # What the load averages printed on failure are worth
+//!
+//! Less than they look, and they under-report BY CONSTRUCTION.
+//!
+//! A load average is an exponentially weighted moving average, not a window. A
+//! contention event lasting as long as a failing run here is only partly
+//! captured at the moment of sampling: about 68 per cent by the one-minute
+//! figure for a 69-second event, about 39 per cent for a 30-second one. **A low
+//! one-minute figure is therefore EXPECTED even when contention is exactly what
+//! happened**, and does not clear it.
+//!
+//! The three figures answer different questions rather than corroborating each
+//! other. For a 69-second event the one-minute average captures roughly 68 per
+//! cent, the five-minute about 21, the fifteen-minute about 7. Only the first
+//! describes the run; the others describe the period around it.
+//!
+//! The one-minute figure is also volatile rather than merely lagging. Readings
+//! on one machine within a single hour: 5.56, 4.53, 7.75, 27.83, against
+//! fifteen-minute values that stayed between 25 and 35 throughout. It read a
+//! quarter of the long-run value during a decay and above the five-minute value
+//! during a spike.
+//!
+//! Sampled AFTER the timed section, so its window overlaps the section it
+//! describes rather than a period the run did not occur in.
+//!
 //! The middle row is the regression this guards against, and it is the reason
 //! the ceiling sits where it does. The bottom row being five times faster than
 //! the top is the actual payoff of the v2 read path; a future change that gives
@@ -118,6 +162,11 @@ fn constant_loads_in_a_loop_stay_fast() {
                fn main(hi: Word) -> Word { \
                for i in 0..hi limit 200000 { d.s = d.s + 1234567 + i; } d.s }";
     let (result, elapsed) = time_run(src, ITERATIONS);
+    // Sampled AFTER the timing, so the one-minute window overlaps the section it
+    // describes. Best-effort and never fatal: this is a diagnostic printed on
+    // the red path, not a verdict, and a machine that cannot report it should
+    // still run the test.
+    let load = read_load_average().unwrap_or_else(|| "unavailable".to_string());
 
     // The arithmetic must be right. Without this the timing proves nothing: a
     // VM that skipped the body entirely would be extremely fast.
@@ -131,6 +180,12 @@ fn constant_loads_in_a_loop_stay_fast() {
         elapsed < CEILING_SECS,
         "VM executed {ITERATIONS} constant-loading iterations in {elapsed:.2}s, \
          over the {CEILING_SECS}s tripwire.\n\
+         \n\
+         Load average at the end of the timed section (1/5/15 min): {load}\n\
+         A LOW ONE-MINUTE FIGURE DOES NOT CLEAR CONTENTION. It is an \
+         exponentially weighted average and under-reports a contention event \
+         this short by roughly a third; only the one-minute figure describes \
+         this run at all, the longer two describe the period around it.\n\
          \n\
          FIRST, RULE OUT CONCURRENT LOAD. This reads wall-clock time, so a heavy \
          build in another session or worktree on the same machine can push it \
@@ -171,4 +226,52 @@ fn constant_loads_in_a_loop_stay_fast() {
     // tripwire only ever says pass or fail; the number is what shows a slow
     // slide toward it.
     println!("perf canary: {ITERATIONS} iterations in {elapsed:.3}s (ceiling {CEILING_SECS}s)");
+}
+
+/// Best-effort system load average, as a display string, or `None`.
+///
+/// Diagnostic only, printed on the failure path. `libc` is not a dependency
+/// here, so this reads `/proc/loadavg` where it exists and falls back to the
+/// `uptime` command. A machine offering neither still runs the test.
+fn read_load_average() -> Option<String> {
+    if let Ok(s) = std::fs::read_to_string("/proc/loadavg") {
+        let mut it = s.split_whitespace();
+        let (a, b, c) = (it.next()?, it.next()?, it.next()?);
+        return Some(format!("{a} {b} {c}"));
+    }
+    let out = std::process::Command::new("uptime").output().ok()?;
+    let s = String::from_utf8(out.stdout).ok()?;
+    let tail = s.rsplit_once("average")?.1;
+    Some(tail.trim_start_matches([':', 's', ' ']).trim().to_string())
+}
+
+/// The diagnostic must actually work, or it silently reports "unavailable" on
+/// exactly the failure it exists to explain.
+///
+/// This is the must-fire control for `read_load_average`. Its value is printed
+/// only on the red path, so nothing else in this file would ever notice it
+/// returning `None` or garbage. It asserts three parseable numbers rather than
+/// merely `Some`, because a parser that returned the wrong slice of the
+/// `uptime` line would still be `Some`.
+#[test]
+fn the_load_average_diagnostic_reports_three_numbers() {
+    let s = read_load_average().expect(
+        "no load average available on this platform -- the failure message would \
+         say 'unavailable' at exactly the moment it is needed",
+    );
+    let nums: Vec<f64> = s
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|t| !t.is_empty())
+        .filter_map(|t| t.parse::<f64>().ok())
+        .collect();
+    assert_eq!(
+        nums.len(),
+        3,
+        "expected three load figures, parsed {} from {s:?}",
+        nums.len()
+    );
+    assert!(
+        nums.iter().all(|n| *n >= 0.0),
+        "negative load average parsed from {s:?}, so the slice is wrong"
+    );
 }
