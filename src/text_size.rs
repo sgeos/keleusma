@@ -23,7 +23,7 @@
 //! cannot compose text at all today, only receive it from a host
 //! native. **This is infrastructure left behind by the removal**, and
 //! the authorized `Text<N>` work is what it was built for. See
-//! [`docs/decisions/TEXT_CAPACITY_TYPE.md`]. Text composition was
+//! `docs/decisions/TEXT_CAPACITY_TYPE.md`. Text composition was
 //! removed because it could not be bounded; a declared capacity is what
 //! lets it back.
 //!
