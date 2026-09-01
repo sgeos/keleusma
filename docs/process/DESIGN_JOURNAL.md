@@ -1,5 +1,47 @@
 # Design Journal
 
+## 2026-08-31 — A C host runs a Keleusma policy, and building it found a ruling nobody had acted on
+
+**Increment**: the C-host example the operator queued, at
+`native_codegen/examples/motor_policy/`. A motor drive's thermal derate and overcurrent trip, chosen
+because it is exactly where a host wants field-updatable logic and cannot risk it. See
+`../decisions/C_HOST_EXAMPLE_BRIEF.md`.
+
+**THE EXAMPLE EARNED ITS KEEP BEFORE IT RAN.** The policy compiled and the backend refused it: *"Fixed
+slot; the host-visible fraction-bit scale is unspecified."* **That is the precise question the
+operator settled earlier the same day** — the host knows the interpretation of the bits, on the
+analogy of a C header laying out the contract for a separately compiled procedure. A stale refusal
+sitting in this line's own file, and **trying to use the language for a real job is what found it**
+where reading had not.
+
+**The contract is generated from the module rather than transcribed**, so the offsets cannot drift
+from the code they describe. That is the operator's own analogy taken literally, and it is the most
+useful part of the artefact.
+
+**TWO DEFECTS OF MINE, BOTH CAUGHT BY LOOKING RATHER THAN TRUSTING.**
+
+The generated header emitted **duplicate macro names** for array elements, which C rejects outright —
+the header would not have compiled. Found by reading the generated file rather than assuming the
+generator was right, which is the same discipline that keeps catching instrument errors here.
+
+**My first mutation proved nothing.** I perturbed the POLICY, which moves both sides of a
+differential identically. A differential is invariant to its subject by construction; the mutation
+that establishes reach perturbs the LOWERING. Obvious afterwards, and I ran it before noticing.
+
+**The guarantee is shown rather than asserted**: the build prints WCET and memory bounds from the
+verifier. `wcmu_stream_iteration` refuses a policy with no `Stream` block, correctly, and reporting
+that refusal as a limitation would have been a misread of the tool rather than a fact about the
+policy.
+
+**AND THE PIPELINE-STATUS TRAP FIRED A THIRD TIME.** The verification chain ended with a `grep` for
+failures, which correctly found none and exited 1, so a green suite reported as a failed task. Three
+times this session, every one in a command written to check work. The rule is not "remember it": a
+status you intend to read gets its own line, and a filter never goes last.
+
+**Scaffolding removed rather than left.** The probe written first to check the policy compiled read
+its source from a path in `/tmp`. A test whose subject lives outside the repository is the shape this
+line already has a lesson about, and the example's own test subsumes it.
+
 ## 2026-08-31 — `f32` lowers, four defects found by the differential, and the blocker is not in this package
 
 **Increment**: lowering `f32`, per the operator's ruling that the floating-point type matches the

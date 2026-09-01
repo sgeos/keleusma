@@ -442,3 +442,44 @@ fn a_bool_shared_slot_agrees_in_value_and_in_buffer() {
         assert_shared_agrees(src, &args);
     }
 }
+
+#[test]
+fn a_fixed_shared_slot_agrees_in_value_and_in_buffer() {
+    // **THE OPERATOR RULED THE SCALE OUT OF BAND** on 2026-08-31: the host is
+    // expected to know the interpretation of the bits, as a C header lays out
+    // the contract for a separately compiled procedure. So a `Fixed` slot is a
+    // word of Q-format bits at the stated offset, and this pins that the backend
+    // writes the same bytes the reference does.
+    //
+    // **THE BITS ARE THE VALUE.** A lowering that rescaled, masked or
+    // sign-adjusted would return a plausible number, so the values below are
+    // chosen to differ from their integer reading: `as Fixed<8>` shifts left by
+    // eight, so 3 is stored as 768.
+    let src = "shared data s { q: Fixed<8>, n: Word }
+               fn main(a: Word, b: Word) -> Word {
+                   s.n = b; s.q = a as Fixed<8>; ((s.q) as Word) + s.n
+               }";
+    for args in [
+        [3, 5],
+        [-3, 5],
+        [0, 0],
+        [1, -1],
+        [12345, 7],
+        [i64::MIN / 512, 1],
+    ] {
+        assert_shared_agrees(src, &args);
+    }
+}
+
+#[test]
+fn a_fixed_shared_array_indexes_contiguously() {
+    // The stride case, and the one the example policy actually uses: a fixed
+    // array of per-zone values written under a bounded loop.
+    let src = "shared data s { qs: [Fixed<8>; 3], n: Word }
+               fn main(a: Word, b: Word) -> Word {
+                   s.n = b; s.qs[a] = b as Fixed<8>; ((s.qs[0]) as Word) + s.n
+               }";
+    for args in [[0, 11], [1, 22], [2, 33], [0, -7]] {
+        assert_shared_agrees(src, &args);
+    }
+}

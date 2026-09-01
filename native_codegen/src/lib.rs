@@ -1023,6 +1023,8 @@ impl<'ctx> Lower<'ctx> {
 const SCALAR_BOOL: u8 = 1;
 const SCALAR_BYTE: u8 = 2;
 const SCALAR_INT: u8 = 3;
+/// Q-format fixed point. Signed two's-complement of the runtime's word width.
+const SCALAR_FIXED: u8 = 4;
 /// Bytes this backend gives a private data slot.
 ///
 /// The layout of private storage is **this backend's own choice**, because
@@ -1084,7 +1086,19 @@ fn resolve_shared_scalar<'ctx>(
         });
     }
     match e.kind {
-        SCALAR_INT => Ok((e.offset, i64t, e.kind)),
+        // **`Fixed` IS A WORD OF Q-FORMAT BITS, AND THE OPERATOR RULED THE
+        // SCALE OUT OF BAND.** This arm was refused with "the host-visible
+        // fraction-bit scale is unspecified, so two programs whose values differ
+        // by a factor of 2^N share one layout". That was the right refusal until
+        // 2026-08-31, when the operator ruled that the host is expected to know
+        // the interpretation of the bits, on the analogy of a C header laying out
+        // the contract for a separately compiled procedure.
+        //
+        // So the layout IS the contract and the scale travels with the header.
+        // The bits are the value: no rescale, no mask, exactly as `Fixed` is
+        // already read from a composite body. See `docs/decisions/ABI_RULINGS.md`
+        // and `FIXED_SHARED_SLOT_ABI.md`.
+        SCALAR_INT | SCALAR_FIXED => Ok((e.offset, i64t, e.kind)),
         SCALAR_BYTE | SCALAR_BOOL => Ok((e.offset, i8t, e.kind)),
         // **A FLOAT SLOT IS AN EIGHT-BYTE LOAD AND A TAG.** The operator's
         // Option A ruling settles this slot as IEEE-754 bytes at the stated
@@ -1164,7 +1178,7 @@ fn alloc_format_kind(tag: u8, float_bytes: u32) -> String {
 /// Width in bytes of a shared scalar kind this backend lowers.
 fn shared_scalar_width(kind: u8, float_bytes: u32) -> Option<u32> {
     match kind {
-        SCALAR_INT => Some(8),
+        SCALAR_INT | SCALAR_FIXED => Some(8),
         SCALAR_BYTE | SCALAR_BOOL => Some(1),
         SCALAR_FLOAT_TAG if float_width_lowered(float_bytes) => Some(float_bytes),
         _ => None,

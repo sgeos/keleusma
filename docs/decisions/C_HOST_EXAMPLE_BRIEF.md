@@ -73,3 +73,57 @@ exists to preserve.
 **Writing a demonstration that is really a test.** The audience is someone deciding whether to embed
 Keleusma in a controller. It should read as a worked answer to "can I let a customer change this
 rule", not as a proof that the linker works.
+
+## Outcome, written after the build
+
+**A C host links a native object and runs a real protection policy**, at
+`native_codegen/examples/motor_policy/`. Four cases, physically sensible output, reproducible with
+`examples/motor_policy/run.sh`.
+
+### It surfaced an unacted ruling before it ran
+
+The backend still refused `Fixed` shared slots with *"the host-visible fraction-bit scale is
+unspecified"* — **the precise question the operator settled** on 2026-08-31 by ruling that the host
+knows the interpretation of the bits, on the analogy of a C header. A stale refusal in this line's own
+file, found by trying to use the language for the job the example is about. Lifted, with a
+differential over values that differ from their integer reading and a mutation that shifts the slot
+offset and fails the test.
+
+### The contract is generated, which is the operator's analogy taken literally
+
+`policy.h` is emitted **from the compiled module**, so its offsets cannot drift from the code they
+describe, and the `Fixed` scale is stated there rather than carried in the value.
+
+### Two defects of my own, both caught by looking rather than trusting
+
+**The generated header emitted duplicate macro names** for array elements, which C rejects outright.
+The header would not have compiled. Found by READING the generated file, not by assuming the
+generator was right. Repeated names are now suffixed by element index; unique ones are left readable.
+
+**My first mutation was meaningless.** Perturbing the policy moves BOTH sides of a differential
+identically, so it proved nothing. The mutation that establishes reach perturbs the LOWERING, and
+shifting the `Fixed` slot offset does fail the example's oracle.
+
+### The guarantee is shown
+
+The build prints WCET of 19 and 134 cost units, a 352-byte stack and 24-byte heap bound, and a
+58-byte shared segment, **all from the verifier**. `wcmu_stream_iteration` correctly refuses a policy
+with no `Stream` block, and reporting that refusal as a limitation would have been a misread of the
+tool rather than a fact about the policy; the module-level call is the right one.
+
+### The limits are in the README rather than left to a reader
+
+Streams do not lower, so the policy is a plain function rather than a coroutine. The native artefact
+can demand more region memory than the runtime's verified figure. `Text` and `Opaque` slots are
+refused and a `Float` slot needs eight bytes.
+
+### Packaging holds
+
+**Zero `native_codegen` files in the crate tarball**, measured rather than read, so the example does
+not make LLVM a dependency of the repository.
+
+### And a piece of scaffolding was removed rather than left
+
+The probe written first to check the policy compiled read its source from a path in `/tmp`. **A test
+whose subject lives outside the repository is exactly the shape this line has a recorded lesson
+about**, and the example's own test subsumes it.
