@@ -86,6 +86,13 @@ fn zero_value_at(
     match ty {
         TypeExpr::Unit(_) => Ok(ConstValue::Unit),
         TypeExpr::Prim(p, _) => Ok(zero_prim(p)),
+        // Text<N> has no zero value yet because its flat representation is not
+        // built. Reported through the unknown-type variant rather than a new
+        // one, since adding a variant for a temporary state costs every match
+        // on this enum.
+        TypeExpr::TextN(_, _) => Err(ZeroValueError::UnknownType(alloc::string::String::from(
+            "Text<N> (no flat representation yet)",
+        ))),
         TypeExpr::Multiword(n, _, _) => Ok(ConstValue::Array(
             alloc::vec![zero_prim(&crate::ast::PrimType::Word); n.as_lit().unwrap_or(0) as usize],
         )),
