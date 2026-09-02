@@ -138,6 +138,35 @@ manages. This is the piece the V0.4.0 strategy identifies as where the risk conc
 > **Sufficiency is NOT measured**: `lower_module` refuses on the first unsupported opcode and
 > `Op::Stream` is the first op of every stream chunk, so nothing behind it has been examined and
 > composites may sit there. Handling the degenerate form is **necessary** for those eight stages.
+>
+> ---
+>
+> ⚠ **SUFFICIENCY HAS SINCE BEEN MEASURED, AND THE CAVEAT ABOVE IS SUPERSEDED. 2026-09-02.**
+>
+> The caveat was correct when written on 2026-08-10, and **nothing corrected it for three weeks while
+> the instrument that answers it ran in the package suite on every invocation.** It is retained above
+> rather than deleted, because its EXPIRY is the finding and not its wrongness.
+>
+> **Measured by `native_codegen/tests/spike_stream_sufficiency.rs`**, which walks `examples/scripts`,
+> `src/selfhost/kel`, `examples/rtos/scripts` and `compiler/kel` — **a different population from the
+> 69-module figure used elsewhere in this line's censuses**:
+>
+> ```text
+>   stages freed by the stream work alone : 12
+>   stages needing more                   : 0
+> ```
+>
+> **"Freed" means no OTHER unsupported opcode sits behind the refusal.** It does **not** mean the
+> module lowers: `Op::Stream` is still refused, deliberately, and the backend's coverage residual
+> depends on that refusal standing.
+>
+> **And it does NOT answer whether those stages need coroutine intrinsics.** That is the separate
+> question the source-level reading above addresses, and it remains a source-level reading.
+> Conflating the two would replace one overclaim with another.
+>
+> **What it does settle** is the risk this section names: the concern was that handling `Stream` and
+> `Reset` might not deliver the stage modules because unexamined blockers sat behind them. Measured,
+> none do.
 > Nothing here shows it is **sufficient**, and this note must not be read as saying Workstream B
 > can be deferred past Order 1.
 >

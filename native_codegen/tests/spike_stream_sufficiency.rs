@@ -1,6 +1,19 @@
-//! RESEARCH SPIKE, not a regression test. **UNCOMPILED — see `README.md`.**
+//! **STATUS CORRECTED 2026-09-02. THIS HEADER DESCRIBED A FILE THAT DOES NOT
+//! EXIST ANY MORE — ITS OWN.**
 //!
-//! Install as `native_codegen/tests/spike_stream_sufficiency.rs`.
+//! It read: *"RESEARCH SPIKE, not a regression test. UNCOMPILED — see
+//! `README.md`. Install as `native_codegen/tests/spike_stream_sufficiency.rs`."*
+//!
+//! **It is installed at exactly that path, it compiles, it runs on every suite
+//! invocation, and it asserts** — including a non-vacuity check that the corpus
+//! is actually being read. Checked across the package: it is the ONLY file
+//! claiming to be uncompiled, so this was a single stale header rather than a
+//! convention.
+//!
+//! **It costs roughly 95 seconds**, the second-largest binary in the package
+//! after the corpus differential. That cost is now paid deliberately: it is the
+//! only instrument answering the sufficiency question below, and the roadmap was
+//! steering a risk judgement on the assumption that nothing answered it.
 //!
 //! Answers the one question the four counts left open and the source reading
 //! could not reach: **is handling `Stream` and `Reset` SUFFICIENT to unblock the
