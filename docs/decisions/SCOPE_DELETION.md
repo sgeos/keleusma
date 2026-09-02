@@ -19,9 +19,19 @@ the other producing it. **The unification is the `v0.2.3` line's**; the instance
 | "the gate is green" | by **the wrapper's exit code** |
 | "eleven tests cover the sites" | **four** of them |
 | "the toolchain requires strictly more" | by **count**, not by containment |
+| "the `f32` rung costs fewer runtime symbols" | verified under **default features**, and the test could not compile under `narrow-float-32` at all |
 
 **Not one of these is a wrong number, and not one came from a careless check.** Every measurement was
 performed correctly. What went missing was the clause naming what it ranged over.
+
+> ⚠ **THE SEVENTH INSTANCE WAS COMMITTED WHILE THIS FILE WAS BEING WRITTEN.** A test comparing
+> `f32` against `f64` hard-coded the wide width and was verified under default features only. It went
+> red on the next absorption, because under `narrow-float-32` the runtime's maximum float width **is**
+> `f32` — so the test's own subject does not exist there. **The claim ranged over two configurations
+> and the verification over one**, by the author of the record naming that exact failure.
+>
+> The repair is the one the record's own rules demand: **the narrow build asserts that the wide width
+> is refused**, rather than skipping. A branch that asserts nothing is a bucket nobody empties.
 
 ## Why it is durable
 

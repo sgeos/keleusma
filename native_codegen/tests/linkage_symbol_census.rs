@@ -864,6 +864,42 @@ fn the_narrow_float_width_costs_fewer_runtime_symbols_only_with_the_unit_enabled
             .collect()
     };
 
+    // ⚠ **THIS TEST'S SUBJECT DOES NOT EXIST IN EVERY BUILD, AND SAYING SO IS
+    // NOT A SKIP.** The comparison is `f32` against `f64`. Under
+    // `narrow-float-32` the runtime's maximum float width IS `f32`, so there is
+    // no wider width to compare against and the test cannot ask its question.
+    //
+    // **A first version hard-coded log2 = 6 and was verified only under default
+    // features.** It went red the moment the `v0.2.3` line's target check
+    // started enforcing the runtime maximum — a claim verified in one
+    // configuration while ranging over two, which is this session's own recorded
+    // failure class committed by the person recording it.
+    //
+    // **The narrow build asserts something real instead of skipping**: that the
+    // wide width is genuinely unavailable. A branch that asserts nothing is a
+    // bucket nobody empties.
+    if keleusma::bytecode::RUNTIME_FLOAT_BITS_LOG2 < 6 {
+        let mut wide = KelTarget::host();
+        wide.has_floats = true;
+        wide.float_bits_log2 = 6;
+        let err = compile_with_target(&parse(&tokenize(SRC).expect("lex")).expect("parse"), &wide)
+            .expect_err(
+                "this build's runtime maximum is below f64, so an f64 target must \
+                 be refused. If it compiles, the runtime maximum is not being \
+                 enforced and the comparison below was skipped for no reason.",
+            );
+        assert!(
+            err.message.contains("exceeds runtime maximum"),
+            "the refusal is not about the runtime maximum: {}",
+            err.message
+        );
+        println!(
+            "  {NARROW_TRIPLE} f64 is unavailable in this build (runtime maximum              log2={}), so the f32-versus-f64 comparison has no subject here and              is not attempted",
+            keleusma::bytecode::RUNTIME_FLOAT_BITS_LOG2
+        );
+        return;
+    }
+
     let generic32 = measure("generic", 5);
     let generic64 = measure("generic", 6);
     let m33_32 = measure("cortex-m33", 5);

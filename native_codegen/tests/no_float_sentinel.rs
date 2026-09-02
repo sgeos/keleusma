@@ -28,7 +28,8 @@
 //! like the silent-wrong-number hazard the same file warns against two functions
 //! above it. **Measured, it is not reachable through any operation**: an
 //! unlowerable non-zero width is refused before a float type is used, and no IR
-//! is emitted at all. Threading an `Option` through six call sites and into
+//! is emitted at all — now at two stages, since absorption 45 moved the friendly
+//! path's refusal into the front end. Threading an `Option` through six call sites and into
 //! closures, to remove a hazard nothing can reach, would risk a real defect in a
 //! backend measured correct. See `docs/decisions/NO_FLOAT_SENTINEL.md`.
 
@@ -118,37 +119,73 @@ fn the_embedded_targets_are_refused_for_word_width_not_float_width() {
     }
 }
 
-/// **THE HAZARD THAT WOULD MATTER, AND IT IS NOT REACHABLE.**
+/// **THE HAZARD THAT WOULD MATTER, AND THE REFUSAL MOVED UPSTREAM OF IT.**
 ///
-/// A width this backend does not lower, non-zero and with floats enabled. If the
-/// module lowered, `float_type`'s default arm would have widened it to `f64` and
-/// the program would compute in the wrong precision — a plausible wrong number
-/// rather than a fault, which is the exact failure this backend says it refuses.
+/// A width this backend does not lower, non-zero and with floats enabled. If a
+/// module lowered at such a width, `float_type`'s default arm would widen it to
+/// `f64` and the program would compute in the wrong precision — a plausible
+/// wrong number rather than a fault.
+///
+/// # ⚠ THIS TEST MOVED IN ABSORPTION 45, AND THE MOVE WAS PREDICTED
+///
+/// It used to construct a two-byte float target, watch the LOWERING refuse, and
+/// assert on that message. **The `v0.2.3` line now refuses such a target at
+/// COMPILE**, so the module never reaches the backend and the old assertion
+/// failed. That was named as this absorption's falsifier before it was measured,
+/// and it is **the refusal correctly moving upstream** rather than a defect on
+/// either side.
+///
+/// # The consequence, which is the part worth keeping
+///
+/// **The backend's own float-width guard is no longer reachable through any
+/// `Target`.** Every sub-32-bit width is now rejected by the front end.
+///
+/// **It is not dead code.** This backend consumes BYTECODE, and bytecode need
+/// not come from this front end — which is the whole reason a native code
+/// generator has its own guards. So the guard is still tested, by the route that
+/// models the actual threat: a module compiled at a lowerable width whose
+/// declared width is then altered, exactly as a module arriving from elsewhere
+/// might present.
 #[test]
-fn an_unlowerable_non_zero_float_width_is_refused_with_no_code_emitted() {
+fn an_unlowerable_float_width_is_refused_at_compile_and_again_by_the_backend() {
+    // 1. THE FRIENDLY PATH. A target claiming floats at a width that is not a
+    //    format no longer compiles at all.
     let mut t = Target::host();
     t.has_floats = true;
-    t.float_bits_log2 = 4; // 16-bit: two bytes, which this backend does not lower
-    assert_eq!(1u32 << t.float_bits_log2 >> 3, 2);
+    t.float_bits_log2 = 4; // two bytes
+    let err = lower_for(FLOAT_SRC, &t)
+        .expect_err("a target claiming floats at a non-format width must not compile");
+    assert!(
+        err.contains("not a floating-point format"),
+        "the compile refusal is not about the float width, so it may be \
+         incidental: {err}"
+    );
 
-    let outcome = lower_for(FLOAT_SRC, &t).expect("a 16-bit float target compiles");
-    let err = match outcome {
-        Err(e) => e,
-        Ok(ir) => panic!(
-            "a two-byte float width LOWERED instead of being refused. If it \
-             widened to f64 the program computes in the wrong precision:\n{ir}"
-        ),
-    };
-    let msg = format!("{err:?}");
+    // 2. THE THREAT MODEL. Bytecode need not come from this front end. Compile at
+    //    a width the backend lowers, then alter the declared width the way a
+    //    module from elsewhere could present, and require the backend to refuse
+    //    on its own account.
+    let ast = parse(&tokenize(FLOAT_SRC).expect("lex")).expect("parse");
+    let mut m = compile_with_target(&ast, &Target::host()).expect("compiles at the host width");
+    m.float_bits_log2 = 4;
+
+    let ctx = Context::create();
+    let lm = ctx.create_module("kel");
+    let e = lower_module(&ctx, &lm, &m, LowerOptions::default())
+        .expect_err("the backend must refuse a declared width it does not lower");
+    let msg = format!("{e:?}");
     assert!(
         msg.contains("2 bytes"),
-        "the refusal does not name the offending width, so it may be refusing \
-         for an unrelated reason: {msg}"
+        "the backend refusal does not name the offending width: {msg}"
     );
     assert!(
         msg.contains("4 and 8"),
-        "the refusal names the wrong lowered set. It said only 8 was lowered \
-         while 4 is lowered too, which predates f32 support: {msg}"
+        "the backend refusal names the wrong lowered set: {msg}"
+    );
+    let ir = lm.print_to_string().to_string();
+    assert!(
+        !ir.contains("double") && !ir.contains("half"),
+        "the backend emitted float code before refusing:\n{ir}"
     );
 }
 
