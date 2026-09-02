@@ -10,6 +10,25 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-01, session 61, CLOSE). FIVE MERGES, NOTHING RED, NOTHING UNMERGED.**
+>
+> `origin/v0.2.3` at `27fcbd11`, release gate green at 13 steps. Landed: the per-release format
+> fingerprint with its release step; float arithmetic narrowing to the module's declared width at ten
+> sites; a target refusal for float widths that are not formats; `Opaque` sized by the address width;
+> three instrument fixes; the perf canary's triage note.
+>
+> **Coverage of the float work is 8 of 10, measured by MUTATION.** The test file passed eleven tests
+> while covering four sites. `Mod` and `Neg` are uncoverable by construction, recorded with the
+> reason beside each, because a survived mutant meaning "cannot be covered" and one meaning "nobody
+> wrote the test" are indistinguishable without it.
+>
+> **`Text<N>` is the only major item unstarted.** The `ScalarKind::Text` collapse must land with it:
+> that is a wire change, free before publication and unavailable after.
+>
+> **An open decision belongs to the operator**: whose release gate is canonical at the native-codegen
+> back-merge. The two lines' scripts differ by 29 lines, so every "the gate is green" said today was
+> said about a different instrument. Ruled union with conditions, recorded in `RELEASE_PROCESS.md`.
+
 > **Currency note (2026-08-31, session 59, CLOSE). `Text<N>` AUTHORIZED AND DESIGNED; ONE REFACTOR
 > COMMITTED BUT UNVERIFIED; ONE LIVE DEFECT AWAITING THE OPERATOR.**
 >
