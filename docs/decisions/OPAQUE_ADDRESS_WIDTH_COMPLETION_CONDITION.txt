@@ -1,0 +1,38 @@
+Ordering is not a completion criterion. Any order that leaves the tree in
+the state below is complete.
+
+1. The scalar kind for opaque host handles is sized by the address width
+   rather than the word width, in the canonical flat-layout table.
+
+2. The work compiles under default features, under the self-hosted
+   feature, and under the signatures-and-shell feature set, and in each
+   case with test targets included, not only the library.
+
+3. No call site obtains the address width by a literal invented locally
+   where the surrounding code derives the word and float widths from the
+   module header. Wherever the other two widths are threaded, the third
+   is threaded the same way.
+
+4. RETIRED. This criterion said the format fingerprint must move when
+   this change lands, on the reasoning that a fingerprint failing to move
+   would mean the detector was broken.
+
+   It was written while the fingerprint was DERIVED from the scalar size
+   table. The operator redirected that design to a per-release random
+   value, so the fingerprint now moves at release and NOT on a layout
+   change, and two builds within one release cycle share it deliberately.
+
+   Under the current design the fingerprint is expected to be UNCHANGED
+   by this work, and it is. What catches an unintended layout change is
+   the golden wire-byte test, which is unchanged here too -- correctly,
+   since the golden program contains no opaque handle for the width
+   change to reach.
+
+5. The self-hosted byte-identity comparisons pass.
+
+6. Every statement about what compiles or passes names the feature set
+   AND whether test targets were included. No result measured in one
+   configuration is reported as a conclusion about another.
+
+7. Anything left unfinished is recorded in the process channels as
+   unfinished, naming the specific sites or checks involved.

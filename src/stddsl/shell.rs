@@ -784,6 +784,10 @@ mod tests {
             opaques: &[],
             word_bytes: 8,
             float_bytes: 8,
+            // These tests pass only `StaticStr` arguments, which `arg_str`
+            // resolves without consulting the arena, so no width here is read.
+            // Eight matches the other two rather than asserting anything.
+            addr_bytes: 8,
         }
     }
 
