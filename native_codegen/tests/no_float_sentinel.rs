@@ -217,3 +217,101 @@ fn no_refusal_claims_eight_is_the_only_lowered_float_width() {
             .join("\n  ")
     );
 }
+
+/// **THE PREDICATE IS A CLAIM ABOUT A SET, SO THE SET IS ENUMERATED.**
+///
+/// `float_width_lowered` is an allowlist — `matches!(float_bytes, 4 | 8)` — so
+/// it defaults to refusing, which is this codebase's stated posture. The tests
+/// above sample it at two points: the no-floats sentinel, and one unlowerable
+/// width.
+///
+/// **Sampling a predicate is reasoning about the members you had in mind.** The
+/// `v0.2.3` line wrote the mirror of this guard on their side and it failed on
+/// its first run, not for the reason it was written: their predicate was a
+/// DENYLIST, `!matches!(bits_log2, 3 | 4)`, correct for the two rungs under
+/// discussion and wrong about everything else — it claimed two-bit and four-bit
+/// floats were implemented. **A denylist for a safety question defaults to
+/// admitting the unknown.**
+///
+/// So this walks every encodable `float_bits_log2` and checks the outcome
+/// against the predicate, rather than trusting that an allowlist cannot be
+/// wrong about its own domain.
+/// # ⚠ THREE DISTINCT `float_bits_log2` VALUES COLLAPSE TO ONE WIDTH HERE
+///
+/// Measured by this sweep: `float_bytes` is `1 << log2 >> 3`, so **log2 0, 1 and
+/// 2 all give ZERO bytes**. This backend therefore cannot distinguish the
+/// no-floats sentinel from a declared two-bit or four-bit float.
+///
+/// **Not a defect here, because all three refuse**, and a module with no floats
+/// carries no float operation to refuse. It is recorded because the `v0.2.3`
+/// line's predicate operates on `bits_log2` directly and *can* tell them apart,
+/// so the two sides do not agree on how many distinct inputs exist — and a
+/// conflation that is harmless under one refusal policy is not automatically
+/// harmless under another.
+#[test]
+fn every_encodable_float_width_is_lowered_or_refused_as_the_allowlist_says() {
+    const FLOAT_SRC: &str =
+        "fn main(w: Word) -> Word {\n  let a = w as Float;\n  let s = a + 1.5;\n  s as Word\n}\n";
+
+    let mut lowered: Vec<u8> = Vec::new();
+    let mut refused: Vec<(u8, &'static str)> = Vec::new();
+
+    for log2 in 0u8..=7 {
+        let mut t = Target::host();
+        t.has_floats = true;
+        t.float_bits_log2 = log2;
+        let bytes = 1u32 << log2 >> 3;
+
+        match lower_for(FLOAT_SRC, &t) {
+            // Refused before lowering: the front end or the target check. A
+            // distinct outcome, kept distinct — folding it into the lowering's
+            // refusal would credit this backend with a rejection it did not make.
+            Err(_) => refused.push((log2, "compile")),
+            Ok(Err(_)) => refused.push((log2, "lowering")),
+            Ok(Ok(_)) => lowered.push(log2),
+        }
+        println!(
+            "  float_bits_log2={log2} ({bytes} bytes) -> {}",
+            match lower_for(FLOAT_SRC, &t) {
+                Err(_) => "refused at compile".to_string(),
+                Ok(Err(e)) => format!("refused at lowering: {e:?}"),
+                Ok(Ok(_)) => "LOWERED".to_string(),
+            }
+        );
+    }
+
+    assert!(
+        !lowered.is_empty(),
+        "no width lowered at all, so this sweep is measuring a broken harness \
+         rather than the predicate"
+    );
+
+    // Every width that lowered must be one the allowlist admits. A width that
+    // lowers while the predicate refuses it would mean some path bypasses the
+    // guard entirely.
+    for log2 in &lowered {
+        let bytes = 1u32 << log2 >> 3;
+        assert!(
+            matches!(bytes, 4 | 8),
+            "float_bits_log2={log2} ({bytes} bytes) LOWERED, but the allowlist \
+             admits only 4 and 8. Some path reaches the float lowering without \
+             consulting it, which is how a wrong-width float becomes a plausible \
+             wrong number rather than a fault."
+        );
+    }
+
+    // And nothing the allowlist admits may be refused BY THE LOWERING — a
+    // refusal there would mean the predicate claims support the backend lacks,
+    // which is the direction that admits wrong numbers on the other line.
+    for (log2, stage) in &refused {
+        let bytes = 1u32 << log2 >> 3;
+        if matches!(bytes, 4 | 8) {
+            assert_ne!(
+                *stage, "lowering",
+                "float_bits_log2={log2} ({bytes} bytes) is admitted by the \
+                 allowlist and refused by the lowering. The predicate claims a \
+                 width the backend does not implement."
+            );
+        }
+    }
+}

@@ -165,6 +165,49 @@ makes a sum say something about one of its terms.
 population" would have produced a carefully scoped 457 that still could not have told anyone what
 they needed to know.
 
+## ⚠ AN EXCLUSION INSIDE AN ENUMERATION, WHICH IS THE SHARPEST FORM YET
+
+**The `v0.2.3` line's, 2026-09-01, and it cost them a live defect.**
+
+They wrote a test enumerating every float width their predicate admits, building a module at each —
+the correct instrument, written for exactly this class. **It skipped the zero row**, with a comment
+saying a module declaring zero has no float operations to narrow.
+
+> **"I wrote the assumption into the test as a skip, and then the test could not see the case."**
+
+**An exclusion inside an enumeration is a population deleted from an instrument built to check
+populations.** It is the sharpest form in this record because the deletion happens *inside the
+defence*, and it is invisible for the same reason as every other instance: the skip carried a
+justifying comment, so nothing looked missing.
+
+What it hid: a target with `has_floats = true` and `float_bits_log2 = 0` **compiled, loaded, and
+returned 3.75** — computed in `f64` while declaring a zero-bit float, which is the defect their whole
+arithmetic-width increment exists to remove, surviving at the one width the narrowing treats as
+nothing to do.
+
+**No component was wrong.** The allowlist admits zero, correctly, because a module with no floats has
+nothing to narrow. The narrowing does nothing at zero, correctly. The field's documentation says it is
+honoured only when `has_floats` is true, correctly. **Nothing enforced the pairing** — the eleven
+increments finding in miniature.
+
+### The distinction that separates a safe skip from this one
+
+Checked on this line's own censuses afterwards, since a grep for `continue` finds many.
+
+**Most skips are precondition failures** — an unreadable file, a module that will not compile — and
+those are legitimately outside a census's population, which is separately reconciled.
+
+**One skips on a MEASURED property**, in `loop_composite_census.rs`: a loop body that carries a
+`Break` is skipped. **It is safe, and the reason is structural**: those sites are added to a counted
+`amb` bucket and reported. The rows are classified, not dropped.
+
+> **A `continue` that routes into a counted bucket is a classification. A `continue` that routes
+> nowhere is a deletion.**
+
+The two are indistinguishable at the call site — one keyword, one line, both with a justifying
+comment. **Only the presence of an accumulator tells them apart**, which makes "does this skip
+increment anything?" the question to ask of every exclusion inside an instrument.
+
 ## No rate is given here, and the reason is stronger than caution
 
 **Six instances in one day is a count over an unbounded denominator.** Neither line knows how many
