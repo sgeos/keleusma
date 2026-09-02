@@ -33,7 +33,24 @@ awk '
     { line = $0; gsub(/\033\[[0-9;]*m/, "", line) }
 
     line ~ /^=== / {
-        if (step != "") printf "  %-58s %4d binaries %6d tests\n", step, bins, cases
+        if (step != "") {
+            # AN ABSENCE IS NOT A ZERO. A step that ran with no tests and a step
+            # that never ran leave the SAME absence in this log, and rendering
+            # either as "0 binaries 0 tests" asserts a measurement that did not
+            # happen: zero and zero reads as "we looked and found none" when
+            # what happened is "there was nothing to look at". Harder to catch
+            # than the prose form of the same error, because a number looks
+            # like evidence.
+            #
+            # Not rendered as SKIPPED either: this tool CANNOT tell which case
+            # it is, and that marker would invent information -- confidently
+            # wrong rather than merely ambiguous. A step that knows which case
+            # it is should say so in its own label, because only it can.
+            if (bins == 0 && cases == 0)
+                printf "  %-58s   -- no test results --\n", step
+            else
+                printf "  %-58s %4d binaries %6d tests\n", step, bins, cases
+        }
         step = line
         sub(/^=== /, "", step); sub(/ ===$/, "", step)
         bins = 0; cases = 0
@@ -50,11 +67,32 @@ awk '
     }
 
     END {
-        if (step != "") printf "  %-58s %4d binaries %6d tests\n", step, bins, cases
+        if (step != "") {
+            # AN ABSENCE IS NOT A ZERO. A step that ran with no tests and a step
+            # that never ran leave the SAME absence in this log, and rendering
+            # either as "0 binaries 0 tests" asserts a measurement that did not
+            # happen: zero and zero reads as "we looked and found none" when
+            # what happened is "there was nothing to look at". Harder to catch
+            # than the prose form of the same error, because a number looks
+            # like evidence.
+            #
+            # Not rendered as SKIPPED either: this tool CANNOT tell which case
+            # it is, and that marker would invent information -- confidently
+            # wrong rather than merely ambiguous. A step that knows which case
+            # it is should say so in its own label, because only it can.
+            if (bins == 0 && cases == 0)
+                printf "  %-58s   -- no test results --\n", step
+            else
+                printf "  %-58s %4d binaries %6d tests\n", step, bins, cases
+        }
         if (steps == 0) { print "no step headers found; this is not a gate log" > "/dev/stderr"; exit 1 }
         if (total_bins == 0) { print "no test results found in any step" > "/dev/stderr"; exit 1 }
         printf "\n  %d step(s). PER-STEP figures above are the quotable ones.\n", steps
         print  "  A total across steps is not a test count: the same suite runs under several"
         print  "  feature sets, so summing them counts most tests more than once."
+        print  ""
+        print  "  A step showing no test results either ran without tests or did not run at"
+        print  "  all. This summary CANNOT distinguish the two: both leave the same absence"
+        print  "  in the log. A step that knows which it is should say so in its own label."
     }
 ' "$log"

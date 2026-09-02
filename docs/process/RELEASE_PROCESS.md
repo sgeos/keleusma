@@ -429,6 +429,30 @@ Notes:          <anything the next releaser must know>
 
 ## Abort criteria — any one is NO-GO
 
+> **A GATE STEP THAT SKIPPED IS NOT A GATE STEP THAT PASSED.**
+>
+> "No gate may be skipped" is stated elsewhere in this document and is silent on
+> the case that matters most, because it reads as being about an operator's
+> choice. **A step conditional on the ENVIRONMENT skips without anyone choosing
+> it.** The operator who omits a flag knows they omitted it; the operator on a
+> machine that happens to lack a toolchain knows only that the gate went green.
+>
+> The concrete case: the detached `native_codegen/` step is conditional on an
+> LLVM development install. On a machine without it the gate reports green
+> having never built the native backend.
+>
+> **Publishing a release that ships the native backend on a gate whose native
+> step skipped is NO-GO.** Green-with-a-skip is fine for routine development and
+> is not fine for a publication.
+>
+> `scripts/gate-summary.sh` renders a step with no test results as
+> `-- no test results --` rather than as a count, and says in its own footer
+> that it cannot distinguish "ran without tests" from "did not run". **That
+> ambiguity is the operator's to resolve before publishing, not the tool's.**
+> Read the gate log for the step's own label, which says which case it was.
+
+
+
 Conditions that mandate a halt, to be checked continuously through the preflight. Any one
 present before the point of no return means **do not proceed**:
 
