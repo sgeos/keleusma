@@ -1,5 +1,90 @@
 # Design Journal
 
+## 2026-09-01/02 — [v0.3.0] Twelve increments, two absorptions, and three claims of my own that were false
+
+**Increments**: the fused-multiply-add precondition, the host and bare-metal linkage censuses, the
+unwind-personality removal, the bound-transfer narrowing, the no-floats sentinel coverage, the
+`float_type` reachability fix, the generated host contract, the untested-combination run, the ladder
+correction, absorptions 44 and 45, and a roadmap caveat that had expired.
+
+**Figures carried, not re-derived**: `native_codegen` **459 passed, 0 failed, 88 binaries** under
+default features and again under `narrow-float-32`. Workspace **2720 passed, 0 failed, 116 binaries**
+under **default features only**. `origin/v0.2.3` absorbed through `c070803a`.
+
+### The f32 rung went green, and the reason it means anything is that I left it red
+
+`entry_abi_float.rs::the_parameter_is_operated_on_rather_than_only_passed_through` had been this
+line's only failure since the `f32` lowering landed. **Two cheap routes to green were available** —
+drive the oracle through the parameterised machine, or choose values where the widths agree — and both
+hide the defect, the second being the cheating the operator ruled out.
+
+**Had I taken either, the `v0.2.3` line would have repaired the runtime into a suite that could no
+longer tell, and both lines would have believed it.** The prediction was recorded as a NAMED TEST
+rather than a count, because "457 passed" reads identically before and after if some other test goes
+red in exchange.
+
+### Three claims of mine were false, and each was found by measuring rather than reviewing
+
+**"`f32` and `f16` buy native instructions rather than merely narrower storage."** Asserted in
+`NARROW_TARGET_LINKAGE.md` from the `f64` figure. **Measured: with the CPU that census used, `f32`
+costs six runtime symbols against `f64`'s six — no gain at all.** It holds only with the
+floating-point unit enabled, and then the residual two are `Word`-to-float conversions, so the
+remaining cost is a property of the **word** width. That is a better finding than the sentence it
+replaces.
+
+**"Declaring the natives makes omitting one a compile error."** Nearly shipped into a generated
+header that embedders read. **Measured all three cases with a C compiler: a missing definition still
+links-errors; a MISMATCHED one compiles clean without the declaration and fails with it.** The real
+guarantee is the better one, and it makes the boundary symmetric with the backend's own arity refusal.
+
+**A test verified under one configuration while its claim ranged over two.** The ladder test
+hard-coded `f64` and went red on the next absorption, because under `narrow-float-32` the runtime's
+maximum float width **is** `f32`, so its subject does not exist there. **Committed by the author of
+`SCOPE_DELETION.md`, in a test written while documenting that class.**
+
+### Two decisions were reversed, and both are recorded in both forms
+
+**"Change nothing in the whitelist"** about `float_type`'s default arm. Reversed by the `v0.2.3`
+line's reciprocal argument: **their storage sites refuse at the same junction**, so the convention I
+was contradicting locally is one this codebase already follows. Their design also showed the route —
+**move the refusal upstream rather than thread a `Result` through six call sites** — and unreachability
+is now established **by execution**, a panic in the arm giving 459/0/88 with zero panics.
+
+**The ladder claim above.** Corrected in place with the superseded text kept, because a decision that
+quietly becomes its opposite teaches nothing.
+
+### What was refused
+
+**No native worst-case-time model was started.** `NATIVE_WCET_ASYMMETRY.md` names what one would
+require and says explicitly that it is a workstream, not an increment. The bound-transfer claim was
+**narrowed rather than deleted** — the cost figure is true about the bytecode and only its subject was
+unstated.
+
+**No `f16` lowering was built**, and the handoff's reason for that was corrected: the arithmetic width
+landed in absorption 44, so the recorded blocker expired. **`f16` is still blocked because there is no
+oracle** — the reference refuses widths 3 and 4 at load, so a lowering could not be validated even
+though LLVM has the type. *"The blocker cleared"* is exactly the inference a struck-through row invites.
+
+### The cross-line pattern that produced the most
+
+Four times: one line reports a finding, the other checks its own side rather than assuming, and the
+check finds something neither was looking for. **Each finding was invisible to the line that owned the
+code and immediate to the line that did not.** The sharpest was a conflation this line recorded as
+harmless here, which on their side compiled, loaded, and **returned 3.75 while declaring a zero-bit
+float**.
+
+`SCOPE_DELETION.md` records the class both lines produced seven times: **a true measurement quoted with
+its scope deleted**. Its most uncomfortable entry is that **a falsifier sharing its claim's framing
+cannot falsify the framing** — three were written to catch one claim and all three passed.
+
+### The verification residual, stated rather than closed
+
+**The workspace was run on this branch under default features only.** Four configurations remain. The
+corpus-reading tests are not feature-gated and `src/selfhost/kel` is byte-identical to
+`origin/v0.2.3`, so **the marginal risk is low and it is not zero** — which is the honest form, rather
+than "verified" or "a gap".
+
+
 ## 2026-08-31 — A C host runs a Keleusma policy, and building it found a ruling nobody had acted on
 
 **Increment**: the C-host example the operator queued, at
