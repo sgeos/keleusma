@@ -57,8 +57,41 @@ So the warning lives in exactly one cell: **no-default-features × test targets.
 the session's recurring shape applied to the gate itself: *"clippy `-D warnings` is green"* is true
 **under default features**, and the sentence does not say so.
 
-**The file is `src/vm.rs`, which this line does not own.** Reported to the `v0.2.3` line rather than
-repaired here.
+**The file is `src/vm.rs`, which this line does not own.** Reported to the `v0.2.3` line, which fixed
+it: the import was gated on `test` while its only consumer was gated on `all(test, compile, verify)`,
+so under no-default-features the module vanished and the import did not.
+
+### ⚠ THE OBVIOUS REMEDY DOES NOT WORK, AND THIS RECORD IMPLIED IT WOULD
+
+The natural fix is to add `--no-default-features` to the gate's lint step. **The `v0.2.3` line
+measured it, found it does nothing, and said so before proposing it. Reproduced independently here,
+forcing a fresh lint each time:**
+
+| invocation | unused-import warnings |
+|---|---|
+| `clippy --workspace --all-targets` | 0 |
+| `clippy --workspace --all-targets --no-default-features` | **0 — the flag is accepted and has no effect** |
+| `clippy -p keleusma --all-targets` | 0 |
+| `clippy -p keleusma --all-targets --no-default-features` | **1** |
+
+**Workspace feature unification defeats the flag.** `keleusma-cli` declares `keleusma` with
+`features = ["shell", "signatures", "encryption", "self-host"]`, so a workspace build turns them back
+on whatever is passed at the workspace level.
+
+**So the hole is narrower and more specific than this record first stated.** Not *"the gate does not
+lint the no-default configuration"* — that phrasing suggests a flag would close it. Their statement:
+
+> **The gate's lint is workspace-scoped and its tests are package-scoped, and no flag on a
+> workspace-scoped command can reach a package-scoped configuration.**
+
+Closing it requires `-p keleusma` lint steps mirroring the test steps' scoping. **That is not done**,
+and their reason is the one this line accepted from them an hour earlier, now pointing the other way:
+package-scoped linting under default features already reports five warnings on unrelated items, so
+adding the steps today would turn the gate red on a separate matter — **folding a behaviour change
+into a hole-closing fix.** It gets its own increment.
+
+Their counts, recorded with their configurations attached rather than quoted bare: **nine warnings
+package-scoped under no-default, five under default, zero under `self-host`.**
 
 ## What a green gate here does and does not establish
 

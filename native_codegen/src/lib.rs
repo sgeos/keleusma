@@ -119,7 +119,12 @@ pub enum Width {
 /// Whether an operand is an integer or a floating-point value.
 ///
 /// **Separate from [`Width`], and deliberately not folded into it.** A `Float`
-/// and a `Word` are both eight bytes, so a width alone cannot tell them apart —
+/// and a `Word` are the same width **in the default build**, so a width alone
+/// cannot tell them apart there — and under `narrow-float-32` a `Float` is four
+/// bytes while a `Word` is eight, so the width discriminates in one supported
+/// configuration and not in the other. **Either way a width is not a kind**, and
+/// an earlier version of this sentence claimed the two are always eight bytes,
+/// which was false in a shipped configuration and hid a real defect for a week.
 /// `width_of_declared_shape` collapses `WireShape::Scalar { kind }` to a size and
 /// discards exactly this. Every float operation therefore needs a channel width
 /// cannot provide, and overloading `Width::Scalar` would reinstate the collapse
@@ -468,30 +473,39 @@ fn certified_local_widths(chunk: &Chunk) -> BTreeMap<usize, Width> {
 /// number of bytes and the body reads back as a plausible wrong value rather
 /// than as an error. `Unknown` instead fails at the USE, which is the existing
 /// refusal.
-fn width_of_declared_shape(shape: Option<&keleusma::bytecode::WireShape>) -> Width {
+fn width_of_declared_shape(
+    shape: Option<&keleusma::bytecode::WireShape>,
+    float_bytes: u32,
+) -> Width {
     match shape {
         Some(keleusma::bytecode::WireShape::Scalar { kind }) => {
             match keleusma::value_layout::ScalarKind::from_tag(*kind) {
-                // **THE THIRD ARGUMENT ARRIVED WITH ABSORPTION 46**, which sizes
-                // `Opaque` by the address width rather than the word width. Eight
-                // is passed because this backend targets a 64-bit address space
-                // and, more decisively, **refuses `Opaque` at every route it can
-                // reach** — the shared-slot resolver reports it as Workstream D —
-                // so no lowered path consumes this size for that kind.
+                // **THE FLOAT WIDTH IS THE MODULE'S, NOT EIGHT, AND THAT WAS A
+                // REAL DEFECT.** It used to be hard-coded, and the comment on
+                // `OperandKind` above still said *"a `Float` and a `Word` are both
+                // eight bytes"* — false under `narrow-float-32`, where a `Float`
+                // is four.
                 //
-                // ⚠ **THE OTHER TWO ARE HARD-CODED TOO, AND THE FLOAT ONE IS
-                // SUSPECT.** The comment on `OperandKind` above says *"a `Float`
-                // and a `Word` are both eight bytes"*. **That is false under
-                // `narrow-float-32`**, where a `Float` is four. Passing 8 there
-                // would report a declared `Float` as eight bytes when the module
-                // says four.
+                // **Measured before repairing, and the symptom is a REFUSAL rather
+                // than a wrong number**: a struct with a `Float` field built from a
+                // declared-`Float` call result was rejected under `narrow-float-32`
+                // with *"NewComposite packs 16 bytes but the instruction bakes 12;
+                // the layout model has drifted"*. Sixteen is 8 + 8; twelve is 4 + 8.
+                // **The backend refused a program it should lower, and blamed the
+                // layout model for a constant of its own.**
                 //
-                // **Not repaired here, deliberately.** This edit exists to restore
-                // the build after an absorption, and folding a behaviour change
-                // into it would conflate two effects in one measurement — which is
-                // the conflation this line has recorded three times. Investigated
-                // as its own increment, with its own prediction.
-                Some(k) => Width::Scalar(u32::try_from(k.size_in_bytes(8, 8, 8)).unwrap_or(0)),
+                // It is latent rather than dangerous only because the packed size is
+                // cross-checked against the size the instruction bakes. That guard
+                // is what converts a silent mispack into a loud refusal, which is
+                // the same property that makes the `Opaque` refusal protective: the
+                // danger was never being wrong, it was being wrong SILENTLY.
+                //
+                // The word width stays eight because this backend is 64-bit by
+                // construction (`WORD_BITS`), and the address width because `Opaque`
+                // is refused at every reachable route.
+                Some(k) => Width::Scalar(
+                    u32::try_from(k.size_in_bytes(8, float_bytes as usize, 8)).unwrap_or(0),
+                ),
                 None => Width::Unknown,
             }
         }
@@ -4040,7 +4054,7 @@ fn lower_chunk_body<'ctx>(
                     // An undeclared or unsizable return still yields `Unknown`
                     // and still fails closed at the use.
                     let sg_ret = chunk_signatures.get(usize::from(*idx)).map(|sg| &sg.ret);
-                    let w = width_of_declared_shape(sg_ret);
+                    let w = width_of_declared_shape(sg_ret, float_bytes);
                     // The KIND comes from the same declaration as the width, so a
                     // float call result is operable rather than `Unknown` — the
                     // caller-side twin of the parameter seeding in the prologue.
@@ -4150,7 +4164,7 @@ fn lower_chunk_body<'ctx>(
                 // a USE rather than here — the behaviour every unsignatured
                 // native still gets, and that is all of them in the shipped
                 // corpus today.
-                let w = width_of_declared_shape(native_shapes.get(usize::from(*idx)));
+                let w = width_of_declared_shape(native_shapes.get(usize::from(*idx)), float_bytes);
                 st.push_w(ret, w);
             }
             // `Byte` occupies a full `i64` slot holding a value in `0..=255`.
