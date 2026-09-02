@@ -80,9 +80,36 @@ unexpected requirement for a language with no exceptions, on a target with no un
 **A single `f64` addition, with its conversions, pulls six runtime symbols on the flagship embedded
 target.** Every double-precision operation there is already a function call.
 
-**So `f32` and `f16` buy native instructions rather than merely narrower storage**, on the target the
-ecosystem value proposition is written for. That is an argument for the ladder that has nothing to do
-with size, and it did not appear in [`FLOAT_LADDER.md`](./FLOAT_LADDER.md)'s original reasoning.
+> ⚠ **THIS CLAIM WAS ASSERTED HERE AND WAS FALSE AS WRITTEN. MEASURED 2026-09-01, LATER THE SAME DAY.**
+>
+> It read: *"So `f32` and `f16` buy native instructions rather than merely narrower storage."* **That
+> was an inference from the `f64` figure and from the target having a floating-point unit. The `f32`
+> cost was never measured.**
+>
+> | CPU | `f32` | `f64` |
+> |---|---|---|
+> | **`generic`, no features** — what this census used | **6** | **6** |
+> | `cortex-m33` | **2** | 6 |
+>
+> **With the CPU this census actually used there is NO GAIN AT ALL** — six symbols either way, just
+> the single-precision routines instead of the double-precision ones.
+>
+> **The claim holds only with the unit enabled, and only partly.** At `cortex-m33` the add and the
+> three comparisons go native, and **the residual two are `__fixsfdi` and `__floatdisf` — the
+> conversions between a 64-bit integer and a float.** Those cannot go native because **Keleusma's
+> `Word` is 64 bits and the unit is single-precision.**
+>
+> **The corrected statement**: on a target whose floating-point unit is enabled, `f32` moves the
+> arithmetic and comparisons into instructions and leaves the `Word` conversions as calls. **The
+> residual is a property of the WORD width, not the float width** — which points at the narrow-word
+> work rather than at the float ladder.
+>
+> **And nothing here is measurable about `f16`.** Nothing implements it and the reference refuses the
+> width at load, so there is no oracle. The original sentence covered both rungs; only one can be
+> measured, and the measured one must not carry the other.
+>
+> Pinned by `the_narrow_float_width_costs_fewer_runtime_symbols_only_with_the_unit_enabled`, which
+> asserts both rows — the no-gain case and the corrected one — so neither can quietly change.
 
 It also bears on **worst-case execution time**, which is this project's value proposition. An inline
 expansion is analysable; an opaque call into a compiler runtime is not, unless the runtime's own
@@ -105,6 +132,13 @@ reported "prediction refuted" and been believed.**
 
 ## Limits
 
-One machine, one LLVM, two targets, `generic` CPU on each, `RelocMode::PIC`, `default<O2>`. A
-different CPU selection on the narrow target could change which operations are native, and no other
-bare-metal target was measured.
+One machine, one LLVM, two targets, `generic` CPU on each, `RelocMode::PIC`, `default<O2>`.
+
+> ⚠ **THE CPU SELECTION IS NOT A FOOTNOTE, AND THIS SECTION TREATED IT AS ONE.** It read that a
+> different CPU "could change which operations are native". **Measured: it changes the `f32` figure
+> from six symbols to two**, and it is the difference between the claim above being false and being
+> true. **Every count in this document is under `generic` with no features**, which is a CPU with no
+> floating-point unit — so the eleven-symbol figure describes the worst case rather than a realistic
+> deployment.
+
+No other bare-metal target was measured.

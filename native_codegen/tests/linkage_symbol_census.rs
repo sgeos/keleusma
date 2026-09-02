@@ -783,3 +783,127 @@ fn no_unwind_personality_is_required_and_removing_the_attribute_brings_it_back()
          it. The recorded cause is wrong and must be re-derived: {without:?}"
     );
 }
+
+/// **A CLAIM THIS LINE ASSERTED AND HAD NOT MEASURED, AND IT WAS WRONG.**
+///
+/// `NARROW_TARGET_LINKAGE.md` recorded that a single `f64` addition pulls six
+/// runtime symbols on `thumbv8m.main-none-eabihf` and concluded: *"So `f32` and
+/// `f16` buy native instructions rather than merely narrower storage."*
+///
+/// **Measured, that is false as stated.** With the CPU the census actually used,
+/// `generic` with no features, `f32` costs **six** symbols against `f64`'s six —
+/// the same count, just the single-precision routines instead of the
+/// double-precision ones. **No gain at all.**
+///
+/// # It becomes true only when the floating-point unit is enabled, and only partly
+///
+/// | CPU | `f32` | `f64` |
+/// |---|---|---|
+/// | `generic`, no features | 6 | 6 |
+/// | `cortex-m33` | **2** | 6 |
+///
+/// **And the residual two are not arithmetic.** They are `__fixsfdi` and
+/// `__floatdisf`: the conversions between a 64-bit integer and a float. The add
+/// and the three comparisons go native; the conversions cannot, **because
+/// Keleusma's `Word` is 64 bits and the unit is single-precision.**
+///
+/// So the honest statement is narrower and more useful than the one recorded:
+/// **on a target whose floating-point unit is enabled, `f32` moves the arithmetic
+/// and comparisons into instructions and leaves the `Word` conversions as calls.**
+/// The remaining cost is a property of the WORD width, not of the float width.
+///
+/// **Nothing here is said about `f16`.** Nothing implements it and the reference
+/// refuses the width at load, so there is no oracle. The recorded claim covered
+/// both rungs; only one is measurable, and a measured rung must not carry an
+/// unmeasured one.
+#[test]
+fn the_narrow_float_width_costs_fewer_runtime_symbols_only_with_the_unit_enabled() {
+    use keleusma::compiler::compile_with_target;
+    // **ALIASED, because `inkwell::targets::Target` is already in scope in this
+    // file and a bare import of the runtime's `Target` shadows it.** The
+    // compiler caught it; naming the two apart beats relying on import order.
+    use keleusma::target::Target as KelTarget;
+
+    // ONE program, ONE triple. Only the declared float width and the CPU vary.
+    const SRC: &str =
+        "fn main(w: Word) -> Word {\n  let a = w as Float;\n  let s = a + 1.5;\n  s as Word\n}\n";
+
+    let dir = scratch("ladder");
+    let measure = |cpu: &str, log2: u8| -> Vec<String> {
+        let mut t = KelTarget::host();
+        t.has_floats = true;
+        t.float_bits_log2 = log2;
+        let m = compile_with_target(&parse(&tokenize(SRC).expect("lex")).expect("parse"), &t)
+            .unwrap_or_else(|e| panic!("log2={log2} must compile: {}", e.message));
+        Target::initialize_all(&InitializationConfig::default());
+        let triple = inkwell::targets::TargetTriple::create(NARROW_TRIPLE);
+        let machine = Target::from_triple(&triple)
+            .expect("target")
+            .create_target_machine(
+                &triple,
+                cpu,
+                "",
+                OptimizationLevel::Default,
+                RelocMode::PIC,
+                CodeModel::Default,
+            )
+            .expect("target machine");
+        let ctx = Context::create();
+        let lm = ctx.create_module("kel");
+        lm.set_triple(&triple);
+        lower_module(&ctx, &lm, &m, LowerOptions::default()).expect("lower");
+        lm.run_passes("default<O2>", &machine, PassBuilderOptions::create())
+            .expect("O2");
+        let obj = dir.join(format!("{cpu}{log2}.o"));
+        machine
+            .write_to_file(&lm, FileType::Object, &obj)
+            .expect("write");
+        undefined_symbols(&obj)
+            .into_iter()
+            .filter(|s| s.starts_with("__"))
+            .collect()
+    };
+
+    let generic32 = measure("generic", 5);
+    let generic64 = measure("generic", 6);
+    let m33_32 = measure("cortex-m33", 5);
+    let m33_64 = measure("cortex-m33", 6);
+
+    for (label, syms) in [
+        ("generic  f32", &generic32),
+        ("generic  f64", &generic64),
+        ("m33      f32", &m33_32),
+        ("m33      f64", &m33_64),
+    ] {
+        println!("  {NARROW_TRIPLE} {label} -> {} {syms:?}", syms.len());
+    }
+
+    // **NON-VACUITY.** Every claim below is about counts, and all hold trivially
+    // if nothing was emitted or the reader saw nothing.
+    assert!(
+        !generic64.is_empty() && !m33_64.is_empty(),
+        "the f64 rows found no runtime symbols, so the reader or the emission is          broken and the f32 figures mean nothing"
+    );
+
+    // The claim as originally recorded, which fails.
+    assert_eq!(
+        generic32.len(),
+        generic64.len(),
+        "with no floating-point unit enabled, f32 and f64 were expected to cost          the SAME number of runtime symbols — that is why the recorded claim was          wrong. If they now differ, re-derive the record rather than leaving it."
+    );
+
+    // The claim as it actually holds.
+    assert!(
+        m33_32.len() < m33_64.len(),
+        "with the unit enabled, f32 no longer costs fewer runtime symbols than          f64. The corrected claim has expired and must be re-derived: f32          {m33_32:?} against f64 {m33_64:?}"
+    );
+
+    // And the residual is conversions, not arithmetic — the part that makes it a
+    // statement about the WORD width rather than the float width.
+    assert!(
+        m33_32
+            .iter()
+            .all(|s| s.contains("fix") || s.contains("float")),
+        "the residual f32 symbols are no longer only Word-to-float conversions,          so the recorded explanation is wrong: {m33_32:?}"
+    );
+}
