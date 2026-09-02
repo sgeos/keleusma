@@ -1523,12 +1523,19 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             // the value rather than asserting, because a debug assertion here
             // would fire on a perfectly valid narrow-target module.
             0 => v,
-            // binary16 (4) and OFP8 E5M2 (3) need software rounding that does
-            // not exist yet, and Rust has no `f16` on stable to lean on.
-            // Reaching here would mean computing wide while declaring narrow,
-            // which is the defect this function exists to remove, so such
-            // modules are refused at load instead.
-            _ => v,
+            // Unreachable BY CONSTRUCTION rather than by inspection: the
+            // load-time refusal consults
+            // `float_width_narrowing_is_implemented`, and so does this arm's
+            // assertion, so the two cannot disagree about which widths are
+            // implemented. Reaching here would mean computing wide while
+            // declaring narrow, which is the defect this function removes.
+            other => {
+                debug_assert!(
+                    !crate::bytecode::float_width_narrowing_is_implemented(other),
+                    "float_bits_log2 = {other} is declared implemented but has no narrowing arm"
+                );
+                v
+            }
         }
     }
 
@@ -2416,7 +2423,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // `Target::embedded_8` or `Target::embedded_16`, which declare
         // `float_bits_log2: 0` alongside `has_floats: false`. Zero is the
         // no-floats sentinel, not a one-bit format.
-        if float_bits_log2 == 3 || float_bits_log2 == 4 {
+        if !crate::bytecode::float_width_narrowing_is_implemented(float_bits_log2) {
             return Err(VmError::VerifyError(alloc::format!(
                 "bytecode declares float_bits_log2 = {float_bits_log2} ({}-bit floats), which this \
                  runtime does not implement: arithmetic at that width needs software rounding that \

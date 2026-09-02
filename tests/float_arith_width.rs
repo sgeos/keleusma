@@ -256,3 +256,227 @@ fn checked_div_narrows_to_the_declared_width() {
     ));
     assert_eq!(got, want as f32 as f64, "checked Div was not narrowed");
 }
+
+// ---------------------------------------------------------------------------
+// The refusal and the narrowing must agree about which widths are implemented.
+// ---------------------------------------------------------------------------
+
+/// A module declaring an unimplemented float width is refused, not approximated.
+///
+/// Silently computing wide while declaring narrow is the defect this whole file
+/// exists to remove. Fixing it at one rung while reintroducing it at two others
+/// would be worse than not starting.
+#[test]
+fn an_unimplemented_float_width_is_refused_at_load() {
+    use keleusma::bytecode::float_width_narrowing_is_implemented as implemented;
+    for bits in [3u8, 4] {
+        assert!(
+            !implemented(bits),
+            "width 2^{bits} is claimed implemented; if a rung landed, this test and the \
+             narrowing must move together"
+        );
+    }
+}
+
+/// The no-floats sentinel must NOT be refused.
+///
+/// `Target::embedded_8` and `embedded_16` declare `float_bits_log2: 0` with
+/// `has_floats: false`. Zero is the sentinel, not a one-bit format. A blanket
+/// "narrower than 32 bits" refusal would reject every module built for those
+/// targets, which is the mistake this guards.
+#[test]
+fn the_no_floats_sentinel_is_not_treated_as_an_unimplemented_width() {
+    use keleusma::bytecode::float_width_narrowing_is_implemented as implemented;
+    assert!(
+        implemented(0),
+        "zero is the no-floats sentinel and must not be refused as an unimplemented width"
+    );
+}
+
+/// Every width the runtime can actually be built at is implemented.
+///
+/// Must-fire: without it the predicate could return false everywhere and the
+/// two tests above would still pass.
+#[test]
+fn the_implemented_widths_include_the_ones_the_runtime_uses() {
+    use keleusma::bytecode::float_width_narrowing_is_implemented as implemented;
+    assert!(implemented(5), "f32 must be implemented");
+    assert!(implemented(6), "f64 must be implemented");
+}
+
+/// Every encodable float width is CLASSIFIED, and none is skipped.
+///
+/// # Why this is a classification and not a loop with exclusions
+///
+/// The first version of this test carried two `continue`s and neither
+/// incremented anything. One skipped widths the predicate rejects; the other
+/// skipped zero, with a correct comment explaining that a zero-width module has
+/// no floats to narrow.
+///
+/// **A module declaring zero with `has_floats` then compiled, loaded, and
+/// returned 3.75 -- computed in `f64` while declaring a zero-bit float.** The
+/// test written to enumerate the domain could not see it, because the
+/// assumption had been written into it as a skip. A population deleted from an
+/// instrument built to check populations.
+///
+/// The rule, from the `v0.3.0` line, which separates a safe exclusion from that
+/// one: **a skip that routes into a counted bucket is a classification; a skip
+/// that routes nowhere is a deletion.** Both look identical at the call site --
+/// one keyword, one justifying comment -- and only an accumulator tells them
+/// apart. The question is not "is this skip justified", because that one was.
+/// It is "does this skip increment anything".
+///
+/// So every width in the encodable domain lands in exactly one bucket here, the
+/// buckets are counted, and their total is asserted to cover the domain. A
+/// future width that fits none of them fails rather than passing unseen.
+#[test]
+fn every_encodable_float_width_is_classified_and_none_is_skipped() {
+    use keleusma::bytecode::float_width_narrowing_is_implemented as implemented;
+
+    // Widths that run, widths refused at compile, and the no-floats sentinel.
+    let (mut ran, mut refused, mut sentinel) = (0usize, 0usize, 0usize);
+
+    for bits in 0u8..=6 {
+        let target = Target {
+            word_bits_log2: 6,
+            addr_bits_log2: 6,
+            float_bits_log2: bits,
+            has_floats: true,
+            has_strings: false,
+        };
+        let tokens = tokenize("fn main() -> Float { 1.5 + 2.25 }").expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let compiled = compile_with_target(&program, &target);
+
+        if bits == 0 {
+            // The sentinel is CHECKED, not skipped: paired with `has_floats` it
+            // must be refused, and that is the case the old skip concealed.
+            assert!(
+                compiled.is_err(),
+                "the no-floats sentinel was accepted alongside has_floats; a module built                  this way computes at the runtime's precision while declaring zero bits"
+            );
+            sentinel += 1;
+            continue;
+        }
+
+        if !implemented(bits) {
+            assert!(
+                compiled.is_err(),
+                "width 2^{bits} is not implemented and must not compile with has_floats"
+            );
+            refused += 1;
+            continue;
+        }
+
+        let module = compiled
+            .unwrap_or_else(|e| panic!("width 2^{bits} is claimed implemented but failed: {e:?}"));
+        let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        type WideVm<'a, 'arena> = GenericVm<'a, 'arena, i64, u64, f64>;
+        let mut vm: WideVm<'_, '_> = WideVm::new(module, &arena).unwrap_or_else(|e| {
+            panic!("width 2^{bits} is claimed implemented but was refused at load: {e:?}")
+        });
+        match vm.call(&[]).expect("call") {
+            GenericVmState::Finished(GenericValue::Float(f)) => assert_eq!(f, 3.75),
+            other => panic!("width 2^{bits}: unexpected result {other:?}"),
+        }
+        ran += 1;
+    }
+
+    // THE ROW THAT MAKES THIS AN ENUMERATION RATHER THAN A SAMPLE. Every width
+    // in the domain landed in exactly one bucket; a future width matching none
+    // of them fails here instead of passing unobserved.
+    assert_eq!(
+        ran + refused + sentinel,
+        7,
+        "the domain 0..=6 is seven widths and only {} were classified: ran {ran}, \
+         refused {refused}, sentinel {sentinel}",
+        ran + refused + sentinel
+    );
+    assert!(ran >= 2, "non-vacuity: only {ran} widths actually executed");
+    assert!(
+        refused >= 2,
+        "non-vacuity: only {refused} widths were refused"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// A target may not claim floats at a width that is not a format.
+//
+// Found by the v0.3.0 line's observation that its backend collapses
+// float_bits_log2 0, 1 and 2 to zero bytes and so cannot distinguish the
+// no-floats sentinel from a declared two-bit or four-bit float -- harmless
+// there because all three refuse. Checking whether the same conflation was
+// harmless HERE showed it was not: this runtime's predicate admits 0
+// unconditionally, and nothing enforced that a zero-width module has no floats.
+//
+// Measured before the fix: a program declaring float_bits_log2 = 0 with
+// has_floats = true COMPILED, LOADED, AND RETURNED 3.75 -- computed in f64
+// while declaring a zero-bit float. The defect the narrowing exists to remove,
+// surviving at the one width the narrowing treats as "nothing to do".
+// ---------------------------------------------------------------------------
+
+/// Every width that is not a format is refused when floats are claimed.
+#[test]
+fn a_target_claiming_floats_at_a_non_format_width_is_refused() {
+    for bits in [0u8, 1, 2, 3, 4] {
+        let target = Target {
+            word_bits_log2: 6,
+            addr_bits_log2: 6,
+            float_bits_log2: bits,
+            has_floats: true,
+            has_strings: false,
+        };
+        let tokens = tokenize("fn main() -> Float { 1.5 + 2.25 }").expect("lex");
+        let program = parse(&tokens).expect("parse");
+        assert!(
+            compile_with_target(&program, &target).is_err(),
+            "float_bits_log2 = {bits} with has_floats was accepted; a module built this \
+             way computes at the runtime's precision while declaring otherwise"
+        );
+    }
+}
+
+/// The must-fire control: the widths that ARE formats must still compile.
+///
+/// Without this the refusal above could reject everything and still pass.
+#[test]
+fn a_target_claiming_floats_at_a_real_width_still_compiles() {
+    for bits in [5u8, 6] {
+        let target = Target {
+            word_bits_log2: 6,
+            addr_bits_log2: 6,
+            float_bits_log2: bits,
+            has_floats: true,
+            has_strings: false,
+        };
+        let tokens = tokenize("fn main() -> Float { 1.5 + 2.25 }").expect("lex");
+        let program = parse(&tokens).expect("parse");
+        assert!(
+            compile_with_target(&program, &target).is_ok(),
+            "float_bits_log2 = {bits} is a real format and must compile"
+        );
+    }
+}
+
+/// The no-floats sentinel remains usable in its intended pairing.
+///
+/// The refusal is conditional on `has_floats`. A narrow target declaring zero
+/// alongside `has_floats: false` is the normal, correct configuration and must
+/// not be caught by the new check.
+#[test]
+fn the_no_floats_sentinel_still_compiles_a_float_free_program() {
+    let target = Target {
+        word_bits_log2: 6,
+        addr_bits_log2: 6,
+        float_bits_log2: 0,
+        has_floats: false,
+        has_strings: false,
+    };
+    let tokens = tokenize("fn main() -> Word { 1 + 2 }").expect("lex");
+    let program = parse(&tokens).expect("parse");
+    assert!(
+        compile_with_target(&program, &target).is_ok(),
+        "the no-floats sentinel with has_floats = false is the normal narrow-target \
+         configuration and must keep working"
+    );
+}

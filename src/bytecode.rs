@@ -3694,6 +3694,51 @@ pub const MAX_DATA_ADDR: u32 = 1 << 24;
 /// is closed by the number having moved.
 pub const BYTECODE_VERSION: u16 = 2;
 
+/// Whether this build implements arithmetic narrowing at a declared float width.
+///
+/// **The single source of truth for two places that must never disagree**: the
+/// load-time refusal and the runtime narrowing. The refusal ASKS this rather
+/// than restating it, so a rung cannot become implemented while the refusal
+/// still rejects it.
+///
+/// That failure mode is specific and nasty. A refusal naming a stale supported
+/// set does not merely mislead -- it tells someone to stop using something that
+/// works, which is worse than a bare refusal. Adding binary16 by teaching the
+/// narrowing and forgetting the refusal would produce exactly that.
+///
+/// # What is and is not implemented
+///
+/// Unimplemented: `3` (OFP8 E5M2) and `4` (IEEE binary16). Both need software
+/// rounding that does not exist here, and Rust has no `f16` on stable to lean
+/// on. Admitting such a module would compute in a wider format while declaring
+/// a narrow one, which is the defect the narrowing exists to remove.
+///
+/// Everything else is implemented: `5` narrows through `f32`, a width at or
+/// above the runtime's is the identity, and **`0` is the no-floats sentinel**
+/// used by [`crate::target::Target::embedded_8`] and
+/// [`crate::target::Target::embedded_16`] alongside `has_floats: false`. Zero
+/// is not a one-bit format, and a blanket "narrower than 32 bits" rejection
+/// would refuse every module built for those targets.
+///
+/// **To add a rung**: teach the narrowing, then remove its width here. Those
+/// are the only two edits, and forgetting the second refuses working modules
+/// while forgetting the first admits wrong numbers.
+pub const fn float_width_narrowing_is_implemented(bits_log2: u8) -> bool {
+    // AN ALLOWLIST, NOT A DENYLIST, AND THE FIRST VERSION WAS THE LATTER.
+    //
+    // It read `!matches!(bits_log2, 3 | 4)`, which is the same thing for the two
+    // rungs anyone was thinking about and wrong for everything else: it claimed
+    // widths 1 and 2 -- two-bit and four-bit floats, which are not formats --
+    // were implemented. Such a module would have loaded and computed at full
+    // runtime precision while declaring otherwise, which is the defect the
+    // narrowing exists to remove.
+    //
+    // A denylist for a safety predicate defaults to admitting the unknown. This
+    // codebase's stated posture is default-deny, and the test enumerating every
+    // width claimed implemented is what caught the inversion.
+    matches!(bits_log2, 0 | 5 | 6)
+}
+
 /// This release's format fingerprint, carried in the auxiliary header's
 /// reserved word and refused at load when it does not match.
 ///
