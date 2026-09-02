@@ -1354,8 +1354,12 @@ fn stage_seed_for(m: &Module, name: &str, subject_file: &str) -> Result<Vec<u8>,
             // reason about are the subject's.
             let wb = (1usize << subject.word_bits_log2) / 8;
             let fb = (1usize << subject.float_bits_log2) / 8;
+            // **ARRIVED WITH ABSORPTION 46**, which sizes `Opaque` by the address
+            // width. Derived from the subject module exactly as `wb` and `fb` are,
+            // and as the runtime's own callers derive it.
+            let ab = (1usize << subject.addr_bits_log2) / 8;
             let sig = subject.signatures.get(cix);
-            keleusma::selfhost::seed_verify_typed_shared(&vm, &subject, chunk, sig, wb, fb)
+            keleusma::selfhost::seed_verify_typed_shared(&vm, &subject, chunk, sig, wb, fb, ab)
         }
         "verify_structural.kel" => {
             // The always-yielding set is the subject module's, computed by the

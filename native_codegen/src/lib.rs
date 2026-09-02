@@ -472,7 +472,26 @@ fn width_of_declared_shape(shape: Option<&keleusma::bytecode::WireShape>) -> Wid
     match shape {
         Some(keleusma::bytecode::WireShape::Scalar { kind }) => {
             match keleusma::value_layout::ScalarKind::from_tag(*kind) {
-                Some(k) => Width::Scalar(u32::try_from(k.size_in_bytes(8, 8)).unwrap_or(0)),
+                // **THE THIRD ARGUMENT ARRIVED WITH ABSORPTION 46**, which sizes
+                // `Opaque` by the address width rather than the word width. Eight
+                // is passed because this backend targets a 64-bit address space
+                // and, more decisively, **refuses `Opaque` at every route it can
+                // reach** — the shared-slot resolver reports it as Workstream D —
+                // so no lowered path consumes this size for that kind.
+                //
+                // ⚠ **THE OTHER TWO ARE HARD-CODED TOO, AND THE FLOAT ONE IS
+                // SUSPECT.** The comment on `OperandKind` above says *"a `Float`
+                // and a `Word` are both eight bytes"*. **That is false under
+                // `narrow-float-32`**, where a `Float` is four. Passing 8 there
+                // would report a declared `Float` as eight bytes when the module
+                // says four.
+                //
+                // **Not repaired here, deliberately.** This edit exists to restore
+                // the build after an absorption, and folding a behaviour change
+                // into it would conflate two effects in one measurement — which is
+                // the conflation this line has recorded three times. Investigated
+                // as its own increment, with its own prediction.
+                Some(k) => Width::Scalar(u32::try_from(k.size_in_bytes(8, 8, 8)).unwrap_or(0)),
                 None => Width::Unknown,
             }
         }

@@ -541,6 +541,12 @@ fn the_accessor_seeds_move_each_stages_chunk_coverage() {
             "verify_typed.kel" => {
                 let wb = (1usize << subject.word_bits_log2) / 8;
                 let fb = (1usize << subject.float_bits_log2) / 8;
+                let ab = (1usize << subject.addr_bits_log2) / 8;
+                // **ARRIVED WITH ABSORPTION 46**, which sizes `Opaque` by the
+                // address width. Derived from the subject module the same way
+                // `wb` and `fb` are, and the same way the runtime's own callers
+                // derive it -- not hard-coded, so a narrow-address build is
+                // seeded with the width it actually declares.
                 let idx = subject
                     .chunks
                     .iter()
@@ -553,6 +559,7 @@ fn the_accessor_seeds_move_each_stages_chunk_coverage() {
                     subject.signatures.get(idx),
                     wb,
                     fb,
+                    ab,
                 )
             }
             // The multiheaded reconstruct path. Its record stream comes from
@@ -1011,6 +1018,7 @@ fn verify_stage_seed(
         "verify_typed.kel" => {
             let wb = (1usize << subject.word_bits_log2) / 8;
             let fb = (1usize << subject.float_bits_log2) / 8;
+            let ab = (1usize << subject.addr_bits_log2) / 8;
             keleusma::selfhost::seed_verify_typed_shared(
                 vm,
                 subject,
@@ -1018,6 +1026,7 @@ fn verify_stage_seed(
                 subject.signatures.get(chunk_ix),
                 wb,
                 fb,
+                ab,
             )
         }
         _ => {
