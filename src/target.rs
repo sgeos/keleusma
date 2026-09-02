@@ -252,6 +252,36 @@ pub(crate) fn validate_program_for_target(
     program: &Program,
     target: &Target,
 ) -> Result<(), CompileError> {
+    // A SELF-CONTRADICTORY TARGET IS REFUSED BEFORE THE PROGRAM IS EXAMINED.
+    //
+    // `float_bits_log2` is documented as honoured only when `has_floats` is
+    // true, and zero is the no-floats sentinel that `embedded_8` and
+    // `embedded_16` carry. A target claiming floats at a zero width asserts
+    // both at once.
+    //
+    // It is refused because it was ACCEPTED, and the result was a module that
+    // compiled, loaded and computed in the runtime's full precision while
+    // declaring a zero-bit float. That is precisely the defect the arithmetic
+    // narrowing exists to remove, surviving at the one width the narrowing
+    // treats as "nothing to do".
+    //
+    // Widths 1 and 2 are refused for the same reason a moment later: they are
+    // not formats, and the runtime's implemented-width predicate does not admit
+    // them, so a target declaring one produces bytecode nothing will run.
+    if target.has_floats && target.float_bits_log2 < 5 {
+        return Err(CompileError {
+            message: alloc::format!(
+                "target declares has_floats with float_bits_log2 = {}, which is not a \
+                 floating-point format this runtime implements. Zero is the no-floats \
+                 sentinel (pair it with has_floats = false); 1 and 2 are not formats; \
+                 3 and 4 are OFP8 E5M2 and IEEE binary16, which need software rounding \
+                 that does not exist yet",
+                target.float_bits_log2,
+            ),
+            span: crate::token::Span::default(),
+        });
+    }
+
     // Machine-property `require` directives are checked against the target
     // regardless of its capability flags, so this runs before the
     // floats-and-strings fast path below.

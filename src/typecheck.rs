@@ -4316,7 +4316,31 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                     } else if matches!(lt, Type::Float) && matches!(rt, Type::Float) {
                         Ok(Type::Float)
                     } else if matches!(lt, Type::Str) && matches!(rt, Type::Str) {
-                        Ok(Type::Str)
+                        // TEXT CONCATENATION IS REFUSED, AND THIS ARM USED TO ADMIT IT.
+                        //
+                        // It returned `Type::Str`, so `"ab" + "cd"` type-checked, PASSED THE
+                        // VERIFIER, and then faulted at runtime with "cannot add KStr and KStr".
+                        // V0.2.0 removed the script-side text-composition machinery from the
+                        // virtual machine -- there is no concat opcode and no bundled operation --
+                        // but this arm outlived its execution path by a full minor version.
+                        //
+                        // **A program the compiler accepts and the verifier passes must run.**
+                        // That is the whole of what `verify()` promises, and an expression that
+                        // always faults breaks it. Refusing here restores the promise: the
+                        // rejection is now at the compile boundary, where the conservative
+                        // stance says an unsupported construct belongs.
+                        //
+                        // The refusal is TEMPORARY BY DESIGN. Bounded text composition returns
+                        // with `Text<N>`, where a literal carries its own byte capacity and
+                        // concatenation composes them by const arithmetic -- `Text<A>` and
+                        // `Text<B>` yielding `Text<A + B>`. At that point this arm comes back with
+                        // an implementation behind it. See `docs/decisions/TEXT_CAPACITY_TYPE.md`.
+                        Err(TypeError::new(
+                            alloc::string::String::from(
+                                "text concatenation is not available: `Text + Text` has no                                  runtime implementation, so admitting it here would produce a                                  program that verifies and cannot run. Bounded concatenation                                  returns with the capacity-carrying `Text<N>` type; until then,                                  compose text in a host-registered native.",
+                            ),
+                            *span,
+                        ))
                     } else if matches!(lt, Type::Var(_)) || matches!(rt, Type::Var(_)) {
                         Ok(ctx.fresh())
                     } else {

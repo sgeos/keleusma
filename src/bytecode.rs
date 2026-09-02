@@ -3686,6 +3686,17 @@ pub struct Module {
 /// Unused bits are reserved.
 pub const FLAG_EPHEMERAL: u8 = 0x01;
 
+/// Every header flag bit this build defines, across both the framing header
+/// and the auxiliary body's header record, which carry the same byte.
+///
+/// **Measured, not inferred.** A first draft of this mask held only
+/// [`FLAG_EPHEMERAL`] and would have rejected every signed module, because
+/// signing sets [`crate::wire_format::FLAG_REQUIRES_SIGNATURE`] into this same
+/// byte. Any new flag must be added here or loading its modules fails.
+pub const KNOWN_HEADER_FLAGS: u8 = FLAG_EPHEMERAL
+    | crate::wire_format::FLAG_REQUIRES_SIGNATURE
+    | crate::wire_format::FLAG_ENCRYPTED;
+
 /// Magic prefix identifying serialized Keleusma bytecode (`KELE`).
 pub const BYTECODE_MAGIC: [u8; 4] = *b"KELE";
 
@@ -3701,25 +3712,107 @@ pub const MAX_DATA_ADDR: u32 = 1 << 24;
 /// Wire format version for serialized bytecode. Bytecode produced under a
 /// different version is rejected at load time.
 ///
-/// The version number signals a compatibility commitment to consumers. This
-/// crate has no public adoption, so there is no installed base to protect, and
-/// the version is deliberately held at 1 across development wire-format changes
-/// rather than bumped on each one. This continues an established policy: V0.2
-/// development releases briefly used version 2 before adoption and rolled it back
-/// to 1 when the header gained the flags byte and the shared and private data
-/// byte counts.
+/// The version number signals a compatibility commitment to consumers.
 ///
-/// The V0.2.3 line widened the shared-data byte-offset, data-slot-index, and
-/// indexed-array-length operands of `GetData`/`SetData`/`GetDataIndexed`/
-/// `SetDataIndexed` from sixteen to twenty-four bits (raising the shared-segment
-/// ceiling from 64 KB to 16 MB) without changing the four-byte opcode record or
-/// eight-byte operand-pool entry sizes. Under the no-adoption policy this is NOT
-/// a version bump; the number stays 1. The consequence, accepted deliberately, is
-/// that a module from an earlier development build shares version 1 with the wider
-/// format and would be accepted then mis-read rather than cleanly rejected on a
-/// version check -- moot while there is no saved bytecode in use, and revisited if
-/// the crate gains adoption.
+/// **It is FROZEN at 2 and does not move between releases.** The operator set
+/// that policy on 2026-09-01: the number stays at 2 until a hardware compiler
+/// exists or the language sees notable adoption. The stated and accepted
+/// consequence is that **early releases will not be compatible with one
+/// another**, and the version check cannot tell them apart, because it is
+/// exact equality against a number every one of them declares.
+///
+/// That is what [`FORMAT_FINGERPRINT`] exists to cover. The version says which
+/// era the format belongs to; the fingerprint says which release.
+///
+/// The number reached 2 on 2026-08-06, authorized on the grounds that the
+/// substrate itself had changed when the auxiliary body became the wire-format
+/// v2 container. An earlier no-adoption policy held it at 1 through the
+/// widening of the shared-data operands; that policy is superseded and the
+/// hazard it accepted, a version-1 artifact being accepted and then mis-read,
+/// is closed by the number having moved.
 pub const BYTECODE_VERSION: u16 = 2;
+
+/// Whether this build implements arithmetic narrowing at a declared float width.
+///
+/// **The single source of truth for two places that must never disagree**: the
+/// load-time refusal and the runtime narrowing. The refusal ASKS this rather
+/// than restating it, so a rung cannot become implemented while the refusal
+/// still rejects it.
+///
+/// That failure mode is specific and nasty. A refusal naming a stale supported
+/// set does not merely mislead -- it tells someone to stop using something that
+/// works, which is worse than a bare refusal. Adding binary16 by teaching the
+/// narrowing and forgetting the refusal would produce exactly that.
+///
+/// # What is and is not implemented
+///
+/// Unimplemented: `3` (OFP8 E5M2) and `4` (IEEE binary16). Both need software
+/// rounding that does not exist here, and Rust has no `f16` on stable to lean
+/// on. Admitting such a module would compute in a wider format while declaring
+/// a narrow one, which is the defect the narrowing exists to remove.
+///
+/// Everything else is implemented: `5` narrows through `f32`, a width at or
+/// above the runtime's is the identity, and **`0` is the no-floats sentinel**
+/// used by [`crate::target::Target::embedded_8`] and
+/// [`crate::target::Target::embedded_16`] alongside `has_floats: false`. Zero
+/// is not a one-bit format, and a blanket "narrower than 32 bits" rejection
+/// would refuse every module built for those targets.
+///
+/// **To add a rung**: teach the narrowing, then remove its width here. Those
+/// are the only two edits, and forgetting the second refuses working modules
+/// while forgetting the first admits wrong numbers.
+pub const fn float_width_narrowing_is_implemented(bits_log2: u8) -> bool {
+    // AN ALLOWLIST, NOT A DENYLIST, AND THE FIRST VERSION WAS THE LATTER.
+    //
+    // It read `!matches!(bits_log2, 3 | 4)`, which is the same thing for the two
+    // rungs anyone was thinking about and wrong for everything else: it claimed
+    // widths 1 and 2 -- two-bit and four-bit floats, which are not formats --
+    // were implemented. Such a module would have loaded and computed at full
+    // runtime precision while declaring otherwise, which is the defect the
+    // narrowing exists to remove.
+    //
+    // A denylist for a safety predicate defaults to admitting the unknown. This
+    // codebase's stated posture is default-deny, and the test enumerating every
+    // width claimed implemented is what caught the inversion.
+    matches!(bits_log2, 0 | 5 | 6)
+}
+
+/// This release's format fingerprint, carried in the auxiliary header's
+/// reserved word and refused at load when it does not match.
+///
+/// # Why a random number and not a derived one
+///
+/// [`BYTECODE_VERSION`] is frozen at 2 across releases, so it cannot
+/// distinguish two releases that both declare 2 while meaning different
+/// things. This can, because **every release gets a fresh value**.
+///
+/// An earlier implementation derived this from the scalar size table, on the
+/// reasoning that a hand-written constant fails by being forgotten. That was
+/// the wrong trade and the operator redirected it. A derived value only ever
+/// covers what it hashes, so a release that changed an opcode's meaning, a
+/// wire encoding, or the interpretation of a field would leave it unmoved
+/// while genuinely differing. A per-release value covers the release itself
+/// rather than a proxy for it. Forgetting is answered by this being a
+/// release-checklist step rather than a per-change one.
+///
+/// # What it does not do
+///
+/// It does not detect drift WITHIN a release cycle; two builds from the same
+/// release share it by design. The golden wire-byte test is what catches an
+/// unintended layout change between releases, and it does catch it.
+///
+/// # Updating
+///
+/// `scripts/fingerprint.sh --new` generates one and rewrites this line.
+/// `scripts/fingerprint.sh [commit]` reports the value any commit uses.
+///
+/// Zero is never a valid value: it is what a module written before the
+/// fingerprint existed carries, and what a hand-built fixture carries if it
+/// forgets, so it must not be mistaken for a live one.
+///
+/// This occupies space the wire format reserves. If that space is ever
+/// assigned a real meaning, this mechanism ends rather than moves.
+pub const FORMAT_FINGERPRINT: u32 = 0x4327_63E1;
 
 /// Word size in bits assumed by this binary build, encoded as the
 /// base-2 exponent. Actual width in bits is `1 << RUNTIME_WORD_BITS_LOG2`.

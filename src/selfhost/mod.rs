@@ -5609,7 +5609,11 @@ fn header_fields_of(module: &Module) -> [i64; 11] {
         0, // shared_data_bytes
         0, // private_data_bytes
         0, // schema_hash
-        0, // reserved
+        // The reserved word carries the format fingerprint. Taken from the
+        // same function the reference emitter calls, never a copied literal:
+        // a duplicated constant would drift silently, whereas this cannot
+        // disagree with the reference by construction.
+        i64::from(crate::bytecode::FORMAT_FINGERPRINT),
     ]
 }
 

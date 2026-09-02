@@ -44,6 +44,23 @@ type NarrowVm<'a, 'arena> = GenericVm<'a, 'arena, i16, u16, f32>;
 /// Narrow-Word but f64-Float alias. Used to exercise the lifted
 /// `Library<W, A, f64>` impls of `stddsl::Math` and `stddsl::Audio`
 /// on a runtime whose word type is narrower than the default i64.
+/// The float width this BUILD's runtime supports, as the base-2 exponent of bits.
+///
+/// A target declaring a wider float than the runtime is refused by `compile_with_target` with
+/// "target float_bits_log2 = N exceeds runtime maximum M". Tests whose subject is something else
+/// entirely -- registering a library on a narrow-word runtime, say -- must not pin a float width,
+/// or they fail under `narrow-float-32` for a reason that has nothing to do with what they check.
+///
+/// **Deriving the width is the right repair ONLY where the float is incidental.** Where the float
+/// width IS the subject, deriving it makes the test vacuous; see
+/// `wider_float_bytecode_never_reaches_execution`, which is repaired differently for that reason.
+const fn build_float_bits_log2() -> u8 {
+    // DERIVED FROM THE CRATE, NOT RESTATED. A `cfg!(feature = "narrow-float-32")` here would be a
+    // second copy of a condition the runtime already owns, and would be silently wrong the day a
+    // narrower float feature is added. `Target::host` reads the same constant.
+    keleusma::bytecode::RUNTIME_FLOAT_BITS_LOG2
+}
+
 #[cfg(feature = "floats")]
 type NarrowWordF64Vm<'a, 'arena> = GenericVm<'a, 'arena, i16, u16, f64>;
 
@@ -137,26 +154,71 @@ fn narrow_float_runtime_runs_f32_bytecode() {
 
 #[cfg(feature = "floats")]
 #[test]
-fn wider_float_bytecode_rejected_by_f32_runtime() {
-    // Bytecode declaring float_bits_log2 = 6 (f64) must be rejected
-    // by a runtime whose F = f32. Otherwise the load-time width
-    // check would silently narrow constants from f64 to f32.
+fn wider_float_bytecode_never_reaches_execution() {
+    // Bytecode declaring a float wider than the runtime's must never run. Otherwise the width
+    // check would silently narrow constants, which is a wrong answer rather than a refusal.
+    //
+    // # THIS TEST IS NOT REPAIRED BY DERIVING THE WIDTH, AND THAT IS THE POINT
+    //
+    // Its siblings pin a float width incidentally and are fixed by taking the build's width. Here
+    // the width IS the subject: a target matching the build is not wider than the runtime, so
+    // there would be nothing left to reject and the test would pass by testing nothing. That is
+    // the shape of green this repair exists to avoid.
+    //
+    // # THE GATE MOVED, WHICH IS WHY THE OLD FORM DIED ON ITS OWN FIXTURE
+    //
+    // It asserted a LOAD-time rejection and built its subject with `compile_with_target`. Under
+    // `narrow-float-32` the compiler now refuses the wide target first, so the fixture never
+    // existed and the test failed in `.expect("compile")` -- reported as a failure to reject while
+    // actually being a rejection one gate earlier.
+    //
+    // So the claim is stated at the strength it actually holds: **a wider-float module is refused,
+    // at compile time or at load time, and never executes.** Both gates are real and which one
+    // fires depends on the build. Asserting the disjunction is honest; asserting only the
+    // load-time gate was true of one build and false of the other.
+    // SIX, FIXED, AND NOT `build + 1`. The virtual machine below is explicitly `f32`, so a
+    // 64-bit float is wider than it under EVERY build. Deriving `build + 1` instead would make the
+    // compiler refuse the target on every build too, and the load-time gate -- the thing this test
+    // was originally written for -- would become unreachable. The repair would have kept the test
+    // green while deleting its subject, which is the failure mode this whole exercise is against.
+    //
+    // At six, each build exercises a different gate and both stay live:
+    //   default (`f64` runtime)  -- compile accepts 6, the `f32` machine refuses it at LOAD time
+    //   `narrow-float-32`        -- the compiler refuses 6 against a runtime maximum of 5
+    let wider = 6;
     let target = Target {
         word_bits_log2: 6,
         addr_bits_log2: 6,
-        float_bits_log2: 6,
+        float_bits_log2: wider,
         has_floats: true,
         has_strings: false,
     };
     let src = "fn main() -> Float { 1.5 }";
     let tokens = tokenize(src).expect("lex");
     let program = parse(&tokens).expect("parse");
-    let module = compile_with_target(&program, &target).expect("compile");
 
+    let module = match compile_with_target(&program, &target) {
+        // Gate one: the compiler refuses to emit for a target wider than the runtime.
+        Err(e) => {
+            assert!(
+                e.message.contains("float_bits_log2"),
+                "compile refused the wider target, but not on the float width: {}",
+                e.message
+            );
+            return;
+        }
+        Ok(m) => m,
+    };
+
+    // Gate two: the module exists, so the safe constructor must refuse it.
     let arena = Arena::with_capacity(4096);
     type F32Vm<'a, 'arena> = GenericVm<'a, 'arena, i64, u64, f32>;
     let err = match F32Vm::new(module, &arena) {
-        Ok(_) => panic!("must reject wider float bytecode"),
+        Ok(_) => panic!(
+            "a module declaring float_bits_log2 = {wider} was accepted by a runtime that cannot \
+             represent it. Neither gate fired, so wider-float bytecode can now execute and its \
+             constants are silently narrowed."
+        ),
         Err(e) => e,
     };
     let msg = format!("{:?}", err);
@@ -246,7 +308,7 @@ fn narrow_runtime_can_register_audio_library_via_lifted_impl() {
     let target = Target {
         word_bits_log2: 4,
         addr_bits_log2: 4,
-        float_bits_log2: 6,
+        float_bits_log2: build_float_bits_log2(),
         has_floats: true,
         has_strings: false,
     };
@@ -449,7 +511,7 @@ fn narrow_runtime_can_register_math_library_via_lifted_impl() {
     let target = Target {
         word_bits_log2: 4,
         addr_bits_log2: 4,
-        float_bits_log2: 6,
+        float_bits_log2: build_float_bits_log2(),
         has_floats: true,
         has_strings: false,
     };
