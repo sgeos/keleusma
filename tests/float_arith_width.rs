@@ -366,3 +366,85 @@ fn every_width_claimed_implemented_can_actually_be_loaded() {
         "non-vacuity: only {checked} widths exercised, so this proves nothing"
     );
 }
+
+// ---------------------------------------------------------------------------
+// A target may not claim floats at a width that is not a format.
+//
+// Found by the v0.3.0 line's observation that its backend collapses
+// float_bits_log2 0, 1 and 2 to zero bytes and so cannot distinguish the
+// no-floats sentinel from a declared two-bit or four-bit float -- harmless
+// there because all three refuse. Checking whether the same conflation was
+// harmless HERE showed it was not: this runtime's predicate admits 0
+// unconditionally, and nothing enforced that a zero-width module has no floats.
+//
+// Measured before the fix: a program declaring float_bits_log2 = 0 with
+// has_floats = true COMPILED, LOADED, AND RETURNED 3.75 -- computed in f64
+// while declaring a zero-bit float. The defect the narrowing exists to remove,
+// surviving at the one width the narrowing treats as "nothing to do".
+// ---------------------------------------------------------------------------
+
+/// Every width that is not a format is refused when floats are claimed.
+#[test]
+fn a_target_claiming_floats_at_a_non_format_width_is_refused() {
+    for bits in [0u8, 1, 2, 3, 4] {
+        let target = Target {
+            word_bits_log2: 6,
+            addr_bits_log2: 6,
+            float_bits_log2: bits,
+            has_floats: true,
+            has_strings: false,
+        };
+        let tokens = tokenize("fn main() -> Float { 1.5 + 2.25 }").expect("lex");
+        let program = parse(&tokens).expect("parse");
+        assert!(
+            compile_with_target(&program, &target).is_err(),
+            "float_bits_log2 = {bits} with has_floats was accepted; a module built this \
+             way computes at the runtime's precision while declaring otherwise"
+        );
+    }
+}
+
+/// The must-fire control: the widths that ARE formats must still compile.
+///
+/// Without this the refusal above could reject everything and still pass.
+#[test]
+fn a_target_claiming_floats_at_a_real_width_still_compiles() {
+    for bits in [5u8, 6] {
+        let target = Target {
+            word_bits_log2: 6,
+            addr_bits_log2: 6,
+            float_bits_log2: bits,
+            has_floats: true,
+            has_strings: false,
+        };
+        let tokens = tokenize("fn main() -> Float { 1.5 + 2.25 }").expect("lex");
+        let program = parse(&tokens).expect("parse");
+        assert!(
+            compile_with_target(&program, &target).is_ok(),
+            "float_bits_log2 = {bits} is a real format and must compile"
+        );
+    }
+}
+
+/// The no-floats sentinel remains usable in its intended pairing.
+///
+/// The refusal is conditional on `has_floats`. A narrow target declaring zero
+/// alongside `has_floats: false` is the normal, correct configuration and must
+/// not be caught by the new check.
+#[test]
+fn the_no_floats_sentinel_still_compiles_a_float_free_program() {
+    let target = Target {
+        word_bits_log2: 6,
+        addr_bits_log2: 6,
+        float_bits_log2: 0,
+        has_floats: false,
+        has_strings: false,
+    };
+    let tokens = tokenize("fn main() -> Word { 1 + 2 }").expect("lex");
+    let program = parse(&tokens).expect("parse");
+    assert!(
+        compile_with_target(&program, &target).is_ok(),
+        "the no-floats sentinel with has_floats = false is the normal narrow-target \
+         configuration and must keep working"
+    );
+}
