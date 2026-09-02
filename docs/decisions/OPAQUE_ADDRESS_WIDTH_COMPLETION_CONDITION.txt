@@ -13,9 +13,20 @@ the state below is complete.
    module header. Wherever the other two widths are threaded, the third
    is threaded the same way.
 
-4. The format fingerprint's pinned value differs from what it was before
-   this change. A fingerprint that did not move would mean the detector
-   is broken, and that must not be resolved by weakening the test.
+4. RETIRED. This criterion said the format fingerprint must move when
+   this change lands, on the reasoning that a fingerprint failing to move
+   would mean the detector was broken.
+
+   It was written while the fingerprint was DERIVED from the scalar size
+   table. The operator redirected that design to a per-release random
+   value, so the fingerprint now moves at release and NOT on a layout
+   change, and two builds within one release cycle share it deliberately.
+
+   Under the current design the fingerprint is expected to be UNCHANGED
+   by this work, and it is. What catches an unintended layout change is
+   the golden wire-byte test, which is unchanged here too -- correctly,
+   since the golden program contains no opaque handle for the width
+   change to reach.
 
 5. The self-hosted byte-identity comparisons pass.
 

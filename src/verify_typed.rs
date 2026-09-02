@@ -515,6 +515,23 @@ fn validate_data_layout(
 /// Shared entry: interpret one chunk under a seeding signature, a module
 /// signature table, and the set of declared flat enum body sizes (all empty
 /// when the chunk is checked in isolation).
+// EIGHT ARGUMENTS, AND THE ALLOW IS A RECORDED DEBT RATHER THAN A SHRUG.
+//
+// This crossed clippy's threshold when `addr_bytes` joined `word_bytes` and
+// `float_bytes`, which is the moment the three widths became a thing that
+// should travel as one value. The function's own first act is to pack all eight
+// arguments into a `Ctx` it then uses exclusively.
+//
+// The real fix is to bundle the widths, and it is not done here. Measured:
+// `addr_bytes: usize` appears at 43 signatures across seven modules, several of
+// them public. That is a refactor, and this commit is the repair of a change
+// that was already left unfinished once. A redesign inside a repair is how the
+// repair stops being verifiable.
+//
+// Recorded because it will only get more expensive: bundling before the next
+// width lands makes that width nearly free, and the public signatures make it
+// cheaper before a publication than after one.
+#[allow(clippy::too_many_arguments)]
 fn check_chunk_seeded(
     chunk: &Chunk,
     sig: &ChunkSig,

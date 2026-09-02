@@ -33,6 +33,19 @@ Choose by what the value *is*. The three widths derive from the module header by
 a helper that already receives the word and float widths should receive the address width from the
 same place rather than having one invented at the call site.
 
+## A criterion this brief stated, now retired
+
+The section below argued that the format fingerprint must move when this lands,
+and that a fingerprint failing to move would mean the detector is broken.
+
+**That was true of the fingerprint as designed at the time and is not true now.**
+The operator redirected it from a value derived from the scalar size table to a
+per-release random constant. It moves at release, not on a layout change.
+
+Left in place rather than deleted, because the reasoning was sound for the design
+it was written against, and because a brief that silently loses a criterion is
+harder to audit than one that records why the criterion went away.
+
 ## Why it is worth landing now specifically
 
 The format fingerprint hashes the scalar size table at pairwise-distinct reference widths. This
