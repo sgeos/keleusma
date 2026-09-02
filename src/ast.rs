@@ -1244,6 +1244,31 @@ pub enum TypeExpr {
     /// nominal type; its runtime representation is a flat array of N
     /// words.
     Multiword(ConstExpr, ConstExpr, Span),
+    /// Capacity-bounded mutable text: `Text<N>`, holding up to `N` content
+    /// bytes with no terminator.
+    ///
+    /// **Distinct from bare `Text`**, which is a pointer to `.rodata` and
+    /// carries no capacity in its type. A literal is static and has the bare
+    /// type; a value that can change has this one. They are two types, not one
+    /// parameterised family, because their residence rules differ: static text
+    /// lives in read-only memory for the module's lifetime, and a `Text<N>` is
+    /// an ordinary value.
+    ///
+    /// The runtime representation is a FLAT composite carrying no pointer,
+    /// handle, or epoch. That is the whole reason the type is admissible: a
+    /// handle implies unbounded lifetime, which is why it would need an epoch,
+    /// which puts worst-case memory beyond static reach and contradicts the
+    /// ecosystem's definitive-WCMU proposition. Because it carries no pointer,
+    /// a value containing one may cross a yield boundary, which bare dynamic
+    /// text may not.
+    ///
+    /// `N` is a const expression resolved to a literal at monomorphization
+    /// (B40), so neither worst-case analysis ever sees a symbolic bound.
+    ///
+    /// The governing analogy is the operator's: this is `for .. limit <const>`
+    /// applied to storage instead of iteration -- a runtime length under a
+    /// static cap.
+    TextN(ConstExpr, Span),
     /// Option type: `Option<T>`.
     Option(Box<TypeExpr>, Span),
     /// Unit type: `()`.
@@ -1331,6 +1356,7 @@ impl TypeExpr {
             | TypeExpr::Tuple(_, span)
             | TypeExpr::Array(_, _, span)
             | TypeExpr::Multiword(_, _, span)
+            | TypeExpr::TextN(_, span)
             | TypeExpr::Option(_, span)
             | TypeExpr::Unit(span)
             | TypeExpr::Labelled(_, _, span) => *span,
