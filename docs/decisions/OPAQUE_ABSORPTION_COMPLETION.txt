@@ -1,0 +1,52 @@
+COMPLETION CONDITION — absorption 46 and the gate (V0.3.X)
+
+Ordering is NOT a completion criterion. The properties below may be reached in
+any order, by any route. Judge the end state of the tree and the transcript, not
+the sequence, the branch, or the process used to get there.
+
+DONE when all of the following hold.
+
+1. THE ABSORPTION IS MEASURED ALONE.
+   The package suite result for the absorbed tree is obtained with no other
+   change in flight, and reported.
+
+2. A PREDICTION WITH A NAMED FALSIFIER WAS RECORDED BEFORE MEASURING.
+   The record shows what was predicted and what would refute it, written before
+   the measurement rather than after.
+
+3. THE PREDICTION IS RESOLVED AGAINST WHAT WAS MEASURED.
+   If a figure moved, the record names the tests involved and states the cause,
+   and does not adjust the prediction to match.
+
+4. BOTH FLOAT CONFIGURATIONS ARE COVERED.
+   The package result is given for default features and for the narrow float
+   configuration, since one has been red on this line before.
+
+5. THE GATE IS RUN ON THE FINAL TREE, OR ITS ABSENCE IS STATED.
+   The project's own gate script is run on the tree after the absorption, and
+   its outcome reported per step. If it was not run, the record says so and does
+   not describe partial verification as a gate pass.
+
+6. THE STEPS NOT PREVIOUSLY RUN ON THIS BRANCH ARE REPORTED EXPLICITLY.
+   The workspace lint pass and the documentation build at the published feature
+   sets are reported by name, since neither had been run here.
+
+7. A FAILURE IS REPORTED BEFORE IT IS REPAIRED.
+   Each failing step is named with its cause and with a statement of whether the
+   cause belongs to this line.
+
+8. CONCURRENT HEAVY WORK IS ACCOUNTED FOR.
+   The record states whether another long job was running during any
+   timing-sensitive step, and any timing failure is re-run alone before being
+   named a regression.
+
+9. NOTHING IS CLAIMED THAT WAS NOT RUN.
+   Every count and pass/fail claim corresponds to output appearing in the
+   transcript. Carried figures are marked as carried.
+
+10. FIGURES CARRY THEIR POPULATION.
+    Each count says which package and which configuration it ranges over.
+
+NOT completion criteria: which branch anything sits on, whether work is
+committed, how many commits were made, the order of the ten properties above, or
+whether any other goal in the same session advanced.
