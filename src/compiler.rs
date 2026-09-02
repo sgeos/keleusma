@@ -105,6 +105,14 @@ struct TypeInfo {
     /// Module-declared float width in bytes, the float companion of
     /// [`TypeInfo::word_bytes`].
     float_bytes: usize,
+    /// Module-declared ADDRESS width in bytes, which sizes an `Opaque`.
+    ///
+    /// Distinct from [`TypeInfo::word_bytes`] because the two widths are
+    /// selected independently and an `Opaque` is a handle to host memory
+    /// rather than a word. They coincide at eight bytes in the default
+    /// configuration, which is why sizing an `Opaque` by the word width was
+    /// latent rather than visibly wrong.
+    addr_bytes: usize,
 }
 
 impl TypeInfo {
@@ -117,13 +125,15 @@ impl TypeInfo {
     fn layout_context(&self) -> LayoutContext<'_> {
         // Opaque fallback is enabled because the compiler runs after the
         // type checker: a bare `Named` type that is not a struct, enum, or
-        // newtype is an opaque host reference, which is flat-eligible as a
-        // `word_bytes` registry index (B28 P3).
+        // newtype is an opaque host reference, which is flat-eligible as an
+        // `addr_bytes` registry index (B28 P3, resized per the operator's
+        // 2026-08-31 ruling that an `Opaque` follows the address width).
         LayoutContext::new(
             &self.struct_defs,
             &self.enum_defs,
             self.word_bytes,
             self.float_bytes,
+            self.addr_bytes,
         )
         .with_opaque_fallback(&self.newtype_names)
     }
@@ -3382,6 +3392,7 @@ pub fn compile_with_options(
     let mut type_info = TypeInfo {
         word_bytes: (1usize << target.word_bits_log2) / 8,
         float_bytes: (1usize << target.float_bits_log2) / 8,
+        addr_bytes: (1usize << target.addr_bits_log2) / 8,
         ..TypeInfo::default()
     };
     for type_def in &program.types {
@@ -5971,10 +5982,11 @@ fn type_flat_size(ty: &TypeExpr, ti: &TypeInfo) -> Option<usize> {
     if ti.word_bytes == 0 {
         return None;
     }
-    ti.layout_context()
-        .layout_for(ty)
-        .ok()?
-        .flat_byte_size(ti.word_bytes, ti.float_bytes)
+    ti.layout_context().layout_for(ty).ok()?.flat_byte_size(
+        ti.word_bytes,
+        ti.float_bytes,
+        ti.addr_bytes,
+    )
 }
 
 /// Build the per-enum-type layout descriptors the runtime uses to make an
@@ -6074,7 +6086,7 @@ fn wire_shape_of_type(ty: &TypeExpr, ti: &TypeInfo) -> crate::bytecode::WireShap
         LayoutDescriptor::Struct { .. } => CompositeKind::Struct,
         LayoutDescriptor::Enum { .. } => CompositeKind::Enum,
     };
-    match u32::try_from(desc.size_in_bytes(ti.word_bytes, ti.float_bytes)) {
+    match u32::try_from(desc.size_in_bytes(ti.word_bytes, ti.float_bytes, ti.addr_bytes)) {
         Ok(size) => WireShape::Flat {
             kind: composite_kind.to_tag(),
             size,
@@ -6117,7 +6129,7 @@ fn data_field_pool_bytes(ty: &TypeExpr, ti: &TypeInfo) -> usize {
         _ => match ti.layout_context().layout_for(ty) {
             Ok(crate::value_layout::LayoutDescriptor::Scalar(_)) => 0,
             Ok(layout) => layout
-                .flat_byte_size(ti.word_bytes, ti.float_bytes)
+                .flat_byte_size(ti.word_bytes, ti.float_bytes, ti.addr_bytes)
                 .unwrap_or(0),
             Err(_) => 0,
         },
@@ -6180,8 +6192,9 @@ fn push_shared_layout_desc(
                     span,
                 });
             }
-            let size = u32::try_from(kind.size_in_bytes(ti.word_bytes, ti.float_bytes))
-                .map_err(|_| overflow())?;
+            let size =
+                u32::try_from(kind.size_in_bytes(ti.word_bytes, ti.float_bytes, ti.addr_bytes))
+                    .map_err(|_| overflow())?;
             out.push(crate::bytecode::SharedSlotLayout {
                 offset: base_offset,
                 kind: kind.to_tag(),
@@ -6216,7 +6229,7 @@ fn push_shared_layout_desc(
                 _ => unreachable!("matched Tuple/Struct/Enum above"),
             };
             let len = layout
-                .flat_byte_size(ti.word_bytes, ti.float_bytes)
+                .flat_byte_size(ti.word_bytes, ti.float_bytes, ti.addr_bytes)
                 .ok_or_else(|| CompileError {
                     message: String::from(
                         "shared data composite field is not flat (it carries a reference); not \
@@ -6301,7 +6314,7 @@ fn classify_flat_field(ty: &TypeExpr, ti: &TypeInfo) -> FlatFieldForm {
         return FlatFieldForm::Scalar(kind);
     }
     if let (Some(size), Some(variant)) = (
-        descriptor.flat_byte_size(ti.word_bytes, ti.float_bytes),
+        descriptor.flat_byte_size(ti.word_bytes, ti.float_bytes, ti.addr_bytes),
         descriptor.flat_composite_kind(),
     ) && size <= u16::MAX as usize
     {

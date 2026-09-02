@@ -60,9 +60,9 @@ pub enum AbsVal {
 
 impl AbsVal {
     /// Byte size this value occupies inside a packed flat body, if known.
-    fn packed_size(&self, word_bytes: usize, float_bytes: usize) -> Option<u32> {
+    fn packed_size(&self, word_bytes: usize, float_bytes: usize, addr_bytes: usize) -> Option<u32> {
         match self {
-            AbsVal::Scalar(k) => Some(k.size_in_bytes(word_bytes, float_bytes) as u32),
+            AbsVal::Scalar(k) => Some(k.size_in_bytes(word_bytes, float_bytes, addr_bytes) as u32),
             AbsVal::Flat { size, .. } => Some(*size),
             AbsVal::Top => None,
         }
@@ -330,7 +330,19 @@ pub fn typed_check_chunk_with_sig(
     word_bytes: usize,
     float_bytes: usize,
 ) -> Result<(), TypedError> {
-    check_chunk_seeded(chunk, sig, &[], &[], &[], word_bytes, float_bytes)
+    // A chunk checked in isolation has no module to read an address width from, so it takes the
+    // runtime's own. That is sound here and only here: with no module there is no cross-compiled
+    // target to disagree with.
+    check_chunk_seeded(
+        chunk,
+        sig,
+        &[],
+        &[],
+        &[],
+        word_bytes,
+        float_bytes,
+        (1usize << crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2) / 8,
+    )
 }
 
 /// Check every chunk of a module, seeding each from the module's per-chunk
@@ -346,7 +358,13 @@ pub fn typed_check_module(
     // Wire-table validation (A.2.1 Phase 4): the carried tables are trusted
     // only because verified. B6: every shared slot lies within the shared-data
     // buffer. B8 is enforced per-op below via the enum body-size cross-check.
-    validate_data_layout(module, word_bytes, float_bytes)?;
+    // THE ADDRESS WIDTH IS DERIVED FROM THE MODULE, not taken as a parameter. It is the
+    // module's own declared width, the same field the runtime checks on load, so reading it here
+    // cannot drift from what the compiler baked. Passing `word_bytes` instead would validate the
+    // layout against the wrong field and silently agree wherever the two widths coincide, which
+    // is exactly the latency this ruling removes.
+    let addr_bytes = (1usize << module.addr_bits_log2) / 8;
+    validate_data_layout(module, word_bytes, float_bytes, addr_bytes)?;
 
     // The set of declared flat enum body sizes (`word_bytes + min_payload`),
     // against which a flat-enum `NewComposite` size is cross-checked (B8). A
@@ -371,6 +389,7 @@ pub fn typed_check_module(
             &module.native_return_shapes,
             word_bytes,
             float_bytes,
+            addr_bytes,
         )?;
     }
     Ok(())
@@ -385,6 +404,7 @@ fn validate_data_layout(
     module: &Module,
     word_bytes: usize,
     float_bytes: usize,
+    addr_bytes: usize,
 ) -> Result<(), TypedError> {
     let Some(layout) = &module.data_layout else {
         return Ok(());
@@ -430,7 +450,7 @@ fn validate_data_layout(
             usize::from(sl.len)
         } else {
             match ScalarKind::from_tag(sl.kind) {
-                Some(k) => k.size_in_bytes(word_bytes, float_bytes),
+                Some(k) => k.size_in_bytes(word_bytes, float_bytes, addr_bytes),
                 // An undecodable kind tag cannot be sized; treat as a corrupt
                 // table entry.
                 None => {
@@ -495,6 +515,23 @@ fn validate_data_layout(
 /// Shared entry: interpret one chunk under a seeding signature, a module
 /// signature table, and the set of declared flat enum body sizes (all empty
 /// when the chunk is checked in isolation).
+// EIGHT ARGUMENTS, AND THE ALLOW IS A RECORDED DEBT RATHER THAN A SHRUG.
+//
+// This crossed clippy's threshold when `addr_bytes` joined `word_bytes` and
+// `float_bytes`, which is the moment the three widths became a thing that
+// should travel as one value. The function's own first act is to pack all eight
+// arguments into a `Ctx` it then uses exclusively.
+//
+// The real fix is to bundle the widths, and it is not done here. Measured:
+// `addr_bytes: usize` appears at 43 signatures across seven modules, several of
+// them public. That is a refactor, and this commit is the repair of a change
+// that was already left unfinished once. A redesign inside a repair is how the
+// repair stops being verifiable.
+//
+// Recorded because it will only get more expensive: bundling before the next
+// width lands makes that width nearly free, and the public signatures make it
+// cheaper before a publication than after one.
+#[allow(clippy::too_many_arguments)]
 fn check_chunk_seeded(
     chunk: &Chunk,
     sig: &ChunkSig,
@@ -503,6 +540,7 @@ fn check_chunk_seeded(
     native_return_shapes: &[WireShape],
     word_bytes: usize,
     float_bytes: usize,
+    addr_bytes: usize,
 ) -> Result<(), TypedError> {
     let ctx = Ctx {
         chunk,
@@ -511,6 +549,7 @@ fn check_chunk_seeded(
         enum_body_sizes,
         native_return_shapes,
         wb: word_bytes,
+        ab: addr_bytes,
         fb: float_bytes,
     };
     // The local frame starts from the seed (parameters carry their declared
@@ -580,6 +619,10 @@ struct Ctx<'a> {
     wb: usize,
     /// Target float width in bytes.
     fb: usize,
+    /// Target ADDRESS width in bytes, which sizes an `Opaque`. Carried
+    /// separately from `wb` because the two widths are selected independently
+    /// and coincide only in the default configuration.
+    ab: usize,
 }
 
 /// A recursive abstract interpreter over ops `[start, end)`. The immutable
@@ -919,7 +962,7 @@ fn apply_op(
             let mut all_known = true;
             for _ in 0..*count {
                 let v = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
-                match v.packed_size(ctx.wb, ctx.fb) {
+                match v.packed_size(ctx.wb, ctx.fb, ctx.ab) {
                     Some(n) => computed = computed.saturating_add(n),
                     None => all_known = false,
                 }
@@ -956,7 +999,7 @@ fn apply_op(
 
         Op::GetField(StructField::Flat { offset, kind }) => {
             let v = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
-            check_flat_scalar(&v, *offset, *kind, ctx.wb, ctx.fb, ip)?;
+            check_flat_scalar(&v, *offset, *kind, ctx.wb, ctx.fb, ctx.ab, ip)?;
             stack.push(AbsVal::Scalar(*kind));
         }
         Op::GetField(StructField::FlatNested {
@@ -977,7 +1020,7 @@ fn apply_op(
         // nested composite field at its offset and size (A.2.1 Phase 3).
         Op::GetTupleField(TupleField::Flat { offset, kind }) => {
             let v = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
-            check_flat_scalar(&v, *offset, *kind, ctx.wb, ctx.fb, ip)?;
+            check_flat_scalar(&v, *offset, *kind, ctx.wb, ctx.fb, ctx.ab, ip)?;
             stack.push(AbsVal::Scalar(*kind));
         }
         Op::GetTupleField(TupleField::FlatNested {
@@ -998,7 +1041,7 @@ fn apply_op(
         // struct field against the padded enum body (A.2.1 Phase 3).
         Op::GetEnumField(EnumField::Flat { offset, kind }) => {
             let v = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
-            check_flat_scalar(&v, *offset, *kind, ctx.wb, ctx.fb, ip)?;
+            check_flat_scalar(&v, *offset, *kind, ctx.wb, ctx.fb, ctx.ab, ip)?;
             stack.push(AbsVal::Scalar(*kind));
         }
         Op::GetEnumField(EnumField::FlatNested {
@@ -1022,7 +1065,7 @@ fn apply_op(
         Op::GetIndex(ArrayElem::Flat { kind }) => {
             let _index = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
             let arr = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
-            let elem = kind.size_in_bytes(ctx.wb, ctx.fb) as u32;
+            let elem = kind.size_in_bytes(ctx.wb, ctx.fb, ctx.ab) as u32;
             check_flat_array_stride(&arr, elem, ip)?;
             stack.push(AbsVal::Scalar(*kind));
         }
@@ -1117,11 +1160,12 @@ fn check_flat_scalar(
     kind: ScalarKind,
     wb: usize,
     fb: usize,
+    ab: usize,
     ip: usize,
 ) -> Result<(), TypedError> {
     match v {
         AbsVal::Flat { size, .. } => {
-            let need = usize::from(offset) + kind.size_in_bytes(wb, fb);
+            let need = usize::from(offset) + kind.size_in_bytes(wb, fb, ab);
             if need > *size as usize {
                 return Err(TypedError::OffsetOutOfBounds {
                     ip,

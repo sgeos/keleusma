@@ -3483,6 +3483,16 @@ impl<'a> AuxView<'a> {
         Some(self.module.header()?.float_bits_log2)
     }
 
+    /// Runtime ADDRESS width, log2 form.
+    ///
+    /// The field has been in the auxiliary header all along; nothing read it,
+    /// because `ScalarKind` sized an `Opaque` by the WORD width. No wire-format
+    /// change is involved in exposing it -- the accessor was simply missing.
+    #[inline]
+    pub fn addr_bits_log2(&self) -> Option<u8> {
+        Some(self.module.header()?.addr_bits_log2)
+    }
+
     /// Schema hash, used to reject an incompatible hot swap.
     #[inline]
     pub fn schema_hash(&self) -> Option<u32> {

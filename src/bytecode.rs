@@ -613,9 +613,10 @@ pub(crate) fn flat_field_size<W: crate::word::Word, F: crate::float::Float>(
     v: &GenericValue<W, F>,
     word_bytes: usize,
     float_bytes: usize,
+    addr_bytes: usize,
 ) -> Option<usize> {
     if let Some(kind) = flat_tuple_scalar_kind(v) {
-        return Some(kind.size_in_bytes(word_bytes, float_bytes));
+        return Some(kind.size_in_bytes(word_bytes, float_bytes, addr_bytes));
     }
     // A `StaticStr` is not directly packable (it has no arena `(ptr, len)`
     // handle); the VM construct path converts it to a `KStr` before packing,
@@ -649,6 +650,7 @@ pub(crate) fn flat_tuple_element_with_refs<W: crate::word::Word, F: crate::float
     v: &GenericValue<W, F>,
     word_bytes: usize,
     float_bytes: usize,
+    addr_bytes: usize,
 ) -> bool {
     match v {
         // Both the host `Arc` form and the internal index form are opaque and
@@ -665,7 +667,7 @@ pub(crate) fn flat_tuple_element_with_refs<W: crate::word::Word, F: crate::float
         GenericValue::StaticStr(_) | GenericValue::KStr(_) => {
             word_bytes >= core::mem::size_of::<usize>()
         }
-        _ => flat_field_size(v, word_bytes, float_bytes).is_some(),
+        _ => flat_field_size(v, word_bytes, float_bytes, addr_bytes).is_some(),
     }
 }
 
@@ -904,9 +906,10 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         elements: alloc::vec::Vec<Self>,
         word_bytes: usize,
         float_bytes: usize,
+        addr_bytes: usize,
         arena: &keleusma_arena::Arena,
     ) -> Result<Self, allocator_api2::alloc::AllocError> {
-        match Self::pack_flat_in_arena(&elements, 0, word_bytes, float_bytes, arena)? {
+        match Self::pack_flat_in_arena(&elements, 0, word_bytes, float_bytes, addr_bytes, arena)? {
             Some(body) => Ok(Self::Tuple(TupleBody::Flat(body))),
             None => Ok(Self::Tuple(TupleBody::boxed(elements))),
         }
@@ -918,9 +921,10 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         elements: alloc::vec::Vec<Self>,
         word_bytes: usize,
         float_bytes: usize,
+        addr_bytes: usize,
         arena: &keleusma_arena::Arena,
     ) -> Result<Self, allocator_api2::alloc::AllocError> {
-        match Self::pack_flat_in_arena(&elements, 0, word_bytes, float_bytes, arena)? {
+        match Self::pack_flat_in_arena(&elements, 0, word_bytes, float_bytes, addr_bytes, arena)? {
             Some(body) => Ok(Self::Array(ArrayBody::Flat(body))),
             None => Ok(Self::Array(ArrayBody::boxed(elements))),
         }
@@ -935,13 +939,14 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         fields: alloc::vec::Vec<(alloc::string::String, Self)>,
         word_bytes: usize,
         float_bytes: usize,
+        addr_bytes: usize,
         arena: &keleusma_arena::Arena,
     ) -> Result<Self, allocator_api2::alloc::AllocError> {
         let (names, values): (
             alloc::vec::Vec<alloc::string::String>,
             alloc::vec::Vec<Self>,
         ) = fields.into_iter().unzip();
-        match Self::pack_flat_in_arena(&values, 0, word_bytes, float_bytes, arena)? {
+        match Self::pack_flat_in_arena(&values, 0, word_bytes, float_bytes, addr_bytes, arena)? {
             Some(body) => Ok(Self::Struct(StructBody::Flat(body))),
             None => Ok(Self::Struct(StructBody::boxed(
                 type_name,
@@ -974,6 +979,7 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         fields: alloc::vec::Vec<Self>,
         word_bytes: usize,
         float_bytes: usize,
+        addr_bytes: usize,
         arena: &keleusma_arena::Arena,
     ) -> Result<Self, allocator_api2::alloc::AllocError> {
         let disc_value = Self::Int(<W as crate::word::Word>::from_i64_wrap(disc));
@@ -987,7 +993,14 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         // form was removed). A top-level host enum has `min_payload == 0` and is
         // variant-sized.
         let min_bytes = word_bytes + min_payload;
-        match Self::pack_flat_in_arena(&values, min_bytes, word_bytes, float_bytes, arena)? {
+        match Self::pack_flat_in_arena(
+            &values,
+            min_bytes,
+            word_bytes,
+            float_bytes,
+            addr_bytes,
+            arena,
+        )? {
             Some(body) => Ok(Self::Enum(EnumBody::Flat(body))),
             None => {
                 // Not flat-eligible: rebuild the boxed body, dropping the
@@ -1029,22 +1042,27 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         self,
         word_bytes: usize,
         float_bytes: usize,
+        addr_bytes: usize,
         arena: &keleusma_arena::Arena,
     ) -> Result<Self, allocator_api2::alloc::AllocError> {
         match self {
             Self::Tuple(TupleBody::Boxed(elems)) => {
                 let elems = (*elems)
                     .into_iter()
-                    .map(|v| v.into_arena_canonical_field(word_bytes, float_bytes, arena))
+                    .map(|v| {
+                        v.into_arena_canonical_field(word_bytes, float_bytes, addr_bytes, arena)
+                    })
                     .collect::<Result<alloc::vec::Vec<_>, _>>()?;
-                Self::tuple_in_arena(elems, word_bytes, float_bytes, arena)
+                Self::tuple_in_arena(elems, word_bytes, float_bytes, addr_bytes, arena)
             }
             Self::Array(ArrayBody::Boxed(elems)) => {
                 let elems = (*elems)
                     .into_iter()
-                    .map(|v| v.into_arena_canonical_field(word_bytes, float_bytes, arena))
+                    .map(|v| {
+                        v.into_arena_canonical_field(word_bytes, float_bytes, addr_bytes, arena)
+                    })
                     .collect::<Result<alloc::vec::Vec<_>, _>>()?;
-                Self::array_in_arena(elems, word_bytes, float_bytes, arena)
+                Self::array_in_arena(elems, word_bytes, float_bytes, addr_bytes, arena)
             }
             Self::Struct(StructBody::Boxed(b)) => {
                 let BoxedStruct { type_name, fields } = *b;
@@ -1053,11 +1071,23 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                     .map(|(k, v)| {
                         Ok::<_, allocator_api2::alloc::AllocError>((
                             k,
-                            v.into_arena_canonical_field(word_bytes, float_bytes, arena)?,
+                            v.into_arena_canonical_field(
+                                word_bytes,
+                                float_bytes,
+                                addr_bytes,
+                                arena,
+                            )?,
                         ))
                     })
                     .collect::<Result<alloc::vec::Vec<_>, _>>()?;
-                Self::struct_in_arena(type_name, fields, word_bytes, float_bytes, arena)
+                Self::struct_in_arena(
+                    type_name,
+                    fields,
+                    word_bytes,
+                    float_bytes,
+                    addr_bytes,
+                    arena,
+                )
             }
             Self::Enum(EnumBody::Boxed(b)) => {
                 let BoxedEnum {
@@ -1085,7 +1115,9 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                 if type_name == "Option" {
                     let fields = fields
                         .into_iter()
-                        .map(|v| v.into_arena_canonical_field(word_bytes, float_bytes, arena))
+                        .map(|v| {
+                            v.into_arena_canonical_field(word_bytes, float_bytes, addr_bytes, arena)
+                        })
                         .collect::<Result<alloc::vec::Vec<_>, _>>()?;
                     return Self::enum_in_arena(
                         type_name,
@@ -1095,12 +1127,15 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                         fields,
                         word_bytes,
                         float_bytes,
+                        addr_bytes,
                         arena,
                     );
                 }
                 let fields = fields
                     .into_iter()
-                    .map(|v| v.into_arena_canonical_field(word_bytes, float_bytes, arena))
+                    .map(|v| {
+                        v.into_arena_canonical_field(word_bytes, float_bytes, addr_bytes, arena)
+                    })
                     .collect::<Result<alloc::vec::Vec<_>, _>>()?;
                 Self::enum_in_arena(
                     type_name,
@@ -1110,6 +1145,7 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                     fields,
                     word_bytes,
                     float_bytes,
+                    addr_bytes,
                     arena,
                 )
             }
@@ -1149,9 +1185,10 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         self,
         word_bytes: usize,
         float_bytes: usize,
+        addr_bytes: usize,
         arena: &keleusma_arena::Arena,
     ) -> Result<Self, allocator_api2::alloc::AllocError> {
-        match self.into_arena_canonical(word_bytes, float_bytes, arena)? {
+        match self.into_arena_canonical(word_bytes, float_bytes, addr_bytes, arena)? {
             Self::StaticStr(s) if word_bytes >= core::mem::size_of::<usize>() => {
                 let ks = crate::kstring::KString::alloc(arena, &s)?;
                 Ok(Self::KStr(ks))
@@ -1361,6 +1398,7 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         min_bytes: usize,
         word_bytes: usize,
         float_bytes: usize,
+        addr_bytes: usize,
         arena: &keleusma_arena::Arena,
     ) -> Result<Option<crate::flat_value::FlatComposite>, allocator_api2::alloc::AllocError> {
         // Size and eligibility first, with no allocation: `flat_field_size`
@@ -1369,7 +1407,7 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         // un-materialised arena children the VM packs here.
         let mut size = 0usize;
         for v in values {
-            match flat_field_size(v, word_bytes, float_bytes) {
+            match flat_field_size(v, word_bytes, float_bytes, addr_bytes) {
                 Some(n) => size += n,
                 None => return Ok(None),
             }
@@ -1384,7 +1422,7 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
             let mut off = 0usize;
             for v in values {
                 if let Some(kind) = flat_tuple_scalar_kind(v) {
-                    let field = kind.size_in_bytes(word_bytes, float_bytes);
+                    let field = kind.size_in_bytes(word_bytes, float_bytes, addr_bytes);
                     v.write_scalar_le(dst, off, word_bytes, float_bytes)
                         .map_err(|_| ())?;
                     off += field;

@@ -83,6 +83,14 @@ pub struct LayoutContext<'a> {
     /// Byte width of the target's float type. Equals `8` for
     /// the bundled `f64` runtime.
     float_bytes: usize,
+    /// Byte width of the target's ADDRESS, which sizes `ScalarKind::Opaque`.
+    ///
+    /// Separate from `word_bytes` because the two are selected independently:
+    /// `narrow-address-8`, `-16` and `-32` exist apart from the `narrow-word-*`
+    /// family, and an `Opaque` is a handle to host memory rather than a word.
+    /// They agree at sixty-four bits in the default configuration, which is why
+    /// sizing an `Opaque` by the word width was latent rather than visibly broken.
+    addr_bytes: usize,
     /// Newtype names, used only with `opaque_fallback` to avoid
     /// misclassifying a newtype-typed field as opaque. `None` when no
     /// fallback is configured.
@@ -107,12 +115,14 @@ impl<'a> LayoutContext<'a> {
         enums: &'a BTreeMap<String, EnumDef>,
         word_bytes: usize,
         float_bytes: usize,
+        addr_bytes: usize,
     ) -> Self {
         Self {
             structs,
             enums,
             word_bytes,
             float_bytes,
+            addr_bytes,
             newtypes: None,
             opaque_fallback: false,
         }
@@ -268,7 +278,7 @@ impl<'a> LayoutContext<'a> {
     /// `self.layout_for(ty)?.size_in_bytes(self.word_bytes, self.float_bytes)`.
     pub fn size_in_bytes(&self, ty: &TypeExpr) -> Result<usize, LayoutError> {
         let layout = self.layout_for(ty)?;
-        Ok(layout.size_in_bytes(self.word_bytes, self.float_bytes))
+        Ok(layout.size_in_bytes(self.word_bytes, self.float_bytes, self.addr_bytes))
     }
 
     /// The word byte width this context was constructed with.
@@ -316,7 +326,7 @@ mod tests {
     #[test]
     fn primitive_word_is_word_bytes() {
         let (structs, enums) = empty_tables();
-        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
+        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES, I64_BYTES);
         let ty = TypeExpr::Prim(PrimType::Word, span());
         assert_eq!(ctx.size_in_bytes(&ty).unwrap(), I64_BYTES);
     }
@@ -324,7 +334,7 @@ mod tests {
     #[test]
     fn primitive_byte_is_one_byte() {
         let (structs, enums) = empty_tables();
-        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
+        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES, I64_BYTES);
         let ty = TypeExpr::Prim(PrimType::Byte, span());
         assert_eq!(ctx.size_in_bytes(&ty).unwrap(), 1);
     }
@@ -332,7 +342,7 @@ mod tests {
     #[test]
     fn primitive_bool_is_one_byte() {
         let (structs, enums) = empty_tables();
-        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
+        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES, I64_BYTES);
         let ty = TypeExpr::Prim(PrimType::Bool, span());
         assert_eq!(ctx.size_in_bytes(&ty).unwrap(), 1);
     }
@@ -341,7 +351,7 @@ mod tests {
     #[test]
     fn primitive_float_is_float_bytes() {
         let (structs, enums) = empty_tables();
-        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
+        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES, I64_BYTES);
         let ty = TypeExpr::Prim(PrimType::Float, span());
         assert_eq!(ctx.size_in_bytes(&ty).unwrap(), F64_BYTES);
     }
@@ -349,7 +359,7 @@ mod tests {
     #[test]
     fn primitive_text_is_two_words() {
         let (structs, enums) = empty_tables();
-        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
+        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES, I64_BYTES);
         let ty = TypeExpr::Prim(PrimType::Text, span());
         assert_eq!(ctx.size_in_bytes(&ty).unwrap(), 2 * I64_BYTES);
     }
@@ -357,7 +367,7 @@ mod tests {
     #[test]
     fn primitive_fixed_is_word_bytes() {
         let (structs, enums) = empty_tables();
-        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
+        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES, I64_BYTES);
         let ty = TypeExpr::Prim(PrimType::Fixed(None), span());
         assert_eq!(ctx.size_in_bytes(&ty).unwrap(), I64_BYTES);
         let ty_explicit = TypeExpr::Prim(PrimType::Fixed(Some(16)), span());
@@ -367,7 +377,7 @@ mod tests {
     #[test]
     fn unit_is_zero_bytes() {
         let (structs, enums) = empty_tables();
-        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
+        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES, I64_BYTES);
         let ty = TypeExpr::Unit(span());
         assert_eq!(ctx.size_in_bytes(&ty).unwrap(), 0);
     }
@@ -375,7 +385,7 @@ mod tests {
     #[test]
     fn tuple_of_primitives() {
         let (structs, enums) = empty_tables();
-        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
+        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES, I64_BYTES);
         let ty = TypeExpr::Tuple(
             alloc::vec![
                 TypeExpr::Prim(PrimType::Word, span()),
@@ -390,7 +400,7 @@ mod tests {
     #[test]
     fn array_of_words() {
         let (structs, enums) = empty_tables();
-        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
+        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES, I64_BYTES);
         let ty = TypeExpr::array_lit(Box::new(TypeExpr::Prim(PrimType::Word, span())), 8, span());
         assert_eq!(ctx.size_in_bytes(&ty).unwrap(), 8 * I64_BYTES);
     }
@@ -398,7 +408,7 @@ mod tests {
     #[test]
     fn array_negative_size_rejected() {
         let (structs, enums) = empty_tables();
-        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
+        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES, I64_BYTES);
         let ty = TypeExpr::array_lit(Box::new(TypeExpr::Prim(PrimType::Word, span())), -1, span());
         assert!(matches!(
             ctx.size_in_bytes(&ty),
@@ -411,7 +421,7 @@ mod tests {
         // Defense-in-depth backstop for audit C11. A zero-length array is
         // degenerate and rejected at layout time as well as at typecheck.
         let (structs, enums) = empty_tables();
-        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
+        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES, I64_BYTES);
         let ty = TypeExpr::array_lit(Box::new(TypeExpr::Prim(PrimType::Word, span())), 0, span());
         assert!(matches!(
             ctx.size_in_bytes(&ty),
@@ -427,7 +437,7 @@ mod tests {
         // would otherwise silently produce a wrong width.
         use crate::ast::ConstExpr;
         let (structs, enums) = empty_tables();
-        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
+        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES, I64_BYTES);
         let too_big = TypeExpr::Multiword(
             ConstExpr::Lit(65537, span()),
             ConstExpr::Lit(0, span()),
@@ -453,7 +463,7 @@ mod tests {
     #[test]
     fn option_of_word() {
         let (structs, enums) = empty_tables();
-        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
+        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES, I64_BYTES);
         let ty = TypeExpr::Option(Box::new(TypeExpr::Prim(PrimType::Word, span())), span());
         // Word-sized discriminant (B28 P2): 8-byte disc + 8-byte payload.
         assert_eq!(ctx.size_in_bytes(&ty).unwrap(), I64_BYTES + I64_BYTES);
@@ -462,7 +472,7 @@ mod tests {
     #[test]
     fn option_of_bool() {
         let (structs, enums) = empty_tables();
-        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
+        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES, I64_BYTES);
         let ty = TypeExpr::Option(Box::new(TypeExpr::Prim(PrimType::Bool, span())), span());
         // Word-sized discriminant (B28 P2): 8-byte disc + 1-byte payload.
         assert_eq!(ctx.size_in_bytes(&ty).unwrap(), I64_BYTES + 1);
@@ -471,7 +481,7 @@ mod tests {
     #[test]
     fn labelled_descends_to_inner() {
         let (structs, enums) = empty_tables();
-        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
+        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES, I64_BYTES);
         let ty = TypeExpr::Labelled(
             Box::new(TypeExpr::Prim(PrimType::Word, span())),
             alloc::vec!["Sensitive".to_string()],
@@ -483,7 +493,7 @@ mod tests {
     #[test]
     fn negative_labelled_descends_to_inner() {
         let (structs, enums) = empty_tables();
-        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
+        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES, I64_BYTES);
         let ty = TypeExpr::NegativeLabelled(
             Box::new(TypeExpr::Prim(PrimType::Word, span())),
             alloc::vec!["Egress".to_string()],
@@ -517,7 +527,7 @@ mod tests {
                 span: span(),
             },
         );
-        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
+        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES, I64_BYTES);
         let ty = TypeExpr::Named("Point".to_string(), alloc::vec![], alloc::vec![], span());
         assert_eq!(ctx.size_in_bytes(&ty).unwrap(), 2 * I64_BYTES);
     }
@@ -555,7 +565,7 @@ mod tests {
                 span: span(),
             },
         );
-        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
+        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES, I64_BYTES);
         let ty = TypeExpr::Named("Color".to_string(), alloc::vec![], alloc::vec![], span());
         // Word-sized discriminant (B28 P2): 8-byte disc + 3-byte payload.
         assert_eq!(ctx.size_in_bytes(&ty).unwrap(), I64_BYTES + 3);
@@ -564,7 +574,7 @@ mod tests {
     #[test]
     fn unknown_named_type_is_an_error() {
         let (structs, enums) = empty_tables();
-        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
+        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES, I64_BYTES);
         let ty = TypeExpr::Named("Missing".to_string(), alloc::vec![], alloc::vec![], span());
         match ctx.size_in_bytes(&ty) {
             Err(LayoutError::UnknownType(name)) => assert_eq!(name, "Missing"),
@@ -575,7 +585,7 @@ mod tests {
     #[test]
     fn unsubstituted_generic_is_an_error() {
         let (structs, enums) = empty_tables();
-        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
+        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES, I64_BYTES);
         let ty = TypeExpr::Named(
             "Vec".to_string(),
             alloc::vec![TypeExpr::Prim(PrimType::Word, span())],
@@ -612,7 +622,7 @@ mod tests {
                 span: span(),
             },
         );
-        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
+        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES, I64_BYTES);
         let ty = TypeExpr::Named("Wrapper".to_string(), alloc::vec![], alloc::vec![], span());
         assert_eq!(ctx.size_in_bytes(&ty).unwrap(), 2 * I64_BYTES);
     }
@@ -642,7 +652,7 @@ mod tests {
                 span: span(),
             },
         );
-        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
+        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES, I64_BYTES);
         let ty = TypeExpr::Named("Greeting".to_string(), alloc::vec![], alloc::vec![], span());
         assert_eq!(ctx.size_in_bytes(&ty).unwrap(), I64_BYTES + 2 * I64_BYTES);
     }
@@ -672,11 +682,11 @@ mod tests {
                 span: span(),
             },
         );
-        let ctx_2byte_word = LayoutContext::new(&structs, &enums, 2, 4);
+        let ctx_2byte_word = LayoutContext::new(&structs, &enums, 2, 4, 2);
         let ty = TypeExpr::Named("Point".to_string(), alloc::vec![], alloc::vec![], span());
         assert_eq!(ctx_2byte_word.size_in_bytes(&ty).unwrap(), 2 * 2);
 
-        let ctx_1byte_word = LayoutContext::new(&structs, &enums, 1, 4);
+        let ctx_1byte_word = LayoutContext::new(&structs, &enums, 1, 4, 1);
         assert_eq!(ctx_1byte_word.size_in_bytes(&ty).unwrap(), 2);
     }
 }

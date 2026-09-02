@@ -4050,10 +4050,11 @@ fn const_scalar_size(
     cv: Option<&crate::bytecode::ConstValue>,
     wb: usize,
     fb: usize,
+    ab: usize,
 ) -> Option<i64> {
     use crate::bytecode::ConstValue;
     use crate::value_layout::ScalarKind;
-    let sz = |k: ScalarKind| k.size_in_bytes(wb, fb) as i64;
+    let sz = |k: ScalarKind| k.size_in_bytes(wb, fb, ab) as i64;
     match cv {
         Some(ConstValue::Unit) => Some(sz(ScalarKind::Unit)),
         Some(ConstValue::Bool(_)) => Some(sz(ScalarKind::Bool)),
@@ -4079,6 +4080,7 @@ fn typed_desc(
     chunk: &crate::bytecode::Chunk,
     wb: usize,
     fb: usize,
+    ab: usize,
 ) -> (i64, i64, i64, i64, i64, i64, i64, i64, i64) {
     use crate::bytecode::{ArrayElem, EnumField, NewCompositeOperand, Op, StructField, TupleField};
     use crate::value_layout::CompositeKind;
@@ -4098,7 +4100,7 @@ fn typed_desc(
         Op::Call(_, _) | Op::CallVerifiedNative(_, _) | Op::CallExternalNative(_, _) => {
             (12, 0, 0, 0)
         }
-        Op::Const(idx) => match const_scalar_size(chunk.constants.get(*idx as usize), wb, fb) {
+        Op::Const(idx) => match const_scalar_size(chunk.constants.get(*idx as usize), wb, fb, ab) {
             Some(sz) => (2, sz, 0, 0),
             None => (0, 0, 0, 0),
         },
@@ -4118,7 +4120,7 @@ fn typed_desc(
         Op::GetField(StructField::Flat { offset, kind })
         | Op::GetTupleField(TupleField::Flat { offset, kind })
         | Op::GetEnumField(EnumField::Flat { offset, kind }) => {
-            (7, *offset as i64, kind.size_in_bytes(wb, fb) as i64, 0)
+            (7, *offset as i64, kind.size_in_bytes(wb, fb, ab) as i64, 0)
         }
         Op::GetField(StructField::FlatNested {
             offset,
@@ -4135,7 +4137,7 @@ fn typed_desc(
             size,
             variant,
         }) => (8, *offset as i64, *size as i64, i64::from(variant.to_tag())),
-        Op::GetIndex(ArrayElem::Flat { kind }) => (9, kind.size_in_bytes(wb, fb) as i64, 0, 0),
+        Op::GetIndex(ArrayElem::Flat { kind }) => (9, kind.size_in_bytes(wb, fb, ab) as i64, 0, 0),
         Op::GetIndex(ArrayElem::FlatNested { size, variant }) => {
             (10, *size as i64, 0, i64::from(variant.to_tag()))
         }
@@ -4147,13 +4149,18 @@ fn typed_desc(
 /// Lift a wire signature shape into the stage's `(tag, size, kind)` lattice, mirroring
 /// `AbsVal::from_wire`: Top -> (0,0,0); a decodable scalar -> (1, byte size, 0); a decodable flat
 /// composite -> (2, byte size, composite-kind tag); an undecodable tag -> Top.
-fn abs_from_wire(shape: &crate::bytecode::WireShape, wb: usize, fb: usize) -> (i64, i64, i64) {
+fn abs_from_wire(
+    shape: &crate::bytecode::WireShape,
+    wb: usize,
+    fb: usize,
+    ab: usize,
+) -> (i64, i64, i64) {
     use crate::bytecode::WireShape;
     use crate::value_layout::{CompositeKind, ScalarKind};
     match shape {
         WireShape::Top => (0, 0, 0),
         WireShape::Scalar { kind } => match ScalarKind::from_tag(*kind) {
-            Some(k) => (1, k.size_in_bytes(wb, fb) as i64, 0),
+            Some(k) => (1, k.size_in_bytes(wb, fb, ab) as i64, 0),
             None => (0, 0, 0),
         },
         WireShape::Flat { kind, size } => match CompositeKind::from_tag(*kind) {
@@ -4175,13 +4182,14 @@ fn typed_run(
     sig: Option<&crate::bytecode::ChunkSignature>,
     wb: usize,
     fb: usize,
+    ab: usize,
 ) -> bool {
     let m = verify_typed_kel_module();
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
     let mut vm = Vm::new(m, &arena).expect("verify verify_typed.kel");
-    let mut shared = seed_verify_typed_shared(&vm, module, chunk, sig, wb, fb);
+    let mut shared = seed_verify_typed_shared(&vm, module, chunk, sig, wb, fb, ab);
     match vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call verify_typed.kel")
@@ -4212,6 +4220,7 @@ pub fn seed_verify_typed_shared(
     sig: Option<&crate::bytecode::ChunkSignature>,
     wb: usize,
     fb: usize,
+    ab: usize,
 ) -> Vec<u8> {
     use crate::bytecode::Op;
     assert!(
@@ -4226,12 +4235,12 @@ pub fn seed_verify_typed_shared(
     // Seed the local frame from the signature's parameters (leading slots) and the resume shape.
     if let Some(sig) = sig {
         for (i, param) in sig.params.iter().enumerate().take(256) {
-            let (tag, size, kind) = abs_from_wire(param, wb, fb);
+            let (tag, size, kind) = abs_from_wire(param, wb, fb, ab);
             set(vm, &mut shared, TV_SEED_TAG + i, tag);
             set(vm, &mut shared, TV_SEED_SIZE + i, size);
             set(vm, &mut shared, TV_SEED_KIND + i, kind);
         }
-        let (rtag, rsize, rkind) = abs_from_wire(&sig.resume, wb, fb);
+        let (rtag, rsize, rkind) = abs_from_wire(&sig.resume, wb, fb, ab);
         set(vm, &mut shared, TV_RESUME_TAG, rtag);
         set(vm, &mut shared, TV_RESUME_SIZE, rsize);
         set(vm, &mut shared, TV_RESUME_KIND, rkind);
@@ -4252,7 +4261,7 @@ pub fn seed_verify_typed_shared(
         );
     }
     for (i, op) in chunk.ops.iter().enumerate() {
-        let (class, arg, is_term, tk, req, prod, ta, tb, tc) = typed_desc(op, chunk, wb, fb);
+        let (class, arg, is_term, tk, req, prod, ta, tb, tc) = typed_desc(op, chunk, wb, fb, ab);
         assert!(prod <= 4, "verify_typed.kel push_tops unroll bound");
         set(vm, &mut shared, TV_CLASS + i, class);
         set(vm, &mut shared, TV_ARG + i, arg);
@@ -4271,12 +4280,12 @@ pub fn seed_verify_typed_shared(
             match op {
                 Op::Call(callee, _) => {
                     if let Some(cs) = module.signatures.get(*callee as usize) {
-                        let (tag, size, kind) = abs_from_wire(&cs.ret, wb, fb);
+                        let (tag, size, kind) = abs_from_wire(&cs.ret, wb, fb, ab);
                         set(vm, &mut shared, TV_RET_TAG + i, tag);
                         set(vm, &mut shared, TV_RET_SIZE + i, size);
                         set(vm, &mut shared, TV_RET_KIND + i, kind);
                         for (p, param) in cs.params.iter().enumerate().take(TV_CP_STRIDE) {
-                            let (ptag, psize, pkind) = abs_from_wire(param, wb, fb);
+                            let (ptag, psize, pkind) = abs_from_wire(param, wb, fb, ab);
                             set(vm, &mut shared, TV_CP_TAG + i * TV_CP_STRIDE + p, ptag);
                             set(vm, &mut shared, TV_CP_SIZE + i * TV_CP_STRIDE + p, psize);
                             set(vm, &mut shared, TV_CP_KIND + i * TV_CP_STRIDE + p, pkind);
@@ -4285,7 +4294,7 @@ pub fn seed_verify_typed_shared(
                 }
                 Op::CallVerifiedNative(idx, _) | Op::CallExternalNative(idx, _) => {
                     if let Some(w) = module.native_return_shapes.get(*idx as usize) {
-                        let (tag, size, kind) = abs_from_wire(w, wb, fb);
+                        let (tag, size, kind) = abs_from_wire(w, wb, fb, ab);
                         set(vm, &mut shared, TV_RET_TAG + i, tag);
                         set(vm, &mut shared, TV_RET_SIZE + i, size);
                         set(vm, &mut shared, TV_RET_KIND + i, kind);
@@ -4303,7 +4312,8 @@ pub fn seed_verify_typed_shared(
 pub fn typed_reject_chunk_via_kel(module: &Module, chunk: &crate::bytecode::Chunk) -> bool {
     let wb = (1usize << module.word_bits_log2) / 8;
     let fb = (1usize << module.float_bits_log2) / 8;
-    typed_run(module, chunk, None, wb, fb)
+    let ab = (1usize << module.addr_bits_log2) / 8;
+    typed_run(module, chunk, None, wb, fb, ab)
 }
 
 /// Run verify_typed.kel over every chunk of a module, seeding each from the module's per-chunk
@@ -4312,11 +4322,12 @@ pub fn typed_reject_chunk_via_kel(module: &Module, chunk: &crate::bytecode::Chun
 pub fn typed_reject_module_via_kel(module: &Module) -> bool {
     let wb = (1usize << module.word_bits_log2) / 8;
     let fb = (1usize << module.float_bits_log2) / 8;
+    let ab = (1usize << module.addr_bits_log2) / 8;
     module
         .chunks
         .iter()
         .enumerate()
-        .any(|(i, chunk)| typed_run(module, chunk, module.signatures.get(i), wb, fb))
+        .any(|(i, chunk)| typed_run(module, chunk, module.signatures.get(i), wb, fb, ab))
 }
 
 // --- Self-hosted A.2.1 data-layout validation, slice 2c (verify_datalayout.kel) --------------
@@ -4372,6 +4383,7 @@ pub fn dl_reject_module_via_kel(module: &Module) -> bool {
     let n_shared = layout.shared_layout.len();
     let wb = (1usize << module.word_bits_log2) / 8;
     let fb = (1usize << module.float_bits_log2) / 8;
+    let ab = (1usize << module.addr_bits_log2) / 8;
     let m = verify_datalayout_kel_module();
     let need = required_persistent_capacity_for(&m);
     // The working region must hold verify_datalayout.kel's per-batch frames while it walks a stage's
@@ -4435,7 +4447,7 @@ pub fn dl_reject_module_via_kel(module: &Module) -> bool {
                 (sl.len as i64, 0)
             } else {
                 match ScalarKind::from_tag(sl.kind) {
-                    Some(k) => (k.size_in_bytes(wb, fb) as i64, 0),
+                    Some(k) => (k.size_in_bytes(wb, fb, ab) as i64, 0),
                     None => (0, 1),
                 }
             };
