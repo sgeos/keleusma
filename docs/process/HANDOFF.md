@@ -5,63 +5,49 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-08-31 (session 59 CLOSE).** Validate by the ANCESTRY and CONTENT block below, not
-> by a hash: a refresh takes more than one commit, so any hash written here is stale by one the
-> moment it is written. Three sessions have written one and had a reader treat the off-by-one as
-> staleness.
+> **REFRESHED 2026-09-01 (session 61 CLOSE).** Validate by the ANCESTRY and CONTENT block below,
+> not by a hash: a refresh takes more than one commit, so any hash written here is stale by one the
+> moment it is written.
 >
-> ## READ THIS FIRST: THERE IS UNPUSHED WORK IN A WORKTREE
+> ## THERE IS NOTHING RED AND NOTHING UNMERGED
 >
-> **`feat/region-kind-wiring` is merged, but `feat/opaque-address-width` is NOT.** It lives in a
-> separate worktree at `../keleusma-worktrees/opaque-address-width`, its head is a single commit,
-> and **it has never been pushed**. `git branch -a` from the primary directory will not show you a
-> remote for it. `scripts/worktree.sh list` will show you the tree.
+> `origin/v0.2.3` is at `27fcbd11`, the full release gate is green at 13 steps, every branch this
+> line created is merged, and the worktrees are clean.
 >
-> **IT DOES NOT COMPILE.** Session 60 corrected this. The branch was pushed with `--no-verify` and
-> is RED on purpose, so that a feature branch is not stranded in a worktree a second time.
+> **This is stated first because the previous two sessions each opened with stranded work.** There
+> is none. If you find some, it arrived after this was written.
 >
-> Session 59 wrote here that it compiled against library, derive macro and every test target. That
-> claim was measured under the DEFAULT feature set and generalised without being re-measured.
-> Re-measured under the three sets continuous integration actually runs, it fails two of them at
-> **six unmigrated call sites**, all of them the same mechanical omission of the new `addr_bytes`
-> argument.
+> ## THE LARGEST THING LEFT IS `Text<N>`, AND IT IS UNSTARTED
 >
-> - `--features self-host`, five sites, `src/selfhost/mod.rs` lines 4056, 4121, 4138, 4156, 4438,
->   each a `size_in_bytes(wb, fb)` that now needs a third argument.
-> - `--features signatures,shell` **with `--tests`**, one site, `src/stddsl/shell.rs:782`, a
->   `NativeCtx` initialiser missing the `addr_bytes` field. The library alone is clean under that
->   set, so a `cargo check` without `--tests` reports success and hides it.
+> Designed and authorized, with its brief and completion condition drafted. Read
+> [`../decisions/TEXT_CAPACITY_TYPE.md`](../decisions/TEXT_CAPACITY_TYPE.md) before touching text.
 >
-> Default features are clean. **Repairing those six sites, then completing a real workspace run, is
-> the highest-value first action available.** Do not report the branch as verified until then.
+> **The `ScalarKind::Text` collapse to one address must land WITH it.** That is a wire-format change,
+> and `BYTECODE_VERSION` is frozen at 2 across releases by operator policy, so such changes are free
+> before publication and unavailable after. The release plan puts publication immediately after
+> `Text<N>` and the native-codegen back-merge.
 >
-> Session 57 ended with an unpushed feature branch and session 58 had to discover it at resumption.
-> This is the same shape, recorded deliberately rather than left to be found.
+> ## AN OPERATOR DECISION IS ON THE CRITICAL PATH
 >
-> ## A LIVE DEFECT AWAITING AN OPERATOR DECISION
+> **Whose release gate is canonical at the back-merge.** The `v0.3.0` line's script differs from this
+> one by 29 lines. Every "the gate is green" recorded by either line today was said about a
+> different instrument. Ruled union with conditions and written into `RELEASE_PROCESS.md`; the
+> operator can overrule before the back-merge.
 >
-> **Under `narrow-float-32` the module declares a four-byte float and the bundled `Vm` computes in
-> `f64`.** `pub type Vm = GenericVm<i64, u64, f64>` carries NO `#[cfg]`, while
-> `RUNTIME_FLOAT_BITS_LOG2` drops to 5. Reported by the `v0.3.0` line, mechanism verified here.
+> ## THE FINGERPRINT IS ROLLED PER RELEASE, NOT DERIVED
 >
-> **The suite is green at 2610 / 0 and the configuration is still incoherent.** Do not read that
-> green as the configuration being correct. Making the alias `f32` under the feature is a semantic
-> change to a public type and needs the operator.
+> A random constant beside `BYTECODE_VERSION`, currently `0x4327_63E1`. **Release step 1b rolls it**
+> and nothing enforces that step: skipping it produces no warning and no test failure, only two
+> releases silently accepting each other's bytecode. `scripts/fingerprint.sh` reads any commit's
+> value.
 >
-> ## WHAT THE OPERATOR AUTHORIZED, AND WHERE IT STANDS
+> An earlier design derived it from the scalar size table. That is retracted, and any record saying
+> the fingerprint moves on a layout change is stale — it moves at RELEASE.
 >
-> **Dynamic `Text<N>` is authorized**, first-party in session on 2026-08-31, and the design is
-> SETTLED in [`../decisions/TEXT_CAPACITY_TYPE.md`](../decisions/TEXT_CAPACITY_TYPE.md). Read that
-> before touching text. It is not implemented at all; only the ground was cleared.
+> ## WHAT THE GATE'S GREEN DOES NOT COVER
 >
-> **Four relayed rulings from the `v0.3.0` line were confirmed** by the operator directly and are
-> binding: static `Text` as one pointer, `Opaque` by `addr_bits_log2` with its trust boundary
-> recorded, `narrow-float-32` going green, and `confine` becoming load-bearing.
->
-> **`BYTECODE_VERSION` IS DELIBERATELY UNSPENT.** R5's clause proposing one address for
-> `ScalarKind::Text` was WRONG and the other line retracted it. The one-address form becomes correct
-> only after `Text<N>` removes the dynamic case from that kind; doing it in one step spends a single
-> authorization rather than two. **Do not spend it on a partial change.**
+> Float arithmetic at binary16 or OFP8 E5M2. Nothing implements them and both are refused at load.
+> The green covers `f32` and the refusal.
 
 ## Validity
 

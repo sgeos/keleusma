@@ -13,6 +13,105 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-01 — Session 61: five merges, and every defect was found by an instrument's own blind spot
+
+Five merges landed: the format fingerprint, float arithmetic honouring the declared width, three
+instrument fixes, the zero-width target refusal, and `Opaque` sized by the address width. Nothing
+red or unmerged remains on this line.
+
+**The engineering is the smaller half of what happened.** Every real defect today was found by
+turning an instrument on itself, and in four cases the instrument that failed was the one built to
+catch that exact class.
+
+### What landed
+
+**A per-release format fingerprint** in the auxiliary header's reserved word, refused at load on
+mismatch. `BYTECODE_VERSION` is frozen at 2 across releases by operator policy, so the version check
+admits every release that declares 2. The first implementation DERIVED the value from the scalar
+size table; the operator redirected it to a random per-release constant, and the redirect answers the
+objection the derived version was built on. A derived value covers only what it hashes, so a release
+changing an opcode's meaning or the reading of a field leaves it unmoved while genuinely differing.
+Release step 1b rolls it; `scripts/fingerprint.sh` reads any commit's value.
+
+**Float arithmetic now narrows to the declared width** at ten sites. Storage honoured the header and
+arithmetic did not, so a value rounded through a composite field and not on the operand stack. Never
+a `narrow-float-32` defect: `check_runtime_widths` admits narrower-than-runtime bytecode on purpose,
+so a stock build showed it. Soundness rests on the `2p+2` condition, which also makes the
+differential against the native backend meaningful rather than coincidental — that backend lowers
+natively at `f32`, so agreement is evidence only because the condition holds.
+
+**A target may no longer claim floats at a width that is not a format.** `has_floats` with
+`float_bits_log2 = 0` compiled, loaded and returned 3.75.
+
+### The pattern, which is the durable part
+
+**Scope deletion.** A true measurement quoted as though it ranged wider than it did. Six instances
+across two lines in one day, catalogued jointly with the `v0.3.0` line:
+
+- "the branch compiles" — under default features
+- "the documentation does not exist" — on remote branches
+- "the gate is green" — the wrapper's exit code
+- "eleven tests cover the sites" — four of them
+- "2 of 11 test names overclaim" — names opening with a quantifier
+- "the toolchain requires strictly more" — by count; the sets are disjoint
+
+The scoped and unscoped statements are the same sentence minus a clause, so nothing looks missing.
+The discipline is not to measure more carefully — every measurement was correct — but to **write the
+population into the sentence so deleting it is visible as a deletion.**
+
+**A subclass with a different remedy.** A total cannot be scoped into usefulness: "457 passed under
+narrow-float-32 at commit X" is fully scoped and still cannot say "this test passes". The population
+is destroyed by the aggregation. There the fix is not to use the instrument — predict a named member.
+
+**An absence rendered as a zero.** `gate-summary.sh` showed a step that ran with no tests and a step
+that never ran identically as `0 binaries 0 tests`. A count claims something was measured. Harder to
+see than the prose forms, because a number looks like evidence.
+
+### Four instruments that failed at their own job
+
+1. **A gate-completion wait that measured its own existence.** `until ! pgrep -f "release-gate.sh"`
+   matches the shell running it. Two stacked, one waiting nearly two hours after the gate finished.
+   It also explains why an earlier `pkill -f` looked clean: it killed the gate and the waiter
+   together.
+2. **A test whose name asserted a subject its body never reached.**
+   `checked_mul_narrows_to_the_declared_width` was written as `0.0 - a * b`; only the outermost
+   operation takes the checked arms, so it was a checked Sub wrapping a plain Mul. The name is the
+   only assertion in a test file that nothing checks.
+3. **A denylist where a safety predicate needed an allowlist.** `!matches!(bits_log2, 3 | 4)` claimed
+   two-bit and four-bit floats were implemented. Default-deny is this project's stated posture and I
+   wrote the inverse, one commit after a release rule about instruments asserting more than they
+   measured.
+4. **An enumeration test with two skips that incremented nothing.** One dropped widths 1 and 2 — the
+   exact widths the denylist had wrongly admitted — so the instrument that caught the inversion was
+   blind to the members it was about. The other dropped zero and hid the target defect.
+
+The rule that separates a safe exclusion, from the `v0.3.0` line: **a skip routing into a counted
+bucket is a classification; a skip routing nowhere is a deletion.** Both look identical at the call
+site and only an accumulator tells them apart. My addition: the accumulator must also be checked
+against the domain size, or it counts correctly and proves nothing.
+
+### Coverage measured rather than assumed
+
+The float work's test file passed eleven tests while covering **four of ten** narrowing sites.
+Mutation testing — removing each narrowing in turn — is what showed it. Final coverage is 8 of 10,
+with `Mod` and `Neg` uncoverable by construction because narrowing is the identity for exact
+operations. Recorded with the reason beside each cell, since a SURVIVED cell meaning "cannot be
+covered" and one meaning "nobody wrote the test" are indistinguishable without it.
+
+### Facts established by measurement that were previously assumed
+
+**rustc does not contract** a multiply feeding an add: on 1.98.0/aarch64 at `-O` and `-C
+opt-level=3`, `a * b + c` emits no fused instruction while `a.mul_add` emits one in the same unit, on
+a target where the instruction is baseline. **The narrowing round trip survives optimisation**:
+`(x as f32) as f64` keeps both conversions. Both are load-bearing for the construction and neither
+had been checked.
+
+### What is not done
+
+`Text<N>` is designed, authorized, and unstarted. The width bundle is a recorded debt: `addr_bytes`
+appears at 43 signatures across seven modules, several public, and bundling is cheaper before a
+publication than after one.
+
 ## 2026-08-31 — Session 60 resume: the handoff's own claim was false, and the gate caught it
 
 A resume that did nothing but obey the handoff protocol and push what was outstanding, which was
