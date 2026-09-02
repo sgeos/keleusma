@@ -1,0 +1,47 @@
+COMPLETION CONDITION — the remaining gate configurations (V0.3.X)
+
+Ordering is NOT a completion criterion. The properties below may be reached in
+any order, by any route. Judge the end state of the tree and the transcript, not
+the sequence, the branch, or the process used to get there.
+
+DONE when all of the following hold.
+
+1. EVERY CONFIGURATION NAMED AS UNVERIFIED HAS EITHER RUN OR IS STILL NAMED.
+   Each test configuration the record listed as not yet run on this branch has
+   been run, or remains listed as unrun with the reason.
+
+2. RESULTS ARE REPORTED PER CONFIGURATION.
+   Each configuration's outcome is given separately, with its feature set. No
+   figure sums across configurations.
+
+3. EACH RESULT COMES FROM THE TOOL'S OWN STATUS.
+   Pass and fail are taken from the test runner's exit status and its own summary
+   lines, not from a pipeline's status or a filter's.
+
+4. THE COMMANDS MATCH THE ONES THE PROJECT USES.
+   The invocations correspond to those in the project's own gate script. A
+   similar invocation under a different name does not satisfy this.
+
+5. NO CLAIM IS MADE THAT THE FULL GATE RAN.
+   The record distinguishes running test configurations from running the gate,
+   which also includes formatting, linting, documentation and link checks.
+
+6. A FAILURE, IF ANY, IS REPORTED BEFORE IT IS REPAIRED.
+   Each failure is named with its cause and with a statement of whether the cause
+   belongs to this line.
+
+7. THE RESIDUAL RECORD IS UPDATED TO MATCH.
+   Wherever the branch was described as verified under one configuration only,
+   that description now reflects what has been run.
+
+8. THE VALUE OF A GREEN RESULT IS STATED HONESTLY.
+   If the outcome matches the prediction, the record says it confirms an
+   expectation rather than resolving a doubt.
+
+9. NOTHING IS CLAIMED THAT WAS NOT RUN.
+   Every count and pass/fail claim corresponds to output appearing in the
+   transcript. Carried figures are marked as carried.
+
+NOT completion criteria: which branch anything sits on, whether work is
+committed, how many commits were made, the order of the nine properties above,
+or whether any other goal in the same session advanced.

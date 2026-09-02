@@ -84,6 +84,12 @@ corpus-reading tests are not feature-gated and `src/selfhost/kel` is byte-identi
 `origin/v0.2.3`, so **the marginal risk is low and it is not zero** — which is the honest form, rather
 than "verified" or "a gap".
 
+> **ADDENDUM, same session, later.** The residual above was **closed rather than left stated**: all
+> seven remaining configurations were run and all are green, with every figure matching the `v0.2.3`
+> gate's own per-step numbers. The paragraph stands as written because it was accurate when written —
+> it recorded a real gap and judged its risk correctly. **Its closure is a later fact, not a
+> correction of it.** See `../decisions/REMAINING_CONFIGURATIONS.md`.
+
 
 ## 2026-08-31 — A C host runs a Keleusma policy, and building it found a ruling nobody had acted on
 
