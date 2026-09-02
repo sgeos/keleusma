@@ -1302,6 +1302,13 @@ fn struct_field_access_lowers_to_getfield() {
 
 /// The ScalarKind and byte size of a scalar field type on the 64-bit host target
 /// (word and float are eight bytes). Mirrors `value_layout::ScalarKind::size_in_bytes`.
+///
+/// **The host-target scope is load-bearing and is not enforced here.** Under
+/// `narrow-float-32` a `Float` is four bytes and these figures are wrong. That is
+/// safe rather than latent: the sizes are compared against the reference
+/// compiler's own layout, so a mismatch fails the comparison loudly instead of
+/// producing a quietly wrong offset. The scope is stated so a future reader does
+/// not take the eight as a fact about floats.
 fn scalar_kind_size(ty: &str) -> (ScalarKind, u16) {
     match ty {
         "Word" => (ScalarKind::Int, 8),
