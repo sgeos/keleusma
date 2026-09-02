@@ -329,6 +329,7 @@ fn intern_debug_type(pool: &mut crate::debug_meta::DebugPool, bytes: &[u8]) -> u
 fn render_type_expr(ty: &TypeExpr) -> String {
     use crate::ast::PrimType;
     match ty {
+        TypeExpr::TextN(n, _) => alloc::format!("Text<{}>", n),
         TypeExpr::Prim(p, _) => match p {
             PrimType::Byte => String::from("Byte"),
             PrimType::Word => String::from("Word"),
@@ -2865,6 +2866,87 @@ fn compile_multiword_div(
     Ok(())
 }
 
+/// Refuse every type the front end can name but the back end cannot build.
+///
+/// Today that is `Text<N>` alone. The type surface exists so a program naming
+/// it gets a message about the feature rather than about an unknown type, and
+/// **nothing below the surface is built**: no flat layout, no runtime
+/// representation, no operation.
+///
+/// Refused rather than approximated. Guessing a representation is how a wrong
+/// size reaches the worst-case memory analysis, which is the number this
+/// ecosystem sells. Each later increment removes one refusal from here.
+///
+/// # Why a whole-program walk rather than the existing per-position checks
+///
+/// Because the per-position checks do not see it. The infallible `TypeExpr` to
+/// `Type` conversion resolves `Text<N>` to the static text type, so a parameter
+/// or a return has lost the distinction before any fallible pass runs. Only the
+/// data-field path, which keeps the `TypeExpr`, refused.
+fn refuse_unimplemented_types(program: &Program) -> Result<(), CompileError> {
+    fn walk(te: &TypeExpr) -> Result<(), CompileError> {
+        match te {
+            TypeExpr::TextN(_, span) => Err(CompileError {
+                message: alloc::string::String::from(
+                    "Text<N> is not implemented beyond the type surface: its layout, runtime \
+                     representation and operations are not built yet",
+                ),
+                span: *span,
+            }),
+            TypeExpr::Array(inner, _, _)
+            | TypeExpr::Option(inner, _)
+            | TypeExpr::Labelled(inner, _, _)
+            | TypeExpr::NegativeLabelled(inner, _, _) => walk(inner),
+            TypeExpr::Tuple(elems, _) => elems.iter().try_for_each(walk),
+            TypeExpr::Named(_, args, _, _) => args.iter().try_for_each(walk),
+            TypeExpr::Prim(_, _) | TypeExpr::Unit(_) | TypeExpr::Multiword(_, _, _) => Ok(()),
+        }
+    }
+    // Bodies are visited too, not only signatures. A `let` annotation is a
+    // declaration position and an earlier version of this walk missed it: the
+    // parameter and return cases refused while `let s: Text<8>` compiled.
+    // Collected through the existing `Visitor` rather than a hand-rolled
+    // recursion, so a future statement form carrying a type is visited by
+    // construction rather than by remembering to add it here.
+    struct FindTextN {
+        found: Option<Span>,
+    }
+    impl crate::visitor::Visitor for FindTextN {
+        fn visit_stmt(&mut self, stmt: &crate::ast::Stmt) {
+            if let crate::ast::Stmt::Let(l) = stmt
+                && let Some(TypeExpr::TextN(_, span)) = &l.type_expr
+            {
+                self.found.get_or_insert(*span);
+            }
+            crate::visitor::Visitor::walk_stmt(self, stmt);
+        }
+    }
+
+    fn walk_fn(f: &crate::ast::FunctionDef) -> Result<(), CompileError> {
+        walk(&f.return_type)?;
+        for p in &f.params {
+            if let Some(te) = &p.type_expr {
+                walk(te)?;
+            }
+        }
+        let mut finder = FindTextN { found: None };
+        crate::visitor::Visitor::visit_block(&mut finder, &f.body);
+        if let Some(span) = finder.found {
+            return walk(&TypeExpr::TextN(crate::ast::ConstExpr::Lit(0, span), span));
+        }
+        Ok(())
+    }
+    for f in &program.functions {
+        walk_fn(f)?;
+    }
+    for b in &program.impls {
+        for m in &b.methods {
+            walk_fn(m)?;
+        }
+    }
+    Ok(())
+}
+
 /// Compile a parsed Keleusma program into a bytecode module.
 ///
 /// Runs the static type checker before bytecode emission. Type errors
@@ -3041,6 +3123,19 @@ pub fn compile_with_options(
 ) -> Result<(Module, Vec<CompileWarning>), CompileError> {
     let mut warnings: Vec<CompileWarning> = Vec::new();
     target.validate_against_runtime()?;
+    // ONE GUARD, RUN ONCE, OVER EVERY DECLARATION POSITION.
+    //
+    // The first attempt refused `Text<N>` inside the existing per-position
+    // checks and it did not work: the infallible `TypeExpr` to `Type`
+    // conversion maps it to the static text type, so by the time a fallible
+    // pass looked at a parameter or a return the distinction was gone. Only the
+    // data-field position refused, because that path keeps the `TypeExpr`.
+    //
+    // Measured, not assumed: an uncalled parameter, a called parameter, a
+    // return type and a `let` annotation all COMPILED, and a data field did
+    // not. The comment claiming a downstream check would catch the rest was the
+    // assertion nothing verified.
+    refuse_unimplemented_types(program)?;
     crate::target::validate_program_for_target(program, target)?;
     let mut owned = program.clone();
 
@@ -4295,6 +4390,7 @@ fn type_expr_head_name(t: &TypeExpr) -> String {
         },
         TypeExpr::Unit(_) => String::from("()"),
         TypeExpr::Multiword(_, _, _) => String::from("Multiword"),
+        TypeExpr::TextN(_, _) => String::from("Text"),
         TypeExpr::Named(name, _, _, _) => name.clone(),
         TypeExpr::Tuple(_, _) => String::from("tuple"),
         TypeExpr::Array(_, _, _) => String::from("array"),
@@ -5078,6 +5174,13 @@ fn validate_data_field_type(
 ) -> Result<(), CompileError> {
     match type_expr {
         TypeExpr::Multiword(_, _, _) => Ok(()),
+        TypeExpr::TextN(_, span) => Err(CompileError {
+            message: alloc::string::String::from(
+                "Text<N> is not implemented beyond the type surface: its layout, runtime \
+                 representation and operations are not built yet",
+            ),
+            span: *span,
+        }),
         TypeExpr::Prim(prim, span) => match prim {
             PrimType::Byte
             | PrimType::Word
@@ -5954,6 +6057,7 @@ fn type_expr_head(ty: &TypeExpr) -> Option<String> {
         ),
         TypeExpr::Unit(_) => Some("()".to_string()),
         TypeExpr::Multiword(_, _, _) => Some("Multiword".to_string()),
+        TypeExpr::TextN(_, _) => Some("Text".to_string()),
         TypeExpr::Tuple(_, _) => Some("tuple".to_string()),
         TypeExpr::Array(_, _, _) => Some("array".to_string()),
         TypeExpr::Option(_, _) => Some("Option".to_string()),
@@ -7752,7 +7856,10 @@ fn normalize_fixed_defaults(program: &mut Program, frac_bits: u8) {
                     *slot = Some(frac_bits);
                 }
             }
-            TypeExpr::Prim(_, _) | TypeExpr::Unit(_) | TypeExpr::Multiword(_, _, _) => {}
+            TypeExpr::Prim(_, _)
+            | TypeExpr::Unit(_)
+            | TypeExpr::Multiword(_, _, _)
+            | TypeExpr::TextN(_, _) => {}
             TypeExpr::Tuple(parts, _) => {
                 for p in parts.iter_mut() {
                     fix_type(p, frac_bits);

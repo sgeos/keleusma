@@ -146,6 +146,12 @@ impl<'a> LayoutContext<'a> {
     /// offsets. Errors propagate through [`LayoutError`].
     pub fn layout_for(&self, ty: &TypeExpr) -> Result<LayoutDescriptor, LayoutError> {
         match ty {
+            // No layout yet. Refused rather than approximated: guessing a
+            // representation here is how a wrong size reaches the worst-case
+            // memory analysis, which is the one number this ecosystem sells.
+            TypeExpr::TextN(_, _) => Err(LayoutError::UnresolvedGeneric(
+                alloc::string::String::from("Text<N> has no flat layout yet"),
+            )),
             TypeExpr::Unit(_) => Ok(LayoutDescriptor::Scalar(ScalarKind::Unit)),
             TypeExpr::Prim(prim, _) => Ok(LayoutDescriptor::Scalar(scalar_kind_for_prim(*prim))),
             TypeExpr::Multiword(n, f, _) => {

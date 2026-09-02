@@ -287,6 +287,13 @@ impl Type {
         fixed_default_frac_bits: u8,
     ) -> Type {
         match expr {
+            // The capacity is not carried into `Type` yet, because nothing
+            // downstream can act on it: there is no flat representation and no
+            // operation. It resolves to the static text type here so this
+            // infallible conversion stays total, and `check_text_capacity`
+            // below refuses the type in every declaration position, so no
+            // program reaches code generation on the strength of this line.
+            TypeExpr::TextN(_, _) => Type::Str,
             TypeExpr::Prim(p, _) => match p {
                 PrimType::Byte => Type::Byte,
                 PrimType::Word => Type::Word,
@@ -943,6 +950,21 @@ fn check_array_len_positive(ce: &crate::ast::ConstExpr) -> Result<(), TypeError>
 /// that the signature, parameter, and data-field positions already enforced.
 fn check_composite_dimensions(t: &TypeExpr) -> Result<(), TypeError> {
     match t {
+        // Text<N> IS REFUSED HERE, and this is the refusal that binds. The
+        // type surface parses and resolves, so a program naming it gets a
+        // message about the feature rather than about an unknown type -- but
+        // no program compiles, because the layout, the flat representation and
+        // the operations are not built.
+        //
+        // Each later increment removes one refusal. The compiler enumerates
+        // what remains; no comment has to claim it.
+        TypeExpr::TextN(_, span) => Err(TypeError::new(
+            alloc::string::String::from(
+                "Text<N> is not implemented beyond the type surface: its layout, runtime \
+                 representation and operations are not built yet",
+            ),
+            *span,
+        )),
         TypeExpr::Array(elem, len, _) => {
             check_array_len_positive(len)?;
             check_composite_dimensions(elem)
@@ -993,6 +1015,7 @@ fn validate_no_nested_negative_labels(
     at_top_level_allowed_position: bool,
 ) -> Result<(), TypeError> {
     match t {
+        TypeExpr::TextN(_, _) => Ok(()),
         TypeExpr::NegativeLabelled(inner, _, span) => {
             if !at_top_level_allowed_position {
                 return Err(TypeError {

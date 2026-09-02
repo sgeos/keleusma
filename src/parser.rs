@@ -2924,6 +2924,16 @@ impl<'a> Parser<'a> {
         // rejected as an unknown opaque type by the type checker.
         if self.at_upper("Text") {
             self.pos += 1;
+            // `Text<N>` is the capacity-bounded mutable type; bare `Text` is a
+            // pointer to `.rodata` with no capacity in its type. They are two
+            // types, not one parameterised family, because their residence
+            // rules differ -- static text lives in read-only memory for the
+            // module's lifetime and a `Text<N>` is an ordinary value.
+            if self.eat(&TokenKind::Lt) {
+                let cap = self.parse_const_expr()?;
+                let end = self.expect(&TokenKind::Gt)?;
+                return Ok(TypeExpr::TextN(cap, merge_spans(span, end)));
+            }
             return Ok(TypeExpr::Prim(PrimType::Text, span));
         }
 

@@ -1269,6 +1269,10 @@ fn type_arg_canonical(t: &TypeExpr) -> String {
             format!("arr_{}_{}", type_arg_canonical(elem), n)
         }
         TypeExpr::Multiword(n, f, _) => format!("Multiword{}_{}", n, f),
+        // The capacity is part of the mangled name: `Text<4>` and `Text<8>` are
+        // different types with different sizes, so they must not share an
+        // instantiation.
+        TypeExpr::TextN(n, _) => format!("Text{}", n),
         TypeExpr::Option(inner, _) => format!("opt_{}", type_arg_canonical(inner)),
         TypeExpr::Labelled(inner, _, _) => type_arg_canonical(inner),
         TypeExpr::NegativeLabelled(inner, _, _) => type_arg_canonical(inner),
@@ -1501,6 +1505,7 @@ fn type_head_for_impl(ty: &TypeExpr) -> String {
         TypeExpr::Tuple(_, _) => "tuple".to_string(),
         TypeExpr::Array(_, _, _) => "array".to_string(),
         TypeExpr::Multiword(_, _, _) => "Multiword".to_string(),
+        TypeExpr::TextN(_, _) => "Text".to_string(),
         TypeExpr::Option(_, _) => "Option".to_string(),
         TypeExpr::Labelled(inner, _, _) => type_head_for_impl(inner),
         TypeExpr::NegativeLabelled(inner, _, _) => type_head_for_impl(inner),
@@ -1514,6 +1519,7 @@ fn type_head_for_impl(ty: &TypeExpr) -> String {
 fn subst_type_expr(t: &TypeExpr, subst: &BTreeMap<String, TypeExpr>) -> TypeExpr {
     match t {
         TypeExpr::Prim(_, _) | TypeExpr::Unit(_) | TypeExpr::Multiword(_, _, _) => t.clone(),
+        TypeExpr::TextN(_, _) => t.clone(),
         TypeExpr::Named(name, args, const_args, span) => {
             if args.is_empty()
                 && const_args.is_empty()
@@ -1621,6 +1627,11 @@ fn subst_const_expr(
 fn subst_const_dims_in_type(te: &TypeExpr, const_subst: &BTreeMap<String, i64>) -> TypeExpr {
     match te {
         TypeExpr::Prim(_, _) | TypeExpr::Unit(_) => te.clone(),
+        // The capacity is a const expression and MUST be substituted here. A
+        // Text<N> inside a generic body would otherwise keep a symbolic N past
+        // monomorphization, which is exactly what B40 exists to prevent and
+        // what would put the worst-case memory bound beyond static reach.
+        TypeExpr::TextN(n, span) => TypeExpr::TextN(subst_const_expr(n, const_subst), *span),
         TypeExpr::Array(elem, n, span) => TypeExpr::Array(
             Box::new(subst_const_dims_in_type(elem, const_subst)),
             subst_const_expr(n, const_subst),
