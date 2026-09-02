@@ -280,6 +280,24 @@ fn every_encodable_float_width_is_lowered_or_refused_as_the_allowlist_says() {
         );
     }
 
+    // **THE SUM IS CHECKED AGAINST THE DOMAIN, at the `v0.2.3` line's addition to
+    // the counted-bucket rule.** An accumulator that increments but is never
+    // compared against the domain size is a bucket nobody empties: it counts
+    // correctly and proves nothing.
+    //
+    // Structurally guaranteed today, because the match over the nested `Result`
+    // is exhaustive and every arm pushes. **Asserted anyway**, because the
+    // guarantee is a property of the current control flow rather than of the
+    // test, and a fourth arm or a `continue` would break it silently. This is
+    // the line expected to rot first, since it is the only one that must change
+    // when the domain does.
+    assert_eq!(
+        lowered.len() + refused.len(),
+        8,
+        "the sweep classified {} widths out of a domain of 8. A width matching \
+         no bucket passes unseen, which is how an enumeration stops enumerating.",
+        lowered.len() + refused.len()
+    );
     assert!(
         !lowered.is_empty(),
         "no width lowered at all, so this sweep is measuring a broken harness \

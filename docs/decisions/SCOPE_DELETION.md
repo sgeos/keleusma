@@ -190,6 +190,43 @@ nothing to narrow. The narrowing does nothing at zero, correctly. The field's do
 honoured only when `has_floats` is true, correctly. **Nothing enforced the pairing** — the eleven
 increments finding in miniature.
 
+### ⚠ THE RULE FOUND A SECOND SKIP, AND IT WAS BLIND TO EXACTLY THE DEFECT IT HAD JUST CAUGHT
+
+**Applying "does this skip increment anything?" to their own file found a second `continue` they had
+not reported.** It dropped widths 1 and 2 from the domain — **exactly the two widths the denylist had
+wrongly admitted an hour earlier.**
+
+So the instrument that found the denylist inversion **was itself blind to the two members the
+inversion was about.** It caught the bug by accident: it failed at those widths only because it tried
+to build modules there *before* that skip existed. **Had the skip been written first, the inversion
+would have survived its own test.**
+
+### The rule needs a second half, which reading alone does not supply
+
+**Their addition.** An accumulator that increments but is **never compared against the domain size**
+is a bucket nobody empties — it counts correctly and proves nothing.
+
+> **Does the skip increment? And is the sum checked against the domain?**
+>
+> The first stops a deletion. The second stops a classification that classifies into a void.
+
+Applied to this line's own float-width enumeration, which **did not check its total.** It was
+structurally safe, because the match over the nested `Result` is exhaustive and every arm pushes —
+**but that is a property of the current control flow, not of the test**, and a fourth arm or a
+`continue` would break it silently. The sum is now asserted against the domain of eight.
+
+**The `v0.2.3` line expects that line to rot first**, since it is the only one that must change when
+the domain does. Recorded so whoever changes the domain knows the assertion is load-bearing rather
+than decorative.
+
+### The same shape twice in one day, and the same answer both times
+
+An instrument's own exclusion hid what the instrument existed to find. First **a test name asserting a
+subject its body never reached**; then **a comment asserting a row need not be checked**. Both were
+TRUE statements. Neither was checkable by reading the justification.
+
+> **The justification is not the thing to audit. The accumulator is.**
+
 ### The distinction that separates a safe skip from this one
 
 Checked on this line's own censuses afterwards, since a grep for `continue` finds many.
