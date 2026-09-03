@@ -329,6 +329,32 @@ by its first sentence only — by the person who had written it that morning and
 the population, or the question, into the sentence. Here the sentence was already right. The fix is
 entirely in the citing act, which is why it evades every remedy aimed at the artifact.
 
+### This species RESISTS MECHANISATION, and the obvious guard would be vacuous
+
+**Recorded so that nobody builds the guard and believes it.** The other species in this file are
+defects in artifacts, and every remedy here works by writing something into a sentence. This one is a
+defect in a **use** of an artifact and is unreachable from the artifact side, however well the
+artifact is written.
+
+**The obvious mechanisation is a quote checker**: verify that text a document attributes to another
+document actually appears there. **It would have caught neither instance.**
+
+| instance | why the checker misses it |
+|---|---|
+| the `v0.2.3` line's misquote | **the quoted sentence was verbatim correct.** What was wrong was presenting one of a paragraph's two rules as the paragraph's rule. A checker confirms presence, and the sentence was present |
+| this line's misquote | **it was not a quotation.** It was a paraphrase — "that file says X" — with no quoted string to match against anything |
+
+**A checker that passed on both instances of the defect it was built for is worse than no checker**,
+because it converts an unmeasured risk into a measured-and-clear one. That is this file's own recurring
+lesson applied before the guard is built rather than after.
+
+**What the other line noticed, which is the reason quality is not the lever**: both instances happened
+to someone who had the correct file and had recently written the rule. **Artifact quality was at a
+local maximum and it did not help.**
+
+So the remedy is a practice and not a document: **open the file in the same turn you cite it.** That is
+not mechanisable here, and saying so is more useful than a guard that would report clean.
+
 ### The corollary, which is the general form of both failures
 
 > **Asking the other line was cheap and being sure about my own file was not, so the second was
