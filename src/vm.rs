@@ -6153,12 +6153,27 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let val = self.pop()?;
                     match val {
                         // A boxed array reports its element count directly.
-                        // A flat array does not store its length in the
-                        // bytes, but array length is a fixed-size, compile-
-                        // time constant the compiler folds to a literal (it
-                        // never emits `Op::Len` on an array), so a flat body
-                        // here is a mis-compilation rather than a script
-                        // error.
+                        // A flat array does not store its length in the bytes.
+                        //
+                        // **THE COMPILER DOES EMIT `Op::Len` ON AN ARRAY.**
+                        // This comment previously said it never does. It does:
+                        // `static_for_in_length` has no `Expr::If` arm, so
+                        // `for x in if c { a } else { b }` falls through to the
+                        // dynamic path and emits exactly this opcode. Measured,
+                        // with a plain-array control that does not.
+                        //
+                        // `verify()` ACCEPTS such a module. What holds the trap
+                        // shut is the resource-bound check refusing the loop for
+                        // having no statically extractable bound -- a refusal in
+                        // the LIFTABLE category of the conservative-verification
+                        // taxonomy. Lifting it, which is a desirable improvement
+                        // someone would make with no reason to look here, turns a
+                        // rejected program into one that loads and traps.
+                        //
+                        // Pinned by `tests/len_flat_array_hazard.rs`, which fails
+                        // if the bound refusal disappears. Reported by the
+                        // `v0.3.0` line, whose backend refuses `Op::Len`
+                        // deliberately for this reason.
                         crate::bytecode::GenericValue::Array(
                             crate::bytecode::ArrayBody::Boxed(arr),
                         ) => {
