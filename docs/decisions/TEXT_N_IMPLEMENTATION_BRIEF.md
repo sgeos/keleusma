@@ -54,13 +54,32 @@ nothing has been published at 2, so it is **free before publication and impossib
 without a version the operator has declined to spend**. The release plan puts publication right
 after this work. Land the collapse with `Text<N>`, not after it.
 
-## The fingerprint will move, and that is the mechanism working
+## The fingerprint will NOT move on its own, and this section used to say the opposite
 
-The format fingerprint hashes the scalar size table. Changing `ScalarKind::Text` from two words to
-one address **must** move it. Expect the pinned value to change and update it deliberately.
+**CORRECTED 2026-09-03, and the correction inverts the advice.** This section previously stated that
+the format fingerprint hashes the scalar size table, that changing `ScalarKind::Text` must therefore
+move it, and that a fingerprint failing to move would mean the detector is broken.
 
-Do not treat the moving fingerprint as breakage. The one outcome that would be a real defect is the
-fingerprint **failing** to move, which would mean the detector is broken.
+**That was true of a design the operator replaced.** `FORMAT_FINGERPRINT` in `src/bytecode.rs` is a
+hand-rolled random constant, currently `0x4327_63E1`. It derives from nothing. A layout change moves
+it exactly never.
+
+The stale text is dangerous rather than merely out of date, because it inverts a diagnostic. A
+session performing the `ScalarKind::Text` collapse would look for the fingerprint to move as evidence
+the mechanism works, would observe that it did not, and would conclude the detector is broken while
+it is behaving exactly as designed. **The correct expectation is the reverse: the value does not
+move unless a person moves it.**
+
+Rolling it is a release step, not a consequence of a layout edit. `scripts/fingerprint.sh` reads
+this tree's value, reads any commit's or tag's, and rolls a new one; step 1b of the release process
+does the rolling. Skipping that step produces no warning and no test failure, only two releases
+silently accepting each other's bytecode.
+
+**Why the operator chose a random constant over a derived one is worth keeping**, because the
+argument against it looked strong. A hand-written constant fails by being forgotten, which is true.
+But a derived value covers only what it hashes, so a release that changed an opcode's MEANING while
+leaving every hashed size alone would leave it unmoved while genuinely differing. A value that is
+rolled deliberately per release has no such blind spot.
 
 ## Specific wrong turns to avoid
 
