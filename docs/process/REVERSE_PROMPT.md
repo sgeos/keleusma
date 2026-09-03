@@ -129,15 +129,36 @@ ruled union with conditions so work could proceed; say so before the back-merge 
 
 ## THE QUEUE
 
-1. **`Text<N>` increment 3**, the type-system half, and it is the expensive one. The type expression
-   still converts infallibly to the string type in the type checker. Making the capacity a distinct
-   nominal type is the design's own requirement, and `Multiword` is the precedent, but the string
-   type is matched at 113 sites across nine modules, so this is a refactor rather than a tick of
-   work. Size it before starting it.
-2. **THREE BRANCHES ARE PUSHED AND UNMERGED**, awaiting a full gate: `feat/text-capacity-layout`,
-   `docs/session-61-tail-channels`, `fix/wire-changelogs`. All are green at the ROUTINE tier only.
-   The routine tier excludes the self-host byte-identity binaries, so the merge gate is a real
-   check here and not a formality.
+1. **`Text<N>` increment 3**, the type-system half. The type expression still converts infallibly to
+   the string type in the type checker, and making the capacity a distinct nominal type is the
+   design's own requirement, with `Multiword` as the precedent.
+
+   **I first sized this at "113 sites across nine modules, a refactor rather than a tick of work".
+   That number answers a different question than the one asked.** It counts MENTIONS of the string
+   type; what matters is how many matches BREAK when a sibling variant is added, which is a much
+   smaller set, because a match with a wildcard arm is unaffected.
+
+   The empirical precedent is the better evidence and it points the other way: `Type::Multiword` was
+   itself added to this same enum -- threaded through parsing, display, unification, layout, the
+   monomorphizer, zero-value and data-field validation -- in **67 insertions across 7 files**. That
+   is a lower bound, since the tree has grown a typed verifier and a wire schema since, but it is not
+   a multi-day refactor.
+
+   Two static scans of mine then disagreed with each other, twenty-two wildcard-free matches by one
+   population and five by another, because the two patterns select different sets. **Neither is
+   authoritative and the disagreement is the finding**: the static approach cannot settle this. The
+   decisive instrument is the compiler -- add the variant and let it enumerate the breakage exactly.
+
+2. **FOUR PULL REQUESTS ARE OPEN INTO THIS BRANCH** and CI is the verification. Feature-branch
+   pushes get NO automated verification at all: the workflow triggers only on `main`, `v*` and pull
+   requests. A hook-bypassed push to a feature branch is therefore unverified by everything except
+   what was run by hand.
+
+   The full local gate was abandoned deliberately rather than failed. Under the machine's unrelated
+   load a test that takes 190 seconds had not finished in 33 minutes, and the gate had nine and a
+   half steps left. A pull request gives the same checks on dedicated runners and, more importantly,
+   keeps a red off this branch, which is the entire reason the local gate is required before a
+   merge.
 3. **The `ScalarKind::Text` collapse to one address**, which must land WITH the feature and before
    publication, because it is a wire change and those are free only while nothing has shipped at
    `BYTECODE_VERSION` 2.
