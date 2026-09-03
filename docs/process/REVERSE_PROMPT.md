@@ -43,6 +43,20 @@ The float outcome: **direct narrowing is the default**, because chaining is unne
 merely safe; the `2p+2` condition on the intermediate is **retained** as the guard for anything that
 must chain, which is what keeps `bfloat16` caught.
 
+## The next thing worth doing is a re-run, and I nearly built a duplicate instead
+
+The question after the opcode work is the one the census states itself: lowering is not correctness.
+**I was about to propose building the instrument that measures it. It already exists** — a per-opcode
+mutation sweep with a pre-registered mutation set. Opening the file before citing it is what stopped
+the duplicate, an hour after I recorded that practice for a different reason.
+
+**The finding is currency.** That census says **"no hole open"**, measured 2026-08-16, while the
+emitter it characterises has changed in **39 commits since**. A stale count still reads as a count;
+**"no hole open" reads as a present-tense safety property**, which is the kind of sentence a release
+leans on. It is marked, not withdrawn — staleness is not evidence of a hole, and 39 commits is not 39
+defects. Only the re-run settles it, and it must not run on a contended machine, where a slow run is
+indistinguishable from a detected hang.
+
 ## No opcode is known to be missing support, and the headline number said otherwise
 
 The census reports **63 of 66 lowered**, which reads as three opcodes to implement. **None of the three
