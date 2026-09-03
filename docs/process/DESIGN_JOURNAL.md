@@ -1,5 +1,44 @@
 # Design Journal
 
+## 2026-09-02 night — [v0.3.0] I asked for the wrong unblock, and the answer was a wrong oracle
+
+**Increment**: the `f16` blocker, restated after the `v0.2.3` line corrected it.
+
+I asked that line for the **minimal** thing that would unblock the `f16` rung: load acceptance for
+binary16, so a module would at least run on the reference side and the differential could compare.
+
+**That request would have produced a wrong oracle rather than a weak one.** The refusal of widths 3
+and 4 was added deliberately in their arithmetic-width increment, because no software rounding exists
+for those widths. An accepted module would **compute in `f64` while declaring a narrow float**. Had
+they granted what I asked, the reference would have done that while this backend lowered to `half`,
+and the two sides would disagree on **every value that rounds** — with byte-identity as arbiter and
+every disagreement attributed to my lowering. **A correct backend measured against a wrong reference
+is worse than no measurement**, because it manufactures failures and points them at the wrong side.
+
+**The accurate blocker is reference f16 ARITHMETIC.** My handoff said "no oracle, the reference
+refuses widths 3 and 4 at load", which is true and invites exactly the request I made. Both channels
+now say arithmetic, and both carry the reason load acceptance alone is harmful, because the wrong
+framing is the kind a future session acts on.
+
+### The zero margin is worth keeping
+
+The construction is settled: compute in `f64`, round to binary16 after each operation. The chain
+`f64 -> f32 -> binary16` is sound because `2p+2` for binary16 is 24 and `f32` supplies **exactly** 24.
+**Met with no slack.** For the `f32` target the same condition holds at 53 against 50, a margin of
+three. Here it is tight, so the soundness argument cannot absorb any narrowing of the intermediate.
+
+### The Len report came back verified rather than accepted
+
+Four measurements on their side, including the control that makes the first one mean anything: the
+conditional-source program compiles and contains `Op::Len`, the plain-source control compiles and does
+not, `verify()` accepts, and `Vm::new` refuses with the bound message.
+
+**And the comment in `vm.rs` asserting the compiler "never emits `Op::Len` on an array" was false**,
+now retracted at the site with the measurement attached. That is the same shape this line has hit
+repeatedly today: an invariant asserted in prose, relied upon by a check, and untrue. Their refusal is
+accidental, held by a check that knows nothing about `Len`; this backend's refusal is structural and
+stays.
+
 ## 2026-09-02 night — [v0.3.0] An absent verdict was not a negative verdict
 
 **Increment**: verdicts for the two opcodes that had none.

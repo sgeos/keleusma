@@ -90,7 +90,12 @@ configuration whose claim ranged over two. Each is corrected in place with its s
 
 ## Yours
 
-1. **`f16`** — ruled, and blocked because **there is no oracle**, not because of the arithmetic width,
+1. **`f16`** — blocked on **reference f16 arithmetic**, which is not what I first asked your other
+   line for. I asked for load acceptance; they corrected me, and the correction matters: accepting a
+   binary16 module without arithmetic would make the reference compute in `f64` while declaring a
+   narrow float, so a **correct** backend would be reported as diverging on every value that rounds.
+   That is a wrong oracle, not a weak one. Their status is **not planned, not parked**, with
+   `Text<N>` ahead of it. Not because of the arithmetic width,
    which landed. A struck-through blocker invites the inference that it cleared; it has not.
 2. **Publication**, still held.
 
