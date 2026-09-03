@@ -10,8 +10,96 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-01 (session 61) — seven merges, a release blocker found by census, and `Text<N>`
-started
+**Date**: 2026-09-03 (session 62) — `Text<N>` has a flat layout, and my own handoff was red
+
+## MY SESSION-61 HANDOFF WAS RED AND ITS BANNER SAID IT WAS GREEN
+
+The refresh I wrote at the close of session 61 rewrote the validity block and, in doing so, deleted
+one of two required occurrences of the construct-support triple. A test derives that triple by
+calling the boundary table and demands at least two occurrences in `HANDOFF.md`, precisely so that a
+branch adding a case turns the document red instead of leaving it quietly wrong. Deleting one left
+`found 1 occurrence(s)`.
+
+**Two properties made it invisible, and both generalise.** The pre-push hook's routine tier excludes
+the self-host binaries, so pushing would never have caught it. And "markdown is not compiled" is true
+of nearly every file under `docs/` and false of exactly the one I edited, which is read by
+`include_str!`. A true general rule applied to the single population it does not cover, which is the
+species this line spent session 61 cataloguing, committed while writing the catalogue.
+
+Repaired at `1826f3a4`, with a must-fire control: the test fails on the unfixed commit and passes on
+the fixed one. I enumerated the coupling class rather than stopping at the first finding. Six files
+mention these documents and four mention them only in prose.
+
+## `Text<N>` HAS A FLAT LAYOUT
+
+Increment 2, on `feat/text-capacity-layout` at `9ff3f345`, pushed. A positive literal capacity now
+yields a two-element tuple, a word-sized length followed by an array of exactly `N` single-byte
+elements, sized exactly one word plus `N`. It reuses the existing tuple and array descriptors rather
+than adding a variant, so sizing, field offsets and the typed verifier's shape reconstruction need no
+change, and no opcode is spent.
+
+Three guards, each carrying its reason: a symbolic capacity surviving monomorphization is refused
+rather than guessed, `Text<0>` is not a type, and the capacity converts with a checked conversion
+rather than a cast, because a cast truncates silently on a 32-bit host and a truncated capacity
+under-sizes the buffer without failing.
+
+**Checked by mutation rather than by reading.** Adding a terminator byte to the content array fails
+two of three shape tests, so "no terminator" is a tested claim rather than a comment. The size
+formula is pinned at four word widths, because it is a claim about tuple layout having no padding and
+one width does not establish it.
+
+Scope: the layout only. `Text<N>` still does not compile end to end and the refusals above the layout
+remain, each to be removed by a later increment. Verified green at the routine tier, 2212 tests plus
+doctests, with both exit statuses read from the log.
+
+## TWO DESIGN RECORDS CONTRADICTED THE RULINGS THAT SUPERSEDED THEM
+
+`TEXT_CAPACITY_TYPE.md` still listed the overflow rule as an open question belonging to you, after
+you had ruled on it. `TEXT_N_IMPLEMENTATION_BRIEF.md` still said the format fingerprint is derived
+from the scalar size table, after your redirect made it a per-release random constant.
+
+**The second is worse than stale, because it inverts a diagnostic.** It tells a session performing
+the `ScalarKind::Text` collapse to expect the fingerprint to move and to treat a non-moving
+fingerprint as a broken detector. The value derives from nothing, so it moves exactly never, and that
+session would have chased a healthy component. Both corrected.
+
+Both were a record that was correct when written, left standing beside the ruling that superseded it,
+with nothing marking which was newer. **A superseded document does not announce itself.** Both were
+found only by reading the source they described rather than the description.
+
+## WHAT I GOT WRONG TODAY
+
+- **I read a verdict off a truncated summary.** One of four new tests appeared absent from a run and
+  I opened an investigation; the test had passed, and my own `tail -20` had hidden it.
+- **I read clippy's status off a pipeline again.** A composite ending in `tail` reported success while
+  clippy had failed with five errors. This file's own handoff warns about that in three variants, and
+  I produced a fourth while working from it.
+- **My contention restraint was inconsistent, and this one is for the other line to know.** I held two
+  docs commits overnight rather than disturb their twelve-hour mutation sweep, then ran eight cargo
+  invocations beside it today. Either contention matters, in which case that sweep is contaminated by
+  me and should be re-run, or it does not, in which case the holding was theatre. **It cannot be
+  both.** Their sweep scores an over-long run as a hang and counts a hang as detected, so contention
+  moves its result in the FLATTERING direction. Treat today's figure as suspect.
+
+## THE OPEN DECISION IS STILL YOURS
+
+Whose release gate is canonical at the back-merge. Unchanged from session 61 and still unanswered. I
+ruled union with conditions so work could proceed; say so before the back-merge if you disagree.
+
+## THE QUEUE
+
+1. **`Text<N>` increment 3**, the type-system half. The type expression still converts infallibly to
+   the string type in the type checker, which is the exact hole that let increment 1's refusal leak
+   through four of five declaration positions.
+2. **The `ScalarKind::Text` collapse to one address**, which must land WITH the feature and before
+   publication, because it is a wire change and those are free only while nothing has shipped at
+   `BYTECODE_VERSION` 2.
+3. The width bundle refactor, recorded as debt; the discard-arm reachability census; `DATA_INIT` for
+   the one stage that does not elide.
+
+---
+
+## Session 61, retained because the release blocker is still live in fact
 
 ## A RELEASE BLOCKER, FOUND BY CENSUS, AND IT IS YOURS TO KNOW ABOUT
 
