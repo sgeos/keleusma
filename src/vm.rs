@@ -4,7 +4,17 @@ use alloc::format;
 use alloc::string::String;
 // The `vec!` macro is used only by the test module; lib code uses the
 // fully-qualified `alloc::vec!`.
-#[cfg(test)]
+//
+// The cfg must MATCH THE TEST MODULE'S, which is
+// `all(test, feature = "compile", feature = "verify")`. Gated on `test` alone
+// this import is unused whenever those features are off, and the resulting
+// warning is invisible to the release gate: the gate's lint step denies
+// warnings but runs `--workspace`, where feature unification through
+// `keleusma-cli` turns `compile` and `verify` back on, while the step that
+// does reach the bare configuration is `cargo test`, which prints warnings and
+// passes. Each instrument is correct in its own scope and the union of the
+// scopes has a hole. Raised by the `v0.3.0` line, whose gate printed it.
+#[cfg(all(test, feature = "compile", feature = "verify"))]
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -1465,11 +1475,38 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     ///
     /// # Why computing wide and rounding here is sound
     ///
-    /// Computing in a wider format and rounding once per operation equals
-    /// computing natively at the target, provided the intermediate carries at
-    /// least `2p + 2` significand bits for target precision `p`. `f64` has 53;
-    /// an `f32` target needs 50, `binary16` needs 24, OFP8 `E5M2` needs 8.
-    /// Every rung clears it.
+    /// **`2p + 2` answers two different questions and they must not be
+    /// conflated.** Doing so is what produced a wrong recommendation between
+    /// the two development lines, so both appear here with their question
+    /// attached.
+    ///
+    /// ## One: arithmetic equivalence. ALWAYS IN FORCE.
+    ///
+    /// Computing an operation in a wider format and rounding once equals
+    /// computing it natively at the target, provided the **computing** format
+    /// carries at least `2p + 2` significand bits for target precision `p`.
+    /// `f64` supplies 53; an `f32` target needs 50, `binary16` needs 24, OFP8
+    /// `E5M2` needs 8.
+    ///
+    /// This is what licenses this whole function, and it does not depend on how
+    /// the narrowing is implemented. The margin at `f32` is 3 and at `binary16`
+    /// is 29 -- **figures about equivalence, not budgets for anything else.**
+    ///
+    /// ## Two: conversion double rounding. NOT IN FORCE HERE.
+    ///
+    /// If an implementation narrowed through an intermediate format, the
+    /// two-step result matches the one-step result only when that
+    /// **intermediate** carries `2p + 2`. Reaching `binary16` via `f32` is 24
+    /// against exactly 24 -- **margin zero, which is a reason not to chain
+    /// rather than a budget to spend.** Reaching it via `bfloat16` is 8 against
+    /// 24 and is excluded, which is the case a blanket "never chain" rule would
+    /// have been dropped as over-broad before it ever caught.
+    ///
+    /// **This function narrows directly from the value computed in `f64`, so
+    /// this question does not arise at all**: a single rounding raises no
+    /// double-rounding question and there is no margin to erode. The condition
+    /// is recorded because it is the guard for any future implementation that
+    /// must chain -- hardware with no direct path, or a reused routine.
     ///
     /// That is also what makes the differential against the native backend
     /// meaningful rather than coincidentally agreeing: it lowers natively at
@@ -6153,12 +6190,27 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let val = self.pop()?;
                     match val {
                         // A boxed array reports its element count directly.
-                        // A flat array does not store its length in the
-                        // bytes, but array length is a fixed-size, compile-
-                        // time constant the compiler folds to a literal (it
-                        // never emits `Op::Len` on an array), so a flat body
-                        // here is a mis-compilation rather than a script
-                        // error.
+                        // A flat array does not store its length in the bytes.
+                        //
+                        // **THE COMPILER DOES EMIT `Op::Len` ON AN ARRAY.**
+                        // This comment previously said it never does. It does:
+                        // `static_for_in_length` has no `Expr::If` arm, so
+                        // `for x in if c { a } else { b }` falls through to the
+                        // dynamic path and emits exactly this opcode. Measured,
+                        // with a plain-array control that does not.
+                        //
+                        // `verify()` ACCEPTS such a module. What holds the trap
+                        // shut is the resource-bound check refusing the loop for
+                        // having no statically extractable bound -- a refusal in
+                        // the LIFTABLE category of the conservative-verification
+                        // taxonomy. Lifting it, which is a desirable improvement
+                        // someone would make with no reason to look here, turns a
+                        // rejected program into one that loads and traps.
+                        //
+                        // Pinned by `tests/len_flat_array_hazard.rs`, which fails
+                        // if the bound refusal disappears. Reported by the
+                        // `v0.3.0` line, whose backend refuses `Op::Len`
+                        // deliberately for this reason.
                         crate::bytecode::GenericValue::Array(
                             crate::bytecode::ArrayBody::Boxed(arr),
                         ) => {
