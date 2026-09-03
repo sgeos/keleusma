@@ -52,6 +52,33 @@ Scope: the layout only. `Text<N>` still does not compile end to end and the refu
 remain, each to be removed by a later increment. Verified green at the routine tier, 2212 tests plus
 doctests, with both exit statuses read from the log.
 
+## THE REFUSAL WAS SHORT BY THREE POSITIONS, AND IT HAD ALREADY BEEN WIDENED ONCE
+
+Enumerating type positions BY CLASS rather than by example found three that compiled an unbuilt
+type: a capacity nested inside an array in a `let` annotation, one nested inside a tuple, and a
+trait method signature. All three now refuse, on `feat/text-capacity-layout` at `17aa1b22`.
+
+**Two distinct mechanisms, and neither is a typo.**
+
+The `let` cases failed because the body walk pattern-matched the annotation against the capacity
+type instead of calling the recursive walk the signature positions already used, so it saw a
+capacity only when it was outermost. The positions that REUSED the check never had the hole; the
+one that reimplemented it did.
+
+The trait case failed because the walk iterated functions and impl blocks, which is every
+declaration that has a BODY. A trait signature has none, so it fell outside a loop whose shape had
+been fixed by bodies rather than by the class being checked, which is types.
+
+**The point is not that three more positions needed checking.** This guard had ALREADY been widened
+once, after increment 1 shipped a refusal that four of five positions walked past. A guard widened
+after a miss has a new reach, and its correctness on the cases that prompted the widening is no
+evidence at all about that new reach. The reach question has to be asked again after every widening.
+
+The test refuses to count a lex or parse failure as a pass, and asserts that every fixture actually
+reaches the compiler. That caught two of my own fourteen fixtures being malformed -- an inherent
+impl and a bare `None`, neither of which this parser accepts -- which would otherwise have sat there
+as spurious refusals, testing nothing while reporting success.
+
 ## TWO DESIGN RECORDS CONTRADICTED THE RULINGS THAT SUPERSEDED THEM
 
 `TEXT_CAPACITY_TYPE.md` still listed the overflow rule as an open question belonging to you, after
@@ -88,13 +115,19 @@ ruled union with conditions so work could proceed; say so before the back-merge 
 
 ## THE QUEUE
 
-1. **`Text<N>` increment 3**, the type-system half. The type expression still converts infallibly to
-   the string type in the type checker, which is the exact hole that let increment 1's refusal leak
-   through four of five declaration positions.
-2. **The `ScalarKind::Text` collapse to one address**, which must land WITH the feature and before
+1. **`Text<N>` increment 3**, the type-system half, and it is the expensive one. The type expression
+   still converts infallibly to the string type in the type checker. Making the capacity a distinct
+   nominal type is the design's own requirement, and `Multiword` is the precedent, but the string
+   type is matched at 113 sites across nine modules, so this is a refactor rather than a tick of
+   work. Size it before starting it.
+2. **THREE BRANCHES ARE PUSHED AND UNMERGED**, awaiting a full gate: `feat/text-capacity-layout`,
+   `docs/session-61-tail-channels`, `fix/wire-changelogs`. All are green at the ROUTINE tier only.
+   The routine tier excludes the self-host byte-identity binaries, so the merge gate is a real
+   check here and not a formality.
+3. **The `ScalarKind::Text` collapse to one address**, which must land WITH the feature and before
    publication, because it is a wire change and those are free only while nothing has shipped at
    `BYTECODE_VERSION` 2.
-3. The width bundle refactor, recorded as debt; the discard-arm reachability census; `DATA_INIT` for
+4. The width bundle refactor, recorded as debt; the discard-arm reachability census; `DATA_INIT` for
    the one stage that does not elide.
 
 ---
