@@ -34,6 +34,32 @@ at the target, provided the intermediate carries at least `2p+2` significand bit
 precision `p`. `f64` has 53; an `f32` target needs 50, `f16` needs 24, E5M2 needs 8. Every rung
 clears it, `f32` with a margin of 3.
 
+### `2p+2` answers TWO different questions, and conflating them produced a wrong recommendation
+
+This is worth separating because failing to separate it led me to recommend, in conversation, a
+construction this brief already forbids.
+
+**Use one: arithmetic equivalence.** Does computing an operation in `f64` and rounding once to the
+target equal computing it natively at the target? Needs the *computing* format to carry `2p+2` bits.
+For binary16 that is 24 against `f64`'s 53 — **margin 29**. This use is unavoidable and comfortable.
+
+**Use two: conversion double rounding.** If you narrow through an intermediate format, does the
+two-step result equal the one-step result? Needs the *intermediate* to carry `2p+2`. For binary16 via
+`f32` that is 24 against exactly 24 — **margin zero**.
+
+**The second question only arises if you chain, and this brief already says not to.** Rounding `f64`
+directly to binary16 is a single correctly-rounded narrowing: no double rounding, no condition to
+satisfy, no margin to erode. The `f32` hop buys nothing and costs a tight soundness argument.
+
+Raised by the `v0.3.0` line, whose form of the objection is the one to keep: **a zero-margin argument
+cannot absorb anything, so a future change to the intermediate breaks soundness silently rather than
+loudly, and the damage shows only in the low bit.** Replacing a tight argument with no argument is
+strictly better for something that has to be maintained.
+
+The direct round is not harder to write, either. `f32`-to-binary16 and `f64`-to-binary16
+round-to-nearest-even differ only in shift amounts; the exponent-range and subnormal handling are the
+same shape. The chain is an artifact of reaching for an existing `f32`-to-half routine.
+
 This matters beyond correctness: the V0.3.X backend lowers natively at `f32` where LLVM has the
 type. The two constructions differ, and the condition above is the reason their differential is
 meaningful rather than coincidentally agreeing.
