@@ -53,17 +53,43 @@ Five rules govern every release. They bind the human maintainer and any AI agent
 
 ## The crates
 
-Five crates publish to crates.io, in this dependency order:
+**SEVEN** crates publish to crates.io, in this dependency order:
 
 1. `keleusma-macros` — proc-macro, no internal deps.
 2. `keleusma-arena` — standalone allocator, no internal deps. **Versioned independently** (0.3.x line).
-3. `keleusma` — the runtime; depends on `keleusma-macros` and `keleusma-arena`.
-4. `keleusma-bench` — depends on `keleusma` and `keleusma-arena`.
-5. `keleusma-cli` — the `keleusma` binary; depends on `keleusma` and `keleusma-arena`.
+3. `keleusma-wire-derive` — derive macro for `keleusma-wire` records, no internal deps. **Versioned
+   independently** (0.1.x line). An implementation detail of `keleusma-wire`; consumers depend on
+   that crate with its `derive` feature rather than on this one.
+4. `keleusma-wire` — the standalone wire-format container; depends on `keleusma-wire-derive` through
+   its `derive` feature. **Versioned independently** (0.1.x line).
+5. `keleusma` — the runtime; depends on `keleusma-macros`, `keleusma-arena`, and `keleusma-wire`
+   with its `derive` feature.
+6. `keleusma-bench` — depends on `keleusma` and `keleusma-arena`.
+7. `keleusma-cli` — the `keleusma` binary; depends on `keleusma` and `keleusma-arena`.
 
 `keleusma`, `keleusma-cli`, `keleusma-bench`, and `keleusma-macros` track the
-major-minor of `keleusma`. `keleusma-arena` has its own version and bumps only when
-its public API changes.
+major-minor of `keleusma`. `keleusma-arena`, `keleusma-wire`, and `keleusma-wire-derive`
+have their own versions and bump only when their public API changes.
+
+> ### The wire crates were missing from this list, and that was a publish-blocking defect
+>
+> This section said FIVE and named neither wire crate, while `keleusma` carries a path
+> dependency on `keleusma-wire`. Following the list as written publishes `keleusma-macros`
+> and `keleusma-arena` — **both irreversible** — and then fails on `keleusma`, because the
+> registry has no `keleusma-wire` to resolve. The failure lands after the point where the
+> abort criteria still help.
+>
+> **Nothing was inconsistent; something was absent.** Both crates are marked
+> `publish = ["crates-io"]`, carry a description, licence and repository, have their own
+> continuous-integration job, and are covered by the release gate. Every artifact the
+> tooling can inspect said they were ready. The one document the tooling cannot inspect
+> had never heard of them.
+>
+> Found by censusing the workspace against this file rather than by reading it. A missing
+> entry has no line number, which is why neither instrument caught it.
+>
+> **When a crate is added to the workspace with `publish` set, it belongs here in the same
+> commit.** There is no automated guard for this list.
 
 ## Preflight checklist
 
@@ -119,6 +145,10 @@ publish is not, and it waits for the maintainer's word.
 
 - Bump `keleusma`, `keleusma-cli`, `keleusma-bench`, and `keleusma-macros` to the new
   `X.Y.Z`.
+- Bump `keleusma-wire` and `keleusma-wire-derive` **only if their public API changed**
+  since their last *published* version, on the same rule as the arena below. On a FIRST
+  publication neither has a published version to compare against, so both ship as they
+  stand.
 - Bump `keleusma-arena` **only if its public API changed** since its last *published*
   version. If it did, also bump the arena version requirement in every dependent
   (`keleusma`, `keleusma-cli`, `keleusma-bench`) to `">= new"` so a downstream
@@ -249,8 +279,12 @@ the local test gate both pass, yet `cargo publish` fails at the registry-resolve
 verify build. Check this before publishing, in dependency order:
 
 ```sh
-cargo publish -p keleusma-macros --dry-run
-cargo publish -p keleusma-arena  --dry-run
+cargo publish -p keleusma-macros      --dry-run
+cargo publish -p keleusma-arena       --dry-run
+cargo publish -p keleusma-wire-derive --dry-run
+# keleusma-wire's dry-run resolves keleusma-wire-derive from the registry, so it only
+# succeeds after that crate is actually published. Same trap as keleusma's, one level down.
+cargo publish -p keleusma-wire        --dry-run
 # keleusma's dry-run resolves its deps from the registry, so it only succeeds after
 # macros and arena are actually published. The definitive check for keleusma and the
 # downstream crates is therefore the real publish in step 9, one at a time.
@@ -373,8 +407,10 @@ bump does not require a re-publish, but a dependent may then keep the older depe
 version — see step 1).
 
 ```sh
-cargo publish -p keleusma-macros    # skip if unchanged at this version
-cargo publish -p keleusma-arena     # only if bumped; skip if unchanged and already published
+cargo publish -p keleusma-macros       # skip if unchanged at this version
+cargo publish -p keleusma-arena        # only if bumped; skip if unchanged and already published
+cargo publish -p keleusma-wire-derive  # only if bumped; skip if unchanged and already published
+cargo publish -p keleusma-wire         # only if bumped; skip if unchanged and already published
 cargo publish -p keleusma
 cargo publish -p keleusma-bench
 cargo publish -p keleusma-cli
@@ -417,7 +453,10 @@ field; `n/a` is a valid value, blank is not.
 Release:        Keleusma vX.Y.Z
 Commit SHA:     <full 40-char SHA of the tagged release commit>
 Crates:         keleusma X.Y.Z, keleusma-cli X.Y.Z, keleusma-bench X.Y.Z,
-                keleusma-macros X.Y.Z, keleusma-arena A.B.C
+                keleusma-macros X.Y.Z, keleusma-arena A.B.C,
+                keleusma-wire W.X.Y, keleusma-wire-derive W.X.Y
+                (record every crate actually published, including any that
+                were skipped as unchanged, and say which were skipped)
 CI run (green): <URL of the green CI run on the release commit>
 Local gate:     scripts/release-gate.sh [--miri] — PASS on <toolchain> <YYYY-MM-DD>
 Audit:          <report path / commit / "delta-scoped, maintainer discretion">

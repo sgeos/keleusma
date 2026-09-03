@@ -1764,6 +1764,21 @@ mod tests {
         }
     }
 
+    /// A context for the marshalling tests below.
+    ///
+    /// **The three widths are not read by any test that uses this**, which is
+    /// measured rather than assumed: perturbing `float_bytes` from 8 to 4
+    /// leaves all 18 marshall tests passing. These tests marshal strings and
+    /// check arity and length errors; none reaches a width-dependent path.
+    ///
+    /// Recorded because a survived perturbation is ambiguous on its own. "The
+    /// width is unread" and "nobody wrote the test that reads it" look
+    /// identical without the reason beside them, and the reason here is the
+    /// former.
+    ///
+    /// Prompted by the `v0.3.0` line, which found the same hard-coded pair on
+    /// its side under a comment asserting that a `Float` and a `Word` are both
+    /// eight bytes -- false under `narrow-float-32`, where a float is four.
     fn ctx(arena: &keleusma_arena::Arena) -> crate::vm::NativeCtx<'_> {
         crate::vm::NativeCtx {
             arena,
