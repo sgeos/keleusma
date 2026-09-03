@@ -19,6 +19,30 @@ from disk, and they passed. **Green with that caveat, not a clean number.**
 **My prediction was a partial hit.** Green and the pass floor held; the binary population was
 understated by two.
 
+## ⚠ COMMITS ARE HELD LOCALLY ON PURPOSE, NOT FORGOTTEN
+
+Five commits sit on `v0.3.0` ahead of `origin/v0.3.0`. **This is deliberate.** The `v0.2.3` line is
+running a gate over five branches on this machine, and my pre-push hook runs the routine-tier suite,
+so pushing would contend with it for no benefit. They will signal when it ends. **If you resume and
+find the branch ahead of its remote, push it** — nothing about them is unfinished.
+
+## A citation failure on both lines, and the fifth failure species it produced
+
+I told the other line my tree forbade chaining floats through an intermediate rung. **It does not** —
+it records that prohibition being withdrawn as over-broad at my own line's urging. I made a claim
+about my own governing file without opening it, **one increment after recording that a relay must be
+checked against the governing files.** They did the mirror image, quoting one of their brief's two
+rules as the paragraph's rule.
+
+The species: **a correct record misquoted is indistinguishable downstream from an incorrect one.** It
+defeats every other remedy in `SCOPE_DELETION.md`, because those all work by writing something into a
+sentence and here the sentence was already right. The obvious guard, a quote checker, would have
+caught neither instance, and that is recorded so nobody builds it and trusts it.
+
+The float outcome: **direct narrowing is the default**, because chaining is unnecessary rather than
+merely safe; the `2p+2` condition on the intermediate is **retained** as the guard for anything that
+must chain, which is what keeps `bfloat16` caught.
+
 ## No opcode is known to be missing support, and the headline number said otherwise
 
 The census reports **63 of 66 lowered**, which reads as three opcodes to implement. **None of the three
