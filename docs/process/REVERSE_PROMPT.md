@@ -6,68 +6,51 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## Seven increments and absorption 43. `native_codegen` is 454 passed, 0 failed, 87 binaries.
+## ⚠ ONE THING IN FLIGHT AT HANDOFF
 
-That figure is over the **`native_codegen` package only**, cargo's exit status and the summed
-per-binary counts agreeing, measured with no edits in flight.
+`cargo test --workspace --no-fail-fast`, started about 18:03 on 2026-09-02, **log at `/tmp/ws2.log`**.
+Predicted green at or above **2720 passed over 116 binaries, default features only**. Read the log
+and cargo's own status; do not assume.
 
-## The standing prediction is discharged, and it held
+**The deliverable is not that figure.** It is a durable record that **an absorption touching shared
+source leaves workspace coverage stale on this branch**, because every absorption prediction here
+names only `native_codegen` counts and so cannot express it. If the run is green and nothing is
+written down, the gap recurs at the next absorption.
 
-**69 modules still compile** through the `v0.2.3` line's `Text + Text` refusal. It had been open since
-before absorption 42 because the refusal sat on a feature branch. The scan behind it still could not
-see a variable-to-variable concatenation, so the caveat retires with the prediction rather than
-outliving it.
+## All three items blocked on the other line at session start are CLOSED
 
-## Three things worth your attention
+The runtime arithmetic width, which turned the `f32` rung green. `Opaque` sized by the address width.
+The `Text<N>` type surface. Nothing is unabsorbed.
 
-**The host and bare-metal toolchain requirements are DISJOINT.** The host needs two symbols, the
-bare-metal target eleven others, and the intersection is empty. **A host measurement is not even a
-conservative guide to an embedded link.** I would have assumed otherwise, and so would the other line.
+## The first full gate on this line ran, and it is GREEN
 
-**A single `f64` addition pulls six runtime symbols on `thumbv8m`.** So `f32` and `f16` buy native
-instructions on the target the value proposition is written for — an argument for the float ladder
-about what is *linkable*, not what is smaller, and one absent from its original reasoning.
+Fourteen steps, and **the native step RAN** at 88 binaries and 459 tests rather than skipping — so the
+backend is now covered by the release gate rather than only by its own suite.
 
-**Half the bound transfers and half does not.** The memory figures describe the emitted object and are
-measured against it. The cost-unit figure is a bytecode count under a virtual-machine cost model, and
-nothing relates it to native execution. They were printed under one heading reading "PROVEN BOUNDS";
-they are not any more. **The figure is kept, because it is true about the bytecode** — only its
-subject was unstated.
+**It exposed a hole in itself.** A warning lives in *no-default-features × test targets*; the lint
+step denies warnings but only under default features, and the no-default step is `cargo test`, which
+prints them and passes. **The obvious fix does not work** — the flag is accepted and has no effect,
+because workspace feature unification turns the features back on. Measured on both lines.
 
-## What I refused, and one decision I reversed
+## What I got wrong, which matters more than what I built
 
-**No native worst-case-time model was started.** What one would require is named and explicitly not
-begun: it is a workstream, not an increment.
+**Three claims of mine were measured false**: that `f32` buys native instructions on bare metal, that
+declaring host natives makes an *omitted* one a compile error, and a test verified under one
+configuration whose claim ranged over two. Each is corrected in place with its superseded text kept.
 
-**I recorded a decision and reversed it the same day, and both are in the record.** I concluded
-"change nothing" about a suspicious default arm. The `v0.2.3` line pointed out that their equivalent
-sites refuse at the same junction, so the convention I was contradicting locally is one this codebase
-already follows. **The superseded reasoning is kept beside the reversal**, because a decision that
-quietly becomes its opposite teaches nothing.
-
-## The methodological finding, which I think outranks the code
-
-`docs/decisions/SCOPE_DELETION.md`. Both lines produced the same error six times in one day: **a true
-measurement quoted with its scope deleted.** Not wrong numbers, not careless checks — correct results
-quoted as ranging over more than they did. The scoped and unscoped sentences differ by a clause, so
-nothing looks missing.
-
-**The worst instance is mine, and it had three falsifiers written to catch it.** All three passed,
-because they tested containment in one direction and the claim was about containment. **A falsifier
-that shares its claim's framing cannot falsify the framing.**
+**And a prediction failed today by scope error**: I inferred *"no layout exists for the new type"* from
+*"no change to the layout file"*. A layout does exist, for the older type.
 
 ## Yours
 
-1. **Publication**, still held.
-2. **`f16`**, ruled and now buildable once the arithmetic width is absorbed.
+1. **`f16`** — ruled, and blocked because **there is no oracle**, not because of the arithmetic width,
+   which landed. A struck-through blocker invites the inference that it cleared; it has not.
+2. **Publication**, still held.
 
-## What is blocked on the other line
+## For whoever resumes
 
-The arithmetic width is **implemented and pending their gate**. When I absorb it, the one red `f32`
-test here should go green — and they asked me to check that rung specifically rather than read a green
-as floats-in-general, because nothing implements binary16 or E5M2 yet.
-
-`Text<N>` and `Opaque` remain theirs.
+Validate `docs/process/handoffs/v0.3.0.md` by running its ancestry block. **64 anchors, zero failures
+at this stamp.** Use `scripts/gate-in-worktree.sh` rather than `release-gate.sh` directly.
 
 ---
 ---
