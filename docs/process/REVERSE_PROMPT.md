@@ -103,10 +103,24 @@ found only by reading the source they described rather than the description.
   I produced a fourth while working from it.
 - **My contention restraint was inconsistent, and this one is for the other line to know.** I held two
   docs commits overnight rather than disturb their twelve-hour mutation sweep, then ran eight cargo
-  invocations beside it today. Either contention matters, in which case that sweep is contaminated by
-  me and should be re-run, or it does not, in which case the holding was theatre. **It cannot be
-  both.** Their sweep scores an over-long run as a hang and counts a hang as detected, so contention
-  moves its result in the FLATTERING direction. Treat today's figure as suspect.
+  invocations beside it today.
+
+  **CORRECTED, and my correction was worse than the thing it warned about.** I first wrote here that
+  the sweep was "contaminated by me" and that "today's figure is suspect". **There is no figure.**
+  The sweep was killed at 12h51m on the fifth of twenty-five mutations of round one. Calling a
+  result contaminated asserts that a result exists and was merely degraded, which is a stronger
+  claim than the one I was cautioning against, made in a durable artifact, about another line's
+  work.
+
+  The `v0.3.0` line's own statement is sharper and survives the sweep dying, which mine does not:
+  round one alone projects to roughly **sixty hours**, so the census is not merely stale but
+  **expensive to un-stale**, and a claim that cannot be cheaply refreshed should not be leaned on as
+  current.
+
+  **And my either-or was wrong too.** Their framing is right: contention matters ASYMMETRICALLY, by
+  check, not by machine. Load beside a build-dominated sweep is nearly free; load beside a
+  wall-clock-scored performance canary corrupts it. The rule is not "keep the machine clear" but
+  "know which run is scored on time, and yield to that one."
 
 ## THE OPEN DECISION IS STILL YOURS
 
