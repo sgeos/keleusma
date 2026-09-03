@@ -526,12 +526,12 @@ const DISPOSITIONS: &[(&str, &str, &str)] = &[
     (
         "Reset",
         "ACCEPTED, by a route this census does not instrument",
-        "33 corpus modules emit it; the backend accepts 32 and refuses 1, and          dispatch visits it in none, because the degenerate-stream SHAPE match          consumes it and emits nothing for it. Measured in verdictless_opcodes.rs,          whose negative result carries a control proving the visit instrument can          report a positive.",
+        "33 corpus modules emit it; the backend accepts 32 and refuses 1, and dispatch visits it in none, because the degenerate-stream SHAPE match consumes it and emits nothing for it. Measured in verdictless_opcodes.rs, whose negative result carries a control proving the visit instrument can report a positive. THE MECHANISM WAS NOT FOUND HERE: RESET_UNPROVEN_BRIEF.md, 2026-08-27, already recorded that the transform steps over Reset, and warned that a naive probe would land it in the supported column having proved nothing. What this measurement adds is the module-level verdict, which that brief left open.",
     ),
     (
         "IsStruct",
         "NO VERDICT AVAILABLE, and none is claimed",
-        "zero corpus witnesses and no hand-built probe, so nothing has ever put it to the backend. The absence is an ESTABLISHED PROPERTY rather than an unmeasured gap: the v0.2.3 line's bounded search found NO PRODUCER, because the routes that once emitted it are now either folded out when the struct type is statically known or refused by the type checker. A synthetic module could force a verdict, and it would report the backend's disposition toward bytecode no compiler emits, which is why none is forced here. See the Pattern::Struct arm of src/compiler.rs.",
+        "zero corpus witnesses and no hand-built probe, so nothing has ever put it to the backend. The absence is an ESTABLISHED PROPERTY rather than an unmeasured gap: the v0.2.3 line's bounded search found NO PRODUCER, because the routes that once emitted it are now either folded out when the struct type is statically known or refused by the type checker. A synthetic module could force a verdict, and it would report the backend's disposition toward bytecode no compiler emits, which is why none is forced here. See the Pattern::Struct arm of src/compiler.rs. This line's own IS_STRUCT_DISPOSITION.md, 2026-08-24, investigated intent and producers and recommended against removal; it was not cited when this disposition was first written.",
     ),
 ];
 
