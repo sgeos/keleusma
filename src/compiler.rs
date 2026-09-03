@@ -2908,15 +2908,29 @@ fn refuse_unimplemented_types(program: &Program) -> Result<(), CompileError> {
     // Collected through the existing `Visitor` rather than a hand-rolled
     // recursion, so a future statement form carrying a type is visited by
     // construction rather than by remembering to add it here.
+    //
+    // **THE ANNOTATION IS WALKED RECURSIVELY, NOT PATTERN-MATCHED.** An earlier
+    // version matched `Some(TypeExpr::TextN(..))` directly, so it saw a capacity
+    // only when it was the OUTERMOST type. `let s: [Text<8>; 2]` and
+    // `let s: (Word, Text<8>)` both compiled: just as unbuilt, and invisible to a
+    // check that looked at one level. The signature positions never had this
+    // hole because they always called `walk`; the body path was the one that
+    // reimplemented the test instead of reusing it.
+    //
+    // Found by enumerating type positions BY CLASS rather than by example. The
+    // three hand-picked positions the earlier test used all passed, because they
+    // were the three that prompted the guard.
     struct FindTextN {
-        found: Option<Span>,
+        found: Option<CompileError>,
     }
     impl crate::visitor::Visitor for FindTextN {
         fn visit_stmt(&mut self, stmt: &crate::ast::Stmt) {
             if let crate::ast::Stmt::Let(l) = stmt
-                && let Some(TypeExpr::TextN(_, span)) = &l.type_expr
+                && let Some(te) = &l.type_expr
+                && let Err(e) = walk(te)
+                && self.found.is_none()
             {
-                self.found.get_or_insert(*span);
+                self.found = Some(e);
             }
             crate::visitor::Visitor::walk_stmt(self, stmt);
         }
@@ -2931,8 +2945,11 @@ fn refuse_unimplemented_types(program: &Program) -> Result<(), CompileError> {
         }
         let mut finder = FindTextN { found: None };
         crate::visitor::Visitor::visit_block(&mut finder, &f.body);
-        if let Some(span) = finder.found {
-            return walk(&TypeExpr::TextN(crate::ast::ConstExpr::Lit(0, span), span));
+        if let Some(e) = finder.found {
+            // The error carries the offending type's own span. The earlier
+            // version re-synthesised a `TextN` node to regenerate the message,
+            // which worked only because the message ignores the capacity.
+            return Err(e);
         }
         Ok(())
     }
@@ -2942,6 +2959,26 @@ fn refuse_unimplemented_types(program: &Program) -> Result<(), CompileError> {
     for b in &program.impls {
         for m in &b.methods {
             walk_fn(m)?;
+        }
+    }
+    // A TRAIT DECLARATION IS A TYPE POSITION AND WAS NOT WALKED. A signature
+    // inside a trait has parameter and return types like any other, and
+    // `trait T { fn f(t: Text<8>) -> Word; }` COMPILED -- the walk covered
+    // functions and impl blocks, which is every position that has a body. A
+    // trait signature has none, so it fell outside a loop written around
+    // bodies.
+    //
+    // It is walked separately rather than through `walk_fn`, because a trait
+    // method is a `TraitMethodSig` and not a `FunctionDef`: it carries no body
+    // to visit. That type difference is exactly what let it be forgotten.
+    for t in &program.traits {
+        for m in &t.methods {
+            walk(&m.return_type)?;
+            for p in &m.params {
+                if let Some(te) = &p.type_expr {
+                    walk(te)?;
+                }
+            }
         }
     }
     Ok(())
