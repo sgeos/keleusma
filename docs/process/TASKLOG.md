@@ -10,6 +10,25 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-01, session 61 tail). A RELEASE BLOCKER, AND `Text<N>` STARTED.**
+>
+> `origin/v0.2.3` at `6af37f66`, gate green at 13 steps. Per-step: default 2748, no-default 297,
+> signatures 2356, signatures+shell 2373, self-host 2527, wire 57 and 20, compiler 86.
+>
+> **`RELEASE_PROCESS.md` listed five publishable crates and there are seven.** `keleusma-wire` and
+> `keleusma-wire-derive` were absent from all four enumerations. Following it publishes two crates
+> irreversibly and then fails on the third. Corrected; census of four other classes came back clean.
+>
+> **`Text<N>` increment 1 landed**: the type surface, refused everywhere below it. Increment 2 is
+> planned against the `Multiword` precedent, which supplies a post-erasure tripwire, a range check
+> with its reason, and the answer to whether a nominally-distinct type may be structurally a
+> composite.
+>
+> Also landed: the `Op::Len` flat-array hazard pinned as a ratchet after the comment denying it was
+> found false; a no-default-features warning the gate structurally cannot see, because its lint step
+> is workspace-scoped and its test steps are package-scoped; and both uses of `2p+2` separated with
+> their questions.
+
 > **Currency note (2026-09-01, session 61, CLOSE). FIVE MERGES, NOTHING RED, NOTHING UNMERGED.**
 >
 > `origin/v0.2.3` at `27fcbd11`, release gate green at 13 steps. Landed: the per-release format

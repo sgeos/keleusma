@@ -10,8 +10,31 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-01 (session 61) — five merges, nothing red or unmerged, and `Text<N>` is the only
-major item left
+**Date**: 2026-09-01 (session 61) — seven merges, a release blocker found by census, and `Text<N>`
+started
+
+## A RELEASE BLOCKER, FOUND BY CENSUS, AND IT IS YOURS TO KNOW ABOUT
+
+**`RELEASE_PROCESS.md` said five crates publish to crates.io. There are seven.**
+`keleusma-wire` and `keleusma-wire-derive` appear nowhere in it -- not in the crate list, not in
+the dry-run sequence, not in the publish sequence, not in the release-record template.
+
+**Following the document as written loses money.** It publishes `keleusma-macros` and
+`keleusma-arena`, both irreversible, and then FAILS on `keleusma`, because the registry has no
+`keleusma-wire` to resolve. The failure lands after the point where the abort criteria still help.
+
+Step 3 exists to catch exactly this. Its own text warns that the local gate and the audit gate both
+pass while `cargo publish` fails at the registry-resolved verify build, and its dry-run list omitted
+the only two crates that would have triggered it.
+
+**Nothing was inconsistent; something was absent.** Both crates are marked publishable, carry a
+description, licence and repository, have their own continuous-integration job, and are covered by
+the release gate. Every artifact the tooling can inspect said they were ready. The one document the
+tooling cannot inspect had never heard of them. **A missing entry has no line number.**
+
+Corrected at all four enumeration sites. The census also came back clean on docs.rs configuration,
+tarball excludes, publish metadata, and CI coverage, so this is one blocker rather than the first of
+several -- and I checked those four classes rather than stopping at the first finding.
 
 ## NOTHING IS RED AND NOTHING OF MINE IS UNMERGED
 
@@ -24,6 +47,20 @@ default 2739, no-default 297, signatures 2347, signatures+shell 2364, self-host 
 detached compiler 86.
 
 ## WHAT LANDED
+
+**`Text<N>` is STARTED.** The type parses, is distinct from bare `Text`, and carries its capacity
+through monomorphization. **Nothing below the type surface is built** and every stage that cannot
+handle it refuses with a named error, so each later increment removes one refusal rather than adding
+a feature. Increment 2 is planned in full: the flat layout is `Tuple([Int, [Byte; N]])`, needing no
+new descriptor variant, sized exactly `word_bytes + N` with no padding, and `Multiword<N, F>` is the
+exact precedent for a nominally-distinct structurally-composite type.
+
+**Two increments found defects in their own first drafts.** The `Text<N>` refusal did not work: the
+infallible type conversion resolved it to static text, so four of five declaration positions
+compiled. The float-width predicate was a DENYLIST in a default-deny codebase and claimed two-bit
+and four-bit floats were implemented.
+
+
 
 **The format fingerprint**, per your redirect. Random per release, in a constant beside
 `BYTECODE_VERSION`, currently `0x4327_63E1`. `scripts/fingerprint.sh` reads this tree's value, reads
