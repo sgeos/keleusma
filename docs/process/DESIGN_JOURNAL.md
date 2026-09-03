@@ -1,5 +1,54 @@
 # Design Journal
 
+## 2026-09-03 — [v0.3.0] A twelve-hour sweep abandoned, and absorption 48 with every clause hit
+
+### The sweep was stopped, and that is the finding rather than the failure
+
+Round one of the mutation sweep ran **12h51m on a deliberately quiet machine** and was killed while
+still on **`CmpLe`, the 5th of 25 mutations**. Round one alone therefore projects to roughly **60
+hours**, and round one is **25 of 53 pre-registered mutations across six tables**.
+
+**So `NATIVE_MUTATION_CENSUS.md` is not merely stale, it is expensive to un-stale.** Its "no hole
+open" was measured 2026-08-16 against an emitter that has since moved 39 commits, and re-establishing
+it is not a single increment. **A claim that cannot be cheaply refreshed should not be leaned on as
+current**, and that is a stronger statement about the census than the staleness marker alone.
+
+The route that remains is a **targeted subset** — the tool takes named opcodes — **selected from the
+emitter diff rather than from expectation**, because its honesty rests on a pre-registered set.
+
+**Progress was only recoverable because the sweep mutates the emitter in place**: the working-tree
+diff named the opcode under test. That recovery was necessary only because the run was piped through
+`tail`, so its output stayed buffered until exit. **Launching it that way gave up progress visibility
+for nothing**, and without the in-place diff the continue-or-kill decision would have been blind.
+
+The emitter was restored byte-identical and re-checked with `cargo check`, since a killed run never
+reaches its own restore step.
+
+### Absorption 48, four clauses, four hits
+
+`v0.2.3` through `6af37f66`, 12 commits, **6 files and 283 insertions** — of which 207 are `src/` and
+`tests/`. **My brief said "total 207", conflating the source subset with the total**, which is the
+scope habit this line keeps catching, in my own prediction document.
+
+| clause | predicted | result |
+|---|---|---|
+| the tree still builds | yes | **hit** |
+| `native_codegen` unchanged | 469 / 0 / 91, both float configs | **hit exactly** |
+| workspace coverage | goes `STALE-COMPILED`, naming the changed source | **hit** |
+| the differential still agrees | yes | **hit**, both configs |
+
+**The third clause is the one worth noting.** Every previous absorption on this line named only
+backend figures, so workspace staleness was missed by construction. **This is the first absorption
+where that question was answered by RUNNING something**, and the guard named `src/vm.rs`,
+`src/marshall.rs` and the two test files rather than leaving it to judgement.
+
+The fourth mattered more than it looks: their `vm.rs` change alters the reference side, which is half
+the oracle. Agreement across both configurations is evidence the two implementations still track.
+
+**Absorbed and not claimed**: `tests/len_flat_array_hazard.rs` is theirs. This line reported the
+hazard; they verified it independently with a control, found the `vm.rs` comment false, and built the
+ratchet.
+
 ## 2026-09-02 night — [v0.3.0] I relayed a peer's construction past a rule my own tree already held
 
 **Increment**: the `f16` narrowing construction, corrected, and the conflation behind it named.
