@@ -1,0 +1,3 @@
+commit: 1b03e270576d50b886ce4b377596ccb0f2989001
+stamped: 2026-09-03T01:38:17Z
+figures: 2744 passed, 0 failed, 118 binaries | cargo test --workspace --no-fail-fast | DEFAULT FEATURES ONLY | CAVEAT: not a frozen-tree run. Started 18:02; the documentation-only commit 1b03e270 landed at 18:11 while it ran. Exposure is bounded to the docs-reading tests, which passed, but this is not a clean measurement.

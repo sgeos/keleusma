@@ -1,5 +1,67 @@
 # Design Journal
 
+## 2026-09-02 night — [v0.3.0] The workspace clause becomes executable, and my own reach test is caught measuring nothing
+
+**Increment**: the workspace staleness guard, its reach proof, and the correction of a scope error in
+my own handoff.
+
+**Figures measured this increment**: workspace **2744 passed, 0 failed, 118 binaries** under
+`cargo test --workspace --no-fail-fast`, **default features only**, with the caveat below.
+
+### The run was green and it was not clean, and both halves matter
+
+The suite started at 18:02. My own documentation-only commit landed at 18:11 while it ran. **This line
+recorded the absorption-40 hazard precisely so that would not happen, and it happened anyway**, which
+says the rule was remembered as prose and not enforced by anything.
+
+The mutation was documentation, so exposure is bounded to the handful of tests that read `docs/` from
+disk, and those passed. The result is green **with the caveat carried**, and the caveat now lives in
+the stamp file rather than only in a sentence someone has to notice.
+
+**The prediction was a partial hit**, and calling it a clean one would have been the easy write-up.
+Green held and the pass floor held; the binary population was understated by two, because absorption
+47 added two test binaries. A prediction that names a population must move when the population moves.
+
+### Why the remedy is a script and not a paragraph
+
+The gap is that every absorption prediction here ranges over `native_codegen` alone, so **none of them
+can express workspace staleness**. That is the absorption-46 build-clause defect in a second place, not
+a new species.
+
+The obvious remedy is a note in the handoff. **That remedy is built from the material that already
+failed.** This line's own documents record a banner stale for three days, a blocker row whose reason
+had expired, and an ancestry anchor written against a moving ref that went false unnoticed. The
+mechanism of the defect is *the written thing did not fire*. So the remedy runs.
+
+**And it is deliberately not a test.** A test asserting coverage is current would be red from the
+instant of every absorption until someone spent ninety minutes clearing it. A guard that is red by
+default is suppressed, not obeyed. That reasoning is recorded in the script itself, because the next
+reader's first instinct will be to make it a test.
+
+### The reach proof caught my own test passing for the wrong reason
+
+Mutating the guard to mis-classify `src/` as inert **left all five tests green**. Other compiled paths
+had moved in the same range, so the verdict `STALE-COMPILED` was still correct — the test asserted the
+verdict and never its contents. It now compares both counts against git's own answer and goes red
+under that mutation.
+
+**This is the third time on this line that a guard has been found agreeing with itself.** The pattern
+is stable enough to state as a rule: **asserting a classifier's verdict does not test its
+classification; only comparing against an independently computed answer does.**
+
+Two smaller misses on the way. A `sed` mutation failed with a bad-flag error and applied nothing,
+and the resulting green was very nearly read as evidence. And a grep for tests reading `docs/`
+returned fifteen files by matching doc comments, where about five actually open a path.
+
+### The guard immediately corrected a figure I had written
+
+My handoff gave the gap as **absorption 47, seven `src/` files**. True about absorption 47. The
+coverage gap spanned **twenty-four compiled files** since the last workspace run, because that run
+predated several absorptions. A true measurement about a narrower population, presented as though it
+described the whole. **SCOPE_DELETION, in a document I wrote, found by an instrument built to report
+its own range.**
+
+
 ## 2026-09-01/02 — [v0.3.0] Twelve increments, two absorptions, and three claims of my own that were false
 
 **Increments**: the fused-multiply-add precondition, the host and bare-metal linkage censuses, the

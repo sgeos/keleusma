@@ -6,16 +6,47 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## ⚠ ONE THING IN FLIGHT AT HANDOFF
+## The workspace suite came back green, with one caveat I have to state
 
-`cargo test --workspace --no-fail-fast`, started about 18:03 on 2026-09-02, **log at `/tmp/ws2.log`**.
-Predicted green at or above **2720 passed over 116 binaries, default features only**. Read the log
-and cargo's own status; do not assume.
+**2744 passed, 0 failed, 118 binaries**, from `cargo test --workspace --no-fail-fast`, **default
+features only**. One suite in one configuration. The gate is fourteen steps and this was not it.
 
-**The deliverable is not that figure.** It is a durable record that **an absorption touching shared
-source leaves workspace coverage stale on this branch**, because every absorption prediction here
-names only `native_codegen` counts and so cannot express it. If the run is green and nothing is
-written down, the gap recurs at the next absorption.
+**It was not measured on a frozen tree.** The run began at 18:02 and my own documentation-only commit
+landed at 18:11 underneath it. That is the hazard this line already recorded at absorption 40, and I
+repeated it. The change was documentation, so the exposure is bounded to the few tests reading `docs/`
+from disk, and they passed. **Green with that caveat, not a clean number.**
+
+**My prediction was a partial hit.** Green and the pass floor held; the binary population was
+understated by two.
+
+## The deliverable was the routine change, and it is now executable
+
+A paragraph in the handoff saying "also check the workspace" would have been the obvious remedy.
+**It is made of the material that already failed here** — this line has a banner that was stale for
+three days, a blocker row whose reason had expired, and an ancestry anchor written against a moving
+ref. So the remedy runs instead of being read.
+
+`native_codegen/tools/workspace-coverage.sh` reports whether a recorded workspace result still
+describes the tree, classifying change as compiled, documentation-read, or inert, **default-deny**, so
+it may over-report staleness and never under-report it. It is a script and not a test on purpose: a
+test would be red from every absorption until a ninety-minute run cleared it, and **a guard red by
+default is suppressed rather than obeyed.**
+
+## What I got wrong, which is the more useful half
+
+**My own reach test passed while measuring nothing.** With `src/` deliberately mis-marked inert, it
+still reported the right verdict, because other compiled paths had moved too. It asserted the verdict
+and not its contents. It now cross-checks against git's own counts and goes red under that mutation.
+
+**A `sed` mutation failed outright** with a bad-flag error, and I came close to reading the resulting
+green as evidence. It had applied nothing.
+
+**I claimed fifteen workspace tests read `docs/`.** That grep counted doc comments. About five open a
+path. The count was wrong; the constraint it justified was not.
+
+**A figure in my own handoff was scoped wrong.** It gave the gap as seven `src/` files from absorption
+47. The coverage gap was **twenty-four compiled files** since the last workspace run. True figure,
+narrower population, read as though it covered the whole.
 
 ## All three items blocked on the other line at session start are CLOSED
 

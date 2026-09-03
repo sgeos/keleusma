@@ -1,0 +1,53 @@
+COMPLETION CONDITION — the workspace staleness guard (V0.3.X)
+
+Ordering is NOT a completion criterion. The properties below may be reached in
+any order, by any route. Judge the end state of the tree and the transcript,
+not the sequence, the branch, or the process used to get there.
+
+DONE when all of the following hold.
+
+1. THE STALENESS QUESTION IS ANSWERABLE BY RUNNING SOMETHING.
+   A durable executable artifact in the tree reports whether the recorded
+   workspace-suite result still describes the tree as it stands. Prose alone
+   does not satisfy this property.
+
+2. THE GUARD'S REACH IS DEMONSTRATED BEFORE IT IS TRUSTED.
+   Every verdict the guard can return is exercised against a case whose correct
+   answer is known independently, including at least one case in which the
+   guard must stay silent about a real change rather than about an absent one.
+   A verdict demonstrated only on an empty difference does not count.
+
+3. THE GUARD FAILS SAFE.
+   Its treatment of an unrecognised path is stated, and that treatment
+   over-reports staleness rather than under-reporting it.
+
+4. THE CHOICE OF ARTIFACT FORM IS JUSTIFIED.
+   The record says why the check takes the form it does rather than a form that
+   fires automatically, in terms of what would happen if it fired by default.
+
+5. THE GAP IS DESCRIBED AS STRUCTURAL RATHER THAN AS AN OVERSIGHT.
+   The record states that a prediction ranging over one package cannot express
+   staleness in a population it never covered, and relates this to the earlier
+   instance of the same species instead of presenting it as a new discovery.
+
+6. THE SIZE OF THE GAP CARRIES ITS OWN SCOPE.
+   Any figure for what has gone unexercised states the range it spans. A count
+   belonging to a single absorption is not presented as the size of the
+   coverage gap.
+
+7. THE WORKSPACE RESULT IS REPORTED WITH ITS CONFIGURATION.
+   The suite outcome is stated with the feature configuration and the package
+   population it ranges over, and is distinguished from a full gate run.
+
+8. NOTHING IS CLAIMED THAT WAS NOT RUN.
+   Every count and every pass or fail claim corresponds to output appearing in
+   the transcript. Figures carried from an earlier measurement are marked as
+   carried.
+
+9. A FAILURE IS REPORTED BEFORE IT IS REPAIRED.
+   Any failing test is named with its cause, and with a statement of whether
+   that cause belongs to this line.
+
+NOT completion criteria: which branch anything sits on, whether the work is
+committed, how many commits were made, the order of the properties above, or
+whether any other goal in the same session advanced.
