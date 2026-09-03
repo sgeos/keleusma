@@ -145,9 +145,20 @@ ruled union with conditions so work could proceed; say so before the back-merge 
    a multi-day refactor.
 
    Two static scans of mine then disagreed with each other, twenty-two wildcard-free matches by one
-   population and five by another, because the two patterns select different sets. **Neither is
-   authoritative and the disagreement is the finding**: the static approach cannot settle this. The
-   decisive instrument is the compiler -- add the variant and let it enumerate the breakage exactly.
+   population and five by another, because the two patterns select different sets. Neither was
+   authoritative, so I ran the decisive instrument instead of arguing between them.
+
+   **MEASURED, by adding the variant and letting the compiler enumerate: FIVE match sites, all in
+   `src/typecheck.rs`.** Identical under default features and under
+   `--tests --features signatures,shell,self-host`, so it is not a configuration artefact. The
+   second static scan was right and the first over-counted by more than four times.
+
+   **What that number is and is not.** It is the STRUCTURAL ripple -- the arms the compiler forces
+   you to write. It says nothing about the semantic work, which is the real content of the
+   increment: how a capacity type unifies (not with static text, and not across two capacities),
+   what it displays as, and what each of those five arms should DO. An error count measures what
+   must be touched, never what must be decided, and quoting it as the cost of the increment would be
+   the same substitution that produced the 113 in the first place.
 
 2. **FOUR PULL REQUESTS ARE OPEN INTO THIS BRANCH** and CI is the verification. Feature-branch
    pushes get NO automated verification at all: the workflow triggers only on `main`, `v*` and pull
