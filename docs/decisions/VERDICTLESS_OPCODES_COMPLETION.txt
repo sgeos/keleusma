@@ -1,0 +1,52 @@
+COMPLETION CONDITION — the opcodes with no verdict (V0.3.X)
+
+Ordering is NOT a completion criterion. The properties below may be reached in
+any order, by any route. Judge the end state of the tree and the transcript, not
+the sequence, the branch, or the process used to get there.
+
+DONE when all of the following hold.
+
+1. EVERY OPCODE THE BACKEND HAS NO VERDICT FOR IS ENUMERATED.
+   The set of instruction-set opcodes for which neither census can say
+   "lowered" nor "refused" is stated, with the reason each one lacks a verdict.
+
+2. A VERDICT IS ESTABLISHED BY EXECUTION, NOT BY READING THE SOURCE.
+   For each such opcode, the tree contains something that drives the backend and
+   records what it did. Inferring support from a source reading, a comment, or a
+   pattern match found by grep does not satisfy this property.
+
+3. WHERE A CENSUS MEASURED THE WRONG SITE, THAT IS STATED AS SUCH.
+   If an opcode lacks a verdict because it is handled somewhere the census does
+   not instrument rather than because support is missing, the record says so and
+   distinguishes the two, and does not leave a reader to infer missing support
+   from an absent verdict.
+
+4. AN OPCODE ACCEPTED IN ONE SHAPE AND REFUSED IN ANOTHER IS RECORDED AS BOTH.
+   A single verdict is not reported for an opcode whose treatment depends on the
+   shape it appears in. Each shape is named with what the backend did.
+
+5. NO ACCEPTANCE IS REPORTED AS A CORRECTNESS CLAIM.
+   The record distinguishes the backend emitting code from the emitted code
+   being right, and does not present the former as the latter.
+
+6. GUARDS ADDED HERE PROVE THEIR REACH.
+   Any check introduced is exercised against a case where it must fail, so a
+   passing result is evidence about the tree rather than about the check. A
+   check demonstrated only on a case it passes does not satisfy this.
+
+7. THE CENSUS FIGURES CARRY THEIR POPULATION.
+   Any count of lowered, refused, or verdictless opcodes states which census
+   produced it and which population that census reads.
+
+8. NOTHING IS CLAIMED THAT WAS NOT RUN.
+   Every count and every verdict corresponds to output appearing in the
+   transcript. Figures carried from an earlier measurement are marked as carried.
+
+9. A FAILURE IS REPORTED BEFORE IT IS REPAIRED.
+   Any failing test or refused compilation is named with its cause, and with a
+   statement of whether that cause belongs to this line.
+
+NOT completion criteria: which branch anything sits on, whether the work is
+committed, how many commits were made, the order of the properties above, the
+number of opcodes whose verdict changes, or whether any other goal in the same
+session advanced.

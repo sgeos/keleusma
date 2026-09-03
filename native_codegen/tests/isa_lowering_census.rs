@@ -508,6 +508,33 @@ fn a_degenerate_stream_visits_its_stream_op_and_never_its_reset() {
 /// real inputs and that the partition is TOTAL — every declared opcode lands in
 /// exactly one column, so an opcode cannot fall out of the accounting while the
 /// columns still look sane.
+/// **THE DISPOSITION OF EVERY OPCODE OUTSIDE THE LOWERS COLUMN.**
+///
+/// The fraction printed above reads as a count of opcodes that need
+/// implementing. **For every entry here that reading is wrong**, and it is the
+/// kind of wrong that sends effort at work which must not be done. So the
+/// disposition is printed where the fraction is printed, not only in prose
+/// somewhere else.
+///
+/// `(opcode, disposition, evidence)`.
+const DISPOSITIONS: &[(&str, &str, &str)] = &[
+    (
+        "Len",
+        "REFUSING IS CORRECT, and lowering it would be a defect",
+        "the virtual machine returns InvalidBytecode for Op::Len on a flat array. A          backend that lowered it would compute a length where the reference traps,          manufacturing divergence in the one signal this line treats as its          correctness oracle. See len_flat_array_hazard.rs. The repair is not this          line's: src/vm.rs and src/verify.rs belong to the v0.2.3 line.",
+    ),
+    (
+        "Reset",
+        "ACCEPTED, by a route this census does not instrument",
+        "33 corpus modules emit it; the backend accepts 32 and refuses 1, and          dispatch visits it in none, because the degenerate-stream SHAPE match          consumes it and emits nothing for it. Measured in verdictless_opcodes.rs,          whose negative result carries a control proving the visit instrument can          report a positive.",
+    ),
+    (
+        "IsStruct",
+        "NO VERDICT AVAILABLE, and none is claimed",
+        "zero corpus witnesses and no hand-built probe, so nothing has ever put it          to the backend. A reachability fact rather than a support fact.",
+    ),
+];
+
 #[test]
 fn how_many_isa_opcodes_does_the_backend_lower() {
     let isa = declared_isa();
@@ -589,6 +616,35 @@ fn how_many_isa_opcodes_does_the_backend_lower() {
         println!("         are supported for one representation and refused for another.");
         println!("         Not a contradiction; a property of the instruction set.");
     }
+    println!();
+    let not_lowered: Vec<&String> = isa.iter().filter(|o| !lowered.contains(*o)).collect();
+    println!(
+        "  NOT IN THE LOWERS COLUMN ({}) -- WITH DISPOSITION:",
+        not_lowered.len()
+    );
+    println!("      NONE of these is an unimplemented lowering. Reading the fraction");
+    println!("      above as a count of missing support is the error this block exists");
+    println!("      to prevent.");
+    for (op, disposition, evidence) in DISPOSITIONS {
+        println!("    {op}: {disposition}");
+        println!("        {evidence}");
+    }
+
+    // A new opcode falling out of the LOWERS column must acquire a disposition
+    // rather than silently joining a fraction someone will misread. This compares
+    // two concrete sets, so it cannot pass by reading nothing.
+    let described: std::collections::BTreeSet<&str> =
+        DISPOSITIONS.iter().map(|(o, _, _)| *o).collect();
+    let actual: std::collections::BTreeSet<&str> = not_lowered.iter().map(|o| o.as_str()).collect();
+    assert_eq!(
+        actual,
+        described,
+        "every opcode outside the LOWERS column needs a disposition. Undescribed: \
+         {:?}; described but now lowered: {:?}",
+        actual.difference(&described).collect::<Vec<_>>(),
+        described.difference(&actual).collect::<Vec<_>>()
+    );
+
     println!();
     println!(
         "  NAMED REFUSED, never lowers ({}): {refused_only:?}",

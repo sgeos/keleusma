@@ -1,5 +1,74 @@
 # Design Journal
 
+## 2026-09-02 night — [v0.3.0] An absent verdict was not a negative verdict
+
+**Increment**: verdicts for the two opcodes that had none.
+
+**Measured**: 33 corpus modules emit `Reset`; the backend **accepts 32 and refuses 1**, and the
+lowering **never visits it in any of them**. `IsStruct` has **zero** corpus witnesses.
+
+### The censuses were right and the reading of them was wrong
+
+The ISA lowering census reports **63 of 66 lowered** over 74 corpus modules, with `Len` refused,
+`Reset` unproven and `IsStruct` without a witness. **Three opcodes outside the lowered set for three
+different reasons**, which is exactly what a single fraction destroys. A reader who sees 63 of 66
+concludes that three opcodes are unsupported, and for `Reset` that conclusion is false.
+
+`Reset` is handled by **shape recognition**. A degenerate stream is `Stream ; body ; Yield ; PopN(1)
+; Reset`, and in that shape `Stream` and `Reset` lower to nothing. Both censuses instrument the
+opcode walk, so an opcode consumed by a shape match registers as an absence. **The instrument was
+measuring the wrong site, and the absence was a property of the instrument.**
+
+### The result would have been worthless without its control
+
+The load-bearing claim is that the lowering never visits `Reset`. **If the visit instrument were
+simply broken and always returned false, that claim would pass while measuring nothing.** Asserting a
+negative with an instrument whose positive response is unproven is not evidence.
+
+So a control asserts the instrument reports true for `Add`, an opcode the backend demonstrably
+dispatches. Mutating the instrument to return false unconditionally makes **the control fail while
+the `Reset` test stays green** — which is the whole demonstration. The `Reset` test alone would have
+passed with a dead instrument.
+
+**This is the second time tonight the same defect appeared**, after the staleness guard's reach test
+stayed green under a mutation that mis-classified the source tree. Stated as a rule: **a negative
+result requires a demonstration that the instrument can produce a positive one.**
+
+### `IsStruct` is recorded as a reachability fact, not a support fact
+
+Zero corpus witnesses and no probe, so **no verdict is available and none is claimed**. The test is
+written to fail if a witness ever appears, because that would make a verdict available while the
+census commentary still said otherwise.
+
+### And then the fraction itself was the problem
+
+With `Reset` resolved, the census still printed **63 of 66** with three rows beneath it, and **the
+natural reading of that fraction is three opcodes needing implementation. None of the three does.**
+
+| opcode | disposition |
+|---|---|
+| `Reset` | accepted, by a route the census does not instrument |
+| `IsStruct` | no verdict available, and none claimed |
+| `Len` | **refusing is correct, and lowering it would be a defect** |
+
+`Len` is the dangerous row, because it looks the most like actionable work. The virtual machine
+returns `InvalidBytecode` for `Op::Len` on a flat array, and the reference compiler emits it from an
+ordinary program. **A backend that lowered it would compute a length where the reference traps**,
+manufacturing divergence in the one signal this line uses as its oracle. Refusing is what keeps the
+two sides comparable. The repair belongs to the `v0.2.3` line, which owns `src/vm.rs`.
+
+**So the count of opcodes with missing support is zero**, and the remedy is a disposition printed
+beside the fraction rather than a better fraction. Moving `Reset` into the lowered column would have
+made the number prettier and destroyed the fact that it is accepted by an uninstrumented route.
+
+A guard now asserts that the set of opcodes outside the lowered column equals the set carrying a
+disposition, so a new one cannot silently join a fraction someone will misread. Removing a
+disposition makes it fail by name.
+
+**Measured**: `native_codegen` **469 passed, 0 failed, 91 binaries**, under default features and again
+under `narrow-float-32`, `cargo fmt` clean and zero clippy warnings. The prediction of 469 over 91 was
+recorded before the run and hit exactly.
+
 ## 2026-09-02 night — [v0.3.0] The workspace clause becomes executable, and my own reach test is caught measuring nothing
 
 **Increment**: the workspace staleness guard, its reach proof, and the correction of a scope error in

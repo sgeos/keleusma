@@ -19,6 +19,22 @@ from disk, and they passed. **Green with that caveat, not a clean number.**
 **My prediction was a partial hit.** Green and the pass floor held; the binary population was
 understated by two.
 
+## No opcode is known to be missing support, and the headline number said otherwise
+
+The census reports **63 of 66 lowered**, which reads as three opcodes to implement. **None of the three
+is an unimplemented lowering.** `Reset` is accepted by a shape match the census does not instrument,
+measured at 32 of 33 emitting modules. `IsStruct` has no witness at all, so no verdict exists and none
+is claimed. And **`Len` must stay refused**: the machine traps on it, so lowering it would compute a
+length where the reference errors, which manufactures divergence in this line's only correctness
+signal. That repair belongs to your other line, which owns `src/vm.rs`.
+
+The census now prints each disposition beside the fraction, and a guard fails if an opcode leaves the
+lowered column without one. **I did not move `Reset` into the lowered column**, because a prettier
+number would have hidden the interesting fact.
+
+**Measured**: `native_codegen` **469 passed, 0 failed, 91 binaries** under both float configurations,
+formatting clean, zero clippy warnings. Predicted before running and hit exactly.
+
 ## The deliverable was the routine change, and it is now executable
 
 A paragraph in the handoff saying "also check the workspace" would have been the obvious remedy.
