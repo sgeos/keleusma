@@ -1,5 +1,47 @@
 # Design Journal
 
+## 2026-09-02 night — [v0.3.0] I relayed a peer's construction past a rule my own tree already held
+
+**Increment**: the `f16` narrowing construction, corrected, and the conflation behind it named.
+
+Last increment I recorded the `v0.2.3` line's description of the binary16 construction — the chain
+`f64 -> f32 -> binary16`, sound with zero margin — into this handoff **as settled**. I flagged the
+tightness and asked them whether the `f32` hop was load-bearing. It was not.
+
+**But the question I asked them was one my own tree had already answered.**
+`FLOAT_LADDER.md` says narrow from the wide value and never through an intermediate rung.
+`FLOAT_ARITH_WIDTH_BRIEF.md` warns against confusing the two conditions. **Both were in this tree
+while I wrote the chain into the handoff as the settled construction.** I did not check the relayed
+description against the files that govern it.
+
+**That is the relayed-ruling failure exactly**: a peer-relayed statement recorded as settled
+propagates the relay's error into a durable artifact. The peer had the same defect in the mirror image
+— their own brief forbade the chain while they described it to me in speech.
+
+### The conflation, which is the part worth keeping
+
+`2p+2` answers **two different questions**, and using one number for both is what let a zero-margin
+argument look acceptable.
+
+| question | what must carry `2p+2` | binary16 | `f32` |
+|---|---|---|---|
+| arithmetic equivalence, wide computation rounded per operation against native | the **computing** format | 24 against 53, margin **29** | 50 against 53, margin **3** |
+| conversion double rounding, chained narrowing against direct | the **intermediate** | 24 against exactly 24, margin **0** | does not arise |
+
+**The second question exists only if you chain**, and rounding `f64` straight to binary16 is a single
+correctly-rounded narrowing with no condition at all. So the `f32` hop introduced a constraint and
+bought nothing.
+
+**This line's own margin-3 figure answers the first question.** It has been recorded here since the
+`f32` rung and it is not a statement about chained conversion. Had the two stayed conflated, a future
+reader could have taken margin 3 as licence for a chain.
+
+### What was and was not wrong
+
+**Nothing in either tree.** `narrow_float` implements only the 32-bit rung, a single hop. The defect
+lived in a plan and in a description — the more dangerous place, because this line would have built
+against it and the differential would have reported the resulting disagreement as a backend defect.
+
 ## 2026-09-02 night — [v0.3.0] I asked for the wrong unblock, and the answer was a wrong oracle
 
 **Increment**: the `f16` blocker, restated after the `v0.2.3` line corrected it.
