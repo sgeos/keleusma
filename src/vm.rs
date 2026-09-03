@@ -4,7 +4,17 @@ use alloc::format;
 use alloc::string::String;
 // The `vec!` macro is used only by the test module; lib code uses the
 // fully-qualified `alloc::vec!`.
-#[cfg(test)]
+//
+// The cfg must MATCH THE TEST MODULE'S, which is
+// `all(test, feature = "compile", feature = "verify")`. Gated on `test` alone
+// this import is unused whenever those features are off, and the resulting
+// warning is invisible to the release gate: the gate's lint step denies
+// warnings but runs `--workspace`, where feature unification through
+// `keleusma-cli` turns `compile` and `verify` back on, while the step that
+// does reach the bare configuration is `cargo test`, which prints warnings and
+// passes. Each instrument is correct in its own scope and the union of the
+// scopes has a hole. Raised by the `v0.3.0` line, whose gate printed it.
+#[cfg(all(test, feature = "compile", feature = "verify"))]
 use alloc::vec;
 use alloc::vec::Vec;
 
