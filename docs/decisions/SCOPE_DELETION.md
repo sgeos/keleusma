@@ -306,6 +306,39 @@ narrowing is the default**, and the `2p+2` condition on the intermediate is **re
 any implementation that must chain**, which is what keeps the `bfloat16` case caught. Neither rule
 replaces the other.
 
+## ⚠ A FIFTH SPECIES: A CORRECT RECORD MISQUOTED LOOKS EXACTLY LIKE AN INCORRECT ONE
+
+**Named by the `v0.2.3` line on 2026-09-02, from this line's fourth home of the previous species.**
+
+> **A correct record misquoted is indistinguishable, downstream, from an incorrect one. Everything
+> after the citation is identical. The only difference is WHERE THE REPAIR GOES, and nobody can tell
+> which until someone opens the file.**
+
+**The two instances arrived the same evening, in the same increment, on the same subject.**
+
+| who | the citation | the file |
+|---|---|---|
+| this line | asserted [`FLOAT_LADDER.md`](./FLOAT_LADDER.md) forbade chaining | **it records the prohibition WITHDRAWN**, at this line's own urging |
+| the `v0.2.3` line | quoted its brief's bold imperative as the paragraph's rule | **the paragraph states BOTH** — the imperative, then "the rule is a condition on the intermediate", three sentences apart |
+
+**Neither artifact was wrong.** This line's ladder file was correct and was cited as saying the
+reverse. The other line's brief was correct and self-consistent about a two-part rule, and was quoted
+by its first sentence only — by the person who had written it that morning and had it open.
+
+**So the repair for this species is not in the document.** For the earlier species the fix is to write
+the population, or the question, into the sentence. Here the sentence was already right. The fix is
+entirely in the citing act, which is why it evades every remedy aimed at the artifact.
+
+### The corollary, which is the general form of both failures
+
+> **Asking the other line was cheap and being sure about my own file was not, so the second was
+> skipped while the first was counted as diligence.**
+
+Both citation failures happened **one increment after** recording that a relayed statement must be
+checked against the governing files. **The remedy was applied to the other party's claim and not to
+the claim that corrected it.** A rule about verification is easiest to skip precisely when it is being
+invoked, because invoking it feels like having done it.
+
 ## No rate is given here, and the reason is stronger than caution
 
 **Six instances in one day is a count over an unbounded denominator.** Neither line knows how many
