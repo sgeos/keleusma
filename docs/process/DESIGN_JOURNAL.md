@@ -1,5 +1,36 @@
 # Design Journal
 
+## 2026-09-03 — [v0.3.0] The coverage guard completed its first full cycle
+
+**Workspace: 2748 passed, 0 failed, 119 binaries**, `cargo test --workspace --no-fail-fast`, **default
+features only**, **measured on a frozen tree with no edits in flight** — unlike the run of 2026-09-02,
+which had a documentation commit land underneath it. The prediction of 2748 over 119 was recorded
+before the run and **hit exactly**, and the figures match the `v0.2.3` line's own gate, confirming that
+this branch's six extra corpus files are iterated inside existing tests rather than adding any.
+
+### The number is not the point; the cycle is
+
+The guard has now run end to end for the first time:
+
+| stage | verdict |
+|---|---|
+| after absorption 48 | **STALE-COMPILED**, naming `src/vm.rs`, `src/marshall.rs` and two test files |
+| the run it justified | green, on a frozen tree |
+| after re-stamping | **CURRENT** |
+
+**This is what keeps the instrument from becoming the thing it was built to avoid.** The choice of a
+script over a test was justified on the grounds that a test asserting coverage-is-current would be red
+from every absorption until someone spent hours clearing it, and **a guard red by default is
+suppressed rather than obeyed**. That argument only holds if the stamp is actually cleared. **A stamp
+never cleared makes the script permanently stale and equally ignorable**, so the re-stamp is not
+bookkeeping — it is the step that preserves the reason for the design.
+
+### The stamp now carries its subject, per the other line's rule
+
+It records the configuration, that the tree was frozen, and **that its subject is the tree at that
+commit rather than a standing property**. That is the fourth-species remedy applied where it belongs:
+a measured claim needs its value, its population, its question, and **its subject as of a date**.
+
 ## 2026-09-03 — [v0.3.0] A twelve-hour sweep abandoned, and absorption 48 with every clause hit
 
 ### The sweep was stopped, and that is the finding rather than the failure
