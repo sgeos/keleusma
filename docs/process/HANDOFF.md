@@ -95,10 +95,18 @@ recorded parent is a claim that nothing else ever lands, and it has failed three
    and the `Op::Len` trap may be open.
 4. `tests/text_capacity_type.rs` exists. If it does not, `Text<N>` increment 1 is not on this branch.
 
-**Do not trust the counts in this file without re-deriving them.** The construct-support boundary is
-ratcheted at `n_ok >= 40` in `self_hosted_construct_support_boundary` rather than pinned to a fixed
-triple; **run the test rather than grepping for the classification**, which is how a wrong figure got
-published earlier in this line's history.
+**Do not trust the counts in this file without re-deriving them.** The construct-support boundary
+last read **96 SOk / 1 Refuses / 3 Diverges / 1 RefRejects** over 101 cases. It is ratcheted at
+`n_ok >= 40` in `self_hosted_construct_support_boundary` rather than pinned to that triple; **run
+the test rather than grepping for the classification**, which is how a wrong figure got published
+earlier in this line's history.
+
+**That figure is stated here twice ON PURPOSE, and a test requires it.**
+`the_boundary_table_counts_match_the_handoff_and_the_names_match_the_labels` derives the triple by
+calling `boundary_cases` and then demands at least two occurrences of it in this file, so a branch
+adding a case silently turns the document red instead of leaving it quietly wrong. **The refresh of
+2026-09-03 deleted one of the two and broke that test**, which the pre-push hook cannot see, because
+its routine tier excludes the `selfhost_*` binaries. If you rewrite this block, keep two.
 
 ## RUN THE SUITE WITH `--no-fail-fast`, AND THE REASON IS NOT TIDINESS
 
