@@ -5,49 +5,73 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-09-01 (session 61 CLOSE).** Validate by the ANCESTRY and CONTENT block below,
+> **REFRESHED 2026-09-03 (session 61 CLOSE).** Validate by the ANCESTRY and CONTENT block below,
 > not by a hash: a refresh takes more than one commit, so any hash written here is stale by one the
 > moment it is written.
 >
-> ## THERE IS NOTHING RED AND NOTHING UNMERGED
+> ## READ FIRST: TWO COMMITS ARE HELD, DELIBERATELY, AND THE MACHINE IS NOT YOURS
 >
-> `origin/v0.2.3` is at `27fcbd11`, the full release gate is green at 13 steps, every branch this
-> line created is merged, and the worktrees are clean.
+> **`origin/v0.2.3` is at `6af37f66` and the gate was green there at 13 steps.** Two commits are
+> committed, unpushed, on two branches, and they are held ON PURPOSE rather than forgotten:
 >
-> **This is stated first because the previous two sessions each opened with stranded work.** There
-> is none. If you find some, it arrived after this was written.
+> - `docs/session-61-tail-channels` at `22aa1d95` — the channel refresh you are reading
+> - `fix/wire-changelogs` at `7540abe8` — changelogs for the two wire crates
 >
-> ## THE LARGEST THING LEFT IS `Text<N>`, AND IT IS UNSTARTED
+> **They are unpushed because the `v0.3.0` line's mutation sweep owns the machine.** That sweep
+> scores a run exceeding six times its calibrated baseline as a HANG, and **a HANG counts as
+> DETECTED**, so contention does not slow the measurement, it INVERTS it — a contended sweep reports
+> better coverage than a quiet one and nothing in its output says which you got. A push runs the
+> pre-push suite. **Check whether the sweep is still running before pushing.**
 >
-> Designed and authorized, with its brief and completion condition drafted. Read
-> [`../decisions/TEXT_CAPACITY_TYPE.md`](../decisions/TEXT_CAPACITY_TYPE.md) before touching text.
+> Both are docs-only and neither is red. Push and gate them when the machine is free.
 >
-> **The `ScalarKind::Text` collapse to one address must land WITH it.** That is a wire-format change,
-> and `BYTECODE_VERSION` is frozen at 2 across releases by operator policy, so such changes are free
-> before publication and unavailable after. The release plan puts publication immediately after
-> `Text<N>` and the native-codegen back-merge.
+> ## A RELEASE BLOCKER IS FIXED IN THE DOCUMENT AND STILL LIVE IN FACT
 >
-> ## AN OPERATOR DECISION IS ON THE CRITICAL PATH
+> `RELEASE_PROCESS.md` said five crates publish to crates.io. **There are seven.** `keleusma-wire`
+> and `keleusma-wire-derive` were absent from all four enumerations of the crate set. Following the
+> document as written publishes two crates IRREVERSIBLY and then fails on `keleusma`, because the
+> registry has no `keleusma-wire` to resolve.
 >
-> **Whose release gate is canonical at the back-merge.** The `v0.3.0` line's script differs from this
-> one by 29 lines. Every "the gate is green" recorded by either line today was said about a
-> different instrument. Ruled union with conditions and written into `RELEASE_PROCESS.md`; the
-> operator can overrule before the back-merge.
+> **The document is corrected. The crates are still unpublished**, so the first publication must
+> publish seven in the recorded order, with the wire pair third and fourth. Nothing enforces this;
+> there is no automated guard on that list.
 >
-> ## THE FINGERPRINT IS ROLLED PER RELEASE, NOT DERIVED
+> ## `Text<N>` IS STARTED AND INCREMENT 2 IS FULLY PLANNED
 >
-> A random constant beside `BYTECODE_VERSION`, currently `0x4327_63E1`. **Release step 1b rolls it**
-> and nothing enforces that step: skipping it produces no warning and no test failure, only two
-> releases silently accepting each other's bytecode. `scripts/fingerprint.sh` reads any commit's
-> value.
+> Increment 1 landed: the type parses, is distinct from bare `Text`, carries its capacity through
+> monomorphization, and **is refused with a named error at every stage below the type surface**. Each
+> later increment REMOVES one refusal. Do not read a refusal as a defect.
 >
-> An earlier design derived it from the scalar size table. That is retracted, and any record saying
-> the fingerprint moves on a layout change is stale — it moves at RELEASE.
+> Increment 2 is planned in
+> [`../decisions/TEXT_N_IMPLEMENTATION_BRIEF.md`](../decisions/TEXT_N_IMPLEMENTATION_BRIEF.md) and
+> needs no discovery: the layout is `Tuple([Scalar(Int), Array{Byte, N}])`, needing **no new
+> descriptor variant**; the size is exactly `word_bytes + N` because tuple layout has no inter-field
+> padding; and `Multiword<N, F>` is the exact precedent for a nominally-distinct,
+> structurally-composite type, supplying a post-erasure tripwire and a range check with its reason.
+> The zero-length-array rule answers whether `Text<0>` is legal: it is not.
+>
+> **The `ScalarKind::Text` collapse to one address must land WITH the feature, before publication.**
+> It is a wire change, and wire changes are free while `BYTECODE_VERSION` is frozen at 2 and nothing
+> has been published at 2. After publication it costs a version the operator has declined to spend.
 >
 > ## WHAT THE GATE'S GREEN DOES NOT COVER
 >
-> Float arithmetic at binary16 or OFP8 E5M2. Nothing implements them and both are refused at load.
-> The green covers `f32` and the refusal.
+> Float arithmetic at binary16 or OFP8 E5M2. Both are **refused at load** and nothing implements
+> them. The green covers `f32` and the refusal. The `v0.3.0` line's f16 rung is blocked on REFERENCE
+> f16 ARITHMETIC — not on load acceptance, and **accepting load alone would be actively harmful**: it
+> would give them a reference computing in `f64` while their backend lowers natively, so their
+> byte-identity oracle would report a divergence on every value that rounds and attribute it to their
+> lowering.
+>
+> ## A LATENT TRAP THAT IS ARMED, NOT FIXED
+>
+> The compiler emits `Op::Len` on an array — `static_for_in_length` has no `Expr::If` arm — and the
+> VM refuses that opcode. **`verify()` accepts the module.** What holds the trap shut is the
+> loop-bound refusal, which this project's own taxonomy calls LIFTABLE.
+>
+> `tests/len_flat_array_hazard.rs` is a ratchet that fails if that refusal changes identity. **If you
+> improve the loop-bound extractor, handle `Op::Len` first**, or a rejected program becomes one that
+> loads and traps. The root repair is an `Expr::If` arm so the length folds.
 
 ## Validity
 
@@ -56,117 +80,25 @@ always-current, so it must be able to report itself stale rather than mislead a 
 - **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint.
 
 **Validate by ANCESTRY and by CONTENT, never by a hash match.** A stamp requiring `HEAD~1` to equal a
-recorded parent is a claim that nothing else ever lands, and it has failed twice.
+recorded parent is a claim that nothing else ever lands, and it has failed three times.
 
-```sh
-git merge-base --is-ancestor 5c3ba628 HEAD    # must succeed
+**Ancestry**: `origin/v0.2.3` should contain `6af37f66`
+(`merge(session-61-tail)`). If it does not, this file predates a reset and is stale.
 
-# Content. If ANY of these differ, say so rather than acting on the state below.
-#
-# **IF YOU AUTOMATE THIS BLOCK, SCOPE THE PATTERN.** A naive `path + # + number` extractor also
-# matches the MARGIN PIN line further down and reads 681 as a test count for
-# `tests/selfhost_wire.rs`, which is pinned at 178. That false DIFF has been produced three
-# times by three sessions writing the same careless one-liner. It is the checker being wrong.
-grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 39
-grep -c '^\s*#\[test\]' tests/selfhost_wire.rs              # 178
-grep -c '^\s*#\[test\]' tests/selfhost_parse.rs             # 89
-grep -c '^\s*#\[test\]' tests/selfhost_codegen.rs           # 147
-grep -c '^\s*#\[test\]' tests/selfhost_pool_tags.rs          # 8
-grep -c '^\s*#\[test\]' tests/selfhost_driver_parity.rs      # 4
-grep -c '^\s*#\[test\]' tests/selfhost_chained_index.rs      # 3
-grep -c '^\s*#\[test\]' tests/stage_command_reach.rs         # 2
-grep -c '^\s*#\[test\]' tests/selfhost_declared_bounds.rs   # 5
-grep -c '^\s*#\[test\]' tests/opcode_reachability.rs        # 6
-grep -c '^\s*#\[test\]' tests/block_form_statements.rs      # 11
-grep -c '^\s*#\[test\]' tests/consts_region_composition.rs  # 11
-grep -c '^\s*#\[test\]' tests/operand_stack_model.rs        # 6
-grep -c '^\s*#\[test\]' tests/wire_slot_layout.rs           # 2
-grep -c '^\s*#\[test\]' tests/selfhost_consts_driver.rs     # 6
-grep -c '^\s*#\[test\]' tests/selfhost_region_coverage.rs   # 5
-grep -c '^\s*#\[test\]' tests/selfhost_chunk_names.rs       # 3
-grep -c '^\s*#\[test\]' tests/parse_record_trace.rs         # 2
-grep -c '^\s*#\[test\]' tests/lex_token_trace.rs            # 2
-grep -c '^\s*#\[test\]' tests/selfhost_bare_for.rs          # 7
-# THE PROOF-SUPPORT FAMILY. Several are GAP pins that fail DELIBERATELY if the gap they
-# record is closed -- read the message before treating a failure as a fix.
-grep -c '^\s*#\[test\]' tests/push_order_claims.rs          # 2
-grep -c '^\s*#\[test\]' tests/selfhost_parse_refusals.rs    # 2
-grep -c '^\s*#\[test\]' tests/composite_escape_window.rs    # 3
-grep -c '^\s*#\[test\]' tests/composite_escape_routes.rs    # 9
-grep -c '^\s*#\[test\]' tests/proof_evidence_index.rs       # 3
-grep -c '^\s*#\[test\]' tests/stream_never_returns.rs       # 2
-grep -c '^\s*#\[test\]' tests/loop_entry_floor.rs           # 3
-grep -c '^\s*#\[test\]' tests/corpus_pattern_coverage.rs    # 3
-grep -c '^\s*#\[test\]' tests/confinement_analysis.rs        # 9
-grep -c '^\s*#\[test\]' src/confine.rs                       # 13
-# THE CITATION GUARD. It now scans HANDOFF.md and REVERSE_PROMPT.md as well as `src/` and
-# `tests/`. It does NOT scan the append-only documents, and that is measured, not assumed.
-grep -c '^\s*#\[test\]' tests/comment_citations.rs           # 6
-# THE wire.kel CHAIN, sessions 54 and 55. These four are why the corpus is eleven stages.
-grep -c '^\s*#\[test\]' tests/reconstruct_failure_modes.rs   # 14
-grep -c '^\s*#\[test\]' tests/radix_literals.rs               # 5
-grep -c '^\s*#\[test\]' tests/call_chunk_index_limit.rs      # 5
-grep -c '^\s*#\[test\]' tests/wire_self_compile_status.rs    # 3
-# THE OP-TAG TABLES, session 56. Closes a finding the `v0.3.0` line could not close.
-grep -c '^\s*#\[test\]' tests/op_tag_tables.rs                # 8
-# THE TWELFTH STAGE'S EXCLUSION, session 56. Explains why the corpus is 11 of 12.
-grep -c '^\s*#\[test\]' tests/forward_data_reference.rs       # 4
-grep -c '^\s*#\[test\]' tests/forest_child_channels.rs        # 2
-grep -c '^\s*#\[test\]' tests/example_index_claims.rs         # 2
-grep -c '^\s*#\[test\]' tests/claimed_counts.rs               # 5
-grep -c '^\s*#\[test\]' tests/documentation_links.rs         # 2
-# THE STRING ABI, session 58. Pins the four properties the agreed contract consists of; the
-# other four are pinned on the `v0.3.0` line and NO test here sees both embodiments at once.
-grep -c '^\s*#\[test\]' tests/string_abi_borrowed.rs       # 10
-# THE ORACLE'S TYPE SURFACE, session 58. All 861 corpus functions are Word -> Word.
-grep -c '^\s*#\[test\]' tests/corpus_type_surface.rs       # 1
-# THE TEXT WORK, session 59. `Text + Text` is REFUSED at compile time; this pin fires when
-# `Text<N>` restores it, and it must then COMPILE AND RUN rather than merely compile.
-grep -c '^\s*#\[test\]' tests/text_composition_hole.rs      # 1
-grep -c '^\s*#\[test\]' tests/lexical_divergence_census.rs # 1
+**Content**, four checks that are cheap and independent:
 
-# THE BYTE-IDENTITY CORPUS IS ELEVEN STAGES. `wire.kel` joined 2026-08-27.
-grep -c 'fn self_host_compiles_.*_kel_byte_identically' tests/selfhost_codegen.rs   # 11
+1. `scripts/fingerprint.sh` reports `0x4327_63E1`. If it differs, a release was rolled since this was
+   written and every version-adjacent statement here needs re-reading.
+2. `docs/process/RELEASE_PROCESS.md` says **SEVEN** crates publish. If it says five, this file
+   predates the release-blocker fix and the blocker is live.
+3. `tests/len_flat_array_hazard.rs` exists and passes. If it fails, the loop-bound refusal changed
+   and the `Op::Len` trap may be open.
+4. `tests/text_capacity_type.rs` exists. If it does not, `Text<N>` increment 1 is not on this branch.
 
-# THE STAGE BOUNDS.
-grep -oE 'fn (nm_max_names|mi_max_nodes|fl_max_nodes|ck_max|highest_command)\(\) -> Word \{ [0-9]+ \}' \
-    src/selfhost/kel/wire.kel     # 1024, 1365, 170, 90, and highest_command 181
-grep -oE 'fn max_nesting\(\) -> Word \{ [0-9]+ \}' src/selfhost/kel/verify_depth.kel   # 32
-
-# THE CALL-RECORD FIELD WIDTH, session 54. It EQUALS the chunk capacity deliberately, so the
-# chunk-cap guard is the only bound and no span overflows silently. A test asserts they stay
-# equal; a roomier radix would recreate the defect one power of two higher.
-grep -oE 'fn (call_chunk_radix|rc_call_chunk_radix)\(\) -> Word \{ [0-9]+ \}' \
-    src/selfhost/kel/parse.kel src/selfhost/kel/reconstruct.kel   # both 1024
-
-# THE MARGIN PINS. Moved again in session 54, and THE BLOB ARITHMETIC DOES NOT ADD UP -- see
-# the comment beside it. Recorded as unexplained rather than rationalised.
-grep -oE 'assert_eq!\(worst_(names|blob), [0-9]+' tests/selfhost_wire.rs   # 681, 35716
-
-# THE CITATION DEBT REGISTER. Shrank 13 -> 12 by RESOLVING one, not excusing another.
-awk '/const UNRESOLVED/,/^\];/' tests/comment_citations.rs | grep -cE '^\s+"'   # 12
-
-# THE TYPE-CHANNEL EXTRACTIONS MOVED TO THE PIPELINE. Two of five.
-grep -oE 'pub fn [a-z_]+_from_pipeline' src/selfhost/mod.rs | sort -u
-#   binding_rows_from_pipeline, chunk_names_from_pipeline, decl_call_rows_from_pipeline,
-#   declared_names_from_pipeline, expression_rows_from_pipeline, field_sets_from_pipeline,
-#   occurrence_rows_from_pipeline
-
-# THE PARSER'S CAPS. Unchanged.
-grep -rhoE 'pub const PARSE_[A-Z_]+: usize = [0-9]+;' src/ | sort
-
-# THE CONSTRUCT-SUPPORT BOUNDARY. Expect 96 SOk / 1 Refuses / 3 Diverges / 1 RefRejects, 101
-# cases. Three radix-literal cases were added in session 54 -- their ABSENCE is why the
-# lexer's total lack of radix support went unmeasured, the fourth instance of that class.
-# The `use Support::{...}` line contributes one of each name and must be excluded.
-awk '/fn boundary_cases\(\)/,/^}/' tests/selfhost_codegen.rs \
-  | grep -v '^    use Support::' \
-  | sed 's://.*::' | grep -oE '\b(SOk|Refuses|Diverges|RefRejects)\b' | sort | uniq -c
-```
-
-**A CHECK THAT PASSES IS NOT A CURRENT DOCUMENT.** The last one passed every check six merges after
-it was written. If the counts hold but the dates below are old, read the three channels first and
-trust them over this file.
+**Do not trust the counts in this file without re-deriving them.** The construct-support boundary is
+ratcheted at `n_ok >= 40` in `self_hosted_construct_support_boundary` rather than pinned to a fixed
+triple; **run the test rather than grepping for the classification**, which is how a wrong figure got
+published earlier in this line's history.
 
 ## RUN THE SUITE WITH `--no-fail-fast`, AND THE REASON IS NOT TIDINESS
 
@@ -243,6 +175,26 @@ gh run list --branch v0.2.3 --limit 1
 ```
 
 ## WHAT A RESUMING SESSION SHOULD DO FIRST
+
+**ZERO (2026-09-03). CHECK THE MACHINE, PUSH THE TWO HELD COMMITS, THEN CONTINUE `Text<N>`.**
+
+```sh
+pgrep -f mutation_sweep              # the v0.3.0 line's sweep; contention INVERTS its result
+git log --oneline -1 origin/v0.2.3   # expect 6af37f66 or later
+```
+
+Held branches: `docs/session-61-tail-channels` and `fix/wire-changelogs`, one commit each, docs-only,
+green locally. Push, gate, merge. **If the sweep is running, wait** — it scores a run over six times
+its baseline as a HANG and counts a HANG as DETECTED, so a contended run reports BETTER coverage than
+a quiet one, and the flattering direction is the dangerous one.
+
+Then `Text<N>` increment 2, which needs construction rather than discovery. Its brief holds the
+layout, the size formula, the precedent and both guards to copy.
+
+**A caution about this file.** It is long and largely historical. **The BANNER at the top is the
+resume prompt**; sections below are accumulated findings, several describing states that have since
+moved. Where a section disagrees with the banner, the banner is newer. There is a SUPERSEDED
+duplicate of this very heading further down, which is the kind of thing to expect here.
 
 **ONE. DERIVE THE MERGE COUNT AND THE PULL-REQUEST STATE. DO NOT READ THEM HERE.**
 
@@ -1133,7 +1085,12 @@ machine-owned copy store measured WORSE than doing nothing.
 
 **THE DEAD `native@1c1ffb1e` GATE RECORD.** Unchanged and untouched, because it is the other line's.
 
-## WHAT A RESUMING SESSION SHOULD DO FIRST
+## WHAT A RESUMING SESSION SHOULD DO FIRST — SUPERSEDED (kept for its findings)
+
+> **This heading was a duplicate of the live one above.** Two sections carried the
+> identical title, so a reader landing here had no signal that another existed, and its
+> item ZERO names a pull request settled long ago. Retitled rather than deleted: the
+> items below record real findings, and only the ORDERING is stale.
 
 **ZERO. SETTLE `#278`.** It is the only open pull request and it carries this file's subject.
 Continuous integration was restarted by a force-push and had not settled; the local gate was green
