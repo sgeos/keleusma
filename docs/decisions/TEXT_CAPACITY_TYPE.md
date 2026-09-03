@@ -247,11 +247,20 @@ arena-resident mutable text is that the ephemeral region is write-once.
 
 ## Open questions, which belong to the operator
 
-1. **The overflow rule.** A push past `N` must refuse at compile time where provable and do
-   something definite otherwise. Trapping matches the language's secure-failure posture; saturating
-   would silently truncate. Not decided here.
-2. **The bundled-operation reversal**, above.
-3. **Surface syntax.** Method form (`s.push(t)`) reads well and matches the authorizing example, but
+**The overflow rule was question 1 here and IS NO LONGER OPEN.** It was ruled in session on
+2026-08-31 and the ruling is recorded under **THE SETTLED SEMANTICS** above: refuse what is static,
+truncate what is not, with an optional arm following `CheckedArmKind`. This list continued to
+present it as undecided after the ruling landed, which is a worse failure than an ordinary stale
+document: a resuming session reading this list would believe the central semantic choice was still
+its to make, and would either re-ask a question the operator has already answered or implement the
+opposite of the ruling. Corrected 2026-09-03. **Where this list and the settled section disagree,
+the settled section wins**, because it records a direct ruling and this list records the state
+before it.
+
+Two questions remain genuinely open.
+
+1. **The bundled-operation reversal**, above.
+2. **Surface syntax.** Method form (`s.push(t)`) reads well and matches the authorizing example, but
    the language's method surface is trait-impl based. Whether `Text<N>` gains methods or free
    operations is a surface decision.
 
