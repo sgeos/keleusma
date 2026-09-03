@@ -365,6 +365,51 @@ checked against the governing files. **The remedy was applied to the other party
 the claim that corrected it.** A rule about verification is easiest to skip precisely when it is being
 invoked, because invoking it feels like having done it.
 
+## ⚠ A SIXTH SHAPE: THE RECORD WAS NEVER OPENED AT ALL
+
+**Found by auditing this line's own work on 2026-09-02, hours after the fifth species was named.**
+
+The fifth species is a correct record **misquoted**. This one is a correct record **never consulted**,
+and it is what produces re-derivation in ignorance.
+
+**The instance is this line's own.** Two increments shipped that evening on `Reset` and `IsStruct`.
+Both sat directly on records already in this directory:
+
+| record | date | what it already held |
+|---|---|---|
+| [`RESET_UNPROVEN_BRIEF.md`](./RESET_UNPROVEN_BRIEF.md) | 2026-08-27 | the mechanism — the degenerate-stream transform steps over `Reset`; the trap that a naive probe yields a **false** SUPPORTED; the missing visit check; the vacuous-probe warning |
+| [`IS_STRUCT_DISPOSITION.md`](./IS_STRUCT_DISPOSITION.md) | 2026-08-24 | intent present, producers investigated, recommendation not to remove — **written by this line** |
+
+**The new work was real but narrower than it was presented.** What the evening actually added was the
+quantified module-level verdict, 33 corpus modules emitting `Reset` with 32 accepted and 1 refused and
+none visited, which the earlier brief did not contemplate because it framed status as visited-or-
+refused. **The mechanism, described as though newly found, was six days old.**
+
+### The part that makes this worth a section rather than an apology
+
+**In the same session, this line avoided a duplicate instrument by reading first**, declining to build
+a mutation sweep that already existed, and **recorded that as evidence the practice was working.**
+
+It was working where it happened to be applied. **Two increments earlier in the same session it had
+not been**, and the claim of success was made without checking that.
+
+> **A verification practice reports on the cases where you remembered to use it. Its silence on the
+> others is not evidence of their absence.**
+
+That is the corollary recorded above arriving in its strongest form: **invoking the rule felt like
+having applied it**, and the self-congratulation was itself uninspected.
+
+### Why this shape resists the fifth species' remedy too
+
+"Open the file in the same turn you cite it" cannot fire here, **because nothing was cited.** There is
+no citation to check against a source. The failure is an absence of reference, and an absence leaves
+nothing to verify.
+
+The only remedy that reaches it is a **search before an increment, not a check during one**: before
+claiming a finding, look for a prior record of the same subject. That is cheap here — the directory is
+one flat namespace — and it was skipped twice in one evening by someone actively collecting failures
+of exactly this family.
+
 ## No rate is given here, and the reason is stronger than caution
 
 **Six instances in one day is a count over an unbounded denominator.** Neither line knows how many
