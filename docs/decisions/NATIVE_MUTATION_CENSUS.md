@@ -1,10 +1,24 @@
 # What can the corpus differential actually detect?
 
+> ⚠ **CURRENCY: THIS RESULT IS STALE, AND THE STATUS LINE BELOW READS AS THOUGH IT IS NOT.**
+> Checked 2026-09-02: **`native_codegen/src/lib.rs` has changed in 39 commits since this file was
+> last measured.** The sweep mutates that emitter, so every verdict here is a property of the emitter
+> **as it stood on 2026-08-16**, not of the tree you are reading it in.
+>
+> **"No hole open" is a present-tense safety claim about a past tree.** That is the dangerous form:
+> a stale test COUNT still reads as a count, whereas this sentence reads as a property someone could
+> lean a release on. It is not withdrawn — it was true when measured, and staleness is **not** evidence
+> of a hole — but it is not current either, and re-running the sweep is the only thing that settles
+> which. Do not re-run it on a contended machine: a slow run under load is indistinguishable from a
+> detected hang, which would fabricate coverage. See
+> [`DIFFERENTIAL_SENSITIVITY_BRIEF.md`](./DIFFERENTIAL_SENSITIVITY_BRIEF.md).
+
 **Status**: measured, the harness repaired twice, and **no hole open**. `Trap`
 was closed in Part D by changing the OBSERVABLE, not the inputs. The only
 undetected mutation left is `PushImmediate`, established in round two as vacuous
 rather than a hole.
-**Date**: 2026-08-14, extended 2026-08-15 (Parts B, C and D).
+**Date**: 2026-08-14, extended 2026-08-15 (Parts B, C and D). **Currency re-checked 2026-09-02 and
+found STALE by 39 emitter commits; see the banner above.**
 
 ## The question, and why the obvious instrument was wrong
 
