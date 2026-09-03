@@ -410,6 +410,50 @@ claiming a finding, look for a prior record of the same subject. That is cheap h
 one flat namespace — and it was skipped twice in one evening by someone actively collecting failures
 of exactly this family.
 
+## ⚠ A SEVENTH SHAPE: THE DISCIPLINE WAS NEVER POINTED AT ACTIONS
+
+**2026-09-03. This line killed the other line's release gate**, step 6 of 12, roughly two hours in
+with zero failures, **while deliberately yielding the machine to them.**
+
+The command was `pkill -x cargo`: no path scope, no worktree scope. It matched every cargo process on
+the host, including a sibling checkout's.
+
+> **Reach discipline had been applied to things that OBSERVE and never to things that CHANGE.**
+> A check with excess reach reports something false. **An action with excess reach destroys something
+> real.** The second needs the discipline more and had received none of it.
+
+Every habit in this file — non-vacuity cases, mutation tests, controls proving an instrument can
+report a positive — **was aimed at guards. Not one was ever aimed at a command that changes state.**
+
+**The mechanism generalises**: selecting a process by PROGRAM NAME is inherently machine-wide, because
+the property distinguishing this checkout from a sibling is not in the name. The selector must come
+from the target path.
+
+**And the correct pattern was already written down.** The other line's `scripts/release-gate.sh`
+carries a reaper scoped exactly that way, with a comment explaining why. It was not opened. **That is
+the sixth shape above, committed by this line hours earlier, and then committed again.**
+
+### The confirmation was inverted, which is separable and worse
+
+After the kill this line checked the process list, saw a test binary from the primary directory under
+load, and reported **"only your run remains"** as evidence the other gate was healthy. **It was the
+orphan of the kill** — parent dead, child reparented to PID 1, running at full tilt for 22 minutes.
+
+> **Confirmation after a destructive action must rest on a signal the damage itself could not
+> produce.** A running process is not one: a killed parent leaves running children. The parent PID, or
+> the gate script's own presence, would have worked. **The wreckage was read as a heartbeat.**
+
+### The same shape a third time, in the load check, by both lines
+
+Both lines reported the machine "clear" from a scan for `cargo`. Neither asked what else ran. The
+answer was **a game at over 100% CPU and a compositor**, for hours. So a reported "load falling,
+consistent with your reaping" **attributed to cleanup a number mostly produced by something neither
+line was running.**
+
+**One good measurement came of it**: the other line's timing canary passed in **11.31 seconds under
+that full load**. That is stronger evidence of margin than a green on an idle machine, because it is a
+pass with the adversary present rather than absent.
+
 ## No rate is given here, and the reason is stronger than caution
 
 **Six instances in one day is a count over an unbounded denominator.** Neither line knows how many
