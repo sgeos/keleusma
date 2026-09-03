@@ -12,6 +12,23 @@
 > which. Do not re-run it on a contended machine: a slow run under load is indistinguishable from a
 > detected hang, which would fabricate coverage. See
 > [`DIFFERENTIAL_SENSITIVITY_BRIEF.md`](./DIFFERENTIAL_SENSITIVITY_BRIEF.md).
+>
+> ⚠ **AND THE RE-RUN WAS ATTEMPTED AND ABANDONED, WHICH IS THE MORE USEFUL RESULT.**
+> Started 2026-09-02 on a machine deliberately kept quiet, **killed after 12h51m** while still on
+> **`CmpLe`, the 5th of the 25 mutations in round one**. That projects to roughly **60 hours for round
+> one alone**, and round one is **25 of the 53 pre-registered mutations across six tables**.
+>
+> **So this census is not merely stale, it is EXPENSIVE TO UN-STALE**, and that changes how much
+> weight its "no hole open" can carry. A claim that cannot be cheaply re-established should not be
+> leaned on as though it were current.
+>
+> **A full single-invocation refresh is not a viable increment.** The workable route is a targeted
+> subset — the tool accepts named opcodes — **with the selection justified from the emitter diff
+> rather than from expectation**, since its honesty rests on a pre-registered set and choosing
+> opcodes that look risky turns a sweep into a demonstration.
+>
+> The emitter was restored byte-identical after the kill and re-checked, because a killed run does not
+> reach its own restore step.
 
 **Status**: measured, the harness repaired twice, and **no hole open**. `Trap`
 was closed in Part D by changing the OBSERVABLE, not the inputs. The only
