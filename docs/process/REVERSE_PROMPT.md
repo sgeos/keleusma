@@ -101,7 +101,7 @@ configuration whose claim ranged over two. Each is corrected in place with its s
 
 ## For whoever resumes
 
-Validate `docs/process/handoffs/v0.3.0.md` by running its ancestry block. **64 anchors, zero failures
+Validate `docs/process/handoffs/v0.3.0.md` by running its ancestry block. **69 anchors, zero failures
 at this stamp.** Use `scripts/gate-in-worktree.sh` rather than `release-gate.sh` directly.
 
 ---
