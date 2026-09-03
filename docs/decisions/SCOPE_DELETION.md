@@ -255,6 +255,57 @@ The two are indistinguishable at the call site — one keyword, one line, both w
 comment. **Only the presence of an accumulator tells them apart**, which makes "does this skip
 increment anything?" the question to ask of every exclusion inside an instrument.
 
+## ⚠ A FIGURE WHOSE VALUE AND POPULATION ARE BOTH CORRECT, AND WHICH IS STILL UNDER-SPECIFIED
+
+**Named by the `v0.2.3` line on 2026-09-02, from an observation this line made.** It is a fourth
+species and it is nastier than the others.
+
+> **When one formula answers more than one question, a figure derived from it is not fully specified
+> by its value and its scope. It also needs its QUESTION.**
+
+**The instance.** `2p+2` answers two questions.
+
+| question | what must carry `2p+2` | `f32` | binary16 |
+|---|---|---|---|
+| **arithmetic equivalence** — does computing wide and rounding per operation equal native? | the **computing** format | 50 against 53, **margin 3** | 24 against 53, margin 29 |
+| **conversion double rounding** — does chained narrowing equal direct? | the **intermediate** | does not arise | 24 against exactly 24, **margin 0** |
+
+This line has recorded **margin 3** since the `f32` rung. The value is right. The population is right.
+**What is missing is which of the two questions it answers**, and left unlabelled a reader may take it
+as licence for a chained conversion — the construction both lines had just removed.
+
+**Why it is worse than a deleted scope.** In the sibling shapes there is an absent phrase to notice: a
+qualifier was dropped, so something is missing from the sentence. **A margin figure looks complete on
+its own.** Two conditions sharing one inequality is enough to let a correct number license a wrong
+construction, with nothing on the page to signal it.
+
+**It had at least three homes**: this line's handoff, the other line's brief, and that line's
+`narrow_float` doc comment, where the arithmetic-equivalence sentence is written in the vocabulary of
+the double-rounding one. The word "intermediate" is what invites the chain reading, sitting in the doc
+comment of the function that implements the single hop.
+
+### And a fourth home, which is this file's own line arguing the opposite
+
+**This line asserted on 2026-09-02 that its tree already forbade chaining. That was FALSE**, and it is
+recorded here rather than quietly fixed.
+
+[`FLOAT_LADDER.md`](./FLOAT_LADDER.md) records the opposite: the other line's prohibition on chaining
+was **withdrawn as over-broad, at this line's urging**, and replaced by the condition on the
+intermediate. The withdrawal was well reasoned — a blanket prohibition would have been dropped before
+it ever caught **bfloat16**, which supplies 8 significand bits against a requirement of 24 and is a
+plausible route on machine-learning silicon.
+
+**So a claim about this tree's own governing file was made without reading it**, one increment after
+recording that a relayed construction must be checked against the governing files. **The remedy was
+applied to the peer's statement and not to the claim that corrected it.**
+
+**The synthesis both records now support.** The prohibition was withdrawn because chaining is *safe*
+under the condition. True. But **safety was the wrong criterion, because chaining is unnecessary** —
+rounding once, directly from the wide value, raises no double-rounding question at all. So: **direct
+narrowing is the default**, and the `2p+2` condition on the intermediate is **retained as the guard for
+any implementation that must chain**, which is what keeps the `bfloat16` case caught. Neither rule
+replaces the other.
+
 ## No rate is given here, and the reason is stronger than caution
 
 **Six instances in one day is a count over an unbounded denominator.** Neither line knows how many
