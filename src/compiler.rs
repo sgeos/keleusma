@@ -2888,8 +2888,8 @@ fn refuse_unimplemented_types(program: &Program) -> Result<(), CompileError> {
         match te {
             TypeExpr::TextN(_, span) => Err(CompileError {
                 message: alloc::string::String::from(
-                    "Text<N> is not implemented beyond the type surface: its layout, runtime \
-                     representation and operations are not built yet",
+                    "Text<N> is not implemented beyond the type surface: no code is generated \
+                     for it and its operations are not built yet",
                 ),
                 span: *span,
             }),
@@ -5213,8 +5213,8 @@ fn validate_data_field_type(
         TypeExpr::Multiword(_, _, _) => Ok(()),
         TypeExpr::TextN(_, span) => Err(CompileError {
             message: alloc::string::String::from(
-                "Text<N> is not implemented beyond the type surface: its layout, runtime \
-                 representation and operations are not built yet",
+                "Text<N> is not implemented beyond the type surface: no code is generated \
+                 for it and its operations are not built yet",
             ),
             span: *span,
         }),
