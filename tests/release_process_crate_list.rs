@@ -193,3 +193,154 @@ fn the_release_process_names_exactly_the_crates_that_publish() {
         publishable.len()
     );
 }
+
+/// Every publishable crate is assigned a versioning policy, and the crates that track
+/// `keleusma` actually do.
+///
+/// # The hazard, which is the crate-list defect wearing a different hat
+///
+/// The release process states two policies: four crates track the major-minor of
+/// `keleusma`, and three version independently. **Nothing checked that every
+/// publishable crate falls under one of them.** A crate added to the workspace and
+/// correctly listed in the publish order can still be absent from the versioning
+/// sentence, and then nobody knows whether to bump it at release time. That is the
+/// same shape as the omission that made this file necessary: consistent everywhere
+/// the tooling looks, absent from the one place it does not.
+///
+/// # Why the partition is checked, not just the arithmetic
+///
+/// Comparing version numbers alone would pass while a crate sat in neither group.
+/// The partition is the property with teeth: **every publishable crate in exactly one
+/// policy, no crate in both, and no policy naming a crate that does not publish.**
+#[test]
+fn every_publishable_crate_has_a_versioning_policy_and_the_tracking_ones_track() {
+    let mut found = Vec::new();
+    manifests(&root(), &mut found);
+
+    let mut publishable = BTreeSet::new();
+    let mut version_of = alloc_map();
+    for path in &found {
+        if let Some((name, publishes)) = package_of(path)
+            && publishes
+        {
+            if let Some(v) = version_in(path) {
+                version_of.insert(name.clone(), v);
+            }
+            publishable.insert(name);
+        }
+    }
+    assert!(
+        publishable.len() >= 5,
+        "the manifest walk found only {} publishable crates",
+        publishable.len()
+    );
+
+    let doc = std::fs::read_to_string(root().join("docs/process/RELEASE_PROCESS.md"))
+        .expect("read RELEASE_PROCESS.md");
+
+    // **SCOPED TO THE POLICY PARAGRAPH, NOT TO A PREFIX OF THE DOCUMENT.** The first
+    // draft took everything before the phrase "track the", which swept in the
+    // numbered publish list above it and put all seven crates in the tracking set.
+    // The test then failed on a true statement -- that the arena crate does not
+    // track -- for a reason that had nothing to do with the tree. Scoping to a
+    // prefix rather than to the sentence is the same defect this file's other guard
+    // was already corrected for.
+    let para = policy_paragraph(&doc);
+    let cut = para
+        .find("track the")
+        .expect("the release process states a major-minor tracking policy");
+    let tracking = backticked_crates(&para[..cut], &publishable);
+    let rest = &para[cut..];
+    let cut2 = rest
+        .find("have their own versions")
+        .expect("the release process states an independent-versioning policy");
+    // `keleusma` appears again in "major-minor of `keleusma`"; it is already in the
+    // tracking set, so excluding names already claimed there removes it without a
+    // special case.
+    let independent: BTreeSet<String> = backticked_crates(&rest[..cut2], &publishable)
+        .difference(&tracking)
+        .cloned()
+        .collect();
+
+    let both: Vec<_> = tracking.intersection(&independent).collect();
+    assert!(
+        both.is_empty(),
+        "these crates are in both policies: {both:?}"
+    );
+
+    let classified: BTreeSet<String> = tracking.union(&independent).cloned().collect();
+    let unclassified: Vec<_> = publishable.difference(&classified).collect();
+    assert!(
+        unclassified.is_empty(),
+        "these crates publish but no versioning policy names them: {unclassified:?}. \
+         At release time nobody knows whether to bump them."
+    );
+
+    // And the tracking crates must actually track.
+    let anchor = version_of
+        .get("keleusma")
+        .expect("the runtime crate has a version");
+    let anchor_mm = major_minor(anchor);
+    for c in &tracking {
+        let v = version_of
+            .get(c)
+            .unwrap_or_else(|| panic!("no version for {c}"));
+        assert_eq!(
+            major_minor(v),
+            anchor_mm,
+            "{c} is {v} but is declared to track the major-minor of keleusma at {anchor}"
+        );
+    }
+}
+
+/// Backticked crate names in a slice of the document, restricted to names that
+/// actually publish so prose mentioning a non-publishing crate cannot enter a policy
+/// set.
+fn backticked_crates(text: &str, publishable: &BTreeSet<String>) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for (i, piece) in text.split('`').enumerate() {
+        if i % 2 == 1 && publishable.contains(piece) {
+            out.insert(piece.to_string());
+        }
+    }
+    out
+}
+
+fn version_in(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    for line in text.lines() {
+        if let Some(rest) = line.trim().strip_prefix("version = ") {
+            return Some(rest.trim_matches('"').to_string());
+        }
+    }
+    None
+}
+
+fn major_minor(v: &str) -> (String, String) {
+    let mut it = v.split('.');
+    (
+        it.next().unwrap_or_default().to_string(),
+        it.next().unwrap_or_default().to_string(),
+    )
+}
+
+fn alloc_map() -> std::collections::BTreeMap<String, String> {
+    std::collections::BTreeMap::new()
+}
+
+/// The paragraph stating the versioning policies, bounded by blank lines.
+///
+/// Returned as a slice so both policy sentences are read from the same paragraph;
+/// searching the whole document instead lets an unrelated sentence elsewhere -- the
+/// language server's diagnostics "track the grammar", for one -- move the split.
+fn policy_paragraph(doc: &str) -> &str {
+    let anchor = doc
+        .find("major-minor")
+        .expect("the release process states a major-minor policy");
+    let start = doc[..anchor].rfind("\n\n").map(|i| i + 2).unwrap_or(0);
+    let end = doc[anchor..]
+        .find("\n\n")
+        .map(|i| anchor + i)
+        .unwrap_or(doc.len());
+    &doc[start..end]
+}
