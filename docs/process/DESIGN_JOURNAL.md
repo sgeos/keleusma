@@ -1,5 +1,47 @@
 # Design Journal
 
+## 2026-09-04 — [v0.3.0] Absorption 49, and a verification channel I had never read
+
+### Five clauses, and the fifth existed only because the other line told me something
+
+`v0.2.3` through `c0f5e5ad`, **40 commits, 16 files, 1880 insertions** — `Text<N>` across four
+increments, two release guards, and the `Op::Len` root-repair work.
+
+| clause | predicted | result |
+|---|---|---|
+| the tree still builds | yes | **hit** |
+| `native_codegen` unchanged | 469 / 0 / 91, both float configs | **hit exactly** |
+| workspace coverage | `STALE-COMPILED`, naming their changed source | **hit** |
+| the differential still agrees | yes | **hit**, both configs |
+| CI green on the push | yes | see below |
+
+**The fourth clause carried real risk this time.** Their `Text<N>` work touched `compiler.rs`,
+`typecheck.rs`, `layout_pass.rs` and `zero_value.rs` — the path this corpus compiles through — so
+agreement across both configurations is a substantive result rather than a formality.
+
+### CI has been running on this branch all session and this line never looked
+
+The other line reported, as a reach fact costing them three unverified pushes, that **CI triggers only
+on `main`, `v*` and pull requests**. This branch is `v0.3.0`. **It matches `v*`.**
+
+So every push made today was checked by CI, and **all five most recent runs are green** — a
+verification channel available the whole time and read for the first time only when someone else
+mentioned it. Green is green; the point is that **a red would have gone unnoticed.**
+
+**The belief that survives**: CI does not build `native_codegen`, which is detached, so the local run
+remains the only gate for the backend itself. That part was right. What was wrong was treating it as
+the only gate for *everything*.
+
+### A correction of theirs, checked rather than accepted
+
+They warned that treating `Reset` as a second instance of the `Op::Len` hazard would imply two hazards
+where there is one: `Reset`'s checks apply to stream blocks only, and the compiler emits it solely in
+stream-loop epilogues, so reaching that refusal takes a corrupted module.
+
+**Checked against this tree's own disposition table, which records `Reset` as ACCEPTED rather than
+refused.** It does not make that error. Verified rather than taken on report, which is the standing
+rule for a relayed claim.
+
 ## 2026-09-03 — [v0.3.0] The package's front door understated it by more than half
 
 `native_codegen/README.md` opened with **"Status: early subset. 28 of the instruction set's 66 opcodes
