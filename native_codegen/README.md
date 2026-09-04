@@ -4,16 +4,32 @@
 
 LLVM native code generation for verified Keleusma bytecode. V0.3.x Workstream A.
 
-**Status: early subset.** 28 of the instruction set's 66 opcodes lower, including counted loops. This is
-not yet a code generator for the language; it is the beginning of one, with the
-differential oracle in place first so that widening the subset is checked from
-the start.
+**Status, measured 2026-09-03: 63 of the instruction set's 66 opcodes lower**, over the 74-module
+corpus, reported by `isa_lowering_census`. The differential oracle was in place before the subset
+widened, so every extension has been checked against the virtual machine from the start.
 
-Scoping for the remaining 44, and the two open analyses, is in
+> ⚠ **THE PARAGRAPH HERE PREVIOUSLY SAID "28 of 66" AND NAMED THE DATA SEGMENT AND COMPOSITES AS THE
+> NEXT INCREMENTS. BOTH WERE LONG DONE.** It understated the backend by more than half and pointed a
+> reader at finished work. **A hand-maintained opcode list is what drifted**, so this file no longer
+> keeps one — run the census, which computes it.
+
+**None of the three remaining opcodes is missing support**, and reading `63 of 66` as three opcodes to
+implement is the specific error the census now prints a disposition table to prevent:
+
+| opcode | disposition |
+|---|---|
+| `Reset` | **accepted**, by a route the census does not instrument — consumed by the degenerate-stream shape match |
+| `IsStruct` | **no verdict available**; no corpus witness and no producer found by a bounded search |
+| `Len` | **refusing is correct.** The machine returns `InvalidBytecode` for it on a flat array, so lowering it would compute a length where the reference traps |
+
+**A LOWERS verdict is not a correctness claim.** It says the backend emitted code, not that the code is
+right; that is the differential's question. Sensitivity — whether a defect in a lowering would be
+*detected* — is measured separately by `tools/mutation_sweep.py`, and
+[`docs/decisions/NATIVE_MUTATION_CENSUS.md`](../docs/decisions/NATIVE_MUTATION_CENSUS.md) is **stale
+and expensive to un-stale**: a round-one re-run was abandoned after 12h51m on the 5th of 25 mutations.
+
+Scoping notes are in
 [`docs/decisions/NATIVE_LOWERING_INVENTORY.md`](../docs/decisions/NATIVE_LOWERING_INVENTORY.md).
-Loops are done. The next increments are the data segment and composites, which
-are also what a loop needs before it can accumulate: **Keleusma locals are
-immutable**, so `s = s + b` across iterations requires a data block.
 
 ## What it does today
 
@@ -22,15 +38,14 @@ and produces either a JIT-executed function or a native object file. Correctness
 is established by executing the same bytecode on the VM and requiring identical
 results.
 
-Supported opcodes: `GetLocal`, `SetLocal`, `PopN`, `Dup`, `Const` (scalars),
-`PushImmediate`, `CheckedAdd`, `CmpEq`, `CmpNe`, `CmpLt`, `CmpGt`, `CmpLe`,
-`CmpGe`, `Not`, `BitAnd`, `BitOr`, `BitXor`, `Shl`, `Shr`, `If`, `Else`,
-`EndIf`, `Loop`, `EndLoop`, `Break`, `BreakIf`, `Return`, `Trap`. Anything else
-is **refused** with `LowerError::UnsupportedOp` rather than lowered to something
-plausible.
+**Supported opcodes are not listed here.** The list is computed, and a copy kept by hand is what went
+stale before:
 
-That covers straight-line arithmetic, structured conditionals, and **counted
-loops**: `for i in 0..3 { }` lowers and runs.
+    cd native_codegen && cargo test --test isa_lowering_census -- --nocapture
+
+Anything unsupported is **refused** with `LowerError::UnsupportedOp` rather than lowered to something
+plausible. Straight-line arithmetic, structured conditionals, counted loops, the data segment,
+composites, native calls, and `f32`/`f64` floats all lower.
 
 Only 64-bit word width (`word_bits_log2 == 6`) is accepted.
 

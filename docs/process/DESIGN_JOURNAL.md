@@ -1,5 +1,35 @@
 # Design Journal
 
+## 2026-09-03 — [v0.3.0] The package's front door understated it by more than half
+
+`native_codegen/README.md` opened with **"Status: early subset. 28 of the instruction set's 66 opcodes
+lower"** and named **the data segment and composites as the next increments**. The census measures
+**63 of 66**, and both of those increments were long finished.
+
+**This is worse than the census staleness closed earlier**, for a reason that is about placement
+rather than size. A stale figure inside a decision document is read by someone already deep in the
+subject. **A README is the front door**: it is what a reader uses to decide what to work on, and this
+one pointed at completed work while understating the backend by more than half.
+
+The file was last touched 2026-09-01 by a commit that did not refresh its status — **the banner-drift
+pattern**, which this line has now recorded in a handoff banner, a blocker row, an ancestry anchor, a
+mutation census, and a package README.
+
+### The structural fix is to stop keeping the list by hand
+
+The README carried a hand-maintained roster of 28 supported opcodes. **That roster is what drifted**,
+and updating it would only reset the clock on the same failure. It now carries the command that
+computes the list instead, plus the disposition table for the three opcodes outside it, so a reader
+cannot repeat the `63 of 66` misreading either.
+
+**A claim that has an instrument should cite the instrument, not a snapshot of its output.**
+
+### One claim was checked and kept
+
+The restriction to 64-bit word width is still accurate — `check_word_width` enforces it and the source
+calls narrower widths a later increment. **`narrow-float-32` is a FLOAT width feature and not a word
+width**, and conflating the two would have replaced a stale sentence with a false one.
+
 ## 2026-09-03 — [v0.3.0] The coverage guard completed its first full cycle
 
 **Workspace: 2748 passed, 0 failed, 119 binaries**, `cargo test --workspace --no-fail-fast`, **default
