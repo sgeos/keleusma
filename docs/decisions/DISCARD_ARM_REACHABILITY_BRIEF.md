@@ -2,8 +2,8 @@
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
 
-**Status**: brief, self-directed. **Not started.** Written 2026-08-31 so the next session can pick
-it up without re-deriving the reasoning.
+**Status**: brief, self-directed. **MEASURED 2026-09-04; the result is below and the headline is that
+the instrument under-measures, proven by a failed positive control.**
 
 ## The observation
 
@@ -56,3 +56,57 @@ record, and let the disposition be its own work with its own evidence.
 
 It is not nineteen paragraphs of judgement. It is a figure the tree recomputes, with the unmeasured
 arms named as unmeasured rather than assumed benign.
+
+## The census, run 2026-09-04
+
+Nineteen arms confirmed by re-derivation, matching the brief. Instrumented with per-arm counters,
+driven over 27 corpus sources (15 under `examples/scripts/`, 12 stage sources under
+`src/selfhost/kel/`) through nine public driver entry points, then reverted.
+
+| arm | line | hits |
+|---|---|---|
+| 0 | 646 | 94,392 |
+| 1 | 771 | 659,696 |
+| 2 | 1090 | 3 |
+| 3 | 1862 | 19,068 |
+| 4-18 | 2400, 2727, 2861, 3113, 3226, 3357, 3570, 4068, 4303, 4572, 4641, 4692, 4755, 5302, 6899 | 0 |
+
+**Four reached. Fifteen at zero.**
+
+## THE POSITIVE CONTROL FAILED, AND THAT IS THE RESULT
+
+**Arm 18, at line 6899, is the one arm the brief names as already measured** -- the `_ => continue`
+in the windowed region loop, whose consequence `tests/selfhost_region_coverage.rs` exists to
+quantify, and which the brief calls "the model for what the other eighteen lack". Its own comment
+states that five kinds reach it.
+
+**This census reports it as zero.**
+
+An arm with independent evidence of reachability, and a test that counts what flows through it,
+measured as unreached. The cause is identified and specific: the arm's driver is
+`wire_windowed_via_kel`, and the census never called it. The nine entry points probed cover the
+lexing, parsing, reconstruction and codegen path; they do not cover wire emission.
+
+**So the fifteen zeros are a statement about this workload's reach, not about those arms.** Four is
+a FLOOR on reachability, not a count of reachable arms. Reporting "fifteen arms are never reached"
+would have been the confident guess dressed as an audit that the brief warned against -- arrived at
+by measurement instead of by reading, which makes it more persuasive and no more true.
+
+## What the next run needs, so it is not re-derived
+
+Add the wire-emission drivers, `wire_windowed_via_kel` foremost, which need a compiled `Module` and
+a region list rather than a source string. `tests/selfhost_region_coverage.rs` has the setup to copy.
+Until then the census covers one half of the driver.
+
+## Two incidental findings worth keeping
+
+**The corpus is dominated by two sources.** `parse.kel` and `wire.kel` cost minutes per entry point
+-- 243 seconds for a single `try_parse_functions` on `parse.kel`, 138 for `self_host_compile` on
+`wire.kel`. That is why the self-host binaries dominate the release gate, and why that gate could
+not finish under machine load on 2026-09-03.
+
+**A count of sources that "compiled" is not available from this harness.** After each probe was
+given its own `catch_unwind` -- necessary, because one guard around all nine meant a source panicking
+on the first never exercised the other eight -- the outer success count became structurally always
+true. An earlier, narrower run measured 10 of 27 sources panicking through `self_host_compile`
+alone. **Do not read a compiled-count out of this harness; it cannot produce one.**
