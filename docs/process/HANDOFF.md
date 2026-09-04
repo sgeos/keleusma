@@ -38,8 +38,31 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > existing tuple and array descriptors so no consumer changed and no opcode was spent. Increment 3
 > made it a distinct nominal type in the checker, so a capacity is no longer erased to static text.
 >
-> **Increment 4 is emission**, and each later increment REMOVES one refusal. Do not read a refusal
-> as a defect.
+> Increment 4 gave it a zero value, cross-checked against the layout.
+>
+> **EMISSION IS BLOCKED ON A DECISION THAT IS THE OPERATOR'S, AND THE BLOCK IS NOT A GUESS.** A
+> spike removed both refusals and asked the compiler what happens next. It said:
+>
+> ```
+> type error: let binding declared as Text<8> but value has type Text
+> ```
+>
+> That is increment 3 working as designed. A literal is STATIC text, `Text<8>` is dynamic text,
+> they deliberately do not unify, and so **nothing can enter a `Text<N>` until there is a way to put
+> it there**. The silent path is closed by a language rule rather than by preference: `GRAMMAR.md`
+> states that no implicit type coercion exists.
+>
+> So emission needs a surface form -- a cast, a constructor, or a method -- and which one is
+> ALREADY open question 2 in `../decisions/TEXT_CAPACITY_TYPE.md`, belonging to the operator. **Do
+> not pick it unilaterally.** It appears in every program anyone writes with the type and is far
+> more expensive to change than the layout beneath it.
+>
+> The spike's other result is the encouraging one: exactly two match arms had to change to admit the
+> type, both already known, and no other pass objected. **The machinery below the surface is in
+> place; only the way in is missing.** The spike was reverted with no residual diff.
+>
+> Each later increment REMOVES one refusal. Do not read a refusal as a defect; all three remaining
+> are correct.
 >
 > **The `ScalarKind::Text` collapse to one address must land WITH that work and before
 > publication.** It is a wire change, and wire changes are free only while `BYTECODE_VERSION` is
