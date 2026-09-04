@@ -1,5 +1,48 @@
 # Design Journal
 
+## 2026-09-04 — [v0.3.0] The second module-level guard, and a reading that reversed on inspection
+
+**Measured**: `native_codegen` **472 passed, 0 failed, 93 binaries** under default features and again
+under `narrow-float-32`, zero clippy warnings. Predicted 472 over 93 and hit exactly.
+
+### Chosen by applying the previous finding to its class
+
+The backend has exactly **two** module-level guards. The word-width one was closed last increment, so
+the neighbouring one, `check_target_endianness`, is the subject — **not because it looked suspect, but
+because the class had two members and only one had been examined.**
+
+### The obvious reading was wrong, and checking the public surface is what showed it
+
+Its comment says the check is on the build host and is not sufficient for cross-compilation. The
+library has no `TargetTriple` and no `create_target_machine`, so the first conclusion was that the gap
+is **latent**.
+
+**Every public entry point is lowering-only.** They return an LLVM module and **the CALLER supplies
+the target machine.** Object emission happens only in tests, and this project already emits for a
+non-host triple in `linkage_symbol_census` — `thumbv8m`, little-endian, so harmless, but the pattern
+is in use.
+
+> **The insufficiency is LIVE FOR CALLERS, not latent.** An embedder can lower here and emit for a
+> big-endian target: the host check passes, and shared slots stored little-endian are byte-swapped by
+> an LLVM load. **The library cannot detect it, because it never sees the target.**
+
+**"No cross-compilation in the library" was true and did not mean what it appeared to mean**, because
+the capability lives with the caller. Reading an absence as safety is the error, and it took one
+command to avoid.
+
+### Two limits stated rather than papered over
+
+**The refusal branch cannot be tested here.** It is a `cfg!(target_endian)` on the build host, so it is
+unreachable on every machine this project builds on. That is a limit on the evidence.
+
+**This is a ratchet, not a repair.** It pins the precondition that makes the present arrangement
+defensible — that the public surface selects no target — so that adding target selection fails and
+**names the obligation** to move the check onto the `TargetMachine`. Following the `Op::Len` precedent,
+which is explicit that pinning a hazard is not discharging it.
+
+Proven by mutation: a public entry point taking a triple makes it fail with the obligation spelled
+out, rather than reporting a bare difference.
+
 ## 2026-09-04 — [v0.3.0] A guard hardened on one axis, with its neighbour left open
 
 **Measured**: `native_codegen` **470 passed, 0 failed, 92 binaries** under default features and again

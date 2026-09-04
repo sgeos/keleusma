@@ -1,0 +1,48 @@
+COMPLETION CONDITION — the endianness obligation is located and ratcheted (V0.3.X)
+
+Ordering is NOT a completion criterion. The properties below may be reached in
+any order, by any route. Judge the end state of the tree and the transcript, not
+the sequence, the branch, or the process used to get there.
+
+DONE when all of the following hold.
+
+1. WHO CHECKS AND WHO CHOOSES IS STATED SEPARATELY.
+   The record says which component tests endianness and which component selects
+   the target the code is emitted for, and does not imply they are the same.
+
+2. THE GAP IS CLASSIFIED AS LIVE OR LATENT, WITH THE REASON.
+   Whether the insufficiency is reachable today is stated, together with the
+   condition that makes it reachable, rather than left as an unqualified caveat.
+
+3. A CHANGE THAT WOULD MAKE THE OBLIGATION MOVE IS MADE TO FAIL LOUDLY.
+   Something in the tree fails if the precondition behind the current
+   arrangement stops holding, and it names the obligation rather than only
+   reporting a difference.
+
+4. THE RATCHET PROVES ITS REACH.
+   It is exercised against a case where it must fail, so a pass is evidence
+   about the tree rather than about the check. A check demonstrated only on
+   cases it passes does not satisfy this.
+
+5. NO CLAIM IS MADE THAT THE HAZARD IS REPAIRED.
+   The record distinguishes locating and pinning an obligation from discharging
+   it, and does not describe a ratchet as a fix.
+
+6. WHAT CANNOT BE TESTED HERE IS SAID PLAINLY.
+   Where a branch cannot execute on the machines this project builds on, that is
+   stated as a limit on the evidence rather than passed over.
+
+7. FIGURES CARRY THEIR POPULATION.
+   Any count states what it ranges over and which check produced it.
+
+8. NOTHING IS CLAIMED THAT WAS NOT RUN.
+   Every count and pass or fail claim corresponds to output in the transcript.
+   Carried figures are marked as carried.
+
+9. A FAILURE IS REPORTED BEFORE IT IS REPAIRED.
+   Any failing test is named with its cause and with a statement of whether that
+   cause belongs to this line.
+
+NOT completion criteria: which branch anything sits on, whether the work is
+committed or pushed, how many commits were made, the order of the properties
+above, or whether big-endian support is added.
