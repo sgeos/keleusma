@@ -280,8 +280,22 @@ you disagree with union, say so before the back-merge rather than during one.**
 1. **`Text<N>`.** Designed, authorized, unstarted, and the largest thing left. Its brief and
    completion condition are drafted. The `ScalarKind::Text` collapse to one address must land WITH it
    — that is a wire change, free before publication and unavailable after.
-2. **The width bundle**, recorded as debt rather than paid. `addr_bytes` appears at 43 signatures
-   across seven modules, several public. Cheaper before a publication than after one.
+2. **The width bundle, and it is a SEMVER BREAK rather than a cleanup.** Re-measured 2026-09-03:
+   `addr_bytes` is taken by **33 function signatures across 5 files** -- `marshall.rs` 15,
+   `bytecode.rs` 9, `value_layout.rs` 5, `verify_typed.rs` 3, `layout_pass.rs` 1 -- and **14 of
+   those are public**.
+
+   The note here previously said 43 signatures across seven modules. A quick line-based grep of mine
+   then said 11, because `addr_bytes` frequently sits on a CONTINUATION line of a multi-line
+   signature and a per-line count cannot see it. The measured figure walks each signature to its
+   closing parenthesis. **Three figures, and only the third was derived from the thing being
+   counted.**
+
+   The count is the smaller half of the finding. **Fourteen public signatures cannot change without
+   breaking every embedder** of a crate published at 0.2.2, so this is not the free tidy-up the
+   "cheaper before a publication than after one" framing suggests -- that sentence is true and it
+   omits the reason it is urgent. Bundling the widths is an API decision belonging to the operator,
+   not a refactor this line should take on its own initiative.
 3. The earlier queue is unchanged: the discard-arm reachability census, and `DATA_INIT` for the one
    stage that does not elide.
 
