@@ -6,159 +6,50 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## The workspace suite came back green, with one caveat I have to state
+## State: absorptions 48, 49 and 50 in, everything pushed, nothing held
 
-**2744 passed, 0 failed, 118 binaries**, from `cargo test --workspace --no-fail-fast`, **default
-features only**. One suite in one configuration. The gate is fourteen steps and this was not it.
+| | |
+|---|---|
+| `native_codegen` | **469 passed, 0 failed, 91 binaries**, under default features and again under `narrow-float-32` |
+| workspace | **2760 / 0 / 120**, default features, measured on a frozen tree |
+| CI on `v0.3.0` | **green**, including the absorption 49 commit |
+| unabsorbed | none |
 
-**It was not measured on a frozen tree.** The run began at 18:02 and my own documentation-only commit
-landed at 18:11 underneath it. That is the hazard this line already recorded at absorption 40, and I
-repeated it. The change was documentation, so the exposure is bounded to the few tests reading `docs/`
-from disk, and they passed. **Green with that caveat, not a clean number.**
+**Absorption 49 predicted five clauses and hit five**, including one I could only state because you told
+me CI triggers on `v*` — **this branch matches it, so every push I made was being checked and I had
+never once looked.** That channel was available all session. A red would have gone unnoticed.
 
-**My prediction was a partial hit.** Green and the pass floor held; the binary population was
-understated by two.
+## I killed your gate, and the rule from it is the session's most useful finding
 
-## Everything is pushed; nothing is held
+`pkill -x cargo`, unscoped, while deliberately yielding you the machine. **Reach discipline had been
+applied to things that OBSERVE and never to things that CHANGE** — every habit in `SCOPE_DELETION.md`
+was aimed at guards, none at a command that alters state, and an over-reaching action destroys where
+an over-reaching check merely misreports. Then I read the orphan of my own kill as evidence your gate
+was healthy: **confirmation after a destructive action must rest on a signal the damage could not
+produce.**
 
-Absorption 48 landed with **four prediction clauses and four hits**, and the workspace is green at
-**2748 / 0 / 119** under default features, measured on a frozen tree and matching your gate's own
-figures exactly.
+## The mutation census cannot be cheaply refreshed, which limits what it can support
 
-## I killed your gate, and the rule I drew from it is the session's most useful finding
+Abandoned at 12h51m on the 5th of 25 mutations — about 60 hours for round one, itself 25 of 53. **A
+claim that cannot be cheaply re-established should not be leaned on as current.** The targeted-subset
+route saves less than it sounds: the emitter diff touches roughly 18 of the 25.
 
-`pkill -x cargo`, unscoped, while deliberately yielding you the machine. It took step 6 of 12 of a
-binding gate about two hours in. **Reach discipline had been applied to things that OBSERVE and never
-to things that CHANGE** — every habit in `SCOPE_DELETION.md` was aimed at guards, none at a command
-that alters state, and an over-reaching action destroys where an over-reaching check merely misreports.
-
-Then I read the orphan of my own kill as evidence your gate was healthy. **Confirmation after a
-destructive action must rest on a signal the damage itself could not produce.**
-
-## The mutation census cannot be cheaply refreshed, which changes what it can support
-
-The re-run was abandoned at 12h51m on the 5th of 25 mutations — about 60 hours for round one, itself
-25 of 53. **A claim that cannot be cheaply re-established should not be leaned on as current.** And
-the targeted-subset route saves less than it sounds: the emitter diff touches roughly 18 of the 25.
-
-**One trap worth your attention on your own documents**: annotating a stale file resets the metric
-that measures its staleness, if that metric counts commits since the file last changed.
-
-## A citation failure on both lines, and the fifth failure species it produced
-
-I told the other line my tree forbade chaining floats through an intermediate rung. **It does not** —
-it records that prohibition being withdrawn as over-broad at my own line's urging. I made a claim
-about my own governing file without opening it, **one increment after recording that a relay must be
-checked against the governing files.** They did the mirror image, quoting one of their brief's two
-rules as the paragraph's rule.
-
-The species: **a correct record misquoted is indistinguishable downstream from an incorrect one.** It
-defeats every other remedy in `SCOPE_DELETION.md`, because those all work by writing something into a
-sentence and here the sentence was already right. The obvious guard, a quote checker, would have
-caught neither instance, and that is recorded so nobody builds it and trusts it.
-
-The float outcome: **direct narrowing is the default**, because chaining is unnecessary rather than
-merely safe; the `2p+2` condition on the intermediate is **retained** as the guard for anything that
-must chain, which is what keeps `bfloat16` caught.
-
-## The next thing worth doing is a re-run, and I nearly built a duplicate instead
-
-The question after the opcode work is the one the census states itself: lowering is not correctness.
-**I was about to propose building the instrument that measures it. It already exists** — a per-opcode
-mutation sweep with a pre-registered mutation set. Opening the file before citing it is what stopped
-the duplicate, an hour after I recorded that practice for a different reason.
-
-**The finding is currency.** That census says **"no hole open"**, measured 2026-08-16, while the
-emitter it characterises has changed in **39 commits since**. A stale count still reads as a count;
-**"no hole open" reads as a present-tense safety property**, which is the kind of sentence a release
-leans on. It is marked, not withdrawn — staleness is not evidence of a hole, and 39 commits is not 39
-defects. Only the re-run settles it, and it must not run on a contended machine, where a slow run is
-indistinguishable from a detected hang.
-
-## No opcode is known to be missing support, and the headline number said otherwise
-
-The census reports **63 of 66 lowered**, which reads as three opcodes to implement. **None of the three
-is an unimplemented lowering.** `Reset` is accepted by a shape match the census does not instrument,
-measured at 32 of 33 emitting modules. `IsStruct` has no witness at all, so no verdict exists and none
-is claimed. And **`Len` must stay refused**: the machine traps on it, so lowering it would compute a
-length where the reference errors, which manufactures divergence in this line's only correctness
-signal. That repair belongs to your other line, which owns `src/vm.rs`.
-
-The census now prints each disposition beside the fraction, and a guard fails if an opcode leaves the
-lowered column without one. **I did not move `Reset` into the lowered column**, because a prettier
-number would have hidden the interesting fact.
-
-**Measured**: `native_codegen` **469 passed, 0 failed, 91 binaries** under both float configurations,
-formatting clean, zero clippy warnings. Predicted before running and hit exactly.
-
-## The deliverable was the routine change, and it is now executable
-
-A paragraph in the handoff saying "also check the workspace" would have been the obvious remedy.
-**It is made of the material that already failed here** — this line has a banner that was stale for
-three days, a blocker row whose reason had expired, and an ancestry anchor written against a moving
-ref. So the remedy runs instead of being read.
-
-`native_codegen/tools/workspace-coverage.sh` reports whether a recorded workspace result still
-describes the tree, classifying change as compiled, documentation-read, or inert, **default-deny**, so
-it may over-report staleness and never under-report it. It is a script and not a test on purpose: a
-test would be red from every absorption until a ninety-minute run cleared it, and **a guard red by
-default is suppressed rather than obeyed.**
-
-## What I got wrong, which is the more useful half
-
-**My own reach test passed while measuring nothing.** With `src/` deliberately mis-marked inert, it
-still reported the right verdict, because other compiled paths had moved too. It asserted the verdict
-and not its contents. It now cross-checks against git's own counts and goes red under that mutation.
-
-**A `sed` mutation failed outright** with a bad-flag error, and I came close to reading the resulting
-green as evidence. It had applied nothing.
-
-**I claimed fifteen workspace tests read `docs/`.** That grep counted doc comments. About five open a
-path. The count was wrong; the constraint it justified was not.
-
-**A figure in my own handoff was scoped wrong.** It gave the gap as seven `src/` files from absorption
-47. The coverage gap was **twenty-four compiled files** since the last workspace run. True figure,
-narrower population, read as though it covered the whole.
-
-## All three items blocked on the other line at session start are CLOSED
-
-The runtime arithmetic width, which turned the `f32` rung green. `Opaque` sized by the address width.
-The `Text<N>` type surface. Nothing is unabsorbed.
-
-## The first full gate on this line ran, and it is GREEN
-
-Fourteen steps, and **the native step RAN** at 88 binaries and 459 tests rather than skipping — so the
-backend is now covered by the release gate rather than only by its own suite.
-
-**It exposed a hole in itself.** A warning lives in *no-default-features × test targets*; the lint
-step denies warnings but only under default features, and the no-default step is `cargo test`, which
-prints them and passes. **The obvious fix does not work** — the flag is accepted and has no effect,
-because workspace feature unification turns the features back on. Measured on both lines.
-
-## What I got wrong, which matters more than what I built
-
-**Three claims of mine were measured false**: that `f32` buys native instructions on bare metal, that
-declaring host natives makes an *omitted* one a compile error, and a test verified under one
-configuration whose claim ranged over two. Each is corrected in place with its superseded text kept.
-
-**And a prediction failed today by scope error**: I inferred *"no layout exists for the new type"* from
-*"no change to the layout file"*. A layout does exist, for the older type.
+**Two traps worth your attention on your own documents.** Annotating a stale file resets a staleness
+metric that counts commits since the file last changed. And this file had accumulated sections with
+the oldest figures on top, in a channel specified as bounded and overwritten each increment — the
+first number a reader saw was two days stale.
 
 ## Yours
 
-1. **`f16`** — blocked on **reference f16 arithmetic**, which is not what I first asked your other
-   line for. I asked for load acceptance; they corrected me, and the correction matters: accepting a
-   binary16 module without arithmetic would make the reference compute in `f64` while declaring a
-   narrow float, so a **correct** backend would be reported as diverging on every value that rounds.
-   That is a wrong oracle, not a weak one. Their status is **not planned, not parked**, with
-   `Text<N>` ahead of it. Not because of the arithmetic width,
-   which landed. A struck-through blocker invites the inference that it cleared; it has not.
+1. **`f16`** — blocked on **reference `f16` arithmetic**, not load acceptance, which alone would give a
+   wrong oracle. Recorded as not planned and not parked, after `Text<N>`.
 2. **Publication**, still held.
 
 ## For whoever resumes
 
-Validate `docs/process/handoffs/v0.3.0.md` by running its ancestry block. **69 anchors, zero failures
-at this stamp.** Use `scripts/gate-in-worktree.sh` rather than `release-gate.sh` directly.
+Validate `docs/process/handoffs/v0.3.0.md` by running its ancestry block. **74 anchors, zero failures
+at the last stamp.** Scope kill patterns to `$(pwd)/target/debug/deps`; an unscoped one took out a
+sibling checkout's two-hour gate.
 
 ---
 ---

@@ -1,5 +1,49 @@
 # Design Journal
 
+## 2026-09-04 — [v0.3.0] Absorption 50, and the guard's middle verdict earns its keep
+
+### Absorption 49 closed at five clauses, five hits
+
+CI on `1c83f9dc` completed **success**, discharging the fifth clause — the one that existed only
+because the other line reported that CI triggers on `v*`.
+
+### Absorption 50 is docs-only, and produced STALE-READ-ONLY for the first time in anger
+
+`v0.2.3` through `bb30cc5a`, 6 commits, **2 documentation files, no `src/` or `tests/`**.
+
+**The guard reported `STALE-READ-ONLY` rather than `STALE-COMPILED`.** Until now that middle verdict
+had only ever been produced by a synthetic reach case; this is the first real absorption to land in it.
+
+**Its payoff is behavioural, not decorative.** `STALE-COMPILED` justifies a two-hour workspace re-run.
+`STALE-READ-ONLY` says the exposure is confined to the tests that read `docs/` from disk, so the
+justified check is those tests and nothing else:
+
+| check | result |
+|---|---|
+| workspace docs-readers | 6, 2 and 2 passed |
+| the backend's own `comment_citations` | 8 passed |
+| compiled inputs changed | **zero** |
+
+**So the `469 / 0 / 91` figure is CARRIED, not re-measured**, and it is carried on a stated ground —
+no compiled input moved — rather than on the assumption that a docs change is harmless. That
+assumption would have been wrong in kind: `comment_citations` reads absorbed documentation, so a
+docs-only absorption **can** break this package, which is exactly why the narrow check is a check
+rather than a shrug.
+
+**A reflexive full re-run would have cost over two hours for the same information.** That is the
+instrument's first real saving, and it is the reason it was built as a classifier rather than a
+boolean.
+
+### The bounded channel had stopped being bounded
+
+`REVERSE_PROMPT.md` is specified as overwritten each increment. Mine had **accumulated** sections
+instead, oldest first, so the opening figure a reader met was **2744 / 118 from two days earlier**
+against a current 2760 / 120.
+
+**The drift pattern, in this line's own outgoing communication channel** — after finding it in a
+handoff banner, a blocker row, an ancestry anchor, a mutation census, a staleness metric and a package
+README. Rewritten as the bounded latest state it is supposed to be.
+
 ## 2026-09-04 — [v0.3.0] Absorption 49, and a verification channel I had never read
 
 ### Five clauses, and the fifth existed only because the other line told me something
