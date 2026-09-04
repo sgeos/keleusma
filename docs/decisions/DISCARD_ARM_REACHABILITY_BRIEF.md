@@ -73,6 +73,49 @@ driven over 27 corpus sources (15 under `examples/scripts/`, 12 stage sources un
 
 **Four reached. Fifteen at zero.**
 
+## THE FINAL FIGURE: NINE OF NINETEEN, ACROSS FOUR PASSES
+
+| pass | workload | arms reached |
+|---|---|---|
+| 1 | 27 corpus sources through 9 hand-picked entry points | 0, 1, 2, 3 |
+| 2 | every stage through the windowed region emitter | 17, 18 |
+| 3 | the assembly entry points | 17 |
+| 4 | 5 tiny sources through all 7 `*_from_pipeline` entry points | 1, 2, 3, 4, 5, 6 |
+| **union** | | **9 of 19** |
+
+### The result that matters is not the nine
+
+**Five toy programs reached more arms than twenty-seven real ones.** Pass 1 fed the entire corpus --
+including stage sources costing minutes each -- through nine entry points chosen by hand, and reached
+four arms. Pass 4 fed five trivial programs through all seven entry points of one family, derived by
+grep, and reached six.
+
+**Workload BREADTH dominated workload SIZE.** The constraint was never how much source went in; it
+was which functions were called. Pass 1 was slow *and* narrow, and its slowness disguised its
+narrowness: forty minutes of work feels like thorough coverage.
+
+**And the entry-point list was chosen, not derived.** Seven `*_from_pipeline` functions exist and
+pass 1 called two. The other five hid three arms. That is the same substitution -- a hand-picked
+sample presented as a population -- that produced this session's other wrong figures, committed
+inside the instrument built to detect exactly that class.
+
+### The ten that remain, and where they live
+
+Named by their enclosing function, so the next pass targets a subsystem rather than sweeping again:
+
+| arms | functions | surface |
+|---|---|---|
+| 7, 8 | `reconstruct_via_kel`, `reconstruct_via_kel_multihead` | reconstruction |
+| 9-12 | `analyze_op_heap`, `structural_marker`, `const_scalar_size`, `seed_verify_typed_shared` | analysis and seeding |
+| 13-16 | `assemble_data_slots`, `assemble_shared_layout`, `assemble_private_init`, `assemble_enum_layouts` | region assembly |
+
+These need real workloads rather than another entry-point sweep, and the assembly cluster lines up
+with the region kinds still skipped, which is a lead rather than a conclusion.
+
+**They remain UNMEASURED, not safe.** Four workloads missing them is stronger than one and is still
+not evidence of unreachability. Pass 1 stands as the standing proof of how a workload gap
+manufactures zeros.
+
 ## SECOND PASS, SAME DAY: THE CONTROL NOW PASSES AND THE FIGURE IS SIX
 
 The gap the first pass identified was closed by driving the WIRE path, reusing the
