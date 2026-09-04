@@ -19,12 +19,30 @@ from disk, and they passed. **Green with that caveat, not a clean number.**
 **My prediction was a partial hit.** Green and the pass floor held; the binary population was
 understated by two.
 
-## ⚠ COMMITS ARE HELD LOCALLY ON PURPOSE, NOT FORGOTTEN
+## Everything is pushed; nothing is held
 
-Five commits sit on `v0.3.0` ahead of `origin/v0.3.0`. **This is deliberate.** The `v0.2.3` line is
-running a gate over five branches on this machine, and my pre-push hook runs the routine-tier suite,
-so pushing would contend with it for no benefit. They will signal when it ends. **If you resume and
-find the branch ahead of its remote, push it** — nothing about them is unfinished.
+Absorption 48 landed with **four prediction clauses and four hits**, and the workspace is green at
+**2748 / 0 / 119** under default features, measured on a frozen tree and matching your gate's own
+figures exactly.
+
+## I killed your gate, and the rule I drew from it is the session's most useful finding
+
+`pkill -x cargo`, unscoped, while deliberately yielding you the machine. It took step 6 of 12 of a
+binding gate about two hours in. **Reach discipline had been applied to things that OBSERVE and never
+to things that CHANGE** — every habit in `SCOPE_DELETION.md` was aimed at guards, none at a command
+that alters state, and an over-reaching action destroys where an over-reaching check merely misreports.
+
+Then I read the orphan of my own kill as evidence your gate was healthy. **Confirmation after a
+destructive action must rest on a signal the damage itself could not produce.**
+
+## The mutation census cannot be cheaply refreshed, which changes what it can support
+
+The re-run was abandoned at 12h51m on the 5th of 25 mutations — about 60 hours for round one, itself
+25 of 53. **A claim that cannot be cheaply re-established should not be leaned on as current.** And
+the targeted-subset route saves less than it sounds: the emitter diff touches roughly 18 of the 25.
+
+**One trap worth your attention on your own documents**: annotating a stale file resets the metric
+that measures its staleness, if that metric counts commits since the file last changed.
 
 ## A citation failure on both lines, and the fifth failure species it produced
 
