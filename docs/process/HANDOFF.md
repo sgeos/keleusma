@@ -5,74 +5,73 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-09-03 (session 61 CLOSE).** Validate by the ANCESTRY and CONTENT block below,
+> **REFRESHED 2026-09-03 (session 62 CLOSE).** Validate by the ANCESTRY and CONTENT block below,
 > not by a hash: a refresh takes more than one commit, so any hash written here is stale by one the
 > moment it is written.
 >
-> ## READ FIRST: TWO COMMITS ARE HELD, DELIBERATELY, AND THE MACHINE IS NOT YOURS
+> ## READ FIRST: NOTHING IS HELD, AND ONE PULL REQUEST IS IN FLIGHT
 >
-> **`origin/v0.2.3` is at `6af37f66` and the gate was green there at 13 steps.** Two commits are
-> committed, unpushed, on two branches, and they are held ON PURPOSE rather than forgotten:
+> **`origin/v0.2.3` is at `3cb70a9c`.** Five pull requests merged into it on 2026-09-03, each
+> verified by a full 22-of-22 continuous-integration matrix: the wire changelogs, the `Text<N>`
+> flat layout, the crate-list guard, the `Op::Len` class analysis, and the session channels.
 >
-> - `docs/session-61-tail-channels` at `22aa1d95` — the channel refresh you are reading
-> - `fix/wire-changelogs` at `7540abe8` — changelogs for the two wire crates
+> **`#338` is open and awaiting its matrix** — `Text<N>` increment 3, the distinct nominal type in
+> the checker. It was green locally at fmt, clippy under `signatures,shell,self-host`, and 1277
+> library tests. **Merge it when its checks pass; do not re-derive its correctness.**
 >
-> **They are unpushed because the `v0.3.0` line's mutation sweep owns the machine.** That sweep
-> scores a run exceeding six times its calibrated baseline as a HANG, and **a HANG counts as
-> DETECTED**, so contention does not slow the measurement, it INVERTS it — a contended sweep reports
-> better coverage than a quiet one and nothing in its output says which you got. A push runs the
-> pre-push suite. **Check whether the sweep is still running before pushing.**
+> ## THE LOCAL GATE WAS ABANDONED ON PURPOSE, AND THE REPLACEMENT IS BETTER
 >
-> Both are docs-only and neither is red. Push and gate them when the machine is free.
+> `scripts/release-gate.sh` was run twice and finished neither time. The second run reached step 3
+> of 12 in 110 minutes, on a machine whose load was dominated by an unrelated application: a test
+> that completes in 190 seconds had not finished in 33.
 >
-> ## A RELEASE BLOCKER IS FIXED IN THE DOCUMENT AND STILL LIVE IN FACT
+> **Continuous integration on a PULL REQUEST is the same verification without the local machine**,
+> and it keeps a red off the version branch, which is the entire reason the local gate is required
+> before a merge. Use it when the machine is loaded. Note the reach, which is easy to get wrong:
+> **CI triggers only on `main`, `v*` and pull requests.** A push to a feature branch is verified by
+> NOTHING — not the hook if bypassed, not CI.
 >
-> `RELEASE_PROCESS.md` said five crates publish to crates.io. **There are seven.** `keleusma-wire`
-> and `keleusma-wire-derive` were absent from all four enumerations of the crate set. Following the
-> document as written publishes two crates IRREVERSIBLY and then fails on `keleusma`, because the
-> registry has no `keleusma-wire` to resolve.
+> ## `Text<N>`: THREE INCREMENTS DONE, AND THE NEXT ONE CARRIES A DEADLINE
 >
-> **The document is corrected. The crates are still unpublished**, so the first publication must
-> publish seven in the recorded order, with the wire pair third and fourth. Nothing enforces this;
-> there is no automated guard on that list.
+> Increment 1 gave it a type surface, refused everywhere below. Increment 2 gave it a flat layout:
+> a word-sized length followed by exactly `N` content bytes, sized `word_bytes + N`, reusing the
+> existing tuple and array descriptors so no consumer changed and no opcode was spent. Increment 3
+> made it a distinct nominal type in the checker, so a capacity is no longer erased to static text.
 >
-> ## `Text<N>` IS STARTED AND INCREMENT 2 IS FULLY PLANNED
+> **Increment 4 is emission**, and each later increment REMOVES one refusal. Do not read a refusal
+> as a defect.
 >
-> Increment 1 landed: the type parses, is distinct from bare `Text`, carries its capacity through
-> monomorphization, and **is refused with a named error at every stage below the type surface**. Each
-> later increment REMOVES one refusal. Do not read a refusal as a defect.
+> **The `ScalarKind::Text` collapse to one address must land WITH that work and before
+> publication.** It is a wire change, and wire changes are free only while `BYTECODE_VERSION` is
+> frozen at 2 and nothing has been published at 2. Afterwards it costs a version the operator has
+> declined to spend.
 >
-> Increment 2 is planned in
-> [`../decisions/TEXT_N_IMPLEMENTATION_BRIEF.md`](../decisions/TEXT_N_IMPLEMENTATION_BRIEF.md) and
-> needs no discovery: the layout is `Tuple([Scalar(Int), Array{Byte, N}])`, needing **no new
-> descriptor variant**; the size is exactly `word_bytes + N` because tuple layout has no inter-field
-> padding; and `Multiword<N, F>` is the exact precedent for a nominally-distinct,
-> structurally-composite type, supplying a post-erasure tripwire and a range check with its reason.
-> The zero-length-array rule answers whether `Text<0>` is legal: it is not.
+> ## TWO THINGS THAT ARE TESTED NOW AND WERE NOT
 >
-> **The `ScalarKind::Text` collapse to one address must land WITH the feature, before publication.**
-> It is a wire change, and wire changes are free while `BYTECODE_VERSION` is frozen at 2 and nothing
-> has been published at 2. After publication it costs a version the operator has declined to spend.
+> **The publish list is guarded.** `tests/release_process_crate_list.rs` derives the publishable
+> set from the manifests and checks `RELEASE_PROCESS.md` against it, including the stated count
+> word. The census that found the SEVEN-versus-FIVE blocker closed the instance; this closes the
+> class. Verified by two must-fire controls.
 >
-> ## WHAT THE GATE'S GREEN DOES NOT COVER
+> **This file is read by two tests.** `tests/selfhost_codegen.rs` reads it through `include_str!`
+> and requires the construct-support triple to appear TWICE; `tests/comment_citations.rs` scans
+> every backticked identifier in it and in `REVERSE_PROMPT.md`. **A rewrite of this banner that
+> drops one occurrence turns the branch red**, and the pre-push routine tier will not catch it,
+> because it excludes the self-host binaries. That happened on 2026-09-02.
 >
-> Float arithmetic at binary16 or OFP8 E5M2. Both are **refused at load** and nothing implements
-> them. The green covers `f32` and the refusal. The `v0.3.0` line's f16 rung is blocked on REFERENCE
-> f16 ARITHMETIC — not on load acceptance, and **accepting load alone would be actively harmful**: it
-> would give them a reference computing in `f64` while their backend lowers natively, so their
-> byte-identity oracle would report a divergence on every value that rounds and attribute it to their
-> lowering.
+> ## A LATENT TRAP THAT IS ARMED, NOT FIXED, AND NOW MEASURED
 >
-> ## A LATENT TRAP THAT IS ARMED, NOT FIXED
+> The compiler emits `Op::Len` on an array and the VM refuses that opcode, while `verify()` accepts
+> the module. What holds it shut is the loop-bound refusal, which this project's taxonomy calls
+> LIFTABLE.
 >
-> The compiler emits `Op::Len` on an array — `static_for_in_length` has no `Expr::If` arm — and the
-> VM refuses that opcode. **`verify()` accepts the module.** What holds the trap shut is the
-> loop-bound refusal, which this project's own taxonomy calls LIFTABLE.
+> `docs/decisions/OP_LEN_ROOT_REPAIR.md` measures the class. `parse_iterable` calls the full
+> expression parser, so every form is admissible after `in`; `Expr` has 27 variants, the fold
+> handles 6, and about seven of the rest can hold an array type. **Making type inference the
+> generic fallback closes exactly ONE of the seven**, because `infer_expr_type` has no arm for
+> `If`, `MethodCall`, `Pipeline`, `Yield`, `Classify` or `Declassify`. Build the floor first:
+> refuse at the emission site rather than emit an opcode the runtime rejects.
 >
-> `tests/len_flat_array_hazard.rs` is a ratchet that fails if that refusal changes identity. **If you
-> improve the loop-bound extractor, handle `Op::Len` first**, or a rejected program becomes one that
-> loads and traps. The root repair is an `Expr::If` arm so the length folds.
-
 ## Validity
 
 - **Branch**: `v0.2.3`, or a branch cut from it. If you are on `v0.3.0`, read
@@ -82,8 +81,8 @@ always-current, so it must be able to report itself stale rather than mislead a 
 **Validate by ANCESTRY and by CONTENT, never by a hash match.** A stamp requiring `HEAD~1` to equal a
 recorded parent is a claim that nothing else ever lands, and it has failed three times.
 
-**Ancestry**: `origin/v0.2.3` should contain `6af37f66`
-(`merge(session-61-tail)`). If it does not, this file predates a reset and is stale.
+**Ancestry**: `origin/v0.2.3` should contain `3cb70a9c`
+(`Merge pull request #335`). If it does not, this file predates a reset and is stale.
 
 **Content**, four checks that are cheap and independent:
 
@@ -94,6 +93,8 @@ recorded parent is a claim that nothing else ever lands, and it has failed three
 3. `tests/len_flat_array_hazard.rs` exists and passes. If it fails, the loop-bound refusal changed
    and the `Op::Len` trap may be open.
 4. `tests/text_capacity_type.rs` exists. If it does not, `Text<N>` increment 1 is not on this branch.
+5. `tests/release_process_crate_list.rs` exists and passes. It is the guard on the publish list; if
+   it fails, the release process and the workspace have diverged and a publication would break.
 
 **Do not trust the counts in this file without re-deriving them.** The construct-support boundary
 last read **96 SOk / 1 Refuses / 3 Diverges / 1 RefRejects** over 101 cases. It is ratcheted at
