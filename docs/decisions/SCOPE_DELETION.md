@@ -433,6 +433,22 @@ from the target path.
 carries a reaper scoped exactly that way, with a comment explaining why. It was not opened. **That is
 the sixth shape above, committed by this line hours earlier, and then committed again.**
 
+### The same scoping error in a WATCH, where it makes the instrument non-terminating
+
+A watch was armed on continuous integration keyed to **"the newest run on this branch"**, and then
+this line kept pushing. **Every push started a new run, so the target moved and the watch could never
+observe its subject settle.** It expired after an hour reporting, correctly, that it had not settled
+and that no verdict should be inferred.
+
+> **Scope a watch to an IDENTITY, not to a POSITION, whenever the population can grow.**
+> "The newest" is a position. A commit hash is an identity. A watch on a position is non-terminating
+> under exactly the conditions that make watching worthwhile — an active branch.
+
+**The give-up message was the only thing that worked**, and it worked because it was written to say
+that expiry is evidence about the watch rather than about the subject. **The design was wrong and the
+honesty about its limits was right**, which is the argument for writing that sentence into every
+timeout.
+
 ### The confirmation was inverted, which is separable and worse
 
 After the kill this line checked the process list, saw a test binary from the primary directory under
