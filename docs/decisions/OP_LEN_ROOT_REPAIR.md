@@ -86,3 +86,68 @@ time analysis consumes this number.
 forms can hold an array type, not a demonstration that each compiles to the hazard. The cheap
 confirmation is one program per row, and that is the first thing the implementing increment should
 write, because a row that turns out unreachable should be struck rather than defended.
+
+## The sibling refusals, censused 2026-09-03
+
+`Op::Len` is not the only opcode the virtual machine can refuse outright. Asking which others do
+is the natural follow-up, since the trap exists precisely because the set the compiler can EMIT and
+the set the machine will ACCEPT are allowed to disagree.
+
+**Four opcode arms can return `InvalidBytecode`**, with comment text excluded so a comment
+mentioning the error does not count as a refusal:
+
+| Opcode | Sites | Classification |
+|---|---|---|
+| `Len` | 2 | The known hazard, on a flat array AND on a flat tuple |
+| `IntToFloat` | 1 | Configuration: the `floats` feature is off |
+| `FloatToInt` | 1 | Configuration: the `floats` feature is off |
+| `Reset` | 1 | Structural: a `Reset` with no `Stream` in the chunk |
+
+### Both questions are now closed, and the answers are DIFFERENT KINDS
+
+**The flat-tuple refusal is not reachable through the for-in path.** Answered with four programs
+rather than by re-reading the emission sites, because the array case's own comment asserted
+unreachability and was wrong. One of the four compiles -- the one iterating an ARRAY of tuples,
+whose length folds statically and emits no `Len`; the three that iterate a tuple directly do not
+compile, because a tuple is not an iterable here. Pinned by
+`no_tuple_shaped_iterable_reaches_op_len`, which also asserts at least one fixture reaches the
+compiler, so the test cannot pass by rejecting everything. **This closes the PATH and not the
+opcode**: the bounds-check emission site remains, restricted to boxed arrays, and widening it
+reopens the question.
+
+**`Reset` is a corrupt-module defence, not a compiler/machine disagreement.** The two
+`Stream`/`Reset` presence checks live in `wcmu_stream_iteration_with_value_slot_bytes`, which
+errors with "requires a Stream block" on any other chunk, so they apply to stream blocks only. The
+compiler emits `Op::Reset` in exactly two places, both stream-loop epilogues. A stray `Reset` in a
+non-stream chunk is therefore not something the compiler produces; reaching that refusal takes a
+hand-built or corrupted module, which is what `InvalidBytecode` exists for.
+
+**The distinction is the point.** `Op::Len` is a genuine disagreement -- the compiler emits what the
+machine refuses, from ordinary source, with `verify()` accepting the module. `Reset` is a defence
+against input no compiler produces. A census that reported both as "opcodes the machine refuses"
+without separating them would have implied two hazards where there is one.
+
+### What the census originally left open, retained because the reasoning is the record
+
+**The flat-TUPLE refusal is unpinned.** `tests/len_flat_array_hazard.rs` covers the array case and
+does not mention tuples. The tuple case looks unreachable, because `Op::Len` is emitted only from
+the for-in dynamic path and from a bounds check already restricted to boxed arrays, and this
+language does not iterate a tuple. **That is a judgement from reading, not a demonstration** — and
+the array case's own comment asserted unreachability and was wrong. Treat it as probably-defensive
+and unproven.
+
+**`Reset` is refused in one direction and verified in the other.** The machine refuses a `Reset`
+with no `Stream` in its chunk; `verify()` checks that a Stream block is not missing its `Reset`.
+Those are different implications, and whether anything checks the machine's direction was not
+established here.
+
+### A note on how this census was taken, because the first attempt was reassuring and wrong
+
+A scan matching opcode arms and looking for `InvalidBytecode` within a fixed twenty-five-line window
+reported TWO arms. The true figure is four: the `Len` arm is ninety-nine lines long and its refusals
+sit thirty-nine and eighty-eight lines in, outside the window.
+
+**The failure direction is what matters.** An under-reporting census of refusals says the machine is
+more permissive than it is, which reads as reassurance. The fix was to extract each arm by brace
+matching rather than by a line budget, so the window is the arm's own extent instead of a guess
+about it.
