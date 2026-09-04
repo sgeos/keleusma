@@ -103,6 +103,38 @@ own comment says the one-address form becomes correct only once `Text<N>` remove
 collapse rides with emission or it does not happen before publication, and after publication it
 costs a version the operator has declined to spend.
 
+### EMISSION IS BLOCKED ON AN OPERATOR DECISION, measured 2026-09-03 by a spike
+
+**Do not start emission expecting a mechanical increment.** A throwaway spike removed both
+refusals and asked the compiler what happens. The answer:
+
+```
+type error: let binding declared as Text<8> but value has type Text
+```
+
+**That is increment 3 working exactly as designed, not an obstacle to route around.** A string
+literal is STATIC text; `Text<8>` is dynamic text; the two are different types and deliberately do
+not unify, which is the operator's ruling. So nothing can enter a `Text<N>` until there is a way to
+put it there.
+
+**And the silent path is closed by a language rule, not by taste.**
+[`GRAMMAR.md`](../spec/GRAMMAR.md) states: *No implicit type coercion exists. Numeric conversion
+requires the `as` keyword.* An implicit literal-to-`Text<N>` conversion at a `let` would contradict
+that rule for every reader of the language, not merely for this feature.
+
+So emission needs a surface form -- a cast, a constructor, or a method -- and **which one is
+already an open question belonging to the operator**, recorded as open question 2 in
+[`TEXT_CAPACITY_TYPE.md`](./TEXT_CAPACITY_TYPE.md). This line should not pick it unilaterally,
+because the choice is visible in every program anyone writes with the type and is far more
+expensive to change than the layout beneath it.
+
+**What the spike also confirmed, which is the good news:** exactly two match arms had to change to
+admit the type, both already known, and no other pass objected. The machinery below the surface is
+in place; only the way in is missing.
+
+**What is NOT blocked** and can proceed without the operator: anything that does not require a value
+to exist. The refusals stay as they are, and each remains correct.
+
 ### What emission must decide, which is not what it must touch
 
 The compiler enumerates what must be TOUCHED the moment a refusal is lifted; that is free
