@@ -127,54 +127,61 @@ found only by reading the source they described rather than the description.
 Whose release gate is canonical at the back-merge. Unchanged from session 61 and still unanswered. I
 ruled union with conditions so work could proceed; say so before the back-merge if you disagree.
 
-## THE QUEUE
+## THE QUEUE, AS IT ACTUALLY STANDS AT SESSION END
 
-1. **`Text<N>` increment 3**, the type-system half. The type expression still converts infallibly to
-   the string type in the type checker, and making the capacity a distinct nominal type is the
-   design's own requirement, with `Multiword` as the precedent.
+**BOTH SUBSTANTIAL ITEMS ARE OPERATOR-BLOCKED, and both blocks were found by TRYING rather than by
+planning.** That is the honest state: the productive ceiling without your input is close, and a
+resuming session should not mistake either item for available work.
 
-   **I first sized this at "113 sites across nine modules, a refactor rather than a tick of work".
-   That number answers a different question than the one asked.** It counts MENTIONS of the string
-   type; what matters is how many matches BREAK when a sibling variant is added, which is a much
-   smaller set, because a match with a wildcard arm is unaffected.
+1. **`Text<N>` EMISSION -- blocked on a decision that is yours.** A spike removed both refusals and
+   asked the compiler what happens. It said `let binding declared as Text<8> but value has type
+   Text`, which is the distinct-nominal-type increment working AS DESIGNED: a literal is static
+   text, `Text<8>` is dynamic text, and they deliberately do not unify. **Nothing can enter a
+   `Text<N>` until there is a way to put it there**, and the silent path is closed by a language
+   rule rather than by taste -- `GRAMMAR.md` states that no implicit type coercion exists.
 
-   The empirical precedent is the better evidence and it points the other way: `Type::Multiword` was
-   itself added to this same enum -- threaded through parsing, display, unification, layout, the
-   monomorphizer, zero-value and data-field validation -- in **67 insertions across 7 files**. That
-   is a lower bound, since the tree has grown a typed verifier and a wire schema since, but it is not
-   a multi-day refactor.
+   The surface form is already open question 2 in `../decisions/TEXT_CAPACITY_TYPE.md`. **Do not
+   pick it unilaterally**: it appears in every program written with the type and is far more
+   expensive to change than the layout beneath it.
 
-   Two static scans of mine then disagreed with each other, twenty-two wildcard-free matches by one
-   population and five by another, because the two patterns select different sets. Neither was
-   authoritative, so I ran the decisive instrument instead of arguing between them.
+   The encouraging half: exactly two match arms had to change to admit the type, and no other pass
+   objected. The machinery below the surface is in place; only the way in is missing.
 
-   **MEASURED, by adding the variant and letting the compiler enumerate: FIVE match sites, all in
-   `src/typecheck.rs`.** Identical under default features and under
-   `--tests --features signatures,shell,self-host`, so it is not a configuration artefact. The
-   second static scan was right and the first over-counted by more than four times.
+2. **The `ScalarKind::Text` collapse -- blocked BEHIND emission, not independently available.** That
+   kind is two words precisely because it must still hold the dynamic case; its own comment says the
+   one-address form becomes correct only once `Text<N>` removes that case. It is a wire change, so
+   it is free while nothing has shipped at `BYTECODE_VERSION` 2 and costs a version afterwards.
 
-   **What that number is and is not.** It is the STRUCTURAL ripple -- the arms the compiler forces
-   you to write. It says nothing about the semantic work, which is the real content of the
-   increment: how a capacity type unifies (not with static text, and not across two capacities),
-   what it displays as, and what each of those five arms should DO. An error count measures what
-   must be touched, never what must be decided, and quoting it as the cost of the increment would be
-   the same substitution that produced the 113 in the first place.
+3. **The width bundle -- blocked because it is a SEMVER BREAK, not a cleanup.** 33 signatures across
+   5 files take `addr_bytes`, and **14 are public**, so it cannot land without breaking every
+   embedder of a crate published at 0.2.2. An API decision, not a refactor to take on initiative.
 
-2. **FOUR PULL REQUESTS ARE OPEN INTO THIS BRANCH** and CI is the verification. Feature-branch
-   pushes get NO automated verification at all: the workflow triggers only on `main`, `v*` and pull
-   requests. A hook-bypassed push to a feature branch is therefore unverified by everything except
-   what was run by hand.
+4. Genuinely available, and small: the discard-arm reachability census, and `DATA_INIT` for the one
+   stage that does not elide.
 
-   The full local gate was abandoned deliberately rather than failed. Under the machine's unrelated
-   load a test that takes 190 seconds had not finished in 33 minutes, and the gate had nine and a
-   half steps left. A pull request gives the same checks on dedicated runners and, more importantly,
-   keeps a red off this branch, which is the entire reason the local gate is required before a
-   merge.
-3. **The `ScalarKind::Text` collapse to one address**, which must land WITH the feature and before
-   publication, because it is a wire change and those are free only while nothing has shipped at
-   `BYTECODE_VERSION` 2.
-4. The width bundle refactor, recorded as debt; the discard-arm reachability census; `DATA_INIT` for
-   the one stage that does not elide.
+## WHAT `Text<N>` IS, SO NOBODY RE-PLANS IT
+
+Four increments merged: the type surface refused everywhere below; the flat layout, a length word
+plus exactly `N` content bytes, reusing existing descriptors with no new variant and no opcode; a
+distinct nominal type in the checker; and a zero value cross-checked against the layout. Three
+refusals remain and **all three are correct** -- nothing generates code for it yet.
+
+## THE MEASUREMENT LESSON THIS SESSION KEPT RE-LEARNING
+
+Three figures in this file were wrong in the same way, and each was corrected only by deriving it
+from the thing itself:
+
+- Sizing the type-system increment: "113 sites across nine modules" counted MENTIONS. Two static
+  scans then disagreed at twenty-two and five. **The compiler answered in thirty seconds: five, all
+  in one file.**
+- The width bundle: recorded at 43 across seven modules, a quick grep said 11 because `addr_bytes`
+  sits on continuation lines, and walking each signature gave **33, of which 14 public**.
+- The refusal census: a fixed-window scan reported two refusing opcode arms; brace-matching the arms
+  gave **four**, and the under-report was in the reassuring direction.
+
+**A count of lines mentioning a thing is never a count of the thing.** When the data is reachable by
+construction, arguing between two regexes over its source text is a choice to keep an instrument
+that can be wrong.
 
 ---
 
