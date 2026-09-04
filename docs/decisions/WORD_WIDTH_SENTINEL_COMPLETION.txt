@@ -1,0 +1,47 @@
+COMPLETION CONDITION — the word-width boundary is default-deny and proven (V0.3.X)
+
+Ordering is NOT a completion criterion. The properties below may be reached in
+any order, by any route. Judge the end state of the tree and the transcript, not
+the sequence, the branch, or the process used to get there.
+
+DONE when all of the following hold.
+
+1. EVERY WORD WIDTH IS CLASSIFIED, NOT ONLY THE ONES A TARGET HAPPENS TO BUILD.
+   The full range of representable word widths is enumerated and each is
+   recorded as accepted or refused, rather than a subset chosen by which targets
+   exist.
+
+2. THE PARTITION IS SHOWN TO BE COMPLETE.
+   Accepted and refused together account for the whole enumerated range, so a
+   width that fell through both would fail rather than pass unnoticed.
+
+3. A REFUSAL IS ATTRIBUTED TO THE WIDTH, NOT MERELY OBSERVED.
+   Where a width is refused, the check establishes the refusal is about the word
+   width rather than an incidental failure that would mask a missing guard.
+
+4. THE INSTRUMENT PROVES IT CAN REPORT BOTH ANSWERS.
+   The check is exercised against a case where it must fail, so a pass is
+   evidence about the backend rather than about the check. A check demonstrated
+   only on cases it passes does not satisfy this.
+
+5. NON-VACUITY OF THE CONSTRUCTION IS ESTABLISHED.
+   Where a width is imposed on a module rather than produced by compilation, the
+   test shows the imposed value actually differs from the build's own, so the
+   construction cannot silently become a no-op.
+
+6. FIGURES CARRY THEIR POPULATION.
+   Any count states what it ranges over and which check produced it, and a
+   partial run is not described as a gate.
+
+7. NOTHING IS CLAIMED THAT WAS NOT RUN.
+   Every count and pass or fail claim corresponds to output appearing in the
+   transcript. Figures carried from an earlier measurement are marked as carried.
+
+8. A FAILURE IS REPORTED BEFORE IT IS REPAIRED.
+   Any failing test is named with its cause and with a statement of whether that
+   cause belongs to this line.
+
+NOT completion criteria: which branch anything sits on, whether the work is
+committed or pushed, how many commits were made, the order of the properties
+above, whether narrower widths become supported, or whether any other goal
+advanced.

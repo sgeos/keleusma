@@ -1,5 +1,55 @@
 # Design Journal
 
+## 2026-09-04 — [v0.3.0] A guard hardened on one axis, with its neighbour left open
+
+**Measured**: `native_codegen` **470 passed, 0 failed, 92 binaries** under default features and again
+under `narrow-float-32`, `cargo fmt` clean, zero clippy warnings. Predicted 470 over 92 before running
+and hit exactly.
+
+### The increment is the precondition of the one I rejected
+
+Narrow word-width lowering is the only substantial backend item blocked on nobody — the machine
+supports `narrow-word-8` and `narrow-word-16`, so the differential oracle exists.
+
+**Scoped and deliberately not started.** The plumbing is tractable: the word type binds in **five**
+places and threads through 88 integer-typed references. **The semantics are not** — narrowing changes
+overflow behaviour, comparison, shift masking, constant truncation and the entry signature. Beginning
+a change of that size across the core lowering and leaving it half-finished is worse than not
+beginning it.
+
+### The gap, and the asymmetry that is the real finding
+
+`check_word_width` is a hand-written `word_bits_log2 == 6`. What tested it: two constructed targets,
+a census using width 5 to ask a **different** question, and a harness precondition. **Nothing
+enumerated the widths and nothing asserted that 6 was the only accepted one.**
+
+**This line built exactly this sentinel for FLOATS earlier in the same session**, enumerating every
+`float_bits_log2` and asserting the accepted and refused sets account for all eight. **The word axis
+has the same shape, the same hand-written equality, and never got it.** A guard hardened on one axis
+while its neighbour stayed open is a shape worth naming: the hardening was applied where attention
+happened to be, not to the class.
+
+### The mutation converted a hypothetical into a demonstration
+
+The brief argued that widening the guard to admit 32-bit would leave the existing tests green, because
+the embedded targets are 8 and 16 and stay refused either way. **That was an argument until it was
+run.**
+
+| under a mutation admitting 32-bit | result |
+|---|---|
+| `no_float_sentinel`, the pre-existing width tests | **6 passed, still green** |
+| the new sentinel | **FAILED**, naming `accepted=[5, 6]` |
+
+So the silent-wrong-code path is real and now closed: a 32-bit module would have lowered with 64-bit
+semantics with no test objecting.
+
+### Three limits stated at the site
+
+It pins a **refusal**, not evidence that a narrow width would lower correctly. A refusal must be
+attributed to the **width** rather than accepted as any error, since an incidental failure satisfies a
+loose check and hides a missing guard. And the construction asserts the build's own width first,
+because the compiler stamps it and an imposed width equal to it would make the test a no-op.
+
 ## 2026-09-04 — [v0.3.0] Absorption 50, and the guard's middle verdict earns its keep
 
 ### Absorption 49 closed at five clauses, five hits
