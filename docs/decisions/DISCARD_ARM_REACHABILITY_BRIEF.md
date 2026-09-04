@@ -99,6 +99,38 @@ pass 1 called two. The other five hid three arms. That is the same substitution 
 sample presented as a population -- that produced this session's other wrong figures, committed
 inside the instrument built to detect exactly that class.
 
+### PASS FIVE CLOSES IT TO FOURTEEN OF NINETEEN, AND MY DEFERRAL WAS WRONG
+
+**I recorded pass five as "the obvious next step rather than run here", on the grounds that four
+passes were already disproportionate. That was effort-reasoning about something pass four had
+already shown costs minutes**, and the genuine question -- whether the remaining functions are
+drivable at all -- I had not asked.
+
+Asked and answered: of 52 public functions, **18 take exactly `(src: &str)` and 8 take exactly
+`(module: &Module)`.** Twenty-six are trivially drivable, including both entry points the call-site
+analysis had already fingered.
+
+Pass five drove all 26 against six small programs and reached **13 arms by itself**. The union
+across five passes is **14 of 19**, up from nine.
+
+**Arms 13, 14 and 15 -- `assemble_data_slots`, `assemble_shared_layout`, `assemble_private_init` --
+are now reached**, exactly as predicted, through `self_host_compile_full` and
+`self_host_compile_scratch`. The structural hypothesis held.
+
+### FIVE REMAIN, AND THEY ARE NAMED
+
+| arm | function | note |
+|---|---|---|
+| 7 | `reconstruct_via_kel` | reconstruction path |
+| 8 | `reconstruct_via_kel_multihead` | reconstruction path |
+| 9 | `analyze_op_heap` | analysis |
+| 11 | `const_scalar_size` | analysis |
+| 16 | `assemble_enum_layouts` | its three siblings are now reached; the corpus source used a
+payload-free enum, which is the likely gap and is a lead rather than a conclusion |
+
+Still UNMEASURED rather than safe, but the population is now small, named, and each has a stated
+next probe.
+
 ### THE CENSUS'S OWN COVERAGE, QUANTIFIED -- 19 OF 52
 
 **The driver has 52 public functions. Four passes drove 19 of them.** Every figure above is
