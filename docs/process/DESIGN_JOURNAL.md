@@ -13,6 +13,92 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-01 — Session 61 tail: a release blocker, and five species of the same error
+
+Two more merges after the first five. The engineering is `Text<N>` increment 1 and a release-process
+correction. The finding is that the day's single error class turned out to have five distinguishable
+species, three of them named in exchange with the `v0.3.0` line.
+
+### The release blocker
+
+`RELEASE_PROCESS.md` said five crates publish and there are seven. `keleusma-wire` and
+`keleusma-wire-derive` were absent from all four enumerations of the crate set: the ordered list, the
+dry-run sequence, the publish sequence, and the release-record template.
+
+Following it publishes two crates irreversibly and then fails on the third, because the registry has
+no `keleusma-wire` to resolve. **Step 3 is the section written expressly to catch this**, warning
+that the local and audit gates both pass while `cargo publish` fails at the registry-resolved verify
+build — and its dry-run list omitted the only two crates that would have triggered it.
+
+**Nothing was inconsistent; something was absent.** Both crates are publishable, fully documented,
+covered by their own CI job and by the gate. Every artifact the tooling can inspect said ready. A
+missing entry has no line number, which is why a census against the manifests found it and reading
+the document could not.
+
+Corrected at all four sites, not the one that surfaced it. Four other classes — docs.rs config,
+tarball excludes, publish metadata, CI coverage — came back clean, which is what makes "one blocker"
+a result rather than the place I stopped looking.
+
+### Five species of scope failure
+
+The day's class is a true measurement quoted as though it ranged wider than it did. By the end it had
+separated into five, and the separation is the useful part because the remedies differ.
+
+1. **Scope deletion.** A true statement with its population dropped. Fixed by writing the population
+   into the sentence.
+2. **Totals versus members.** A statement the instrument cannot express: no scoping makes "457
+   passed" say "this test passes." Fixed by not using that instrument — predict a named member.
+3. **The instrument unreachable.** A statement whose falsity destroys the instrument's ability to
+   report at all. A test count is downstream of compilation, so a build failure yields no number
+   rather than a wrong one, and silence is indistinguishable from not having run. Fixed by checking
+   the precondition separately.
+4. **A figure without its question.** When one formula answers two questions, a figure needs its
+   value, its population, AND its question. `2p+2` governs both arithmetic equivalence and conversion
+   double rounding; a margin correct for one licenses a wrong construction under the other. Worse
+   than deletion because a margin looks complete on its own — there is no absent phrase to notice.
+5. **A correct record misquoted.** Downstream, indistinguishable from an incorrect one; everything
+   after the citation is identical. **Every earlier remedy works by writing something into the
+   sentence, and this species defeats all of them, because the sentence was already right.** The
+   defect is in the citing act, unreachable from the artifact side however well written.
+
+To which the `v0.3.0` line added the subject-as-of-a-date case: "no hole open" measured three weeks
+and 39 commits ago reads as present tense, and **a dated claim whose date nobody checks is
+indistinguishable from a fresh one.**
+
+### The fifth species caught both lines within one increment
+
+I told the other line my brief forbade chaining. It says both — a bold imperative followed by "the
+rule is a condition on the intermediate," which is the withdrawn-and-replaced form. I quoted the half
+that suited me. They asserted their file forbade chaining without reading it; theirs records my
+prohibition being withdrawn as over-broad, at their urging.
+
+Both failures landed **one increment after** recording that a relay must be checked against the
+governing files. Their explanation is the one to keep: **a rule about verification is easiest to skip
+precisely while it is being invoked, because invoking it feels like having done it.**
+
+Artifact quality was at a local maximum in both cases and did not help, because quality is not the
+variable.
+
+### Two increments found defects in their own first drafts
+
+`Text<N>`'s refusal did not work — the infallible type conversion resolved it to static text, so four
+of five declaration positions compiled while a comment asserted a downstream pass would catch them.
+The float-width predicate was a **denylist in a default-deny codebase** and claimed two-bit and
+four-bit floats were implemented; the test written to close a hole in the previous commit's own
+asymmetry claim found it on its first run.
+
+### Also landed
+
+The `Op::Len` flat-array hazard, reported by the other line and verified here in four measurements
+including a control: the compiler does emit `Op::Len` on an array, `verify()` accepts, and only the
+liftable bound refusal holds the trap shut. The comment denying it is retracted and a ratchet fails
+if that refusal changes identity.
+
+A no-default-features warning the gate **structurally cannot see**: its lint step is workspace-scoped
+and its test steps are package-scoped, and no flag on a workspace command reaches a package-scoped
+configuration, because unification re-enables features through `keleusma-cli`. Measured — adding the
+flag to the workspace lint changes nothing.
+
 ## 2026-09-01 — Session 61: five merges, and every defect was found by an instrument's own blind spot
 
 Five merges landed: the format fingerprint, float arithmetic honouring the declared width, three
