@@ -99,6 +99,25 @@ pass 1 called two. The other five hid three arms. That is the same substitution 
 sample presented as a population -- that produced this session's other wrong figures, committed
 inside the instrument built to detect exactly that class.
 
+### THE CENSUS'S OWN COVERAGE, QUANTIFIED -- 19 OF 52
+
+**The driver has 52 public functions. Four passes drove 19 of them.** Every figure above is
+conditioned on that and the earlier text did not say so.
+
+The gap is not abstract. Arms 13-16 sit in the `assemble_*` family, reachable through
+`self_host_compile_full` and `self_host_compile_scratch` -- **two public entry points that appear in
+none of the four passes**, neither in the nine picked by hand nor in the seven-function family
+derived by grep.
+
+**That is the same error a third time, at a third level of scope.** Pass 1 picked entry points by
+hand. Pass 4 corrected it by deriving one FAMILY -- and calling a family the surface is the same
+substitution one level up. The population was always `pub fn` in the driver, and it was always
+countable.
+
+So "ten arms unmeasured" should be read as: **ten arms not reached by 37% of the driver's public
+surface.** A fifth pass driving the other 33 functions is the obvious next step and would very
+likely close the assembly cluster outright.
+
 ### The ten that remain, and where they live
 
 Named by their enclosing function, so the next pass targets a subsystem rather than sweeping again:
