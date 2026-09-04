@@ -73,7 +73,41 @@ driven over 27 corpus sources (15 under `examples/scripts/`, 12 stage sources un
 
 **Four reached. Fifteen at zero.**
 
-## THE POSITIVE CONTROL FAILED, AND THAT IS THE RESULT
+## SECOND PASS, SAME DAY: THE CONTROL NOW PASSES AND THE FIGURE IS SIX
+
+The gap the first pass identified was closed by driving the WIRE path, reusing the
+region-coverage harness rather than building a fresh one -- **66 seconds against the first pass's
+40 minutes**, because that harness already drives every stage through the windowed emitter.
+
+| pass | driver | arms reached |
+|---|---|---|
+| corpus | nine source-taking entry points | 0, 1, 2, 3 |
+| wire | the windowed region emitter | 17, 18 |
+| **union** | | **6 of 19** |
+
+**Arm 18, the positive control, now reads 120 hits.** It read zero in the first pass and the
+diagnosis -- that its driver `wire_windowed_via_kel` was never called -- was exactly right.
+
+**Arm 17, at line 5302, was reached 3,560 times and was invisible to the first pass entirely.**
+That is the sharper form of the lesson: a missing driver does not only hide the arm you already
+suspect, it hides arms you have no reason to suspect, and those are the ones a census exists to
+find.
+
+**Thirteen arms remain at zero: 4 through 16.** Still UNMEASURED rather than safe. Two independent
+workloads missing them is weak evidence of unreachability and not evidence of it -- the first pass
+is the standing proof of how a workload gap manufactures zeros.
+
+**The expensive route was not the informative one.** The first pass recompiles the largest stage
+sources through nine entry points; the region harness drives every stage through the emitter once.
+A third pass should reuse an existing harness before building another.
+
+## What a third pass would need
+
+Both passes cover source-taking entry points and the windowed emitter. Whatever drives arms 4-16 is
+neither. The cheapest next probe is the assembly path `tests/selfhost_wire.rs` exercises, the
+largest remaining self-host surface not yet used as a census workload.
+
+## THE FIRST PASS, RETAINED BECAUSE THE FAILURE IS THE LESSON
 
 **Arm 18, at line 6899, is the one arm the brief names as already measured** -- the `_ => continue`
 in the windowed region loop, whose consequence `tests/selfhost_region_coverage.rs` exists to
