@@ -81,6 +81,65 @@ But a derived value covers only what it hashes, so a release that changed an opc
 leaving every hashed size alone would leave it unmoved while genuinely differing. A value that is
 rolled deliberately per release has no such blind spot.
 
+## Where the work actually stands, 2026-09-03
+
+Four increments are merged. **Do not re-plan them; read what they settled.**
+
+| Increment | What it landed | The thing worth knowing |
+|---|---|---|
+| 1 | The type surface, refused everywhere below | A refusal is not a defect here; each increment removes one |
+| 2 | The flat layout | `Tuple([Scalar(Int), Array{Byte, N}])`, sized exactly `word_bytes + N`, no new descriptor variant, no opcode |
+| 3 | A distinct nominal type in the checker | `Type::TextN(ConstDim)`; **five** match sites, all in `typecheck.rs`, measured by the compiler |
+| 4 | The zero value | A zero length word followed by `N` zero bytes, cross-checked against the layout |
+
+**Three refusals remain, and all three are correct.** One in `check_composite_dimensions`, one in the
+whole-program guard, one in data-field validation. They stay until code is generated.
+
+## The next increment is EMISSION, and it is the gate for everything else
+
+Nothing further can proceed without it. In particular **the `ScalarKind::Text` collapse cannot be
+done first**: that kind is two words precisely because it must still hold the dynamic case, and its
+own comment says the one-address form becomes correct only once `Text<N>` removes that case. The
+collapse rides with emission or it does not happen before publication, and after publication it
+costs a version the operator has declined to spend.
+
+### What emission must decide, which is not what it must touch
+
+The compiler enumerates what must be TOUCHED the moment a refusal is lifted; that is free
+information and should not be estimated in advance. **Estimating it is how three wrong figures got
+into this line's records.** What the compiler cannot tell you is what must be DECIDED:
+
+- **How a literal becomes a `Text<N>`.** A string literal is static text. The settled semantics say
+  a statically-too-narrow assignment is a compile error and runtime overflow truncates with an
+  optional arm following `CheckedArmKind`. So the narrowing check is a compile-time comparison of
+  the literal's byte length against `N`, and it is a REFUSAL rather than a truncation, because the
+  length is known.
+- **Where the bytes live.** The layout is flat and arena-resident. There is no handle and no epoch,
+  and **an implementation step that reintroduces either has broken the design rather than extended
+  it** -- that is the whole reason the bound is static.
+- **Which operations ship first.** The design's position is that text operations reuse the composite
+  machinery. If an operation appears to need an opcode, that is a signal to re-read the composite
+  path, not to spend one: the instruction set is at 66 and the rad-hard constraint is standing.
+
+### The verification that is already in place, and what it will do
+
+Two guards will fire the moment emission is wrong rather than merely incomplete:
+
+- `no_position_that_can_name_a_type_admits_an_unbuilt_one` enumerates fourteen positions by class
+  and asserts every fixture reaches the compiler. **When a refusal is lifted, this test must be
+  updated deliberately**, and the update is the place to state which positions are now admitted.
+- The zero value is cross-checked against `layout_pass`. If emission changes the flat shape and only
+  one of the two follows, that test fails rather than the two drifting silently.
+
+### The trap that is armed and will bite this increment specifically
+
+`Op::Len` is emitted on arrays and refused by the virtual machine, held shut only by the
+loop-bound refusal, which the taxonomy calls liftable. `Text<N>` will want a length operation.
+**Read [`OP_LEN_ROOT_REPAIR.md`](./OP_LEN_ROOT_REPAIR.md) before adding one**: it measures the class,
+shows that the obvious type-inference fallback closes one of seven cases, and argues the floor --
+refusing at the emission site rather than emitting an opcode the runtime rejects -- should be built
+first.
+
 ## Specific wrong turns to avoid
 
 **Do not let `Text<N>` and static text share one `ScalarKind`.** They have different sizes and
