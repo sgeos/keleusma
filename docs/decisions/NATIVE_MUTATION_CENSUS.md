@@ -29,6 +29,24 @@
 >
 > The emitter was restored byte-identical after the kill and re-checked, because a killed run does not
 > reach its own restore step.
+>
+> ⚠ **HOW TO RE-DERIVE THE STALENESS FIGURE, BECAUSE THE OBVIOUS COMMAND NOW LIES.**
+> The 39 was computed as emitter commits since *the last commit touching this file*. **That command
+> broke the moment this banner was added**: the last commit touching the file is now the annotation,
+> so re-running it reports **0**, which reads as current.
+>
+> **Annotating a stale document resets the metric that measures its staleness.** Compute against the
+> MEASUREMENT commit, pinned here so it survives further edits:
+>
+>     measurement: f1800820  (2026-08-16)
+>     git log --oneline f1800820..HEAD -- native_codegen/src/lib.rs | wc -l
+>
+> **The targeted-subset route saves less than hoped.** Opcodes named in that diff, as a CANDIDATE list
+> — an `Op::` token on a changed line may be context or reorganisation rather than a behavioural
+> change, and this has not been checked: `Div`, `Call`, `Add`, `SetLocal`, `Const`, `Mul`, `CmpLe`,
+> `CmpEq`, `Sub`, `Mod`, `CmpNe`, `CmpLt`, `CmpGt`, `CmpGe`, `CheckedAdd`, `Return`, `NewComposite`,
+> `Neg`. **That is most of round one**, so selecting from the diff narrows 25 mutations to roughly
+> 18 rather than to a handful.
 
 **Status**: measured, the harness repaired twice, and **no hole open**. `Trap`
 was closed in Part D by changing the OBSERVABLE, not the inputs. The only
