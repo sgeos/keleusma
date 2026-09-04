@@ -6616,22 +6616,27 @@ fn shared_slot_fields(module: &Module) -> Vec<i64> {
 /// The `DATA_INIT` record fields, two per record, or `None` when this module's pool is one the
 /// driver cannot yet place.
 ///
-/// # Only the elided form is driven, and the other case is NAMED rather than guessed
+/// # Both forms are driven now, and the second was recorded as blocked when it was not
 ///
 /// The reference elides a wholly-default private-initialiser pool, writing the [`ABSENT`] sentinel
 /// as `first` and the slot count as `count`. That case needs nothing from the constant table and is
 /// what eleven of the twelve stage sources produce.
 ///
 /// The remaining form stores the pool in the shared constant table and records the index it landed
-/// at. Predicting that index means modelling the encoder's constant ordering, which is the `CONSTS`
-/// problem and a separate increment. Rather than guess it, this returns `None` and the caller
-/// leaves the region as an honest zeroed gap -- `Skipped` in
-/// `tests/selfhost_region_coverage.rs`'s vocabulary, which is deliberately not `Differs`.
+/// at. That was recorded as blocked on modelling the encoder's constant ordering -- the `CONSTS`
+/// problem -- and **that reason holds for a pool with CONTENTS and not for an empty one.** An empty
+/// pool has no values to place, so its `first` is simply where the pool would have started, and its
+/// count is zero.
 ///
-/// Measured 2026-08-31: the one corpus stage taking this path is `verify_datalayout.kel`, whose
-/// pool is EMPTY. An empty pool is deliberately not reported as elided, so that the sentinel stands
-/// for one situation only; that is the predicate behaving as documented, not an edge case to work
-/// around.
+/// The one corpus stage taking this path is `verify_datalayout.kel`, whose pool is EMPTY. An empty
+/// pool is deliberately not reported as elided, so that the sentinel stands for one situation only;
+/// that is the predicate behaving as documented, not an edge case to work around. Measured against
+/// the reference on 2026-09-04 rather than derived: it encodes as `first = 4, count = 0`, with four
+/// `Int` constant roots.
+///
+/// A pool with contents still returns `None` and still leaves an honest zeroed gap, and so does any
+/// module whose constant roots are not all scalars, because `constant_roots` documents that a
+/// composite root expands into further records and the root count is then not the record count.
 ///
 /// **The elision test calls the shared predicate rather than restating its condition.** The
 /// predicate exists precisely so the encoder and any other producer cannot drift, and its own
@@ -6639,12 +6644,51 @@ fn shared_slot_fields(module: &Module) -> Vec<i64> {
 fn data_init_fields(module: &Module) -> Option<Vec<i64>> {
     let layout = module.data_layout.as_ref()?;
     if crate::wire_schema::private_init_is_elided(layout) {
-        Some(alloc::vec![
+        return Some(alloc::vec![
             i64::from(crate::wire_schema::ABSENT),
             layout.private_init.len() as i64,
-        ])
-    } else {
-        None
+        ]);
+    }
+    // **THE EMPTY NON-ELIDED POOL IS PREDICTABLE, AND IT WAS RECORDED AS BLOCKED.**
+    // The comment above said this form needs the encoder's constant ordering, "the
+    // `CONSTS` problem and a separate increment". That is true of a pool with
+    // CONTENTS, whose index depends on where its values land. An EMPTY pool has no
+    // values, so its `first` is simply where the pool would have started: the
+    // record count the chunk constants occupy, with a count of zero.
+    //
+    // Measured against the reference rather than derived and hoped for:
+    // `verify_datalayout.kel`, the one corpus stage on this path, encodes as
+    // `first = 4, count = 0`, and its four constant roots are four `Int`s.
+    //
+    // **The scalar guard is what makes the count usable, and it is the whole risk.**
+    // `constant_roots` documents that roots are not records -- a composite root
+    // expands during `finish` -- so the root count equals the record count only for
+    // a forest of scalars. Where any root is composite this returns `None` and the
+    // region stays an honest zeroed gap. That distinction matters: a wrong `first`
+    // would turn a `Skipped` region into a `Differs` one, and
+    // `tests/selfhost_region_coverage.rs` separates those two precisely so a gap is
+    // never mistaken for a defect. A gap is a smaller error than a lie.
+    if layout.private_init.is_empty() {
+        let roots = crate::wire_schema::constant_roots_of_module(module);
+        if roots.iter().all(constant_is_scalar) {
+            return Some(alloc::vec![roots.len() as i64, 0]);
+        }
+    }
+    None
+}
+
+/// Whether a constant root occupies exactly one record.
+///
+/// Listed positively rather than as "not a composite", so a variant added later is
+/// excluded by default and the region falls back to its honest gap instead of being
+/// silently assumed flat.
+fn constant_is_scalar(c: &crate::bytecode::ConstValue) -> bool {
+    use crate::bytecode::ConstValue as C;
+    match c {
+        C::Unit | C::Bool(_) | C::Int(_) | C::Byte(_) | C::Fixed(_) => true,
+        #[cfg(feature = "floats")]
+        C::Float(_) => true,
+        _ => false,
     }
 }
 
@@ -6890,12 +6934,11 @@ pub fn wire_windowed_via_kel(
             // and which are skipped, so the coverage claim is a figure rather
             // than a sentence.
             //
-            // FIVE KINDS REACH HERE NOW, down from six on 2026-08-31 when
-            // `SHARED_LAYOUT` was routed above: `ENUM_VARIANTS`, `ENUM_LAYOUTS`,
-            // `DATA_SLOTS`, `PARAM_TYPES`, and `DATA_INIT` for the single stage
-            // whose private-initialiser pool is not elided. The first four wait on
-            // the name-interning route; the fifth waits on a model of the
-            // encoder's constant ordering.
+            // FOUR KINDS REACH HERE NOW: `ENUM_VARIANTS`, `ENUM_LAYOUTS`,
+            // `DATA_SLOTS` and `PARAM_TYPES`, all four waiting on the
+            // name-interning route. Down from five on 2026-09-04 when `DATA_INIT`
+            // was routed for its last stage, and from six on 2026-08-31 when
+            // `SHARED_LAYOUT` was routed above.
             _ => continue,
         };
         if len > WINDOW {
