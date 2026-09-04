@@ -86,3 +86,44 @@ time analysis consumes this number.
 forms can hold an array type, not a demonstration that each compiles to the hazard. The cheap
 confirmation is one program per row, and that is the first thing the implementing increment should
 write, because a row that turns out unreachable should be struck rather than defended.
+
+## The sibling refusals, censused 2026-09-03
+
+`Op::Len` is not the only opcode the virtual machine can refuse outright. Asking which others do
+is the natural follow-up, since the trap exists precisely because the set the compiler can EMIT and
+the set the machine will ACCEPT are allowed to disagree.
+
+**Four opcode arms can return `InvalidBytecode`**, with comment text excluded so a comment
+mentioning the error does not count as a refusal:
+
+| Opcode | Sites | Classification |
+|---|---|---|
+| `Len` | 2 | The known hazard, on a flat array AND on a flat tuple |
+| `IntToFloat` | 1 | Configuration: the `floats` feature is off |
+| `FloatToInt` | 1 | Configuration: the `floats` feature is off |
+| `Reset` | 1 | Structural: a `Reset` with no `Stream` in the chunk |
+
+### Two things this census leaves open, stated rather than closed
+
+**The flat-TUPLE refusal is unpinned.** `tests/len_flat_array_hazard.rs` covers the array case and
+does not mention tuples. The tuple case looks unreachable, because `Op::Len` is emitted only from
+the for-in dynamic path and from a bounds check already restricted to boxed arrays, and this
+language does not iterate a tuple. **That is a judgement from reading, not a demonstration** — and
+the array case's own comment asserted unreachability and was wrong. Treat it as probably-defensive
+and unproven.
+
+**`Reset` is refused in one direction and verified in the other.** The machine refuses a `Reset`
+with no `Stream` in its chunk; `verify()` checks that a Stream block is not missing its `Reset`.
+Those are different implications, and whether anything checks the machine's direction was not
+established here.
+
+### A note on how this census was taken, because the first attempt was reassuring and wrong
+
+A scan matching opcode arms and looking for `InvalidBytecode` within a fixed twenty-five-line window
+reported TWO arms. The true figure is four: the `Len` arm is ninety-nine lines long and its refusals
+sit thirty-nine and eighty-eight lines in, outside the window.
+
+**The failure direction is what matters.** An under-reporting census of refusals says the machine is
+more permissive than it is, which reads as reassurance. The fix was to extract each arm by brace
+matching rather than by a line budget, so the window is the arm's own extent instead of a guess
+about it.
