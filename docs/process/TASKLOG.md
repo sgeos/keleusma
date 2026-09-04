@@ -10,6 +10,49 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-03, session 62). `Text<N>` HAS A FLAT LAYOUT, AND MY OWN HANDOFF WAS RED.**
+>
+> **The session-61 handoff refresh broke a test that pins the handoff's own content**, by deleting
+> one of two required occurrences of the construct-support triple while rewriting the validity
+> block. Repaired at `1826f3a4` with a must-fire control. Invisible for two general reasons: the
+> pre-push routine tier excludes the self-host binaries, and "markdown is not compiled" is true of
+> nearly every file under `docs/` and false of the one that is read by `include_str!`.
+>
+> **`Text<N>` increment 2 landed** on `feat/text-capacity-layout` at `9ff3f345`: a word-sized length
+> followed by exactly `N` content bytes, sized one word plus `N`, reusing the existing tuple and
+> array descriptors so no consumer changes and no opcode is spent. A symbolic capacity is refused
+> rather than guessed, `Text<0>` is not a type, and the capacity uses a checked conversion because a
+> cast truncates silently on a 32-bit host. Verified by MUTATION: adding a terminator byte fails two
+> of three shape tests. The size formula is pinned at four word widths.
+>
+> **Two design records contradicted the rulings that superseded them.** The capacity type's
+> open-questions list still presented the settled overflow rule as undecided, and the implementation
+> brief still described the fingerprint as derived after the redirect made it a per-release random
+> constant. The second INVERTS a diagnostic: it tells a future session to read a non-moving
+> fingerprint as a broken detector, when the value derives from nothing and moves only when a person
+> moves it. Both corrected.
+>
+> Routine tier green at 2212 tests plus doctests. The full gate has NOT been run on this branch.
+
+> **Currency note (2026-09-01, session 61 tail). A RELEASE BLOCKER, AND `Text<N>` STARTED.**
+>
+> `origin/v0.2.3` at `6af37f66`, gate green at 13 steps. Per-step: default 2748, no-default 297,
+> signatures 2356, signatures+shell 2373, self-host 2527, wire 57 and 20, compiler 86.
+>
+> **`RELEASE_PROCESS.md` listed five publishable crates and there are seven.** `keleusma-wire` and
+> `keleusma-wire-derive` were absent from all four enumerations. Following it publishes two crates
+> irreversibly and then fails on the third. Corrected; census of four other classes came back clean.
+>
+> **`Text<N>` increment 1 landed**: the type surface, refused everywhere below it. Increment 2 is
+> planned against the `Multiword` precedent, which supplies a post-erasure tripwire, a range check
+> with its reason, and the answer to whether a nominally-distinct type may be structurally a
+> composite.
+>
+> Also landed: the `Op::Len` flat-array hazard pinned as a ratchet after the comment denying it was
+> found false; a no-default-features warning the gate structurally cannot see, because its lint step
+> is workspace-scoped and its test steps are package-scoped; and both uses of `2p+2` separated with
+> their questions.
+
 > **Currency note (2026-09-01, session 61, CLOSE). FIVE MERGES, NOTHING RED, NOTHING UNMERGED.**
 >
 > `origin/v0.2.3` at `27fcbd11`, release gate green at 13 steps. Landed: the per-release format

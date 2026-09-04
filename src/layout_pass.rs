@@ -146,12 +146,56 @@ impl<'a> LayoutContext<'a> {
     /// offsets. Errors propagate through [`LayoutError`].
     pub fn layout_for(&self, ty: &TypeExpr) -> Result<LayoutDescriptor, LayoutError> {
         match ty {
-            // No layout yet. Refused rather than approximated: guessing a
-            // representation here is how a wrong size reaches the worst-case
-            // memory analysis, which is the one number this ecosystem sells.
-            TypeExpr::TextN(_, _) => Err(LayoutError::UnresolvedGeneric(
-                alloc::string::String::from("Text<N> has no flat layout yet"),
-            )),
+            // `Text<N>` IS A FLAT COMPOSITE: a length word followed by `N`
+            // content bytes, and NOTHING ELSE. No pointer, no handle, no
+            // epoch. That is the load-bearing property, not an implementation
+            // convenience -- a handle would imply an unbounded lifetime, which
+            // is why it would need an epoch, which would put worst-case memory
+            // beyond static reach and contradict the one number this ecosystem
+            // sells. See `docs/decisions/TEXT_CAPACITY_TYPE.md`.
+            //
+            // The shape reuses `Tuple` and `Array` rather than adding a
+            // descriptor variant, so every existing consumer -- sizing, field
+            // offsets, the typed verifier's shape reconstruction -- handles it
+            // with no change. `N` counts CONTENT BYTES with no terminator, so
+            // the size is exactly `word_bytes + N`: tuple layout sums its
+            // elements with no inter-field padding.
+            TypeExpr::TextN(n, _) => {
+                // Post-erasure tripwire, matching `Multiword`. A symbolic const
+                // dimension must never reach the layout pass; monomorphization
+                // (B40) resolves it to a literal first. Reaching here with one
+                // unresolved means a pass was skipped, and a guessed capacity
+                // would be a wrong worst-case memory bound rather than a
+                // visible failure.
+                let n = n.as_lit().ok_or_else(|| {
+                    LayoutError::UnresolvedGeneric(alloc::format!("Text capacity `{}`", n))
+                })?;
+                // A capacity must be positive, and `Text<0>` is therefore not a
+                // legal type: its content array would be zero-length, which the
+                // array rule already rejects as degenerate (audit C11 -- no
+                // storage, every index traps). The error is deliberately
+                // `InvalidArraySize` rather than a new variant. Two reasons:
+                // the failing quantity IS the content array's length, and
+                // `LayoutError` is public and not `#[non_exhaustive]`, so a new
+                // variant would break a downstream exhaustive match in what is
+                // otherwise a patch release of a published crate.
+                //
+                // `usize::try_from` rather than `as usize`: on a 32-bit host a
+                // capacity above `u32::MAX` would TRUNCATE under `as`, and a
+                // truncated capacity is the worst available outcome here --
+                // it under-sizes the buffer silently instead of failing.
+                let n = usize::try_from(n).map_err(|_| LayoutError::InvalidArraySize(n))?;
+                if n == 0 {
+                    return Err(LayoutError::InvalidArraySize(0));
+                }
+                Ok(LayoutDescriptor::Tuple(alloc::vec![
+                    LayoutDescriptor::Scalar(ScalarKind::Int),
+                    LayoutDescriptor::Array {
+                        element: alloc::boxed::Box::new(LayoutDescriptor::Scalar(ScalarKind::Byte)),
+                        count: n,
+                    },
+                ]))
+            }
             TypeExpr::Unit(_) => Ok(LayoutDescriptor::Scalar(ScalarKind::Unit)),
             TypeExpr::Prim(prim, _) => Ok(LayoutDescriptor::Scalar(scalar_kind_for_prim(*prim))),
             TypeExpr::Multiword(n, f, _) => {
@@ -432,6 +476,91 @@ mod tests {
         assert!(matches!(
             ctx.size_in_bytes(&ty),
             Err(LayoutError::InvalidArraySize(0))
+        ));
+    }
+
+    #[test]
+    fn text_with_a_capacity_lays_out_as_a_length_word_and_n_content_bytes() {
+        // The shape is the design, not an encoding detail. If this ever becomes
+        // anything holding a pointer, a handle or an epoch, the worst-case
+        // memory bound stops being static and `Text<N>` has been broken rather
+        // than extended.
+        use crate::ast::ConstExpr;
+        let (structs, enums) = empty_tables();
+        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES, I64_BYTES);
+        let ty = TypeExpr::TextN(ConstExpr::Lit(8, span()), span());
+        let got = ctx.layout_for(&ty).expect("Text<8> has a layout");
+        match &got {
+            LayoutDescriptor::Tuple(elems) => {
+                assert_eq!(
+                    elems.len(),
+                    2,
+                    "a length word and a content array, nothing else"
+                );
+                assert_eq!(elems[0], LayoutDescriptor::Scalar(ScalarKind::Int));
+                match &elems[1] {
+                    LayoutDescriptor::Array { element, count } => {
+                        assert_eq!(**element, LayoutDescriptor::Scalar(ScalarKind::Byte));
+                        assert_eq!(*count, 8, "N counts CONTENT bytes, with no terminator");
+                    }
+                    other => panic!("content is not a byte array: {other:?}"),
+                }
+            }
+            other => panic!("Text<8> is not a flat tuple: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn text_capacity_size_is_exactly_one_word_plus_n_at_every_word_width() {
+        // Pinned across widths because the size formula is a claim about tuple
+        // layout having NO inter-field padding, and a formula verified at one
+        // width is a formula verified at one width. `narrow-word-*` selects
+        // these independently of the host.
+        use crate::ast::ConstExpr;
+        let (structs, enums) = empty_tables();
+        for word_bytes in [1usize, 2, 4, 8] {
+            for n in [1i64, 3, 8, 255] {
+                let ctx = LayoutContext::new(&structs, &enums, word_bytes, F64_BYTES, I64_BYTES);
+                let ty = TypeExpr::TextN(ConstExpr::Lit(n, span()), span());
+                assert_eq!(
+                    ctx.size_in_bytes(&ty).expect("sized"),
+                    word_bytes + n as usize,
+                    "Text<{n}> at word width {word_bytes}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn text_capacity_of_zero_or_negative_is_not_a_type() {
+        // `Text<0>` is degenerate for exactly the reason a zero-length array
+        // is: no storage and every index traps. Rejected here as a
+        // defense-in-depth backstop, the same position the array rule holds.
+        use crate::ast::ConstExpr;
+        let (structs, enums) = empty_tables();
+        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES, I64_BYTES);
+        for bad in [0i64, -1, -8] {
+            let ty = TypeExpr::TextN(ConstExpr::Lit(bad, span()), span());
+            assert!(
+                matches!(ctx.layout_for(&ty), Err(LayoutError::InvalidArraySize(_))),
+                "Text<{bad}> must not have a layout"
+            );
+        }
+    }
+
+    #[test]
+    fn a_symbolic_text_capacity_is_refused_rather_than_guessed() {
+        // The post-erasure tripwire. Monomorphization erases a const parameter
+        // to a literal; one surviving here means a pass was skipped, and a
+        // guessed capacity would be a WRONG worst-case memory bound rather
+        // than a visible failure. Same position as the `Multiword` tripwire.
+        use crate::ast::ConstExpr;
+        let (structs, enums) = empty_tables();
+        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES, I64_BYTES);
+        let ty = TypeExpr::TextN(ConstExpr::Param("N".to_string(), span()), span());
+        assert!(matches!(
+            ctx.layout_for(&ty),
+            Err(LayoutError::UnresolvedGeneric(_))
         ));
     }
 

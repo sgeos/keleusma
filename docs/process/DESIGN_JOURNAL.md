@@ -1722,6 +1722,198 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-03 — Session 62: `Text<N>` through four increments, and a refusal's reason outliving the refusal
+
+Seven merges into `v0.2.3`, and two pull requests still open at the time of writing. The merged
+engineering is `Text<N>` from a bare type surface to a flat layout and a distinct nominal type, plus
+a guard on the publish list and a measurement of the `Op::Len` hazard class; the zero value and the
+refusal-message correction are open, not landed, and are described below as work rather than as
+state. The finding is a variant of the day-before's error class, and it is specific enough to act
+on.
+
+### The finding: a refusal's REASON decays faster than the refusal does
+
+Four instances, all correct when written, all found by reading the source rather than the record:
+
+1. `TEXT_CAPACITY_TYPE.md` listed the overflow rule as an open question after the operator ruled on
+   it. A resuming session would have re-asked a settled question or built the opposite.
+2. `TEXT_N_IMPLEMENTATION_BRIEF.md` described the format fingerprint as derived from the scalar size
+   table, after the operator's redirect made it a per-release random constant. **This one inverts a
+   diagnostic**: it tells a session performing the `ScalarKind::Text` collapse to expect the
+   fingerprint to move and to read a non-moving one as a broken detector, when the value moves only
+   when a person moves it.
+3. The zero-value pass refused `Text<N>` because "its flat representation is not built", two commits
+   after increment 2 built it.
+4. All three copies of the user-visible refusal message said the layout was not built, likewise.
+
+**The pairing is the hazard, not either half.** Every one of these refusals was still CORRECT --
+nothing generates code for `Text<N>` and no program should compile. Only the justifications went
+stale. And a refusal carrying a reason reads as a considered decision, so the next reader honours it
+instead of checking whether it still holds; a bare rejection would have invited that check. The
+sentence that makes the code look thought-through is exactly what suppresses the re-examination.
+
+**The practice, recorded at the binding refusal in `check_composite_dimensions`:** when an increment
+lands a capability, grep the refusals for the name of what you just built. And state what is MISSING
+rather than enumerating what is absent so far -- a list of absent things shrinks by one per increment
+and is wrong immediately, whereas naming the remaining gap stays true until that gap closes.
+
+### The measurement that replaced three wrong estimates
+
+Sizing increment 3 was estimated three times and wrong three times. "113 sites across nine modules"
+counted MENTIONS of the string type in the checker. Two static scans then disagreed with each other
+at twenty-two and five, because one selected match blocks CONTAINING a `Type::Str` arm -- which is
+neither necessary nor sufficient for breaking, since a match that never mentions the string variant
+breaks too and one that mentions it behind a wildcard does not. Both errors in one pattern, pointing
+opposite ways.
+
+Adding the variant and reading the compiler's own enumeration settled it in thirty seconds: **five
+sites, all in one file**, identical under two feature sets. **When the data is reachable by
+construction, arguing between two regexes over its source text is a choice to keep an instrument
+that can be wrong.**
+
+The number was recorded with its own limit attached: five is the STRUCTURAL ripple, the arms the
+compiler forces you to write. It says nothing about the semantic work -- how a capacity type
+unifies, what it displays as, what each arm should do. An error count measures what must be TOUCHED,
+never what must be DECIDED, and quoting it as the cost of the increment would repeat exactly the
+substitution that produced the 113.
+
+### A rule with no reachable test, tested anyway
+
+Increment 3's unification arms cannot be driven from source: the whole-program refusal runs before
+the type checker, so no program reaches them. The options were to leave a rule nothing exercises or
+to call `unify` directly. **Waiting for the refusal to lift would leave the rule unguarded for
+exactly as long as it is unverified**, so the tests call it directly -- and in both operand orders,
+because `unify` matches on an ordered pair and is not symmetric by construction.
+
+Every new test this session was checked by mutation rather than by a green run: a terminator byte in
+the layout, a capacity made irrelevant in unification, a crate deleted from the publish list, a
+non-zero length word in the zero value. Each fired, and where two tests existed each survived the
+other's mutant, which is what distinguishes independent coverage from a duplicated assertion.
+
+### The guard that closes a class rather than an instance
+
+The publish-list blocker found on 2026-09-01 was corrected in the document, which closed the
+instance. `tests/release_process_crate_list.rs` closes the class by deriving the publishable set
+from the manifests -- `publish` is what `cargo publish` obeys, so the manifests are the authority
+and the document is the claim checked against it. It also checks the stated COUNT as an independent
+assertion, because the original defect was `FIVE` sitting above a short list and a guard comparing
+only the list would have let that stand over seven correct entries.
+
+### Process: the local gate stopped being the right instrument
+
+`scripts/release-gate.sh` was run twice and finished neither time, reaching step 3 of 12 in 110
+minutes under unrelated machine load -- a test that completes in 190 seconds had not finished in 33.
+Continuous integration on a PULL REQUEST runs the same checks on dedicated runners and still keeps a
+red off the version branch, which is the whole reason a local gate precedes a merge. Seven pull
+requests were verified that way, each on a full 22-of-22 matrix, and every merge triggers another
+full run on the merged result.
+
+**The reach fact that was written down nowhere and cost three unverified pushes:** CI triggers only
+on `main`, `v*` and pull requests. A push to a feature branch with the hook bypassed is verified by
+nothing at all.
+
+### Two instrument failures of mine, in opposite directions
+
+An `awk` splitting on whitespace instead of tabs read a word from a check's NAME as its status, so
+for ninety minutes I reported CI as "sixteen still running" when the jobs had completed
+successfully. It erred pessimistically -- nothing was wrongly trusted, and the cost was merges not
+happening -- but a parse error has no preferred direction and I got the harmless one by luck.
+
+And I relaunched a two-hour gate detached while dropping the exit-status capture my foreground
+launch had. When the process vanished I had no verdict at all and reconstructed events from a
+`Terminated: 15` line buried mid-log. **The detached case is where a missing status costs most,
+because there is no completion notification either** -- the mirror of the `v0.3.0` line piping a
+twelve-hour sweep through `tail` and losing progress visibility. Neither line instruments the
+long-running case, which is the one that needs it.
+
+---
+
+## 2026-09-01 — Session 61 tail: a release blocker, and five species of the same error
+
+Two more merges after the first five. The engineering is `Text<N>` increment 1 and a release-process
+correction. The finding is that the day's single error class turned out to have five distinguishable
+species, three of them named in exchange with the `v0.3.0` line.
+
+### The release blocker
+
+`RELEASE_PROCESS.md` said five crates publish and there are seven. `keleusma-wire` and
+`keleusma-wire-derive` were absent from all four enumerations of the crate set: the ordered list, the
+dry-run sequence, the publish sequence, and the release-record template.
+
+Following it publishes two crates irreversibly and then fails on the third, because the registry has
+no `keleusma-wire` to resolve. **Step 3 is the section written expressly to catch this**, warning
+that the local and audit gates both pass while `cargo publish` fails at the registry-resolved verify
+build — and its dry-run list omitted the only two crates that would have triggered it.
+
+**Nothing was inconsistent; something was absent.** Both crates are publishable, fully documented,
+covered by their own CI job and by the gate. Every artifact the tooling can inspect said ready. A
+missing entry has no line number, which is why a census against the manifests found it and reading
+the document could not.
+
+Corrected at all four sites, not the one that surfaced it. Four other classes — docs.rs config,
+tarball excludes, publish metadata, CI coverage — came back clean, which is what makes "one blocker"
+a result rather than the place I stopped looking.
+
+### Five species of scope failure
+
+The day's class is a true measurement quoted as though it ranged wider than it did. By the end it had
+separated into five, and the separation is the useful part because the remedies differ.
+
+1. **Scope deletion.** A true statement with its population dropped. Fixed by writing the population
+   into the sentence.
+2. **Totals versus members.** A statement the instrument cannot express: no scoping makes "457
+   passed" say "this test passes." Fixed by not using that instrument — predict a named member.
+3. **The instrument unreachable.** A statement whose falsity destroys the instrument's ability to
+   report at all. A test count is downstream of compilation, so a build failure yields no number
+   rather than a wrong one, and silence is indistinguishable from not having run. Fixed by checking
+   the precondition separately.
+4. **A figure without its question.** When one formula answers two questions, a figure needs its
+   value, its population, AND its question. `2p+2` governs both arithmetic equivalence and conversion
+   double rounding; a margin correct for one licenses a wrong construction under the other. Worse
+   than deletion because a margin looks complete on its own — there is no absent phrase to notice.
+5. **A correct record misquoted.** Downstream, indistinguishable from an incorrect one; everything
+   after the citation is identical. **Every earlier remedy works by writing something into the
+   sentence, and this species defeats all of them, because the sentence was already right.** The
+   defect is in the citing act, unreachable from the artifact side however well written.
+
+To which the `v0.3.0` line added the subject-as-of-a-date case: "no hole open" measured three weeks
+and 39 commits ago reads as present tense, and **a dated claim whose date nobody checks is
+indistinguishable from a fresh one.**
+
+### The fifth species caught both lines within one increment
+
+I told the other line my brief forbade chaining. It says both — a bold imperative followed by "the
+rule is a condition on the intermediate," which is the withdrawn-and-replaced form. I quoted the half
+that suited me. They asserted their file forbade chaining without reading it; theirs records my
+prohibition being withdrawn as over-broad, at their urging.
+
+Both failures landed **one increment after** recording that a relay must be checked against the
+governing files. Their explanation is the one to keep: **a rule about verification is easiest to skip
+precisely while it is being invoked, because invoking it feels like having done it.**
+
+Artifact quality was at a local maximum in both cases and did not help, because quality is not the
+variable.
+
+### Two increments found defects in their own first drafts
+
+`Text<N>`'s refusal did not work — the infallible type conversion resolved it to static text, so four
+of five declaration positions compiled while a comment asserted a downstream pass would catch them.
+The float-width predicate was a **denylist in a default-deny codebase** and claimed two-bit and
+four-bit floats were implemented; the test written to close a hole in the previous commit's own
+asymmetry claim found it on its first run.
+
+### Also landed
+
+The `Op::Len` flat-array hazard, reported by the other line and verified here in four measurements
+including a control: the compiler does emit `Op::Len` on an array, `verify()` accepts, and only the
+liftable bound refusal holds the trap shut. The comment denying it is retracted and a ratchet fails
+if that refusal changes identity.
+
+A no-default-features warning the gate **structurally cannot see**: its lint step is workspace-scoped
+and its test steps are package-scoped, and no flag on a workspace command reaches a package-scoped
+configuration, because unification re-enables features through `keleusma-cli`. Measured — adding the
+flag to the workspace lint changes nothing.
+
 ## 2026-09-01 — Session 61: five merges, and every defect was found by an instrument's own blind spot
 
 Five merges landed: the format fingerprint, float arithmetic honouring the declared width, three

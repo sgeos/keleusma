@@ -178,8 +178,198 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-01 (session 61) — five merges, nothing red or unmerged, and `Text<N>` is the only
-major item left
+**Date**: 2026-09-03 (session 62) — `Text<N>` has a flat layout, and my own handoff was red
+
+## MY SESSION-61 HANDOFF WAS RED AND ITS BANNER SAID IT WAS GREEN
+
+The refresh I wrote at the close of session 61 rewrote the validity block and, in doing so, deleted
+one of two required occurrences of the construct-support triple. A test derives that triple by
+calling the boundary table and demands at least two occurrences in `HANDOFF.md`, precisely so that a
+branch adding a case turns the document red instead of leaving it quietly wrong. Deleting one left
+`found 1 occurrence(s)`.
+
+**Two properties made it invisible, and both generalise.** The pre-push hook's routine tier excludes
+the self-host binaries, so pushing would never have caught it. And "markdown is not compiled" is true
+of nearly every file under `docs/` and false of exactly the one I edited, which is read by
+`include_str!`. A true general rule applied to the single population it does not cover, which is the
+species this line spent session 61 cataloguing, committed while writing the catalogue.
+
+Repaired at `1826f3a4`, with a must-fire control: the test fails on the unfixed commit and passes on
+the fixed one. I enumerated the coupling class rather than stopping at the first finding. Six files
+mention these documents and four mention them only in prose.
+
+## `Text<N>` HAS A FLAT LAYOUT
+
+Increment 2, on `feat/text-capacity-layout` at `9ff3f345`, pushed. A positive literal capacity now
+yields a two-element tuple, a word-sized length followed by an array of exactly `N` single-byte
+elements, sized exactly one word plus `N`. It reuses the existing tuple and array descriptors rather
+than adding a variant, so sizing, field offsets and the typed verifier's shape reconstruction need no
+change, and no opcode is spent.
+
+Three guards, each carrying its reason: a symbolic capacity surviving monomorphization is refused
+rather than guessed, `Text<0>` is not a type, and the capacity converts with a checked conversion
+rather than a cast, because a cast truncates silently on a 32-bit host and a truncated capacity
+under-sizes the buffer without failing.
+
+**Checked by mutation rather than by reading.** Adding a terminator byte to the content array fails
+two of three shape tests, so "no terminator" is a tested claim rather than a comment. The size
+formula is pinned at four word widths, because it is a claim about tuple layout having no padding and
+one width does not establish it.
+
+Scope: the layout only. `Text<N>` still does not compile end to end and the refusals above the layout
+remain, each to be removed by a later increment. Verified green at the routine tier, 2212 tests plus
+doctests, with both exit statuses read from the log.
+
+## THE REFUSAL WAS SHORT BY THREE POSITIONS, AND IT HAD ALREADY BEEN WIDENED ONCE
+
+Enumerating type positions BY CLASS rather than by example found three that compiled an unbuilt
+type: a capacity nested inside an array in a `let` annotation, one nested inside a tuple, and a
+trait method signature. All three now refuse, on `feat/text-capacity-layout` at `17aa1b22`.
+
+**Two distinct mechanisms, and neither is a typo.**
+
+The `let` cases failed because the body walk pattern-matched the annotation against the capacity
+type instead of calling the recursive walk the signature positions already used, so it saw a
+capacity only when it was outermost. The positions that REUSED the check never had the hole; the
+one that reimplemented it did.
+
+The trait case failed because the walk iterated functions and impl blocks, which is every
+declaration that has a BODY. A trait signature has none, so it fell outside a loop whose shape had
+been fixed by bodies rather than by the class being checked, which is types.
+
+**The point is not that three more positions needed checking.** This guard had ALREADY been widened
+once, after increment 1 shipped a refusal that four of five positions walked past. A guard widened
+after a miss has a new reach, and its correctness on the cases that prompted the widening is no
+evidence at all about that new reach. The reach question has to be asked again after every widening.
+
+The test refuses to count a lex or parse failure as a pass, and asserts that every fixture actually
+reaches the compiler. That caught two of my own fourteen fixtures being malformed -- an inherent
+impl and a bare `None`, neither of which this parser accepts -- which would otherwise have sat there
+as spurious refusals, testing nothing while reporting success.
+
+## TWO DESIGN RECORDS CONTRADICTED THE RULINGS THAT SUPERSEDED THEM
+
+`TEXT_CAPACITY_TYPE.md` still listed the overflow rule as an open question belonging to you, after
+you had ruled on it. `TEXT_N_IMPLEMENTATION_BRIEF.md` still said the format fingerprint is derived
+from the scalar size table, after your redirect made it a per-release random constant.
+
+**The second is worse than stale, because it inverts a diagnostic.** It tells a session performing
+the `ScalarKind::Text` collapse to expect the fingerprint to move and to treat a non-moving
+fingerprint as a broken detector. The value derives from nothing, so it moves exactly never, and that
+session would have chased a healthy component. Both corrected.
+
+Both were a record that was correct when written, left standing beside the ruling that superseded it,
+with nothing marking which was newer. **A superseded document does not announce itself.** Both were
+found only by reading the source they described rather than the description.
+
+## WHAT I GOT WRONG TODAY
+
+- **I read a verdict off a truncated summary.** One of four new tests appeared absent from a run and
+  I opened an investigation; the test had passed, and my own `tail -20` had hidden it.
+- **I read clippy's status off a pipeline again.** A composite ending in `tail` reported success while
+  clippy had failed with five errors. This file's own handoff warns about that in three variants, and
+  I produced a fourth while working from it.
+- **My contention restraint was inconsistent, and this one is for the other line to know.** I held two
+  docs commits overnight rather than disturb their twelve-hour mutation sweep, then ran eight cargo
+  invocations beside it today.
+
+  **CORRECTED, and my correction was worse than the thing it warned about.** I first wrote here that
+  the sweep was "contaminated by me" and that "today's figure is suspect". **There is no figure.**
+  The sweep was killed at 12h51m on the fifth of twenty-five mutations of round one. Calling a
+  result contaminated asserts that a result exists and was merely degraded, which is a stronger
+  claim than the one I was cautioning against, made in a durable artifact, about another line's
+  work.
+
+  The `v0.3.0` line's own statement is sharper and survives the sweep dying, which mine does not:
+  round one alone projects to roughly **sixty hours**, so the census is not merely stale but
+  **expensive to un-stale**, and a claim that cannot be cheaply refreshed should not be leaned on as
+  current.
+
+  **And my either-or was wrong too.** Their framing is right: contention matters ASYMMETRICALLY, by
+  check, not by machine. Load beside a build-dominated sweep is nearly free; load beside a
+  wall-clock-scored performance canary corrupts it. The rule is not "keep the machine clear" but
+  "know which run is scored on time, and yield to that one."
+
+## THE OPEN DECISION IS STILL YOURS
+
+Whose release gate is canonical at the back-merge. Unchanged from session 61 and still unanswered. I
+ruled union with conditions so work could proceed; say so before the back-merge if you disagree.
+
+## THE QUEUE
+
+1. **`Text<N>` increment 3**, the type-system half. The type expression still converts infallibly to
+   the string type in the type checker, and making the capacity a distinct nominal type is the
+   design's own requirement, with `Multiword` as the precedent.
+
+   **I first sized this at "113 sites across nine modules, a refactor rather than a tick of work".
+   That number answers a different question than the one asked.** It counts MENTIONS of the string
+   type; what matters is how many matches BREAK when a sibling variant is added, which is a much
+   smaller set, because a match with a wildcard arm is unaffected.
+
+   The empirical precedent is the better evidence and it points the other way: `Type::Multiword` was
+   itself added to this same enum -- threaded through parsing, display, unification, layout, the
+   monomorphizer, zero-value and data-field validation -- in **67 insertions across 7 files**. That
+   is a lower bound, since the tree has grown a typed verifier and a wire schema since, but it is not
+   a multi-day refactor.
+
+   Two static scans of mine then disagreed with each other, twenty-two wildcard-free matches by one
+   population and five by another, because the two patterns select different sets. Neither was
+   authoritative, so I ran the decisive instrument instead of arguing between them.
+
+   **MEASURED, by adding the variant and letting the compiler enumerate: FIVE match sites, all in
+   `src/typecheck.rs`.** Identical under default features and under
+   `--tests --features signatures,shell,self-host`, so it is not a configuration artefact. The
+   second static scan was right and the first over-counted by more than four times.
+
+   **What that number is and is not.** It is the STRUCTURAL ripple -- the arms the compiler forces
+   you to write. It says nothing about the semantic work, which is the real content of the
+   increment: how a capacity type unifies (not with static text, and not across two capacities),
+   what it displays as, and what each of those five arms should DO. An error count measures what
+   must be touched, never what must be decided, and quoting it as the cost of the increment would be
+   the same substitution that produced the 113 in the first place.
+
+2. **FOUR PULL REQUESTS ARE OPEN INTO THIS BRANCH** and CI is the verification. Feature-branch
+   pushes get NO automated verification at all: the workflow triggers only on `main`, `v*` and pull
+   requests. A hook-bypassed push to a feature branch is therefore unverified by everything except
+   what was run by hand.
+
+   The full local gate was abandoned deliberately rather than failed. Under the machine's unrelated
+   load a test that takes 190 seconds had not finished in 33 minutes, and the gate had nine and a
+   half steps left. A pull request gives the same checks on dedicated runners and, more importantly,
+   keeps a red off this branch, which is the entire reason the local gate is required before a
+   merge.
+3. **The `ScalarKind::Text` collapse to one address**, which must land WITH the feature and before
+   publication, because it is a wire change and those are free only while nothing has shipped at
+   `BYTECODE_VERSION` 2.
+4. The width bundle refactor, recorded as debt; the discard-arm reachability census; `DATA_INIT` for
+   the one stage that does not elide.
+
+---
+
+## Session 61, retained because the release blocker is still live in fact
+
+## A RELEASE BLOCKER, FOUND BY CENSUS, AND IT IS YOURS TO KNOW ABOUT
+
+**`RELEASE_PROCESS.md` said five crates publish to crates.io. There are seven.**
+`keleusma-wire` and `keleusma-wire-derive` appear nowhere in it -- not in the crate list, not in
+the dry-run sequence, not in the publish sequence, not in the release-record template.
+
+**Following the document as written loses money.** It publishes `keleusma-macros` and
+`keleusma-arena`, both irreversible, and then FAILS on `keleusma`, because the registry has no
+`keleusma-wire` to resolve. The failure lands after the point where the abort criteria still help.
+
+Step 3 exists to catch exactly this. Its own text warns that the local gate and the audit gate both
+pass while `cargo publish` fails at the registry-resolved verify build, and its dry-run list omitted
+the only two crates that would have triggered it.
+
+**Nothing was inconsistent; something was absent.** Both crates are marked publishable, carry a
+description, licence and repository, have their own continuous-integration job, and are covered by
+the release gate. Every artifact the tooling can inspect said they were ready. The one document the
+tooling cannot inspect had never heard of them. **A missing entry has no line number.**
+
+Corrected at all four enumeration sites. The census also came back clean on docs.rs configuration,
+tarball excludes, publish metadata, and CI coverage, so this is one blocker rather than the first of
+several -- and I checked those four classes rather than stopping at the first finding.
 
 ## NOTHING IS RED AND NOTHING OF MINE IS UNMERGED
 
@@ -192,6 +382,20 @@ default 2739, no-default 297, signatures 2347, signatures+shell 2364, self-host 
 detached compiler 86.
 
 ## WHAT LANDED
+
+**`Text<N>` is STARTED.** The type parses, is distinct from bare `Text`, and carries its capacity
+through monomorphization. **Nothing below the type surface is built** and every stage that cannot
+handle it refuses with a named error, so each later increment removes one refusal rather than adding
+a feature. Increment 2 is planned in full: the flat layout is `Tuple([Int, [Byte; N]])`, needing no
+new descriptor variant, sized exactly `word_bytes + N` with no padding, and `Multiword<N, F>` is the
+exact precedent for a nominally-distinct structurally-composite type.
+
+**Two increments found defects in their own first drafts.** The `Text<N>` refusal did not work: the
+infallible type conversion resolved it to static text, so four of five declaration positions
+compiled. The float-width predicate was a DENYLIST in a default-deny codebase and claimed two-bit
+and four-bit floats were implemented.
+
+
 
 **The format fingerprint**, per your redirect. Random per release, in a constant beside
 `BYTECODE_VERSION`, currently `0x4327_63E1`. `scripts/fingerprint.sh` reads this tree's value, reads

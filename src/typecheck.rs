@@ -210,8 +210,18 @@ pub enum Type {
     Bool,
     /// Unit `()`.
     Unit,
-    /// Static string.
+    /// Static string. A pointer into read-only data with no capacity in its
+    /// type; a literal is static text.
     Str,
+    /// Capacity-bounded dynamic text, `Text<N>`. **A DISTINCT NOMINAL TYPE, not a
+    /// parameterised form of [`Type::Str`]**, which is the operator's ruling and
+    /// the reason the two never unify: static text is a `.rodata` pointer and
+    /// dynamic text is a flat length-plus-`N`-bytes composite, so a value of one
+    /// is not a value of the other. `N` counts CONTENT bytes with no terminator.
+    /// The dimension is a [`ConstDim`], concrete after monomorphization and
+    /// possibly symbolic inside a generic body, exactly as for
+    /// [`Type::Multiword`].
+    TextN(ConstDim),
     /// Tuple of types.
     Tuple(Vec<Type>),
     /// Fixed-length array. The dimension is a [`ConstDim`]: a concrete
@@ -287,13 +297,6 @@ impl Type {
         fixed_default_frac_bits: u8,
     ) -> Type {
         match expr {
-            // The capacity is not carried into `Type` yet, because nothing
-            // downstream can act on it: there is no flat representation and no
-            // operation. It resolves to the static text type here so this
-            // infallible conversion stays total, and `check_text_capacity`
-            // below refuses the type in every declaration position, so no
-            // program reaches code generation on the strength of this line.
-            TypeExpr::TextN(_, _) => Type::Str,
             TypeExpr::Prim(p, _) => match p {
                 PrimType::Byte => Type::Byte,
                 PrimType::Word => Type::Word,
@@ -324,6 +327,7 @@ impl Type {
                 )),
                 const_dim_from_expr(len),
             ),
+            TypeExpr::TextN(n, _) => Type::TextN(const_dim_from_expr(n)),
             TypeExpr::Multiword(words, frac, _) => {
                 Type::Multiword(const_dim_from_expr(words), const_dim_from_expr(frac))
             }
@@ -426,6 +430,7 @@ impl Type {
                 format!("({})", inner.join(", "))
             }
             Type::Array(elem, n) => format!("[{}; {}]", elem.display(), n),
+            Type::TextN(n) => alloc::format!("Text<{}>", n),
             Type::Multiword(n, f) => {
                 if f.known() == Some(0) {
                     format!("Multiword<{}>", n)
@@ -613,6 +618,20 @@ pub fn unify(a: &Type, b: &Type, subst: &mut Subst) -> Result<(), UnifyError> {
                 Err(UnifyError::Mismatch {
                     left: Type::Fixed(a_n),
                     right: Type::Fixed(b_n),
+                })
+            }
+        }
+        // TWO CAPACITIES ARE TWO TYPES, and neither is static text. There is
+        // deliberately no arm pairing `TextN` with `Str`: they have different
+        // representations and different residence rules, so a value of one is
+        // not a value of the other. The absence of that arm is the ruling.
+        (Type::TextN(a_n), Type::TextN(b_n)) => {
+            if const_dims_compatible(&a_n, &b_n) {
+                Ok(())
+            } else {
+                Err(UnifyError::Mismatch {
+                    left: Type::TextN(a_n),
+                    right: Type::TextN(b_n),
                 })
             }
         }
@@ -953,15 +972,29 @@ fn check_composite_dimensions(t: &TypeExpr) -> Result<(), TypeError> {
         // Text<N> IS REFUSED HERE, and this is the refusal that binds. The
         // type surface parses and resolves, so a program naming it gets a
         // message about the feature rather than about an unknown type -- but
-        // no program compiles, because the layout, the flat representation and
-        // the operations are not built.
+        // no program compiles, because nothing generates code for it.
+        //
+        // **THE REASON A REFUSAL GIVES DECAYS FASTER THAN THE REFUSAL DOES.**
+        // This one said "the layout is not built" and stayed there after the
+        // layout landed; the zero-value pass carried the same sentence two
+        // commits past the same event. The refusals were still correct and
+        // their justifications were not, which is the dangerous combination: a
+        // refusal carrying a REASON reads as a considered decision, so the next
+        // reader honours it instead of checking whether it still holds, while a
+        // bare rejection would have invited the check.
+        //
+        // **So when an increment lands a capability, grep the refusals for the
+        // name of what you just built.** State what is MISSING rather than
+        // enumerating what is absent-so-far: a list of missing things shrinks
+        // by one per increment and is wrong immediately, whereas naming the
+        // remaining gap stays true until that gap closes.
         //
         // Each later increment removes one refusal. The compiler enumerates
         // what remains; no comment has to claim it.
         TypeExpr::TextN(_, span) => Err(TypeError::new(
             alloc::string::String::from(
-                "Text<N> is not implemented beyond the type surface: its layout, runtime \
-                 representation and operations are not built yet",
+                "Text<N> is not implemented beyond the type surface: no code is generated \
+                 for it and its operations are not built yet",
             ),
             *span,
         )),
@@ -1102,6 +1135,9 @@ fn type_head_name(t: &Type) -> Option<String> {
         Type::Str => Some("Text".to_string()),
         Type::Tuple(_) => Some("tuple".to_string()),
         Type::Array(_, _) => Some("array".to_string()),
+        // The head is the NAME without its dimension, matching `Multiword` and
+        // `Fixed`: a trait implemented for the family, not for one capacity.
+        Type::TextN(_) => Some("Text".to_string()),
         Type::Multiword(_, _) => Some("Multiword".to_string()),
         Type::Option(_) => Some("Option".to_string()),
         Type::Struct(name, _) | Type::Enum(name, _) | Type::Opaque(name) => Some(name.clone()),
@@ -1597,6 +1633,9 @@ fn type_to_expr_full(ty: &Type, span: crate::token::Span) -> Option<TypeExpr> {
         Type::Array(elem, n) => {
             TypeExpr::array_lit(Box::new(type_to_expr_full(elem, span)?), n.known()?, span)
         }
+        // A symbolic capacity has no literal to write back, so the conversion
+        // fails rather than inventing one; the caller's `Option` carries that.
+        Type::TextN(n) => TypeExpr::TextN(crate::ast::ConstExpr::Lit(n.known()?, span), span),
         Type::Multiword(n, f) => TypeExpr::multiword_lit(
             u16::try_from(n.known()?).ok()?,
             u16::try_from(f.known()?).ok()?,
@@ -2182,6 +2221,7 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
             Type::Str => "Text".to_string(),
             Type::Tuple(_) => "tuple".to_string(),
             Type::Array(_, _) => "array".to_string(),
+            Type::TextN(n) => alloc::format!("Text<{}>", n),
             Type::Multiword(n, f) => alloc::format!("Multiword<{}, {}>", n, f),
             Type::Option(_) => "Option".to_string(),
             Type::Struct(name, _) | Type::Enum(name, _) | Type::Opaque(name) => name,
@@ -2402,6 +2442,7 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
             Type::Str => "Text".to_string(),
             Type::Tuple(_) => "tuple".to_string(),
             Type::Array(_, _) => "array".to_string(),
+            Type::TextN(n) => alloc::format!("Text<{}>", n),
             Type::Multiword(n, f) => alloc::format!("Multiword<{}, {}>", n, f),
             Type::Option(_) => "Option".to_string(),
             Type::Struct(name, _) | Type::Enum(name, _) | Type::Opaque(name) => name,
@@ -7490,6 +7531,64 @@ mod tests {
         unify(&Type::Unit, &Type::Unit, &mut s).unwrap();
         unify(&Type::Str, &Type::Str, &mut s).unwrap();
         assert!(s.is_empty());
+    }
+
+    /// **A capacity type unifies only with the SAME capacity, and never with static
+    /// text.** This is the operator's ruling that static and dynamic text are
+    /// different types rather than one parameterised family, and the reason is
+    /// representational: static text is a pointer into read-only data, dynamic text
+    /// is a flat length-plus-bytes composite. A value of one is not a value of the
+    /// other, so unifying them would admit a read of the wrong shape.
+    ///
+    /// # Why this is tested HERE and not through a source program
+    ///
+    /// It cannot be reached from source. The compiler refuses `Text<N>` in every
+    /// declaration position, and that refusal runs BEFORE the type checker, so no
+    /// program can drive these arms. **A rule with no reachable test is a rule that
+    /// will be broken silently**, and the alternative -- waiting until the refusal
+    /// is lifted to write the test -- leaves the interval where it is unguarded
+    /// exactly as long as the interval where it is unverified. Calling `unify`
+    /// directly closes that gap now.
+    #[test]
+    fn a_capacity_unifies_only_with_the_same_capacity() {
+        let mut s = Subst::new();
+        unify(
+            &Type::TextN(ConstDim::Known(8)),
+            &Type::TextN(ConstDim::Known(8)),
+            &mut s,
+        )
+        .expect("the same capacity unifies with itself");
+        assert!(s.is_empty(), "unifying equal capacities binds no variable");
+
+        let err = unify(
+            &Type::TextN(ConstDim::Known(8)),
+            &Type::TextN(ConstDim::Known(4)),
+            &mut s,
+        )
+        .unwrap_err();
+        match err {
+            UnifyError::Mismatch { left, right } => {
+                assert_eq!(left, Type::TextN(ConstDim::Known(8)));
+                assert_eq!(right, Type::TextN(ConstDim::Known(4)));
+            }
+            other => panic!("expected a mismatch between two capacities, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_capacity_type_never_unifies_with_static_text() {
+        // Checked in BOTH directions. `unify` is not obliged to be symmetric by
+        // construction -- it is a match over an ordered pair -- so a rule verified
+        // one way round is verified one way round.
+        let mut s = Subst::new();
+        assert!(
+            unify(&Type::TextN(ConstDim::Known(8)), &Type::Str, &mut s).is_err(),
+            "a capacity type must not unify with static text"
+        );
+        assert!(
+            unify(&Type::Str, &Type::TextN(ConstDim::Known(8)), &mut s).is_err(),
+            "and not in the other order either"
+        );
     }
 
     #[test]
