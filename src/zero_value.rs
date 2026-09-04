@@ -86,13 +86,38 @@ fn zero_value_at(
     match ty {
         TypeExpr::Unit(_) => Ok(ConstValue::Unit),
         TypeExpr::Prim(p, _) => Ok(zero_prim(p)),
-        // Text<N> has no zero value yet because its flat representation is not
-        // built. Reported through the unknown-type variant rather than a new
-        // one, since adding a variant for a temporary state costs every match
-        // on this enum.
-        TypeExpr::TextN(_, _) => Err(ZeroValueError::UnknownType(alloc::string::String::from(
-            "Text<N> (no flat representation yet)",
-        ))),
+        // **THE ZERO VALUE MIRRORS THE LAYOUT, AND THAT IS THE WHOLE
+        // CORRECTNESS ARGUMENT.** `Text<N>` lays out as a length word followed
+        // by exactly `N` content bytes, so its zero is a length of zero
+        // followed by `N` zero bytes: an empty text that already owns its full
+        // capacity. Any other shape would disagree with `layout_pass`, and a
+        // constant whose shape disagrees with the layout is read at the wrong
+        // offsets rather than rejected.
+        //
+        // The refusal this replaces said "no flat representation yet", which
+        // was true when written and expired when the layout landed. A refusal
+        // outliving its reason is worse than an ordinary stale comment: it
+        // reads as a considered decision rather than an omission, so the next
+        // reader honours it instead of checking it.
+        //
+        // A SYMBOLIC capacity is still refused. Monomorphization erases const
+        // parameters to literals, so one surviving here means a pass was
+        // skipped, and inventing a size would put a wrong figure into the
+        // worst-case memory bound instead of failing visibly.
+        TypeExpr::TextN(n, _) => match n.as_lit() {
+            Some(cap) if cap > 0 => Ok(ConstValue::Tuple(alloc::vec![
+                ConstValue::Int(0),
+                ConstValue::Array(alloc::vec![ConstValue::Byte(0); cap as usize]),
+            ])),
+            // `Text<0>` is not a legal type, for the same reason a zero-length
+            // array is not: no storage, and every index traps.
+            Some(cap) => Err(ZeroValueError::UnknownType(alloc::format!(
+                "Text<{cap}> is not a legal type; a capacity must be positive"
+            ))),
+            None => Err(ZeroValueError::UnknownType(alloc::string::String::from(
+                "Text<N> with a symbolic capacity; monomorphization must resolve it first",
+            ))),
+        },
         TypeExpr::Multiword(n, _, _) => Ok(ConstValue::Array(
             alloc::vec![zero_prim(&crate::ast::PrimType::Word); n.as_lit().unwrap_or(0) as usize],
         )),
@@ -269,6 +294,91 @@ mod tests {
             enums: e,
             newtypes: n,
             refinement_bodies: r,
+        }
+    }
+
+    /// **The zero value and the layout must agree, and this checks them against
+    /// each other rather than each against a hand-written expectation.**
+    ///
+    /// Two modules independently describe the shape of a `Text<N>`: `layout_pass`
+    /// says a length word followed by `N` content bytes, and this module builds a
+    /// constant that must occupy exactly that. They can drift apart, and the
+    /// failure mode if they do is silent: a constant whose shape disagrees with the
+    /// layout is READ AT THE WRONG OFFSETS, not rejected. Comparing them directly
+    /// is what makes that drift loud.
+    ///
+    /// Checked across several capacities so the relationship is tested rather than
+    /// one coincidence.
+    #[test]
+    fn the_zero_value_occupies_exactly_the_layout_the_layout_pass_computes() {
+        use crate::layout_pass::LayoutContext;
+        use crate::value_layout::LayoutDescriptor;
+
+        let (s, e, n, r) = empty_reg();
+        let reg = reg(&s, &e, &n, &r);
+        let structs = BTreeMap::new();
+        let enums = BTreeMap::new();
+
+        for cap in [1i64, 2, 8, 64] {
+            let ty = TypeExpr::TextN(crate::ast::ConstExpr::Lit(cap, sp()), sp());
+
+            let ctx = LayoutContext::new(&structs, &enums, 8, 8, 8);
+            let layout = ctx.layout_for(&ty).expect("Text<N> has a layout");
+
+            let zero = zero_value(&ty, &reg).expect("Text<N> has a zero value");
+
+            // Same element count, same order, same leaf kinds.
+            match (&layout, &zero) {
+                (LayoutDescriptor::Tuple(fields), ConstValue::Tuple(values)) => {
+                    assert_eq!(
+                        fields.len(),
+                        values.len(),
+                        "layout and zero value disagree on field count for Text<{cap}>"
+                    );
+                    assert!(
+                        matches!(values[0], ConstValue::Int(0)),
+                        "the length word must be zero: an empty text owning its capacity"
+                    );
+                    match (&fields[1], &values[1]) {
+                        (LayoutDescriptor::Array { count, .. }, ConstValue::Array(bytes)) => {
+                            assert_eq!(
+                                *count,
+                                bytes.len(),
+                                "layout says {count} content bytes, the zero value has {} for \
+                                 Text<{cap}>",
+                                bytes.len()
+                            );
+                            assert!(
+                                bytes.iter().all(|b| matches!(b, ConstValue::Byte(0))),
+                                "every content byte of the zero value must be zero"
+                            );
+                        }
+                        (l, v) => panic!("content is not an array in both: {l:?} vs {v:?}"),
+                    }
+                }
+                (l, v) => panic!("Text<{cap}> is not a tuple in both: {l:?} vs {v:?}"),
+            }
+        }
+    }
+
+    /// A capacity the monomorphizer should have erased, and one that is not a legal
+    /// type, are both refused rather than given an invented size. Inventing one
+    /// would put a wrong figure into the worst-case memory bound, which is the
+    /// number this ecosystem exists to state.
+    #[test]
+    fn a_symbolic_or_illegal_capacity_has_no_zero_value() {
+        let (s, e, n, r) = empty_reg();
+        let reg = reg(&s, &e, &n, &r);
+
+        let symbolic = TypeExpr::TextN(
+            crate::ast::ConstExpr::Param(alloc::string::String::from("N"), sp()),
+            sp(),
+        );
+        assert!(zero_value(&symbolic, &reg).is_err(), "symbolic capacity");
+
+        for bad in [0i64, -1] {
+            let ty = TypeExpr::TextN(crate::ast::ConstExpr::Lit(bad, sp()), sp());
+            assert!(zero_value(&ty, &reg).is_err(), "Text<{bad}> is not a type");
         }
     }
 
