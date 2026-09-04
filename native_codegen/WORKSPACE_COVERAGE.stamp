@@ -1,3 +1,3 @@
-commit: 50f827cf8f914dcfc7f238d727663d33595e58f3
-stamped: 2026-09-03T23:57:31Z
-figures: 2748 passed, 0 failed, 119 binaries | cargo test --workspace --no-fail-fast | DEFAULT FEATURES ONLY | measured 2026-09-03 on a FROZEN tree, no edits in flight | matches the v0.2.3 gate's own default-features figures | subject: the tree at this commit, not a standing property
+commit: 1c83f9dc7df5e196f9d1d254d125f736b71dd1f9
+stamped: 2026-09-04T07:45:25Z
+figures: 2760 passed, 0 failed, 120 binaries | cargo test --workspace --no-fail-fast | DEFAULT FEATURES ONLY | measured 2026-09-04 on a FROZEN tree after absorption 49 | subject: the tree at this commit, not a standing property
