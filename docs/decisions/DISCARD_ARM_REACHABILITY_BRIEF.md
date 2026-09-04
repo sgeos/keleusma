@@ -117,6 +117,30 @@ across five passes is **14 of 19**, up from nine.
 are now reached**, exactly as predicted, through `self_host_compile_full` and
 `self_host_compile_scratch`. The structural hypothesis held.
 
+### THE REMAINING FIVE ARE A FIXTURE PROBLEM, NOT A HARNESS PROBLEM
+
+Call-site analysis of all five, after pass five:
+
+| arm | function | called from | so |
+|---|---|---|---|
+| 7, 8 | `reconstruct_via_kel`, `..._multihead` | four sites inside the `*_from_pipeline` family | **driven** |
+| 9 | `analyze_op_heap` | one analysis site | driven |
+| 11 | `const_scalar_size` | the `Op::Const` arm of a size walk | **driven** -- every fixture has constants |
+| 16 | `assemble_enum_layouts` | `self_host_compile_full` and `..._scratch` | **driven** in pass five |
+
+**Every one of the five sits inside a function the passes DID call.** The entry-point gap is closed;
+what remains is that these are fallback branches for constructs the six small fixtures never
+contained -- a constant kind not used, an enum layout shape a payload-free enum does not produce, a
+reconstruction case those programs do not reach.
+
+**So a sixth pass is a FIXTURE problem, and that is a different and cheaper kind of work.** It needs
+richer programs, not more functions: payload-bearing enums, the full constant-kind range, multiheaded
+functions. The harness from pass five is reusable as-is.
+
+This also retires the earlier framing. "Ten arms not reached by 37% of the surface" was right when
+written; after pass five the surface is no longer the limiting factor, and saying so is the
+difference between a live caveat and a stale one.
+
 ### FIVE REMAIN, AND THEY ARE NAMED
 
 | arm | function | note |
