@@ -103,7 +103,31 @@ mentioning the error does not count as a refusal:
 | `FloatToInt` | 1 | Configuration: the `floats` feature is off |
 | `Reset` | 1 | Structural: a `Reset` with no `Stream` in the chunk |
 
-### Two things this census leaves open, stated rather than closed
+### Both questions are now closed, and the answers are DIFFERENT KINDS
+
+**The flat-tuple refusal is not reachable through the for-in path.** Answered with four programs
+rather than by re-reading the emission sites, because the array case's own comment asserted
+unreachability and was wrong. One of the four compiles -- the one iterating an ARRAY of tuples,
+whose length folds statically and emits no `Len`; the three that iterate a tuple directly do not
+compile, because a tuple is not an iterable here. Pinned by
+`no_tuple_shaped_iterable_reaches_op_len`, which also asserts at least one fixture reaches the
+compiler, so the test cannot pass by rejecting everything. **This closes the PATH and not the
+opcode**: the bounds-check emission site remains, restricted to boxed arrays, and widening it
+reopens the question.
+
+**`Reset` is a corrupt-module defence, not a compiler/machine disagreement.** The two
+`Stream`/`Reset` presence checks live in `wcmu_stream_iteration_with_value_slot_bytes`, which
+errors with "requires a Stream block" on any other chunk, so they apply to stream blocks only. The
+compiler emits `Op::Reset` in exactly two places, both stream-loop epilogues. A stray `Reset` in a
+non-stream chunk is therefore not something the compiler produces; reaching that refusal takes a
+hand-built or corrupted module, which is what `InvalidBytecode` exists for.
+
+**The distinction is the point.** `Op::Len` is a genuine disagreement -- the compiler emits what the
+machine refuses, from ordinary source, with `verify()` accepting the module. `Reset` is a defence
+against input no compiler produces. A census that reported both as "opcodes the machine refuses"
+without separating them would have implied two hazards where there is one.
+
+### What the census originally left open, retained because the reasoning is the record
 
 **The flat-TUPLE refusal is unpinned.** `tests/len_flat_array_hazard.rs` covers the array case and
 does not mention tuples. The tuple case looks unreachable, because `Op::Len` is emitted only from
