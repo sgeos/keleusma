@@ -972,15 +972,29 @@ fn check_composite_dimensions(t: &TypeExpr) -> Result<(), TypeError> {
         // Text<N> IS REFUSED HERE, and this is the refusal that binds. The
         // type surface parses and resolves, so a program naming it gets a
         // message about the feature rather than about an unknown type -- but
-        // no program compiles, because the layout, the flat representation and
-        // the operations are not built.
+        // no program compiles, because nothing generates code for it.
+        //
+        // **THE REASON A REFUSAL GIVES DECAYS FASTER THAN THE REFUSAL DOES.**
+        // This one said "the layout is not built" and stayed there after the
+        // layout landed; the zero-value pass carried the same sentence two
+        // commits past the same event. The refusals were still correct and
+        // their justifications were not, which is the dangerous combination: a
+        // refusal carrying a REASON reads as a considered decision, so the next
+        // reader honours it instead of checking whether it still holds, while a
+        // bare rejection would have invited the check.
+        //
+        // **So when an increment lands a capability, grep the refusals for the
+        // name of what you just built.** State what is MISSING rather than
+        // enumerating what is absent-so-far: a list of missing things shrinks
+        // by one per increment and is wrong immediately, whereas naming the
+        // remaining gap stays true until that gap closes.
         //
         // Each later increment removes one refusal. The compiler enumerates
         // what remains; no comment has to claim it.
         TypeExpr::TextN(_, span) => Err(TypeError::new(
             alloc::string::String::from(
-                "Text<N> is not implemented beyond the type surface: its layout, runtime \
-                 representation and operations are not built yet",
+                "Text<N> is not implemented beyond the type surface: no code is generated \
+                 for it and its operations are not built yet",
             ),
             *span,
         )),
