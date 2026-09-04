@@ -73,6 +73,124 @@ driven over 27 corpus sources (15 under `examples/scripts/`, 12 stage sources un
 
 **Four reached. Fifteen at zero.**
 
+## THE FINAL FIGURE: NINE OF NINETEEN, ACROSS FOUR PASSES
+
+| pass | workload | arms reached |
+|---|---|---|
+| 1 | 27 corpus sources through 9 hand-picked entry points | 0, 1, 2, 3 |
+| 2 | every stage through the windowed region emitter | 17, 18 |
+| 3 | the assembly entry points | 17 |
+| 4 | 5 tiny sources through all 7 `*_from_pipeline` entry points | 1, 2, 3, 4, 5, 6 |
+| **union** | | **9 of 19** |
+
+### The result that matters is not the nine
+
+**Five toy programs reached more arms than twenty-seven real ones.** Pass 1 fed the entire corpus --
+including stage sources costing minutes each -- through nine entry points chosen by hand, and reached
+four arms. Pass 4 fed five trivial programs through all seven entry points of one family, derived by
+grep, and reached six.
+
+**Workload BREADTH dominated workload SIZE.** The constraint was never how much source went in; it
+was which functions were called. Pass 1 was slow *and* narrow, and its slowness disguised its
+narrowness: forty minutes of work feels like thorough coverage.
+
+**And the entry-point list was chosen, not derived.** Seven `*_from_pipeline` functions exist and
+pass 1 called two. The other five hid three arms. That is the same substitution -- a hand-picked
+sample presented as a population -- that produced this session's other wrong figures, committed
+inside the instrument built to detect exactly that class.
+
+### PASS FIVE CLOSES IT TO FOURTEEN OF NINETEEN, AND MY DEFERRAL WAS WRONG
+
+**I recorded pass five as "the obvious next step rather than run here", on the grounds that four
+passes were already disproportionate. That was effort-reasoning about something pass four had
+already shown costs minutes**, and the genuine question -- whether the remaining functions are
+drivable at all -- I had not asked.
+
+Asked and answered: of 52 public functions, **18 take exactly `(src: &str)` and 8 take exactly
+`(module: &Module)`.** Twenty-six are trivially drivable, including both entry points the call-site
+analysis had already fingered.
+
+Pass five drove all 26 against six small programs and reached **13 arms by itself**. The union
+across five passes is **14 of 19**, up from nine.
+
+**Arms 13, 14 and 15 -- `assemble_data_slots`, `assemble_shared_layout`, `assemble_private_init` --
+are now reached**, exactly as predicted, through `self_host_compile_full` and
+`self_host_compile_scratch`. The structural hypothesis held.
+
+### THE REMAINING FIVE ARE A FIXTURE PROBLEM, NOT A HARNESS PROBLEM
+
+Call-site analysis of all five, after pass five:
+
+| arm | function | called from | so |
+|---|---|---|---|
+| 7, 8 | `reconstruct_via_kel`, `..._multihead` | four sites inside the `*_from_pipeline` family | **driven** |
+| 9 | `analyze_op_heap` | one analysis site | driven |
+| 11 | `const_scalar_size` | the `Op::Const` arm of a size walk | **driven** -- every fixture has constants |
+| 16 | `assemble_enum_layouts` | `self_host_compile_full` and `..._scratch` | **driven** in pass five |
+
+**Every one of the five sits inside a function the passes DID call.** The entry-point gap is closed;
+what remains is that these are fallback branches for constructs the six small fixtures never
+contained -- a constant kind not used, an enum layout shape a payload-free enum does not produce, a
+reconstruction case those programs do not reach.
+
+**So a sixth pass is a FIXTURE problem, and that is a different and cheaper kind of work.** It needs
+richer programs, not more functions: payload-bearing enums, the full constant-kind range, multiheaded
+functions. The harness from pass five is reusable as-is.
+
+This also retires the earlier framing. "Ten arms not reached by 37% of the surface" was right when
+written; after pass five the surface is no longer the limiting factor, and saying so is the
+difference between a live caveat and a stale one.
+
+### FIVE REMAIN, AND THEY ARE NAMED
+
+| arm | function | note |
+|---|---|---|
+| 7 | `reconstruct_via_kel` | reconstruction path |
+| 8 | `reconstruct_via_kel_multihead` | reconstruction path |
+| 9 | `analyze_op_heap` | analysis |
+| 11 | `const_scalar_size` | analysis |
+| 16 | `assemble_enum_layouts` | its three siblings are now reached; the corpus source used a
+payload-free enum, which is the likely gap and is a lead rather than a conclusion |
+
+Still UNMEASURED rather than safe, but the population is now small, named, and each has a stated
+next probe.
+
+### THE CENSUS'S OWN COVERAGE, QUANTIFIED -- 19 OF 52
+
+**The driver has 52 public functions. Four passes drove 19 of them.** Every figure above is
+conditioned on that and the earlier text did not say so.
+
+The gap is not abstract. Arms 13-16 sit in the `assemble_*` family, reachable through
+`self_host_compile_full` and `self_host_compile_scratch` -- **two public entry points that appear in
+none of the four passes**, neither in the nine picked by hand nor in the seven-function family
+derived by grep.
+
+**That is the same error a third time, at a third level of scope.** Pass 1 picked entry points by
+hand. Pass 4 corrected it by deriving one FAMILY -- and calling a family the surface is the same
+substitution one level up. The population was always `pub fn` in the driver, and it was always
+countable.
+
+So "ten arms unmeasured" should be read as: **ten arms not reached by 37% of the driver's public
+surface.** A fifth pass driving the other 33 functions is the obvious next step and would very
+likely close the assembly cluster outright.
+
+### The ten that remain, and where they live
+
+Named by their enclosing function, so the next pass targets a subsystem rather than sweeping again:
+
+| arms | functions | surface |
+|---|---|---|
+| 7, 8 | `reconstruct_via_kel`, `reconstruct_via_kel_multihead` | reconstruction |
+| 9-12 | `analyze_op_heap`, `structural_marker`, `const_scalar_size`, `seed_verify_typed_shared` | analysis and seeding |
+| 13-16 | `assemble_data_slots`, `assemble_shared_layout`, `assemble_private_init`, `assemble_enum_layouts` | region assembly |
+
+These need real workloads rather than another entry-point sweep, and the assembly cluster lines up
+with the region kinds still skipped, which is a lead rather than a conclusion.
+
+**They remain UNMEASURED, not safe.** Four workloads missing them is stronger than one and is still
+not evidence of unreachability. Pass 1 stands as the standing proof of how a workload gap
+manufactures zeros.
+
 ## SECOND PASS, SAME DAY: THE CONTROL NOW PASSES AND THE FIGURE IS SIX
 
 The gap the first pass identified was closed by driving the WIRE path, reusing the
