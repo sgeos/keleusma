@@ -29,6 +29,19 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > `../decisions/INVALID_BYTECODE_CENSUS.md`: **46 sites, 17 examined, 29 explicitly not examined.**
 > **No site is claimed unreachable**, and a guard keeps the document from drifting from the tree.
 >
+> ## AND NINE OF ELEVEN BUILD CONFIGURATIONS ARE BUILT BY NOTHING
+>
+> The float hole above lived in a configuration nothing built, so eleven plausible configurations
+> were swept. **Three are covered** — default, bare no-default, the broad docs.rs surface — and the
+> rest are verified by nothing. `--features compile` did not compile at all; repaired.
+>
+> **A job named for a feature need not cover it**: continuous integration's `--features signatures`
+> is ADDITIVE to the defaults, so signatures-alone is unbuilt. A standing property, not an incident.
+>
+> An addition to continuous integration is **recommended with its cost and deliberately not
+> adopted** — that is the operator's call. See `../decisions/FEATURE_COMBINATION_SWEEP.md`, which
+> also states the sweep's limit: `cargo check --tests` shows a configuration COMPILES and no more.
+>
 > ## THE QUEUE IS OTHERWISE EMPTY AND BOTH LARGE ITEMS NEED THE OPERATOR
 >
 > **`origin/v0.2.3` is at `12951810`. Twenty-one pull requests merged, none open, tree clean**, and

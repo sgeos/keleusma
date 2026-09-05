@@ -47,7 +47,12 @@
 //! the guard's own match arms for the kinds it does NOT handle is what cracked the
 //! first one; guessing at constructs is what failed eight times before that.
 
-#![cfg(feature = "compile")]
+// It uses `Vm::new` / `keleusma::verify`, both of which the `verify` feature
+// provides, so it needs that feature as well as `compile`. Gated on `compile`
+// alone, `--features compile` did not BUILD. Found by the feature-combination
+// sweep: no continuous-integration job and no release-gate step builds `compile`
+// without `verify`, so nothing reported it.
+#![cfg(all(feature = "compile", feature = "verify"))]
 
 use keleusma::bytecode::Op;
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
