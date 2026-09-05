@@ -111,11 +111,50 @@ load time. **Prototyped and measured**: about ten lines in the opcode scan, afte
 at its `verify()` step exactly as its message anticipates, and the float-free control still
 compiles, verifies, loads and runs. The prototype was then reverted.
 
-It is left undone here for a reason that should be weighed rather than assumed away: **continuous
+It was left undone for a reason that should be weighed rather than assumed away: **continuous
 integration does not run this feature set.** The three sets it runs are default, `signatures,shell`
-and `self-host`, all of which include floats. The repair and its test would be exercised only by the
-release gate's `--no-default-features` step, so landing it wants a deliberate local run of that
-configuration rather than a reflexive merge.
+and `self-host`, all of which include floats.
+
+### That objection is now discharged, and the decision is narrower than it was
+
+The missing verification was supplied rather than handed over. With the repair applied, the full
+`--no-default-features --features compile,verify` suite was run and compared against the same suite
+unrepaired:
+
+| | unrepaired | with the repair |
+|---|---|---|
+| new failures introduced | -- | **zero** |
+| `tests/float_opcode_without_floats.rs` | passes, the hole open | fails at its `verify()` step, the pin firing as designed |
+
+**And the semantic worry is moot for locally-compiled code.** The repair refuses a module CONTAINING
+a float opcode, not one that executes it, so a module with unreachable float code would be refused.
+That sounded like a capability loss until it was measured: **the LEXER refuses a float literal
+without the feature**, so no float program can be compiled on such a build at all. The only artefacts
+affected are ones compiled elsewhere and imported -- exactly the case where refusing at load is
+unambiguously right.
+
+What remains is a single semantic judgement for the operator, not an engineering risk.
+
+### Getting that evidence required repairing the configuration itself
+
+**`--no-default-features --features compile,verify` did not compile**, and two further tests failed
+once it did. Five defects, all one class: float-dependent code with no `floats` gate.
+
+| file | how it failed |
+|---|---|
+| `tests/selfhost_codegen.rs` | names `ScalarKind::Float`, a variant absent without the feature |
+| `tests/selfhost_wire.rs` | its constant-kind match leaves the catch-all unreachable |
+| `tests/multiword.rs` | one probe's source carries a float literal; refused at LEX |
+| `tests/block_form_statements.rs` | the grammar's own example uses `Float`; refused at LEX |
+| `tests/narrow_vm.rs` | a float-width helper is dead code there (warning only, left) |
+
+**None of these was tolerated; every one was invisible.** The release gate's no-default step does not
+add `compile,verify`, and continuous integration never omits floats, so **nothing anywhere built this
+combination.** The configuration in which the hole lives was the configuration nothing exercised,
+which is the whole reason the hole survived. It is now green at 105 binaries and 1863 tests.
+
+Same family as the verify-without-floats build failure V0.2.2 repaired, which suggests the class
+recurs and that a feature-combination sweep would be worth more than any single fix in it.
 
 ## Group C is defended, and by two checks that only work together
 

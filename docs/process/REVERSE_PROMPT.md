@@ -39,12 +39,35 @@ on one build to run on another is the normal shape for a language that ships pre
 **Proportionality.** The trap is loud: a clean error at call time, not a wrong answer, a crash, or
 memory unsafety. What is wrong is the LAYER.
 
-**Why I pinned it and did not repair it, which is a decision worth your review.** The repair belongs
-in `verify()` and I prototyped it to validate the pin — about ten lines, after which the pin fails
-exactly where its message says it will while the float-free control still runs — then reverted it.
-**Continuous integration does not run this feature set.** The three it runs all include floats, so
-the repair and its test would be exercised only by the release gate's `--no-default-features` step.
-Landing an unverified repair into a configuration CI cannot see is how V0.2.1 shipped a red Doc job.
+**Why I pinned it and did not repair it — and what has changed since.** The repair belongs in
+`verify()`, is about ten lines, and I prototyped it to validate the pin. My stated objection was that
+continuous integration does not run this feature set, so it would be exercised only by the release
+gate.
+
+**I have since supplied that verification rather than handing you the objection.** The full
+`--no-default-features --features compile,verify` suite was run with the repair and compared against
+the same suite without it: **the repair introduces zero new failures.** The only test whose result
+changes is the pin itself, which is built to fire when the hole closes.
+
+**And the one semantic worry is moot for locally-compiled code.** The repair refuses a module
+CONTAINING a float opcode rather than one that executes it, so a module with unreachable float code
+would be refused. Measured: **the LEXER refuses a float literal without the feature**, so no float
+program can be compiled on such a build at all. Only imported bytecode is affected — exactly the case
+where refusing at load is unambiguously right.
+
+**It is still not landed, and that is deliberate.** I told you in a merged document that this was
+your call, and reversing that within the hour would make the record untrustworthy; a deferral is
+worth something only if it is honoured. What is left is a one-line semantic judgement, with the
+engineering risk removed.
+
+**Getting that evidence required repairing the configuration itself, and that is a finding.**
+`--no-default-features --features compile,verify` **did not compile**, and two more tests failed once
+it did — five defects, all float-dependent code with no `floats` gate. None was tolerated; every one
+was invisible, because the release gate's no-default step does not add `compile,verify` and CI never
+omits floats, so **nothing built this combination.** The configuration in which the hole lives was
+the configuration nothing exercised. Now green at 105 binaries and 1863 tests. Same family as the
+verify-without-floats failure V0.2.2 repaired, which suggests a feature-combination sweep would be
+worth more than any single fix in it.
 
 Pinned by `tests/float_opcode_without_floats.rs`; recorded in
 [`INVALID_BYTECODE_CENSUS.md`](../decisions/INVALID_BYTECODE_CENSUS.md).

@@ -39,6 +39,11 @@
 #![cfg(all(
     feature = "compile",
     feature = "verify",
+    // Its constant-kind match enumerates the float kind, so without the `floats`
+    // feature the catch-all arm becomes unreachable and the file does not COMPILE.
+    // See the note in `selfhost_codegen.rs`: nothing builds this combination, so the
+    // breakage was invisible rather than tolerated.
+    feature = "floats",
     not(feature = "narrow-word-8"),
     not(feature = "narrow-word-16"),
     not(feature = "narrow-word-32")
