@@ -10,6 +10,33 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-05, session 63 close). THE SWEEPS, AND THREE CORRECTED INSTRUMENTS.**
+>
+> **Nine pull requests merged.** The through-line: *the configuration a defect lives in tends to be
+> the configuration nothing builds.* Two load-time holes found (one repaired, one pinned with its
+> repair evidence complete), two build configurations repaired, and the build matrix measured.
+>
+> **Coverage, measured**: three of eleven feature configurations are built by anything; ten narrow
+> selectors compile and none is verified. A job named for a feature need not cover it —
+> `--features signatures` is additive to the defaults. All recommendations are recorded with costs
+> and **none adopted**; the per-push cost is the operator's call.
+>
+> **The suite assumes a 64-bit host.** At `narrow-word-16`: 89 binaries pass, 15 fail, 37 distinct
+> failures, sharing a premise rather than a cause. The perf canary's own constants exceed 16 bits.
+> The narrow widths are unverified — not shown broken, not shown working.
+>
+> **The perf canary could not fail**: its ceiling was asserted after the timed call returned, so it
+> spun 57 minutes instead of tripping. Now bounded, mutation-tested three ways.
+>
+> **Census: 22 of 46 sites examined**, 24 explicitly not. Every index is validated at load; one
+> operand range is not, which is defence in depth and kept distinct from the float hole.
+>
+> **Three of my own instruments were wrong**, all failing in the same direction — reporting a clean
+> or confident result about something they never touched. None was caught by review; all three by
+> making the instrument fail on purpose.
+>
+> No opcode added, no `BYTECODE_VERSION` change. Publication remains held.
+
 > **Currency note (2026-09-04, session 63, later). THE `InvalidBytecode` CLASS IS ENUMERATED, AND
 > ONE HOLE IS PINNED OPEN.**
 >

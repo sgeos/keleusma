@@ -13,6 +13,53 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-05 — sweeping the axes nothing builds, and three instruments that lied
+
+**The arc.** One idea pursued to its ends: *the configuration a defect lives in tends to be the
+configuration nothing builds.* The float hole lived in a no-floats build; verifying its repair
+required a configuration that **did not compile**; sweeping the feature space found another that did
+not compile; sweeping the axis that sweep had EXCLUDED found ten configurations nothing verifies.
+Each step came from taking the previous step's leftover seriously rather than declaring it done.
+
+**The narrow axis is a clean negative, and reporting it as one mattered.** Ten of ten compile.
+Nothing is broken there. The finding is coverage, not breakage, and dressing it up would have been
+the easy dishonesty.
+
+**Answering my own open question changed what it meant.** The narrow document said whether the test
+failures were "one or many" was unexamined. Run: 89 pass, 15 fail, 37 distinct. But the failures
+share a PREMISE — the suite assumes a 64-bit host — rather than a cause in the machine. The worked
+example settles it: the perf canary's program uses `1234567`, which cannot exist at 16 bits. So the
+honest verdict is *unverified*, neither broken nor working, and I wrote both halves.
+
+**A question raised in a durable document and abandoned reads as a lead nobody owns.** That is why
+the run happened at all, and why the canary fix happened after I flagged it in passing.
+
+**The canary's defect was structural, not numeric.** Its ceiling was asserted AFTER the timed call
+returned, so it could only fire once the thing it guarded had finished. Lowering the ceiling would
+have changed nothing. Three mutations: the new bound fires, the old ceiling still fires, the result
+assertion still separates — the last two proving the new property was bought without selling either
+old one.
+
+**And the part worth carrying forward: three of my own instruments were wrong, all in one
+direction.** The sweep's file column listed warning locations under a passing verdict. A mutation
+test of the boundary canonicalization was aimed at the wrong call site and passed, which would have
+put a mechanism into the census that does none of the work attributed to it. The operand-range probe
+mutated an opcode the program did not contain and reported "admitted" — a confident verdict about a
+mutation that never happened, surviving only because the follow-through ran the module and got the
+right answer.
+
+**Not one was caught by re-reading. All three were caught by making the instrument misbehave on
+purpose.** The rule this tree already records — a guard that has not been made to fail is a guess —
+extends further than I had been applying it: *an explanation that has not been made to fail is also
+a guess*, and so is a measurement.
+
+**Severity discipline was a deliberate choice this session.** The operand-range gap needs a corrupt
+artefact and is safe in both directions; the float hole is a module the compiler itself produced.
+Both documents say so. Reporting them at one severity would have discredited the one that matters,
+and the temptation to do it is real when the smaller finding is fresher.
+
+---
+
 ## 2026-09-04 — the `InvalidBytecode` class, enumerated because the last find was luck
 
 **The increment.** `docs/decisions/INVALID_BYTECODE_CENSUS.md` enumerates every site where the
