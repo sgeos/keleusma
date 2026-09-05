@@ -49,6 +49,45 @@ per variant — on the order of fifteen minutes each, so roughly three hours for
 **That is affordable, unlike the 60-hour opcode sweep**, and it is the shape a future increment should
 take. It is not attempted here because attempting it badly is how the unsound table happened.
 
+## ⚠ RETRACTION: the principle below was ALREADY RECORDED, and better
+
+`native_codegen/tests/refusal_classes.rs` opens with **"A refusal's class is carried by its type, not
+by its word order."** It records that `LowerError::UnsupportedOp` was once a `String` built at **31
+sites** carrying four unrelated conditions, and that `isa_lowering_census` attributed refusals by
+taking the leading word of the sentence — so `Const(60000) out of range`, a malformed constant
+**index**, was credited to the `Const` **opcode**, which the backend lowers in nearly every module.
+
+Its sharpest line is one this file did not reach: **the corpus never fired a misattributing site, so
+every published figure was correct — the column was clean because of what the corpus happens to
+contain, not because the query could not go wrong.** That is the distinction between a guard that
+holds and a guard that was never reached.
+
+**So the constructive lesson recorded below was re-derived, not discovered**, across three failed
+instruments and two increments. **The pointer was in this line's own first census**: `UnsupportedShape`
+scored 1 in its "tested" column, and that 1 was this file. It was not opened.
+
+**The remedy for this shape is recorded in [`SCOPE_DELETION.md`](./SCOPE_DELETION.md) as searching
+before an increment rather than checking during one.** It was not applied, again, while actively
+writing about refusal measurement.
+
+## WHAT IS ACTUALLY NEW: the largest refusal class is one condition in disguise
+
+`UnsupportedShape(String)` is constructed at **nine** sites. Reading all nine:
+
+| what is refused | sites |
+|---|---|
+| **a float width that is not 4 or 8** — entry-ABI signature, native return shape, division, comparison, constant, arithmetic, negation, and a generic op arm | **8** |
+| a native call setting the B35 P7 error-reify flag | 1 |
+
+**The backend's largest refusal class is almost entirely `float_width_lowered` saying no.** The enum
+documents it as "a type or feature this backend lacks, not attributable to one opcode", which is true
+and hides that eight ninths of it is a single, already-governed condition.
+
+> **This is the next candidate for the treatment `UnsupportedOp` already received**: give the refusal a
+> structured subject, so a census reads the float width as data rather than parsing a sentence. The
+> blast radius is small — one test file matches the variant and **no test asserts on its message
+> text**.
+
 ## THREE TEXTUAL INSTRUMENTS, THREE BLIND SPOTS — the cheap path is closed
 
 Each attempt was falsified by a control whose answer was known in advance.
