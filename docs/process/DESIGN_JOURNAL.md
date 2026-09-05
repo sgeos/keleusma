@@ -13,6 +13,77 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-04 — the `Op::Len` trap is closed, and the second site was not latent
+
+**The increment.** Both compiler emission sites for `Op::Len` are gone. The for-in iteration bound
+and the checked-index bounds check each fold the length from the operand's type, or fail with a
+compile error naming the unfoldable length. The virtual machine keeps its refusals, which now defend
+against a corrupt or hand-built module rather than against the compiler.
+
+**The analysis document predicted the wrong answer, and the way it was wrong is the finding.**
+`OP_LEN_ROOT_REPAIR.md` argued that delegating to type inference would close one of the seven
+expression forms that can carry an array type, because `infer_expr_type` has no match arm for six of
+them. Measured, the delegation closes six. The function consults an authoritative per-span type
+table recorded by the post-monomorphization type-check pass **before** its structural half, so it
+already answers for forms whose arms are absent. The prediction was made by reading the
+implementation's internals instead of what the data path carries, which is the same mistake this
+line paid for twice under the heading that "the driver discards X" and "X is unreachable" are
+different claims.
+
+**The second emission site was reachable today, with nothing holding it shut.** The checked-index
+construct over a `Multiword` folded its length through a helper that answers only for array types,
+fell back to `Op::Len`, and a multi-word body is flat. Measured against the pre-change baseline by
+stashing: the program compiled, passed `verify()`, took a memory bound, **loaded, and trapped
+`InvalidBytecode`** — the class `verify()` exists to exclude. The recorded array trap needed someone
+to lift the loop-bound refusal first; this one needed nothing.
+
+It was found by enumerating every emission of the opcode rather than by following the witness
+already in hand. Fixing only the site the hazard test names would have been a guard scoped to where
+its author was looking, which is the failure this tree has recorded three times in a week.
+
+**The repair to it is a capability gained, not lost.** The multi-word width is folded, so
+`m[0] { ok(v) => .., invalid_index(i) => .. }` now returns the digit instead of trapping.
+
+**Every guard was made to fail.** Four mutations, each caught by the guard that should catch it:
+removing the multi-word length arm, removing the delegation fallback, folding a bound one short, and
+reinstating an emission. A guard that has not been made to fail is a guess.
+
+**The floor has no witness, and that is recorded as "not found".** No source form reaches the
+compile error behind it — every form that can carry an array type folds. So the floor is pinned by a
+source scan for the emission form, with its reach stated in the test: it sees that one written shape
+in one file, and would not see an emission written through a different binding or built by pushing
+to the op vector directly. A guard whose reach is unstated gets read as a guarantee.
+
+**An unaddressed concern, stated rather than buried.** The fold trusts a function's declared return
+type for the array length, and no check was found that validates a native's returned element count
+against its declared one. A native declaring `[Word; 3]` and returning five elements would give a
+folded bound of three and iterate three times, silently. **This is pre-existing and not introduced
+here** — the `Expr::Call` arm already folded from the declared return type — but the delegation
+extends the same trust to method calls and pipelines, which are also calls. Not investigated
+further; recorded so it is not discovered as new.
+
+**And the guards that pinned the OLD behaviour were the ones I did not scope for.** I corrected
+every stale claim in `docs/` and `src/` and did not grep `tests/`. The corpus run found two tests in
+`tests/opcode_reachability.rs` asserting that the witness REACHES the opcode and that the module
+must fail to load. Both were correct records that my change falsified. The suite caught what my
+scan did not, which is the fourth instance this week of a scan scoped to where its author was
+looking -- and the first where the thing it missed was a test rather than a source file.
+
+Both are updated rather than deleted, and each carried its own instruction for this moment: one said
+"if `static_for_in_length` gained an `Expr::If` arm, this opcode may have no remaining producer and
+that is worth knowing", the other "if it has no producer either, both fallbacks are now unwitnessed
+and that is a larger ISA finding". They were right on both counts.
+
+**The ISA finding, stated at the width the evidence supports.** No producer for `Op::Len` was found
+in the reference compiler: zero emissions in `src/`, and none in the self-hosted `codegen.kel`. On a
+project whose opcode count is a design constraint that reads like a removal candidate. **It is
+recorded, not proposed.** Removing an opcode is a wire change and the operator's call, and this very
+file records `Op::IsStruct` being declared producerless and having four producers found within the
+hour. The claim is "no producer FOUND", and the virtual machine keeps both refusals regardless,
+because a corrupt or hand-built module can still carry the opcode.
+
+---
+
 ## 2026-09-03 — Session 62: `Text<N>` through four increments, and a refusal's reason outliving the refusal
 
 Seven merges into `v0.2.3`, and two pull requests still open at the time of writing. The merged
