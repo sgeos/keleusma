@@ -59,18 +59,19 @@ honest; probing every member individually is not a better use of the same effort
 | B | float opcode without the `floats` feature | 2 | **REACHABLE -- see below** |
 | C | `Fixed` fraction bits exceeding the word width | 5 | **defended**, by two checks that compose |
 | D | composite operand form mismatch | 7 | **defended**, by boundary canonicalization |
-| E | structural indices out of range | 9 | **defended at load** (3 of 9 probed) |
+| E | structural indices out of range | 9 | **defended at load** (8 of 9 probed) |
 | F | shared and private data-segment layout | 7 | host-contract; not examined |
 | G | arena staleness after reset | 3 | not examined |
 | H | the three "should never have been emitted" | 3 | **closed 2026-09-04** |
-| I | operand-range and constant-kind checks | 6 | **mixed** — see below (2 of 6 probed) |
+| I | operand-range and constant-kind checks | 6 | **mixed** — see below (5 of 6 probed) |
 | J | unregistered or invalid native index | 3 | host-contract; not examined |
 
 The group sizes sum to 46, which is the population above; a table whose parts do not add to its
 stated whole has been the tell for a miscount here before.
 
-**Twenty-two of forty-six sites carry an examined verdict.** The remaining twenty-four are named by
-group and explicitly marked as not examined. A census whose entries are unexamined opinions is worse than a
+**Thirty of forty-six sites carry an examined verdict.** The remaining sixteen are named by group and
+explicitly marked as not examined; they are group A, the host-contract surfaces F and J, and one
+member each of E and I. A census whose entries are unexamined opinions is worse than a
 short one that says which sites were looked at.
 
 ## Group B is reachable, and it is a real deployment shape
@@ -238,10 +239,21 @@ what the load-time pass does. Each mutation's application is COUNTED, for a reas
 | `SetData` slot far past the data layout | **rejected at load** |
 | `GetLocal` slot past the chunk's local count | **rejected at load** |
 | `Const` index past the constant pool | **rejected at load** |
+| `GetDataIndexed` / `SetDataIndexed` base past the layout | **rejected at load**, naming the slot RANGE |
+| `Call` chunk index past the module's chunk count | **rejected at load** |
+| `SetLocal` slot past the chunk's local count | **rejected at load** |
+| `GetField` flat offset far past the body | **rejected at load**, by the typed operand-stack pass |
+| `IsEnum` tag past the constant pool | **rejected at load** |
+| `Reset` injected into a non-stream chunk | **rejected at load**, naming the block kind |
 | **`PushImmediate` operand in the reserved range** | **ADMITTED** -- loads, and traps at the call |
+| **`Trap` carrying an unrecognised kind code** | **ADMITTED** -- loads, and traps at the call |
 
-So the pass validates every INDEX it meets, precisely and with a good message, and does not validate
-this one operand RANGE. The neighbours make the omission look incidental rather than deliberate.
+**Eight indices rejected, two operand VALUES admitted.** The pass validates every index it meets,
+precisely and with a good message, and does not validate an operand's value range.
+
+**Two instances rather than one changes how this reads.** A single unchecked operand is an
+oversight; two, against eight checked indices, is a boundary in what the pass was built to cover.
+Which it is remains the operator's to say -- what is recorded is the observation, not the intent.
 
 Pinned by `tests/immediate_operand_range.rs`, whose controls are the four rejected cases: without
 them, "verify admits a bad operand" could be misread as the pass checking nothing.
