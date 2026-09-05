@@ -54,13 +54,35 @@ source scan for the emission form, with its reach stated in the test: it sees th
 in one file, and would not see an emission written through a different binding or built by pushing
 to the op vector directly. A guard whose reach is unstated gets read as a guarantee.
 
-**An unaddressed concern, stated rather than buried.** The fold trusts a function's declared return
-type for the array length, and no check was found that validates a native's returned element count
-against its declared one. A native declaring `[Word; 3]` and returning five elements would give a
-folded bound of three and iterate three times, silently. **This is pre-existing and not introduced
-here** — the `Expr::Call` arm already folded from the declared return type — but the delegation
-extends the same trust to method calls and pipelines, which are also calls. Not investigated
-further; recorded so it is not discovered as new.
+**A concern raised, then measured, and the measurement made it smaller.** The fold trusts a
+function's declared return type for the array length, and no check validates a native's returned
+element count against it. I suspected a soundness gap in the headline guarantee. **There is not
+one**, and reporting the shrinkage is as much the job as raising the worry was.
+
+Measured, and pinned in `tests/native_array_length_contract.rs`: a native declaring `[Word; 3]` and
+returning three iterates three times; returning five iterates three and **silently drops the
+excess**; returning one **traps `IndexOutOfBounds`**; and an unsignatured native is **refused at type
+checking**, so it can never occupy an iterable position at all.
+
+**No row runs the loop more times than the analysis predicted**, which is the direction that would
+be unsound. And the memory bound does not derive from this type either: a native's worst-case memory
+is host-attested per native, so an over-allocating native has broken its own attestation rather than
+found a compiler defect. The residue is that an over-long return is truncated with no diagnostic —
+real, narrow, and a design question rather than a fix.
+
+**The fourth row is also the missing half of the capability argument.** I had claimed no capability
+was lost on the strength of a green corpus, which is evidence about the corpus first; a native's
+array is exactly the shape a corpus under-represents and an embedding contains. The measurement
+closes it properly: the only native whose length is unknown is one the type checker already refuses
+in that position. Every row was taken against the pre-change compiler too, by restoring
+`src/compiler.rs` from the branch point, and all four are identical.
+
+**My own test was non-deterministic on its first revision.** Registration takes a `fn` pointer
+rather than a closure, so the returned element count lives in a process-global, and cargo runs the
+file's tests on parallel threads: one test set the count while another read it, and the under-long
+case passed or failed by interleaving. A verdict that depends on thread scheduling launders a coin
+flip as evidence. Serialised with a lock held across the whole run, and the lock carries that
+reason, because the next person to add a case here will otherwise remove it as ceremony.
 
 **And the guards that pinned the OLD behaviour were the ones I did not scope for.** I corrected
 every stale claim in `docs/` and `src/` and did not grep `tests/`. The corpus run found two tests in

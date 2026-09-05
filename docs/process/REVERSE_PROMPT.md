@@ -64,14 +64,35 @@ tree records `Op::IsStruct` being declared producerless and having four producer
 line within the hour, so the claim here is "no producer FOUND", never "unreachable". The machine
 keeps both refusals regardless.
 
-## TWO CONCERNS I COULD NOT CLOSE
+## THE CONCERN I RAISED AND THEN MEASURED, WHICH SHRANK IT
 
-**A native's declared array length is trusted and not checked.** The fold reads a function's declared
-return type for the element count, and I found no check validating a native's returned element count
-against it. A native declaring `[Word; 3]` and returning five elements yields a folded bound of three
-and iterates three times, silently. **Pre-existing and not introduced here** — the call arm already
-folded from the declared return type — but the delegation extends the same trust to method calls and
-pipelines, which are also calls. Not investigated further.
+I flagged the native-array length as a possible soundness gap and then measured it rather than
+leaving it as a worry. **It is not a soundness gap**, and saying so is as much the job as raising it
+was. `tests/native_array_length_contract.rs` pins all four rows.
+
+| the native declares | it returns | outcome |
+|---|---|---|
+| `[Word; 3]` | 3 | iterates 3 times |
+| `[Word; 3]` | 5 | iterates 3 times; **the excess is silently dropped** |
+| `[Word; 3]` | 1 | **traps `IndexOutOfBounds`**, loudly |
+| no signature | anything | **refused at type checking** |
+
+**The iteration bound is not wrong in any row.** The loop runs exactly the declared count or it
+traps. What would be unsound is running MORE times than the analysis predicted, and no row does
+that. **The memory bound does not come from this type either**: a native's worst-case memory is
+host-attested per native, not derived from its declared return type, so an over-allocating native
+has broken its own attestation rather than found a compiler defect.
+
+What is left is narrow and real: **an over-long return is silently truncated with no diagnostic.**
+Recorded rather than repaired, because validating a native's return against a declared shape at the
+call boundary is a design change and your call, not a fix.
+
+**And the fourth row is why the floor cost no capability.** The only native whose array length is
+unknown is one the type checker will not admit in iterable position at all. Every row was also
+measured against the pre-change compiler by restoring `src/compiler.rs` from the branch point; all
+four are identical, so the `Op::Len` removal changed nothing here.
+
+## THE ONE CONCERN THAT REMAINS OPEN
 
 **The floor has no witness.** No source form reaches the compile error behind it, so it is pinned by
 a source scan for the emission form. Its reach is stated in the test: one written shape, in one file.
