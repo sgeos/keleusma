@@ -10,6 +10,23 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-04, session 63, later). THE `InvalidBytecode` CLASS IS ENUMERATED, AND
+> ONE HOLE IS PINNED OPEN.**
+>
+> **A float-using module verifies, loads, and traps on a runtime built without the `floats`
+> feature.** `verify.rs` has no `floats` gating at all, and `RUNTIME_FLOAT_BITS_LOG2` is not gated
+> either, so a no-floats build advertises full width and the header check passes. Not corrupt: an
+> embedded target omitting floats is the point of the feature. **Pinned, NOT repaired** — the ~10
+> line repair was prototyped and reverted because continuous integration does not run this feature
+> set. Operator decision recorded in `REVERSE_PROMPT.md`.
+>
+> `docs/decisions/INVALID_BYTECODE_CENSUS.md`: **46 construction sites, 17 examined, 29 explicitly
+> not examined.** No site claimed unreachable. Two defences recorded because neither is visible where
+> it matters — the `Fixed` group needs two checks composing, and the composite-form group is held by
+> a boundary canonicalization whose first mutation test was aimed at the wrong call site and passed.
+>
+> No opcode added, no `BYTECODE_VERSION` change. Publication remains held.
+
 > **Currency note (2026-09-04, session 63). THE `Op::Len` TRAP IS CLOSED, AND ONE SITE WAS LIVE.**
 >
 > **Both compiler emission sites for `Op::Len` are gone.** The for-in iteration bound and the

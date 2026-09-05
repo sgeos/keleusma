@@ -13,6 +13,59 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-04 — the `InvalidBytecode` class, enumerated because the last find was luck
+
+**The increment.** `docs/decisions/INVALID_BYTECODE_CENSUS.md` enumerates every site where the
+runtime raises the error meaning *this artefact should never have been produced* — the class
+`verify()` exists to exclude. **46 construction sites; 17 with an examined verdict, 29 explicitly
+marked not examined.**
+
+**Why enumerate at all.** The `Multiword` hole was found BY ACCIDENT while removing an unrelated
+fallback. An accidental find in a class nobody has counted says nothing about how many remain, and
+waiting for a second accident is not a method.
+
+**One hole found, and it is an ordinary deployment shape.** A float-using module verifies, loads,
+and traps on a runtime built without the `floats` feature. Two independent reasons nothing catches
+it earlier: `verify.rs` has no `floats` gating whatsoever, and `RUNTIME_FLOAT_BITS_LOG2` is not
+gated either, so a no-floats build still advertises the full width and the header comparison
+passes. Nothing is corrupt — omitting floats is the point of the feature.
+
+**Pinned, not repaired, and the reason is not caution for its own sake.** The repair is about ten
+lines in `verify()` and was prototyped to validate the pin, then reverted. **Continuous integration
+does not run this feature set**; all three it runs include floats. Landing a repair into a
+configuration CI cannot see is the shape that shipped a red Doc job in V0.2.1.
+
+**Group D looked like the next hole and was a defence.** The compiler bakes a flat access for a
+scalar-fielded struct; `struct_with_widths` says a host-built composite is boxed; the dispatch sends
+every other pairing to a refusal. Seven shapes through a native, none reached it — because a
+host-returned composite is canonicalized at the call boundary into an arena-resident flat body.
+
+**And my first mutation of that claim was aimed at the wrong call site and PASSED.** I removed the
+canonicalization on the argument path; nothing failed, because the return path is a different site.
+Removing it on the native-result path produces exactly the refusal. **A guard that has not been made
+to fail is a guess, and so is an explanation** — the census would otherwise have recorded a
+mechanism that does not do the work attributed to it.
+
+**Group C is held by two checks that only compose.** `verify()` bounds `Fixed` fraction bits by the
+MODULE's declared word width; loading rejects a module declaring a width wider than the RUNTIME's.
+Neither alone is sufficient, and loosening the load-time comparison reopens five sites at once.
+Nothing anywhere said so.
+
+**Three corrections to my own work in one increment**, all caught before they landed. The census's
+first draft said 48 sites against 46, because grep counts text and a doc comment reads like a
+construction site; re-derived by classifying every match rather than adjusting the total. The float
+test's first control reused the float fixture and separated nothing; it now compiles its own
+program. And I committed while clippy was failing, because an `&&` chain read GREP's status rather
+than clippy's — the fourth costume of the same status trap this tree has recorded three times.
+
+**The census cannot drift**: a guard derives the population the way the document says it was derived,
+and is mutation-tested. Its reach is stated in both places — it sees the error written in that form,
+not one returned pre-built or mapped from another kind, and one such conversion exists and is counted
+only because the grep happened to see it. That is evidence the class has members this scan cannot
+enumerate, so the population is a lower bound and the document says so.
+
+---
+
 ## 2026-09-04 — the `Op::Len` trap is closed, and the second site was not latent
 
 **The increment.** Both compiler emission sites for `Op::Len` are gone. The for-in iteration bound

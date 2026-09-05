@@ -10,7 +10,44 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-04 (session 63) — the `Op::Len` trap is closed, and one of its two sites was live
+**Date**: 2026-09-04 (session 63) — the `Op::Len` trap is closed, and a second hole is pinned open
+
+## READ FIRST: A MODULE CAN VERIFY, LOAD, AND THEN TRAP, AND IT IS NOT REPAIRED
+
+**A module using floats verifies, loads, and traps `InvalidBytecode` on a runtime built without the
+`floats` feature.** Measured with `--no-default-features --features verify`:
+
+| step | result |
+|---|---|
+| `Module::from_bytes` | accepted |
+| `verify()` | **accepted** |
+| `Vm::new` | **loaded** |
+| call | **`InvalidBytecode`** |
+
+`InvalidBytecode` asserts the artefact should never have been produced. It is the class `verify()`
+exists to exclude, so this is a hole in the load-time guarantee rather than a bad program.
+
+**Two independent reasons nothing catches it earlier**, either of which would suffice. `verify.rs`
+has **no `floats` gating at all** — not one conditional mentions the feature. And the header check
+cannot reject it: loading admits when `got <= max_supported`, and `RUNTIME_FLOAT_BITS_LOG2` is not
+gated on the feature either, so a build without floats still advertises the full width.
+
+**Nothing here is corrupt.** The fixture is ordinary reference-compiler output, and omitting floats
+is the POINT of the feature — an embedded target is exactly where it is used, and producing bytecode
+on one build to run on another is the normal shape for a language that ships precompiled modules.
+
+**Proportionality.** The trap is loud: a clean error at call time, not a wrong answer, a crash, or
+memory unsafety. What is wrong is the LAYER.
+
+**Why I pinned it and did not repair it, which is a decision worth your review.** The repair belongs
+in `verify()` and I prototyped it to validate the pin — about ten lines, after which the pin fails
+exactly where its message says it will while the float-free control still runs — then reverted it.
+**Continuous integration does not run this feature set.** The three it runs all include floats, so
+the repair and its test would be exercised only by the release gate's `--no-default-features` step.
+Landing an unverified repair into a configuration CI cannot see is how V0.2.1 shipped a red Doc job.
+
+Pinned by `tests/float_opcode_without_floats.rs`; recorded in
+[`INVALID_BYTECODE_CENSUS.md`](../decisions/INVALID_BYTECODE_CENSUS.md).
 
 ## THE TWO QUESTIONS THAT BLOCK EVERYTHING LARGE ARE STILL YOURS
 
@@ -109,10 +146,36 @@ missed was a test rather than a source file.
 Both tests carried their own instruction for this moment and were right on both counts. Neither was
 deleted.
 
+## THE CLASS THOSE TWO HOLES BELONG TO IS NOW ENUMERATED
+
+Both were found the same way and neither was predicted, so I enumerated the class rather than
+waiting for a third accident. `docs/decisions/INVALID_BYTECODE_CENSUS.md` covers all **46**
+construction sites: **17 carry an examined verdict, 29 are explicitly marked not examined.** No site
+is claimed unreachable — this tree already carries one retraction on exactly that distinction.
+
+Two defences are worth your attention because neither is visible where it matters:
+
+- **The `Fixed` group is held by two checks that only work together.** `verify()` compares fraction
+  bits against the MODULE's declared word width; loading rejects a module whose declared width
+  exceeds the RUNTIME's. Loosening the load-time comparison reopens five sites at once, and nothing
+  said so anywhere.
+- **The composite-form group is held by a canonicalization at the host boundary**, sitting between a
+  compiler that bakes a flat access and a marshalling layer that produces a boxed body. Each side
+  looks locally correct. If it regresses, seven refusals open at once on legitimate programs. Now
+  pinned, after a mutation test in which **my first mutation was aimed at the wrong call site and
+  passed**, which would have put a wrong mechanism into the record.
+
 ## THE INTENDED NEXT STEP
 
-Nothing large without your answer to the two questions above. Absent that, the remaining
-self-directed work is the discard-arm census pass six, which
+Nothing large without your answer to the two questions above. **If you want one thing decided, make
+it the float repair**: it is small, prototyped, and the only open hole in the load-time guarantee I
+know of.
+
+Absent that, the remaining self-directed work is census groups E and I — the structural-index and
+operand-range sites, where `verify()` plausibly has a corresponding check and plausibly does not. A
+first reading suggests both are mostly corrupt-artefact territory rather than holes reachable from
+compiler output, which would make them a defence-in-depth question rather than a guarantee question;
+that reading is NOT yet confirmed by a program. After that, the discard-arm census pass six, which
 [`DISCARD_ARM_REACHABILITY_BRIEF.md`](../decisions/DISCARD_ARM_REACHABILITY_BRIEF.md) establishes is
 a **fixture** problem rather than a harness problem: the pass-five harness is reusable as-is, and
 what is missing is source constructs.
