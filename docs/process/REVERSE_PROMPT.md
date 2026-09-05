@@ -74,6 +74,36 @@ worth more than any single fix in it.
 Pinned by `tests/float_opcode_without_floats.rs`; recorded in
 [`INVALID_BYTECODE_CENSUS.md`](../decisions/INVALID_BYTECODE_CENSUS.md).
 
+## A SECOND THING FOR YOU: NINE OF ELEVEN BUILD CONFIGURATIONS ARE BUILT BY NOTHING
+
+The float hole survived in a configuration nothing built, so I swept eleven configurations that a
+host might plausibly ship. **Three are covered; the other eight are verified by nothing**, and one
+of them did not compile.
+
+| covered by CI and the release gate | built by nothing |
+|---|---|
+| default; bare no-default; the broad docs.rs surface | `verify` alone; `compile` alone; `compile,verify`; `verify,floats`; `signatures` alone; `compile,verify,signatures`; `encryption` alone; `compile,verify,encryption` |
+
+**A job named for a feature does not necessarily cover that feature.** Continuous integration's
+`--features signatures` job is ADDITIVE to the default features, so signatures-alone — the shape its
+name suggests — is unbuilt. That is a standing property of the matrix rather than an incident.
+
+**`--features compile` did not build.** A compiler without a verifier is presented in the feature
+documentation as an independent choice; three test files imported `keleusma::verify` while gated on
+`compile` alone. Repaired. No source file was involved.
+
+**A recommendation, deliberately not adopted, because the cost is yours to weigh.** Adding
+`--no-default-features --features compile,verify` to continuous integration costs one job on every
+push and covers the configuration already shown to hide a defect of consequence. A **build-only**
+`cargo check --tests` matrix over all eleven would have caught every compile defect found tonight at
+a fraction of a test job's cost — but would NOT have caught the two lex-time test failures, which
+need the tests to run.
+
+**What the sweep does not say.** It ran `cargo check --tests`, so an "ok" verdict means a
+configuration COMPILES and nothing more. It is not a claim that eleven configurations are supported,
+and the unswept space — the narrow word and address selectors, `self-host` — is far larger than the
+swept one. Recorded in [`FEATURE_COMBINATION_SWEEP.md`](../decisions/FEATURE_COMBINATION_SWEEP.md).
+
 ## THE TWO QUESTIONS THAT BLOCK EVERYTHING LARGE ARE STILL YOURS
 
 Neither moved this session, and neither is mine to decide. They are stated in full at the top of
