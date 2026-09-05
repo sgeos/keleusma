@@ -49,6 +49,34 @@ per variant — on the order of fifteen minutes each, so roughly three hours for
 **That is affordable, unlike the 60-hour opcode sweep**, and it is the shape a future increment should
 take. It is not attempted here because attempting it badly is how the unsound table happened.
 
+## THREE TEXTUAL INSTRUMENTS, THREE BLIND SPOTS — the cheap path is closed
+
+Each attempt was falsified by a control whose answer was known in advance.
+
+| instrument | blind spot | how it was caught |
+|---|---|---|
+| grep the variant name | counts `Display` arms, doc comments, `matches!` filters | `Diagnostic` scored 4 with **no constructions**; `EscapesItsIteration` scored 0 tests while its behaviour is exercised through the analysis API |
+| grep `Err(LowerError::V` and `map_err` | misses variants built by a **constructor function** | **`UnsupportedOp` scored ZERO.** It is the backend's most common refusal, so zero is impossible — the instrument is wrong, not the code |
+| — | `UnsupportedOp` is built by `fn unsupported_op(op, detail)`, so every refusal site calls the helper and never names the enum path | reading the source at the site |
+
+> **There is no cheap textual instrument for "which refusals are produced and where."** Each fix for
+> one blind spot introduces another, and the errors are not conservative in a consistent direction.
+> **The sound instrument is behavioural** — disable the refusal and see what fails — already calibrated
+> at 13 minutes per variant.
+
+### The constructive lesson, which the project already applied once
+
+`unsupported_op`'s own comment says it *"takes the opcode name separately from the prose so the two
+cannot drift: the census reads `op`, and the sentence is for a human."*
+
+**That is why the ISA census can measure opcode refusals at all.** The refusal carries a STRUCTURED
+field naming its subject, so a census reads data rather than parsing English or matching source text.
+
+> **The way to make a refusal surface measurable is to give the refusal structure, not to scan for it
+> afterwards.** `UnsupportedOp` and `UnsupportedWordWidth` carry their subject; `MalformedInput`,
+> `UnsupportedShape` and `Internal` carry prose. **The measurable ones are exactly the structured
+> ones**, and that is a design property rather than a tooling gap.
+
 ## CALIBRATED 2026-09-04: the method works, the cost is measured, and the extrapolation has an assumption
 
 One variant was run as a **control** — `UnsupportedWordWidth`, whose single construction site is known
