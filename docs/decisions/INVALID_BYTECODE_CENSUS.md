@@ -59,17 +59,17 @@ honest; probing every member individually is not a better use of the same effort
 | B | float opcode without the `floats` feature | 2 | **REACHABLE -- see below** |
 | C | `Fixed` fraction bits exceeding the word width | 5 | **defended**, by two checks that compose |
 | D | composite operand form mismatch | 7 | **defended**, by boundary canonicalization |
-| E | structural indices out of range | 9 | not examined |
+| E | structural indices out of range | 9 | **defended at load** (3 of 9 probed) |
 | F | shared and private data-segment layout | 7 | host-contract; not examined |
 | G | arena staleness after reset | 3 | not examined |
 | H | the three "should never have been emitted" | 3 | **closed 2026-09-04** |
-| I | operand-range and constant-kind checks | 6 | not examined |
+| I | operand-range and constant-kind checks | 6 | **mixed** — see below (2 of 6 probed) |
 | J | unregistered or invalid native index | 3 | host-contract; not examined |
 
 The group sizes sum to 46, which is the population above; a table whose parts do not add to its
 stated whole has been the tell for a miscount here before.
 
-**Seventeen of forty-six sites carry an examined verdict.** The remaining twenty-nine are named by
+**Twenty-two of forty-six sites carry an examined verdict.** The remaining twenty-four are named by
 group and explicitly marked as not examined. A census whose entries are unexamined opinions is worse than a
 short one that says which sites were looked at.
 
@@ -221,10 +221,49 @@ canonicalization is load-bearing and invisible from either end: the compiler's b
 runtime's dispatch each look locally correct, and the code that reconciles them sits between them.
 If it regresses, seven refusals open at once.
 
+## Groups E and I: every index is checked at load, one operand RANGE is not
+
+These two ask a **narrower question** than groups B and D, and the difference must not be lost. A
+compiler does not emit an out-of-range data slot or a reserved immediate, so reaching these needs a
+corrupted or hand-built artefact -- which the wire format admits, so the question is real. But both
+outcomes are safe, because the runtime refuses either way. **This is defence in depth, not a hole in
+the load-time guarantee**, and reporting it at group B's severity would discredit group B.
+
+Measured by compiling a valid program, injecting one defect into the compiled artefact, and asking
+what the load-time pass does. Each mutation's application is COUNTED, for a reason given below.
+
+| defect injected | verdict |
+|---|---|
+| `GetData` slot far past the data layout | **rejected at load**, naming the slot and the layout size |
+| `SetData` slot far past the data layout | **rejected at load** |
+| `GetLocal` slot past the chunk's local count | **rejected at load** |
+| `Const` index past the constant pool | **rejected at load** |
+| **`PushImmediate` operand in the reserved range** | **ADMITTED** -- loads, and traps at the call |
+
+So the pass validates every INDEX it meets, precisely and with a good message, and does not validate
+this one operand RANGE. The neighbours make the omission look incidental rather than deliberate.
+
+Pinned by `tests/immediate_operand_range.rs`, whose controls are the four rejected cases: without
+them, "verify admits a bad operand" could be misread as the pass checking nothing.
+
+**Not repaired.** A load-time check costs time on every load and this project rejects conservatively
+on purpose; the observation is recorded and adopting it is a separate call.
+
+### The probe's first revision produced a vacuous verdict, and that is worth recording
+
+It mutated `PushImmediate` in a program compiled from `k + 1` -- **which contains no
+`PushImmediate`**. Nothing was changed, the untouched module verified, and the probe reported
+"admitted": a verdict about a mutation that never happened. It was caught only because the
+follow-through ran the module and it returned the correct answer.
+
+The probe now COUNTS the mutations it applies and reports a zero count as vacuous rather than as a
+result. **Third instrument corrected in one session** -- after a file-attribution column that
+reported warning locations under a passing verdict, and a mutation aimed at the wrong call site that
+passed.
+
 ## Where the next pass should start
 
-Group E, the nine structural-index sites, or group I, the six operand-range and constant-kind
-checks. Both are places where `verify()` plausibly has a corresponding check and plausibly does not,
-and neither has been looked at. Groups F and J are host-contract surfaces and are lower value: a
+Groups F and J, the host-contract surfaces, are what remain unexamined alongside group A and the
+unprobed members of E and I. Groups F and J are host-contract surfaces and are lower value: a
 host that supplies a mis-sized buffer or an unregistered native has broken a stated contract, which
 is the same class as the native array-length finding rather than a hole in the guarantee.
