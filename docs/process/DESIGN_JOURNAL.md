@@ -32,7 +32,10 @@ passes. Nothing is corrupt — omitting floats is the point of the feature.
 
 **Pinned, not repaired, and the reason is not caution for its own sake.** The repair is about ten
 lines in `verify()` and was prototyped to validate the pin, then reverted. **Continuous integration
-does not run this feature set**; all three it runs include floats. Landing a repair into a
+builds no configuration in which the pin compiles**. (Corrected 2026-09-05: the loose claim that
+CI "does not run this feature set" was wrong. It runs `--no-default-features`, but BARE, so `verify`
+is absent and the pin is configured out; every other job is additive to the defaults and has floats.
+The conclusion held and the reason did not.) Landing a repair into a
 configuration CI cannot see is the shape that shipped a red Doc job in V0.2.1.
 
 **Group D looked like the next hole and was a defence.** The compiler bakes a flat access for a

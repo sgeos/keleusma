@@ -41,8 +41,10 @@ memory unsafety. What is wrong is the LAYER.
 
 **Why I pinned it and did not repair it — and what has changed since.** The repair belongs in
 `verify()`, is about ten lines, and I prototyped it to validate the pin. My stated objection was that
-continuous integration does not run this feature set, so it would be exercised only by the release
-gate.
+continuous integration builds no configuration in which the pin compiles, so it would be exercised
+only by the release gate. **Precisely** — the loose form of this claim was wrong: CI does run
+`--no-default-features`, but bare, so `verify` is absent and the pin is configured out; every other
+job adds to the default features and therefore has floats.
 
 **I have since supplied that verification rather than handing you the objection.** The full
 `--no-default-features --features compile,verify` suite was run with the repair and compared against

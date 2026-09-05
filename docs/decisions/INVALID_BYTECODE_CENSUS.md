@@ -112,8 +112,11 @@ at its `verify()` step exactly as its message anticipates, and the float-free co
 compiles, verifies, loads and runs. The prototype was then reverted.
 
 It was left undone for a reason that should be weighed rather than assumed away: **continuous
-integration does not run this feature set.** The three sets it runs are default, `signatures,shell`
-and `self-host`, all of which include floats.
+integration builds no configuration in which this test compiles.** Stated precisely, because the
+loose version of it was wrong: CI DOES run `--no-default-features`, but bare, without `compile` or
+`verify` — and the pin requires `verify` with `floats` absent, so it is configured out there. Every
+other job is additive to the default features and therefore includes floats. An imprecise reason
+outlives the finding it is attached to, so it is corrected rather than left standing.
 
 ### That objection is now discharged, and the decision is narrower than it was
 
