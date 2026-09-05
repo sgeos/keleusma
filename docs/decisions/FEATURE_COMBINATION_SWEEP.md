@@ -168,3 +168,73 @@ If a narrow configuration is ever added to continuous integration, the informati
 **coherent width** — a word and address width selected together — rather than a lone selector, since
 that is what an embedded target actually looks like. The cost is one job per width. As above, this
 is recorded rather than adopted: the standing per-push cost is the operator's call.
+
+## Running the tests under `narrow-word-16`: the open question, answered
+
+The section above said whether the narrow-selector test failures were "one test or many" was
+unexamined, and that answering it needed a test run rather than a build. **A question raised in a
+durable document and then abandoned reads as a lead for someone else**, so it was run.
+
+### The measurement, and its status as a LOWER BOUND
+
+`cargo test --features narrow-word-16 --no-fail-fast`, on 2026-09-05.
+
+| | |
+|---|---|
+| test binaries passing | 89 |
+| test binaries failing | **15** |
+| distinct failing tests | **37** |
+| completeness | complete except for one binary, killed — see below |
+
+**One qualification travels with these figures.** The `perf_canary` binary did not terminate and was
+killed; the run then completed normally. So the only tests unaccounted for are that binary's TWO, and
+the counts are otherwise a total rather than a lower bound. **A first draft of this table said 84
+passing**, a figure read while the run was still going and corrected here, which is the reason to
+take a count from a finished run rather than from a progress line.
+
+### The answer is "many", and the reason is not a runtime defect
+
+The failures cluster, and the clusters share a premise rather than a cause in the virtual machine:
+
+| group | size | what they presuppose |
+|---|---|---|
+| `*_narrows_to_the_declared_width` (add, sub, mul, div, the checked forms, int-to-float) | 9 | a module declaring a NARROW width running on a WIDER runtime. At a 16-bit runtime that premise is void |
+| opaque and flat-composite layout | 5 | offsets and handle widths taken at the host's natural width |
+| float-width classification | 5 | the encodable float widths available at the default configuration |
+| the remainder | 18 | not individually examined |
+
+**Per-test verdicts were NOT made.** The grouping is by name and by the premise the name implies,
+which is weaker evidence than reading each test, and it is recorded at that strength deliberately.
+
+### The worked example, which settles the character of the whole set
+
+`perf_canary::constant_loads_in_a_loop_stay_fast` ran for **57 minutes at 99% of a core** and never
+finished. It is a performance canary, so a reader's first instinct is a performance regression at a
+narrow word.
+
+It is not. The program the test compiles is
+`for i in 0..hi limit 200000 { d.s = d.s + 1234567 + i; }`, and **both `1234567` and `200000` are far
+outside a 16-bit word's range**, whose maximum is 32767. The test's own parameters cannot be
+represented at the width it was asked to run at. It is written for a wide word.
+
+That is the character of this whole set: **the suite assumes a 64-bit host runtime**, and running it
+at 16 bits mostly measures that assumption. It is a statement about the tests, not about the
+runtime's portability.
+
+### What this does and does not license
+
+**It does not say the narrow widths are broken.** Nothing here demonstrates a defect in the virtual
+machine at a narrow word. Every configuration still compiles, which the section above establishes.
+
+**It does not say they work, either.** A suite that cannot run at a width cannot vouch for it. The
+honest position is that the narrow widths are **unverified**, and now measurably so rather than
+presumptively.
+
+**Making the suite run at 16 bits is a real project**, not an increment: it means auditing every test
+that bakes a wide literal or a wide expectation, and deciding per test whether to widen a
+configuration attribute, parameterise the constant, or leave it excluded. Nothing here should be read
+as a recommendation to start that without deciding it is worth the cost.
+
+**One thing is worth fixing on its own merits regardless**: a performance canary that spins for an
+hour instead of failing is a poor citizen in any configuration, and a bound on its own runtime would
+cost little.
