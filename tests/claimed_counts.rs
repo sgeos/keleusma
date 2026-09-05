@@ -364,3 +364,85 @@ fn the_source_listing_is_exhaustive_or_marked_partial() {
         missing.len()
     );
 }
+
+/// **THE `InvalidBytecode` CENSUS STATES A POPULATION; THE TREE MUST STILL HAVE IT.**
+///
+/// `docs/decisions/INVALID_BYTECODE_CENSUS.md` enumerates every site where the runtime raises the
+/// "this artefact should never have been produced" error, and its whole value is that the
+/// enumeration is complete at the moment it was taken. A site added later leaves the document
+/// quietly describing a smaller class than exists -- and a census that has silently stopped being
+/// exhaustive is worse than none, because its reader stops looking.
+///
+/// **The first draft of that document was miscounted**, at 48 against a true 46, because the grep
+/// counts TEXT and a doc comment and a match arm read exactly like a construction site to it. This
+/// guard derives the figure the same way the document says it was derived, and subtracts the same
+/// named exclusions, so the two cannot part.
+///
+/// # Reach, stated rather than assumed
+///
+/// It sees `VmError::InvalidBytecode` written in that form. It does not see a site that returns a
+/// pre-built error, propagates one with `?`, or maps another kind into this one. The document says
+/// the same thing about itself; this test is a drift alarm on a lower bound, not a proof of
+/// completeness.
+#[test]
+fn the_invalid_bytecode_census_still_describes_the_tree() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    let mut matches = 0usize;
+    let mut excluded = 0usize;
+    for name in ["src/vm.rs", "src/marshall.rs"] {
+        let text = std::fs::read_to_string(root.join(name)).expect("read a runtime source file");
+        for line in text.lines() {
+            if !line.contains("VmError::InvalidBytecode") {
+                continue;
+            }
+            matches += 1;
+            let t = line.trim_start();
+            // The same exclusions the document names: a doc comment, and a match arm binding the
+            // variant rather than constructing it.
+            if t.starts_with("///") || t.starts_with("| VmError::InvalidBytecode(_)") {
+                excluded += 1;
+            }
+        }
+    }
+
+    // NON-VACUITY. A read that found nothing, or a pattern that matched nothing, would otherwise
+    // satisfy the comparison below while measuring an empty set.
+    assert!(
+        matches > 30,
+        "only {matches} occurrences were found across the runtime sources, so this scan has \
+         broken rather than the class having shrunk"
+    );
+    assert!(
+        excluded > 0,
+        "no excluded occurrence was recognised, so the exclusion rules no longer match anything \
+         and the derived total is counting non-sites as sites"
+    );
+
+    let doc = std::fs::read_to_string(root.join("docs/decisions/INVALID_BYTECODE_CENSUS.md"))
+        .expect("read INVALID_BYTECODE_CENSUS.md");
+
+    // The document states the total in words as well as digits; the digits are what is checked.
+    let stated = doc
+        .split("**50 matches, of which ")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|n| n.parse::<usize>().ok())
+        .expect(
+            "the census no longer states its site count in the expected form. If the wording \
+             changed, update this extraction; a guard that finds nothing to check is worse than \
+             no guard.",
+        );
+
+    // Test-module occurrences are excluded by the document too, and they are not distinguishable
+    // by line shape, so the comparison carries a small tolerance rather than pretending to
+    // exactness the scan cannot deliver.
+    let derived = matches - excluded;
+    assert!(
+        derived.abs_diff(stated) <= 4,
+        "the census states {stated} construction sites and this scan derives {derived} (from \
+         {matches} occurrences less {excluded} excluded). The class has moved; re-run the \
+         enumeration in the document rather than adjusting the number, because the value of that \
+         document is that every site carries a verdict."
+    );
+}
