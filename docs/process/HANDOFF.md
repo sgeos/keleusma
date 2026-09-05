@@ -9,7 +9,27 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > not by a hash: a refresh takes more than one commit, so any hash written here is stale by one the
 > moment it is written.
 >
-> ## READ FIRST: THE QUEUE IS EMPTY AND BOTH LARGE ITEMS NEED THE OPERATOR
+> ## READ FIRST: A HOLE IN THE LOAD-TIME GUARANTEE IS PINNED OPEN, DELIBERATELY
+>
+> **A float-using module verifies, loads, and then traps `InvalidBytecode` on a runtime built
+> without the `floats` feature.** That error asserts the artefact should never have been produced,
+> which is the class `verify()` exists to exclude, so it is a hole in the guarantee rather than a bad
+> program. Nothing is corrupt: an embedded target omitting floats is the POINT of the feature.
+>
+> Two independent reasons nothing catches it earlier. `verify.rs` has **no `floats` gating at all**,
+> and `RUNTIME_FLOAT_BITS_LOG2` is not gated either, so a no-floats build advertises the full width
+> and the header comparison passes.
+>
+> **Do not "just fix it" without reading why it was left.** The repair is about ten lines in
+> `verify()`, was prototyped, validated the pin, and was reverted. **Continuous integration does not
+> run this feature set** — all three it runs include floats — so it would be exercised only by the
+> release gate's `--no-default-features` step. It is queued for the operator in `REVERSE_PROMPT.md`.
+>
+> Pinned by `tests/float_opcode_without_floats.rs`. The class is enumerated in
+> `../decisions/INVALID_BYTECODE_CENSUS.md`: **46 sites, 17 examined, 29 explicitly not examined.**
+> **No site is claimed unreachable**, and a guard keeps the document from drifting from the tree.
+>
+> ## THE QUEUE IS OTHERWISE EMPTY AND BOTH LARGE ITEMS NEED THE OPERATOR
 >
 > **`origin/v0.2.3` is at `12951810`. Twenty-one pull requests merged, none open, tree clean**, and
 > every post-merge run on the version branch itself came back green. Nothing is held and nothing of
@@ -65,13 +85,19 @@ always-current, so it must be able to report itself stale rather than mislead a 
 >   from five. The ratchet is tightened to four, which mattered: it asserts an upper bound, so it was
 >   green at five and four alike and a passing suite said nothing about whether the change worked.
 >
-> ## A TRAP THAT IS ARMED, NOT FIXED
+> ## THAT TRAP IS NOW DISARMED, AND ITS SIBLING WAS WORSE
 >
-> The compiler emits `Op::Len` on an array, the machine refuses it, and `verify()` accepts the
-> module. What holds it shut is the loop-bound refusal, which this project's taxonomy calls
-> LIFTABLE. `docs/decisions/OP_LEN_ROOT_REPAIR.md` measures the class and shows the obvious
-> type-inference fallback closes ONE of seven cases. **Build the floor first**: refuse at the
-> emission site rather than emit an opcode the runtime rejects.
+> **The compiler has no `Op::Len` emission site.** Both — the for-in bound and the checked-index
+> bounds check — fold the length or fail with a compile error. The recorded trap was LATENT, held
+> shut by a liftable loop-bound refusal.
+>
+> **The second site was not latent.** Checked indexing over a `Multiword` compiled, verified, took a
+> bound, LOADED, and trapped, with nothing holding it shut. Found by enumerating every emission
+> rather than following the known witness. Repaired by folding the multi-word width, so it works now.
+>
+> `OP_LEN_ROOT_REPAIR.md` predicted a type-inference fallback would close ONE of seven forms; it
+> closes SIX, because `infer_expr_type` consults the authoritative per-span type table before its
+> structural half. The document is corrected in place, and its being wrong is recorded there.
 >
 > Its sibling refusals are classified there too, and the distinction matters — `Op::Len` is a real
 > compiler/machine disagreement, `Reset` is a corrupt-module defence. Reporting both as "opcodes the
@@ -128,8 +154,15 @@ recorded parent is a claim that nothing else ever lands, and it has failed three
    written and every version-adjacent statement here needs re-reading.
 2. `docs/process/RELEASE_PROCESS.md` says **SEVEN** crates publish. If it says five, this file
    predates the release-blocker fix and the blocker is live.
-3. `tests/len_flat_array_hazard.rs` exists and passes. If it fails, the loop-bound refusal changed
-   and the `Op::Len` trap may be open.
+3. `tests/len_flat_array_hazard.rs` exists and passes. It now pins the trap as CLOSED — no emission
+   site, every iterable form folding — so a failure means an emission site returned.
+7. `tests/float_opcode_without_floats.rs` exists. It is compiled only WITHOUT the `floats` feature,
+   so a default-feature run silently skips it; check it with
+   `cargo test --no-default-features --features compile,verify`. If it is absent, this file predates
+   the load-time hole being pinned.
+8. `docs/decisions/INVALID_BYTECODE_CENSUS.md` exists and
+   `the_invalid_bytecode_census_still_describes_the_tree` passes. If that test fails, sites were
+   added or removed and the census has stopped being exhaustive.
 4. `tests/text_capacity_type.rs` exists. If it does not, `Text<N>` increment 1 is not on this branch.
 5. `tests/release_process_crate_list.rs` exists and passes. It holds BOTH release guards now — the
    publish list and the versioning policy. If either fails, the release process and the workspace
