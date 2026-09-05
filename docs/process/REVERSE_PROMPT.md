@@ -123,10 +123,22 @@ so it could only fire once the thing it guarded had finished — it spun 57 minu
 instead of failing. Now bounded on a channel, mutation-tested in three directions, with the existing
 ceiling and result assertions shown to still fire.
 
-**Census groups E and I: every INDEX is checked at load, one operand RANGE is not.** A reserved
-`PushImmediate` is admitted, loads, and traps. **Defence in depth, not a guarantee hole** — reaching
-it needs a corrupt artefact, and both outcomes are safe. Kept deliberately distinct from the float
+**Census groups E and I: every INDEX is checked at load, two operand VALUES are not.** A reserved
+`PushImmediate` and an unrecognised `Trap` kind code are each admitted, load, and trap. Eight
+indices beside them are rejected at load with precise messages.
+
+**One unchecked operand is an oversight; two against eight checked indices is a boundary in what the
+pass was built to cover.** Which it is remains yours to say — the observation is recorded, not the
+intent.
+
+**Defence in depth, not a guarantee hole** — reaching either needs a corrupt artefact, and both
+outcomes are safe because the runtime refuses regardless. Kept deliberately distinct from the float
 finding above, which is a module the compiler itself produced.
+
+The census is at **30 of 46 sites examined**; the sixteen that are not are named. This paragraph
+said "one operand RANGE" and 22 of 46 until finishing the probing found the second instance —
+corrected here rather than left standing, because a stale figure in this file is the defect this
+session spent itself on.
 
 ## THE THING I WOULD MOST WANT A REVIEWER TO CHECK
 
