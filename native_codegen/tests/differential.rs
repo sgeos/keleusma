@@ -218,16 +218,38 @@ fn an_unsupported_opcode_is_refused_rather_than_mislowered() {
     // and not the reference compiler's. (The reference VIRTUAL MACHINE traps on
     // `Op::Len` over a flat array at runtime, which is that file's subject;
     // this test never runs the program.)
-    let src = "\
-fn f(c: bool) -> Word {
-  let a = [1, 2];
-  let b = [3, 4];
-  for x in if c { a } else { b } { let _d = x; }
-  0
-}
-fn main() -> Word { f(true) }
-";
-    let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    // **THE SOURCE-LEVEL WITNESS ROTTED, AND THE COMMENT ABOVE PREDICTED IT.**
+    //
+    // The witness was `for x in if c { a } else { b }`, which emitted `Op::Len`
+    // because `static_for_in_length` had no `Expr::If` arm. The `v0.2.3` line's
+    // root repair landed in absorption 51 and folds that length to a constant, so
+    // the program no longer contains the opcode and this test began asserting a
+    // refusal against bytecode that does not carry its subject.
+    //
+    // **There is no successor source construct.** The comment above already
+    // recorded that `probe_unsupported`'s candidate list "now LOWERS or is
+    // rejected by the reference compiler", which made `Len` the last one; the
+    // repair removed it too.
+    //
+    // So the subject is now INJECTED as bytecode. That is the correct coupling
+    // for this test in any case: it asks whether a module-level refusal is
+    // REPORTED, which is a property of the lowering and must not depend on which
+    // source constructs a given compiler version happens to emit. Keying it to a
+    // source program is precisely how the `Op::Call` version rotted, and how this
+    // one did.
+    let mut m = compile(&parse(&tokenize("fn main() -> Word { 0 }").expect("lex")).expect("parse"))
+        .expect("compile");
+
+    // Non-vacuity: the opcode must not already be present, or the injection below
+    // would be a no-op and the refusal would prove nothing about it.
+    assert!(
+        !m.chunks
+            .iter()
+            .any(|c| c.ops.iter().any(|o| matches!(o, Op::Len))),
+        "the base program already contains Op::Len, so injecting it proves nothing"
+    );
+    let entry = m.entry_point.expect("the program has an entry point");
+    m.chunks[entry].ops.insert(0, Op::Len);
 
     // **The vacuity guard is on the REFUSAL, not on a chunk search.** Three
     // attempts to locate the offending op by pattern or by debug rendering

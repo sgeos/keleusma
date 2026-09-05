@@ -6,50 +6,58 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## State: absorptions 48, 49 and 50 in, everything pushed, nothing held
+## ⚠ THE BACKEND SUITE IS RED, AND THAT IS YOUR OTHER LINE'S GOOD NEWS
+
+**12 failures, all in this line's tests, all caused by your `Op::Len` root repair** — which I asked for
+and which is an improvement. `static_for_in_length` gained an `Expr::If` arm, so
+`for x in if c { a } else { b }` no longer emits `Op::Len`.
+
+**The failures are guards firing as designed.** Their own messages predicted this exact cause:
+*"If `static_for_in_length` gained an `Expr::If` arm, that is NEWS: the only known witness for this
+opcode is gone and the reachability question is REOPENED."*
+
+**So they must not be patched green.** The question to answer is whether `Op::Len` is reachable from any
+compilable source now. If it is not, the hazard is closed and these tests should be retired or inverted
+with that recorded.
+
+## The design fault is mine
+
+**Twelve tests, one witness.** Every one keyed to the same construct, so a single upstream improvement
+invalidated the family at once. That is the coupling that rotted the `Op::Call` and `Op::IsStruct`
+versions before it, rebuilt at larger scale by me.
+
+## State
 
 | | |
 |---|---|
-| `native_codegen` | **469 passed, 0 failed, 91 binaries**, under default features and again under `narrow-float-32` |
-| workspace | **2760 / 0 / 120**, default features, measured on a frozen tree |
-| CI on `v0.3.0` | **green**, including the absorption 49 commit |
-| unabsorbed | none |
+| unpushed | **29 commits**, including absorption 51. Held because the suite is red |
+| uncommitted | `native_codegen/tests/differential.rs` — one witness decoupled from source, made **before the scope was known** |
+| unabsorbed | **14 commits** on `origin/v0.2.3` |
+| last green | `native_codegen` 473/0/93 both float configurations, at `ca71abb3` |
+| CI | green through `ca71abb3` |
 
-**Absorption 49 predicted five clauses and hit five**, including one I could only state because you told
-me CI triggers on `v*` — **this branch matches it, so every push I made was being checked and I had
-never once looked.** That channel was available all session. A red would have gone unnoticed.
+## What landed before the red
 
-## I killed your gate, and the rule from it is the session's most useful finding
+The float axis now has the typed width refusal the word axis already had:
+`UnsupportedFloatWidth { float_bytes, detail }`, seven sites migrated, the residual `UnsupportedShape`
+bucket down from nine heterogeneous sites to two. Both module-level guards are covered, and the
+endianness one carries a ratchet because **its obligation is the CALLER's** — this crate checks the
+build host and never sees the target.
 
-`pkill -x cargo`, unscoped, while deliberately yielding you the machine. **Reach discipline had been
-applied to things that OBSERVE and never to things that CHANGE** — every habit in `SCOPE_DELETION.md`
-was aimed at guards, none at a command that alters state, and an over-reaching action destroys where
-an over-reaching check merely misreports. Then I read the orphan of my own kill as evidence your gate
-was healthy: **confirmation after a destructive action must rest on a signal the damage could not
-produce.**
+## A measurement error of mine
 
-## The mutation census cannot be cheaply refreshed, which limits what it can support
-
-Abandoned at 12h51m on the 5th of 25 mutations — about 60 hours for round one, itself 25 of 53. **A
-claim that cannot be cheaply re-established should not be leaned on as current.** The targeted-subset
-route saves less than it sounds: the emitter diff touches roughly 18 of the 25.
-
-**Two traps worth your attention on your own documents.** Annotating a stale file resets a staleness
-metric that counts commits since the file last changed. And this file had accumulated sections with
-the oldest figures on top, in a channel specified as bounded and overwritten each increment — the
-first number a reader saw was two days stale.
+I first reported **one** failure. Fail-fast had stopped the run at 17 of 93 binaries; it is **twelve**.
+I had recorded that trap two increments earlier and did not apply it.
 
 ## Yours
 
-1. **`f16`** — blocked on **reference `f16` arithmetic**, not load acceptance, which alone would give a
-   wrong oracle. Recorded as not planned and not parked, after `Text<N>`.
+1. **`f16`** — still blocked on **reference `f16` arithmetic**, not load acceptance.
 2. **Publication**, still held.
 
 ## For whoever resumes
 
-Validate `docs/process/handoffs/v0.3.0.md` by running its ancestry block. **74 anchors, zero failures
-at the last stamp.** Scope kill patterns to `$(pwd)/target/debug/deps`; an unscoped one took out a
-sibling checkout's two-hour gate.
+Validate `docs/process/handoffs/v0.3.0.md` by running its ancestry block. **80 anchors, zero failures
+at this stamp.** Scope kill patterns to `$(pwd)/target/debug/deps`. Count with `--no-fail-fast`.
 
 ---
 ---
