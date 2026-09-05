@@ -75,8 +75,10 @@ failing configuration.
 nothing more. It does not run the tests, so a configuration marked ok here may still have failing
 tests — `compile,verify` did, and they were found separately. **Compiling is the floor, not evidence
 that behaviour was ever exercised.** The sweep also covers only the `keleusma` crate, and does not
-touch the mutually exclusive `narrow-word-*` and `narrow-address-*` selectors, nor `self-host`, nor
-`sdl3-example`.
+touch `self-host` or `sdl3-example`. **It did not touch the mutually exclusive `narrow-word-*` and
+`narrow-address-*` selectors either, and that exclusion is closed by the final section of this
+document** rather than left standing as a permanent boundary — an unexamined exclusion is the shape
+of gap this document exists to close.
 
 `--all-features` is deliberately not used: it cascades the narrowest word and address selectors and
 builds SDL3 from source, so it produces a confidently wrong answer here. The continuous-integration
@@ -105,3 +107,64 @@ is correct is a separate question this sweep does not address.
 
 **The unswept combinations are not known good.** Nine features and several mutually exclusive
 selectors make the unswept space far larger than the swept one.
+
+## The narrow word, address and float selectors: all compile, none verified
+
+The sweep above deliberately excluded the `narrow-*` selectors, because they are mutually exclusive
+within their groups and would have made that matrix incoherent. **That exclusion was then left
+unexamined, which is the shape of gap this whole document exists to close**, so they were swept
+separately on 2026-09-05.
+
+| configuration | build | what builds it today |
+|---|---|---|
+| default (control) | ok | CI and the release gate |
+| `narrow-word-8` | ok | **nothing** |
+| `narrow-word-16` | ok | **nothing** |
+| `narrow-word-32` | ok | **nothing** |
+| `narrow-address-8` | ok | **nothing** |
+| `narrow-address-16` | ok | **nothing** |
+| `narrow-address-32` | ok | **nothing** |
+| `narrow-float-32` | ok | **nothing** |
+| `narrow-word-16,narrow-address-16` | ok | **nothing** |
+| `narrow-word-32,narrow-address-32` | ok | **nothing** |
+
+**Measured, not inferred:** `narrow-word-16`, `narrow-word-32` and `narrow-address-16` appear **zero
+times** in `.github/` and in `scripts/`. No continuous-integration job and no release-gate step
+selects any narrow width.
+
+### The result is a clean negative, and that is worth stating plainly
+
+Ten of ten compile. **Nothing is broken on this axis today**, which is a different and better outcome
+than the feature sweep found, and reporting it as a near-miss would be dishonest.
+
+### What it does NOT establish, which is the part that matters
+
+**The tests were not run under any narrow selector.** `cargo check --tests` establishes that a
+configuration compiles. It says nothing about behaviour, and here that gap is known to be real rather
+than theoretical: the project instructions record that `--all-features` fails under the cascaded
+narrow configuration because **a test that pins 64-bit checked-addition semantics fails**. So
+"compiles" and "passes" are known to differ for these selectors, and only the first was measured.
+
+Whether that is one test or many is **unexamined**. It is the obvious next question and it needs a
+test run per selector rather than a build.
+
+### A narrow selector is not a cross-compilation target
+
+Continuous integration builds `thumbv7em-none-eabihf` and `wasm32-unknown-unknown`. Those are
+TARGETS. Selecting `narrow-word-16` on the host is a third thing: it changes the runtime's word type,
+not the machine it runs on. **Neither covers the other**, and treating the embedded target builds as
+coverage of the narrow widths would overstate what is verified.
+
+### On the 8-bit selectors specifically
+
+`tests/narrow_vm.rs` excludes `narrow-word-8` and `narrow-address-8` in its own configuration
+attribute. That is evidence they are a narrower case than the others rather than a fully exercised
+one, and it is recorded here so a future failure there is read against that exclusion rather than as
+an unqualified defect.
+
+### Recommendation, again not adopted
+
+If a narrow configuration is ever added to continuous integration, the informative one is a
+**coherent width** — a word and address width selected together — rather than a lone selector, since
+that is what an embedded target actually looks like. The cost is one job per width. As above, this
+is recorded rather than adopted: the standing per-push cost is the operator's call.
