@@ -552,6 +552,18 @@ pub enum LowerError {
     /// sentence "does not yet support opcode chunk 0 has a Float in its
     /// signature".
     UnsupportedShape(String),
+    /// A float width this backend does not lower, with the width as DATA.
+    ///
+    /// The word axis already had `UnsupportedWordWidth`; the float axis did not,
+    /// so seven float-width refusals sat inside `UnsupportedShape`'s prose and a
+    /// census could not read the width without parsing English. This is the same
+    /// treatment `unsupported_op` gave the opcode name, for the same reason.
+    UnsupportedFloatWidth {
+        /// The declared float width in bytes. Only 4 and 8 are lowered.
+        float_bytes: u32,
+        /// The sentence for a human. The census reads `float_bytes`.
+        detail: String,
+    },
     /// The input's own integrity failed — an out-of-range index, an arity
     /// mismatch, a reserved encoding.
     ///
@@ -637,6 +649,13 @@ impl LowerError {
     ///
     /// Takes the opcode name separately from the prose so the two cannot drift:
     /// the census reads `op`, and the sentence is for a human.
+    fn unsupported_float_width(float_bytes: u32, detail: String) -> Self {
+        LowerError::UnsupportedFloatWidth {
+            float_bytes,
+            detail,
+        }
+    }
+
     fn unsupported_op(op: &str, detail: String) -> Self {
         LowerError::UnsupportedOp {
             op: op.to_string(),
@@ -670,6 +689,9 @@ impl core::fmt::Display for LowerError {
                     f,
                     "native lowering does not yet support opcode {op}: {detail}"
                 )
+            }
+            LowerError::UnsupportedFloatWidth { detail, .. } => {
+                write!(f, "{detail}")
             }
             LowerError::UnsupportedShape(what) => {
                 // A neutral lead-in, because these messages are CLAUSES rather
@@ -1675,13 +1697,16 @@ fn lower_module_with<'ctx>(
             .enumerate()
             .find(|(_, sg)| shape_is_float(&sg.ret) || sg.params.iter().any(shape_is_float))
     {
-        return Err(LowerError::UnsupportedShape(format!(
-            "chunk {idx} has a Float in its signature and this module's Float is \
+        return Err(LowerError::unsupported_float_width(
+            float_bytes,
+            format!(
+                "chunk {idx} has a Float in its signature and this module's Float is \
                  {float_bytes} bytes wide; only 4- and 8-byte Floats have an entry ABI \
                  here. \
                  Refused rather than declared as a `double`, because a float of the \
                  wrong width is a wrong number and not a fault"
-        )));
+            ),
+        ));
     }
 
     // **THE FLOAT TYPE IS NOT BUILT HERE, AND THAT IS THE POINT.** It used to be,
@@ -3281,10 +3306,13 @@ fn lower_chunk_body<'ctx>(
                 // where a floor-style remainder would disagree.
                 if st.kind_at(0) == OperandKind::Float || st.kind_at(1) == OperandKind::Float {
                     if !float_width_lowered(float_bytes) {
-                        return Err(LowerError::UnsupportedShape(format!(
-                            "float division at a float width of {float_bytes} \
+                        return Err(LowerError::unsupported_float_width(
+                            float_bytes,
+                            format!(
+                                "float division at a float width of {float_bytes} \
                              bytes; only 4 and 8 are lowered"
-                        )));
+                            ),
+                        ));
                     }
                     let (kl, kr) = (st.kind_at(1), st.kind_at(0));
                     if kl != OperandKind::Float || kr != OperandKind::Float {
@@ -3417,10 +3445,13 @@ fn lower_chunk_body<'ctx>(
                 // reference, not on a differential.
                 if st.kind_at(0) == OperandKind::Float || st.kind_at(1) == OperandKind::Float {
                     if !float_width_lowered(float_bytes) {
-                        return Err(LowerError::UnsupportedShape(format!(
-                            "float comparison at a float width of {float_bytes} \
+                        return Err(LowerError::unsupported_float_width(
+                            float_bytes,
+                            format!(
+                                "float comparison at a float width of {float_bytes} \
                              bytes; only 4 and 8 are lowered"
-                        )));
+                            ),
+                        ));
                     }
                     let (kl, kr) = (st.kind_at(1), st.kind_at(0));
                     if kl != OperandKind::Float || kr != OperandKind::Float {
@@ -3782,12 +3813,15 @@ fn lower_chunk_body<'ctx>(
                 // `i64`; the tag is what carries the difference a width cannot.
                 if let ConstValue::Float(f) = cv {
                     if !float_width_lowered(float_bytes) {
-                        return Err(LowerError::UnsupportedShape(format!(
-                            "a float constant at a float width of {float_bytes} bytes; \
+                        return Err(LowerError::unsupported_float_width(
+                            float_bytes,
+                            format!(
+                                "a float constant at a float width of {float_bytes} bytes; \
                              only 4 and 8 are lowered, and another width is refused \
                              rather than approximated because a float of the wrong \
                              width is a silently wrong number, not a fault"
-                        )));
+                            ),
+                        ));
                     }
                     // **THE CONSTANT IS BUILT AT THE MODULE'S FLOAT WIDTH.** It
                     // took the `f64` pattern unconditionally, and the low 32
@@ -4212,11 +4246,14 @@ fn lower_chunk_body<'ctx>(
             // zero, which is what `as Word` means on the reference side.
             Op::IntToFloat | Op::FloatToInt => {
                 if !float_width_lowered(float_bytes) {
-                    return Err(LowerError::UnsupportedShape(format!(
-                        "{op:?} at a float width of {float_bytes} bytes; only 4 and 8 \
+                    return Err(LowerError::unsupported_float_width(
+                        float_bytes,
+                        format!(
+                            "{op:?} at a float width of {float_bytes} bytes; only 4 and 8 \
                          are lowered, and another width is refused rather than \
                          approximated"
-                    )));
+                        ),
+                    ));
                 }
                 let f64t = float_type(ctx, float_bytes);
                 // **Read the kind BEFORE popping.** `pop` lowers the depth and
@@ -4295,10 +4332,13 @@ fn lower_chunk_body<'ctx>(
                 let (kl, kr) = (st.kind_at(1), st.kind_at(0));
                 if kl == OperandKind::Float || kr == OperandKind::Float {
                     if !float_width_lowered(float_bytes) {
-                        return Err(LowerError::UnsupportedShape(format!(
-                            "float arithmetic at a float width of {float_bytes} \
+                        return Err(LowerError::unsupported_float_width(
+                            float_bytes,
+                            format!(
+                                "float arithmetic at a float width of {float_bytes} \
                              bytes; only 4 and 8 are lowered"
-                        )));
+                            ),
+                        ));
                     }
                     if kl != OperandKind::Float || kr != OperandKind::Float {
                         return Err(LowerError::unsupported_op(
@@ -4364,10 +4404,13 @@ fn lower_chunk_body<'ctx>(
                 // rather than the number.
                 if st.kind_at(0) == OperandKind::Float {
                     if !float_width_lowered(float_bytes) {
-                        return Err(LowerError::UnsupportedShape(format!(
-                            "float negation at a float width of {float_bytes} \
+                        return Err(LowerError::unsupported_float_width(
+                            float_bytes,
+                            format!(
+                                "float negation at a float width of {float_bytes} \
                              bytes; only 4 and 8 are lowered"
-                        )));
+                            ),
+                        ));
                     }
                     let f64t = float_type(ctx, float_bytes);
                     let bits = st.pop();

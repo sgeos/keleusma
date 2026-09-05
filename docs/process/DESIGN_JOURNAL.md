@@ -1,5 +1,47 @@
 # Design Journal
 
+## 2026-09-05 — [v0.3.0] The float axis gets the typed width refusal the word axis already had
+
+**Measured**: `native_codegen` **473 passed, 0 failed, 93 binaries** under default features and again
+under `narrow-float-32`, formatting clean, zero clippy warnings. Predicted 473 over 93 and hit exactly.
+
+### The same word/float asymmetry, in a second place
+
+`UnsupportedWordWidth(u8)` carried its width as data. **The float axis had no equivalent**, so seven
+float-width refusals sat inside `UnsupportedShape(String)` and the only way to recover the width was to
+parse English — the exact conflation `refusal_classes.rs` exists to prevent, one axis over.
+
+**This is the second independent appearance of the same asymmetry.** The first was the completeness
+sentinel: the float widths were enumerated, the word widths were not. Now the mirror image — the word
+width is typed, the float width was prose. **Neither axis is systematically ahead; attention simply
+went where it happened to go, twice, in opposite directions.**
+
+### What landed
+
+`UnsupportedFloatWidth { float_bytes, detail }`, with a constructor mirroring `unsupported_op`, seven
+sites migrated, and the classifier in `refusal_classes.rs` given a matching arm so these refusals are
+named rather than absorbed by its `_ => "other"`.
+
+**The residual bucket is now honest**: `UnsupportedShape` holds **two** genuinely miscellaneous sites
+instead of nine heterogeneous ones — a float return shape, and a native setting the B35 P7 flag.
+
+### A figure of mine was wrong and is corrected in place
+
+The earlier record said **8 of 9** sites refuse a float width. Reading each site: **7** carry
+`float_bytes`; line 1898 refuses a float RETURN SHAPE and names no width. It stays in
+`UnsupportedShape` on the merits.
+
+### The test failing was the useful part
+
+The payoff test first used `fn main() -> Word { 0 }` — **a program with no floats** — so imposing a
+narrow float width produced no refusal at all. **The anti-vacuity guard written into the test caught
+it**, refusing to pass on an empty measurement.
+
+Without that guard the test would have gone green while asserting nothing, which is the failure mode
+this line has spent the session chasing. **The cause was the test, not the change**, and it is recorded
+that way. The repaired test asserts the refusal reports the DECLARED width, so a constant or default in
+the field would fail rather than pass.
+
 ## 2026-09-04 — [v0.3.0] The second module-level guard, and a reading that reversed on inspection
 
 **Measured**: `native_codegen` **472 passed, 0 failed, 93 binaries** under default features and again

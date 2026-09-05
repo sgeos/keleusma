@@ -41,6 +41,7 @@ fn refusals_of(m: &keleusma::bytecode::Module) -> Vec<(&'static str, String)> {
             let label = match e {
                 LowerError::UnsupportedOp { .. } => "UnsupportedOp",
                 LowerError::UnsupportedShape(_) => "UnsupportedShape",
+                LowerError::UnsupportedFloatWidth { .. } => "UnsupportedFloatWidth",
                 LowerError::MalformedInput(_) => "MalformedInput",
                 LowerError::Internal(_) => "Internal",
                 _ => "other",
@@ -277,5 +278,56 @@ fn the_internal_class_renders_as_a_defect_rather_than_a_missing_feature() {
     assert!(
         !matches!(e, LowerError::UnsupportedOp { .. }),
         "the internal class is not distinguishable from an opcode refusal"
+    );
+}
+
+/// **THE POINT OF THE TYPED FLOAT-WIDTH REFUSAL: a census reads the width as
+/// DATA, not by parsing a sentence.**
+///
+/// `UnsupportedWordWidth` already carried its width. The float axis did not, so
+/// seven float-width refusals sat inside `UnsupportedShape(String)` and the only
+/// way to recover the width was to parse English — the exact conflation this
+/// file exists to prevent, one axis over.
+///
+/// Non-vacuity: the test asserts the width it reads is the one the module
+/// declared, so a variant carrying a constant or a default would fail rather
+/// than pass.
+#[test]
+fn a_float_width_refusal_carries_its_width_as_data() {
+    use keleusma_native::module_refusals;
+
+    // The program must actually USE a float: declaring a narrow width on a
+    // float-free module produces no refusal, which the guard below caught when
+    // this test first used `fn main() -> Word { 0 }`.
+    let mut m = compiled(
+        "fn main(w: Word) -> Word {\n  let a = w as Float;\n  let s = a + 1.5;\n  s as Word\n}\n",
+    )
+    .expect("compiles");
+    // Impose a float width this backend does not lower. The compiler stamps the
+    // build's own width, so it is imposed after compilation.
+    assert_ne!(
+        m.float_bits_log2, 4,
+        "this build already declares a 16-bit float, so imposing one below would \
+         be a no-op and this test would measure nothing"
+    );
+    m.float_bits_log2 = 4; // 16-bit: not 4 or 8 bytes, so not lowered
+
+    let widths: Vec<u32> = module_refusals(&m, LowerOptions::default())
+        .into_iter()
+        .filter_map(|(_, e)| match e {
+            LowerError::UnsupportedFloatWidth { float_bytes, .. } => Some(float_bytes),
+            _ => None,
+        })
+        .collect();
+
+    assert!(
+        !widths.is_empty(),
+        "no float-width refusal was produced for a 16-bit float, so this test \
+         measures nothing about the typed variant"
+    );
+    assert!(
+        widths.iter().all(|w| *w == 2),
+        "the refusal reports {widths:?} bytes for a 16-bit float. The width must be \
+         the DECLARED one; a constant or default would make the field decorative."
     );
 }

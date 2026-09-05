@@ -76,8 +76,13 @@ writing about refusal measurement.
 
 | what is refused | sites |
 |---|---|
-| **a float width that is not 4 or 8** — entry-ABI signature, native return shape, division, comparison, constant, arithmetic, negation, and a generic op arm | **8** |
+| **a float WIDTH that is not 4 or 8** — entry-ABI signature, division, comparison, constant, arithmetic, negation, generic op arm | **7** |
+| a float RETURN SHAPE, refused regardless of width | 1 |
 | a native call setting the B35 P7 error-reify flag | 1 |
+
+> ⚠ **CORRECTED.** This table first said **8** width refusals, folding in the float return shape at
+> `lib.rs` line 1898, which names no width and is refused for its shape. **Seven carry a width.** The
+> return-shape site belongs in `UnsupportedShape` on the merits and stayed there.
 
 **The backend's largest refusal class is almost entirely `float_width_lowered` saying no.** The enum
 documents it as "a type or feature this backend lacks, not attributable to one opcode", which is true
