@@ -39,6 +39,20 @@
 //! one shape of check it does not perform. If that is ever changed, this test
 //! fails and says so.
 //!
+//! # It is not one omission but a PATTERN, found by finishing the census
+//!
+//! A second instance was found the same way: `Op::Trap` carries a kind code, the
+//! virtual machine refuses an unrecognised one with the same error, and
+//! `verify()` admits it. Two independent operand-value gaps beside a pass that
+//! validates every INDEX it meets -- a data slot, a local slot, a constant-pool
+//! index, a chunk index, an indexed-data base, an enum tag, a flat field offset,
+//! and a `Reset` in a non-stream chunk are each rejected with a precise message.
+//!
+//! **That reframes the finding.** One unchecked operand reads as an oversight;
+//! two, against eight checked indices, reads as a boundary in what the pass was
+//! built to cover. Which it is remains the operator's to say -- the observation
+//! is recorded, not the intent.
+//!
 //! # Not repaired
 //!
 //! Adding a check costs time on every load, and this project rejects
@@ -124,6 +138,44 @@ fn a_reserved_immediate_is_admitted_at_load_and_trapped_at_run() {
 }
 
 extern crate alloc;
+
+/// **The second instance: an unrecognised `Trap` kind code is also admitted.**
+///
+/// Found while finishing the census rather than by extending this test
+/// speculatively. It matters because it turns a single unchecked operand into a
+/// pattern: this pass validates indices and not operand value ranges.
+#[test]
+fn an_unrecognised_trap_kind_is_also_admitted_at_load() {
+    // A multiheaded function emits the no-matching-head trap; ordinary bodies do
+    // not, which the vacuity guard below would otherwise report.
+    let src = "enum C { A, B }\n\
+        fn describe(C::A) -> Word { 1 }\n\
+        fn describe(C::B) -> Word { 2 }\n\
+        fn main(k: Word) -> Word { describe(C::A) }";
+    let mut module =
+        compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+
+    let mut applied = 0;
+    for chunk in module.chunks.iter_mut() {
+        for op in chunk.ops.iter_mut() {
+            if let Op::Trap(kind) = op {
+                *kind = 250;
+                applied += 1;
+            }
+        }
+    }
+    assert!(
+        applied > 0,
+        "this source no longer emits Op::Trap, so the verdict would be vacuous -- the same \
+         way an earlier revision of this file reported a verdict on a mutation that never \
+         happened"
+    );
+
+    verify(&module).expect(
+        "verify() now rejects an unrecognised trap kind. That closes the second half of this \
+         pattern at the load layer; record it rather than deleting the test.",
+    );
+}
 
 /// **The controls: every INDEX the same pass meets is validated at load.**
 ///
