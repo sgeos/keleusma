@@ -20,7 +20,12 @@
 //! `(required, delta)` and already encoded the true semantics — is the pop/push
 //! model. Each reader gets the numbers it actually wants.
 
-#![cfg(feature = "compile")]
+// It imports `keleusma::verify`, so it needs that feature as well as `compile`.
+// Gated on `compile` alone, `--features compile` did not BUILD -- found by the
+// feature-combination sweep, not by anything that runs routinely, because no
+// continuous-integration job and no release-gate step builds `compile` without
+// `verify`.
+#![cfg(all(feature = "compile", feature = "verify"))]
 
 use keleusma::bytecode::{Chunk, Op};
 use keleusma::verify::op_depth_effect;

@@ -1943,6 +1943,155 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-04 — the `InvalidBytecode` class, enumerated because the last find was luck
+
+**The increment.** `docs/decisions/INVALID_BYTECODE_CENSUS.md` enumerates every site where the
+runtime raises the error meaning *this artefact should never have been produced* — the class
+`verify()` exists to exclude. **46 construction sites; 17 with an examined verdict, 29 explicitly
+marked not examined.**
+
+**Why enumerate at all.** The `Multiword` hole was found BY ACCIDENT while removing an unrelated
+fallback. An accidental find in a class nobody has counted says nothing about how many remain, and
+waiting for a second accident is not a method.
+
+**One hole found, and it is an ordinary deployment shape.** A float-using module verifies, loads,
+and traps on a runtime built without the `floats` feature. Two independent reasons nothing catches
+it earlier: `verify.rs` has no `floats` gating whatsoever, and `RUNTIME_FLOAT_BITS_LOG2` is not
+gated either, so a no-floats build still advertises the full width and the header comparison
+passes. Nothing is corrupt — omitting floats is the point of the feature.
+
+**Pinned, not repaired, and the reason is not caution for its own sake.** The repair is about ten
+lines in `verify()` and was prototyped to validate the pin, then reverted. **Continuous integration
+builds no configuration in which the pin compiles**. (Corrected 2026-09-05: the loose claim that
+CI "does not run this feature set" was wrong. It runs `--no-default-features`, but BARE, so `verify`
+is absent and the pin is configured out; every other job is additive to the defaults and has floats.
+The conclusion held and the reason did not.) Landing a repair into a
+configuration CI cannot see is the shape that shipped a red Doc job in V0.2.1.
+
+**Group D looked like the next hole and was a defence.** The compiler bakes a flat access for a
+scalar-fielded struct; `struct_with_widths` says a host-built composite is boxed; the dispatch sends
+every other pairing to a refusal. Seven shapes through a native, none reached it — because a
+host-returned composite is canonicalized at the call boundary into an arena-resident flat body.
+
+**And my first mutation of that claim was aimed at the wrong call site and PASSED.** I removed the
+canonicalization on the argument path; nothing failed, because the return path is a different site.
+Removing it on the native-result path produces exactly the refusal. **A guard that has not been made
+to fail is a guess, and so is an explanation** — the census would otherwise have recorded a
+mechanism that does not do the work attributed to it.
+
+**Group C is held by two checks that only compose.** `verify()` bounds `Fixed` fraction bits by the
+MODULE's declared word width; loading rejects a module declaring a width wider than the RUNTIME's.
+Neither alone is sufficient, and loosening the load-time comparison reopens five sites at once.
+Nothing anywhere said so.
+
+**Three corrections to my own work in one increment**, all caught before they landed. The census's
+first draft said 48 sites against 46, because grep counts text and a doc comment reads like a
+construction site; re-derived by classifying every match rather than adjusting the total. The float
+test's first control reused the float fixture and separated nothing; it now compiles its own
+program. And I committed while clippy was failing, because an `&&` chain read GREP's status rather
+than clippy's — the fourth costume of the same status trap this tree has recorded three times.
+
+**The census cannot drift**: a guard derives the population the way the document says it was derived,
+and is mutation-tested. Its reach is stated in both places — it sees the error written in that form,
+not one returned pre-built or mapped from another kind, and one such conversion exists and is counted
+only because the grep happened to see it. That is evidence the class has members this scan cannot
+enumerate, so the population is a lower bound and the document says so.
+
+---
+
+## 2026-09-04 — the `Op::Len` trap is closed, and the second site was not latent
+
+**The increment.** Both compiler emission sites for `Op::Len` are gone. The for-in iteration bound
+and the checked-index bounds check each fold the length from the operand's type, or fail with a
+compile error naming the unfoldable length. The virtual machine keeps its refusals, which now defend
+against a corrupt or hand-built module rather than against the compiler.
+
+**The analysis document predicted the wrong answer, and the way it was wrong is the finding.**
+`OP_LEN_ROOT_REPAIR.md` argued that delegating to type inference would close one of the seven
+expression forms that can carry an array type, because `infer_expr_type` has no match arm for six of
+them. Measured, the delegation closes six. The function consults an authoritative per-span type
+table recorded by the post-monomorphization type-check pass **before** its structural half, so it
+already answers for forms whose arms are absent. The prediction was made by reading the
+implementation's internals instead of what the data path carries, which is the same mistake this
+line paid for twice under the heading that "the driver discards X" and "X is unreachable" are
+different claims.
+
+**The second emission site was reachable today, with nothing holding it shut.** The checked-index
+construct over a `Multiword` folded its length through a helper that answers only for array types,
+fell back to `Op::Len`, and a multi-word body is flat. Measured against the pre-change baseline by
+stashing: the program compiled, passed `verify()`, took a memory bound, **loaded, and trapped
+`InvalidBytecode`** — the class `verify()` exists to exclude. The recorded array trap needed someone
+to lift the loop-bound refusal first; this one needed nothing.
+
+It was found by enumerating every emission of the opcode rather than by following the witness
+already in hand. Fixing only the site the hazard test names would have been a guard scoped to where
+its author was looking, which is the failure this tree has recorded three times in a week.
+
+**The repair to it is a capability gained, not lost.** The multi-word width is folded, so
+`m[0] { ok(v) => .., invalid_index(i) => .. }` now returns the digit instead of trapping.
+
+**Every guard was made to fail.** Four mutations, each caught by the guard that should catch it:
+removing the multi-word length arm, removing the delegation fallback, folding a bound one short, and
+reinstating an emission. A guard that has not been made to fail is a guess.
+
+**The floor has no witness, and that is recorded as "not found".** No source form reaches the
+compile error behind it — every form that can carry an array type folds. So the floor is pinned by a
+source scan for the emission form, with its reach stated in the test: it sees that one written shape
+in one file, and would not see an emission written through a different binding or built by pushing
+to the op vector directly. A guard whose reach is unstated gets read as a guarantee.
+
+**A concern raised, then measured, and the measurement made it smaller.** The fold trusts a
+function's declared return type for the array length, and no check validates a native's returned
+element count against it. I suspected a soundness gap in the headline guarantee. **There is not
+one**, and reporting the shrinkage is as much the job as raising the worry was.
+
+Measured, and pinned in `tests/native_array_length_contract.rs`: a native declaring `[Word; 3]` and
+returning three iterates three times; returning five iterates three and **silently drops the
+excess**; returning one **traps `IndexOutOfBounds`**; and an unsignatured native is **refused at type
+checking**, so it can never occupy an iterable position at all.
+
+**No row runs the loop more times than the analysis predicted**, which is the direction that would
+be unsound. And the memory bound does not derive from this type either: a native's worst-case memory
+is host-attested per native, so an over-allocating native has broken its own attestation rather than
+found a compiler defect. The residue is that an over-long return is truncated with no diagnostic —
+real, narrow, and a design question rather than a fix.
+
+**The fourth row is also the missing half of the capability argument.** I had claimed no capability
+was lost on the strength of a green corpus, which is evidence about the corpus first; a native's
+array is exactly the shape a corpus under-represents and an embedding contains. The measurement
+closes it properly: the only native whose length is unknown is one the type checker already refuses
+in that position. Every row was taken against the pre-change compiler too, by restoring
+`src/compiler.rs` from the branch point, and all four are identical.
+
+**My own test was non-deterministic on its first revision.** Registration takes a `fn` pointer
+rather than a closure, so the returned element count lives in a process-global, and cargo runs the
+file's tests on parallel threads: one test set the count while another read it, and the under-long
+case passed or failed by interleaving. A verdict that depends on thread scheduling launders a coin
+flip as evidence. Serialised with a lock held across the whole run, and the lock carries that
+reason, because the next person to add a case here will otherwise remove it as ceremony.
+
+**And the guards that pinned the OLD behaviour were the ones I did not scope for.** I corrected
+every stale claim in `docs/` and `src/` and did not grep `tests/`. The corpus run found two tests in
+`tests/opcode_reachability.rs` asserting that the witness REACHES the opcode and that the module
+must fail to load. Both were correct records that my change falsified. The suite caught what my
+scan did not, which is the fourth instance this week of a scan scoped to where its author was
+looking -- and the first where the thing it missed was a test rather than a source file.
+
+Both are updated rather than deleted, and each carried its own instruction for this moment: one said
+"if `static_for_in_length` gained an `Expr::If` arm, this opcode may have no remaining producer and
+that is worth knowing", the other "if it has no producer either, both fallbacks are now unwitnessed
+and that is a larger ISA finding". They were right on both counts.
+
+**The ISA finding, stated at the width the evidence supports.** No producer for `Op::Len` was found
+in the reference compiler: zero emissions in `src/`, and none in the self-hosted `codegen.kel`. On a
+project whose opcode count is a design constraint that reads like a removal candidate. **It is
+recorded, not proposed.** Removing an opcode is a wire change and the operator's call, and this very
+file records `Op::IsStruct` being declared producerless and having four producers found within the
+hour. The claim is "no producer FOUND", and the virtual machine keeps both refusals regardless,
+because a corrupt or hand-built module can still carry the opcode.
+
+---
+
 ## 2026-09-03 — Session 62: `Text<N>` through four increments, and a refusal's reason outliving the refusal
 
 Seven merges into `v0.2.3`, and two pull requests still open at the time of writing. The merged

@@ -36,8 +36,10 @@ Same shape as two other findings this week, and worth naming as a class:
 - The `v0.3.0` line found `Op::Reset` credited as lowered because the *chunk*
   containing it lowered, while the op sat in a region no edge reaches. A mutation
   crediting it moved their figure to 57 of 66 **with every test still green**.
-- `Op::IsStruct` and `Op::Len` are emitted only on fallback paths, and one of them
-  still has no witness.
+- `Op::IsStruct` and `Op::Len` were emitted only on fallback paths, and one of them
+  still has no witness. **`Op::Len` has had no emission site at all since
+  2026-09-04**; both of its fallback paths were replaced by a folded length or a
+  compile error.
 
 **Code being present, dispatched, and even announced is not evidence it runs.** The
 cheap check is to search for its callers before costing work that depends on it.

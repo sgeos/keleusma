@@ -355,22 +355,23 @@ fn the_skipped_region_kinds_are_the_ones_on_record() {
          in the driver's doc comment and in the handoff, and replace this test with one \
          asserting completeness"
     );
-    // FIVE, down from six on 2026-08-31 when `SHARED_LAYOUT` was routed. `DATA_INIT` is still
-    // listed and that is not a failure to route it: it IS routed, and matches the reference, for
-    // the eleven stage sources whose private-initialiser pool is elided. The twelfth,
-    // `verify_datalayout.kel`, stores its pool in the shared constant table, and predicting the
-    // index it lands at means modelling the encoder's constant ordering -- the `CONSTS` problem,
-    // and a separate increment. That one stage keeps the kind on this list.
+    // FOUR, down from five on 2026-09-04 when `DATA_INIT` left the set, which was itself down
+    // from six on 2026-08-31 when `SHARED_LAYOUT` did. `DATA_INIT` was listed for one stage
+    // only -- `verify_datalayout.kel`, whose private-initialiser pool is not elided -- and the
+    // reason recorded for leaving it was that predicting the pool's index means modelling the
+    // encoder's constant ordering. **That is true of a pool with CONTENTS.** This one is EMPTY,
+    // so its index is simply where the pool would have started, and the driver now computes it
+    // from the constant-root count where every root is a scalar.
     //
     // **A kind is listed here if it is skipped for ANY stage**, so this figure moves only when a
     // kind is routed for EVERY stage. That is the conservative reading and the right one: a kind
     // routed for most inputs is not a kind the driver covers.
     assert!(
-        skipped.len() <= 5,
-        "{} kinds are skipped: {skipped:02x?}. FIVE are on record after `SHARED_LAYOUT` was \
-         routed -- `ENUM_VARIANTS`, `ENUM_LAYOUTS`, `DATA_SLOTS`, `DATA_INIT` (for the one \
-         stage that does not elide) and `PARAM_TYPES`. More means the driver has stopped \
-         routing something it used to",
+        skipped.len() <= 4,
+        "{} kinds are skipped: {skipped:02x?}. FOUR are on record after `DATA_INIT` was \
+         routed -- `ENUM_VARIANTS`, `ENUM_LAYOUTS`, `DATA_SLOTS` and `PARAM_TYPES`, all four \
+         waiting on the name-interning route. More means the driver has stopped routing \
+         something it used to",
         skipped.len()
     );
 }

@@ -2,6 +2,12 @@
 #![cfg(all(
     feature = "compile",
     feature = "verify",
+    // The reference tables below name `ScalarKind::Float`, a variant that does not
+    // exist without the `floats` feature, so this file cannot COMPILE there. It was
+    // invisible because the release gate's no-default step does not add
+    // `compile,verify`, leaving this combination built by nothing. Same family as the
+    // verify-without-floats build failure V0.2.2 repaired.
+    feature = "floats",
     not(feature = "narrow-word-8"),
     not(feature = "narrow-word-16"),
     not(feature = "narrow-word-32")

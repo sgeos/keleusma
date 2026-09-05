@@ -11,7 +11,12 @@
 //! the tree was green; see `tests/operand_stack_model.rs`. These are the
 //! remaining models, each checked against a source that is not itself.
 
-#![cfg(feature = "compile")]
+// It uses `Vm::new` / `keleusma::verify`, both of which the `verify` feature
+// provides, so it needs that feature as well as `compile`. Gated on `compile`
+// alone, `--features compile` did not BUILD. Found by the feature-combination
+// sweep: no continuous-integration job and no release-gate step builds `compile`
+// without `verify`, so nothing reported it.
+#![cfg(all(feature = "compile", feature = "verify"))]
 
 use keleusma::bytecode::{Chunk, Module, Op};
 

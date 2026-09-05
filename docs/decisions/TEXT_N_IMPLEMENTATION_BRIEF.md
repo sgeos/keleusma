@@ -165,12 +165,17 @@ Two guards will fire the moment emission is wrong rather than merely incomplete:
 
 ### The trap that is armed and will bite this increment specifically
 
-`Op::Len` is emitted on arrays and refused by the virtual machine, held shut only by the
-loop-bound refusal, which the taxonomy calls liftable. `Text<N>` will want a length operation.
-**Read [`OP_LEN_ROOT_REPAIR.md`](./OP_LEN_ROOT_REPAIR.md) before adding one**: it measures the class,
-shows that the obvious type-inference fallback closes one of seven cases, and argues the floor --
-refusing at the emission site rather than emitting an opcode the runtime rejects -- should be built
-first.
+`Op::Len` was emitted on arrays and refused by the virtual machine. **The trap was disarmed on
+2026-09-04**: the compiler has no emission site for the opcode, both former sites folding the length
+or failing with a compile error. `Text<N>` will still want a length operation.
+
+**Read [`OP_LEN_ROOT_REPAIR.md`](./OP_LEN_ROOT_REPAIR.md) before adding one**, for the rule rather
+than the trap: a length must come from the operand's type where the type has it, and where it does
+not the compiler must refuse rather than emit an opcode the runtime rejects. A `Text<N>` length is
+NOT a folded constant -- `N` is the capacity and the length is a runtime value in the composite's
+first word -- so a length operation on it reads that word and must not reach `Op::Len` at all. That
+document also records that its own prediction about how many cases a type-inference fallback would
+close was wrong by a factor of six, which is worth reading before trusting any estimate in it.
 
 ## Specific wrong turns to avoid
 

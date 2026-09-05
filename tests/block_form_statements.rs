@@ -75,6 +75,10 @@ fn a_block_form_statement_program_compiles() {
 /// contradiction is worse than one that resolves to nothing, because it looks
 /// like a reference.
 #[test]
+// The grammar's example uses `Float` and float literals, which the LEXER refuses
+// without the `floats` feature. Gated rather than rewritten, because the point of the
+// test is that the grammar's own example parses VERBATIM.
+#[cfg(feature = "floats")]
 fn the_break_statement_documented_in_the_grammar_parses() {
     // The grammar's own example, transcribed with only a function wrapper added.
     assert!(parses(

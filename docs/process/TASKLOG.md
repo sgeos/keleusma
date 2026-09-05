@@ -10,6 +10,48 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-04, session 63, later). THE `InvalidBytecode` CLASS IS ENUMERATED, AND
+> ONE HOLE IS PINNED OPEN.**
+>
+> **A float-using module verifies, loads, and traps on a runtime built without the `floats`
+> feature.** `verify.rs` has no `floats` gating at all, and `RUNTIME_FLOAT_BITS_LOG2` is not gated
+> either, so a no-floats build advertises full width and the header check passes. Not corrupt: an
+> embedded target omitting floats is the point of the feature. **Pinned, NOT repaired** — the ~10
+> line repair was prototyped and reverted because continuous integration does not run this feature
+> set. Operator decision recorded in `REVERSE_PROMPT.md`.
+>
+> `docs/decisions/INVALID_BYTECODE_CENSUS.md`: **46 construction sites, 17 examined, 29 explicitly
+> not examined.** No site claimed unreachable. Two defences recorded because neither is visible where
+> it matters — the `Fixed` group needs two checks composing, and the composite-form group is held by
+> a boundary canonicalization whose first mutation test was aimed at the wrong call site and passed.
+>
+> No opcode added, no `BYTECODE_VERSION` change. Publication remains held.
+
+> **Currency note (2026-09-04, session 63). THE `Op::Len` TRAP IS CLOSED, AND ONE SITE WAS LIVE.**
+>
+> **Both compiler emission sites for `Op::Len` are gone.** The for-in iteration bound and the
+> checked-index bounds check each fold the length from the operand's type or fail with a compile
+> error. Every iterable form that can carry an array type folds and runs -- eleven tried, each
+> asserted on its ITERATION COUNT so a wrong bound fails rather than passing quietly. Four
+> mutations, four caught.
+>
+> **The recorded hazard was latent; the second site was not.** Checked indexing over a `Multiword`
+> folded through an array-only length helper, fell back to the opcode over a flat body, and the
+> program compiled, verified, took a bound, LOADED, and trapped `InvalidBytecode` -- reachable with
+> no lifted refusal required. Repaired by folding the multi-word width, so it now works rather than
+> being refused. Found by enumerating every emission, not by following the known witness.
+>
+> **`OP_LEN_ROOT_REPAIR.md` predicted a type-inference fallback would close one of seven forms; it
+> closes six.** The prediction read `infer_expr_type`'s structural match arms and missed that the
+> function consults the authoritative per-span type table first. The document is corrected in place.
+>
+> **An ISA observation, recorded and NOT acted on**: no producer for `Op::Len` was found in the
+> reference compiler or the self-hosted `codegen.kel`. Removing an opcode is a wire change and the
+> operator's call, and this tree records `Op::IsStruct` being declared producerless with four
+> producers found within the hour. The claim is "no producer FOUND".
+>
+> No opcode added, no `BYTECODE_VERSION` change. Publication remains held.
+
 > **Currency note (2026-09-03, session 62). `Text<N>` HAS A FLAT LAYOUT, AND MY OWN HANDOFF WAS RED.**
 >
 > **The session-61 handoff refresh broke a test that pins the handoff's own content**, by deleting
