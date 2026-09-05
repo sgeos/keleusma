@@ -49,6 +49,43 @@ per variant — on the order of fifteen minutes each, so roughly three hours for
 **That is affordable, unlike the 60-hour opcode sweep**, and it is the shape a future increment should
 take. It is not attempted here because attempting it badly is how the unsound table happened.
 
+## CALIBRATED 2026-09-04: the method works, the cost is measured, and the extrapolation has an assumption
+
+One variant was run as a **control** — `UnsupportedWordWidth`, whose single construction site is known
+and which had just been guarded, so a failure to detect would indict the method rather than the tree.
+
+**The refusal was disabled entirely and the suite run with `--no-fail-fast`.**
+
+| | |
+|---|---|
+| cost, one variant, one configuration | **13m 0s** |
+| result | 469 passed, **3 failed**, 93 binaries |
+| detection set | `a_module_level_refusal_is_visible_to_module_refusals`, `exactly_one_word_width_is_accepted_and_the_partition_is_complete`, `the_embedded_targets_are_refused_for_word_width_not_float_width` |
+
+**The method detects, and detects specifically**: a control, plus two independent catchers, with no
+unrelated collateral failures.
+
+### The cost prediction missed, and the cause is worth more than the number
+
+The estimate recorded ABOVE, before the calibration, was *"fifteen minutes each, roughly three hours
+for eleven"*. **That was accurate.** The in-flight prediction made at calibration time was 7 to 8
+minutes — **a good recorded estimate revised downward, without consulting it, into a worse one.**
+
+**That is the record-not-consulted shape applied to this line's own figure from the previous
+increment.** The remedy already written in `SCOPE_DELETION.md` is to search before asserting; it was
+not applied to an estimate because an estimate did not feel like a claim.
+
+### The extrapolation, and the assumption it rests on
+
+Eleven variants at 13 minutes is **about 2.4 hours** for one configuration, which is affordable.
+
+> ⚠ **THAT ASSUMES EVERY VARIANT DISABLES AS CLEANLY AS THIS ONE.** `UnsupportedWordWidth` has a
+> single construction site returning a `Result` that is trivially replaced by `Ok(())`.
+> `UnsupportedShape` and `MalformedInput` are constructed in many places, and disabling a refusal may
+> fail to compile or change behaviour so that tests fail for unrelated reasons. **The per-variant
+> mutation is engineering work, not a uniform transformation**, and the wall-clock figure does not
+> cover it.
+
 ## The one thing the attempt did establish
 
 `InvalidIr` has exactly **one** construction, wrapping LLVM's own module verification. It is an
