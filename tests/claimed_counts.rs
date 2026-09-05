@@ -166,10 +166,30 @@ fn the_stated_figures_say_how_they_were_measured() {
          reader comparing it against a grep for `#[test]` would get a different number and think \
          the document wrong."
     );
+    // **A DATE IN THE RIGHT SHAPE, NOT ONE PARTICULAR DATE.**
+    //
+    // This assertion used to require the literal string `Measured 2026-08-28`, which made the
+    // honest act of RE-MEASURING fail the guard. A check that fires on the correct behaviour
+    // teaches its reader to weaken it, and a weakened guard is worse than none: the next person
+    // to re-derive the figures would have deleted the assertion rather than updated a date they
+    // had no reason to think was load-bearing.
+    //
+    // What the guard actually wants is that the figures carry SOME measurement date, so a reader
+    // can judge how far they may have drifted. That is what is checked.
+    let dated = INSTRUCTIONS.match_indices("Measured ").any(|(i, _)| {
+        let rest = &INSTRUCTIONS[i + "Measured ".len()..];
+        let d: Vec<char> = rest.chars().take(10).collect();
+        d.len() == 10
+            && d[..4].iter().all(char::is_ascii_digit)
+            && d[4] == '-'
+            && d[5..7].iter().all(char::is_ascii_digit)
+            && d[7] == '-'
+            && d[8..10].iter().all(char::is_ascii_digit)
+    });
     assert!(
-        INSTRUCTIONS.contains("Measured 2026-08-28"),
-        "the stated figures no longer carry the date they were measured, so a reader cannot tell \
-         how far they may have drifted"
+        dated,
+        "the stated figures no longer carry the date they were measured in the form \
+         `Measured YYYY-MM-DD`, so a reader cannot tell how far they may have drifted"
     );
 }
 

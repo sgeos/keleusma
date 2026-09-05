@@ -2,7 +2,62 @@
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
 
-**Status**: Analysis, measured against the tree. Not implemented. Written 2026-09-03.
+**Status**: **IMPLEMENTED 2026-09-04.** The analysis below was written 2026-09-03 and is kept
+verbatim beneath the outcome, because two of its central predictions were WRONG and the way they
+were wrong is more useful than the parts that were right.
+
+## OUTCOME, and where this document was mistaken
+
+**Both emission sites are gone.** The for-in bound and the checked-index bounds check each fold the
+length from the operand's type or fail with a compile error. `tests/len_flat_array_hazard.rs`
+carries the ratchet, mutation-tested in four directions.
+
+### Prediction one, wrong: "the generic fallback closes exactly one of seven"
+
+This document argued that delegating to type inference would fix only `TupleIndex`, because
+`infer_expr_type` has no arm for `If`, `MethodCall`, `Pipeline`, `Yield`, `Classify` or
+`Declassify`. **Measured, the delegation closes six of the seven**, and every iterable form that can
+carry an array type now folds and runs.
+
+The reasoning failed because it read `infer_expr_type`'s structural match arms and stopped there.
+The function consults an **authoritative per-span type table** recorded by the post-monomorphization
+type-check pass BEFORE its structural half, so it already answers for forms whose arms are absent.
+The seventh, `classify`, is refused earlier by an unrelated rule -- a labelled array is not an array
+to for-in -- and that row is struck rather than defended, as this document instructed.
+
+**This is the tree's recorded failure mode in a fresh costume**: reading an implementation's
+internals to predict what a data path carries, where reading what the path actually carries settles
+it. The same mistake cost two increments earlier in this line under the heading "the driver discards
+X" and "X is unreachable" are different claims.
+
+### Prediction two, wrong by omission: the class was not one site, and not all of it was latent
+
+This document treated the hazard as the for-in path. There were **two** emission sites, and the
+second was worse. The checked-index construct over a `Multiword` folded its length through a helper
+that answers only for array types, fell back to `Op::Len`, and a multi-word body is flat.
+
+Measured: that program **compiled, passed `verify()`, LOADED, and trapped `InvalidBytecode` at run
+time**. The array trap needed someone to lift the loop-bound refusal first. **This one was held shut
+by nothing** and was reachable on the day it was measured. It is repaired by folding the multi-word
+width, so the construct now works rather than being refused.
+
+Found by grepping every emission of the opcode rather than by following the one the hazard test
+named -- which is the scope-by-the-class rule, and it paid immediately.
+
+### What this document got right
+
+The floor. "Refuse at the emission site rather than emit an opcode the runtime rejects" is what was
+built, it cost no opcode, and it is the part that makes any remaining gap safe. Also right: do not
+delete the ratchet, do not trust a folded length without checking it, and do not take the
+seven-member table as verified reachability.
+
+**The floor has no known witness.** Every form found folds, so nothing reaches the compile error
+behind it. That is recorded as *not found*, never as *unreachable*, and the guard on it is a source
+scan whose reach is stated in the test rather than assumed.
+
+---
+
+## The analysis as written on 2026-09-03, kept for the record
 
 ## What is recorded, and what it gets right
 

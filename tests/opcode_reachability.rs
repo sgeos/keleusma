@@ -65,25 +65,47 @@ fn ops_of(src: &str) -> Vec<Op> {
         .collect()
 }
 
-/// **`Op::Len` IS REACHABLE IN BYTECODE, AND THE WITNESSING PROGRAM CANNOT BE
-/// GIVEN A MEMORY BOUND.** Both halves matter on this project.
+/// **`Op::Len` NO LONGER HAS A PRODUCER IN THE REFERENCE COMPILER**, and this
+/// test is the record of how its last one was removed.
 ///
-/// The construct is an `if` EXPRESSION as a `for`-in source.
+/// # What this test asserted until 2026-09-04, and why the reversal is the point
 ///
-/// `Op::Len` is emitted only when `static_for_in_length` returns `None`. That
-/// function matches on `ArrayLiteral`, `Call`, `FieldAccess`, `Ident`,
-/// `ArrayIndex` and `Match`, then falls through to `_ => None`. **`Expr::If` is
-/// not among them**, so an `if` expression as the iteration source takes the
-/// fallback.
+/// It asserted that an `if` EXPRESSION as a `for`-in source REACHES `Op::Len`,
+/// because `static_for_in_length` matched six expression kinds and fell through
+/// to `_ => None` for everything else. That was true, was found by reading the
+/// guard's match arms for what they omit, and its own failure message said: "if
+/// `static_for_in_length` gained an `Expr::If` arm, this opcode may have no
+/// remaining producer and that is worth knowing".
 ///
-/// Found by reading the guard's match arms for what it omits, after six probes
-/// that varied the SHAPE of the source rather than its expression KIND.
+/// It gained something better than an `Expr::If` arm. The fold now delegates to
+/// the authoritative per-span type table when its structural arms decline, so
+/// every expression form that can carry an array type folds. The witness below
+/// compiles, is bounded, loads, and runs.
 ///
-/// The controls matter as much as the case: every other source kind is checked to
-/// take the static path, so a change that made `static_for_in_length` return
-/// `None` for everything would fail here rather than look like a win.
+/// # The claim this test makes, stated at the width it can support
+///
+/// **No producer was FOUND in the reference compiler.** Not that the opcode is
+/// unreachable. This distinction is not pedantry here: `Op::IsStruct` was
+/// recorded in this very file as having no producer, another line found four
+/// within the hour, and the retraction is still in the tree. The compiler-wide
+/// scan lives in `tests/len_flat_array_hazard.rs` with its reach stated.
+///
+/// The virtual machine keeps its two refusals regardless, because a corrupt or
+/// hand-built module can still carry the opcode, and the wire format keeps its
+/// tag so such a module round-trips to a diagnosable error rather than to
+/// nonsense.
+///
+/// **This is an ISA observation, not an ISA proposal.** On a project whose
+/// opcode count is a design constraint, an opcode with no producer looks like a
+/// removal candidate. Removing one is a wire change and the operator's call, and
+/// the `Op::IsStruct` history above is the reason not to volunteer it from a
+/// single scan.
+///
+/// The controls matter as much as the case: every source kind is checked to take
+/// the static path, so a change that made the fold return `None` for everything
+/// would fail here rather than look like a win.
 #[test]
-fn a_for_in_over_an_if_expression_reaches_op_len() {
+fn a_for_in_over_an_if_expression_no_longer_reaches_op_len() {
     const WITNESS: &str = "fn f(c: bool) -> Word { let a = [1, 2]; let b = [3, 4]; \
                            for x in if c { a } else { b } { let _d = x; } 0 }\n\
                            fn main() -> Word { f(true) }";
@@ -93,47 +115,40 @@ fn a_for_in_over_an_if_expression_reaches_op_len() {
          fn main() -> Word { f(true) }",
     );
     assert!(
-        reached.iter().any(|o| matches!(o, Op::Len)),
-        "an `if`-expression `for`-in source no longer reaches `Op::Len`; if \
-         `static_for_in_length` gained an `Expr::If` arm, this opcode may have no \
-         remaining producer and that is worth knowing"
+        !reached.iter().any(|o| matches!(o, Op::Len)),
+        "an `if`-expression `for`-in source reaches `Op::Len` again. The virtual \
+         machine refuses that opcode on a flat array body, so this module can pass \
+         `verify()`, load, and then trap `InvalidBytecode` -- the class `verify()` \
+         exists to exclude. Fold the length from the source's type instead."
     );
 
-    // **AND THE QUALIFICATION THAT CHANGES WHAT "REACHABLE" MEANS HERE.**
+    // **THE QUALIFICATION THAT USED TO SIT HERE IS DISCHARGED, NOT DELETED.**
     //
-    // Raised by the `v0.3.0` line and verified here rather than taken on report.
-    // `verify()` ACCEPTS this program; `module_wcmu` REFUSES it, with "loop at
-    // instruction 20 has no statically extractable iteration bound".
+    // It read: `verify()` accepts this program while `module_wcmu` refuses it,
+    // with "loop at instruction 20 has no statically extractable iteration
+    // bound"; and the two facts were one fact, because the opcode was emitted
+    // exactly when the source had no statically known length, which is exactly
+    // what the bound extractor refuses.
     //
-    // **THE TWO FACTS ARE ONE FACT.** `Op::Len` is emitted exactly when the
-    // `for`-in source has no statically known length, and a loop whose trip count
-    // is not statically known is exactly what the bound extractor refuses. The
-    // property that makes the opcode reachable IS the property that makes the loop
-    // unbounded. They are not two limitations that might be lifted separately.
+    // That analysis was right, and it is what made the trap dangerous rather
+    // than harmless. The refusal was in the SECOND category of
+    // `LANGUAGE_DESIGN.md` -- provable in principle, analysis not implemented --
+    // so it was liftable, and lifting it would have turned a rejected program
+    // into one that loads and traps.
     //
-    // **THE OBVIOUS OBJECTION IS RULED OUT.** "The arms differ in length, so of
-    // course the bound is unknown" — no: both arms here are length TWO, the trip
-    // count is two on every path, and it is still refused. Neither
-    // `static_for_in_length` nor the bound extractor looks THROUGH an `Expr::If`.
-    // It is the same omission twice, which makes this the SECOND category of
-    // conservative rejection in `LANGUAGE_DESIGN.md` — provable in principle,
-    // analysis not implemented — rather than the first.
-    //
-    // **NOT A DEFECT.** A verifier refusing a bound it cannot prove is the
-    // documented stance. It is recorded because it qualifies the reachability
-    // claim: on a language whose value proposition is definitive WCET and WCMU,
-    // an opcode reachable only in a program the resource analysis rejects is
-    // closer to unwitnessed than the headline suggests.
+    // **BOTH HALVES MOVED TOGETHER, WHICH IS THE OUTCOME THAT COMMENT WANTED.**
+    // The length now folds, so the loop has a `Const` bound, so the resource
+    // analysis admits it AND no opcode is emitted. What was refused as
+    // unboundable is now a bounded, running program.
     assert!(
         keleusma::verify::verify(&module_of(WITNESS)).is_ok(),
-        "the structural verifier now rejects the witness, so the split between \
-         `verify` accepting and the bound analysis refusing no longer holds"
+        "the structural verifier now rejects the witness"
     );
     assert!(
-        keleusma::verify::module_wcmu(&module_of(WITNESS), &[]).is_err(),
-        "the resource analysis now BOUNDS the `Op::Len` witness. That closes the \
-         qualification above: the opcode is reachable in an admissible program, \
-         and this comment should be rewritten rather than deleted"
+        keleusma::verify::module_wcmu(&module_of(WITNESS), &[]).is_ok(),
+        "the resource analysis no longer bounds the former `Op::Len` witness. The \
+         fold that gives this loop a `Const` bound has regressed, and the program \
+         is back to being refused for having no extractable iteration bound"
     );
     // The must-not-fire half: a statically-sized `for`-in IS boundable, so the
     // refusal above is attributable to the unknown length rather than to `for`-in.
@@ -147,8 +162,11 @@ fn a_for_in_over_an_if_expression_reaches_op_len() {
          above says nothing about the unknown length specifically"
     );
 
-    // THE CONTROLS. Each of these IS handled by `static_for_in_length`, so each
-    // must take the static path. Without them a blanket regression would pass.
+    // THE CONTROLS. Each of these IS handled by the fold, so each must take the
+    // static path. Without them a blanket regression would pass. They were the
+    // must-not-fire half when the case above asserted the opposite outcome, and
+    // they keep that role now that it agrees with them: a fold that returned a
+    // length for nothing would fail here.
     const STATIC_SOURCES: &[(&str, &str)] = &[
         (
             "ident",
@@ -492,13 +510,26 @@ fn a_struct_pattern_against_a_foreign_type_is_refused_by_the_type_checker() {
 /// |---|---|---|
 /// | witness found | an `if` expression as a `for`-in source | a struct pattern on an un-annotated parameter |
 /// | `verify()` | accepts | accepted |
-/// | resource analysis | **refuses** | accepted |
-/// | load | **`Vm::new` REFUSES** | loaded |
-/// | run | never runs | **trapped** |
-/// | now | unchanged | **repaired; no producer remains** |
+/// | resource analysis | **refused** | accepted |
+/// | load | **`Vm::new` REFUSED** | loaded |
+/// | run | never ran | **trapped** |
+/// | now | **repaired; no producer found** | **repaired; no producer remains** |
 ///
-/// `Op::Len`'s witness cannot be admitted at all — refused at LOAD by the strict iteration-bound
-/// check, which is the conservative-verification stance working as designed. It was never a hole.
+/// `Op::Len`'s witness could not be admitted at all — refused at LOAD by the strict
+/// iteration-bound check, which is the conservative-verification stance working as designed. It
+/// was never a hole in the load-time check.
+///
+/// **It was, however, a trap waiting on someone else's improvement.** The refusal holding it shut
+/// was liftable, so the honest reading was "safe today, and safe only because an unrelated
+/// analysis is incomplete". Both emission sites were removed on 2026-09-04; the length folds and
+/// the witness is now an ordinary bounded program.
+///
+/// **AND THE SECOND `Op::Len` SITE WAS NOT LIKE THE FIRST.** The checked-index bounds check over a
+/// `Multiword` folded through an array-only length helper, fell back to the opcode, and produced a
+/// program that verified, took a bound, LOADED, and trapped. That one was a hole in the load-time
+/// check, of the same shape as `Op::IsStruct`'s, and nothing held it shut. It was found by
+/// enumerating every emission of the opcode rather than by following the witness in hand — the
+/// column above says "witness found", and one witness is not the class.
 ///
 /// `Op::IsStruct`'s witness satisfied every load-time check and died at call time, which WAS a
 /// hole. Folding the irrefutable type test closed **that construct** — and, for about an hour, this
@@ -511,27 +542,37 @@ fn a_struct_pattern_against_a_foreign_type_is_refused_by_the_type_checker() {
 /// fail. Both matter on an instruction set whose opcode count is a design constraint, and neither
 /// is a claim that an opcode is unreachable.
 #[test]
-fn op_len_has_an_inadmissible_witness_and_op_is_struct_a_narrowed_one() {
+fn op_len_has_no_producer_found_and_op_is_struct_a_narrowed_one() {
     const LEN_WITNESS: &str = "fn f(c: bool) -> Word { let a = [1, 2]; let b = [3, 4]; \
                                for x in if c { a } else { b } { let _d = x; } 0 }\n\
                                fn main() -> Word { f(true) }";
 
-    // `Op::Len` is still produced, and its witness is still refused at LOAD rather than trapping.
+    // **THE ASYMMETRY THIS TEST NAMES HAS COLLAPSED ON THE `Op::Len` SIDE, 2026-09-04.**
+    //
+    // The former witness no longer produces the opcode: the fold delegates to the authoritative
+    // per-span type table, so an `if`-expression source folds like any other. This assertion is
+    // the inverse of the one it replaces, and the message it replaced said what to do here --
+    // "if it has no producer either, both fallbacks are now unwitnessed and that is a larger ISA
+    // finding". It is that finding, and it is recorded rather than acted on: removing an opcode
+    // is a wire change and the operator's call.
+    //
+    // **The scope is "no producer FOUND", not "unreachable".** This file is the reason to be
+    // careful about the difference -- see the two retracted revisions below.
     let len_mod = module_of(LEN_WITNESS);
     assert!(
-        len_mod
+        !len_mod
             .chunks
             .iter()
             .any(|c| c.ops.iter().any(|o| matches!(o, Op::Len))),
-        "the `Op::Len` witness stopped producing the opcode; if it has no producer either, both \
-         fallbacks are now unwitnessed and that is a larger ISA finding"
+        "the former `Op::Len` witness produces the opcode again. The virtual machine refuses it \
+         on a flat array body, so the module can load and then trap"
     );
-    keleusma::verify::verify(&len_mod).expect("the `Op::Len` witness must still verify");
+    keleusma::verify::verify(&len_mod).expect("the former `Op::Len` witness must still verify");
     let arena = keleusma::Arena::with_capacity(keleusma::vm::DEFAULT_ARENA_CAPACITY);
     assert!(
-        keleusma::vm::Vm::new(len_mod, &arena).is_err(),
-        "the `Op::Len` witness now LOADS. If it also runs, the load-time bound check stopped \
-         catching it; if it loads and then traps, the refusal merely moved later, which is worse"
+        keleusma::vm::Vm::new(len_mod, &arena).is_ok(),
+        "the former `Op::Len` witness no longer LOADS. It is now an ordinary bounded program, so \
+         a refusal here means the folded iteration bound has regressed"
     );
 
     // This asserts only the narrower true thing: the construct the fold closed no longer emits the

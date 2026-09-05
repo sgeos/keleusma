@@ -14,10 +14,17 @@ one exists".
 **Both fire only when a static type is UNKNOWN**, so the target is making
 INFERENCE FAIL, not finding an unusual shape:
 
-- `Op::Len`, `src/compiler.rs:7647`, fires when `fc.static_for_in_length(expr)`
-  returns `None` for a `for`-in source. Its own comment calls the fallback
-  "admissible at the bytecode level but may be rejected by the verifier in strict
-  mode", which reads like a defensive path nobody expects to take.
+- `Op::Len` fired when `fc.static_for_in_length(expr)` returned `None` for a
+  `for`-in source. Its own comment called the fallback "admissible at the bytecode
+  level but may be rejected by the verifier in strict mode", which reads like a
+  defensive path nobody expects to take.
+
+  **SUPERSEDED 2026-09-04: that emission site no longer exists**, nor does the
+  second one in the checked-index bounds check. Both fold the length or fail with
+  a compile error. See [`OP_LEN_ROOT_REPAIR.md`](./OP_LEN_ROOT_REPAIR.md). The
+  line number this entry used to cite is deliberately not replaced with a new one:
+  a cited line number is stale the moment anything above it moves, which is this
+  line's own repeatedly paid-for lesson about copying figures forward.
 - `Op::IsStruct`, `src/compiler.rs:11364`, fires when
   `named_type_name(ty) != Some(type_name)` for a struct pattern — a struct pattern
   whose scrutinee is NOT statically that struct. `src/compiler.rs:12631` already
@@ -132,9 +139,16 @@ fails; it was a declaration site with no type to lose.**
 in the load-time check rather than a bad program.
 
 Of the three "should never have been emitted" refusals the virtual machine carries — two for
-`Op::Len`, one for `Op::IsStruct` — **this was the only one a program that actually loaded could
-reach.** `Op::Len`'s witness is refused at LOAD by the strict iteration-bound check, which is the
-conservative-verification stance working as designed.
+`Op::Len`, one for `Op::IsStruct` — this was believed to be the only one a program that actually
+loaded could reach, because `Op::Len`'s known witness was refused at LOAD by the strict
+iteration-bound check.
+
+**That belief was too narrow, corrected 2026-09-04.** A SECOND `Op::Len` emission site existed, in
+the checked-index bounds check, and over a `Multiword` operand it produced a program that verified,
+took a bound, loaded, and trapped `InvalidBytecode` — with no lifted refusal required. So two of the
+three were reachable from a loading program, not one. The witness that was found first was the one
+held shut by a refusal; the one held shut by nothing was found later, by enumerating every emission
+of the opcode rather than following the witness already in hand.
 
 I was one step from reporting that the class generalised. Running both witnesses instead of one
 caught it.

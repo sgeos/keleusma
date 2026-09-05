@@ -664,9 +664,40 @@ impl FuncCompiler {
     /// Infer the static array length of an expression used as a
     /// for-in source. Returns `Some(N)` when the expression's static
     /// type is `[T; N]`. Used to emit a `Const(N)` end bound that the
-    /// strict-mode WCMU verifier accepts. Falls back to `None` for
-    /// expressions whose array length is not statically known.
+    /// strict-mode WCMU verifier accepts.
+    ///
+    /// # Why this delegates rather than growing an arm per expression form
+    ///
+    /// The type checker admits a for-in iterable only when its type is
+    /// `Type::Array`, and an array type carries a [`crate::typecheck::ConstDim`]
+    /// that monomorphization has already resolved to a literal. **So the
+    /// length is statically available for every well-typed program**, and a
+    /// `None` here is a limitation of this function rather than a property of
+    /// the source.
+    ///
+    /// Growing the structural match one `Expr` variant at a time was measured
+    /// and rejected: of the seven expression forms that can realistically hold
+    /// an array type, the structural path can type exactly one, because
+    /// [`infer_expr_type`]'s own structural half has no arm for the other six
+    /// either. What closes them is that `infer_expr_type` consults the
+    /// authoritative per-span table recorded by the post-monomorphization
+    /// type-check pass BEFORE its structural half, so delegating to it reaches
+    /// the type checker's own answer for any form the pass resolved.
+    ///
+    /// The structural arms below are kept ahead of the delegation because they
+    /// answer from declared types, which are available even where the per-span
+    /// table has no entry.
     fn static_for_in_length(&self, expr: &Expr) -> Option<i64> {
+        if let Some(n) = self.structural_for_in_length(expr) {
+            return Some(n);
+        }
+        infer_expr_type(self, expr)
+            .as_ref()
+            .and_then(array_length_of_type)
+    }
+
+    /// The declared-type half of [`FuncCompiler::static_for_in_length`].
+    fn structural_for_in_length(&self, expr: &Expr) -> Option<i64> {
         match expr {
             Expr::ArrayLiteral { elements, .. } => Some(elements.len() as i64),
             Expr::Call { name, .. } => {
@@ -974,6 +1005,38 @@ fn array_length_of_type(t: &TypeExpr) -> Option<i64> {
     match t {
         TypeExpr::Array(_, n, _) => n.as_lit(),
         _ => None,
+    }
+}
+
+/// The element count of a type that the `[i]` postfix can index, which is a
+/// STRICTLY WIDER set than the array types [`array_length_of_type`] answers for.
+///
+/// # Why the two are separate rather than one widened function
+///
+/// A for-in source and an indexed operand are admitted by different rules. The
+/// type checker accepts only `Type::Array` as a for-in iterable, so widening
+/// the iterable's length helper to `Multiword` would answer a question that
+/// cannot be asked. The checked-index construct, by contrast, indexes anything
+/// the `[i]` postfix accepts, and [`element_type_of`] has admitted `Multiword`
+/// there since B19 -- a `Multiword<N, F>` indexes to its `Word` digits.
+///
+/// # The defect this closes
+///
+/// The checked-index bounds check folded its length through
+/// `array_length_of_type` alone, which answers `None` for a `Multiword`, and
+/// fell back to `Op::Len`. A multi-word body is FLAT, so the virtual machine
+/// refuses that opcode. Measured 2026-09-04: `m[0] { ok(v) => .., invalid_index(i)
+/// => .. }` over a `Multiword<2>` compiled, passed `verify()`, LOADED, and then
+/// trapped `InvalidBytecode` at run time -- the class `verify()` exists to
+/// exclude, reachable with no lifted refusal and no future change required.
+///
+/// It is the same shape as the for-in `Op::Len` trap recorded in
+/// `tests/len_flat_array_hazard.rs`, and worse in one respect: that one was
+/// held shut by a loop-bound refusal, and this one was held shut by nothing.
+fn indexable_length_of_type(t: &TypeExpr) -> Option<i64> {
+    match t {
+        TypeExpr::Multiword(n, _, _) => n.as_lit(),
+        other => array_length_of_type(other),
     }
 }
 
@@ -7772,12 +7835,25 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
                     return compile_for_in_data_array(fc, for_stmt, name, field, &elem, len);
                 }
             }
-            // Determine the static array length if the source's type is
-            // statically known. Used to emit a `Const(N)` end bound that
-            // the strict-mode WCMU verifier accepts. Falls back to
-            // `Op::Len` for sources whose length is not statically
-            // known. The fall-back is admissible at the bytecode level
-            // but may be rejected by the verifier in strict mode.
+            // Determine the static array length. Used to emit a `Const(N)`
+            // end bound that the strict-mode WCMU verifier accepts.
+            //
+            // **There is no `Op::Len` fall-back here, deliberately.** The type
+            // checker admits a for-in iterable only when its type is an array,
+            // and an array type's dimension is a literal after
+            // monomorphization, so a well-typed program always has a static
+            // length. Emitting `Op::Len` instead produced a module that
+            // `verify()` accepted and the virtual machine refused at run time
+            // with `InvalidBytecode` -- the class `verify()` exists to
+            // exclude. What held that trap shut was the resource-bound
+            // extractor refusing a loop with no extractable bound, a refusal
+            // this project's taxonomy calls liftable, so lifting it would have
+            // turned a rejected program into a loading, trapping one.
+            //
+            // Refusing at the emission site is the honest outcome: a failure
+            // to fold is a limitation of `static_for_in_length` and reporting
+            // it as a compile error names the defect rather than deferring it
+            // to a runtime the artefact was never valid for.
             let static_length = fc.static_for_in_length(expr);
             // Determine the iteration variable's type from the source
             // type's element type. Recorded on the iteration variable's
@@ -7792,15 +7868,22 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
 
             // Compute the end bound.
             let end_slot = fc.declare_local("__for_end");
-            if let Some(n) = static_length {
-                let n_const = fc.add_constant(Value::Int(n));
-                fc.emit(Op::Const(n_const));
-                fc.emit(Op::SetLocal(end_slot));
-            } else {
-                fc.emit(Op::GetLocal(arr_slot));
-                fc.emit(Op::Len);
-                fc.emit(Op::SetLocal(end_slot));
-            }
+            let Some(n) = static_length else {
+                return Err(CompileError {
+                    message: String::from(
+                        "the length of this for-in source could not be folded to a \
+                         constant. Its type is an array, so the length is statically \
+                         known and this is a limitation of the compiler rather than of \
+                         the program; please report it. The alternative would be to \
+                         emit a length opcode the virtual machine refuses on a flat \
+                         array body, producing a module that loads and then traps.",
+                    ),
+                    span: expr.span(),
+                });
+            };
+            let n_const = fc.add_constant(Value::Int(n));
+            fc.emit(Op::Const(n_const));
+            fc.emit(Op::SetLocal(end_slot));
 
             // Initialize index to 0.
             let zero_const = fc.add_constant(Value::Int(0));
@@ -10398,10 +10481,12 @@ fn compile_checked(
 
 /// Compile the indexing construct `array[index] { ok(v) => ...,
 /// invalid_index(i) => ... }` (B35 P4). The lowering needs no new
-/// opcode: it synthesizes the bounds check from `Op::Len`, integer
-/// comparisons, and `Op::If`, computing an outcome flag (`0` ok, `1`
+/// opcode: it synthesizes the bounds check from the folded array length,
+/// integer comparisons, and `Op::If`, computing an outcome flag (`0` ok, `1`
 /// invalid index) and stashing the element (in-bounds) or leaving the
-/// index for the `invalid_index` binding. The arm dispatch mirrors
+/// index for the `invalid_index` binding. **The length is a folded constant
+/// and never `Op::Len`**, which a flat array body cannot answer; this comment
+/// named that opcode until the fall-back beneath it was removed. The arm dispatch mirrors
 /// `compile_checked`. An unhandled out-of-bounds index re-issues the
 /// plain `Op::GetIndex`, which traps with the precise
 /// `VmError::IndexOutOfBounds(index, len)`.
@@ -10435,19 +10520,32 @@ fn compile_checked_index(
     fc.emit(Op::SetLocal(idx_slot));
     // len_slot = the array length. Array length is a fixed-size,
     // compile-time constant, so fold it to a literal rather than emit
-    // `Op::Len`, which a flat array body cannot answer (B28 P2). Fall back
-    // to `Op::Len` only for a boxed array whose length the compiler could
-    // not recover statically.
+    // `Op::Len`, which a flat array body cannot answer (B28 P2).
+    //
+    // **The `Op::Len` fall-back that used to sit here is gone**, for the
+    // reason given at the for-in emission site: the opcode is refused on a
+    // flat body, so emitting it yields a module that passes `verify()` and
+    // traps at run time. The comment it carried described the fall-back as
+    // serving "a boxed array whose length the compiler could not recover
+    // statically", and no such case was found -- the indexed operand's type
+    // is what decides the fold, and a boxed array's type is an array like any
+    // other.
     let arr_len = infer_expr_type(fc, object)
         .as_ref()
-        .and_then(array_length_of_type);
-    if let Some(n) = arr_len {
-        let n_const = fc.add_constant(Value::Int(n));
-        fc.emit(Op::Const(n_const));
-    } else {
-        fc.emit(Op::GetLocal(arr_slot));
-        fc.emit(Op::Len);
-    }
+        .and_then(indexable_length_of_type);
+    let Some(n) = arr_len else {
+        return Err(CompileError {
+            message: String::from(
+                "the length of this indexed value could not be folded to a constant, \
+                 so its bounds check cannot be built. A fixed-size array's length is \
+                 statically known, so this is a limitation of the compiler rather than \
+                 of the program; please report it.",
+            ),
+            span: *span,
+        });
+    };
+    let n_const = fc.add_constant(Value::Int(n));
+    fc.emit(Op::Const(n_const));
     fc.emit(Op::SetLocal(len_slot));
     // flag defaults to 1 (invalid_index); flipped to 0 when in range.
     let one_idx = fc.add_constant(Value::Int(1));

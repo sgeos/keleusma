@@ -6192,25 +6192,41 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         // A boxed array reports its element count directly.
                         // A flat array does not store its length in the bytes.
                         //
-                        // **THE COMPILER DOES EMIT `Op::Len` ON AN ARRAY.**
-                        // This comment previously said it never does. It does:
-                        // `static_for_in_length` has no `Expr::If` arm, so
-                        // `for x in if c { a } else { b }` falls through to the
-                        // dynamic path and emits exactly this opcode. Measured,
-                        // with a plain-array control that does not.
+                        // **THE COMPILER HAS NO EMISSION SITE FOR `Op::Len`**
+                        // as of 2026-09-04. Both sites that had one -- the
+                        // for-in bound and the checked-index bounds check --
+                        // now fold the length from the operand's type or fail
+                        // with a compile error. This refusal is therefore a
+                        // defence against a corrupt or hand-built module, not
+                        // against the compiler.
                         //
-                        // `verify()` ACCEPTS such a module. What holds the trap
-                        // shut is the resource-bound check refusing the loop for
-                        // having no statically extractable bound -- a refusal in
-                        // the LIFTABLE category of the conservative-verification
-                        // taxonomy. Lifting it, which is a desirable improvement
-                        // someone would make with no reason to look here, turns a
-                        // rejected program into one that loads and traps.
+                        // **This is NOT a claim that the opcode is
+                        // unreachable.** This comment has been wrong in both
+                        // directions already: it first said the compiler never
+                        // emits `Op::Len` while the compiler did, and the
+                        // correction to that is what found the trap. What is
+                        // claimed here is only what a test checks --
+                        // `tests/len_flat_array_hazard.rs` scans the compiler
+                        // for the emission form and drives every iterable form
+                        // that can carry an array type -- and the scan's reach
+                        // is stated in that file rather than assumed.
                         //
-                        // Pinned by `tests/len_flat_array_hazard.rs`, which fails
-                        // if the bound refusal disappears. Reported by the
-                        // `v0.3.0` line, whose backend refuses `Op::Len`
-                        // deliberately for this reason.
+                        // History, because it is what makes the refusal worth
+                        // keeping. `static_for_in_length` had no `Expr::If`
+                        // arm, so `for x in if c { a } else { b }` fell through
+                        // to a dynamic path and emitted this opcode; `verify()`
+                        // accepted the module, and what held the trap shut was
+                        // the resource-bound check refusing a loop with no
+                        // statically extractable bound -- a refusal in the
+                        // LIFTABLE category of the conservative-verification
+                        // taxonomy. Reported by the `v0.3.0` line, whose
+                        // backend refuses `Op::Len` deliberately.
+                        //
+                        // A second site was NOT latent: the checked-index
+                        // bounds check over a `Multiword` compiled, verified,
+                        // loaded, and trapped here with no lifted refusal
+                        // required. Its length is now folded from the
+                        // multi-word width.
                         crate::bytecode::GenericValue::Array(
                             crate::bytecode::ArrayBody::Boxed(arr),
                         ) => {
