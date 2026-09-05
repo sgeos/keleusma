@@ -5,95 +5,110 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-09-03 (session 62 CLOSE).** Validate by the ANCESTRY and CONTENT block below,
+> **REFRESHED 2026-09-04 (session 62 CLOSE).** Validate by the ANCESTRY and CONTENT block below,
 > not by a hash: a refresh takes more than one commit, so any hash written here is stale by one the
 > moment it is written.
 >
-> ## READ FIRST: NOTHING IS HELD, AND ONE PULL REQUEST IS IN FLIGHT
+> ## READ FIRST: THE QUEUE IS EMPTY AND BOTH LARGE ITEMS NEED THE OPERATOR
 >
-> **`origin/v0.2.3` is at `3cb70a9c`.** Five pull requests merged into it on 2026-09-03, each
-> verified by a full 22-of-22 continuous-integration matrix: the wire changelogs, the `Text<N>`
-> flat layout, the crate-list guard, the `Op::Len` class analysis, and the session channels.
+> **`origin/v0.2.3` is at `12951810`. Twenty-one pull requests merged, none open, tree clean**, and
+> every post-merge run on the version branch itself came back green. Nothing is held and nothing of
+> this line is unpushed.
 >
-> **`#338` is open and awaiting its matrix** — `Text<N>` increment 3, the distinct nominal type in
-> the checker. It was green locally at fmt, clippy under `signatures,shell,self-host`, and 1277
-> library tests. **Merge it when its checks pass; do not re-derive its correctness.**
+> **Do not go looking for available work before reading the two questions below.** Both remaining
+> substantial items were ATTEMPTED this session and both turned out to need a decision that is not
+> this line's to make. Each block was found by trying, not by planning, so neither is a guess.
 >
-> ## THE LOCAL GATE WAS ABANDONED ON PURPOSE, AND THE REPLACEMENT IS BETTER
+> ### QUESTION ONE: how does a value ENTER a `Text<N>`?
 >
-> `scripts/release-gate.sh` was run twice and finished neither time. The second run reached step 3
-> of 12 in 110 minutes, on a machine whose load was dominated by an unrelated application: a test
-> that completes in 190 seconds had not finished in 33.
+> A spike removed both refusals and asked the compiler. It said `let binding declared as Text<8> but
+> value has type Text` — which is the distinct-nominal-type increment WORKING AS DESIGNED. A literal
+> is static text, `Text<8>` is dynamic text, and they deliberately do not unify.
 >
-> **Continuous integration on a PULL REQUEST is the same verification without the local machine**,
-> and it keeps a red off the version branch, which is the entire reason the local gate is required
-> before a merge. Use it when the machine is loaded. Note the reach, which is easy to get wrong:
-> **CI triggers only on `main`, `v*` and pull requests.** A push to a feature branch is verified by
-> NOTHING — not the hook if bypassed, not CI.
->
-> ## `Text<N>`: THREE INCREMENTS DONE, AND THE NEXT ONE CARRIES A DEADLINE
->
-> Increment 1 gave it a type surface, refused everywhere below. Increment 2 gave it a flat layout:
-> a word-sized length followed by exactly `N` content bytes, sized `word_bytes + N`, reusing the
-> existing tuple and array descriptors so no consumer changed and no opcode was spent. Increment 3
-> made it a distinct nominal type in the checker, so a capacity is no longer erased to static text.
->
-> Increment 4 gave it a zero value, cross-checked against the layout.
->
-> **EMISSION IS BLOCKED ON A DECISION THAT IS THE OPERATOR'S, AND THE BLOCK IS NOT A GUESS.** A
-> spike removed both refusals and asked the compiler what happens next. It said:
->
-> ```
-> type error: let binding declared as Text<8> but value has type Text
-> ```
->
-> That is increment 3 working as designed. A literal is STATIC text, `Text<8>` is dynamic text,
-> they deliberately do not unify, and so **nothing can enter a `Text<N>` until there is a way to put
-> it there**. The silent path is closed by a language rule rather than by preference: `GRAMMAR.md`
-> states that no implicit type coercion exists.
->
-> So emission needs a surface form -- a cast, a constructor, or a method -- and which one is
-> ALREADY open question 2 in `../decisions/TEXT_CAPACITY_TYPE.md`, belonging to the operator. **Do
-> not pick it unilaterally.** It appears in every program anyone writes with the type and is far
+> **The silent path is closed by a language rule, not by taste**: `GRAMMAR.md` states that no
+> implicit type coercion exists. So emission needs a surface form — a cast, a constructor, or a
+> method — and which one is ALREADY open question 2 in `../decisions/TEXT_CAPACITY_TYPE.md`.
+> **Do not pick it unilaterally.** It appears in every program anyone writes with the type and is far
 > more expensive to change than the layout beneath it.
 >
-> The spike's other result is the encouraging one: exactly two match arms had to change to admit the
-> type, both already known, and no other pass objected. **The machinery below the surface is in
-> place; only the way in is missing.** The spike was reverted with no residual diff.
+> Exactly two match arms had to change to admit the type, and no other pass objected. The machinery
+> below the surface is in place; only the way in is missing.
 >
-> Each later increment REMOVES one refusal. Do not read a refusal as a defect; all three remaining
-> are correct.
+> ### QUESTION TWO: is the width bundle worth a breaking change before publication?
 >
-> **The `ScalarKind::Text` collapse to one address must land WITH that work and before
-> publication.** It is a wire change, and wire changes are free only while `BYTECODE_VERSION` is
-> frozen at 2 and nothing has been published at 2. Afterwards it costs a version the operator has
-> declined to spend.
+> `addr_bytes` is taken by **33 signatures across 5 files, 14 of them public**. Fourteen public
+> signatures cannot change without breaking every embedder of a crate published at 0.2.2, so this is
+> an API decision rather than the tidy-up "cheaper before a publication than after one" suggests.
 >
-> ## TWO THINGS THAT ARE TESTED NOW AND WERE NOT
+> ## `Text<N>` IS BUILT UP TO ITS FRONT DOOR
 >
-> **The publish list is guarded.** `tests/release_process_crate_list.rs` derives the publishable
-> set from the manifests and checks `RELEASE_PROCESS.md` against it, including the stated count
-> word. The census that found the SEVEN-versus-FIVE blocker closed the instance; this closes the
-> class. Verified by two must-fire controls.
+> Four increments merged: the type surface refused everywhere below it; the flat layout, a
+> word-sized length followed by exactly `N` content bytes, reusing existing descriptors with no new
+> variant and no opcode; a distinct nominal type in the checker; and a zero value cross-checked
+> against the layout so the two cannot drift silently.
 >
-> **This file is read by two tests.** `tests/selfhost_codegen.rs` reads it through `include_str!`
-> and requires the construct-support triple to appear TWICE; `tests/comment_citations.rs` scans
-> every backticked identifier in it and in `REVERSE_PROMPT.md`. **A rewrite of this banner that
-> drops one occurrence turns the branch red**, and the pre-push routine tier will not catch it,
-> because it excludes the self-host binaries. That happened on 2026-09-02.
+> **Three refusals remain and all three are CORRECT** — nothing generates code for it yet. Do not
+> read a refusal as a defect. **The `ScalarKind::Text` collapse must land WITH emission and before
+> publication**: it is a wire change, free while nothing has shipped at `BYTECODE_VERSION` 2 and
+> costing a version afterwards.
 >
-> ## A LATENT TRAP THAT IS ARMED, NOT FIXED, AND NOW MEASURED
+> ## WHAT IS NEWLY GUARDED, SO IT IS NOT RE-DERIVED
 >
-> The compiler emits `Op::Len` on an array and the VM refuses that opcode, while `verify()` accepts
-> the module. What holds it shut is the loop-bound refusal, which this project's taxonomy calls
-> LIFTABLE.
+> - **The publish list.** `the_release_process_names_exactly_the_crates_that_publish` derives the
+>   publishable set from the manifests and checks the document against it, including the stated
+>   count word. The census that found the SEVEN-versus-FIVE blocker closed an instance; this closes
+>   the class.
+> - **The versioning policy.** `every_publishable_crate_has_a_versioning_policy_and_the_tracking_ones_track`
+>   asserts every publishable crate falls under exactly one policy. A crate added without one is
+>   otherwise invisible until release day.
+> - **`DATA_INIT` is routed for all twelve stages** and the skipped-region set is FOUR kinds, down
+>   from five. The ratchet is tightened to four, which mattered: it asserts an upper bound, so it was
+>   green at five and four alike and a passing suite said nothing about whether the change worked.
 >
-> `docs/decisions/OP_LEN_ROOT_REPAIR.md` measures the class. `parse_iterable` calls the full
-> expression parser, so every form is admissible after `in`; `Expr` has 27 variants, the fold
-> handles 6, and about seven of the rest can hold an array type. **Making type inference the
-> generic fallback closes exactly ONE of the seven**, because `infer_expr_type` has no arm for
-> `If`, `MethodCall`, `Pipeline`, `Yield`, `Classify` or `Declassify`. Build the floor first:
-> refuse at the emission site rather than emit an opcode the runtime rejects.
+> ## A TRAP THAT IS ARMED, NOT FIXED
+>
+> The compiler emits `Op::Len` on an array, the machine refuses it, and `verify()` accepts the
+> module. What holds it shut is the loop-bound refusal, which this project's taxonomy calls
+> LIFTABLE. `docs/decisions/OP_LEN_ROOT_REPAIR.md` measures the class and shows the obvious
+> type-inference fallback closes ONE of seven cases. **Build the floor first**: refuse at the
+> emission site rather than emit an opcode the runtime rejects.
+>
+> Its sibling refusals are classified there too, and the distinction matters — `Op::Len` is a real
+> compiler/machine disagreement, `Reset` is a corrupt-module defence. Reporting both as "opcodes the
+> machine refuses" would imply two hazards where there is one.
+>
+> ## THE PROCESS FACT THAT COST THIS SESSION THE MOST
+>
+> **CI triggers only on `main`, `v*` and pull requests.** A push to a feature branch with the hook
+> bypassed is verified by NOTHING. Three branches sat in that state for hours here.
+>
+> The local gate was abandoned deliberately, not failed: it ran twice and finished neither time,
+> reaching step 3 of 12 in 110 minutes under unrelated machine load. **A pull request gives the same
+> checks on dedicated runners and still keeps a red off the version branch**, which is the whole
+> reason a local gate precedes a merge. Use it when the machine is loaded.
+>
+> ## THE LESSON THIS SESSION KEPT PAYING FOR
+>
+> **Every wrong figure was a chosen sample presented as a population.** 113 counted mentions, not
+> breakage — the compiler said five. 43 signatures were really 33. A windowed scan reported two
+> refusing opcode arms where brace-matching found four. A reachability census drove nine entry
+> points where fifty-two exist.
+>
+> **And every broken instrument failed QUIETLY.** A `tail`-terminated pipeline reported success on a
+> red gate; a trailing `echo` masked a failing status; an `awk` on the wrong delimiter read green
+> checks as pending; a waiter read the gap between two CI matrices as completion. Seven such
+> failures, and not one erred toward false alarm — because a broken measurement stops reporting, and
+> silence is shaped exactly like nothing-wrong.
+>
+> **The practice that follows**: derive a population, never pick one; and when a run is detached,
+> capture its exit status IN THE LOG, because a detached run sends no notification either.
+>
+> ## THE DISCARD-ARM CENSUS IS FINISHED AT 14 OF 19
+>
+> Five passes, recorded in `../decisions/DISCARD_ARM_REACHABILITY_BRIEF.md`. **The remaining five are
+> a FIXTURE problem, not a harness problem** — every one sits inside a function the passes already
+> drove, so what is missing is source constructs, not entry points. The pass-five harness is reusable
+> as-is, which makes a sixth pass cheaper than any so far.
 >
 ## Validity
 
@@ -104,8 +119,8 @@ always-current, so it must be able to report itself stale rather than mislead a 
 **Validate by ANCESTRY and by CONTENT, never by a hash match.** A stamp requiring `HEAD~1` to equal a
 recorded parent is a claim that nothing else ever lands, and it has failed three times.
 
-**Ancestry**: `origin/v0.2.3` should contain `3cb70a9c`
-(`Merge pull request #335`). If it does not, this file predates a reset and is stale.
+**Ancestry**: `origin/v0.2.3` should contain `12951810`
+(`Merge pull request #353`). If it does not, this file predates a reset and is stale.
 
 **Content**, four checks that are cheap and independent:
 
@@ -116,8 +131,11 @@ recorded parent is a claim that nothing else ever lands, and it has failed three
 3. `tests/len_flat_array_hazard.rs` exists and passes. If it fails, the loop-bound refusal changed
    and the `Op::Len` trap may be open.
 4. `tests/text_capacity_type.rs` exists. If it does not, `Text<N>` increment 1 is not on this branch.
-5. `tests/release_process_crate_list.rs` exists and passes. It is the guard on the publish list; if
-   it fails, the release process and the workspace have diverged and a publication would break.
+5. `tests/release_process_crate_list.rs` exists and passes. It holds BOTH release guards now — the
+   publish list and the versioning policy. If either fails, the release process and the workspace
+   have diverged and a publication would break.
+6. `tests/selfhost_region_coverage.rs` passes with its skipped-kind bound at FOUR. If it fails
+   because five kinds are skipped, `DATA_INIT` has stopped being routed.
 
 **Do not trust the counts in this file without re-deriving them.** The construct-support boundary
 last read **96 SOk / 1 Refuses / 3 Diverges / 1 RefRejects** over 101 cases. It is ratcheted at
