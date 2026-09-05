@@ -60,7 +60,7 @@ honest; probing every member individually is not a better use of the same effort
 | C | `Fixed` fraction bits exceeding the word width | 5 | **defended**, by two checks that compose |
 | D | composite operand form mismatch | 7 | **defended**, by boundary canonicalization |
 | E | structural indices out of range | 9 | **defended at load** (8 of 9 probed) |
-| F | shared and private data-segment layout | 7 | host-contract; not examined |
+| F | shared and private data-segment layout | 7 | **host-contract, confirmed** (1 of 7 probed) — but see below |
 | G | arena staleness after reset | 3 | not examined |
 | H | the three "should never have been emitted" | 3 | **closed 2026-09-04** |
 | I | operand-range and constant-kind checks | 6 | **mixed** — see below (5 of 6 probed) |
@@ -69,9 +69,9 @@ honest; probing every member individually is not a better use of the same effort
 The group sizes sum to 46, which is the population above; a table whose parts do not add to its
 stated whole has been the tell for a miscount here before.
 
-**Thirty of forty-six sites carry an examined verdict.** The remaining sixteen are named by group and
-explicitly marked as not examined; they are group A, the host-contract surfaces F and J, and one
-member each of E and I. A census whose entries are unexamined opinions is worse than a
+**Thirty-one of forty-six sites carry an examined verdict.** The remaining fifteen are named by group
+and explicitly marked as not examined; they are group A, six of the seven in F, the three in J, and
+one member each of E and I. A census whose entries are unexamined opinions is worse than a
 short one that says which sites were looked at.
 
 ## Group B is reachable, and it is a real deployment shape
@@ -272,6 +272,36 @@ The probe now COUNTS the mutations it applies and reports a zero count as vacuou
 result. **Third instrument corrected in one session** -- after a file-attribution column that
 reported warning locations under a passing verdict, and a mutation aimed at the wrong call site that
 passed.
+
+## Group F: the classification was an assertion, and testing it found something else
+
+Groups F and J were called "host-contract surfaces" and set aside. **That was an assertion, not a
+measurement**, and an exclusion made for a good reason is still an exclusion -- the same shape that
+hid the narrow selectors from the feature sweep until they were swept.
+
+One site did not obviously belong to the class. The message about a NEW module declaring a different
+number of private slots than the host supplied fires on a **hot swap**, which is a shipped feature.
+A host that swaps to a module with different data requirements has done nothing wrong.
+
+**The classification survives.** `Module::data_layout` and `DataLayout::slots` are both public, so a
+host can read the required slot count directly from the module it is about to install and supply
+matching data. A correct host never reaches the site. It is genuinely a contract violation.
+
+### But the error KIND is wrong by this codebase's own stated rule
+
+`VmError::NotSuspended` carries this, verbatim, as its reason for existing:
+
+> Distinguished from `VmError::InvalidBytecode` to keep API misuse separate from corrupt or
+> malformed bytecode.
+
+The hot-swap site reports **a host argument of the wrong length** as `InvalidBytecode`. The bytecode
+is not malformed; the caller's argument is. So the project defines the distinction, builds a variant
+to preserve it, and then breaks it here.
+
+**Small, and worth exactly what it is.** A host sees an error naming their artefact when the fault is
+in their call, which sends the reader to inspect the wrong thing. **Not repaired**: changing which
+variant a public API returns is a breaking change and the operator's call, alongside the other
+API-shaped decisions already queued for them.
 
 ## Where the next pass should start
 
