@@ -1,5 +1,56 @@
 # What can the corpus differential actually detect?
 
+> 🔧 **2026-09-06: THE INSTRUMENT WAS BROKEN, IN THE DIRECTION THAT FABRICATES COVERAGE. REPAIRED,
+> AND THE SWEEP IS NOW ~400x CHEAPER. READ THIS BEFORE THE STALENESS BANNER BELOW.**
+>
+> **The sweep could not have produced a valid verdict since 2026-08-21.** `tools/mutation_sweep.py`
+> drives `corpus_differential` one module at a time through `KEL_ONLY_MODULE`. On 2026-08-21
+> (`0a8d8547`) that test gained CORPUS-POPULATION assertions — a seeded stage must be driven at two
+> or more subjects, some module must widen its seeds, something must be exempt. **A one-module
+> invocation satisfies none of them**, for reasons having nothing to do with any mutation.
+>
+> **The sweep classifies on the EXIT STATUS**: non-zero is recorded as `DISAGREE`, which counts as
+> DETECTED. So every module of every mutation would have been scored as detecting it, and the sweep
+> would have written a confident **"no hole open"** that was an artefact of its own harness. This
+> banner already warned that a hang could fabricate coverage; **this was worse, because it was
+> deterministic.**
+>
+> **That is five days after this census was measured** (`f1800820`, 2026-08-16), so the recorded
+> verdicts predate the breakage and are unaffected. **The 12h51m re-run attempted 2026-09-02 was
+> driving the broken instrument**, and whatever it reported before being killed is an artefact rather
+> than a measurement.
+>
+> **REPAIRED** by separating two kinds of assertion in that test, a distinction now stated where they
+> live: **POPULATION guards** (the corpus is being swept properly) are skipped under
+> `KEL_ONLY_MODULE`; **CONSISTENCY guards** (the breakdown accounts for every module) hold at any
+> population and are NOT skipped. Mutation-tested both ways: with a population guard made
+> unsatisfiable, a FULL run fails and a filtered run still passes, so the guard is live rather than
+> dead code.
+>
+> ### AND THE COST COLLAPSES, WHICH CHANGES WHAT IS AFFORDABLE
+>
+> The sweep ran `cargo test --test corpus_differential` per module, which runs **all nine tests in
+> the binary**. Measured 2026-09-06 on a warm build:
+>
+> | subject | wall clock |
+> |---|---|
+> | one real module, unfiltered | **385 s** |
+> | a NONEXISTENT module name | **387 s** |
+> | filtered to the classifying test | **< 1 s** |
+>
+> **The control is what settles it**: a module that does not exist costs the same as one that does,
+> so essentially the entire per-module cost was tests that cannot detect a mutation.
+>
+> **THE ORACLE IS NOT NARROWED.** Scoping what the differential COMPARES would be the dangerous
+> change, and it is not what was done — the sweep already selected modules by opcode. What changed is
+> that it stops running unrelated analyses. **Calibrated rather than assumed**: with `CmpEq` mutated
+> `EQ -> NE`, **44 of the 48 carrying modules DISAGREE, in 52 seconds** where the old path would have
+> cost roughly 5.1 hours for that one mutation.
+>
+> **So "expensive to un-stale" is no longer true**, and the paragraphs below that reason from a
+> 60-hour cost describe a tool that no longer behaves that way. They are kept because the reasoning
+> was correct for the tool as it stood.
+
 > ⚠ **CURRENCY: THIS RESULT IS STALE, AND THE STATUS LINE BELOW READS AS THOUGH IT IS NOT.**
 > Checked 2026-09-02: **`native_codegen/src/lib.rs` has changed in 39 commits since this file was
 > last measured.** The sweep mutates that emitter, so every verdict here is a property of the emitter

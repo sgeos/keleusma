@@ -616,8 +616,33 @@ def main():
             for mod in mods:
                 env = dict(os.environ, KEL_ONLY_MODULE=mod)
                 try:
+                    # **RUN ONLY THE TEST THIS SWEEP CLASSIFIES ON.**
+                    #
+                    # Without the filter, `cargo test` runs all nine tests in the
+                    # binary. Measured 2026-09-06: a single-module invocation cost
+                    # **385 seconds**, and a NONEXISTENT module name cost 387 --
+                    # so essentially the whole per-module cost was tests that
+                    # cannot detect a mutation. Filtered to the classifying test
+                    # it is **under one second**.
+                    #
+                    # For `CmpEq`, carried by 48 modules, that is 5.1 hours to 52
+                    # seconds; over 25 mutations it is what makes round one a
+                    # coffee break instead of sixty hours.
+                    #
+                    # **THE ORACLE IS UNTOUCHED.** This does not narrow what is
+                    # compared, which would be the dangerous change -- it stops
+                    # running unrelated analyses. Calibrated: with `CmpEq` mutated
+                    # EQ->NE, 44 of the 48 carrying modules DISAGREE.
                     r = run(
-                        ["cargo", "test", "--test", "corpus_differential", "--", "--nocapture"],
+                        [
+                            "cargo",
+                            "test",
+                            "--test",
+                            "corpus_differential",
+                            "--",
+                            "--nocapture",
+                            "every_lowering_module_executes_or_is_exempt",
+                        ],
                         env=env,
                         timeout=budgets.get(mod, PER_MODULE_TIMEOUT),
                     )

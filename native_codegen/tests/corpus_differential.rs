@@ -3169,7 +3169,36 @@ fn every_lowering_module_executes_or_is_exempt() {
     // is before a module executes a single operation -- and three stages left
     // the vacuous set for no reason at all. The figure is reported with the
     // qualifications beside it and a reader draws the conclusion.
-    {
+    //
+    // ⚠ **SKIPPED ENTIRELY UNDER `KEL_ONLY_MODULE`, AND THIS REPAIRS AN
+    // INSTRUMENT THAT WAS BROKEN IN THE DIRECTION THAT FABRICATES COVERAGE.**
+    //
+    // `tools/mutation_sweep.py` drives this binary one module at a time. Every
+    // stage source is then filtered out, so `subjects_built` is empty and the
+    // seeded-stage assertion below fired on EVERY sweep invocation --
+    // *"seeded stage codegen.kel was driven at 0 subject(s)"* -- for a reason
+    // having nothing to do with any mutation.
+    //
+    // **The sweep classifies on the EXIT STATUS**: a non-zero exit is recorded
+    // as `DISAGREE`, which counts as DETECTED. So a sweep run in this state
+    // reports every mutation detected by every module, and would put a
+    // fabricated *"no hole open"* into `NATIVE_MUTATION_CENSUS.md` with total
+    // confidence. The census's own banner warns that a hang could fabricate
+    // coverage; this was worse, because it was deterministic.
+    //
+    // **Dated: the assertion landed 2026-08-21 (`0a8d8547`), five days after the
+    // census was measured on 2026-08-16 (`f1800820`).** The 12h51m re-run
+    // attempted on 2026-09-02 was therefore driving a broken instrument, and its
+    // verdicts are artefacts rather than measurements.
+    //
+    // The gate itself is NOT weakened: a full run still drives every stage and
+    // still enforces the assertion. What is skipped is a report about modules
+    // this invocation deliberately did not run.
+    if std::env::var("KEL_ONLY_MODULE").is_ok() {
+        println!(
+            "\n================ ORDER-1 GATE: SKIPPED under KEL_ONLY_MODULE.\n               A single-module invocation drives no stage sources, so this gate has\n               nothing to measure. A full run reports and asserts it."
+        );
+    } else {
         let in_stage = |n: &String| stage_files.contains(n);
         let ex: Vec<&String> = executed.iter().filter(|n| in_stage(n)).collect();
         let vac: Vec<&String> = vacuous.iter().filter(|n| in_stage(n)).collect();
@@ -3512,17 +3541,37 @@ fn every_lowering_module_executes_or_is_exempt() {
     // the same while the sweep silently measures seed 0 only -- which is the state
     // that hid the `SLT`/`SLE` defect when the count was 4. Measured 2026-08-20:
     // 19 modules widen, 482 pairs at `SEEDS = 24`.
-    assert!(
-        seed_widened > 0,
-        "no module ran more than one argument vector, so SEEDS is widening nothing \
-         and this whole differential is a seed-0 measurement wearing a sweep's name"
-    );
-    assert!(
-        seed_pairs > executed.len() + vacuous.len(),
-        "{seed_pairs} (module, seed) pairs across {} comparable modules means at most \
-         one vector each; the sweep is not sweeping",
-        executed.len() + vacuous.len()
-    );
+    // ⚠ **POPULATION GUARDS, SKIPPED UNDER `KEL_ONLY_MODULE`. THE DISTINCTION IS
+    // THE POINT AND IS STATED SO IT IS NOT BLURRED LATER.**
+    //
+    // This test carries two kinds of assertion, and only one kind may be skipped:
+    //
+    //   * **POPULATION guards** -- "some module widened its seeds", "something was
+    //     exempt". They say the CORPUS is being swept properly. A deliberate
+    //     one-module invocation makes them vacuous or false for a reason that has
+    //     nothing to do with correctness.
+    //   * **CONSISTENCY guards** -- "the breakdown classified as many modules as
+    //     executed", "the histogram accounts for every exemption". They hold at
+    //     ANY population, including one. **These are NOT skipped**, and skipping
+    //     them to make a single-module run quiet would remove the checks that
+    //     still mean something there.
+    //
+    // See the Order-1 gate above for why this matters: the sweep classifies on
+    // exit status, so a population guard firing under `KEL_ONLY_MODULE` is read
+    // as a DETECTED mutation and fabricates coverage.
+    if std::env::var("KEL_ONLY_MODULE").is_err() {
+        assert!(
+            seed_widened > 0,
+            "no module ran more than one argument vector, so SEEDS is widening nothing \
+             and this whole differential is a seed-0 measurement wearing a sweep's name"
+        );
+        assert!(
+            seed_pairs > executed.len() + vacuous.len(),
+            "{seed_pairs} (module, seed) pairs across {} comparable modules means at most \
+             one vector each; the sweep is not sweeping",
+            executed.len() + vacuous.len()
+        );
+    }
     println!("  EXEMPT                : {}", exempt.len());
     for (n, why, _class) in &exempt {
         println!("     {n:26} {why}");
@@ -3567,8 +3616,10 @@ fn every_lowering_module_executes_or_is_exempt() {
          introduced a class that `all_classes` does not list",
         exempt.len()
     );
+    // A POPULATION guard: see the note above. One module may legitimately be
+    // exempt of nothing.
     assert!(
-        !exempt.is_empty(),
+        !exempt.is_empty() || std::env::var("KEL_ONLY_MODULE").is_ok(),
         "no module was exempt at all, so this breakdown describes nothing and its \
          guards cannot fire"
     );
