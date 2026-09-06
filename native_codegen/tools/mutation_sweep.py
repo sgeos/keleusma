@@ -648,8 +648,62 @@ def opcode_module_map():
     return out
 
 
+def check_placement():
+    """Does every registered mutation still MATCH the emitter, exactly once?
+
+    **THIS EXISTS BECAUSE NINE MUTATIONS DECAYED SILENTLY.** Measured 2026-09-06:
+    `Return`, `Div`, `Mod`, `GetData`, `SetData`, `GetDataIndexed`,
+    `SetDataIndexed`, `Yield` and `GetIndex` had all stopped placing. Every one
+    was a REFORMATTING or a SIGNATURE change -- `resolve_shared_*` gained
+    `float_bytes`, `build_return` became `build_typed_return`, `SK::Int` folded
+    into `SK::Int | SK::Fixed` -- and no opcode had stopped being lowered.
+
+    **Nothing announced it.** The sweep was too expensive to run, so the coverage
+    for those opcodes was gone for weeks with no signal. A mutation that does not
+    place is a silent no-op that looks exactly like "nothing detected it".
+
+    This check is TEXTUAL and needs no sweep, so it can run in the ordinary test
+    suite. It is not a substitute for running the sweep: placing is necessary for
+    a verdict, never sufficient.
+    """
+    original = open(LIB).read()
+    tables = {
+        "round one": MUTATIONS,
+        "round two (strong)": MUTATIONS_STRONG,
+        "round three": MUTATIONS_ROUND3,
+        "round three (strong)": MUTATIONS_ROUND3_STRONG,
+        "sign probe": MUTATIONS_SIGN_PROBE,
+        "reachability": MUTATIONS_REACHABILITY,
+    }
+    bad = []
+    total = 0
+    print("\n================ MUTATION PLACEMENT")
+    for label, table in tables.items():
+        misses = []
+        for opcode, (old, _new) in sorted(table.items()):
+            total += 1
+            n = original.count(old)
+            if n != 1:
+                misses.append((opcode, n))
+                bad.append((label, opcode, n))
+        print(f"  {label:22} {len(table):3} entries, {len(misses)} not placing"
+              + (f"  {[f'{o} x{n}' for o, n in misses]}" if misses else ""))
+    print(f"  ------------------------------------------------")
+    print(f"  {total} registered mutations, {len(bad)} do not place exactly once")
+    print("================\n")
+    return bad
+
+
 def main():
     wanted = list(sys.argv[1:])
+    if "--check-placement" in wanted:
+        bad = check_placement()
+        if bad:
+            print("MUTATIONS THAT NO LONGER PLACE:")
+            for label, opcode, n in bad:
+                print(f"  {label}: {opcode} matches the emitter {n} times, expected 1")
+            sys.exit(1)
+        sys.exit(0)
     table = MUTATIONS
     if "--strong" in wanted:
         wanted.remove("--strong")

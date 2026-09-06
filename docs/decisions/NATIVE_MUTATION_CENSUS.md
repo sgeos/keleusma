@@ -1,5 +1,32 @@
 # What can the corpus differential actually detect?
 
+> 🛡 **2026-09-06: THE TABLES NOW ANNOUNCE THEIR OWN DECAY. 53 of 53 mutations place exactly once.**
+>
+> Nine mutations rotted silently and nothing said so, because only the sweep could see it and the
+> sweep was too expensive to run. **Placement is TEXTUAL and needs no sweep**, so it is now an
+> ordinary test: `native_codegen/tests/mutation_placement.rs`, via
+> `tools/mutation_sweep.py --check-placement`.
+>
+> | table | entries | not placing |
+> |---|---|---|
+> | round one | 25 | 0 |
+> | round two (strong) | 7 | 0 |
+> | round three | 17 | 0 |
+> | round three (strong) | 1 | 0 |
+> | sign probe | 2 | 0 |
+> | reachability | 1 | 0 |
+> | **total** | **53** | **0** |
+>
+> **It carries a must-fire control**, because this line has had three textual censuses falsified by
+> their own controls. A copy of the tool with one registered snippet corrupted must fail the check,
+> and must NAME the entry — a failure that does not say which entry rotted would not help anyone. The
+> real tool and the real emitter are never touched by the control.
+>
+> ⚠ **PLACING IS NECESSARY FOR A VERDICT AND NEVER SUFFICIENT.** A mutation can place and still be
+> worthless: it may abort lowering, or its opcode may have no executing witness, which is exactly the
+> state of `BitAnd`, `BitOr`, `BitXor` and `Shr`. This guard says the tables have not rotted. **It says
+> nothing about what the sweep would find**, and must not be quoted as though it did.
+
 > 🔍 **2026-09-06: THE FOUR "NOT SEMANTIC" OPCODES ARE A CORPUS GAP, NOT A MUTATION DEFECT — AND THE
 > TOOL WAS SAYING THE WRONG THING ABOUT THEM.**
 >
