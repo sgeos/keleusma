@@ -128,6 +128,23 @@ rather than changing behaviour. *"UNDETECTED: none"* is true and incomplete.
 **Two margins are thin enough to name**: `Shl` 1/3 and `CmpLe` 2/11. A single corpus change takes
 `Shl` to zero, and a binary verdict would not show that eroding.
 
+## ALL NINE DRIFTED MUTATIONS ARE RESTORED, AND ROUND THREE IS NOW 17/17
+
+Every mutation emitter drift had retired is re-registered and detected: `Return` 39/61, `Div` 10/14,
+`Mod` 12/14, `GetData` 24/29, `SetData` 25/30, `GetDataIndexed` 11/16, `SetDataIndexed` 11/14,
+`Yield` 12/29, `GetIndex` 3/7. **Full round three: 17 of 17 place, 17 of 17 detected, zero
+unplaceable, zero undetected.** Emitter byte-identical.
+
+**Every drift was a reformatting or signature change, not a behavioural one** — `resolve_shared_*`
+gained `float_bytes`, `build_return` became `build_typed_return`, `SK::Int` folded into
+`SK::Int | SK::Fixed`. **No opcode had stopped being lowered.** Expect this again whenever the
+emitter is refactored; only the placement check surfaces it.
+
+**Still open, and named rather than implied**: `BitAnd`, `BitOr`, `BitXor` and `Shr` have no coverage
+evidence in ANY table, because every registered mutation for them aborts lowering instead of changing
+behaviour. Eight opcodes — `Break`, `Else`, `EndIf`, `EndLoop`, `Loop`, `PopN`, `Reset`, `Stream` —
+are never perturbed at all. Four detection margins are one or two modules wide.
+
 ## State
 
 | | |
