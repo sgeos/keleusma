@@ -22,7 +22,12 @@
 > mutation that does not place is a silent no-op, which looks exactly like nothing detected it."*
 > Had it not refused, `Return` would read as UNDETECTED and be mistaken for a hole. **A pre-registered
 > mutation set drifts out of date with the code it mutates, silently, and only a placement check
-> catches it.** Re-registering `Return` against the current emitter is outstanding work.
+> catches it.**
+>
+> ✅ **RE-REGISTERED AND RE-RUN THE SAME DAY: `Return` DETECTED by 39/61 [DISAGREE 32, SIGNAL 7].**
+> The replacement keeps the original's discriminating shape — return a constant zero rather than the
+> popped value — against the current `build_typed_return` call. Coverage is restored for those 61
+> sites, and round one now carries evidence for every opcode that has a placeable, semantic mutation.
 >
 > ⚠ **FOUR OPCODES YIELD NO EVIDENCE EITHER WAY**: `BitAnd`, `BitOr`, `BitXor` and `Shr` return
 > **NOT SEMANTIC (lowering aborted)** — the mutation prevents the module lowering rather than changing

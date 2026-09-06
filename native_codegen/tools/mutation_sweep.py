@@ -164,8 +164,23 @@ MUTATIONS = {
         'st.b.build_int_compare(IntPredicate::EQ, c, i64t.const_zero(), "brknz")',
     ),
     "Return": (
-        "Op::Return => {\n                let v = st.pop();\n                st.b.build_return(Some(&v)).unwrap();",
-        "Op::Return => {\n                let _v = st.pop();\n                st.b.build_return(Some(&i64t.const_zero())).unwrap();",
+        # **RE-REGISTERED 2026-09-06 AFTER GOING STALE, WHICH IS THE POINT.**
+        #
+        # The previous text expected `st.b.build_return(Some(&v))`. The emitter
+        # was refactored to `build_typed_return(&st.b, func, v)` at some point
+        # after 2026-08-16, so this mutation stopped PLACING and `Return` -- 52
+        # sites -- contributed no coverage evidence at all until the 2026-09-06
+        # re-run reported `UNPLACEABLE (0 matches)`.
+        #
+        # **The refusal is what caught it.** A mutation that does not place is a
+        # silent no-op and looks exactly like "nothing detected it", so without
+        # the placement check this would have read as a HOLE. A pre-registered
+        # set drifts out of date with the code it mutates, silently.
+        #
+        # The replacement returns a constant zero instead of the popped value,
+        # which is the same DISCRIMINATING shape the original had.
+        "Op::Return => {\n                let v = st.pop();\n                build_typed_return(&st.b, func, v);",
+        "Op::Return => {\n                let _v = st.pop();\n                build_typed_return(&st.b, func, i64t.const_zero().into());",
     ),
     # --- conversions -------------------------------------------------------
     "ByteToWord": (
