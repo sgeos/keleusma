@@ -91,6 +91,43 @@ The conflict prediction over-shot: one, not three.** I predicted from which file
 rather than from where in them, and the finer question is the one that decides. Both `TASKLOG.md`
 notes are kept; neither line's record was discarded.
 
+## AND THE ONE YOU SHOULD READ FIRST: A CENSUS INSTRUMENT WAS FABRICATING COVERAGE
+
+`NATIVE_MUTATION_CENSUS.md` said **"no hole open"** and was marked expensive to re-establish — 12h51m
+had bought 5 of 25 mutations before being killed, projecting ~60 hours.
+
+**The sweep could not have produced a valid verdict since 2026-08-21.** It drives the corpus
+differential one module at a time; on that date the test gained CORPUS-POPULATION assertions that a
+one-module run cannot satisfy. **The sweep classifies on exit status and reads non-zero as DETECTED**,
+so it would have scored every module as detecting every mutation and written a confident
+**"no hole open" that was an artefact of its own harness.** Deterministic, not a flake.
+
+**Repaired** by separating population guards from consistency guards — the latter hold at any
+population and are NOT skipped. Proven both ways: with a population guard made unsatisfiable, a full
+run fails and a filtered run passes.
+
+**And the cost was 400x too high for a reason the control makes plain**: one real module cost 385s
+unfiltered, and a NONEXISTENT module name cost 387s. Almost the entire per-module cost was tests that
+cannot detect a mutation. **The oracle is NOT narrowed** — that would be the dangerous change, and the
+sweep already selected modules by opcode.
+
+## SO ROUND ONE IS RE-RUN, IN 42 MINUTES, AND THE RESULT IS NARROWER THAN ITS HEADLINE
+
+**No new hole.** The undetected set is exactly `ByteToWord` and `PushImmediate`, both already
+established here as non-holes. Forty commits of emitter drift opened nothing in what round one tests.
+
+**But `Return` came back UNPLACEABLE, and that is the real finding.** Its mutation expected
+`st.b.build_return(Some(&v))`; the emitter now calls `build_typed_return(...)`. **It had silently
+stopped applying, so 52 sites carried no coverage evidence at all.** The tool REFUSED rather than
+reporting a false negative — without that check it would have read as a hole. Re-registered and
+re-run: **DETECTED by 39/61.**
+
+**Four opcodes yield no evidence either way** — `BitAnd`, `BitOr`, `BitXor`, `Shr` abort lowering
+rather than changing behaviour. *"UNDETECTED: none"* is true and incomplete.
+
+**Two margins are thin enough to name**: `Shl` 1/3 and `CmpLe` 2/11. A single corpus change takes
+`Shl` to zero, and a binary verdict would not show that eroding.
+
 ## State
 
 | | |
