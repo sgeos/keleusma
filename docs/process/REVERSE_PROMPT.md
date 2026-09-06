@@ -147,6 +147,16 @@ so no mutation of them could ever be detected, at any shape. The registered muta
 tool now says `NO EXECUTING WITNESS (corpus gap, not a mutation defect)` instead of blaming them.
 This also explains `Shl` 1/3: one of its three carrying modules is `wire.kel`.
 
+## AND THE TABLES NOW ANNOUNCE THEIR OWN DECAY
+
+Nine mutations rotted silently over weeks because only the sweep could see it and the sweep cost sixty
+hours. **Placement is textual**, so it is now an ordinary test: **53 of 53 mutations across all six
+tables place exactly once**, checked in a fraction of a second, with a must-fire control that must
+also NAME the entry that rotted.
+
+**Placing is necessary and never sufficient**, and the test says so itself. A mutation can place and
+still be worthless if it aborts lowering or its opcode has no executing witness.
+
 **Closing it needs a CORPUS change, not a table change** — an executing module exercising the bitwise
 and shift operators. **Recorded, not undertaken**: adding corpus files to chase a coverage figure is
 how a sweep becomes a demonstration, and that call is yours. Eight opcodes — `Break`, `Else`, `EndIf`, `EndLoop`, `Loop`, `PopN`, `Reset`, `Stream` —
