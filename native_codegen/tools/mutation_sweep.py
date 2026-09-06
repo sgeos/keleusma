@@ -495,8 +495,28 @@ def calibrate(modules):
         env = dict(os.environ, KEL_ONLY_MODULE=mod)
         t0 = time.monotonic()
         try:
+            # **THE CALIBRATION MUST RUN EXACTLY WHAT THE SWEEP RUNS.**
+            #
+            # The budget is a HANG threshold, and this docstring's own argument
+            # is that a timeout is evidence of non-termination only while a
+            # healthy run fits comfortably inside it. If calibration measured the
+            # whole nine-test binary (385s) while the sweep ran one filtered test
+            # (<1s), every budget would be hundreds of times too generous and a
+            # real infinite loop would sit inside it undetected -- the same class
+            # of false verdict this function was written to remove, inverted.
+            #
+            # So the command below is kept IDENTICAL to the one in `main`. If one
+            # changes, the other must.
             run(
-                ["cargo", "test", "--test", "corpus_differential"],
+                [
+                    "cargo",
+                    "test",
+                    "--test",
+                    "corpus_differential",
+                    "--",
+                    "--nocapture",
+                    "every_lowering_module_executes_or_is_exempt",
+                ],
                 env=env,
                 timeout=CALIBRATION_CEILING,
             )

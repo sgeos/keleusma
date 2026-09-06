@@ -1,5 +1,46 @@
 # What can the corpus differential actually detect?
 
+> ✅ **2026-09-06: ROUND ONE RE-RUN IN FULL, ~42 MINUTES. NO NEW HOLE — AND ONE MUTATION HAD
+> SILENTLY GONE STALE.**
+>
+> All **25** round-one mutations re-run against the current emitter after the instrument repair
+> below. Wall clock **about 42 minutes across four chunks**, against the ~60 hours projected on
+> 2026-09-02. The emitter was verified **byte-identical** to its committed state afterwards.
+>
+> **THE HEADLINE, STATED WITH ITS QUALIFICATIONS RATHER THAN WITHOUT THEM.** The undetected set is
+> exactly `ByteToWord` and `PushImmediate`, **both already established here as non-holes** —
+> `ByteToWord` is an equivalent mutant by construction, `PushImmediate` is the vacuous control whose
+> arm has zero sites. **So forty commits of emitter drift opened no new hole in what round one
+> tests.** That is the result, and the sentences below are why it is narrower than it sounds.
+>
+> ⚠ **`Return` came back UNPLACEABLE (0 matches), AND THIS IS THE REAL FINDING.** Its pre-registered
+> mutation expects `st.b.build_return(Some(&v))`; the emitter now calls `build_typed_return(&st.b,
+> func, v)`. **The mutation stopped applying at some point after 2026-08-16, so `Return` has
+> contributed no coverage evidence since** — it was 52 sites in the recorded table.
+>
+> **The tool refused instead of reporting a false negative**, which is the design working: *"a
+> mutation that does not place is a silent no-op, which looks exactly like nothing detected it."*
+> Had it not refused, `Return` would read as UNDETECTED and be mistaken for a hole. **A pre-registered
+> mutation set drifts out of date with the code it mutates, silently, and only a placement check
+> catches it.** Re-registering `Return` against the current emitter is outstanding work.
+>
+> ⚠ **FOUR OPCODES YIELD NO EVIDENCE EITHER WAY**: `BitAnd`, `BitOr`, `BitXor` and `Shr` return
+> **NOT SEMANTIC (lowering aborted)** — the mutation prevents the module lowering rather than changing
+> what it computes. *"UNDETECTED: none"* is true and incomplete; these four are untested, not covered.
+>
+> ⚠ **TWO MARGINS ARE THIN ENOUGH TO NAME.** `Shl` is detected by **1 of 3** carrying modules and
+> `CmpLe` by **2 of 11**. Detection by one module satisfies "no hole", but a single corpus change
+> could take `Shl` to zero, and **the binary verdict this census records would not show that margin
+> eroding.** Recorded so the next reader sees the margin rather than only the verdict.
+>
+> **Detection ratios, this run**: `Const` 61/67, `GetLocal` 58/66, `SetLocal` 53/61, `CheckedAdd`
+> 47/57, `If` 46/52, `CmpEq` 44/48, `CheckedSub` 21/28, `CmpGt` 20/27, `CheckedMul` 18/25,
+> `CheckedNeg` 15/18, `BreakIf` 14/21, `CmpLt` 13/26, `CmpGe` 12/28, `Not` 8/15, `Dup` 4/12,
+> `CmpNe` 4/10, `CmpLe` 2/11, `Shl` 1/3.
+>
+> **Rounds two and three are NOT re-run**, so nothing here refreshes their verdicts. This is round one
+> of six tables.
+
 > 🔧 **2026-09-06: THE INSTRUMENT WAS BROKEN, IN THE DIRECTION THAT FABRICATES COVERAGE. REPAIRED,
 > AND THE SWEEP IS NOW ~400x CHEAPER. READ THIS BEFORE THE STALENESS BANNER BELOW.**
 >
