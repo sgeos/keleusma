@@ -1,5 +1,72 @@
 # What can the corpus differential actually detect?
 
+> 🔴 **2026-09-06, LATER: ROUNDS TWO AND THREE RE-RUN TOO — AND NINE PRE-REGISTERED MUTATIONS HAVE
+> SILENTLY STOPPED PLACING. ALSO, I BROKE `Trap` DETECTION WHILE SPEEDING THE TOOL UP, AND THE
+> ROUND-ONE ENTRY BELOW WAS PRODUCED BY THAT BROKEN VERSION.**
+>
+> ### The error I introduced, stated first because it changes how to read the entry below
+>
+> The speed-up filtered the sweep to `every_lowering_module_executes_or_is_exempt`, on the reasoning
+> that it is the test the classifier reads. **That silently removed
+> `a_trapping_programs_native_side_dies_with_sigtrap`, which is what detects an `Op::Trap` mutation.**
+> `Trap` came back **UNDETECTED across 34** where PART D recorded **DETECTED 30/30** — I was one step
+> from recording a reopened hole that does not exist.
+>
+> **The calibration could not have caught it.** `CmpEq` at 44/48 was a real calibration, and `CmpEq`
+> is detected by the differential test itself. **A calibration only covers the detection PATHS it
+> happens to exercise**, and validating a cheaper instrument against one mutation says nothing about
+> mutations caught by a different mechanism.
+>
+> **Repaired by EXCLUDING the two expensive analyses rather than INCLUDING one test**, which keeps
+> every detection path. One module: 385 s unfiltered, **5 s** now. Re-run: **`Trap` DETECTED by 34/34**,
+> better than the historic 30/30 because the corpus has grown.
+>
+> **The blast radius is bounded by an argument, not by re-running everything.** A narrower test set
+> can only turn DETECTED into UNDETECTED, never the reverse, and `UNPLACEABLE` is a textual property
+> unaffected by test selection. So every `DETECTED` verdict stands. The suspect ones were re-derived
+> with the corrected tool and are **unchanged**: `ByteToWord` and `PushImmediate` still undetected,
+> `BitAnd`, `BitOr`, `BitXor`, `Shr` still NOT SEMANTIC.
+>
+> ### ROUND THREE: EIGHT OF SEVENTEEN MUTATIONS NO LONGER PLACE
+>
+> | verdict | opcodes |
+> |---|---|
+> | DETECTED | `NewComposite` 29/31, `CallVerifiedNative` 14/20, `Call` 13/40, `GetField` 6/6, `GetTupleField` 4/5, `IsEnum` 4/4, `Trap` 34/34, `GetEnumField` 1/2, `WordToByte` 1/2 |
+> | **UNPLACEABLE (0 matches)** | `Div`, `GetData`, `GetDataIndexed`, `GetIndex`, `Mod`, `SetData`, `SetDataIndexed`, `Yield` |
+>
+> **These are NOT removed opcodes.** Every one still appears in both `src/bytecode.rs` and the
+> emitter, so the opcode is still lowered — the MUTATION TEXT has drifted. Verified concretely for
+> `Div`, `GetData`, `GetIndex` and `Yield`: each expected text occurs **zero** times in the current
+> emitter.
+>
+> **With `Return` in round one, that is NINE pre-registered mutations silently retired.** Their
+> opcodes have contributed **no coverage evidence at all** since the emitter was refactored, and
+> nothing announced it — because the sweep was too expensive to run and, when finally run, was broken.
+>
+> ### SO THE HONEST SUMMARY OF THIS CENSUS IS NOT "STALE"
+>
+> **It had decayed in three independent ways at once**: a harness that would have fabricated universal
+> detection, a mutation set that had lost nine of its members to drift, and a cost that stopped anyone
+> from discovering either. **"No hole open" was measured when all nine still placed.** What can be
+> said now is that no hole is open *among the mutations that still place and still test semantics*.
+>
+> ### ROUND TWO
+>
+> `CmpNe` 4/10, `Dup` 5/12, `Shl` 1/3 detected; `BitAnd`, `BitOr`, `Shr` **NOT SEMANTIC**;
+> `PushImmediate` undetected as the control. **Round two did NOT rescue the bitwise opcodes**, which
+> was the prediction made before running it. `BitAnd`, `BitOr`, `BitXor` and `Shr` therefore have **no
+> coverage evidence in either table**: every registered mutation for them changes LOWERABILITY rather
+> than behaviour.
+>
+> ### Outstanding, and named rather than left implicit
+>
+> - **Re-register the eight drifted round-three mutations** against the current emitter, as `Return`
+>   was. Until then those opcodes are untested.
+> - **Devise a semantic mutation for `BitAnd`, `BitOr`, `BitXor`, `Shr`** that does not abort lowering.
+> - **Eight opcodes are never perturbed in any round**: `Break`, `Else`, `EndIf`, `EndLoop`, `Loop`,
+>   `PopN`, `Reset`, `Stream`. A gap in the pre-registration, not a detection failure.
+> - **Thin margins**: `Shl` 1/3, `CmpLe` 2/11, `GetEnumField` 1/2, `WordToByte` 1/2.
+
 > ✅ **2026-09-06: ROUND ONE RE-RUN IN FULL, ~42 MINUTES. NO NEW HOLE — AND ONE MUTATION HAD
 > SILENTLY GONE STALE.**
 >

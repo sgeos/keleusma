@@ -530,7 +530,10 @@ def calibrate(modules):
                     "corpus_differential",
                     "--",
                     "--nocapture",
-                    "every_lowering_module_executes_or_is_exempt",
+                    "--skip",
+                    "how_deep_does_the_undetected_set_go",
+                    "--skip",
+                    "which_subjects_would_notice_a_wrong_backend",
                 ],
                 env=env,
                 timeout=CALIBRATION_CEILING,
@@ -669,14 +672,39 @@ def main():
                     # running unrelated analyses. Calibrated: with `CmpEq` mutated
                     # EQ->NE, 44 of the 48 carrying modules DISAGREE.
                     r = run(
-                        [
+[
                             "cargo",
                             "test",
                             "--test",
                             "corpus_differential",
                             "--",
                             "--nocapture",
-                            "every_lowering_module_executes_or_is_exempt",
+                            # **EXCLUDE THE EXPENSIVE ANALYSES, DO NOT INCLUDE ONE
+                            # TEST. THE DIFFERENCE COST A REAL DETECTION.**
+                            #
+                            # The first version of this speed-up filtered to
+                            # `every_lowering_module_executes_or_is_exempt` alone,
+                            # on the reasoning that it is the test the classifier
+                            # reads. **That silently removed
+                            # `a_trapping_programs_native_side_dies_with_sigtrap`,
+                            # which is what detects an `Op::Trap` mutation.**
+                            # `Trap` went from DETECTED 30/30 (2026-08-15) to
+                            # UNDETECTED across 34, and would have been recorded
+                            # as a reopened hole that did not exist.
+                            #
+                            # The calibration that was run -- `CmpEq`, 44/48 --
+                            # could not have caught it, because `CmpEq` is caught
+                            # by the differential test itself. **A calibration only
+                            # covers the detection PATHS it happens to exercise.**
+                            #
+                            # So the filter now removes the two tests that are
+                            # expensive and cannot detect anything, and keeps every
+                            # other detection path. One module: 385s unfiltered,
+                            # 5s here.
+                            "--skip",
+                            "how_deep_does_the_undetected_set_go",
+                            "--skip",
+                            "which_subjects_would_notice_a_wrong_backend",
                         ],
                         env=env,
                         timeout=budgets.get(mod, PER_MODULE_TIMEOUT),
