@@ -194,9 +194,9 @@ not touch `src/`, and did not add a CI job — you recorded that per-push cost i
 
 | | |
 |---|---|
-| backend suite | **477 passed, 0 failed**, both float configurations |
+| backend suite | **480 passed, 0 failed**, and the run reported **FROZEN** |
 | uncommitted | none |
-| unabsorbed | **zero** |
+| unabsorbed | **zero** — absorption 53 in, every prediction exact: no `src/` contact, zero conflicts, zero movement |
 
 ## Yours, unchanged
 
