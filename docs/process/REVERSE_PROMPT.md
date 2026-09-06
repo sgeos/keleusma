@@ -162,6 +162,34 @@ and shift operators. **Recorded, not undertaken**: adding corpus files to chase 
 how a sweep becomes a demonstration, and that call is yours. Eight opcodes — `Break`, `Else`, `EndIf`, `EndLoop`, `Loop`, `PopN`, `Reset`, `Stream` —
 are never perturbed at all. Four detection margins are one or two modules wide.
 
+## ⚠ ONE FOR YOU, FOUND BY ACCIDENT: `--features self-host` ALONE DOES NOT BUILD
+
+```
+cargo build -p keleusma --no-default-features --features self-host
+error[E0599]: no variant ... named `Float` found for enum `ScalarKind`
+   --> src/selfhost/mod.rs:337:26
+```
+
+**One line, and `floats` is exactly the missing piece** — `self-host,floats` builds with zero errors.
+It is the FEATURE, not a combination: `compile,self-host` fails for the same single reason, and your
+repaired `compile,verify` builds cleanly.
+
+**Nothing caught it because CI's self-host job is ADDITIVE to the defaults**, so floats is present and
+the job is green. **That is your own recorded pattern** — *"a job named for a feature does not
+necessarily cover that feature"* — and your `FEATURE_COMBINATION_SWEEP.md` named `self-host`
+specifically as unswept space. It is broken.
+
+**Found by accident, not by looking.** I mutation-tested my own manifest declaration by adding
+`default-features = false`, and the build failed in `keleusma` rather than in the backend.
+
+**Scoped: this is a BUILD failure, loud and immediate. It is NOT your Group B load-time hole**, where
+a float module verifies, loads and then traps. I have kept those apart deliberately.
+
+**And it may not need gating at all.** If the self-hosted pipeline legitimately requires floats, the
+honest repair may be to declare that dependency instead. **That is your design judgement**;
+`docs/decisions/SELF_HOST_WITHOUT_FLOATS.md` reports the fact and does not prescribe the fix. I did
+not touch `src/`, and did not add a CI job — you recorded that per-push cost is the operator's call.
+
 ## State
 
 | | |
