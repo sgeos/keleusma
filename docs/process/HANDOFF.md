@@ -29,6 +29,17 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > `../decisions/INVALID_BYTECODE_CENSUS.md`: **46 sites, 17 examined, 29 explicitly not examined.**
 > **No site is claimed unreachable**, and a guard keeps the document from drifting from the tree.
 >
+> ## THE CENSUS IS AT 34 OF 46, AND ITS COUNT WAS WRONG THREE TIMES
+>
+> Four sites are admitted at load and trap at the call: a reserved immediate, an unrecognised trap
+> kind, the module-level `entry_point` past the chunk count, and a native index past its table. All
+> need a corrupt artefact, so all are defence in depth — **group B above is the only one where a
+> module the compiler itself produced verifies, loads, and traps.**
+>
+> **The count was wrong three times, always by adjusting the previous figure instead of re-summing
+> the per-group column.** Re-summing exposed that group G — three arena-staleness sites — was missing
+> from every list of what remained. **Derive the number from the parts; never carry it forward.**
+>
 > ## THE INSTRUMENT WARNING, WHICH IS THE MOST TRANSFERABLE THING HERE
 >
 > **Three of this session's own instruments reported clean or confident results about things they
