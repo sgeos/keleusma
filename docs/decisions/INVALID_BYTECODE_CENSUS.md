@@ -59,18 +59,34 @@ honest; probing every member individually is not a better use of the same effort
 | B | float opcode without the `floats` feature | 2 | **REACHABLE -- see below** |
 | C | `Fixed` fraction bits exceeding the word width | 5 | **defended**, by two checks that compose |
 | D | composite operand form mismatch | 7 | **defended**, by boundary canonicalization |
-| E | structural indices out of range | 9 | not examined |
-| F | shared and private data-segment layout | 7 | host-contract; not examined |
-| G | arena staleness after reset | 3 | not examined |
+| E | structural indices out of range | 9 | **defended at load** (8 of 9 probed) |
+| F | shared and private data-segment layout | 7 | **host-contract, confirmed** (1 of 7 probed) — but see below |
+| G | arena staleness after reset | 3 | **no witness found** (1 of 3 probed) — see below |
 | H | the three "should never have been emitted" | 3 | **closed 2026-09-04** |
-| I | operand-range and constant-kind checks | 6 | not examined |
-| J | unregistered or invalid native index | 3 | host-contract; not examined |
+| I | operand-range and constant-kind checks | 6 | **mixed** — see below (5 of 6 probed) |
+| J | unregistered or invalid native index | 3 | **mixed** — the index is admitted at load (1 of 3 probed) |
 
 The group sizes sum to 46, which is the population above; a table whose parts do not add to its
 stated whole has been the tell for a miscount here before.
 
-**Seventeen of forty-six sites carry an examined verdict.** The remaining twenty-nine are named by
-group and explicitly marked as not examined. A census whose entries are unexamined opinions is worse than a
+**Thirty-four of forty-six sites carry an examined verdict**, group by group: none of A's one, both
+of B, all five of C, all seven of D, eight of E's nine, two of F's seven, one of G's three, all three
+of H, five of I's six, and one of J's three.
+
+**The remaining twelve** are group A's single site, one in E, five in F, two in G, one in I, and two
+in J.
+
+**Two corrections are folded into that tally, and both are the same defect.** Earlier revisions of
+this line said fifteen remaining and then eleven, and **both omitted group G entirely** — the
+arena-staleness sites, never examined, silently absent from a list that purported to name what was
+left. The figure was also re-derived by summing the per-group column rather than by adjusting the
+previous number, which is how the omission surfaced at all.
+
+**One caveat applies to every count here.** Probes map to sites by MESSAGE CLASS, not one-to-one: a
+mutation tripping `GetData` exercises the site that message comes from, and sibling sites emitting
+the same message are credited with it. The groups were formed the same way. Read the figure as
+"message classes examined", not as lines of source visited — a weaker claim than the bare number
+suggests, and it was overdue. A census whose entries are unexamined opinions is worse than a
 short one that says which sites were looked at.
 
 ## Group B is reachable, and it is a real deployment shape
@@ -221,10 +237,152 @@ canonicalization is load-bearing and invisible from either end: the compiler's b
 runtime's dispatch each look locally correct, and the code that reconciles them sits between them.
 If it regresses, seven refusals open at once.
 
+## Groups E and I: every index is checked at load, one operand RANGE is not
+
+These two ask a **narrower question** than groups B and D, and the difference must not be lost. A
+compiler does not emit an out-of-range data slot or a reserved immediate, so reaching these needs a
+corrupted or hand-built artefact -- which the wire format admits, so the question is real. But both
+outcomes are safe, because the runtime refuses either way. **This is defence in depth, not a hole in
+the load-time guarantee**, and reporting it at group B's severity would discredit group B.
+
+Measured by compiling a valid program, injecting one defect into the compiled artefact, and asking
+what the load-time pass does. Each mutation's application is COUNTED, for a reason given below.
+
+| defect injected | verdict |
+|---|---|
+| `GetData` slot far past the data layout | **rejected at load**, naming the slot and the layout size |
+| `SetData` slot far past the data layout | **rejected at load** |
+| `GetLocal` slot past the chunk's local count | **rejected at load** |
+| `Const` index past the constant pool | **rejected at load** |
+| `GetDataIndexed` / `SetDataIndexed` base past the layout | **rejected at load**, naming the slot RANGE |
+| `Call` chunk index past the module's chunk count | **rejected at load** |
+| `SetLocal` slot past the chunk's local count | **rejected at load** |
+| `GetField` flat offset far past the body | **rejected at load**, by the typed operand-stack pass |
+| `IsEnum` tag past the constant pool | **rejected at load** |
+| `Reset` injected into a non-stream chunk | **rejected at load**, naming the block kind |
+| **`PushImmediate` operand in the reserved range** | **ADMITTED** -- loads, and traps at the call |
+| **`Trap` carrying an unrecognised kind code** | **ADMITTED** -- loads, and traps at the call |
+
+**Eight indices rejected, two operand VALUES admitted.** The pass validates every index it meets,
+precisely and with a good message, and does not validate an operand's value range.
+
+**Two instances rather than one changes how this reads.** A single unchecked operand is an
+oversight; two, against eight checked indices, is a boundary in what the pass was built to cover.
+Which it is remains the operator's to say -- what is recorded is the observation, not the intent.
+
+Pinned by `tests/immediate_operand_range.rs`, whose controls are the four rejected cases: without
+them, "verify admits a bad operand" could be misread as the pass checking nothing.
+
+**Not repaired.** A load-time check costs time on every load and this project rejects conservatively
+on purpose; the observation is recorded and adopting it is a separate call.
+
+### The probe's first revision produced a vacuous verdict, and that is worth recording
+
+It mutated `PushImmediate` in a program compiled from `k + 1` -- **which contains no
+`PushImmediate`**. Nothing was changed, the untouched module verified, and the probe reported
+"admitted": a verdict about a mutation that never happened. It was caught only because the
+follow-through ran the module and it returned the correct answer.
+
+The probe now COUNTS the mutations it applies and reports a zero count as vacuous rather than as a
+result. **Third instrument corrected in one session** -- after a file-attribution column that
+reported warning locations under a passing verdict, and a mutation aimed at the wrong call site that
+passed.
+
+## Group F: the classification was an assertion, and testing it found something else
+
+Groups F and J were called "host-contract surfaces" and set aside. **That was an assertion, not a
+measurement**, and an exclusion made for a good reason is still an exclusion -- the same shape that
+hid the narrow selectors from the feature sweep until they were swept.
+
+One site did not obviously belong to the class. The message about a NEW module declaring a different
+number of private slots than the host supplied fires on a **hot swap**, which is a shipped feature.
+A host that swaps to a module with different data requirements has done nothing wrong.
+
+**The classification survives.** `Module::data_layout` and `DataLayout::slots` are both public, so a
+host can read the required slot count directly from the module it is about to install and supply
+matching data. A correct host never reaches the site. It is genuinely a contract violation.
+
+### But the error KIND is wrong by this codebase's own stated rule
+
+`VmError::NotSuspended` carries this, verbatim, as its reason for existing:
+
+> Distinguished from `VmError::InvalidBytecode` to keep API misuse separate from corrupt or
+> malformed bytecode.
+
+The hot-swap site reports **a host argument of the wrong length** as `InvalidBytecode`. The bytecode
+is not malformed; the caller's argument is. So the project defines the distinction, builds a variant
+to preserve it, and then breaks it here.
+
+**Small, and worth exactly what it is.** A host sees an error naming their artefact when the fault is
+in their call, which sends the reader to inspect the wrong thing. **Not repaired**: changing which
+variant a public API returns is a breaking change and the operator's call, alongside the other
+API-shaped decisions already queued for them.
+## The final pass: four admissions, and the pattern is wider than operand values
+
+Finishing the remaining sites found two more admissions, and the second is not an opcode operand at
+all.
+
+| defect injected | `verify()` | `Vm::new` | call |
+|---|---|---|---|
+| `entry_point` past the module's chunk count | **admits** | loads | **traps** `invalid chunk index` |
+| `CallVerifiedNative` index past the native table | **admits** | loads | **traps** `invalid native index` |
+
+Alongside them, newly rejected at load: a `GetEnumField` payload offset past the body (caught by the
+typed operand-stack pass) and a shared-slot index past the layout.
+
+**So the boundary is not simply "indices yes, operand values no".** It is closer to: the pass
+validates **operands inside a chunk against tables inside the module**, and does not validate an
+operand's value range, the **module-level entry point**, or the native index. The entry point is
+plainly checkable -- the chunk count sits in the same structure. Whether the native index is
+checkable at load is NOT established here, since natives are registered by the host after loading,
+and this document does not claim it either way.
+
+**Severity is unchanged from the rest of this class.** Every one needs a corrupted or hand-built
+artefact; the compiler produces none of them, and the runtime refuses all of them. This is defence in
+depth. **Group B remains the only entry where a module the compiler itself produced verifies, loads,
+and traps**, and it is the only one that should prompt action.
+
+### Why this pass happened at all
+
+Three times in this session a remaining group was called low-value and set aside, and three times
+testing it anyway found something: group D's undocumented boundary mechanism, groups E and I's two
+admitted operands, group F's error-kind violation of a rule this codebase states in its own source.
+**Three for three against my own judgement** was a better argument than the judgement, so the last
+sites were probed rather than asserted away. Two more admissions is the fourth.
+
+## Group G: no witness found, and the reason is structural rather than a check
+
+Group G was **never examined and was missing from every list of what remained** until the tally was
+re-derived by summing the per-group column. A group nobody counted is a group nobody checked, which
+is reason enough to look.
+
+It also had the best remaining chance of being a **group B shape** rather than a corrupt-artefact
+one. The other outstanding sites need a hand-built module or a host API misuse; **holding a value
+across a reset is something a program does.**
+
+**A hypothesis from a filename was wrong, and it is recorded because it nearly went untested.**
+`src/confine.rs` sounded like the mechanism that would prevent the escape. Read, it is a memory
+planner asking whether a construction site's region can be reused -- nothing to do with refusing
+escapes. Had the verdict been written from the filename, it would have credited a module that does
+none of that work, exactly as an earlier mutation in this session credited the wrong call site.
+
+**Measured with programs.** Four shapes were driven through a `loop main` across three resumes each:
+a local array held across a yield, a `private data` composite read on later iterations, a struct in
+a local, and a nested array. **None reached a staleness refusal**, and each ran to a `Reset` final
+state, so the resets are shown to have happened rather than assumed.
+
+**The reason is the shape of the language, not a check that catches it.** A transient composite
+cannot be NAMED after the reset that ends its iteration, because the next iteration re-executes the
+body and rebuilds it. The only storage crossing a reset is the persistent region, which is not
+reset. So there is no expression that reads a pre-reset transient body.
+
+**No witness found -- not unreachable.** One of group G's three sites was probed this way; the other
+two concern host-supplied opaque handles going stale, which is a different question and untested
+here.
+
 ## Where the next pass should start
 
-Group E, the nine structural-index sites, or group I, the six operand-range and constant-kind
-checks. Both are places where `verify()` plausibly has a corresponding check and plausibly does not,
-and neither has been looked at. Groups F and J are host-contract surfaces and are lower value: a
+Groups F and J, the host-contract surfaces, are what remain unexamined alongside group A and the
+unprobed members of E and I. Groups F and J are host-contract surfaces and are lower value: a
 host that supplies a mis-sized buffer or an unregistered native has broken a stated contract, which
 is the same class as the native array-length finding rather than a hole in the guarantee.

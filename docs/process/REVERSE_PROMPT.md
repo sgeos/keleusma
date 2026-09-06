@@ -101,7 +101,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-04 (session 63) — the `Op::Len` trap is closed, and a second hole is pinned open
+**Date**: 2026-09-05 (session 63) — two load-time holes found, one repaired, and three of my own instruments corrected
 
 ## READ FIRST: A MODULE CAN VERIFY, LOAD, AND THEN TRAP, AND IT IS NOT REPAIRED
 
@@ -194,6 +194,60 @@ need the tests to run.
 configuration COMPILES and nothing more. It is not a claim that eleven configurations are supported,
 and the unswept space — the narrow word and address selectors, `self-host` — is far larger than the
 swept one. Recorded in [`FEATURE_COMBINATION_SWEEP.md`](../decisions/FEATURE_COMBINATION_SWEEP.md).
+
+## WHAT ELSE THE SWEEPS TURNED UP, IN ONE PLACE
+
+**The narrow widths compile and nothing verifies them.** All ten selectors build; no continuous-
+integration job or release-gate step selects any of them. Running the suite at `narrow-word-16`
+gives **89 binaries passing, 15 failing, 37 distinct failures** — but the failures share a PREMISE,
+not a cause in the virtual machine. The clearest case: the performance canary's own program uses
+`1234567`, which cannot be represented at 16 bits. **The suite assumes a 64-bit host**, so running
+it at 16 bits mostly measures that assumption.
+
+That licenses neither conclusion on its own. It does not show the narrow widths are broken, and it
+does not show they work. They are **unverified, and now measurably so rather than presumptively**.
+Making the suite run at 16 bits is a project rather than an increment, and I am not recommending it
+be started.
+
+**The performance canary could not fail.** Its ceiling was asserted after the timed call returned,
+so it could only fire once the thing it guarded had finished — it spun 57 minutes at 99% of a core
+instead of failing. Now bounded on a channel, mutation-tested in three directions, with the existing
+ceiling and result assertions shown to still fire.
+
+**Census groups E and I: every INDEX is checked at load, two operand VALUES are not.** A reserved
+`PushImmediate` and an unrecognised `Trap` kind code are each admitted, load, and trap. Eight
+indices beside them are rejected at load with precise messages.
+
+**One unchecked operand is an oversight; two against eight checked indices is a boundary in what the
+pass was built to cover.** Which it is remains yours to say — the observation is recorded, not the
+intent.
+
+**Defence in depth, not a guarantee hole** — reaching either needs a corrupt artefact, and both
+outcomes are safe because the runtime refuses regardless. Kept deliberately distinct from the float
+finding above, which is a module the compiler itself produced.
+
+The census is at **30 of 46 sites examined**; the sixteen that are not are named. This paragraph
+said "one operand RANGE" and 22 of 46 until finishing the probing found the second instance —
+corrected here rather than left standing, because a stale figure in this file is the defect this
+session spent itself on.
+
+## THE THING I WOULD MOST WANT A REVIEWER TO CHECK
+
+**Three of my own instruments were wrong tonight, and all three failed in the same direction.**
+
+| instrument | how it lied |
+|---|---|
+| the feature sweep's file column | listed WARNING locations under a PASSING verdict |
+| a mutation test of the boundary canonicalization | aimed at the wrong call site and PASSED |
+| the operand-range probe | mutated an op the program did not contain, then reported "admitted" |
+
+Each reported a clean or confident result about something it never touched. The third survived only
+because the follow-through ran the module and it returned the correct answer; a verdict-only probe
+would have shipped a fabricated finding.
+
+**None was caught by review. All three were caught by making the instrument fail on purpose.** If
+any conclusion in this session's documents deserves suspicion, it is one whose instrument was never
+made to misbehave.
 
 ## THE TWO QUESTIONS THAT BLOCK EVERYTHING LARGE ARE STILL YOURS
 

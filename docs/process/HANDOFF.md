@@ -29,6 +29,20 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > `../decisions/INVALID_BYTECODE_CENSUS.md`: **46 sites, 17 examined, 29 explicitly not examined.**
 > **No site is claimed unreachable**, and a guard keeps the document from drifting from the tree.
 >
+> ## THE INSTRUMENT WARNING, WHICH IS THE MOST TRANSFERABLE THING HERE
+>
+> **Three of this session's own instruments reported clean or confident results about things they
+> never touched**: a sweep column listing WARNING locations under a PASSING verdict; a mutation test
+> aimed at the wrong call site that PASSED, which would have recorded a mechanism doing none of the
+> work attributed to it; and a probe that mutated an opcode its program did not contain, then
+> reported the untouched module as "admitted".
+>
+> **None was caught by re-reading. All three were caught by making the instrument misbehave on
+> purpose.** The rule already in this file — a guard that has not been made to fail is a guess —
+> extends further than it was being applied: **an explanation is also a guess, and so is a
+> measurement.** Treat any conclusion in these documents whose instrument was never made to
+> misbehave as provisional.
+>
 > ## AND NINE OF ELEVEN BUILD CONFIGURATIONS ARE BUILT BY NOTHING
 >
 > The float hole above lived in a configuration nothing built, so eleven plausible configurations
@@ -41,6 +55,13 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > An addition to continuous integration is **recommended with its cost and deliberately not
 > adopted** — that is the operator's call. See `../decisions/FEATURE_COMBINATION_SWEEP.md`, which
 > also states the sweep's limit: `cargo check --tests` shows a configuration COMPILES and no more.
+>
+> **The narrow selectors are the same story and were swept too**: ten compile, none is verified by
+> anything. Running the suite at a 16-bit word gives 89 passing and 15 failing binaries, but the
+> failures share a PREMISE — the suite assumes a 64-bit host, down to a canary whose own constant
+> `1234567` cannot exist at that width. So the narrow widths are **unverified: neither shown broken
+> nor shown working.** Making the suite run there is a project, not an increment, and is not
+> recommended without deciding it is worth the cost.
 >
 > ## THE QUEUE IS OTHERWISE EMPTY AND BOTH LARGE ITEMS NEED THE OPERATOR
 >

@@ -122,6 +122,28 @@ use std::time::Instant;
 /// that a healthy runtime finishes in well under a second.
 const ITERATIONS: i64 = 200_000;
 
+/// **Hard bound on the canary's own runtime, in seconds.**
+///
+/// # Why a second bound exists when there is already a ceiling
+///
+/// [`CEILING_SECS`] is asserted AFTER the timed call returns, so it can only
+/// fire once the thing it guards has finished. **A tripwire whose alarm depends
+/// on the mine not exploding is not a tripwire.** Measured 2026-09-05: under
+/// `--features narrow-word-16` this test ran 57 minutes at 99% of a core and
+/// never returned, because its own parameters -- `1234567` and the iteration
+/// count -- cannot be represented at that width. The suite could not proceed.
+///
+/// This bound is enforced by waiting on a channel rather than by inspecting a
+/// duration, so it does not depend on the work completing.
+///
+/// # Why this value
+///
+/// Four times [`CEILING_SECS`], so a run that is merely slow trips the ceiling
+/// first and gets that assertion's far better diagnostic. A healthy runtime
+/// finishes this loop in well under a second, so the margin against ordinary
+/// contention is three orders of magnitude.
+const HARD_TIMEOUT_SECS: u64 = 120;
+
 /// Wall-clock ceiling, in seconds.
 ///
 /// Chosen from the failure mode rather than from the observed runtime: the
@@ -134,6 +156,56 @@ const CEILING_SECS: f64 = 30.0;
 /// execution time. Compilation is deliberately excluded from the timing: the
 /// paths under guard are VM reads, and including the front end would dilute the
 /// signal with unrelated work.
+/// [`time_run`], abandoned if it does not finish within `HARD_TIMEOUT_SECS`.
+///
+/// # What this does and does not do
+///
+/// It bounds how long the TEST waits. **It does not stop the work.** A Rust
+/// thread cannot be killed from outside, so a non-terminating program keeps
+/// running until the test binary exits. What is gained is that the suite reaches
+/// a verdict and proceeds, instead of stopping for as long as anyone lets it.
+///
+/// The thread is given a large stack because the virtual machine recurses
+/// through composite construction and a spawned thread's default is smaller than
+/// the main thread's.
+fn time_run_bounded(src: &str, arg: i64) -> Result<(i64, f64), String> {
+    let owned = src.to_string();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(move || {
+            // A send failure means the receiver already timed out and gave up,
+            // which is not this thread's problem to report.
+            let _ = tx.send(time_run(&owned, arg));
+        })
+        .expect("spawn the timed run");
+    rx.recv_timeout(std::time::Duration::from_secs(HARD_TIMEOUT_SECS))
+        .map_err(|_| {
+            alloc_format(
+                HARD_TIMEOUT_SECS,
+                read_load_average().unwrap_or_else(|| "unavailable".to_string()),
+            )
+        })
+}
+
+/// The message for a run that never returned. Separated so the failure path
+/// reads as a sentence rather than as formatting.
+fn alloc_format(secs: u64, load: String) -> String {
+    format!(
+        "the timed program did not finish within {secs}s, so the wall-clock ceiling \
+         below could never be reached and the suite would otherwise wait \
+         indefinitely.\n\
+         \n\
+         Load average at the timeout (1/5/15 min): {load}\n\
+         \n\
+         This is USUALLY NOT a performance regression. The likeliest cause is that \
+         the program's own constants cannot be represented at the configured word \
+         width -- measured under `narrow-word-16`, where `1234567` exceeds the \
+         32767 maximum. A genuine slowdown trips the ceiling instead, with a \
+         better diagnostic."
+    )
+}
+
 fn time_run(src: &str, arg: i64) -> (i64, f64) {
     let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
     let need = required_persistent_capacity_for(&module);
@@ -161,7 +233,10 @@ fn constant_loads_in_a_loop_stay_fast() {
     let src = "private data d { s: Word } \
                fn main(hi: Word) -> Word { \
                for i in 0..hi limit 200000 { d.s = d.s + 1234567 + i; } d.s }";
-    let (result, elapsed) = time_run(src, ITERATIONS);
+    let (result, elapsed) = match time_run_bounded(src, ITERATIONS) {
+        Ok(pair) => pair,
+        Err(message) => panic!("{message}"),
+    };
     // Sampled AFTER the timing, so the one-minute window overlaps the section it
     // describes. Best-effort and never fatal: this is a diagnostic printed on
     // the red path, not a verdict, and a machine that cannot report it should
