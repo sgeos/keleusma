@@ -64,14 +64,29 @@ honest; probing every member individually is not a better use of the same effort
 | G | arena staleness after reset | 3 | not examined |
 | H | the three "should never have been emitted" | 3 | **closed 2026-09-04** |
 | I | operand-range and constant-kind checks | 6 | **mixed** — see below (5 of 6 probed) |
-| J | unregistered or invalid native index | 3 | host-contract; not examined |
+| J | unregistered or invalid native index | 3 | **mixed** — the index is admitted at load (1 of 3 probed) |
 
 The group sizes sum to 46, which is the population above; a table whose parts do not add to its
 stated whole has been the tell for a miscount here before.
 
-**Thirty-one of forty-six sites carry an examined verdict.** The remaining fifteen are named by group
-and explicitly marked as not examined; they are group A, six of the seven in F, the three in J, and
-one member each of E and I. A census whose entries are unexamined opinions is worse than a
+**Thirty-three of forty-six sites carry an examined verdict**, group by group: none of A's one, both
+of B, all five of C, all seven of D, eight of E's nine, two of F's seven, **none of G's three**, all
+three of H, five of I's six, and one of J's three.
+
+**The remaining thirteen** are group A's single site, one in E, five in F, **all three in G**, one in
+I, and two in J.
+
+**Two corrections are folded into that tally, and both are the same defect.** Earlier revisions of
+this line said fifteen remaining and then eleven, and **both omitted group G entirely** — the
+arena-staleness sites, never examined, silently absent from a list that purported to name what was
+left. The figure was also re-derived by summing the per-group column rather than by adjusting the
+previous number, which is how the omission surfaced at all.
+
+**One caveat applies to every count here.** Probes map to sites by MESSAGE CLASS, not one-to-one: a
+mutation tripping `GetData` exercises the site that message comes from, and sibling sites emitting
+the same message are credited with it. The groups were formed the same way. Read the figure as
+"message classes examined", not as lines of source visited — a weaker claim than the bare number
+suggests, and it was overdue. A census whose entries are unexamined opinions is worse than a
 short one that says which sites were looked at.
 
 ## Group B is reachable, and it is a real deployment shape
@@ -302,6 +317,38 @@ to preserve it, and then breaks it here.
 in their call, which sends the reader to inspect the wrong thing. **Not repaired**: changing which
 variant a public API returns is a breaking change and the operator's call, alongside the other
 API-shaped decisions already queued for them.
+## The final pass: four admissions, and the pattern is wider than operand values
+
+Finishing the remaining sites found two more admissions, and the second is not an opcode operand at
+all.
+
+| defect injected | `verify()` | `Vm::new` | call |
+|---|---|---|---|
+| `entry_point` past the module's chunk count | **admits** | loads | **traps** `invalid chunk index` |
+| `CallVerifiedNative` index past the native table | **admits** | loads | **traps** `invalid native index` |
+
+Alongside them, newly rejected at load: a `GetEnumField` payload offset past the body (caught by the
+typed operand-stack pass) and a shared-slot index past the layout.
+
+**So the boundary is not simply "indices yes, operand values no".** It is closer to: the pass
+validates **operands inside a chunk against tables inside the module**, and does not validate an
+operand's value range, the **module-level entry point**, or the native index. The entry point is
+plainly checkable -- the chunk count sits in the same structure. Whether the native index is
+checkable at load is NOT established here, since natives are registered by the host after loading,
+and this document does not claim it either way.
+
+**Severity is unchanged from the rest of this class.** Every one needs a corrupted or hand-built
+artefact; the compiler produces none of them, and the runtime refuses all of them. This is defence in
+depth. **Group B remains the only entry where a module the compiler itself produced verifies, loads,
+and traps**, and it is the only one that should prompt action.
+
+### Why this pass happened at all
+
+Three times in this session a remaining group was called low-value and set aside, and three times
+testing it anyway found something: group D's undocumented boundary mechanism, groups E and I's two
+admitted operands, group F's error-kind violation of a rule this codebase states in its own source.
+**Three for three against my own judgement** was a better argument than the judgement, so the last
+sites were probed rather than asserted away. Two more admissions is the fourth.
 
 ## Where the next pass should start
 
