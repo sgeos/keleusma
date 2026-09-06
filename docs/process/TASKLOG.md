@@ -10,6 +10,29 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-06, V0.3.X line). `Op::Len` HAS NO PRODUCER THAT COULD BE FOUND, AND
+> TWELVE GUARDS WERE DISPOSED OF RATHER THAN REPAIRED.**
+>
+> Absorption 51 brought the `Op::Len` root repair and **twelve backend tests fired at once**, all on
+> the V0.3.X line. **None was patched green.** Four inverted, four retired as superseded, one verdict
+> restated, two census figures re-measured with their causes named, one corpus claim amended.
+>
+> **No producer found**, by four legs each carrying a must-fire control: 14 constructs probed with 10
+> reaching codegen and none emitting; all 69 compiling corpus modules across four roots swept, none carrying it; the
+> compiler scanned, 11 occurrences all comments or absence assertions. **NOT written as unreachable** —
+> this tree carries a retraction on that word from `Op::IsStruct`.
+>
+> **A MECHANISM WAS RECORDED WRONGLY BY THE V0.3.X LINE AND IS CORRECTED.** Its handoff said
+> `static_for_in_length` gained an `Expr::If` arm. It did not, and still has none; the fold comes from
+> that function's fallback to `infer_expr_type`. `OP_LEN_ROOT_REPAIR.md` stated this correctly on the
+> day it landed and was restated without being read.
+>
+> **A figure moved and its reading is constrained**: corpus refusals 2 → 1, because the opcode's INPUT
+> vanished, not because the backend learned to lower it. That refusal stands. `65 of 66` unchanged.
+>
+> `docs/decisions/OP_LEN_PRODUCER_CENSUS.md`. No opcode added, no `BYTECODE_VERSION` change.
+> Publication remains held.
+
 > **Currency note (2026-09-04, session 63, later). THE `InvalidBytecode` CLASS IS ENUMERATED, AND
 > ONE HOLE IS PINNED OPEN.**
 >

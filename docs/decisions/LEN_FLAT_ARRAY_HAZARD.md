@@ -2,8 +2,34 @@
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
 
-**Status: reported, NOT repaired. The repair is not this line's to make** — it lies in `src/vm.rs`
-and `src/verify.rs`, owned by the `v0.2.3` line. Every fact below was measured for this document.
+**Status: CLOSED 2026-09-05, and closed somewhere neither this document nor its ratchet expected.**
+The analysis below is kept verbatim beneath this banner, because the way it was overtaken is the
+useful part.
+
+**The hazard was reported as needing a repair in `src/vm.rs` or `src/verify.rs`.** It was closed in
+`src/compiler.rs` instead: the `v0.2.3` line removed **both `Op::Len` emission sites**, so the opcode
+is no longer produced from any source. Neither owning file was touched. **A bad program stopped being
+generated, which is strictly better than a bad program being caught** — and it is the second time on
+this line that an item parked on "the owning line must repair this" was resolved by someone fixing
+the actual cause somewhere else. **Test the premise of an escalation before escalating it.**
+
+**What survives.** The runtime arm is still live and still faults; it now defends against a corrupt
+or hand-built module rather than against the compiler, which is what `src/vm.rs` always said it was
+for. Legs 1, 3 and 4 are INVERTED in the ratchet rather than deleted, and leg 2 is pinned through
+INJECTED bytecode so a compiler change can no longer kill a guard on a runtime property.
+
+**One statement below is wrong and is corrected here rather than edited out.** The mechanism was not
+that `static_for_in_length` lacked an `Expr::If` arm — it still lacks one. The fold comes from that
+function's fallback to `infer_expr_type`, which consults the authoritative per-span type table.
+
+See [`OP_LEN_PRODUCER_CENSUS.md`](./OP_LEN_PRODUCER_CENSUS.md) for the producer search, its four
+legs and its limits, and [`OP_LEN_ROOT_REPAIR.md`](./OP_LEN_ROOT_REPAIR.md) for the repair itself.
+
+---
+
+## The analysis as written before 2026-09-05, kept for the record
+
+Every fact below was measured for this document at the time it was written.
 
 **This is NOT an exploitable hole today, and must not be read as one.** Leg 3 is the reason, and it
 was measured after an earlier reading of this hazard assumed the opposite.

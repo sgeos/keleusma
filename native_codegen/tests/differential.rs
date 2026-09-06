@@ -221,10 +221,19 @@ fn an_unsupported_opcode_is_refused_rather_than_mislowered() {
     // **THE SOURCE-LEVEL WITNESS ROTTED, AND THE COMMENT ABOVE PREDICTED IT.**
     //
     // The witness was `for x in if c { a } else { b }`, which emitted `Op::Len`
-    // because `static_for_in_length` had no `Expr::If` arm. The `v0.2.3` line's
+    // because no static length could be found for the source. The `v0.2.3` line's
     // root repair landed in absorption 51 and folds that length to a constant, so
     // the program no longer contains the opcode and this test began asserting a
     // refusal against bytecode that does not carry its subject.
+    //
+    // **THE MECHANISM, STATED CORRECTLY.** `structural_for_in_length` did NOT
+    // gain an `Expr::If` arm and still has none. What folds the form is
+    // `static_for_in_length`'s FALLBACK to `infer_expr_type`, which consults the
+    // authoritative per-span type table and so answers for expression forms whose
+    // structural arms are absent. This line recorded the wrong mechanism in two
+    // handoff documents, restating it from `OP_LEN_ROOT_REPAIR.md` -- a document
+    // it had already absorbed, and which stated it correctly -- without reading
+    // it. See `docs/decisions/OP_LEN_PRODUCER_CENSUS.md`.
     //
     // **There is no successor source construct.** The comment above already
     // recorded that `probe_unsupported`'s candidate list "now LOWERS or is

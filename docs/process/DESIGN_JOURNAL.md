@@ -1,5 +1,105 @@
 # Design Journal
 
+## 2026-09-06 — [v0.3.0] `Op::Len` has no producer that could be found, and twelve tests are disposed of rather than repaired
+
+**Predicted before the run**: 474 passed, 0 failed, both float configurations — 473 as of the last
+green, plus 4 in a new census binary, minus 3 retired from `probe_len_reachability`.
+
+**Measured: 474 passed, 0 failed, both configurations.** **THE PREDICTION WAS A PARTIAL HIT, NOT A
+CLEAN ONE, AND SAYING SO IS THE POINT.** The population hit **exactly**. The green did not: the first
+frozen measurement returned **two failures neither predicted nor caused by the increment's subject**,
+and both were resolved rather than absorbed into the count. A count that lands exactly can make a
+prediction look better than it was.
+
+**The measurement itself needed three attempts, and the first two were my errors.** One run was taken
+while I edited documents underneath it — **the absorption-40 hazard, repeated by this line rather than
+merely remembered** — and is discarded rather than quoted. Two more were killed at the harness's
+**ten-minute background ceiling**, which I had exceeded by passing a timeout well over the documented
+maximum; the suite is now measured in two chunks split at `corpus_differential`, which alone consumes
+most of that ceiling.
+
+### The two unpredicted failures, and neither was what it looked like
+
+**`corpus_fingerprint` fired twice**, correctly both times: amending the corpus witness changed a file
+whose digest is pinned. The second firing was my sequencing error — **the pin has to be the last edit,
+not an early one**, or a later corpus change silently invalidates it again.
+
+**`linkage_symbol_census` fired on DIFFERENT TESTS in two consecutive runs of a frozen tree.** A
+failure that moves between runs is a race, not a result. **It is the same defect that file already
+documents, one level up.** Its `scratch` helper disambiguates with a process-local counter, which
+genuinely separates tests under `cargo test` — where a binary's tests share one process — but not
+under `cargo nextest`, which runs each test in its own process, so every process starts the counter at
+zero and two tests sharing a tag receive the identical directory. Repaired with the process id.
+
+**I first suspected my own corpus widening.** It reads a different constant, which I checked rather
+than assumed. **A plausible self-attribution is still a guess.**
+
+### The instruction that mattered was a warning against the obvious action
+
+The previous handoff said the suite was red on purpose and that the twelve failures **must not be
+patched green**. Every one of them named, in its own failure message, what to do when it fired. That
+text was followed rather than short-circuited.
+
+### The question, and the answer
+
+**Is `Op::Len` reachable from any compilable source now? No producer was found.** Four legs, each
+with a must-fire control: a detector control on injected bytecode; a 14-shape construct battery, 10
+reaching codegen, none emitting; a sweep of all 69 compiling corpus modules across four roots, none carrying it; and a
+scan of the compiler finding 11 occurrences, all comments or absence assertions.
+
+**A grep was refused as the answer.** Three textual censuses on this line were falsified by their own
+controls, and a scan cannot tell a construction from a match arm from a sentence. It is admitted only
+as a supporting leg, with the same scanner shown finding real constructions in the wire-format
+decoder.
+
+**Not written as unreachable.** `Op::IsStruct` was declared producerless here once and four producers
+were found within the hour.
+
+### The error I made, and it was mine end to end
+
+The handoff and the reverse prompt both said *"`static_for_in_length` gained an `Expr::If` arm"*. **It
+did not, and it still has none.** The fold comes from that function's fallback to `infer_expr_type`,
+which consults the authoritative per-span type table.
+
+**`OP_LEN_ROOT_REPAIR.md` — a document this line had already absorbed — states it correctly**, under a
+heading admitting its own prediction had been wrong. I restated it incorrectly without reading it, and
+it propagated into three artefacts. **Reading the absorbed document is cheaper than every artefact
+that repeats it.**
+
+### The finding was larger than the form that was repaired
+
+**Both emission sites in `src/compiler.rs` are gone.** The question was never which construct reaches
+the opcode; it was whether any can. Answering the narrow question would have left that unsaid.
+
+### The design fault was mine, and the repair is structural
+
+**Twelve tests, one witness** — the coupling that rotted `Op::Call` and `Op::IsStruct` before it,
+rebuilt at larger scale. The witness text now has a single definition in `tests/common/mod.rs` and the
+verdict a single owner in `len_producer_census.rs`. A resolution to be careful would not have been a
+repair.
+
+**And one guard was decoupled rather than inverted.** `len_flat_array_hazard` leg 2 pins a RUNTIME
+property — the machine's refusal of the opcode on a flat body — and it died from a COMPILER change,
+which is the wrong dependency. It now injects the opcode as bytecode. Two attempts were needed and
+both failures were instructive: inserting at instruction zero underflowed the operand stack, and
+inserting into a loop chunk shifted the back edge past its header. Each was refused for a structural
+reason while the test claimed to measure a runtime one.
+
+### A prediction resolved, and its premise is what failed
+
+`probe_len_reachability` predicted a harness panic once every refusal in `refused_witness.kel` lowered
+while the module still could not take an arena. **No panic**: the module now lowers, takes 600 bytes,
+loads, and runs to `Int(4)`. The two properties could not move apart, because the property that
+emitted the opcode was the property that denied the bound — the structural claim the file argued from
+the start. **The argument held; the contingency planned around it never arose.**
+
+### A figure moved, and the reading that would be wrong
+
+Corpus refusals **2 → 1**. The backend did not learn to lower `Op::Len`; its input vanished. A refusal
+leaving the list because nothing feeds it is not backend coverage, and conflating the two overstates
+the backend. `65 of 66` stands for a new reason.
+
+
 ## 2026-09-05 — [v0.3.0] The float axis gets the typed width refusal the word axis already had
 
 **Measured**: `native_codegen` **473 passed, 0 failed, 93 binaries** under default features and again

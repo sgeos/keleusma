@@ -205,3 +205,158 @@ pub fn vm_and_native_two_arg(src: &str, a: i64, b: i64) -> (i64, i64) {
     };
     (vv, nv)
 }
+
+// ---------------------------------------------------------------------------
+// THE WITNESS REGISTRY, AND WHY IT IS HERE RATHER THAN COPIED INTO EACH TEST
+// ---------------------------------------------------------------------------
+//
+// Absorption 51 turned TWELVE tests red at once across FIVE files, because each
+// carried its own copy of the same `Op::Len` witness source. One upstream
+// improvement invalidated every copy simultaneously, and each copy had to be
+// found and disposed of separately.
+//
+// **That coupling is this line's own design fault and it has now rotted three
+// times** -- `Op::Call`, `Op::IsStruct`, and now `Op::Len`. The witness text is
+// a single definition from here on, so the next fold invalidates ONE location.
+//
+// The tests themselves stay numerous; that is not the problem. What must not be
+// duplicated is the definition of what is being witnessed.
+
+/// The `if`-EXPRESSION for-in source. **This no longer emits `Op::Len`** -- the
+/// fold is recorded in `docs/decisions/OP_LEN_PRODUCER_CENSUS.md` -- and it is
+/// kept because several tests assert exactly that absence.
+#[allow(dead_code)]
+pub const IF_SOURCE: &str = "\
+fn f(c: bool) -> Word {
+  let a = [1, 2];
+  let b = [3, 4];
+  for x in if c { a } else { b } { let _d = x; }
+  0
+}
+fn main() -> Word { f(true) }
+";
+
+/// The same shape with BOTH ARMS THE SAME LENGTH.
+#[allow(dead_code)]
+pub const IF_SOURCE_EQUAL_LENGTHS: &str = "\
+fn f(c: bool) -> Word {
+  let a = [1, 2];
+  let b = [9, 9];
+  for x in if c { a } else { b } { let _d = x; }
+  0
+}
+fn main() -> Word { f(true) }
+";
+
+/// The ordinary for-in. The control that keeps every claim about the `if` form
+/// from being a claim about for-in in general.
+#[allow(dead_code)]
+pub const PLAIN_SOURCE: &str = "\
+fn f() -> Word {
+  let a = [1, 2];
+  for x in a { let _d = x; }
+  0
+}
+fn main() -> Word { f() }
+";
+
+/// The former `Op::IsStruct` witness, kept as a control: it must still compile
+/// and still MEAN `a + b`.
+#[allow(dead_code)]
+pub const IS_STRUCT_SOURCE: &str = "\
+struct P { a: Word, b: Word }
+fn g(P { a, b }) -> Word { a + b }
+fn main() -> Word { g(P { a: 1, b: 2 }) }
+";
+
+/// Compile a source that is expected to compile.
+#[allow(dead_code)]
+pub fn build(src: &str) -> keleusma::bytecode::Module {
+    keleusma::compiler::compile(
+        &keleusma::parser::parse(&keleusma::lexer::tokenize(src).expect("lex")).expect("parse"),
+    )
+    .expect("compile")
+}
+
+/// Compile a source that may legitimately fail at any stage.
+#[allow(dead_code)]
+pub fn try_build(src: &str) -> Option<keleusma::bytecode::Module> {
+    keleusma::lexer::tokenize(src)
+        .ok()
+        .and_then(|t| keleusma::parser::parse(&t).ok())
+        .and_then(|a| keleusma::compiler::compile(&a).ok())
+}
+
+/// Does any chunk carry an opcode whose debug name begins with `name`?
+///
+/// Prefix matching on the debug form covers both the nullary `Len` and the
+/// parameterised forms such as `IsStruct(0)` without naming their payloads.
+#[allow(dead_code)]
+pub fn emits(m: &keleusma::bytecode::Module, name: &str) -> bool {
+    m.chunks
+        .iter()
+        .any(|c| c.ops.iter().any(|o| format!("{o:?}").starts_with(name)))
+}
+
+/// The corpus roots, **widened to four after this loader reproduced the exact
+/// defect `corpus_fingerprint.rs` was built to prevent.**
+///
+/// The first version here listed three, copied from `remaining_refusals`. But
+/// `corpus_fingerprint` watches FOUR, because the censuses that publish figures
+/// read four — `spike_corpus_coverage`, `isa_lowering_census` and
+/// `bound_transfer` all include `examples/rtos/scripts` and `compiler/kel`.
+///
+/// **That guard's own header records this defect at three granularities**: a
+/// pinned value whose input was an unwatched directory scan, then a scan of three
+/// named directories where the loaders recurse, then a guard covering three roots
+/// where the consumers read four. **Each time the watched population was narrower
+/// than the one that mattered, and each time the narrow scan returned a
+/// well-formed answer.** This is the fourth occurrence, committed by a loader
+/// written in the same session that read the warning.
+///
+/// A sweep looking for an opcode wants the WIDEST population available: a
+/// negative over a narrow corpus is a weaker negative, and nothing here is made
+/// worse by reading more files. Recursion reaches `examples/scripts/rogue` and
+/// `examples/scripts/piano_roll`; listing a subdirectory as well is what made
+/// three other tests count one directory twice.
+#[allow(dead_code)]
+pub const CORPUS_DIRS: [&str; 4] = [
+    "examples/scripts",
+    "src/selfhost/kel",
+    "examples/rtos/scripts",
+    "compiler/kel",
+];
+
+/// Every `.kel` file under the corpus roots that COMPILES, as `(file name, module)`.
+///
+/// A file that does not compile is skipped rather than reported: several corpus
+/// files are stage sources needing a prelude, and they are not this loader's
+/// subject. Callers that need a population floor must assert one.
+#[allow(dead_code)]
+pub fn corpus() -> Vec<(String, keleusma::bytecode::Module)> {
+    let root = std::path::Path::new("..");
+    let mut stack: Vec<std::path::PathBuf> = CORPUS_DIRS.iter().map(|d| root.join(d)).collect();
+    let mut paths = Vec::new();
+    while let Some(p) = stack.pop() {
+        if p.is_dir() {
+            if let Ok(rd) = std::fs::read_dir(&p) {
+                stack.extend(rd.filter_map(|e| e.ok()).map(|e| e.path()));
+            }
+        } else if p.extension().is_some_and(|x| x == "kel") {
+            paths.push(p);
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    let mut out = Vec::new();
+    for p in paths {
+        let name = p.file_name().unwrap().to_string_lossy().to_string();
+        let Ok(src) = std::fs::read_to_string(&p) else {
+            continue;
+        };
+        if let Some(m) = try_build(&src) {
+            out.push((name, m));
+        }
+    }
+    out
+}

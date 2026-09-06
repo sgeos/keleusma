@@ -47,6 +47,9 @@
 //! # `src/vm.rs` is the `v0.2.3` line's
 //!
 //! Read here, never written. Any repair implied by a finding is theirs.
+mod common;
+
+use common::IF_SOURCE;
 use keleusma::bytecode::Module;
 use keleusma::vm::{auto_arena_capacity_for, required_persistent_capacity_for};
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
@@ -399,34 +402,57 @@ fn the_non_generic_form_is_repaired_and_runs() {
     );
 }
 
-/// **NOT REACHED: `Op::Len` on a flat array — and the mechanism is the bound.**
+/// **NOT REACHED: `Op::Len` on a flat array — AND THE MECHANISM CHANGED, WHICH
+/// IS WHY THE VERDICT IS RESTATED RATHER THAN LEFT STANDING.**
 ///
-/// The only construct known to emit `Op::Len` from the for-in site is an `if`
-/// EXPRESSION as the source. **It is refused a resource bound**, so it never
-/// loads. The property that reaches the opcode is the property that denies the
-/// bound: `Op::Len` fires when the source length is not statically known, and a
-/// loop whose trip count is not statically known is what the extractor refuses.
+/// # The verdict this replaces
 ///
-/// **This is the stance working, not a hole**, and it is recorded as a mechanism
-/// rather than as an outcome.
+/// It read: the only construct known to emit `Op::Len` is an `if` EXPRESSION as
+/// the for-in source, and **it is refused a resource bound**, so it never loads.
+/// The property that reached the opcode was the property that denied the bound.
+///
+/// # What is true now
+///
+/// **There is no producer.** The `v0.2.3` line removed both `Op::Len` emission
+/// sites in the compiler; each folds the length from the operand's type or fails
+/// with a compile error. So the site is not reached because nothing feeds it, not
+/// because a bound is refused — and the former witness is now an ordinary
+/// program that folds, loads and runs.
+///
+/// **The two readings are not interchangeable.** "Held shut by a liftable
+/// refusal" was a standing hazard: someone improving the bound extractor, with no
+/// reason to look at this opcode, would have opened it. "No producer" is not that
+/// hazard. Leaving the old wording in place would have kept a closed risk on the
+/// books and misdirected whoever read it next.
+///
+/// **It is also not a claim of unreachability.** What was searched, and its
+/// limits, are in `tests/len_producer_census.rs` and
+/// `docs/decisions/OP_LEN_PRODUCER_CENSUS.md`.
 #[test]
-fn the_len_array_site_is_not_reached_because_the_bound_is_refused() {
-    const IF_SOURCE: &str = "fn f(c: bool) -> Word { let a = [1, 2]; let b = [3, 4]; \
-                             for x in if c { a } else { b } { let _d = x; } 0 }\n\
-                             fn main() -> Word { f(true) }";
+fn the_len_array_site_is_not_reached_because_nothing_produces_the_opcode() {
+    // **THE WITNESS TEXT IS NOT COPIED HERE ANY MORE.** This file carried its own
+    // near-duplicate of the source, one of five copies across the suite, and one
+    // upstream fold invalidated all of them at once. The single definition lives
+    // in `tests/common/mod.rs`.
     let m = built(IF_SOURCE).expect("compiles");
     assert!(
-        m.chunks
+        !m.chunks
             .iter()
             .any(|c| c.ops.iter().any(|o| format!("{o:?}").starts_with("Len"))),
-        "the construct no longer emits Op::Len, so this verdict is about nothing"
+        "the construct emits `Op::Len` again, so a producer exists and the \
+         flat-array mis-compilation site has a feeder once more. Re-measure \
+         whether it is reachable rather than restoring the old wording."
     );
-    assert_eq!(
-        chain(IF_SOURCE),
-        Reach::NoBound,
-        "the Op::Len witness is now GRANTED a bound. If it also reaches the \
-         virtual machine, the flat-array mis-compilation site has become \
-         reachable and this file's verdict is wrong -- re-measure it."
+    // **The former witness now goes all the way**, which is the fact that
+    // replaced the refusal. Asserted so that a regression to `NoBound` -- the old
+    // state -- fails here rather than passing as though nothing moved.
+    let reached = chain(IF_SOURCE);
+    assert!(
+        matches!(reached, Reach::Ran(_)),
+        "the folded form no longer runs to completion; it stopped at {reached:?}. \
+         A regression to `NoBound` is the OLD state returning, and any other \
+         stage means the mechanism recorded above is wrong. Either way the \
+         verdict must be re-derived rather than the wording restored."
     );
 }
 

@@ -182,17 +182,31 @@ fn which_isa_opcodes_have_no_corpus_witness() {
          that supply one now run the nominal check first. This line claimed the\n  \
          opcode producerless once before and was falsified within the hour.\n  \
          \n  \
-         `Len` IS STILL WITNESSED and is the other kind of fact entirely:\n  \
+         `Len` IS NO LONGER WITNESSED EITHER, as of 2026-09-05, and the two rows\n  \
+         now say the same thing for different reasons:\n  \
          \n  \
-           witness      verify()  module_wcmu  arena     load   run\n  \
-           Len          accepts   REFUSES      REFUSED   n/a    never runs\n  \
-           IsStruct     -- no known producer --\n  \
+           witness      status\n  \
+           Len          -- no producer found --\n  \
+           IsStruct     -- no producer found --\n  \
          \n  \
-         `Len`'s witness cannot be ADMITTED -- refused before load by the strict\n  \
-         iteration-bound check, the conservative-verification stance working as\n  \
-         designed rather than a hole. It is reachable in BYTECODE and not in an\n  \
-         ADMISSIBLE PROGRAM, so 65 of 66 is the honest figure and the last one is\n  \
-         not obtainable by writing a better test.\n  \
+         THE `Len` ROW USED TO READ DIFFERENTLY AND THE CHANGE MATTERS. It was\n  \
+         `accepts / REFUSES / REFUSED / n/a / never runs`: a witness that existed\n  \
+         in BYTECODE but could not be ADMITTED, held out by the strict\n  \
+         iteration-bound check. That was the conservative-verification stance\n  \
+         working as designed. The `v0.2.3` line then removed BOTH emission sites\n  \
+         in the compiler, so the opcode is not produced at all and the former\n  \
+         witness is now an ordinary program that folds, loads and runs.\n  \
+         \n  \
+         **NOT RECORDED AS UNREACHABLE, ON THE SAME TERMS AS THE ROW ABOVE.**\n  \
+         `len_producer_census.rs` probes fourteen shapes, sweeps all 69 compiling\n  \
+         corpus modules across four roots, and scans the compiler for a construction expression,\n  \
+         each leg carrying a control proving it can see a real occurrence. None\n  \
+         found. That is a search, not a proof.\n  \
+         \n  \
+         SO 65 OF 66 IS STILL THE HONEST FIGURE, BUT FOR A NEW REASON: the last\n  \
+         opcode is unobtainable because nothing emits it, not because what emits\n  \
+         it cannot be admitted. The backend's refusal of `Len` STANDS -- a module\n  \
+         can still carry it by decode or by hand.\n  \
          \n  \
          THE ESCALATION THIS ROW CARRIED IS RETIRED. `IsStruct`'s trap was\n  \
          recorded here as blocked on an ownership question about `src/verify.rs`,\n  \

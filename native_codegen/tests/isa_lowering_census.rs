@@ -521,7 +521,7 @@ const DISPOSITIONS: &[(&str, &str, &str)] = &[
     (
         "Len",
         "REFUSING IS CORRECT, and lowering it would be a defect",
-        "the virtual machine returns InvalidBytecode for Op::Len on a flat array. A          backend that lowered it would compute a length where the reference traps,          manufacturing divergence in the one signal this line treats as its          correctness oracle. See len_flat_array_hazard.rs. The repair is not this          line's: src/vm.rs and src/verify.rs belong to the v0.2.3 line.",
+        "the virtual machine returns InvalidBytecode for Op::Len on a flat body. A          backend that lowered it would compute a length where the reference traps,          manufacturing divergence in the one signal this line treats as its          correctness oracle. That runtime arm is still live and is still pinned, now          through INJECTED bytecode rather than a compiled program: see          len_flat_array_hazard.rs leg 2. WHAT CHANGED ON 2026-09-05 is upstream, not          here -- the reference compiler stopped emitting the opcode from any source,          so the refusal has no feeder. THE REFUSAL IS NOT WITHDRAWN. A module can          still carry the opcode by decode or by hand, and this backend must keep          refusing it. See OP_LEN_PRODUCER_CENSUS.md.",
     ),
     (
         "Reset",

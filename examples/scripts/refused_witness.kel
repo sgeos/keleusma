@@ -19,19 +19,28 @@
 //   FixedDiv   runtime-fault lowering, DEFERRED TO V0.4.0 by RUNTIME_FAULTS.md.
 //              It returns DivisionByZero unconditionally with no construct to
 //              catch it.
-//   Len        reachable only through an `if` EXPRESSION as the for-in source,
-//              and THAT PROGRAM CANNOT BE GIVEN A RESOURCE BOUND -- the loop has
-//              no statically extractable iteration count. Reachable in bytecode,
-//              not in an admissible program.
+// `Len` IS NO LONGER CLAIMED HERE. It was withdrawn on 2026-09-05 because the
+// reference compiler stopped emitting it: `static_for_in_length` now delegates
+// to the authoritative per-span type table, which folds the `if`-expression
+// source that was this file's witness. See the block above `len_witness`.
 // IsStruct IS NO LONGER CLAIMED HERE, and the functions below are kept as a
 // CONTROL rather than as a witness. See the block above `is_struct_witness`.
 //
-// THIS FILE IS EXPECTED TO SIT IN THE DIFFERENTIAL'S EXEMPT SET, and it cannot
-// be given an arena at all while `len_witness` is present. Do not "fix" that:
-// the whole point is to concentrate the inadmissible parts in one place so the
-// rest of the corpus can run.
+// THIS FILE NO LONGER SITS IN THE DIFFERENTIAL'S EXEMPT SET, AND THE NAME IS
+// NOW WRONG. Measured 2026-09-05: `module_refusals` returns EMPTY, the module
+// takes an arena of 600 bytes, loads, and RUNS to `Int(4)`. Two independent
+// changes arrived together -- `FixedDiv` became lowerable, and the reference
+// compiler stopped emitting `Op::Len` -- so nothing here is refused.
 //
-// WITNESSES: FixedDiv, Len, FixedMul, WordToFixed, FixedToWord
+// `probe_len_reachability.rs` predicted a harness PANIC for exactly this
+// moment: all refusals lowered while the module still could not be given an
+// arena would have reached `arena_for`'s `expect("arena capacity")`. THAT DID
+// NOT HAPPEN, and the reason is worth keeping. The same repair that removed the
+// last refusal ALSO made the module admissible, because the property that
+// emitted `Op::Len` was the property that denied the bound. The prediction was
+// sound and its premise -- that the two could move apart -- was what failed.
+//
+// WITNESSES: FixedDiv, FixedMul, WordToFixed, FixedToWord
 //
 // THE LINE ABOVE IS A MACHINE-CHECKED CLAIM, not a comment.
 // `witness_integrity.rs` compiles this file and asserts every opcode named
@@ -108,49 +117,51 @@ fn destructure(P { a, b }: P<Word>) -> Word {
 }
 
 
-// `Op::Len` — AND THE CONSTRUCT CAME FROM THE V0.2.X LINE, not from this one.
+// `Op::Len` — WITHDRAWN 2026-09-05. THIS FUNCTION IS NOW A CONTROL, NOT A WITNESS.
 //
-// `Len` fires only when the for-in source has NO STATICALLY KNOWN LENGTH, so
-// reaching it needs INFERENCE TO FAIL rather than an unusual syntax. Between the
-// two lines, FOURTEEN guessed constructs failed. What worked was not a fifteenth
-// guess: it was reading `static_for_in_length`'s own match arms for what they
-// OMIT. They handle ArrayLiteral, Call, FieldAccess, Ident, ArrayIndex and Match,
-// then fall through to `_ => None`. `Expr::If` is not among them.
+// THE HISTORY, BECAUSE IT IS THE REUSABLE PART.
 //
-// THE METHOD IS THE TRANSFERABLE PART. When a fallback path resists probing,
-// read the guard's arm list for the omission instead of enumerating constructs
-// against it.
+//   1. `Len` fires only when the for-in source has NO STATICALLY KNOWN LENGTH,
+//      so reaching it needed INFERENCE TO FAIL rather than an unusual syntax.
+//      Between the two lines, FOURTEEN guessed constructs failed. What worked
+//      was not a fifteenth guess: it was reading `static_for_in_length`'s own
+//      match arms for what they OMIT. THE METHOD IS THE TRANSFERABLE PART.
+//   2. The `v0.2.3` line then removed BOTH emission sites in the compiler. Each
+//      folds the length from the operand's type or fails with a compile error
+//      naming the unfoldable length.
+//   3. So this function stopped emitting the opcode, and `witness_integrity.rs`
+//      caught it by name rather than letting a census figure slip quietly. That
+//      guard has now fired for THREE opcodes in this file — `Op::IsStruct`
+//      twice and `Op::Len` once — which is the whole reason the claim line is
+//      machine-checked instead of prose.
 //
-// `Op::IsStruct` is the remaining unwitnessed opcode and the identical trick
-// does NOT reach it: its guard reads a type from `infer_expr_type`, which has no
-// `Expr::If` arm either, yet the test still folds out. Making inference fail is
-// NECESSARY BUT NOT SUFFICIENT there, and what suppresses it is not established.
-// Nine attempts are recorded in the `v0.2.3` line's `tests/opcode_reachability.rs`
-// so a tenth does not repeat them. NOT written as unreachable by either line.
+// THE MECHANISM, STATED CORRECTLY, BECAUSE THIS LINE FIRST RECORDED IT WRONG.
 //
-// THE BODY DISCARDS, and that is the corpus idiom rather than laziness: local
-// bindings are immutable, so accumulation across iterations is not expressible
-// in an atomic-total `fn` body at all. `04_for_in.kel` says so and uses the same
-// shape. A first draft here carried `let mut total` and would not have compiled.
+// `structural_for_in_length` did NOT gain an `Expr::If` arm; it still matches
+// exactly ArrayLiteral, Call, FieldAccess, Ident, ArrayIndex and Match. What
+// folds the form is `static_for_in_length`'s FALLBACK to `infer_expr_type`,
+// which consults the authoritative per-span type table and therefore answers
+// for expression forms whose structural arms are absent.
+// `docs/decisions/OP_LEN_ROOT_REPAIR.md` recorded that correctly on the day it
+// landed; this line restated it wrongly in two handoff documents without
+// reading the one it had already absorbed.
 //
-// THIS FUNCTION MAKES THE WHOLE MODULE INADMISSIBLE, AND THAT IS NOT A MISTAKE.
-// `verify()` accepts it, but `auto_arena_capacity_for` REFUSES it: the loop "has
-// no statically extractable iteration bound". The two facts are ONE fact.
-// `Op::Len` fires exactly when the for-in source has no statically known length,
-// and a loop whose trip count is not statically known is exactly what the bound
-// extractor refuses. So the property that makes the opcode reachable is the
-// property that makes the loop unbounded.
+// NO REPLACEMENT CONSTRUCT WAS HUNTED FOR, AND THE SEARCH IS RECORDED INSTEAD.
+// `native_codegen/tests/len_producer_census.rs` probes fourteen shapes, sweeps
+// all 69 compiling corpus modules across four roots, and scans the compiler for a construction
+// expression, each leg carrying a control that proves it can see a real
+// occurrence. None found. NOT WRITTEN AS UNREACHABLE — this line claimed
+// producerless once before and was falsified within the hour.
 //
-// MEASURED, ruling out the obvious objection: giving both arms the SAME length
-// makes the trip count two on every path and provable by inspection, and it is
-// STILL refused, because neither the length guard nor the bound extractor looks
-// THROUGH an `Expr::If`. Second-category conservative rejection, not first.
+// WHAT THIS FUNCTION IS FOR NOW: it pins that the folded form still COMPILES,
+// still takes a bound, and still MEANS zero. A fold that silently changed a
+// program's VALUE would be worse than the trap it replaced.
 //
-// CONSEQUENCE FOR THIS FILE: it can never be given an arena while this function
-// is present, so it can never leave the differential's exempt set by lowering
-// alone. `probe_len_reachability.rs` pins that, including the harness panic that
-// would follow if all four refused opcodes were lowered without adding a
-// bound-refusal exemption class first. Read that file before "fixing" this one.
+// AND THE FILE'S NAME IS NOW WRONG, WHICH IS RECORDED RATHER THAN RENAMED.
+// Nothing here is refused any more: `module_refusals` reports an empty set, the
+// module takes an arena, and it RUNS. It is kept under this name because
+// several tests and documents reference it by path, and a rename would cost
+// more than the misleading name does. See `OP_LEN_PRODUCER_CENSUS.md`.
 fn len_witness(c: bool) -> Word {
   let a = [1, 2];
   let b = [3, 4];

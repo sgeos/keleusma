@@ -6,58 +6,82 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## ⚠ THE BACKEND SUITE IS RED, AND THAT IS YOUR OTHER LINE'S GOOD NEWS
+## THE RED SUITE IS RESOLVED, AND IT WAS RESOLVED THE WAY THE GUARDS ASKED
 
-**12 failures, all in this line's tests, all caused by your `Op::Len` root repair** — which I asked for
-and which is an improvement. `static_for_in_length` gained an `Expr::If` arm, so
-`for x in if c { a } else { b }` no longer emits `Op::Len`.
+Twelve tests fired when your `Op::Len` root repair arrived. **None was patched green.** Each named in
+its own message what to do when it fired, and that is what was done: four inverted, four retired as
+superseded, one verdict restated, two census figures re-measured with their causes named, and one
+corpus claim amended.
 
-**The failures are guards firing as designed.** Their own messages predicted this exact cause:
-*"If `static_for_in_length` gained an `Expr::If` arm, that is NEWS: the only known witness for this
-opcode is gone and the reachability question is REOPENED."*
+## THE ANSWER TO THE REOPENED QUESTION: NO PRODUCER FOUND
 
-**So they must not be patched green.** The question to answer is whether `Op::Len` is reachable from any
-compilable source now. If it is not, the hazard is closed and these tests should be retired or inverted
-with that recorded.
+Four methods, each carrying a control that proves it can see a real occurrence.
 
-## The design fault is mine
+| leg | result |
+|---|---|
+| detector control | reports TRUE on an injected occurrence, so no negative is vacuous |
+| construct battery | 14 probed, 10 reach codegen, **0 emit** |
+| corpus sweep | **69 modules across four roots, 0 carry it** |
+| compiler source scan | 11 occurrences, **all comments or absence assertions** |
 
-**Twelve tests, one witness.** Every one keyed to the same construct, so a single upstream improvement
-invalidated the family at once. That is the coupling that rotted the `Op::Call` and `Op::IsStruct`
-versions before it, rebuilt at larger scale by me.
+**Not written as unreachable.** This tree carries a retraction on that word from `Op::IsStruct`, and
+the same discipline applies here. `docs/decisions/OP_LEN_PRODUCER_CENSUS.md` records the search, its
+limits, and what it cannot establish.
+
+## I RECORDED YOUR MECHANISM WRONGLY, AND THE ERROR WAS MINE END TO END
+
+My handoff and this file both said *"`static_for_in_length` gained an `Expr::If` arm"*. **It did not,
+and it still has none.** The fold comes from that function's fallback to `infer_expr_type`, which
+consults the authoritative per-span type table.
+
+**`OP_LEN_ROOT_REPAIR.md` states this correctly, under a heading admitting the prediction had been
+wrong.** I restated it incorrectly from a document I had already absorbed, without reading it, and it
+propagated into three artefacts before anyone checked the source. Corrected everywhere it appeared.
+
+## THE FINDING IS LARGER THAN THE FORM YOU REPAIRED
+
+**Both `Op::Len` emission sites in `src/compiler.rs` are gone**, so the question was never which
+construct reaches the opcode. Worth knowing if the ISA question ever comes up: the opcode now has no
+producer in the reference compiler, and the machine's refusal of it defends only decoded or
+hand-built modules. **I am not proposing removal.** That is a wire change and yours to call, and this
+line claimed producerless once before and was falsified within the hour.
+
+## A PREDICTION OF MINE RESOLVED, AND ITS PREMISE IS WHAT FAILED
+
+I predicted the corpus differential would panic once every refusal in `refused_witness.kel` lowered
+while the module still could not take an arena. **It did not.** The module now lowers completely,
+takes 600 bytes, loads, and runs to `Int(4)` — because the property that emitted `Op::Len` was the
+property that denied the bound, which is what the file argued from the start. The argument held; the
+contingency I planned around never arose.
+
+## A FIGURE THAT MOVED, AND WHAT IT DOES NOT MEAN
+
+Corpus refusals **2 → 1**. The backend did **not** learn to lower `Op::Len` — its input vanished.
+Reading that as coverage would overstate the backend. `65 of 66` stands, for a new reason.
+
+## The design fault was mine and is repaired structurally
+
+**Twelve tests, one witness** — the coupling that rotted `Op::Call` and `Op::IsStruct` before it. The
+witness text now has one definition and the verdict one owner, so the next fold invalidates one place
+rather than twelve.
 
 ## State
 
 | | |
 |---|---|
-| unpushed | **29 commits**, including absorption 51. Held because the suite is red |
-| uncommitted | `native_codegen/tests/differential.rs` — one witness decoupled from source, made **before the scope was known** |
-| unabsorbed | **14 commits** on `origin/v0.2.3` |
-| last green | `native_codegen` 473/0/93 both float configurations, at `ca71abb3` |
-| CI | green through `ca71abb3` |
+| backend suite | **green**, both float configurations |
+| uncommitted | none |
+| unabsorbed | 14 commits on `origin/v0.2.3` |
 
-## What landed before the red
+## Yours, unchanged
 
-The float axis now has the typed width refusal the word axis already had:
-`UnsupportedFloatWidth { float_bytes, detail }`, seven sites migrated, the residual `UnsupportedShape`
-bucket down from nine heterogeneous sites to two. Both module-level guards are covered, and the
-endianness one carries a ratchet because **its obligation is the CALLER's** — this crate checks the
-build host and never sees the target.
-
-## A measurement error of mine
-
-I first reported **one** failure. Fail-fast had stopped the run at 17 of 93 binaries; it is **twelve**.
-I had recorded that trap two increments earlier and did not apply it.
-
-## Yours
-
-1. **`f16`** — still blocked on **reference `f16` arithmetic**, not load acceptance.
-2. **Publication**, still held.
+1. **`f16`** — blocked on **reference `f16` arithmetic**, not load acceptance.
+2. **Publication**, held.
 
 ## For whoever resumes
 
-Validate `docs/process/handoffs/v0.3.0.md` by running its ancestry block. **80 anchors, zero failures
-at this stamp.** Scope kill patterns to `$(pwd)/target/debug/deps`. Count with `--no-fail-fast`.
+Validate `docs/process/handoffs/v0.3.0.md` by running its ancestry block. Scope kill patterns to
+`$(pwd)/target/debug/deps`. Count with `--no-fail-fast`.
 
 ---
 ---

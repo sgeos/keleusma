@@ -295,7 +295,7 @@ const PINNED: &[(&str, u64)] = &[
         "examples/scripts/piano_roll/piano_roll_9.kel",
         0x6f0eda1f8db18364,
     ),
-    ("examples/scripts/refused_witness.kel", 0x44716aedbe5f189b),
+    ("examples/scripts/refused_witness.kel", 0xbe747a6ae1c8ea22),
     (
         "examples/scripts/rogue/rogue_ai_boss.kel",
         0x51c63edcd748eebf,

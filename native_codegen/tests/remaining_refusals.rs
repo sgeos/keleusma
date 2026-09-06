@@ -106,9 +106,23 @@ fn every_remaining_refusal_is_named_to_the_chunk_and_the_reason() {
     // so `float_witness.kel` lowers and agrees with the reference in the corpus
     // differential. `Len` and `Stream` remain, each for its own established
     // reason. See `docs/decisions/FLOAT_SLICE_TWO.md`.
+    //
+    // **2 -> 1 on 2026-09-05, and the chunk that left is named.**
+    // `refused_witness.kel::main` no longer refuses anything, because the
+    // reference compiler stopped emitting `Op::Len` at all. That module's whole
+    // refusal was the opcode; with no producer for it, the module lowers
+    // completely, takes an arena, and RUNS in the corpus differential.
+    //
+    // **THE FIGURE THIS DOES NOT MEAN.** The backend did not learn to lower
+    // `Op::Len`. It still refuses it, and `isa_lowering_census.rs` still records
+    // that refusal with its reason. What changed is upstream: nothing feeds the
+    // opcode any more. A refusal leaving this list because its INPUT vanished is
+    // a different fact from a refusal leaving because the backend improved, and
+    // conflating the two would overstate backend coverage.
+    // See `docs/decisions/OP_LEN_PRODUCER_CENSUS.md`.
     assert_eq!(
         refusals.len(),
-        2,
+        1,
         "the set of refusals changed: {refusals:?}. Re-derive the coverage \
          figures and say which chunks changed state before altering anything else."
     );

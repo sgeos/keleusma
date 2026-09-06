@@ -167,10 +167,29 @@ fn undefined_symbols(obj: &Path) -> Vec<String> {
 /// committed to a working tree: the file was verified alone, five tests green,
 /// and the full suite found two failures immediately. **A green run of one
 /// binary is not evidence about that binary in the suite.**
+///
+/// # ⚠ AND THE FIRST FIX WAS ITSELF ONE HARNESS WIDE, WHICH IS THE SAME DEFECT
+///
+/// The repair above disambiguated with a **process-local** counter. That is
+/// sufficient under `cargo test`, where every test in a binary shares one
+/// process and the counter really does separate them. **It is not sufficient
+/// under `cargo nextest`, which runs each test in its OWN process**: every
+/// process starts the counter at zero, so two tests using the same tag are
+/// handed the identical directory and the original race returns unchanged.
+///
+/// Observed 2026-09-06: two consecutive nextest runs of the same tree failed
+/// **different tests in this file** —
+/// `the_external_symbol_set_is_named_and_partitioned`, then
+/// `the_sweep_emits_objects_and_the_reader_finds_symbols_in_them`. A failure
+/// that moves between runs on a frozen tree is a race, not a result.
+///
+/// **The lesson generalises past this file.** A uniqueness token is only unique
+/// within the scope that mints it, and "the test harness" is not one scope. The
+/// process id closes the gap because it is unique across both.
 fn scratch(tag: &str) -> PathBuf {
     static N: AtomicUsize = AtomicUsize::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed);
-    let d = std::env::temp_dir().join(format!("kel_linkage_{tag}_{n}"));
+    let d = std::env::temp_dir().join(format!("kel_linkage_{tag}_{}_{n}", std::process::id()));
     std::fs::create_dir_all(&d).expect("scratch dir");
     d
 }
