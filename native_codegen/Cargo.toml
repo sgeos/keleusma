@@ -23,7 +23,32 @@ license = "0BSD"
 [workspace]
 
 [dependencies]
-keleusma = { path = "..", features = ["compile", "self-host"] }
+# **`floats` IS LISTED BECAUSE THIS PACKAGE USES IT, NOT BECAUSE IT NEEDS TURNING ON.**
+#
+# It was already reaching here, but only as a DEFAULT feature of the parent
+# crate. `self-host` implies `compile` and `verify`, so those two were genuinely
+# declared; `floats` was neither declared nor implied, and arrived solely because
+# `default-features` was never disabled.
+#
+# That made this line a false statement of intent: a reader concludes the backend
+# needs `compile` and `self-host`, when the float differential, the float
+# composite tests, the declared-width refusals and the ABI scope tests all rest on
+# `floats` as well. The realistic failure is a TIDY-UP -- adding
+# `default-features = false` is exactly what someone would do on seeing an
+# explicit list, and it reads as a clarification.
+#
+# **Scoped honestly, and measured rather than reasoned about.** Removing this
+# declaration AND the defaults does not merely fail a test: the package does not
+# COMPILE, because `ScalarKind::Float` disappears. So the behavioural probe in
+# `inherited_feature_declaration.rs` cannot be what catches that case, and the
+# DECLARATION RATCHET in the same file is the guard that does the work. What this
+# line buys is that the manifest describes what the package uses; what the ratchet
+# buys is that the description stays accurate.
+#
+# **It is NOT the runtime finding it resembles.** A float module verifying,
+# loading and then TRAPPING on a runtime built without floats is the `v0.2.3`
+# line's `INVALID_BYTECODE_CENSUS.md` Group B, a different and larger thing.
+keleusma = { path = "..", features = ["compile", "self-host", "floats"] }
 inkwell = { version = "0.9", features = ["llvm22-1"] }
 
 # **THE NARROW-FLOAT CONFIGURATION, MADE SELECTABLE.**
