@@ -1,5 +1,42 @@
 # What can the corpus differential actually detect?
 
+> ✅ **2026-09-06, LATEST: ALL NINE DRIFTED MUTATIONS ARE RE-REGISTERED AND ALL NINE ARE DETECTED.**
+>
+> | opcode | detected | the drift that had retired it |
+> |---|---|---|
+> | `Return` | 39/61 | `build_return(Some(&v))` became `build_typed_return(...)` |
+> | `Div` | 10/14 | the arm's operand pops moved behind `guard_min_div_neg_one` |
+> | `Mod` | 12/14 | as `Div` |
+> | `GetData` | 24/29 | `resolve_shared_scalar` gained `float_bytes`; call site reflowed |
+> | `SetData` | 25/30 | as `GetData` |
+> | `GetDataIndexed` | 11/16 | `resolve_shared_array` gained `float_bytes`; call site reflowed |
+> | `SetDataIndexed` | 11/14 | as `GetDataIndexed` |
+> | `Yield` | 12/29 | the same `build_typed_return` refactor as `Return` |
+> | `GetIndex` | 3/7 | `SK::Int => 8` became `SK::Int \| SK::Fixed => 8` |
+>
+> **Every one is a REFORMATTING or a SIGNATURE change, not a behavioural one.** No opcode had stopped
+> being lowered; the mutation TEXT stopped matching. That is the failure mode to expect again, and the
+> placement check is the only thing that surfaces it.
+>
+> **Two mutation SHAPES changed and that is recorded rather than glossed.** `Div` and `Mod` swapped the
+> OPERATION instead of the operands, because the operand-pop structure the original anchored on no
+> longer exists. The property preserved is the one that matters — the opcode computes the wrong
+> arithmetic — but a reader comparing to the original table should know the shape is not identical.
+>
+> **A reading error worth keeping.** The first `GetIndex` anchor was built from a `grep -v` view with
+> comment lines stripped, so two lines looked contiguous when the source separates them by a comment
+> block. It did not place. **A display filter is not the file.**
+>
+> **FULL ROUND THREE RE-RUN AFTER THE RESTORATION: 17 of 17 PLACE, 17 of 17 DETECTED, ZERO
+> UNPLACEABLE, ZERO UNDETECTED**, in 1782 s. `Call` 13/40, `CallVerifiedNative` 14/20, `Div` 10/14,
+> `GetData` 24/29, `GetDataIndexed` 11/16, `GetEnumField` 1/2, `GetField` 6/6, `GetIndex` 3/7,
+> `GetTupleField` 4/5, `IsEnum` 4/4, `Mod` 12/14, `NewComposite` 29/31, `SetData` 25/30,
+> `SetDataIndexed` 11/14, `Trap` 34/34, `WordToByte` 1/2, `Yield` 12/29. Emitter byte-identical.
+>
+> **What this does NOT establish.** These are round-three verdicts under the current corpus and
+> emitter. The four opcodes whose mutations abort lowering are still untested, and the eight never
+> perturbed in any round are still unperturbed.
+
 > 🔴 **2026-09-06, LATER: ROUNDS TWO AND THREE RE-RUN TOO — AND NINE PRE-REGISTERED MUTATIONS HAVE
 > SILENTLY STOPPED PLACING. ALSO, I BROKE `Trap` DETECTION WHILE SPEEDING THE TOOL UP, AND THE
 > ROUND-ONE ENTRY BELOW WAS PRODUCED BY THAT BROKEN VERSION.**

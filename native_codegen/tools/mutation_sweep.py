@@ -252,30 +252,68 @@ MUTATIONS_STRONG = {
 # ---------------------------------------------------------------------------
 MUTATIONS_ROUND3 = {
     # --- the shared data arm, split by direction and by indexing -----------
+    # **RE-REGISTERED 2026-09-06.** The original anchored on a call to
+    # `resolve_shared_scalar` before it gained `float_bytes` and the call site
+    # reformatted across lines, so it had silently stopped placing. The
+    # discriminating property is kept -- touch the WRONG BYTES of the shared
+    # region -- by shifting the resolved offset, which leaves the module
+    # lowerable so the mutation stays SEMANTIC rather than aborting lowering.
     "GetData": (
-        "                        let (byte_off, w, k) = resolve_shared_scalar(&data, slot, i8t, i64t)?;",
-        "                        let (byte_off, w, k) = resolve_shared_scalar(&data, slot, i8t, i64t)?;\n                        let byte_off = if is_read { byte_off + 1 } else { byte_off };",
+        "                        let (byte_off, w, k) =\n                            resolve_shared_scalar(&data, slot, i8t, i64t, float_bytes)?;",
+        "                        let (byte_off, w, k) =\n                            resolve_shared_scalar(&data, slot, i8t, i64t, float_bytes)?;\n                        let byte_off = byte_off.wrapping_add(1);",
     ),
+    # **RE-REGISTERED 2026-09-06.** The original anchored on a call to
+    # `resolve_shared_scalar` before it gained `float_bytes` and the call site
+    # reformatted across lines, so it had silently stopped placing. The
+    # discriminating property is kept -- touch the WRONG BYTES of the shared
+    # region -- by shifting the resolved offset, which leaves the module
+    # lowerable so the mutation stays SEMANTIC rather than aborting lowering.
     "SetData": (
-        "                        let (byte_off, w, k) = resolve_shared_scalar(&data, slot, i8t, i64t)?;",
-        "                        let (byte_off, w, k) = resolve_shared_scalar(&data, slot, i8t, i64t)?;\n                        let byte_off = if is_read { byte_off } else { byte_off + 1 };",
+        "                        let (byte_off, w, k) =\n                            resolve_shared_scalar(&data, slot, i8t, i64t, float_bytes)?;",
+        "                        let (byte_off, w, k) =\n                            resolve_shared_scalar(&data, slot, i8t, i64t, float_bytes)?;\n                        let byte_off = byte_off.wrapping_add(2);",
     ),
+    # **RE-REGISTERED 2026-09-06.** The original anchored on a call to
+    # `resolve_shared_array` before it gained `float_bytes` and the call site
+    # reformatted across lines, so it had silently stopped placing. The
+    # discriminating property is kept -- touch the WRONG BYTES of the shared
+    # region -- by shifting the resolved offset, which leaves the module
+    # lowerable so the mutation stays SEMANTIC rather than aborting lowering.
     "GetDataIndexed": (
-        "                        let (first_off, w, k) = resolve_shared_array(&data, slot, bound)?;",
-        "                        let (first_off, w, k) = resolve_shared_array(&data, slot, bound)?;\n                        let first_off = if is_read { first_off + 1 } else { first_off };",
+        "                        let (first_off, w, k) =\n                            resolve_shared_array(&data, slot, bound, float_bytes)?;",
+        "                        let (first_off, w, k) =\n                            resolve_shared_array(&data, slot, bound, float_bytes)?;\n                        let first_off = first_off.wrapping_add(1);",
     ),
+    # **RE-REGISTERED 2026-09-06.** The original anchored on a call to
+    # `resolve_shared_array` before it gained `float_bytes` and the call site
+    # reformatted across lines, so it had silently stopped placing. The
+    # discriminating property is kept -- touch the WRONG BYTES of the shared
+    # region -- by shifting the resolved offset, which leaves the module
+    # lowerable so the mutation stays SEMANTIC rather than aborting lowering.
     "SetDataIndexed": (
-        "                        let (first_off, w, k) = resolve_shared_array(&data, slot, bound)?;",
-        "                        let (first_off, w, k) = resolve_shared_array(&data, slot, bound)?;\n                        let first_off = if is_read { first_off } else { first_off + 1 };",
+        "                        let (first_off, w, k) =\n                            resolve_shared_array(&data, slot, bound, float_bytes)?;",
+        "                        let (first_off, w, k) =\n                            resolve_shared_array(&data, slot, bound, float_bytes)?;\n                        let first_off = first_off.wrapping_add(2);",
     ),
     # --- the division family, guarded so each attributes -------------------
+    # **RE-REGISTERED 2026-09-06. THE SHAPE CHANGED, AND THAT IS RECORDED.**
+    #
+    # The original anchored on the arm's operand pops and swapped them. That text
+    # no longer exists: the arm now pops once and routes through
+    # `guard_min_div_neg_one`, so there is nothing to swap at that anchor. The
+    # replacement keeps the property that MATTERS -- the opcode computes the wrong
+    # arithmetic -- by swapping the OPERATION instead of the operands: `Div` emits
+    # a remainder.
+    #
+    # **Not chosen because it looked likely to be caught.** It is the minimal
+    # unique edit to the arm that still exists, and it is registered before being
+    # run, as the pre-registration discipline requires.
     "Div": (
-        "            Op::Div | Op::Mod => {\n                let rhs = st.pop();\n                let lhs = st.pop();",
-        "            Op::Div | Op::Mod => {\n                let rhs = st.pop();\n                let lhs = if matches!(op, Op::Div) { rhs } else { st.pop() };\n                let _unused = st.depth;",
+        'Op::Div => st.b.build_int_signed_div(lhs, safe, "sdiv").unwrap(),',
+        'Op::Div => st.b.build_int_signed_rem(lhs, safe, "sdiv").unwrap(),',
     ),
+    # Re-registered 2026-09-06 for the same reason as `Div` above, with the same
+    # shape change: `Mod` emits a quotient.
     "Mod": (
-        "            Op::Div | Op::Mod => {\n                let rhs = st.pop();\n                let lhs = st.pop();",
-        "            Op::Div | Op::Mod => {\n                let rhs = st.pop();\n                let lhs = st.pop();\n                let (lhs, rhs) = if matches!(op, Op::Mod) { (rhs, lhs) } else { (lhs, rhs) };",
+        '_ => st.b.build_int_signed_rem(lhs, safe, "srem").unwrap(),',
+        '_ => st.b.build_int_signed_div(lhs, safe, "srem").unwrap(),',
     ),
     # --- composites --------------------------------------------------------
     "NewComposite": (
@@ -294,9 +332,19 @@ MUTATIONS_ROUND3 = {
         "                    EF::Flat { offset, kind } => SF::Flat {\n                        offset: *offset,",
         "                    EF::Flat { offset, kind } => SF::Flat {\n                        offset: *offset + 1,",
     ),
+    # **RE-REGISTERED 2026-09-06.** The arm read `SK::Int => 8,` when this was
+    # written; `Fixed` was folded into the same arm, so the anchor stopped
+    # matching and `GetIndex` had silently lost its coverage. Shape unchanged: a
+    # wrong element stride, which keeps the module lowerable so the mutation
+    # stays SEMANTIC.
     "GetIndex": (
-        "                let elem: u64 = match kind {\n                    SK::Int => 8,",
-        "                let elem: u64 = match kind {\n                    SK::Int => 4,",
+        # **A ONE-LINE ANCHOR, AND THE TWO-LINE ONE FAILED FOR A READING ERROR.**
+        # The arm's two lines are separated by a comment block in the source. A
+        # first attempt built the anchor from a `grep -v` view with comments
+        # stripped, so the text looked contiguous and did not place. A display
+        # filter is not the file.
+        "                    SK::Int | SK::Fixed => 8,",
+        "                    SK::Int | SK::Fixed => 4,",
     ),
     "IsEnum": (
         "                    Some(ConstValue::Int(v)) => *v,",
@@ -321,9 +369,15 @@ MUTATIONS_ROUND3 = {
         "            Op::Trap(_) => {\n                st.b.build_unconditional_branch(trap_bb).unwrap();",
         "            Op::Trap(_) => {\n                st.b.build_return(Some(&i64t.const_zero())).unwrap();",
     ),
+    # **RE-REGISTERED 2026-09-06.** The degenerate-yield arm moved from
+    # `st.b.build_return(Some(&v))` to `build_typed_return(...)` -- the same
+    # refactor that retired `Return`'s mutation -- so this stopped placing. The
+    # bare call is NOT unique (the `Op::Return` arm carries it too), so the
+    # anchor keeps the guard line. Shape unchanged: return a constant instead of
+    # the yielded value.
     "Yield": (
-        "            Op::Yield if degenerate_yield.is_some_and(|ys| ys.contains(&i)) => {\n                let v = st.pop();\n                st.b.build_return(Some(&v)).unwrap();",
-        "            Op::Yield if degenerate_yield.is_some_and(|ys| ys.contains(&i)) => {\n                let v = st.pop();\n                let _ = v;\n                st.b.build_return(Some(&i64t.const_zero())).unwrap();",
+        "            Op::Yield if degenerate_yield.is_some_and(|ys| ys.contains(&i)) => {\n                let v = st.pop();\n                build_typed_return(&st.b, func, v);",
+        "            Op::Yield if degenerate_yield.is_some_and(|ys| ys.contains(&i)) => {\n                let _v = st.pop();\n                build_typed_return(&st.b, func, i64t.const_zero().into());",
     ),
 }
 
