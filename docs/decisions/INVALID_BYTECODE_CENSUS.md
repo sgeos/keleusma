@@ -61,7 +61,7 @@ honest; probing every member individually is not a better use of the same effort
 | D | composite operand form mismatch | 7 | **defended**, by boundary canonicalization |
 | E | structural indices out of range | 9 | **defended at load** (8 of 9 probed) |
 | F | shared and private data-segment layout | 7 | **host-contract, confirmed** (1 of 7 probed) — but see below |
-| G | arena staleness after reset | 3 | not examined |
+| G | arena staleness after reset | 3 | **no witness found** (1 of 3 probed) — see below |
 | H | the three "should never have been emitted" | 3 | **closed 2026-09-04** |
 | I | operand-range and constant-kind checks | 6 | **mixed** — see below (5 of 6 probed) |
 | J | unregistered or invalid native index | 3 | **mixed** — the index is admitted at load (1 of 3 probed) |
@@ -69,12 +69,12 @@ honest; probing every member individually is not a better use of the same effort
 The group sizes sum to 46, which is the population above; a table whose parts do not add to its
 stated whole has been the tell for a miscount here before.
 
-**Thirty-three of forty-six sites carry an examined verdict**, group by group: none of A's one, both
-of B, all five of C, all seven of D, eight of E's nine, two of F's seven, **none of G's three**, all
-three of H, five of I's six, and one of J's three.
+**Thirty-four of forty-six sites carry an examined verdict**, group by group: none of A's one, both
+of B, all five of C, all seven of D, eight of E's nine, two of F's seven, one of G's three, all three
+of H, five of I's six, and one of J's three.
 
-**The remaining thirteen** are group A's single site, one in E, five in F, **all three in G**, one in
-I, and two in J.
+**The remaining twelve** are group A's single site, one in E, five in F, two in G, one in I, and two
+in J.
 
 **Two corrections are folded into that tally, and both are the same defect.** Earlier revisions of
 this line said fifteen remaining and then eleven, and **both omitted group G entirely** — the
@@ -349,6 +349,36 @@ testing it anyway found something: group D's undocumented boundary mechanism, gr
 admitted operands, group F's error-kind violation of a rule this codebase states in its own source.
 **Three for three against my own judgement** was a better argument than the judgement, so the last
 sites were probed rather than asserted away. Two more admissions is the fourth.
+
+## Group G: no witness found, and the reason is structural rather than a check
+
+Group G was **never examined and was missing from every list of what remained** until the tally was
+re-derived by summing the per-group column. A group nobody counted is a group nobody checked, which
+is reason enough to look.
+
+It also had the best remaining chance of being a **group B shape** rather than a corrupt-artefact
+one. The other outstanding sites need a hand-built module or a host API misuse; **holding a value
+across a reset is something a program does.**
+
+**A hypothesis from a filename was wrong, and it is recorded because it nearly went untested.**
+`src/confine.rs` sounded like the mechanism that would prevent the escape. Read, it is a memory
+planner asking whether a construction site's region can be reused -- nothing to do with refusing
+escapes. Had the verdict been written from the filename, it would have credited a module that does
+none of that work, exactly as an earlier mutation in this session credited the wrong call site.
+
+**Measured with programs.** Four shapes were driven through a `loop main` across three resumes each:
+a local array held across a yield, a `private data` composite read on later iterations, a struct in
+a local, and a nested array. **None reached a staleness refusal**, and each ran to a `Reset` final
+state, so the resets are shown to have happened rather than assumed.
+
+**The reason is the shape of the language, not a check that catches it.** A transient composite
+cannot be NAMED after the reset that ends its iteration, because the next iteration re-executes the
+body and rebuilds it. The only storage crossing a reset is the persistent region, which is not
+reset. So there is no expression that reads a pre-reset transient body.
+
+**No witness found -- not unreachable.** One of group G's three sites was probed this way; the other
+two concern host-supplied opaque handles going stale, which is a different question and untested
+here.
 
 ## Where the next pass should start
 
