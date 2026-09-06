@@ -1,5 +1,30 @@
 # What can the corpus differential actually detect?
 
+> 🔍 **2026-09-06: THE FOUR "NOT SEMANTIC" OPCODES ARE A CORPUS GAP, NOT A MUTATION DEFECT — AND THE
+> TOOL WAS SAYING THE WRONG THING ABOUT THEM.**
+>
+> `BitAnd`, `BitOr`, `BitXor` and `Shr` reported **NOT SEMANTIC (lowering aborted)** in both round one
+> and round two. That reads as *"these mutations were badly chosen"*, and the obvious next step is to
+> redesign them. **That step would have been wasted.**
+>
+> **Measured: each of the four is carried by exactly ONE corpus module, `wire.kel`, and that module is
+> EXEMPT.** Run unmutated it already reports `EXECUTED AND AGREEING : 0`, `EXEMPT : 1`. So every run
+> reports NOLOWER whether the emitter is mutated or not, and **no mutation of these opcodes could ever
+> be detected, at any shape.** The registered mutations are fine; there is nothing for them to act on.
+>
+> **The tool's verdict conflated two causes**, and `len(nolower) == len(per)` cannot tell them apart on
+> its own. It now distinguishes them, using data the calibration pass was already collecting: when no
+> carrying module executes even unmutated, the verdict is **`NO EXECUTING WITNESS (corpus gap, not a
+> mutation defect)`**. Confirmed not to disturb the cases it should not touch — `CmpEq` still 44/48,
+> `Shl` still 1/3.
+>
+> **This also explains `Shl` 1/3.** Its three carrying modules include `wire.kel`, so only two can
+> execute at all and one of those detects. The thin margin is thinner than the ratio suggests.
+>
+> **What would close it is a CORPUS change, not a table change**: an executing module that exercises
+> the bitwise and shift operators. Recorded, not undertaken — adding corpus files to chase a coverage
+> figure is how a sweep becomes a demonstration.
+
 > ✅ **2026-09-06, LATEST: ALL NINE DRIFTED MUTATIONS ARE RE-REGISTERED AND ALL NINE ARE DETECTED.**
 >
 > | opcode | detected | the drift that had retired it |

@@ -560,6 +560,13 @@ def calibrate(modules):
     terminate at any budget.
     """
     budget = {}
+    # **WHICH MODULES ACTUALLY EXECUTE, MEASURED HERE BECAUSE THE RUN IS
+    # ALREADY HAPPENING.** An EXEMPT module never executes, so no mutation of
+    # an opcode it carries can EVER be detected. Without this the case reports
+    # as `NOT SEMANTIC (lowering aborted)`, blaming the mutation for something
+    # true before the mutation existed, and sending the next reader to redesign
+    # a mutation when the gap is in the CORPUS.
+    executes = set()
     for mod in sorted(modules):
         env = dict(os.environ, KEL_ONLY_MODULE=mod)
         t0 = time.monotonic()
@@ -576,7 +583,7 @@ def calibrate(modules):
             #
             # So the command below is kept IDENTICAL to the one in `main`. If one
             # changes, the other must.
-            run(
+            r0 = run(
                 [
                     "cargo",
                     "test",
@@ -593,6 +600,8 @@ def calibrate(modules):
                 timeout=CALIBRATION_CEILING,
             )
             base = time.monotonic() - t0
+            if "EXECUTED AND AGREEING : 1" in (r0.stdout + r0.stderr):
+                executes.add(mod)
         except subprocess.TimeoutExpired:
             # Already pathological unmutated. Give it the ceiling and say so,
             # rather than silently handing it a budget derived from a run that
@@ -607,10 +616,14 @@ def calibrate(modules):
         # `max()` on an empty dict and die in a traceback, which reads like a
         # broken tool rather than a mistyped request.
         print("  nothing to calibrate: no named opcode has sites in the selected table")
-        return budget
+        return budget, executes
     slow = max(budget.items(), key=lambda kv: kv[1])
-    print(f"  calibrated {len(budget)} modules; slowest budget {slow[0]} {slow[1]:.0f}s\n")
-    return budget
+    print(f"  calibrated {len(budget)} modules; slowest budget {slow[0]} {slow[1]:.0f}s")
+    dead = sorted(set(budget) - executes)
+    if dead:
+        print(f"  {len(dead)} of {len(budget)} do NOT execute unmutated: {dead}")
+    print()
+    return budget, executes
 
 
 def opcode_module_map():
@@ -672,7 +685,7 @@ def main():
     driven = {m for op, mods in mapping.items()
               if (not wanted or op in wanted) and op in table
               for m in mods}
-    budgets = calibrate(driven)
+    budgets, executes = calibrate(driven)
     results = {}
     try:
         for opcode, (old, new) in sorted(table.items()):
@@ -799,7 +812,22 @@ def main():
                 if any(o == k for _, o in per)
             )
             if len(nolower) == len(per):
-                results[opcode] = ("NOT SEMANTIC (lowering aborted)", per)
+                # **TWO VERY DIFFERENT CAUSES REACH HERE, AND CONFLATING THEM
+                # SENDS EFFORT AT THE WRONG THING.** If NO carrying module
+                # executes even UNMUTATED, the mutation is irrelevant: the opcode
+                # has no executing witness and NOTHING could detect a change to
+                # it. Measured 2026-09-06: `BitAnd`, `BitOr`, `BitXor` and `Shr`
+                # are each carried by exactly one module, `wire.kel`, which is
+                # EXEMPT. Two rounds reported them `NOT SEMANTIC`, which reads as
+                # "the mutation was badly chosen" when the truth is "this opcode
+                # has no witness that runs".
+                if not any(m in executes for m, _ in per):
+                    results[opcode] = (
+                        "NO EXECUTING WITNESS (corpus gap, not a mutation defect)",
+                        per,
+                    )
+                else:
+                    results[opcode] = ("NOT SEMANTIC (lowering aborted)", per)
             elif detected:
                 results[opcode] = (f"DETECTED by {len(detected)}/{len(per)} [{kinds}]", per)
             else:
