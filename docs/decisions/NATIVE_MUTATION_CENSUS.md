@@ -1,5 +1,36 @@
 # What can the corpus differential actually detect?
 
+> 📋 **2026-09-06: THE EIGHT NEVER-PERTURBED OPCODES ARE NOT AN OVERSIGHT. SIX EMIT NOTHING TO
+> PERTURB, AND TWO ARE DELIBERATELY REFUSED.**
+>
+> Every round has reported *"never perturbed in ANY round: `Break`, `Else`, `EndIf`, `EndLoop`,
+> `Loop`, `PopN`, `Reset`, `Stream`"*, which reads as a pre-registration gap someone should close.
+> **It is not.** All eight have plentiful corpus witnesses — 29 to 64 carrying modules each — so
+> unlike the bitwise four this is not a witness problem. It is what the emitter does with them.
+>
+> | opcode | its emitter arm | why no semantic mutation exists |
+> |---|---|---|
+> | `Loop` | `Op::Loop(_) => {}` | **emits nothing** |
+> | `EndIf` | `Op::EndIf => {}` | **emits nothing** |
+> | `PopN` | `st.depth -= *n as usize;` | adjusts compiler-side depth bookkeeping, **emits no instruction** |
+> | `EndLoop`, `Break` | **one shared arm**, an unconditional branch | a mutation cannot even distinguish the two, and a wrong target is structurally invalid |
+> | `Else` | unconditional branch | as above |
+> | `Stream`, `Reset` | **deliberately refused** | a divergent `loop fn` would spin inside native code with no way for the host to stop it — stated in `yield_hook`'s comment as refused *"rather than by omission"* |
+>
+> **The branch case was PROBED, not assumed.** `Op::Else`'s target was redirected and the emitter
+> **panics** — `blocks[&(...)]` out of range — rather than diverging. A wrong branch target is a
+> lowering crash, not a behavioural difference. The emitter was restored byte-identically.
+>
+> **So the honest reading of that recurring line is: three opcodes emit nothing, one keeps only a
+> counter, three share branch arms whose only mutation is a crash, and two are refused on purpose.**
+> Perturbing them is not work someone forgot to do.
+>
+> **What this does NOT say.** It is not a claim that these opcodes are correctly lowered — three of
+> them lower to nothing at all, so there is nothing for a differential to check, and `Stream` and
+> `Reset` are refused rather than verified. **Absence of a mutation is not evidence of correctness**,
+> and this row exists so nobody reads the recurring "never perturbed" line as either a gap or a
+> guarantee.
+
 > 🛡 **2026-09-06: THE TABLES NOW ANNOUNCE THEIR OWN DECAY. 53 of 53 mutations place exactly once.**
 >
 > Nine mutations rotted silently and nothing said so, because only the sweep could see it and the
