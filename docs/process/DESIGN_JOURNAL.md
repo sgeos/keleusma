@@ -1,5 +1,43 @@
 # Design Journal
 
+## 2026-09-06 — [v0.3.0] Absorption 52, a feature declared rather than inherited, and a stale pending item
+
+**Predicted before merging**: no `src/` and no corpus root touched, so `native_codegen` moves by
+**zero** — 477 passed, 0 failed. **Three merge conflicts**, in the three files both lines write.
+
+**Measured: 477 passed, 0 failed, under BOTH default features and `narrow-float-32`**, the default run on a tree with zero uncommitted files. The pass prediction hit
+exactly. **The conflict prediction OVER-SHOT: one conflict, not three.** `REVERSE_PROMPT.md` and
+`DESIGN_JOURNAL.md` auto-merged because the two lines wrote non-adjacent regions — I predicted from
+*which files both lines touch* rather than from *where in them*, and the finer question is the one
+that decides. Both `TASKLOG.md` notes were kept; neither line's record was discarded.
+
+**This absorption was measured alone on a frozen tree**, which the previous increment failed to do.
+Eighteen commits, not the fourteen the handoff recorded — the peer line advanced while this one
+worked, so a count in a handoff is a timestamp, not a fact.
+
+### The float feature was used but never declared
+
+`native_codegen/Cargo.toml` asked for `compile` and `self-host`. `self-host` implies `compile` and
+`verify`, so those were genuinely declared. **`floats` was neither declared nor implied**, arriving
+only because default features were never disabled — while the manifest read as though the explicit
+list were complete.
+
+**Mutation-tested in two directions, and the second corrected my own brief.** Removing `floats` from
+the list with defaults still on fails only the declaration ratchet, the behavioural probe passing —
+which is exactly why the two are stated separately. Adding `default-features = false` **fails the
+BUILD**: `ScalarKind` has no `Float` variant. My brief had said the float tests would "fail loudly".
+It is louder than that, and the consequence is that the behavioural probe cannot catch the realistic
+case at all. **The declaration ratchet is the guard that does the work**, and saying so where the
+test lives is worth more than a guard that sounds stronger than it is.
+
+### A pending item outlived its work
+
+The handoff carried "a code edit, deliberately not made" — citations in `isa_lowering_census.rs`. They
+had already landed in `61e185c2`. **The deferral was right when written and the list was never
+cleared.** A pending item that outlives its work sends the next session at something already done:
+check it against the tree, the way this file's figures are re-derived rather than trusted.
+
+
 ## 2026-09-06 — [v0.3.0] `Op::Len` has no producer that could be found, and twelve tests are disposed of rather than repaired
 
 **Predicted before the run**: 474 passed, 0 failed, both float configurations — 473 as of the last

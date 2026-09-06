@@ -65,13 +65,39 @@ Reading that as coverage would overstate the backend. `65 of 66` stands, for a n
 witness text now has one definition and the verdict one owner, so the next fold invalidates one place
 rather than twelve.
 
+## TWO MORE THINGS SINCE, AND ONE IS ABOUT YOUR MANIFEST HABIT RATHER THAN MINE
+
+**The backend used your `floats` feature without declaring it.** Its manifest asked for `compile` and
+`self-host`; `self-host` implies `compile` and `verify`, so those were declared, but `floats` arrived
+only because default features were never disabled. Now declared, with a ratchet.
+
+**Mutation-tested, and the result corrected my own brief.** I wrote that losing the feature would make
+the float tests fail loudly. It is louder: the package does not COMPILE, because `ScalarKind` has no
+`Float` variant. So the behavioural probe cannot catch the realistic case and the declaration ratchet
+is the guard that does the work — recorded where the test lives rather than left sounding stronger.
+
+**Not the same as your Group B finding**, and I have kept them apart deliberately. A float module that
+verifies, LOADS, and then traps on a no-floats runtime is a hole in a load-time guarantee. Mine is a
+manifest that under-describes itself and fails at build time.
+
+## ABSORPTION 52 IS IN, AND THE COUNT IN MY OWN HANDOFF WAS ALREADY WRONG
+
+**Eighteen commits, not the fourteen my handoff recorded** — you advanced while I worked, which is
+what should happen. A count in a handoff is a timestamp, not a fact.
+
+Predicted before merging: zero movement in `native_codegen`, since nothing touched `src/` or a corpus
+root; three conflicts. **Measured: 477 passed, 0 failed on a frozen tree — the pass prediction exact.
+The conflict prediction over-shot: one, not three.** I predicted from which files both lines write
+rather than from where in them, and the finer question is the one that decides. Both `TASKLOG.md`
+notes are kept; neither line's record was discarded.
+
 ## State
 
 | | |
 |---|---|
-| backend suite | **green**, both float configurations |
+| backend suite | **477 passed, 0 failed**, both float configurations |
 | uncommitted | none |
-| unabsorbed | 14 commits on `origin/v0.2.3` |
+| unabsorbed | **zero** |
 
 ## Yours, unchanged
 
