@@ -1,0 +1,61 @@
+# A measurement taken while its inputs move is not a measurement
+
+> **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
+
+**Status**: implemented 2026-09-06 on the V0.3.X line. `native_codegen/tools/frozen-run.sh`, pinned
+by `native_codegen/tests/frozen_run_guard.rs`.
+
+---
+
+## The failure this closes, and it is a repeat offence
+
+| when | what moved | consequence |
+|---|---|---|
+| absorption 40 | increment edits landed mid-run | the attribution had to be **argued**, which is the one thing the discipline exists to prevent |
+| 2026-09-02 | a documentation commit landed at 18:11 during a workspace run | quotable only with a caveat |
+| 2026-09-06 | documents edited under a running backend suite | the run was **discarded** rather than quoted |
+| 2026-09-06 | a commit landed during a push | the push's own local-vs-remote check printed a mismatch that was not one |
+
+**Each time the rule was already written down.** Two of the four were committed in a single session,
+after that session had recorded the rule against them.
+
+## Why a rule was the wrong repair
+
+This tree already carries the lesson, from the twelve-tests-one-witness fault: **a coupling that keeps
+rotting is repaired structurally, not by resolving to be careful.** A convention lives in whoever
+remembers it; a verdict attached to the output is met by whoever reads the result.
+
+So `frozen-run.sh` hashes `HEAD` plus `git status --porcelain` before and after a command, and prints
+**FROZEN** or **NOT FROZEN** beside the exit status and wall clock.
+
+## What it covers, and what it does not
+
+**Catches**: an edit, a commit, a merge, a stash, or a checkout landing mid-run — anything that moves
+tracked content or `HEAD`.
+
+**Does not catch**: untracked files a run reads, environment changes, machine load, writes outside the
+worktree, or anything at all about whether the measurement was *correct*.
+
+> ⚠ **A FROZEN VERDICT RULES OUT ONE WAY OF BEING WRONG.** It is the way this project keeps being
+> wrong, which is why it is worth automating — but it is not a validity claim. This line has
+> overclaimed an instrument's reach three times, so the limit is stated beside the guard rather than
+> left to be inferred.
+
+## It labels; it does not block
+
+A legitimate edit to an unrelated file is not an error, and failing a run for it would be a new
+failure mode. The wrapped command's exit status passes through unchanged, and a test pins that — **a
+wrapper that could turn a failing measurement into a passing one would be far worse than the problem
+it was built for.**
+
+## The guard's own test was the defect it guards against
+
+The first version had three `#[test]` functions. The harness runs them concurrently, so the probe that
+deliberately moves the tree ran while the case asserting a still tree was measuring, and that case
+failed.
+
+**The tests raced each other through the very state the guard observes.** It is the same class as the
+`linkage_symbol_census` scratch-directory race, except no per-test isolation can fix it: the shared
+resource is not a directory the test chose, it is the worktree. **A guard that observes global state
+cannot be tested in parallel with anything that mutates global state**, so the cases are sequential
+within one test — a property of what is being checked, not a workaround.
