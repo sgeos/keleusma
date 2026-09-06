@@ -140,9 +140,16 @@ gained `float_bytes`, `build_return` became `build_typed_return`, `SK::Int` fold
 `SK::Int | SK::Fixed`. **No opcode had stopped being lowered.** Expect this again whenever the
 emitter is refactored; only the placement check surfaces it.
 
-**Still open, and named rather than implied**: `BitAnd`, `BitOr`, `BitXor` and `Shr` have no coverage
-evidence in ANY table, because every registered mutation for them aborts lowering instead of changing
-behaviour. Eight opcodes — `Break`, `Else`, `EndIf`, `EndLoop`, `Loop`, `PopN`, `Reset`, `Stream` —
+**And the four that looked like bad mutations are a CORPUS gap.** `BitAnd`, `BitOr`, `BitXor` and
+`Shr` reported *NOT SEMANTIC (lowering aborted)* in two rounds, which reads as "redesign these
+mutations". **Each is carried by exactly one module, `wire.kel`, which is EXEMPT and never executes** —
+so no mutation of them could ever be detected, at any shape. The registered mutations are fine. The
+tool now says `NO EXECUTING WITNESS (corpus gap, not a mutation defect)` instead of blaming them.
+This also explains `Shl` 1/3: one of its three carrying modules is `wire.kel`.
+
+**Closing it needs a CORPUS change, not a table change** — an executing module exercising the bitwise
+and shift operators. **Recorded, not undertaken**: adding corpus files to chase a coverage figure is
+how a sweep becomes a demonstration, and that call is yours. Eight opcodes — `Break`, `Else`, `EndIf`, `EndLoop`, `Loop`, `PopN`, `Reset`, `Stream` —
 are never perturbed at all. Four detection margins are one or two modules wide.
 
 ## State
