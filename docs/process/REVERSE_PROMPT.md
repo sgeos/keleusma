@@ -339,7 +339,7 @@ so it could only fire once the thing it guarded had finished — it spun 57 minu
 instead of failing. Now bounded on a channel, mutation-tested in three directions, with the existing
 ceiling and result assertions shown to still fire.
 
-**Census groups E and I: every INDEX is checked at load, two operand VALUES are not.** A reserved
+**Census: every operand INSIDE a chunk is checked against tables inside the module; four things are not.** A reserved
 `PushImmediate` and an unrecognised `Trap` kind code are each admitted, load, and trap. Eight
 indices beside them are rejected at load with precise messages.
 
@@ -351,8 +351,25 @@ intent.
 outcomes are safe because the runtime refuses regardless. Kept deliberately distinct from the float
 finding above, which is a module the compiler itself produced.
 
-The census is at **30 of 46 sites examined**; the sixteen that are not are named. This paragraph
-said "one operand RANGE" and 22 of 46 until finishing the probing found the second instance —
+The census is at **34 of 46 sites examined**; the twelve that are not are named group by group in the
+document. **FOUR admissions in total**, not two: the reserved immediate and the trap kind above, plus
+the module-level `entry_point` past the chunk count and a native index past its table — each admitted
+at load, loading, and trapping at the call. The entry point is plainly checkable, since the chunk
+count sits in the same structure; whether the native index is checkable at load is **not** established,
+because natives are registered by the host after loading.
+
+**This paragraph has been wrong three times, always the same way.** It said "one operand RANGE" and
+22 of 46, then two and 30 of 46, then thirty-one — each figure produced by adjusting the previous
+number rather than re-summing the per-group column. Re-summing is what finally exposed that **group G
+was missing from every list of what remained**: three arena-staleness sites nobody had counted. One
+of them is now probed and found to have **no witness** -- a transient composite cannot be NAMED after
+the reset that ends its iteration, so the language's shape prevents it rather than a check catching
+it.
+
+**Read every count here as "message classes examined", not lines of source visited.** Probes map to
+sites by message shape, and sibling sites emitting the same message are credited together. That is a
+weaker claim than the bare number suggests. The earlier text said 22 of 46 until finishing the
+probing found the second instance —
 corrected here rather than left standing, because a stale figure in this file is the defect this
 session spent itself on.
 
