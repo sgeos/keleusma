@@ -48,6 +48,27 @@ failure mode. The wrapped command's exit status passes through unchanged, and a 
 wrapper that could turn a failing measurement into a passing one would be far worse than the problem
 it was built for.**
 
+## It also records WHAT the run measured, and the reason is a mistake of the author's
+
+A verdict saying **FROZEN** without saying what the run found is half a provenance record: it tells a
+later reader the tree was still and nothing about the result.
+
+**The prompt was two consecutive runs quoted as `exit 0` with no test count**, because the invocation
+piped the guard through `tail -10` and the summary line fell outside the window. **The guard was not
+losing it — the caller was.** Checking that before changing anything avoided "fixing" a tool that
+worked.
+
+But the observation survived the correction, so the last lines of the wrapped command are now printed
+**adjacent to the verdict**. A truncated log fragment then carries both or neither.
+
+> ⚠ **STREAM AND CAPTURE, NEVER BUFFER.** The output goes to the terminal as it happens *and* to a
+> file, via `tee`. Buffering until exit is a recorded failure here: a 12h51m sweep was piped through
+> `tail`, so progress was invisible and the continue-or-kill decision was blind for hours.
+
+**The wrapped exit status still passes through unchanged**, verified directly and by the test that
+pins it. `tee` moves the status into `PIPESTATUS`, and getting that wrong would have made every failed
+measurement read as a pass — the exact failure mode this guard must never introduce.
+
 ## The guard's own test was the defect it guards against
 
 The first version had three `#[test]` functions. The harness runs them concurrently, so the probe that

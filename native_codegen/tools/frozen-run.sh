@@ -53,8 +53,13 @@ before="$(stamp)"
 head_before="$(git -C "$repo_root" rev-parse --short HEAD)"
 start="$(date +%s)"
 
-"$@"
-rc=$?
+# **STREAM AND CAPTURE, NEVER BUFFER.** The output goes to the terminal AS IT
+# HAPPENS and to a file at the same time. Buffering it until exit is a recorded
+# failure on this project: a 12h51m sweep was piped through `tail`, so progress
+# was invisible and the continue-or-kill decision was blind for hours.
+_fr_out="$(mktemp -t frozen-run)"
+"$@" 2>&1 | tee "$_fr_out"
+rc=${PIPESTATUS[0]}
 
 end="$(date +%s)"
 after="$(stamp)"
@@ -66,6 +71,17 @@ echo "  command   : $*"
 echo "  exit      : $rc"
 echo "  wall      : $((end - start))s"
 echo "  HEAD      : $head_before -> $head_after"
+# **WHAT THE RUN MEASURED, BESIDE WHETHER THE TREE MOVED.**
+#
+# A record saying "frozen" without saying what was found is half a record: it
+# tells a later reader the tree was still and nothing about the result. Keeping
+# the summary ADJACENT to the verdict means a truncated log fragment carries both
+# or neither -- and a caller who pipes this through `tail` (twice in ten minutes,
+# on the day this was written) still gets the number.
+if [ -s "$_fr_out" ]; then
+    echo "  ---- last lines of the wrapped command ----"
+    tail -n 4 "$_fr_out" | sed 's/^/  | /'
+fi
 if [ "$before" = "$after" ]; then
     echo "  VERDICT   : FROZEN. Tracked content did not change during the run."
     echo "              This rules out ONE way of being wrong. It is not a claim"
@@ -77,4 +93,5 @@ else
     echo "              attached -- which is what the record requires."
 fi
 echo "================"
+rm -f "$_fr_out"
 exit $rc
