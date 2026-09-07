@@ -208,9 +208,16 @@ sites are there; the module does not get to them.
 | the harness payload drives it into the fault | **false** — an empty payload faults byte-identically |
 | the harness under-sizes the shared buffer | **false** — it sizes from the module's own `shared_data_bytes` |
 | a stage-seed path clones a smaller buffer | **false** — `wire.kel` has no stage seed |
+| the per-tick reply value drives it there | **false** — replying `Int(0)` faults byte-identically |
 
 **And 65,536 is not the shared buffer** — `wire.kel` declares **237,624** bytes, and no such constant
 exists in my harness. It looks like an internal array bound.
+
+**The index is INVARIANT under every input dimension I control** — payload, buffer sizing, stage
+seeding, per-tick reply. Same `1570808` and `65536` on all four, and a stream module gets one seed so
+there is no seed axis either. **That points at the module rather than at my driving**, which is why it
+is yours. *"Invariant under the four dimensions I varied" is not "invariant under all inputs"* — that
+is what I measured, at its actual strength.
 
 **I am NOT claiming a defect in `wire.kel`.** It may be faulting correctly on input it was never meant
 to receive, in which case my harness's driving is the thing to change — and I would rather you tell me

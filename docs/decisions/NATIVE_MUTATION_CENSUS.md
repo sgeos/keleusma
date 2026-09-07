@@ -98,6 +98,7 @@
 > | the harness `PAYLOAD` drives it into the fault | **false** — an EMPTY payload faults byte-identically |
 > | the harness under-sizes the shared buffer | **false** — it sizes from the module's own `shared_data_bytes` |
 > | a stage-seed path clones a smaller buffer | **false** — `wire.kel` has no stage seed and takes the ordinary path |
+> | the per-tick reply value drives it there | **false** — replying `Int(0)` instead of the tick counter faults byte-identically |
 >
 > **And 65,536 is not the shared buffer**: `wire.kel` declares **237,624** bytes, and no such constant
 > exists in the harness. It is an internal array bound inside the module.
@@ -105,6 +106,14 @@
 > **So the gate is a bounds fault inside `wire.kel` under the differential's driving.**
 > `src/selfhost/kel/` belongs to the `v0.2.3` line and is read-only here, so this is REPORTED rather
 > than repaired — see `REVERSE_PROMPT.md`.
+>
+> **THE INDEX IS INVARIANT UNDER EVERY INPUT DIMENSION THE HARNESS CONTROLS** — payload contents,
+> buffer sizing, stage seeding, and the per-tick reply. `1570808` and `65536` are the same on all
+> four. A stream module is driven with ONE seed, so there is no seed axis to vary either. **That
+> points at the module rather than at the driving**, and is why this is filed to the owning line.
+>
+> ⚠ **"Invariant under the four dimensions I varied" is not "invariant under all inputs."** It is what
+> was measured, stated at its actual strength.
 >
 > **What is NOT claimed**: that this is a defect in `wire.kel`. The module may be faulting correctly on
 > input it was never meant to receive, in which case the harness's driving is the thing to change. That
