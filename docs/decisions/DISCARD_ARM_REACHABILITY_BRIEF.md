@@ -2,7 +2,7 @@
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
 
-**Status**: brief, self-directed. **MEASURED 2026-09-04; the result is below and the headline is that
+**Status**: brief, self-directed. **MEASURED 2026-09-04, extended by pass six 2026-09-06; the result is below and the headline is that
 the instrument under-measures, proven by a failed positive control.**
 
 ## The observation
@@ -141,16 +141,54 @@ This also retires the earlier framing. "Ten arms not reached by 37% of the surfa
 written; after pass five the surface is no longer the limiting factor, and saying so is the
 difference between a live caveat and a stale one.
 
-### FIVE REMAIN, AND THEY ARE NAMED
+### PASS SIX: THE FIXTURE HYPOTHESIS WAS RIGHT, AND ONE ARM CLOSES
+
+Pass five's diagnosis was that the last five are a **fixture** problem needing richer programs --
+payload-bearing enums, the full constant-kind range, multiheaded functions. Pass six tested the two
+arms that diagnosis makes concrete predictions about.
+
+**Arm 16 is REACHED.** `assemble_enum_layouts`' discard arm fires on a payload-bearing enum
+(`enum E { A, B(bool) }` constructed and matched), and does **not** fire on either control -- a plain
+`Word` function or one returning a `Word` constant. The union across six passes is **15 of 19**.
+
+**Arm 11 is NOT reached by the fixture predicted for it.** `const_scalar_size` discards a
+`ConstValue` outside `Int`/`Byte`/`Fixed`/`StaticStr`, and its comment names `Float`. `ConstValue`
+also has `Bool` and `Unit`, so a `bool` constant looked like a fixture needing no float support. It
+did not fire. **The hypothesis is refuted, not the arm's reachability**: bool constants evidently do
+not arrive at that function, and why is not established here.
+
+### A misattribution caught before it was published, and it is the reason to record method
+
+The arm first instrumented as "16" was found by scanning the lines after `assemble_enum_layouts`.
+**It sits in a different function** -- `wire_shape_of` -- and its `_ => WireShape::Top` fires for a
+`bool`-typed function rather than for anything enum-related. Reported as arm 16, that would have
+credited the right conclusion to the wrong code, exactly as this session's earlier mutation of a
+boundary mechanism was aimed at the wrong call site and passed.
+
+The correct arm was then instrumented and behaves as the brief predicted. **Both facts are kept**:
+`wire_shape_of`'s discard arm is reached by a `bool` return type, and whether it is among the
+nineteen is **not established** -- it was never part of this census's numbering.
+
+### An incidental observation, not chased
+
+A function returning a `Byte` constant **panics** through `self_host_compile_full` rather than
+refusing cleanly. Whether that construct is inside the supported subset is not determined here; it is
+recorded because a panic and a refusal are different outcomes and only one is a documented boundary.
+
+### FOUR REMAIN, AND THEY ARE NAMED
 
 | arm | function | note |
 |---|---|---|
 | 7 | `reconstruct_via_kel` | reconstruction path |
 | 8 | `reconstruct_via_kel_multihead` | reconstruction path |
 | 9 | `analyze_op_heap` | analysis |
-| 11 | `const_scalar_size` | analysis |
-| 16 | `assemble_enum_layouts` | its three siblings are now reached; the corpus source used a
-payload-free enum, which is the likely gap and is a lead rather than a conclusion |
+| 11 | `const_scalar_size` | analysis. A `bool` constant was tried in pass six and did NOT reach it |
+
+**Arm 16 is closed and its row is removed**, rather than left in a table under a heading that
+contradicts it. Its note read: "the corpus source used a payload-free enum, which is the likely gap
+and is a lead rather than a conclusion". **The lead was right** -- a payload-bearing enum reaches it,
+with two controls that do not. A lead recorded as a lead, and later confirmed, is the cheapest kind
+of finding there is.
 
 Still UNMEASURED rather than safe, but the population is now small, named, and each has a stated
 next probe.
