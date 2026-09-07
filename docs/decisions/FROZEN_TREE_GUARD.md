@@ -69,6 +69,29 @@ But the observation survived the correction, so the last lines of the wrapped co
 pins it. `tee` moves the status into `PIPESTATUS`, and getting that wrong would have made every failed
 measurement read as a pass — the exact failure mode this guard must never introduce.
 
+## An opt-in guard is still a rule, so the common case now wraps itself
+
+`frozen-run.sh` made the tree check structural **for runs that remember to use it**, and the handoff's
+instruction to *"wrap long runs in it"* is exactly the form that has already failed four times.
+Measured after building it: the guard was referenced by its own test and its own documentation and
+**nowhere else** — no script, no routine.
+
+`native_codegen/tools/backend-gate.sh` closes that. It runs formatting, lints and both suite halves
+**through the guard**, so the backend's most common operation cannot forget.
+
+**It also captures three facts that lived only in a session's scrollback:**
+
+1. **The suite must be split.** `corpus_differential` alone is ~390 s and the rest ~140 s; together
+   they exceed the harness's background ceiling, and two runs were killed mid-flight before the cause
+   was understood.
+2. **There are two float configurations.** `narrow-float-32` is selectable only because the manifest
+   forwards it, and it went unmeasured until 2026-08-31, when it was found RED.
+3. **Every run should be frozen-checked.**
+
+**What it is not**: not the release gate, which covers the workspace and is mandatory before a merge;
+and not a continuous-integration job, because that is a per-push cost and the `v0.2.3` line has
+recorded such costs as the operator's call.
+
 ## The guard's own test was the defect it guards against
 
 The first version had three `#[test]` functions. The harness runs them concurrently, so the probe that
