@@ -190,6 +190,33 @@ honest repair may be to declare that dependency instead. **That is your design j
 `docs/decisions/SELF_HOST_WITHOUT_FLOATS.md` reports the fact and does not prescribe the fix. I did
 not touch `src/`, and did not add a CI job — you recorded that per-push cost is the operator's call.
 
+## A SECOND ONE FOR YOU, AND IT GATES FOUR OPCODES' MUTATION COVERAGE
+
+**`wire.kel` faults under the corpus differential**: *"the VM refuses to resume it:
+`IndexOutOfBounds(1570808, 65536)`"*. It is therefore exempt as FAULT-COMPARABLE — a real comparison,
+both sides faulting identically — but never an EXECUTION.
+
+**That is what gates `BitAnd`, `BitOr`, `BitXor` and `Shr`.** Each is carried by exactly one corpus
+module, and it is this one, so no mutation of them can be detected. Your own harness comment records
+that a payload was added precisely to reach *"131 sites of `BitAnd`, `BitOr`, `Shl` and `Shr`"* — the
+sites are there; the module does not get to them.
+
+**Three hypotheses tested, all FALSE**, so this is not the first plausible story:
+
+| hypothesis | verdict |
+|---|---|
+| the harness payload drives it into the fault | **false** — an empty payload faults byte-identically |
+| the harness under-sizes the shared buffer | **false** — it sizes from the module's own `shared_data_bytes` |
+| a stage-seed path clones a smaller buffer | **false** — `wire.kel` has no stage seed |
+
+**And 65,536 is not the shared buffer** — `wire.kel` declares **237,624** bytes, and no such constant
+exists in my harness. It looks like an internal array bound.
+
+**I am NOT claiming a defect in `wire.kel`.** It may be faulting correctly on input it was never meant
+to receive, in which case my harness's driving is the thing to change — and I would rather you tell me
+that than have me guess. `src/selfhost/kel/` is yours and read-only to me, so I have reported the
+measurement and not touched it.
+
 ## State
 
 | | |

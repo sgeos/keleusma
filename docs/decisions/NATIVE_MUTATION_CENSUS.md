@@ -79,9 +79,40 @@
 > **This also explains `Shl` 1/3.** Its three carrying modules include `wire.kel`, so only two can
 > execute at all and one of those detects. The thin margin is thinner than the ratio suggests.
 >
-> **What would close it is a CORPUS change, not a table change**: an executing module that exercises
-> the bitwise and shift operators. Recorded, not undertaken — adding corpus files to chase a coverage
-> figure is how a sweep becomes a demonstration.
+> **WHAT ACTUALLY GATES IT, MEASURED 2026-09-06 AFTER THREE REFUTED HYPOTHESES.** The first version of
+> this entry said "an executing module is needed" and left it there. That was true but not useful, and
+> the mechanism is now known to the instruction:
+>
+> **`wire.kel` is not un-executed — it is EXEMPT AS FAULT-COMPARABLE**, which is a real comparison:
+> both sides fault identically and the differential checks that. What it is not is an EXECUTION, so
+> the sweep's `EXECUTED AND AGREEING : 1` marker never appears and every mutation reads as NOLOWER.
+>
+> **The fault is `IndexOutOfBounds(1570808, 65536)`** — index 1,570,808 against a bound of 65,536 —
+> reported as *"the VM refuses to resume it"*.
+>
+> **Three hypotheses were tested and all three are FALSE**, which is why they are recorded rather than
+> the first plausible one being written up:
+>
+> | hypothesis | verdict |
+> |---|---|
+> | the harness `PAYLOAD` drives it into the fault | **false** — an EMPTY payload faults byte-identically |
+> | the harness under-sizes the shared buffer | **false** — it sizes from the module's own `shared_data_bytes` |
+> | a stage-seed path clones a smaller buffer | **false** — `wire.kel` has no stage seed and takes the ordinary path |
+>
+> **And 65,536 is not the shared buffer**: `wire.kel` declares **237,624** bytes, and no such constant
+> exists in the harness. It is an internal array bound inside the module.
+>
+> **So the gate is a bounds fault inside `wire.kel` under the differential's driving.**
+> `src/selfhost/kel/` belongs to the `v0.2.3` line and is read-only here, so this is REPORTED rather
+> than repaired — see `REVERSE_PROMPT.md`.
+>
+> **What is NOT claimed**: that this is a defect in `wire.kel`. The module may be faulting correctly on
+> input it was never meant to receive, in which case the harness's driving is the thing to change. That
+> is a judgement for the owning line, and asserting it here would be the overclaim this file keeps
+> having to retract.
+>
+> Adding corpus files to chase a coverage figure remains the wrong move; it is how a sweep becomes a
+> demonstration.
 
 > ✅ **2026-09-06, LATEST: ALL NINE DRIFTED MUTATIONS ARE RE-REGISTERED AND ALL NINE ARE DETECTED.**
 >
