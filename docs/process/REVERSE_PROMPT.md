@@ -224,6 +224,12 @@ to receive, in which case my harness's driving is the thing to change — and I 
 that than have me guess. `src/selfhost/kel/` is yours and read-only to me, so I have reported the
 measurement and not touched it.
 
+## For whoever runs this suite
+
+`native_codegen/tools/backend-gate.sh` — fmt, clippy and both halves, each frozen-checked. The suite
+**must** be split: together the halves exceed the harness's background ceiling and the run is killed
+mid-flight. `--narrow` selects the second float configuration.
+
 ## State
 
 | | |
