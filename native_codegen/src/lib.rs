@@ -1757,6 +1757,8 @@ fn lower_module_with<'ctx>(
             || (c.block_type == BlockType::Stream && degenerate_stream_yield(c, program).is_none())
     });
     let data = DataCtx {
+        stream_state_off: u32::try_from(keleusma::vm::required_persistent_capacity_for(program))
+            .unwrap_or(u32::MAX),
         needs_region,
         shared_count,
         shared_layout,
@@ -2086,6 +2088,19 @@ struct DataCtx<'a> {
     /// Whether the module declares any data slot at all, which decides whether
     /// the two trailing pointers are present.
     has_data: bool,
+    /// Byte offset, from the PRIVATE pointer, of this module's stream
+    /// resume-state words.
+    ///
+    /// **`.bss` for the coroutine**: fixed size, fixed offset, and it must
+    /// survive `Op::Reset`, which clears the ephemeral regions. It therefore sits
+    /// in the PERSISTENT region, immediately after
+    /// `keleusma::vm::required_persistent_capacity_for`, and
+    /// `region::persistent_supplement_bytes` is what a host must add to make room
+    /// for it.
+    ///
+    /// Computed where the module is in scope, because the body lowering sees one
+    /// chunk at a time.
+    stream_state_off: u32,
     /// Total declared slots, shared plus private.
     slot_count: u32,
     /// Whether ANY chunk in the module constructs a flat composite, and so
@@ -2701,8 +2716,47 @@ fn lower_chunk_body<'ctx>(
     let trap_bb = ctx.append_basic_block(func, "trap");
 
     b.position_at_end(entry);
+
+    // **A RESUMABLE STREAM KEEPS ITS LOCALS IN THE ARENA, NOT ON THE MACHINE
+    // STACK.** It RETURNS at each `yield` and re-enters at the same point, and a
+    // machine frame does not survive that. The arena does — and because the arena
+    // is per-instance, the same lowered code driven with two arenas is two
+    // independent streams, which is what makes instances free.
+    //
+    // The block sits at `plan_chunk_region(chunk).bytes`, immediately after the
+    // composite map; `region::stream_locals_bytes` reserves it and
+    // `region_total_bytes` publishes it to the host.
+    //
+    // **EPHEMERAL, and that is deliberate**: `Op::Reset` clears every local, which
+    // is what an ephemeral region is for. The resume-state word is the other half
+    // of the frame and is `.bss`, so it lives in the PERSISTENT region instead.
+    let stream_frame_base: Option<PointerValue<'ctx>> = if chunk.block_type == BlockType::Stream
+        && degenerate_yield.is_none()
+        && (data.has_data || data.needs_region)
+    {
+        Some(
+            func.get_nth_param(u32::from(chunk.param_count) + 2)
+                .expect("a non-degenerate stream declares the region pointer")
+                .into_pointer_value(),
+        )
+    } else {
+        None
+    };
+    let locals_off = u64::from(crate::region::plan_chunk_region(chunk).bytes);
+
     let locals: Vec<_> = (0..chunk.local_count as usize)
-        .map(|i| b.build_alloca(i64t, &format!("l{i}")).unwrap())
+        .map(|i| match stream_frame_base {
+            Some(rb) => unsafe {
+                b.build_in_bounds_gep(
+                    i8t,
+                    rb,
+                    &[i64t.const_int(locals_off + (i as u64) * 8, false)],
+                    &format!("l{i}"),
+                )
+                .unwrap()
+            },
+            None => b.build_alloca(i64t, &format!("l{i}")).unwrap(),
+        })
         .collect();
     for (i, local) in locals.iter().enumerate().take(chunk.param_count as usize) {
         // **A FLOAT PARAMETER ARRIVES AS A DOUBLE AND LIVES AS ITS BITS.** Local
@@ -2793,6 +2847,68 @@ fn lower_chunk_body<'ctx>(
             _ => {}
         }
     }
+    // **THE RESUMABLE STREAM'S CONTROL POINTS.**
+    //
+    // `Op::Reset` rewinds to the instruction AFTER `Op::Stream`, exactly as the
+    // virtual machine does, so that index needs a block for the back edge. And
+    // each `Op::Yield` RETURNS, so the instruction after it is a RESUME point
+    // reachable only from the entry dispatch — never by fall-through, because
+    // the yield terminated its block.
+    let general_stream = chunk.block_type == BlockType::Stream && degenerate_yield.is_none();
+    let stream_pos = chunk.ops.iter().position(|o| matches!(o, Op::Stream));
+    let yield_positions: Vec<usize> = if general_stream {
+        chunk
+            .ops
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| matches!(o, Op::Yield))
+            .map(|(i, _)| i)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    // **A RESUME POINT THAT IS ALSO A BRANCH TARGET IS REFUSED, NOT UNIFIED.**
+    //
+    // The two paths into such a block disagree about the operand stack: the
+    // resume edge arrives with nothing on it, while the fall-through carries the
+    // branch's value. Reconciling them means deciding what the suspended
+    // expression's context was, which is a spill question — and inventing an
+    // answer is how a differential oracle gets a wrong result rather than a
+    // refusal.
+    //
+    // Found by measurement: `if t > 0 { let a = yield t; yield a } else { .. }`
+    // put a resume point exactly on the `Op::Else`, and the depth note asserted
+    // `0` against `1`.
+    if general_stream {
+        let branch_targets: std::collections::BTreeSet<usize> = targets.iter().copied().collect();
+        for &y in &yield_positions {
+            if branch_targets.contains(&(y + 1)) {
+                return Err(LowerError::unsupported_op(
+                    "Yield",
+                    format!(
+                        "the resume point after the yield at op {y} is also a branch target, \
+                         so the resume edge and the fall-through disagree about the operand \
+                         stack; no spill layout is defined for a suspension inside an \
+                         expression"
+                    ),
+                ));
+            }
+        }
+    }
+
+    let loop_top: Option<usize> = match (general_stream, stream_pos) {
+        (true, Some(p)) if p + 1 < chunk.ops.len() => {
+            targets.push(p + 1);
+            for &y in &yield_positions {
+                if y + 1 < chunk.ops.len() {
+                    targets.push(y + 1);
+                }
+            }
+            Some(p + 1)
+        }
+        _ => None,
+    };
+
     targets.sort_unstable();
     targets.dedup();
     let blocks: BTreeMap<usize, BasicBlock> = targets
@@ -2891,6 +3007,48 @@ fn lower_chunk_body<'ctx>(
     // jump, and the arm's value push sits immediately after it, unreachable.
     let mut dead = false;
 
+    // **THE ENTRY DISPATCH: WHICH SUSPENSION ARE WE RESUMING AFTER?**
+    //
+    // State 0 is the loop top, which is also what an all-zero arena gives on the
+    // first call and what `Op::Reset` restores — so a fresh instance and a reset
+    // instance take the same path with no distinguished first call.
+    if let Some(top) = loop_top {
+        // **ONE PARAMETER ONLY, REFUSED RATHER THAN GUESSED.** The runtime's
+        // resume writes the incoming value into slot 0 and nothing else, so a
+        // second parameter has no defined value on re-entry. Lowering one anyway
+        // would invent a convention the differential could not vouch for.
+        if chunk.param_count != 1 {
+            return Err(LowerError::unsupported_op(
+                "Stream",
+                format!(
+                    "a resumable stream with {} parameters: resume defines slot 0 only, \
+                     so any further parameter would have no defined value on re-entry",
+                    chunk.param_count
+                ),
+            ));
+        }
+        let pb = private_base.expect("a general stream declares the private pointer");
+        let sp = unsafe {
+            st.b.build_in_bounds_gep(
+                i8t,
+                pb,
+                &[i64t.const_int(u64::from(data.stream_state_off), false)],
+                "statep",
+            )
+            .unwrap()
+        };
+        let state = st.b.build_load(i64t, sp, "state").unwrap().into_int_value();
+        let mut cases: Vec<(inkwell::values::IntValue<'ctx>, BasicBlock<'ctx>)> = Vec::new();
+        for (k, &y) in yield_positions.iter().enumerate() {
+            if y + 1 < chunk.ops.len() {
+                cases.push((i64t.const_int((k + 1) as u64, false), blocks[&(y + 1)]));
+                note!(y + 1, 0);
+            }
+        }
+        note!(top, 0);
+        st.b.build_switch(state, blocks[&top], &cases).unwrap();
+    }
+
     for (i, op) in chunk.ops.iter().enumerate() {
         if let Some(&bb) = blocks.get(&i) {
             if !dead && st.b.get_insert_block().unwrap().get_terminator().is_none() {
@@ -2902,6 +3060,20 @@ fn lower_chunk_body<'ctx>(
                 Some(&d) => {
                     st.depth = d;
                     dead = false;
+                    // **A RESUME POINT RECEIVES THE RESUME VALUE AS PARAMETER 0**,
+                    // which becomes the yield expression's result — the same
+                    // convention the runtime uses, where `resume` writes slot 0
+                    // and pushes it as the suspended frame's yield value.
+                    //
+                    // Reachable ONLY from the dispatch: the yield before it
+                    // returned, so nothing falls through into this block.
+                    if general_stream && i > 0 && matches!(chunk.ops[i - 1], Op::Yield) {
+                        let rv = func
+                            .get_nth_param(0)
+                            .expect("a stream declares its resume parameter")
+                            .into_int_value();
+                        st.push(rv);
+                    }
                 }
                 // A block target no edge reaches. The exit of a `loop` with no
                 // `break` is the real case: it is a legitimate program, not a
@@ -5274,6 +5446,125 @@ fn lower_chunk_body<'ctx>(
             // return above and is accepted rather than refused so that the
             // `dead` path does not have to special-case it.
             Op::Stream | Op::Reset if degenerate_yield.is_some() => {}
+            // **`Op::Stream` MARKS THE LOOP TOP AND EMITS NOTHING.** The block
+            // after it is entered from the dispatch or by the `Reset` back edge.
+            Op::Stream if general_stream => {}
+
+            // **`Op::Yield` SAVES THE RESUME POINT AND RETURNS.**
+            //
+            // Not a callback. The host regains control at every suspension, which
+            // is what makes a divergent `loop fn` drivable at all: `kel_yield`
+            // inverts control and would spin inside native code with no way for
+            // the host to stop it, which is why `Op::Stream` was refused before
+            // this existed.
+            //
+            // The state word says which yield to continue after; the arena holds
+            // the locals. Together they ARE the coroutine instance, which is why
+            // the same lowered code driven with two arenas is two independent
+            // streams.
+            Op::Yield if general_stream => {
+                // **REFUSED, NOT SPILLED.** Anything beneath the yielded value
+                // would have to survive the return too, and inventing a spill
+                // layout here is how a differential oracle gets a wrong answer.
+                if st.depth != 1 {
+                    return Err(LowerError::unsupported_op(
+                        "Yield",
+                        format!(
+                            "a resumable stream whose operand stack holds {} entries at the \
+                             yield: everything beneath the yielded value would have to \
+                             survive the return, and no spill layout is defined",
+                            st.depth
+                        ),
+                    ));
+                }
+                let k = yield_positions
+                    .iter()
+                    .position(|&y| y == i)
+                    .expect("this Yield is in the collected set")
+                    + 1;
+                let pb = private_base.expect("a general stream declares the private pointer");
+                let sp = unsafe {
+                    st.b.build_in_bounds_gep(
+                        i8t,
+                        pb,
+                        &[i64t.const_int(u64::from(data.stream_state_off), false)],
+                        "statep",
+                    )
+                    .unwrap()
+                };
+                st.b.build_store(sp, i64t.const_int(k as u64, false))
+                    .unwrap();
+                let v = st.pop();
+                build_typed_return(&st.b, func, v);
+                dead = true;
+            }
+
+            // **`Op::Reset`: CLEAR THE LOCALS, REWIND THE STATE, JUMP TO THE TOP.**
+            //
+            // The runtime clears every local to `Unit`, truncates the operand
+            // stack, resets the arena's ephemeral region and rewinds to just after
+            // `Op::Stream`. The first and last are emitted here; the operand stack
+            // is already empty, since the compiler emits
+            // `Stream ; body ; PopN(1) ; Reset`.
+            //
+            // **It does NOT return.** The runtime reports `VmState::Reset` as a
+            // leg of its own, but the native driver collapses it — `step(a)`,
+            // `step(r1)`, `step(r2)` reproduces the yielded sequence — so the back
+            // edge is taken inside the same call.
+            //
+            // **The composite region needs no explicit reset**: every site has a
+            // fixed offset, so the next iteration overwrites exactly the bytes a
+            // reset would have reclaimed. That is the fixed-offset lowering of a
+            // stack-disciplined bump arena popped at each iteration, which is the
+            // model to reason in.
+            Op::Reset if general_stream => {
+                let top = loop_top.expect("general_stream implies a loop top");
+                for l in st.locals.iter() {
+                    st.b.build_store(*l, i64t.const_zero()).unwrap();
+                }
+                // **THEN PUT THE RESUME VALUE BACK IN SLOT 0.**
+                //
+                // The runtime's rewind is a SUSPENSION: `Op::Reset` returns
+                // `VmState::Reset`, the host resumes, and the resume writes slot
+                // 0 before the loop top runs again. Collapsing that leg into the
+                // same native call — which the driver's `step(a), step(r1), ...`
+                // shape requires — drops the write, so it is re-applied here.
+                //
+                // **Measured, not reasoned about.** Without this the first yield
+                // of every iteration after the first returned 0 where the runtime
+                // returned the resume value: `[7, 11, 0, 31]` against
+                // `[7, 11, 20, 31]`. The harness re-sends the SAME reply to the
+                // Reset leg and the Yielded leg that follows it, which is why
+                // parameter 0 is the right value to restore.
+                if let Some(l0) = st.locals.first() {
+                    let raw = func
+                        .get_nth_param(0)
+                        .expect("a stream declares its resume parameter");
+                    let stored = if raw.is_float_value() {
+                        st.b.build_bit_cast(raw.into_float_value(), i64t, "rf2i")
+                            .unwrap()
+                            .into_int_value()
+                    } else {
+                        raw.into_int_value()
+                    };
+                    st.b.build_store(*l0, stored).unwrap();
+                }
+                let pb = private_base.expect("a general stream declares the private pointer");
+                let sp = unsafe {
+                    st.b.build_in_bounds_gep(
+                        i8t,
+                        pb,
+                        &[i64t.const_int(u64::from(data.stream_state_off), false)],
+                        "statep",
+                    )
+                    .unwrap()
+                };
+                st.b.build_store(sp, i64t.const_zero()).unwrap();
+                note!(top, st.depth);
+                st.b.build_unconditional_branch(blocks[&top]).unwrap();
+                dead = true;
+            }
+
             Op::Yield => {
                 let v = st.pop();
                 let hook = yield_hook(ctx, module);
