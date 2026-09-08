@@ -146,8 +146,17 @@ than the feature sweep found, and reporting it as a near-miss would be dishonest
 > an eight-bit word with a sixteen-bit address -- the 6502 shape. **32 of its 37 tests drive one of
 > them**: 14 name an alias directly and 18 reach one through its helpers, leaving 5 that do not
 > (they exercise the FLOAT width on a wide-word runtime). 14 + 18 + 5 = 37.
-> `tests/composite_width_skew.rs` adds 9 more. **41 tests in total, in every continuous-integration
-> run.**
+> `tests/composite_width_skew.rs` has 9 tests of which **8** drive a skewed runtime; the ninth is a
+> deliberate control at the DEFAULT widths, so that a failure in the other eight is attributable to
+> the skew rather than to the programs. **32 + 8 = 40 tests, in every continuous-integration run.**
+>
+> **This figure read 41 when first written, and the error is worth keeping.** The count of the skew
+> file was taken as all nine, forgetting its control. The guard added alongside it
+> (`the_narrow_runtime_coverage_claim_still_describes_the_tree`) then derived 41 as well -- by
+> counting a test in `narrow_vm.rs` whose name says it runs on a WIDE runtime, because a COMMENT
+> inside it mentions a narrow helper. **Two errors cancelled to produce agreement**, and agreement
+> is what stops a number being re-examined. It was caught only by checking the per-file split
+> against the hand-derived one rather than accepting the matching total.
 >
 > **The two claims differ in what they cover.** A host alias narrows ONE runtime inside ONE test, so
 > coverage is whatever those tests do. A `narrow-*` feature narrows the bundled `Vm` alias, so the
@@ -155,9 +164,9 @@ than the feature sweep found, and reporting it as a near-miss would be dishonest
 > this document describe. Both statements have content; stating the first as the second overstates
 > the gap and sends a reader looking for coverage that already exists.
 >
-> **How the 41 were identified, and what that would miss**: by parsing each test for the alias its
-> body names or the helper it calls. A test reaching a narrow runtime through a deeper indirection
-> would not be counted, so 41 is a lower bound.
+> **How the 40 were identified, and what that would miss**: by parsing each test for the alias its
+> body CODE names or the helper it calls, with comments stripped. A test reaching a narrow runtime
+> through a deeper indirection is not counted, so 40 is a lower bound.
 >
 > **This is the third claim in this document family stated more broadly than its evidence**, and
 > naming the pattern is more useful than fixing the third quietly. The first was "the reason is not
