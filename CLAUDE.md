@@ -104,7 +104,7 @@ A knowledge graph is maintained in `docs/`. Start at [`docs/README.md`](docs/REA
 See `docs/process/PROCESS_STRATEGY.md` for the library engineering approach and agentic development loop.
 
 **Session startup protocol**:
-1. Read [`docs/process/HANDOFF.md`](docs/process/HANDOFF.md) and run its validity check (compare its recorded parent commit to `git rev-parse HEAD~1`). Report the handoff as valid, or as invalid-and-stale on a mismatch, per its Validity section.
+1. Read [`docs/process/HANDOFF.md`](docs/process/HANDOFF.md) and run the validity check **its own Validity section defines**, which is by ANCESTRY and CONTENT and explicitly **not** by a hash match. This instruction previously prescribed comparing the recorded parent to `git rev-parse HEAD~1`; that stamp asserts nothing else ever lands, `HANDOFF.md` records that it has failed three times, and following it would report a current handoff as stale. Report the handoff as valid, or as invalid-and-stale, on the outcome of the checks that file lists.
 2. Read [`docs/process/TASKLOG.md`](docs/process/TASKLOG.md) for current task state.
 3. Read [`docs/process/REVERSE_PROMPT.md`](docs/process/REVERSE_PROMPT.md) for last AI communication.
 4. Wait for human prompt before proceeding.
