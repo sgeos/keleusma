@@ -282,7 +282,7 @@ mid-flight. `--narrow` selects the second float configuration.
 |---|---|
 | backend suite | **480 passed, 0 failed** in BOTH float configurations, each run reporting **FROZEN**, re-measured at `e52293d2` rather than carried from an earlier stamp |
 | uncommitted | none |
-| unabsorbed | **zero** — absorption 53 in, every prediction exact: no `src/` contact, zero conflicts, zero movement |
+| unabsorbed | **zero** — absorption 54 in, every prediction exact again: no `src/` contact, zero conflicts, zero movement, and neither of my two filed reports closed by it (checked, not assumed) |
 
 ## Yours, unchanged
 
