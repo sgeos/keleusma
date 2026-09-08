@@ -317,19 +317,39 @@ and running the suite at a narrow width remains the project this document declin
 
 ## What this document does not establish
 
-**The narrow widths are still not verified.** Thirty-six of the forty-one failures are the suite
-declining to run at a width it was not written for, and a suite that cannot run at a width cannot
-vouch for it. What has changed is that the failures are now understood individually rather than
-grouped by name.
+**~~The narrow widths are still not verified.~~ CORRECTED 2026-09-08: too broad, and in the same
+way twice more in this section.** What a suite cannot do is run AS A WHOLE at a narrow width, and
+that is what the failures below describe. **Narrow runtimes themselves are driven by 41 tests in the
+DEFAULT build**, through host-defined aliases in `tests/narrow_vm.rs` and
+`tests/composite_width_skew.rs`, on every continuous-integration run. A `narrow-*` feature narrows
+the bundled `Vm` alias so the whole suite runs narrow; a host alias narrows one runtime inside one
+test. Conflating them overstates the gap. See
+[`FEATURE_COMBINATION_SWEEP.md`](./FEATURE_COMBINATION_SWEEP.md) for the count and its derivation.
+
+Thirty-six of the forty-one failures are the suite declining to run at a width it was not written
+for. What has changed is that the failures are now understood individually rather than grouped by
+name.
 
 **Making the suite run at sixteen bits remains a project rather than an increment**, and nothing here
 recommends starting it. Groups A through D would need per-test judgement about whether the premise is
-genuinely void; group F needs its harness reads parameterised on the word width, which is the only
-group where a mechanical change would be both small and clearly right.
+genuinely void.
+
+**Group F was the exception this paragraph named, and it is now done** (2026-09-08): its three
+harness reads take the word width from the crate, so the distinct failures at `narrow-word-16` stand
+at 33 rather than 41. The prediction that it was "the only group where a mechanical change would be
+both small and clearly right" held -- and repairing the first assertion in one of those tests
+exposed a second hard-coded figure inside it, which a single fix per test would have left.
 
 **Only `narrow-word-16` was swept in full.** The other selectors were run over five test files, not
-the suite. The eight-bit selectors remain the least exercised, and `tests/narrow_vm.rs` still
-excludes them by its own configuration attribute.
+the suite.
+
+**The eight-bit sentence that stood here was the same conflation a third time.** It said the
+eight-bit selectors are least exercised because `tests/narrow_vm.rs` excludes them by its own
+configuration attribute. That file does exclude the eight-bit FEATURES -- and it also defines an
+eight-bit-word runtime and drives it in four tests, to which `composite_width_skew.rs` adds two more.
+**The eight-bit SELECTOR is unexercised; the eight-bit RUNTIME is exercised by six tests in the
+default build.** The exclusion and the coverage are about different things and sat one sentence
+apart.
 
 **One failure was measured twice and the first reading was wrong.** An intermediate run of the width
 matrix reported seven failures at `narrow-address-16`, including two tests that had passed a moment
