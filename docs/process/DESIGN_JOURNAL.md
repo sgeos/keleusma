@@ -13,6 +13,77 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-08 — a wrong answer in the flat-composite core, and a capability that was there all along
+
+**The arc.** Session 63 left a measurement unfinished: eighteen of thirty-seven `narrow-word-16`
+failures in an unexamined remainder, and the other nineteen grouped **by test name**. Finishing it
+properly found a defect. Repairing the defect exposed a false belief about what can be tested, and
+correcting that belief turned out to be worth more than the repair.
+
+**Why the census remainder was NOT chosen instead.** My own document rates it low value: groups F and
+J are host-contract surfaces, the class of the native array-length finding rather than a hole in the
+guarantee. Finishing an enumeration because it is three-quarters done is completeness, not value.
+
+### The defect: one field, two authorities
+
+`ScalarKind::Opaque` is sized by the ADDRESS width. The compiler bakes field offsets from that
+layout, the typed verifier sizes operands from it, the marshalling layer reports field sizes from it.
+**The runtime disagreed in four places, each assuming a WORD**: the construction path rewrote the
+registry index to a one-word `Int`, the arena packer advanced by that width, the flat scalar read
+read it back as a word, and the host decode asked for a word's worth of bytes from an
+already-sized field.
+
+The default target makes the two widths equal, so all four agreed by coincidence. Where they differ,
+every field after an opaque sat at an offset the baked access disagreed with. **The worst symptom was
+not a fault**: two structures differing in a `Word` field compared equal.
+
+**The repair deliberately answers no design question.** Whether the field is a registry index (a
+word) or a host handle (an address) is genuinely open. Three of four subsystems already treat the
+layout as the authority, so the runtime now asks it. The open question stays open, and the runtime
+follows whatever it is eventually answered.
+
+### The belief that was wrong
+
+I then wrote, in a merged document, that the construction path **could not** be guarded without a
+continuous-integration job in a configuration nothing builds.
+
+`GenericVm<W, A, F>` is generic over word and address independently; every `Word` and every `Address`
+implementation is unconditional. **A host-defined alias reaches any width pair in the default build.**
+`Target::embedded_8` has shipped a skewed pair — eight-bit word, sixteen-bit address — all along.
+
+So a width-dependent defect costs nothing standing to guard. The sweep document's "the configuration
+a defect lives in is the configuration nothing builds" **binds the feature axis and not the width
+axis**, and that distinction is now written into it.
+
+### What the instruments did this time
+
+**One measurement was invalid and caught only because its result was implausible.** A width-matrix
+run reported seven failures at `narrow-address-16` including two tests that had just passed. It had
+compiled against a source file being mutated for an unrelated experiment at that moment. Re-run
+serially on a quiescent tree: one failure, as expected. **A measurement taken while its subject is
+being edited measures neither state.**
+
+**A prediction was falsified and is recorded as such.** I predicted the failures would track the
+word/address divergence and vanish at a coherent 2/2 width. Five did. Three did not, and they turned
+out to be a different class — test harnesses reading the body in hard-coded eight-byte units.
+
+**A demonstration failed.** Extending the guard to four composite shapes, I shortened a nested
+child's stride to prove the corpus caught something nothing else did. Seventeen tests caught it. The
+corpus's value is a hypothesis about defects not yet found, and the file says so.
+
+**A fail-fast run nearly produced the opposite conclusion.** The first attempt at that measurement
+stopped after the first failing binary and showed only the corpus failing. The tree already records
+this trap for the build phase; it applies to the test phase too.
+
+### The counts, and how they were established
+
+41 to 33 distinct failures at `narrow-word-16`, across 106 binaries. **Established by diffing the
+failing sets**, not by comparing totals: a total falling by eight is equally consistent with fixing
+nine and breaking one. Nothing newly failed. The remaining 33 are seven premise groups, 14 + 6 + 8 +
+2 + 1 + 1 + 1.
+
+**The narrow widths are still not verified.** Three tests passing at a width is three tests.
+
 ## 2026-09-05 — sweeping the axes nothing builds, and three instruments that lied
 
 **The arc.** One idea pursued to its ends: *the configuration a defect lives in tends to be the
