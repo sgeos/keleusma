@@ -137,6 +137,43 @@ selects any narrow width.
 Ten of ten compile. **Nothing is broken on this axis today**, which is a different and better outcome
 than the feature sweep found, and reporting it as a near-miss would be dishonest.
 
+> **CORRECTED 2026-09-08: "compile, never run" is TRUE OF THE FEATURE CONFIGURATIONS AND FALSE OF
+> NARROW RUNTIMES.** This section says no continuous-integration job selects a narrow width, which
+> is true, and then lets that stand as "narrow widths are not exercised", which is not. **They are
+> exercised on every run**, through host-defined aliases in the DEFAULT build.
+>
+> `tests/narrow_vm.rs` defines a sixteen-bit-word runtime, a sixteen-bit word with a wide float, and
+> an eight-bit word with a sixteen-bit address -- the 6502 shape. **32 of its 37 tests drive one of
+> them**: 14 name an alias directly and 18 reach one through its helpers, leaving 5 that do not
+> (they exercise the FLOAT width on a wide-word runtime). 14 + 18 + 5 = 37.
+> `tests/composite_width_skew.rs` has 9 tests of which **8** drive a skewed runtime; the ninth is a
+> deliberate control at the DEFAULT widths, so that a failure in the other eight is attributable to
+> the skew rather than to the programs. **32 + 8 = 40 tests, in every continuous-integration run.**
+>
+> **This figure read 41 when first written, and the error is worth keeping.** The count of the skew
+> file was taken as all nine, forgetting its control. The guard added alongside it
+> (`the_narrow_runtime_coverage_claim_still_describes_the_tree`) then derived 41 as well -- by
+> counting a test in `narrow_vm.rs` whose name says it runs on a WIDE runtime, because a COMMENT
+> inside it mentions a narrow helper. **Two errors cancelled to produce agreement**, and agreement
+> is what stops a number being re-examined. It was caught only by checking the per-file split
+> against the hand-derived one rather than accepting the matching total.
+>
+> **The two claims differ in what they cover.** A host alias narrows ONE runtime inside ONE test, so
+> coverage is whatever those tests do. A `narrow-*` feature narrows the bundled `Vm` alias, so the
+> WHOLE suite runs at that width -- and that is what nothing builds, and what the failure counts in
+> this document describe. Both statements have content; stating the first as the second overstates
+> the gap and sends a reader looking for coverage that already exists.
+>
+> **How the 40 were identified, and what that would miss**: by parsing each test for the alias its
+> body CODE names or the helper it calls, with comments stripped. A test reaching a narrow runtime
+> through a deeper indirection is not counted, so 40 is a lower bound.
+>
+> **This is the third claim in this document family stated more broadly than its evidence**, and
+> naming the pattern is more useful than fixing the third quietly. The first was "the reason is not
+> a runtime defect", refuted by five failures. The second was "nothing builds this configuration",
+> true of features and false of widths, since a host alias reaches any pair. This is the third. All
+> three are mine, and all three read as flat statements where the evidence supported a narrower one.
+
 ### What it does NOT establish, which is the part that matters
 
 **The tests were not run under any narrow selector.** `cargo check --tests` establishes that a
@@ -261,9 +298,11 @@ demonstrated a defect in the virtual machine at a narrow word. Five of the failu
 them is all it took. Every configuration still compiles, which the section above establishes, but
 compiling was never the question.
 
-**It does not say they work, either.** A suite that cannot run at a width cannot vouch for it. The
-honest position is that the narrow widths are **unverified**, and now measurably so rather than
-presumptively.
+**It does not say they work, either.** A suite that cannot run at a width cannot vouch for it.
+
+**But "the narrow widths are unverified" -- as this sentence originally read -- is too broad.** What
+is unverified is the whole suite AT a narrow width. Narrow runtimes themselves are driven by 41
+tests in the default build; see the correction above.
 
 **Making the suite run at 16 bits is a real project**, not an increment: it means auditing every test
 that bakes a wide literal or a wide expectation, and deciding per test whether to widen a
