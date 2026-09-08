@@ -158,7 +158,7 @@ active plan document. They, the boundary test counts, and the git state are the 
 
 ## Git Workflow
 
-Release-branch model with a four-level hierarchy: `main` holds releases (always green; releases cut only from a green `main`); a `vX.Y.Z` version branch integrates the next version (green before merging to `main`); short-lived feature branches are cut from the version branch (intermediate commits may be red, tip green before merge) and merged back via a **no-fast-forward merge commit**; sub-feature branches are cut from and merged back into a feature. A merge proceeds on a green local `scripts/release-gate.sh`, with CI binding afterward (a red result remedied immediately). Direct commits to the version branch are allowed only for small green docs/process changes; all code flows through a feature branch. See [`docs/process/GIT_STRATEGY.md`](docs/process/GIT_STRATEGY.md) for full details. For running multiple agents concurrently (worktree isolation via `scripts/worktree.sh`, per-branch handoffs, and merge/gate serialization) see [`docs/process/PARALLEL_DEVELOPMENT.md`](docs/process/PARALLEL_DEVELOPMENT.md).
+Release-branch model with a four-level hierarchy: `main` holds releases (always green; releases cut only from a green `main`); a `vX.Y.Z` version branch integrates the next version (green before merging to `main`); short-lived feature branches are cut from the version branch (intermediate commits may be red, tip green before merge) and merged back via a **no-fast-forward merge commit**; sub-feature branches are cut from and merged back into a feature. **A merge proceeds once CI is green on a pull request from the feature branch to the version branch; the local gate no longer gates a merge** (changed 2026-08-11, because gate time is the project's bottleneck and two sessions were serialising on one machine). CI is a verified strict superset of the local gate — every local step has a CI job, plus Miri, two MSRV checks, `no_std`, the RTOS cross-build, the SDL3 examples, the LSP and the WASM playground — and it takes about 48 minutes against the local gate's 2h30m, without contending for the shared machine. A red CI result on the version branch or `main` is remedied immediately. The local gate remains the instrument for a pre-publication run (with `--miri`) and for working without a network. Direct commits to the version branch are allowed only for small green docs/process changes; all code flows through a feature branch. See [`docs/process/GIT_STRATEGY.md`](docs/process/GIT_STRATEGY.md) for full details. For running multiple agents concurrently (worktree isolation via `scripts/worktree.sh`, per-branch handoffs, and merge/gate serialization) see [`docs/process/PARALLEL_DEVELOPMENT.md`](docs/process/PARALLEL_DEVELOPMENT.md).
 
 Use scoped conventional commits: `<scope>: <imperative summary>`. Common scopes: `feat`, `fix`, `docs`, `refactor`, `chore`, `test`. Include `Co-Authored-By: Claude <noreply@anthropic.com>` when AI-assisted.
 
@@ -186,7 +186,8 @@ cargo fmt --check && cargo clippy --tests --features signatures,shell,self-host 
 # Documentation gate (broken/private intra-doc links fail here, not in test/clippy)
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
-# Pre-release gate — mirrors CI; run whole before publishing (add --miri for a release)
+# Pre-release gate — a SUBSET of CI (12 steps; CI runs those plus 10 more).
+# Run whole before publishing (add --miri for a release). It does NOT gate a merge.
 scripts/release-gate.sh
 ```
 
