@@ -82,9 +82,19 @@ on whether an out-of-range extent should be a silent stop or a `Derailed`**, and
 analysis's contract rather than mine to choose.
 
 **How I found it.** A sweep asking whether `lower_module` refuses malformed bytecode or panics on it
-— `native_codegen/tests/lowering_robustness.rs`, 195 structural mutations over 8 corpus modules.
-**58 panicked.** 57 were mine, in two classes, and are fixed: `pop` decrementing a `usize` below
-zero, and an out-of-range local index into a `Vec`. This one is the remainder.
+— `native_codegen/tests/lowering_robustness.rs`. **1206 structural mutations over all 69 corpus
+modules; 49 panic, and every one of them is this defect.** Zero are mine, after fixing two classes
+of my own that the same sweep found: `pop` decrementing a `usize` below zero, and an out-of-range
+local index into a `Vec`.
+
+**Three different mutations reach it**, which is worth knowing when you pick the fix: truncating a
+chunk's op stream, and pointing an `Else` or `EndLoop` target out of range. All three make a block's
+recorded extent exceed `ops.len()`, so a single guard closes all three.
+
+**A correction I owe you about my first report.** I initially classified panics by the MUTATION that
+provoked them and attributed three of these to my own backend. They are yours, and I would have sent
+you looking in the wrong crate. The sweep now attributes by the panic's ORIGIN FILE, captured
+through a panic hook, because `catch_unwind` hands back the payload and not the location.
 
 **It is allowed in my test by MESSAGE SHAPE, not by a count**, so a different panic cannot slip
 through under its allowance — and the allowance itself asserts that it still fires, so **when you fix

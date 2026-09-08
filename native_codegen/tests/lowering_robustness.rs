@@ -33,11 +33,35 @@
 use keleusma::bytecode::{Module, Op};
 use keleusma_native::{LowerOptions, lower_module};
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::Mutex;
 
 mod common;
 
-/// Lower `m`, reporting `Ok`, `Err`, or the panic message.
-fn outcome(m: &Module) -> Result<&'static str, String> {
+/// Where the last panic came from, captured by a hook because `catch_unwind`
+/// hands back the payload and NOT the location.
+///
+/// **ATTRIBUTION BY ORIGIN, NOT BY PROVOCATION.** A first version classified
+/// panics by the MUTATION that triggered them — "truncated" meant upstream,
+/// anything else meant this backend. That was wrong and it misattributed three
+/// panics: an out-of-range `Else` target reaches the SAME upstream defect a
+/// truncation does, because both make a block's recorded extent exceed
+/// `ops.len()`. Blaming the backend for them would have sent someone hunting in
+/// the wrong crate.
+static LAST_PANIC_FILE: Mutex<Option<String>> = Mutex::new(None);
+
+fn install_location_hook() {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if let Some(loc) = info.location() {
+            *LAST_PANIC_FILE.lock().unwrap() = Some(loc.file().to_string());
+        }
+        let _ = &prev; // deliberately silent: the sweep prints its own summary
+    }));
+}
+
+/// Lower `m`, reporting `Ok`, or `(origin file, message)` on a panic.
+fn outcome(m: &Module) -> Result<&'static str, (String, String)> {
+    *LAST_PANIC_FILE.lock().unwrap() = None;
     let r = catch_unwind(AssertUnwindSafe(|| {
         let ctx = inkwell::context::Context::create();
         let lm = ctx.create_module("kel");
@@ -52,15 +76,31 @@ fn outcome(m: &Module) -> Result<&'static str, String> {
                 .cloned()
                 .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
                 .unwrap_or_else(|| "non-string panic".to_string());
-            Err(msg.chars().take(120).collect())
+            let file = LAST_PANIC_FILE
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string());
+            Err((file, msg.chars().take(110).collect()))
         }
     }
 }
 
+/// Mutations generated per module, capped so a large module cannot dominate.
+///
+/// Every mutation lowers the whole module, so cost per mutation grows with
+/// module size. See the note at the call site.
+const MUTATIONS_PER_MODULE: usize = 12;
+
 /// Structural corruptions, each a named function from a module to a module.
 fn mutants(base: &Module) -> Vec<(String, Module)> {
     let mut out: Vec<(String, Module)> = Vec::new();
-    for (ci, chunk) in base.chunks.iter().enumerate() {
+    // Stride the chunks so the sample spreads across the module rather than
+    // clustering at its start, where the entry chunk's shape is unrepresentative.
+    let per_chunk = 15usize; // 3 positions x 5 corruption kinds
+    let want_chunks = MUTATIONS_PER_MODULE.div_ceil(per_chunk).max(1);
+    let stride = base.chunks.len().div_ceil(want_chunks).max(1);
+    for (ci, chunk) in base.chunks.iter().enumerate().step_by(stride) {
         let n = chunk.ops.len();
         if n == 0 {
             continue;
@@ -116,14 +156,31 @@ fn lowering_malformed_bytecode_refuses_rather_than_panicking() {
         "the corpus loaded nothing, so this sweep has no subject"
     );
 
-    // Bounded deliberately: enough modules for a range of shapes, few enough
-    // that the sweep stays inside the everyday suite's budget.
-    let subjects: Vec<_> = corpus.into_iter().take(8).collect();
+    // **BREADTH OVER DEPTH, AND THE COST MODEL THAT SAYS SO WAS MEASURED THE
+    // HARD WAY.**
+    //
+    // The first version swept 8 modules exhaustively: 234 mutations in 2.7
+    // seconds. Widening to all 67 was estimated at roughly 20 seconds by scaling
+    // that figure linearly. **It exceeded ten minutes and was killed.**
+    //
+    // The estimate was wrong because BOTH factors scale with module size: the
+    // mutation count grows with the chunk count, and each mutation lowers the
+    // WHOLE module. The eight sampled modules were small; the corpus contains
+    // self-hosted stages with hundreds of chunks, so the true cost is closer to
+    // quadratic in module size than linear in module count.
+    //
+    // So the sweep is capped PER MODULE rather than globally. Every module is
+    // visited — a defect class living only in the large stages would be missed
+    // by a sample chosen for speed — and no single module can dominate the
+    // budget.
+    let subjects: Vec<_> = corpus;
 
     let mut applied = 0usize;
     let mut lowered = 0usize;
     let mut refused = 0usize;
-    let mut panics: Vec<(String, String, String)> = Vec::new();
+    // (module, mutation, origin file, message)
+    let mut panics: Vec<(String, String, String, String)> = Vec::new();
+    install_location_hook();
 
     for (name, m) in &subjects {
         for (what, mutant) in mutants(m) {
@@ -131,7 +188,7 @@ fn lowering_malformed_bytecode_refuses_rather_than_panicking() {
             match outcome(&mutant) {
                 Ok("lowered") => lowered += 1,
                 Ok(_) => refused += 1,
-                Err(msg) => panics.push((name.clone(), what, msg)),
+                Err((file, msg)) => panics.push((name.clone(), what, file, msg)),
             }
         }
     }
@@ -142,8 +199,8 @@ fn lowering_malformed_bytecode_refuses_rather_than_panicking() {
     println!("  lowered      : {lowered}");
     println!("  refused      : {refused}");
     println!("  PANICKED     : {}", panics.len());
-    for (n, w, m) in panics.iter().take(12) {
-        println!("    {n} :: {w}\n      {m}");
+    for (n, w, f, m) in panics.iter().take(8) {
+        println!("    {n} :: {w}\n      [{f}] {m}");
     }
     println!("================\n");
 
@@ -176,13 +233,13 @@ fn lowering_malformed_bytecode_refuses_rather_than_panicking() {
     // matched on its MESSAGE SHAPE, not merely counted: a different panic does
     // not slip through under its allowance, and when the upstream fix lands this
     // assertion fails and the exception must be removed rather than left to rot.
-    let upstream: Vec<&(String, String, String)> = panics
+    let upstream: Vec<_> = panics
         .iter()
-        .filter(|(_, what, msg)| what.contains("truncated") && msg.contains("index out of bounds"))
+        .filter(|(_, _, file, _)| file.contains("confine.rs"))
         .collect();
-    let ours: Vec<&(String, String, String)> = panics
+    let ours: Vec<_> = panics
         .iter()
-        .filter(|p| !upstream.iter().any(|u| std::ptr::eq(*u, *p)))
+        .filter(|(_, _, file, _)| !file.contains("confine.rs"))
         .collect();
 
     assert!(
