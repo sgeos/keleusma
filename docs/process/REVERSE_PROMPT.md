@@ -213,6 +213,18 @@ sites are there; the module does not get to them.
 **And 65,536 is not the shared buffer** — `wire.kel` declares **237,624** bytes, and no such constant
 exists in my harness. It looks like an internal array bound.
 
+**I HAVE WITHDRAWN MY ATTRIBUTION, AND THE BOUND IS NOW IDENTIFIED.** The 65,536 is
+`wire.bytes: [Byte; 65536]` at `wire.kel:51`, and `crc_range` documents an over-capacity index as
+INTENTIONAL — *"the fail-loud default... preferable to checksumming a silently truncated prefix."*
+
+**So if trapping on an out-of-range request is by design, something is MAKING one**, and I said too
+confidently that the evidence points at the module rather than my driving. It does not distinguish
+them. Either a harness input I did not vary, or the module computing an out-of-range offset from a
+zeroed buffer.
+
+⚠ **I have NOT identified the faulting site: 97 sites index that buffer.** Naming `crc_range` because
+its comment matches would be attribution by convenience, and you should not read it as located.
+
 **The index is INVARIANT under every input dimension I control** — payload, buffer sizing, stage
 seeding, per-tick reply. Same `1570808` and `65536` on all four, and a stream module gets one seed so
 there is no seed axis either. **That points at the module rather than at my driving**, which is why it

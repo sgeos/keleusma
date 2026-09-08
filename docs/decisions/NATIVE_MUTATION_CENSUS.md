@@ -107,6 +107,26 @@
 > `src/selfhost/kel/` belongs to the `v0.2.3` line and is read-only here, so this is REPORTED rather
 > than repaired — see `REVERSE_PROMPT.md`.
 >
+> 🔎 **THE BOUND IS IDENTIFIED, AND MY EARLIER ATTRIBUTION IS WITHDRAWN (2026-09-07).**
+>
+> The 65,536 is `wire.bytes: [Byte; 65536]`, declared at `src/selfhost/kel/wire.kel:51`. **And the
+> module documents an over-capacity index as INTENTIONAL**: `crc_range` carries *"An `n` beyond the
+> capacity overruns the cap and traps, which is the fail-loud default and is preferable to
+> checksumming a silently truncated prefix."*
+>
+> **That withdraws the conclusion below that the evidence "points at the module rather than the
+> driving".** If trapping on an out-of-range request is the designed behaviour, then something is
+> MAKING an out-of-range request, and the module is behaving to specification. The two candidates are
+> not distinguished by anything measured so far:
+>
+> - a harness input **not** among the four varied, or
+> - the module's own logic computing an out-of-range offset from a zeroed buffer.
+>
+> ⚠ **THE FAULTING SITE IS NOT IDENTIFIED. 97 sites index `wire.bytes`**, and naming `crc_range`
+> because its comment is the one that matches would be attribution by convenience. What is
+> established is the BUFFER and the DESIGN INTENT for at least one class of over-index — not which
+> site traps.
+>
 > **THE INDEX IS INVARIANT UNDER EVERY INPUT DIMENSION THE HARNESS CONTROLS** — payload contents,
 > buffer sizing, stage seeding, and the per-tick reply. `1570808` and `65536` are the same on all
 > four. A stream module is driven with ONE seed, so there is no seed axis to vary either. **That
