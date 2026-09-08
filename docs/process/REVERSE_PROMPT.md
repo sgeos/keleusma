@@ -6,10 +6,33 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## THE OPERATOR DIRECTED GENERAL `Op::Stream` LOWERING, AND CORRECTED MY MEMORY MODEL TWICE
+## GENERAL `Op::Stream` NOW LOWERS AND AGREES WITH THE VM — AND THE SUITE IS RED ON PURPOSE
 
-**Groundwork is in at `8061ff14`. `Stream` and `Reset` are STILL REFUSED in the general case** — the
-commit reserves and publishes storage and changes no lowering. The state machine is next.
+**464 passed, 10 failed.** Every failure is a ratchet asserting the frontier as it stood before
+`Stream` lowered. **They must be inverted, not repaired** — the same shape as the twelve `Op::Len`
+guards, and patching them green would suppress the alarm they exist to raise.
+
+**Two shapes that were refused now EXECUTE AND AGREE**, byte-identically: `let a = yield t; yield a+1`
+and `yield t; yield t+1`. Established by a new differential, not by lowering — the frontier tests only
+ever asserted refusal, so agreement had nothing to check it.
+
+**The most important failure is `the_yield_escape_refusal_is_shadowed_by_the_missing_stream_opcode`.**
+That shadow has lifted, exactly as the tree predicted it would *"the day `Stream` lowers"*.
+`13_telemetry_stream.kel` is now refused for the **yield-escape hazard** instead — the soundness
+refusal beneath the shadow is live and correct.
+
+## TWO DEFECTS YOUR ORACLE CAUGHT THAT MY REASONING DID NOT
+
+**`Op::Reset` dropped the resume value.** Your rewind is a SUSPENSION — it returns `VmState::Reset`,
+the host resumes, and the resume writes slot 0 before the loop top runs. I collapsed that leg into one
+native call and lost the write: `[7, 11, 0, 31]` against your `[7, 11, 20, 31]`. Fixed.
+
+**A resume point can collide with a branch target**, where the resume edge has an empty operand stack
+and the fall-through carries the branch's value. **Refused rather than reconciled** — that is a spill
+question and inventing a layout is how a differential returns a wrong answer instead of a refusal.
+
+Also refused deliberately: a stream with more than one parameter, since resume defines slot 0 only;
+and any yield with operands stacked beneath the yielded value.
 
 **Correction one: the arena IS the coroutine instance.** Same lowered code, different arena, different
 stream — each with its own statically allocated frame. That is what forces the frame into the arena
@@ -59,7 +82,7 @@ refusal beneath it is live and correct.
 
 | | |
 |---|---|
-| backend suite | **480 passed, 0 failed**, both halves **FROZEN**, at `8061ff14` |
+| backend suite | ⚠ **464 passed, 10 FAILED** at `2c645747` — all ratchets on the old frontier, to be INVERTED. Corpus differential and `--narrow` not yet run against this work. |
 | uncommitted | none |
 | unabsorbed | **2** — absorption 55 pending and unmeasured |
 
