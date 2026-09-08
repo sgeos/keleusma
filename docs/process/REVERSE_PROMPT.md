@@ -102,6 +102,23 @@ failing binary, and showed only the corpus failing — which would have supporte
 conclusion. It was a lower bound, not a result. The tree already records this trap for the build
 phase; it applies to the test phase too.
 
+## TWO PROCESS FINDINGS FROM THE SESSION'S SECOND HALF
+
+**A policy change reached one document and stopped.** `GIT_STRATEGY.md` has said since 2026-08-11
+that continuous integration gates feature branches and the local gate does not. Five other documents
+still said the opposite, including the one that directs an autonomous session. **That is why I spent
+2h30m of the contended machine on a gate CI had already superseded in 48 minutes**, and then reported
+the retired rule to you as policy. All are corrected; `DESIGN_JOURNAL.md` keeps the old wording
+because it is an append-only record of what was believed then.
+
+**The census's last unexamined group was fired by this session's own defect.** Group A is the
+conversion every `?` over the flat scalar codec passes through. It fired twice in the pre-repair
+`narrow-word-16` run, from ordinary programs, as `InvalidBytecode("flat scalar codec: OutOfBounds")`.
+The repair closes that route; the class stays live, because the site's reach is every such `?` and the
+census's instrument cannot enumerate them. **Its message says the bytecode is malformed when the
+artefact was fine** — the same misattribution group F records for the hot-swap site, and equally not
+repaired, because changing which variant a public API returns is a breaking change.
+
 ## THE FOUR DECISIONS ARE STILL YOURS, AND NONE MOVED
 
 Stated in full at the top of [`HANDOFF.md`](./HANDOFF.md). Nothing in this session implements any of
@@ -126,6 +143,14 @@ A float-using module verifies, loads, and traps `InvalidBytecode` on a runtime b
 Nothing large without an answer to the four. The self-directed work with the clearest value left is
 the remaining narrow-width groups, which are premise repairs and therefore a decision about whether
 the suite should run at a narrow width at all — **that decision is not mine and I have not taken
-it.** The two censuses (`InvalidBytecode` at 34 of 46 sites, discard arms at 17 of 19) remain open;
-my own assessment is that their remainders are low value, and that assessment is recorded in the
-documents rather than acted on silently.
+it.**
+
+**Both censuses moved since the paragraph above was first written.** The discard-arm census is
+**CLOSED at 19 of 19**: its last two arms are a `_ => 0` fallback that cannot fire, because the only
+slots it reads are declared `Word` and a `Word` slot yields an `Int` and nothing else. They are now
+the assertion their sibling closure already was.
+
+The `InvalidBytecode` census stands at **35 of 46**, and **should not be driven to 46**: its own
+methodology says probing every member of a class is not a better use of the same effort, and the
+eleven that remain are siblings inside classes that already carry verdicts, plus host-contract
+surfaces.
