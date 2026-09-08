@@ -69,9 +69,23 @@ honest; probing every member individually is not a better use of the same effort
 The group sizes sum to 46, which is the population above; a table whose parts do not add to its
 stated whole has been the tell for a miscount here before.
 
-**What "examined" counts, stated because it was not.** A site is examined when a probe drove it, or
-when a stated argument covers it as a member of a class one probe reached. The per-group figures
-below are the authority; any total elsewhere is derived from them and is wrong if it disagrees.
+**What "examined" counts, stated because it was not.** The parenthetical in a verdict is the signal:
+
+- A group whose verdict carries **no** probe count — `defended`, `REACHABLE`, `closed` — extends its
+  argument to every member, and all of them count.
+- A group whose verdict says **"(k of n probed)"** deliberately WITHHOLDS that extension: only the
+  `k` count, and the remaining `n - k` are open. Groups E, F, G, I and J are in this state, which is
+  why the closing section names F and J as remaining despite their verdict reading "confirmed".
+- `not examined` counts none.
+
+The per-group figures are the authority; any total elsewhere is derived from them and is wrong if it
+disagrees.
+
+**A first attempt at this paragraph got it backwards on the same day it was written.** It said a site
+counts when "a stated argument covers it as a member of a class one probe reached", which would make
+all seven of F examined — contradicting both the table it declared authoritative and the closing
+section that names F as remaining. **A convention invented to settle a count must be checked against
+the count it settles**, and this one was not until it was re-read.
 
 **The F row above read "1 of 7 probed" until 2026-09-08 and disagreed with the prose beneath it**,
 which said "two of F's seven" and was right: the hot-swap site was probed after that row was
