@@ -6,293 +6,68 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## THE RED SUITE IS RESOLVED, AND IT WAS RESOLVED THE WAY THE GUARDS ASKED
-
-Twelve tests fired when your `Op::Len` root repair arrived. **None was patched green.** Each named in
-its own message what to do when it fired, and that is what was done: four inverted, four retired as
-superseded, one verdict restated, two census figures re-measured with their causes named, and one
-corpus claim amended.
-
-## THE ANSWER TO THE REOPENED QUESTION: NO PRODUCER FOUND
-
-Four methods, each carrying a control that proves it can see a real occurrence.
-
-| leg | result |
-|---|---|
-| detector control | reports TRUE on an injected occurrence, so no negative is vacuous |
-| construct battery | 14 probed, 10 reach codegen, **0 emit** |
-| corpus sweep | **69 modules across four roots, 0 carry it** |
-| compiler source scan | 11 occurrences, **all comments or absence assertions** |
-
-**Not written as unreachable.** This tree carries a retraction on that word from `Op::IsStruct`, and
-the same discipline applies here. `docs/decisions/OP_LEN_PRODUCER_CENSUS.md` records the search, its
-limits, and what it cannot establish.
-
-## I RECORDED YOUR MECHANISM WRONGLY, AND THE ERROR WAS MINE END TO END
-
-My handoff and this file both said *"`static_for_in_length` gained an `Expr::If` arm"*. **It did not,
-and it still has none.** The fold comes from that function's fallback to `infer_expr_type`, which
-consults the authoritative per-span type table.
-
-**`OP_LEN_ROOT_REPAIR.md` states this correctly, under a heading admitting the prediction had been
-wrong.** I restated it incorrectly from a document I had already absorbed, without reading it, and it
-propagated into three artefacts before anyone checked the source. Corrected everywhere it appeared.
-
-## THE FINDING IS LARGER THAN THE FORM YOU REPAIRED
-
-**Both `Op::Len` emission sites in `src/compiler.rs` are gone**, so the question was never which
-construct reaches the opcode. Worth knowing if the ISA question ever comes up: the opcode now has no
-producer in the reference compiler, and the machine's refusal of it defends only decoded or
-hand-built modules. **I am not proposing removal.** That is a wire change and yours to call, and this
-line claimed producerless once before and was falsified within the hour.
-
-## A PREDICTION OF MINE RESOLVED, AND ITS PREMISE IS WHAT FAILED
-
-I predicted the corpus differential would panic once every refusal in `refused_witness.kel` lowered
-while the module still could not take an arena. **It did not.** The module now lowers completely,
-takes 600 bytes, loads, and runs to `Int(4)` — because the property that emitted `Op::Len` was the
-property that denied the bound, which is what the file argued from the start. The argument held; the
-contingency I planned around never arose.
-
-## A FIGURE THAT MOVED, AND WHAT IT DOES NOT MEAN
-
-Corpus refusals **2 → 1**. The backend did **not** learn to lower `Op::Len` — its input vanished.
-Reading that as coverage would overstate the backend. `65 of 66` stands, for a new reason.
-
-## The design fault was mine and is repaired structurally
-
-**Twelve tests, one witness** — the coupling that rotted `Op::Call` and `Op::IsStruct` before it. The
-witness text now has one definition and the verdict one owner, so the next fold invalidates one place
-rather than twelve.
-
-## TWO MORE THINGS SINCE, AND ONE IS ABOUT YOUR MANIFEST HABIT RATHER THAN MINE
-
-**The backend used your `floats` feature without declaring it.** Its manifest asked for `compile` and
-`self-host`; `self-host` implies `compile` and `verify`, so those were declared, but `floats` arrived
-only because default features were never disabled. Now declared, with a ratchet.
-
-**Mutation-tested, and the result corrected my own brief.** I wrote that losing the feature would make
-the float tests fail loudly. It is louder: the package does not COMPILE, because `ScalarKind` has no
-`Float` variant. So the behavioural probe cannot catch the realistic case and the declaration ratchet
-is the guard that does the work — recorded where the test lives rather than left sounding stronger.
-
-**Not the same as your Group B finding**, and I have kept them apart deliberately. A float module that
-verifies, LOADS, and then traps on a no-floats runtime is a hole in a load-time guarantee. Mine is a
-manifest that under-describes itself and fails at build time.
-
-## ABSORPTION 52 IS IN, AND THE COUNT IN MY OWN HANDOFF WAS ALREADY WRONG
-
-**Eighteen commits, not the fourteen my handoff recorded** — you advanced while I worked, which is
-what should happen. A count in a handoff is a timestamp, not a fact.
-
-Predicted before merging: zero movement in `native_codegen`, since nothing touched `src/` or a corpus
-root; three conflicts. **Measured: 477 passed, 0 failed on a frozen tree — the pass prediction exact.
-The conflict prediction over-shot: one, not three.** I predicted from which files both lines write
-rather than from where in them, and the finer question is the one that decides. Both `TASKLOG.md`
-notes are kept; neither line's record was discarded.
-
-## AND THE ONE YOU SHOULD READ FIRST: A CENSUS INSTRUMENT WAS FABRICATING COVERAGE
-
-`NATIVE_MUTATION_CENSUS.md` said **"no hole open"** and was marked expensive to re-establish — 12h51m
-had bought 5 of 25 mutations before being killed, projecting ~60 hours.
-
-**The sweep could not have produced a valid verdict since 2026-08-21.** It drives the corpus
-differential one module at a time; on that date the test gained CORPUS-POPULATION assertions that a
-one-module run cannot satisfy. **The sweep classifies on exit status and reads non-zero as DETECTED**,
-so it would have scored every module as detecting every mutation and written a confident
-**"no hole open" that was an artefact of its own harness.** Deterministic, not a flake.
-
-**Repaired** by separating population guards from consistency guards — the latter hold at any
-population and are NOT skipped. Proven both ways: with a population guard made unsatisfiable, a full
-run fails and a filtered run passes.
-
-**And the cost was 400x too high for a reason the control makes plain**: one real module cost 385s
-unfiltered, and a NONEXISTENT module name cost 387s. Almost the entire per-module cost was tests that
-cannot detect a mutation. **The oracle is NOT narrowed** — that would be the dangerous change, and the
-sweep already selected modules by opcode.
-
-## SO ROUND ONE IS RE-RUN, IN 42 MINUTES, AND THE RESULT IS NARROWER THAN ITS HEADLINE
-
-**No new hole.** The undetected set is exactly `ByteToWord` and `PushImmediate`, both already
-established here as non-holes. Forty commits of emitter drift opened nothing in what round one tests.
-
-**But `Return` came back UNPLACEABLE, and that is the real finding.** Its mutation expected
-`st.b.build_return(Some(&v))`; the emitter now calls `build_typed_return(...)`. **It had silently
-stopped applying, so 52 sites carried no coverage evidence at all.** The tool REFUSED rather than
-reporting a false negative — without that check it would have read as a hole. Re-registered and
-re-run: **DETECTED by 39/61.**
-
-**Four opcodes yield no evidence either way** — `BitAnd`, `BitOr`, `BitXor`, `Shr` abort lowering
-rather than changing behaviour. *"UNDETECTED: none"* is true and incomplete.
-
-**Two margins are thin enough to name**: `Shl` 1/3 and `CmpLe` 2/11. A single corpus change takes
-`Shl` to zero, and a binary verdict would not show that eroding.
-
-## ALL NINE DRIFTED MUTATIONS ARE RESTORED, AND ROUND THREE IS NOW 17/17
-
-Every mutation emitter drift had retired is re-registered and detected: `Return` 39/61, `Div` 10/14,
-`Mod` 12/14, `GetData` 24/29, `SetData` 25/30, `GetDataIndexed` 11/16, `SetDataIndexed` 11/14,
-`Yield` 12/29, `GetIndex` 3/7. **Full round three: 17 of 17 place, 17 of 17 detected, zero
-unplaceable, zero undetected.** Emitter byte-identical.
-
-**Every drift was a reformatting or signature change, not a behavioural one** — `resolve_shared_*`
-gained `float_bytes`, `build_return` became `build_typed_return`, `SK::Int` folded into
-`SK::Int | SK::Fixed`. **No opcode had stopped being lowered.** Expect this again whenever the
-emitter is refactored; only the placement check surfaces it.
-
-**And the four that looked like bad mutations are a CORPUS gap.** `BitAnd`, `BitOr`, `BitXor` and
-`Shr` reported *NOT SEMANTIC (lowering aborted)* in two rounds, which reads as "redesign these
-mutations". **Each is carried by exactly one module, `wire.kel`, which is EXEMPT and never executes** —
-so no mutation of them could ever be detected, at any shape. The registered mutations are fine. The
-tool now says `NO EXECUTING WITNESS (corpus gap, not a mutation defect)` instead of blaming them.
-This also explains `Shl` 1/3: one of its three carrying modules is `wire.kel`.
-
-## AND THE TABLES NOW ANNOUNCE THEIR OWN DECAY
-
-Nine mutations rotted silently over weeks because only the sweep could see it and the sweep cost sixty
-hours. **Placement is textual**, so it is now an ordinary test: **53 of 53 mutations across all six
-tables place exactly once**, checked in a fraction of a second, with a must-fire control that must
-also NAME the entry that rotted.
-
-**Placing is necessary and never sufficient**, and the test says so itself. A mutation can place and
-still be worthless if it aborts lowering or its opcode has no executing witness.
-
-**Closing it needs a CORPUS change, not a table change** — an executing module exercising the bitwise
-and shift operators. **Recorded, not undertaken**: adding corpus files to chase a coverage figure is
-how a sweep becomes a demonstration, and that call is yours. Eight opcodes — `Break`, `Else`, `EndIf`, `EndLoop`, `Loop`, `PopN`, `Reset`, `Stream` —
-are never perturbed at all. Four detection margins are one or two modules wide.
-
-## ⚠ ONE FOR YOU, FOUND BY ACCIDENT: `--features self-host` ALONE DOES NOT BUILD
-
-```
-cargo build -p keleusma --no-default-features --features self-host
-error[E0599]: no variant ... named `Float` found for enum `ScalarKind`
-   --> src/selfhost/mod.rs:337:26
-```
-
-**One line, and `floats` is exactly the missing piece** — `self-host,floats` builds with zero errors.
-It is the FEATURE, not a combination: `compile,self-host` fails for the same single reason, and your
-repaired `compile,verify` builds cleanly.
-
-**Nothing caught it because CI's self-host job is ADDITIVE to the defaults**, so floats is present and
-the job is green. **That is your own recorded pattern** — *"a job named for a feature does not
-necessarily cover that feature"* — and your `FEATURE_COMBINATION_SWEEP.md` named `self-host`
-specifically as unswept space. It is broken.
-
-**Found by accident, not by looking.** I mutation-tested my own manifest declaration by adding
-`default-features = false`, and the build failed in `keleusma` rather than in the backend.
-
-**Scoped: this is a BUILD failure, loud and immediate. It is NOT your Group B load-time hole**, where
-a float module verifies, loads and then traps. I have kept those apart deliberately.
-
-**And it may not need gating at all.** If the self-hosted pipeline legitimately requires floats, the
-honest repair may be to declare that dependency instead. **That is your design judgement**;
-`docs/decisions/SELF_HOST_WITHOUT_FLOATS.md` reports the fact and does not prescribe the fix. I did
-not touch `src/`, and did not add a CI job — you recorded that per-push cost is the operator's call.
-
-## A SECOND ONE FOR YOU, AND IT GATES FOUR OPCODES' MUTATION COVERAGE
-
-**`wire.kel` faults under the corpus differential**: *"the VM refuses to resume it:
-`IndexOutOfBounds(1570808, 65536)`"*. It is therefore exempt as FAULT-COMPARABLE — a real comparison,
-both sides faulting identically — but never an EXECUTION.
-
-**That is what gates `BitAnd`, `BitOr`, `BitXor` and `Shr`.** Each is carried by exactly one corpus
-module, and it is this one, so no mutation of them can be detected. Your own harness comment records
-that a payload was added precisely to reach *"131 sites of `BitAnd`, `BitOr`, `Shl` and `Shr`"* — the
-sites are there; the module does not get to them.
-
-**Three hypotheses tested, all FALSE**, so this is not the first plausible story:
-
-| hypothesis | verdict |
-|---|---|
-| the harness payload drives it into the fault | **false** — an empty payload faults byte-identically |
-| the harness under-sizes the shared buffer | **false** — it sizes from the module's own `shared_data_bytes` |
-| a stage-seed path clones a smaller buffer | **false** — `wire.kel` has no stage seed |
-| the per-tick reply value drives it there | **false** — replying `Int(0)` faults byte-identically |
-
-**And 65,536 is not the shared buffer** — `wire.kel` declares **237,624** bytes, and no such constant
-exists in my harness. It looks like an internal array bound.
-
-**I HAVE WITHDRAWN MY ATTRIBUTION, AND THE BOUND IS NOW IDENTIFIED.** The 65,536 is
-`wire.bytes: [Byte; 65536]` at `wire.kel:51`, and `crc_range` documents an over-capacity index as
-INTENTIONAL — *"the fail-loud default... preferable to checksumming a silently truncated prefix."*
-
-**So if trapping on an out-of-range request is by design, something is MAKING one**, and I said too
-confidently that the evidence points at the module rather than my driving. It does not distinguish
-them. Either a harness input I did not vary, or the module computing an out-of-range offset from a
-zeroed buffer.
-
-**NARROWED BY KIND**: the VM raises this variant from exactly two arms, `GetDataIndexed` and
-`SetDataIndexed`, so it is a **shared-data indexed access** — consistent with `wire.bytes` being a
-field of `shared data wire`, which also confirms what the 65,536 is.
-
-**And I cannot narrow it further.** `VmError::IndexOutOfBounds(i64, usize)` carries index and bound
-and **no location** — no chunk, no offset — and both arms use the same variant, so it does not even
-separate the read from the write. Localising needs instrumentation in `src/vm.rs`, which is yours.
-**If you want the site, that is the cheapest route and it is one you can take and I cannot.**
-
-⚠ **I have NOT identified the faulting site: 97 sites index that buffer.** Naming `crc_range` because
-its comment matches would be attribution by convenience, and you should not read it as located.
-
-**The index is INVARIANT under every input dimension I control** — payload, buffer sizing, stage
-seeding, per-tick reply. Same `1570808` and `65536` on all four, and a stream module gets one seed so
-there is no seed axis either. **That points at the module rather than at my driving**, which is why it
-is yours. *"Invariant under the four dimensions I varied" is not "invariant under all inputs"* — that
-is what I measured, at its actual strength.
-
-**I am NOT claiming a defect in `wire.kel`.** It may be faulting correctly on input it was never meant
-to receive, in which case my harness's driving is the thing to change — and I would rather you tell me
-that than have me guess. `src/selfhost/kel/` is yours and read-only to me, so I have reported the
-measurement and not touched it.
-
-## THE ORDER-1 GATE: A DECISION FOR YOU, WITH THE FIGURES ASSEMBLED
-
-The roadmap's order-1 gate reads *"the self-hosted compiler's own bytecode runs correctly as native
-code, differential-tested against the VM"*, and the harness has always said **nothing has ever
-declared whether it is met**. It still does not — but the position is now written down so the decision
-is a choice between named readings rather than a re-derivation.
-
-**12 stages: 10 EXECUTE AND AGREE, 1 vacuous, 1 exempt, ZERO DISAGREE.** Strength is per TICK, not per
-argument vector: **2460 result comparisons**, 180 to 300 per stage, thinnest seeded stage at three
-subjects, none declined.
-
-**Neither non-executing stage is a backend failure.** `verify_datalayout.kel` cannot be driven at all
-by joint agreement — its verdict accumulates across three differently-encoded phases. `wire.kel`
-faults **identically on both sides**, so the two agree about the fault; what is missing is an
-execution, not an agreement.
-
-**The judgement I did not make**: does "runs correctly" require a stage to EXECUTE, or is agreeing
-about a fault, plus being undriveable by design, consistent with the gate? Strict reading says 10 of
-12 and may never be satisfiable; agreement reading says 11 of 12; divergence reading says nothing
-diverges, so it is met.
-
-**I kept the harness's caution deliberately.** Its comment records that *"eleven of twelve agree"* is
-the shape of headline it already inflated once. **A milestone declared met on the wrong reading is
-worse than one left open.** `docs/decisions/ORDER_1_GATE_ASSESSMENT.md`.
-
-## For whoever runs this suite
-
-`native_codegen/tools/backend-gate.sh` — fmt, clippy and both halves, each frozen-checked. The suite
-**must** be split: together the halves exceed the harness's background ceiling and the run is killed
-mid-flight. `--narrow` selects the second float configuration.
+## THE OPERATOR DIRECTED GENERAL `Op::Stream` LOWERING, AND CORRECTED MY MEMORY MODEL TWICE
+
+**Groundwork is in at `8061ff14`. `Stream` and `Reset` are STILL REFUSED in the general case** — the
+commit reserves and publishes storage and changes no lowering. The state machine is next.
+
+**Correction one: the arena IS the coroutine instance.** Same lowered code, different arena, different
+stream — each with its own statically allocated frame. That is what forces the frame into the arena
+rather than into globals or a machine frame, and it makes multiple instances free. I had not
+articulated it, and it is the constraint the whole design hangs on. A future caller may hand the same
+coroutine a different arena.
+
+**Correction two: loops may reuse memory.** I claimed fixed offsets were not equivalent to a bump
+arena for a site inside an inner loop. **Wrong** — I assumed a heap discipline. Under a stack
+discipline with a per-iteration pop, every iteration reuses the same addresses, which is what fixed
+offsets give. Reasoning is to be done in bump-arena terms; fixed offsets are an implementation detail.
+
+**The model, verified against the code rather than sketched**: the arena is double-ended, persistent
+`[0, X)` at the bottom, one ephemeral region ascending after it and one descending from the top.
+`.bss` and the resume state go persistent; locals and composites go ephemeral and are cleared at
+`Reset`. **`Op::Reset` should clear BOTH ephemeral regions** — the VM clears only the top, which is
+vacuous for it since it never allocates from the bottom, but not for this backend, which does.
+
+## A NEAR-MISS YOU SHOULD KNOW ABOUT
+
+Extending `needs_region` to every stream changed the signature of the DEGENERATE chunks too, and
+`yield_sequence.rs` calls those through a hand-written `extern "C" fn(i64) -> i64`. The extra
+parameters became garbage from registers the callee never reads, and **ten tests passed on the calling
+convention's good manners.** It would have stayed green until a stream chunk first dereferenced one.
+**A signature change is invisible to a harness that names the signature itself.** Confined to
+non-degenerate streams.
+
+## AND ONE ATTEMPT I REVERTED RATHER THAN KEPT
+
+Lowering `Stream`/`Reset` over the existing callback `Yield` makes a divergent `loop fn` spin inside
+native code with no way for you to stop it. **Lowers but does not work is worse than an honest
+refusal.** It did prove one thing: with `Stream` lowered, `13_telemetry_stream.kel` falls straight
+through to the **yield-escape refusal** — so that shadow lifts exactly as predicted and the soundness
+refusal beneath it is live and correct.
+
+## Yours, unchanged
+
+1. **`f16`** — blocked on your reference `f16` arithmetic.
+2. **Publication**, held.
+3. **`--features self-host` alone does not build** — `src/selfhost/mod.rs:337` names `ScalarKind::Float`
+   ungated. Reported, not repaired; `src/` is yours.
+4. **`wire.kel` faults** `IndexOutOfBounds(1570808, 65536)` under the differential, which gates
+   mutation coverage for four opcodes. Localising it needs instrumentation in `src/vm.rs` — **the
+   cheapest route, and one you can take and I cannot.**
 
 ## State
 
 | | |
 |---|---|
-| backend suite | **480 passed, 0 failed** in BOTH float configurations, each run reporting **FROZEN**, re-measured at `e52293d2` rather than carried from an earlier stamp |
+| backend suite | **480 passed, 0 failed**, both halves **FROZEN**, at `8061ff14` |
 | uncommitted | none |
-| unabsorbed | **zero** — absorption 54 in, every prediction exact again: no `src/` contact, zero conflicts, zero movement, and neither of my two filed reports closed by it (checked, not assumed) |
+| unabsorbed | **2** — absorption 55 pending and unmeasured |
 
-## Yours, unchanged
+## For whoever runs this suite
 
-1. **`f16`** — blocked on **reference `f16` arithmetic**, not load acceptance.
-2. **Publication**, held.
-
-## For whoever resumes
-
-Validate `docs/process/handoffs/v0.3.0.md` by running its ancestry block. Scope kill patterns to
-`$(pwd)/target/debug/deps`. Count with `--no-fail-fast`.
+`native_codegen/tools/backend-gate.sh` — fmt, clippy and both halves, each frozen-checked. The suite
+**must** be split: together the halves exceed the harness's background ceiling. `--narrow` selects the
+second float configuration.
 
 ---
 ---
