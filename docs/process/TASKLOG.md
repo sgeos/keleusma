@@ -54,7 +54,10 @@ Current sprint source of truth.
 >
 > **The suite assumes a 64-bit host.** At `narrow-word-16`: 89 binaries pass, 15 fail, 37 distinct
 > failures, sharing a premise rather than a cause. The perf canary's own constants exceed 16 bits.
-> The narrow widths are unverified — not shown broken, not shown working.
+> The whole suite AT a narrow width is unverified — not shown broken, not shown working.
+> (Corrected 2026-09-08: this read "the narrow widths are unverified". Narrow RUNTIMES are
+> driven by 40 tests in the default build; what nothing runs is the suite as a whole at a
+> narrow width.)
 >
 > **The perf canary could not fail**: its ceiling was asserted after the timed call returned, so it
 > spun 57 minutes instead of tripping. Now bounded, mutation-tested three ways.

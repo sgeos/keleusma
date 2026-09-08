@@ -125,11 +125,17 @@ One pass over one gap:
    only before a planned compaction, and it is stamped with the current commit (see Guardrails).
 6. **Commit** with a scoped conventional message ending in the
    `Co-Authored-By: Claude ...` line.
-7. **Merge at a natural point**: when the full gate (`scripts/release-gate.sh`) is green, merge the
-   **GATED COMMIT** into `v0.2.3` with a **no-fast-forward merge commit** (`git merge --no-ff
-   <gated-commit>`), push, and confirm CI is green. The green local gate authorizes the merge; CI is
-   the binding authority afterward, so a red CI result is remedied immediately (see
-   [GIT_STRATEGY.md](./GIT_STRATEGY.md#definition-of-green)). The no-ff merge keeps the `v0.2.3`
+7. **Merge at a natural point**: **when CI is green on a pull request** from the feature branch to
+   `v0.2.3`, merge with a **no-fast-forward merge commit** (`git merge --no-ff <commit>`), push, and
+   keep CI green afterward. **CI authorizes the merge; the local gate does not** (changed
+   2026-08-11 -- see [GIT_STRATEGY.md](./GIT_STRATEGY.md#definition-of-green), which records that
+   gate time was the bottleneck and that CI is a verified strict superset of the local gate). A red
+   CI result on `v0.2.3` is remedied immediately.
+
+   **This step said "the green local gate authorizes the merge" until 2026-09-08.** That was the
+   pre-2026-08-11 rule, and it survived here because the policy change reached `GIT_STRATEGY.md`
+   and no other document. A session following it spends about 2h30m of the contended machine on a
+   gate CI has already superseded in about 48 minutes. The no-ff merge keeps the `v0.2.3`
    first-parent history green while preserving the per-increment commits on the merged bubble.
 
    **DO NOT REBASE BEFORE MERGING.** This step used to say to rebase onto the current `v0.2.3` tip

@@ -480,7 +480,10 @@ branch. It performs the whole serialization sequence and refuses to merge if the
 trunk moved under it:
 
 1. Rebase the branch onto the current trunk tip (`git fetch` + `git rebase origin/v0.2.3`).
-2. Run `scripts/release-gate.sh` to green (the mandatory pre-merge gate).
+2. Verify the branch. **CI on a pull request is what authorizes a merge** (changed 2026-08-11;
+   see [GIT_STRATEGY.md](./GIT_STRATEGY.md#definition-of-green)). `scripts/release-gate.sh` is
+   available for a local pass when working offline or before a release, and this step called it
+   "the mandatory pre-merge gate" until 2026-09-08, which was the superseded rule.
 3. Re-check the trunk tip. If it moved while the gate ran, another agent merged
    first — abort and re-run (which rebases onto the new tip and re-gates).
 4. Fast-forward merge and push.
