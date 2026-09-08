@@ -106,7 +106,7 @@ always-current, so it must be able to report itself stale rather than mislead a 
 >
 > **The 2026-08-11 gate change reached one document and stopped.** `GIT_STRATEGY.md` says CI gates
 > feature branches and the local gate does not. Five other documents still said otherwise, so a
-> session spent 2h30m of the contended machine on a gate CI had already superseded in 48 minutes. All
+> session spent 2h30m of the contended machine on a gate CI had already superseded in about an hour. All
 > are corrected; `DESIGN_JOURNAL.md` keeps the old rule because it is an append-only record.
 >
 > **This file told agents to validate it by a hash match**, which its own Validity section forbids and
@@ -465,7 +465,7 @@ signals over the wrong feature sets are still the wrong feature sets.**
 ## THE WORKFLOW: CI GATES FEATURE BRANCHES
 
 **Do not run `scripts/release-gate.sh` to gate a merge.** Operator decision, 2026-08-11. CI is a
-verified strict superset and runs in ~48 minutes against ~2h30m.
+verified strict superset and runs in ~61 minutes against ~2h30m (measured 2026-09-08; it said 48).
 
 1. Cut the feature branch **as the first action**, and `git status` before committing.
 2. **Cut sequential branches ONE AT A TIME.** `DESIGN_JOURNAL.md`, `REVERSE_PROMPT.md` and
