@@ -197,6 +197,65 @@ fn align_up(n: u32) -> u32 {
 /// So the gap is real and closing it is right, but **it is not free and it is not
 /// only about bytes.** See `docs/decisions/NATIVE_BOUNDS_TRANSFER.md` and the
 /// `v0.3.0` handoff's Workstream E notes.
+/// Ephemeral bytes a stream chunk reserves for its LOCALS, ahead of any
+/// composite site.
+///
+/// # Why locals move off the machine stack for a stream
+///
+/// A resumable stream returns at each `yield` and re-enters at the same point,
+/// so a local live across that boundary cannot be a machine-stack `alloca` — the
+/// frame is gone. It lives in the arena instead, which is also what makes a
+/// coroutine INSTANCE work: the arena IS the instance, so the same lowered code
+/// driven with two arenas is two independent streams.
+///
+/// **Ephemeral, not persistent**, because `Op::Reset` clears every local, and
+/// clearing is what an ephemeral region does. The resume-state word is the other
+/// half of the frame and is `.bss`-like, so it lives in the PERSISTENT region;
+/// see [`persistent_supplement_bytes`].
+///
+/// Reserved for every stream chunk, including the degenerate shape that does not
+/// need it. A predicate that disagreed with the lowering's own would be a worse
+/// defect than a few wasted bytes.
+///
+/// # Placed AFTER the composite sites, not before
+///
+/// A first attempt put this prefix at offset zero and broke three planner unit
+/// tests that assert clean properties of the COMPOSITE map — *"one site is
+/// placed at the base"* among them. Those tests were right: `plan_chunk_region`
+/// is about construction sites, and shifting them to make room for something
+/// else muddies what the pass means. The locals block therefore sits at
+/// `plan_chunk_region(chunk).bytes`, and [`region_total_bytes`] adds it.
+pub fn stream_locals_bytes(chunk: &Chunk) -> u32 {
+    if chunk.block_type != keleusma::bytecode::BlockType::Stream {
+        return 0;
+    }
+    align_up(u32::from(chunk.local_count).saturating_mul(8))
+}
+
+/// **The PERSISTENT bytes a host must add when running this module natively.**
+///
+/// One word per stream chunk, holding the resume state: which `yield` to
+/// continue after. It is `.bss` — fixed size, fixed offset, and it must survive
+/// `Op::Reset`, which clears the ephemeral regions.
+///
+/// Sits immediately after `keleusma::vm::required_persistent_capacity_for`, so a
+/// host sizes the persistent region as that figure PLUS this one.
+///
+/// # This is the same weaker guarantee as [`host_arena_supplement_bytes`]
+///
+/// A figure the host must remember to add is not one the runtime's sizing
+/// function includes. A host that calls only `required_persistent_capacity_for`
+/// is under-provisioned for native streams, and publishing the figure does not
+/// change that.
+pub fn persistent_supplement_bytes(module: &keleusma::bytecode::Module) -> u32 {
+    let streams = module
+        .chunks
+        .iter()
+        .filter(|c| c.block_type == keleusma::bytecode::BlockType::Stream)
+        .count();
+    align_up((streams as u32).saturating_mul(8))
+}
+
 pub fn plan_chunk_region(chunk: &Chunk) -> RegionLayout {
     let mut sites = Vec::new();
     let mut next: u32 = 0;
@@ -644,7 +703,12 @@ pub fn region_total_bytes(
     let Some(chunk) = module.chunks.get(chunk_index) else {
         return 0;
     };
-    let mut total = plan_chunk_region(chunk).bytes;
+    // The composite map, then the stream chunk's locals block after it.
+    let mut total = align_up(
+        plan_chunk_region(chunk)
+            .bytes
+            .saturating_add(stream_locals_bytes(chunk)),
+    );
     for op in &chunk.ops {
         if let Op::Call(idx, _) = op {
             total = align_up(total).saturating_add(region_total_bytes(

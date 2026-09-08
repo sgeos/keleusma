@@ -1739,7 +1739,23 @@ fn lower_module_with<'ctx>(
         ),
         None => (0, &[]),
     };
-    let needs_region = program.chunks.iter().any(chunk_builds_composite);
+    // **A STREAM CHUNK NEEDS THE REGION EVEN WITH NO COMPOSITES.** Its locals
+    // live in the arena rather than in machine-stack `alloca`s, because a
+    // resumable stream returns at each `yield` and re-enters at the same point,
+    // and a machine frame does not survive that. See
+    // `region::stream_locals_bytes`.
+    // **ONLY A NON-DEGENERATE STREAM NEEDS IT**, and the distinction is
+    // load-bearing rather than tidy. Adding the pointers to EVERY stream changed
+    // the signature of the degenerate chunks too — and `yield_sequence.rs` calls
+    // those through a hand-written `extern "C" fn(i64) -> i64`, so the extra
+    // parameters became garbage read from registers the callee never touches.
+    // **Ten tests passed by the calling convention's good manners rather than by
+    // being right.** A signature change is invisible to a harness that names the
+    // signature itself, so it must be confined to chunks that actually need it.
+    let needs_region = program.chunks.iter().any(|c| {
+        chunk_builds_composite(c)
+            || (c.block_type == BlockType::Stream && degenerate_stream_yield(c, program).is_none())
+    });
     let data = DataCtx {
         needs_region,
         shared_count,
