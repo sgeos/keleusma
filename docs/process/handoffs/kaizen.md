@@ -7,13 +7,14 @@ per-branch practice of [`PARALLEL_DEVELOPMENT.md`](../PARALLEL_DEVELOPMENT.md) a
 line extended it to a top-level line. Read it with
 `git show origin/kaizen:docs/process/handoffs/kaizen.md`.
 
-> **OPENED 2026-09-08 at cut point `802e72d3`, the `origin/v0.2.3` tip of that day.** Last
-> synced from `v0.2.3` at `802e72d3`, from `v0.3.0` at `b8d78c3f`, and from `proofs` at
-> `6537a36f`. Nothing is in flight and nothing has been written beyond this file. The first
-> commission, a broad audit of the development process for weaknesses and improvements, is
-> received and not started. A resuming session should validate below, read the charter and
-> scope, sweep the three peer mailboxes, and then begin the audit or wait for the operator
-> if the open questions below have been answered in a way that changes its shape.
+> **REFRESHED 2026-09-08, second stamp, after the first audit draft.** Opened the same day at cut
+> point `802e72d3`, the `origin/v0.2.3` tip of that day. Last synced from `v0.2.3` at `802e72d3`,
+> from `v0.3.0` at `b8d78c3f`, and from `proofs` at `6537a36f`. The first commission, a broad
+> audit of the development process, has produced an unversioned first draft and six evidence
+> files under the primary checkout's `tmp/kaizen/`, listed below by path and state. Nothing is
+> versioned beyond this file. Nothing is in flight. The next step is a second-context review of
+> the draft, then the operator's reading, then integration of ruled proposals on a feature branch
+> cut from `kaizen`.
 
 ## Charter
 
@@ -93,8 +94,46 @@ arrived.
 
 ## THE STATE
 
-Opened. The first commission is a broad audit of the development process for weaknesses and
-process improvements. No finding has been recorded and no document beyond this file exists.
+The first audit draft exists and is unreviewed. It rests on six evidence passes, two run by the
+auditor's own commands and four by mining subagents whose reports the auditor read and partly
+checked. The draft finds no quality or speed problem in the ordinary sense and finds instead a
+verification problem and a decision-latency problem, states the trade-off as two regimes with
+one real edge, and makes ten proposals, seven that trade nothing away and three on the edge.
+Every proposal names its mechanism, evidence, expected effect, and the ruling it needs. None is
+adopted.
+
+## DRAFTS, UNVERSIONED, IN THE PRIMARY CHECKOUT
+
+The primary checkout's `tmp/` is ignored by git, so these files exist in one place only and are
+lost if that directory is cleaned. The operator authorized drafting there so the blog session
+can take the final draft for publication.
+
+| path under `tmp/kaizen/` | state |
+|---|---|
+| `process-audit-draft.md` | DRAFT 1, about 8000 words, blog format, prose style-scanned clean, article number placeholder, not reviewed by a second context |
+| `evidence-1-documented-process.md` | miner report, saved |
+| `evidence-2-v023-record.md` | miner report, saved |
+| `evidence-3-v030-and-proofs-record.md` | miner report, saved |
+| `evidence-4-git-ci-metrics.md` | miner report, all executed, saved, raw exports under `raw/` |
+| `evidence-5-blog-format-and-process.md` | miner report, saved |
+| `evidence-6-external-survey.md` | research agent report, sources graded, not re-fetched by the auditor |
+| `NOTES.md` | working notes, observations, draft status |
+
+Two miner figures were not independently checked by the auditor and the draft says so, the
+blog post word count and the incident classification totals.
+
+## Recorded during the audit, as observations and not findings
+
+**A session limit terminated the first evidence pass.** Six parallel mining subagents on the
+most capable model were all cut off after about thirty minutes by an account-level session
+limit, with no report surviving. The passes were rerun on a smaller model and completed. The
+process documents do not mention session or usage limits. A line planning heavy parallel work
+should run mining and audit passes on smaller models and long runs in the background with exit
+status captured.
+
+**A scratch export went stale during a pass.** The V0.3.X mailbox export was one hundred four
+lines behind the live tip by the time a miner cited it, and the miner re-read the live branch.
+A copy of a peer's document is a timestamp, not the document.
 
 ## Recorded at opening, as an observation and not a finding
 
@@ -117,13 +156,17 @@ Nothing.
 ## OPEN, ALL WITH THE OPERATOR
 
 1. **The shape of the line**, recurring practice or discrete reviews, open by the operator's
-   statement. The first audit can proceed under either.
+   statement. The first audit proceeded under either.
 2. **Where audit outputs live.** This line proposes `docs/process/kaizen/` holding dated
-   reports, because it accommodates both shapes, with any adopted change landing in the
-   process document or script it concerns. Not yet ruled.
-3. **How the peers learn this line exists.** A mailbox is invisible to a session that does
-   not know to look for it. The operator may tell the V0.2.X and V0.3.X sessions directly, or
-   this line may be named in their handoffs at their next sync. Not yet ruled.
+   reports, with any adopted change landing in the process document or script it concerns.
+   Not yet ruled.
+3. **How the peers learn this line exists.** The operator ruled on 2026-09-08 that this line may
+   contact the other lines when it makes sense for them to know, and that working without
+   disclosure is acceptable until then. No contact has been made.
+4. **Whether to run a second-context review of the draft before the operator reads it.** The
+   draft's own finding eight argues for it. It costs one fresh session and no calendar time.
+5. **The ten proposals in the draft**, seven in a group that trades nothing away and three on
+   the edge where operator attention is exchanged for latency. Each states the ruling it needs.
 
 ## GOVERNING RULES A RESUMING SESSION MUST NOT LOSE
 
@@ -156,5 +199,6 @@ Run the validity block. Sweep the three peer mailboxes,
 Read [`PROCESS_STRATEGY.md`](../PROCESS_STRATEGY.md), [`GIT_STRATEGY.md`](../GIT_STRATEGY.md),
 [`PARALLEL_DEVELOPMENT.md`](../PARALLEL_DEVELOPMENT.md), and
 [`RELEASE_PROCESS.md`](../RELEASE_PROCESS.md) as the process the audit measures against. Then
-begin the audit as commissioned, cutting a feature branch from `kaizen` for it, unless the
-open questions above have been answered in a way that changes its shape.
+read `tmp/kaizen/NOTES.md` and the draft in the primary checkout, confirm they still exist, and
+continue from the next step named in the banner, unless the open questions above have been
+answered in a way that changes its shape.
