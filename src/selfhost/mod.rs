@@ -3108,9 +3108,22 @@ fn reconstruct_via_kel(
         VmState::Yielded(Value::Int(n)) => n,
         other => panic!("unexpected reconstruct.kel state: {other:?}"),
     };
+    // Both call sites below pass `RC_ERR_CODE` or `RC_ERR_DETAIL`, which
+    // `reconstruct.kel` declares as `Word` in its `shared data io` block, and
+    // `get_shared` reads a slot at the kind the module's layout declares. A
+    // `Word` slot therefore yields `Value::Int` and nothing else, so the second
+    // arm cannot be taken here.
+    //
+    // It previously returned 0 — which is `RC_ERR_CODE`'s "no error" value, so a
+    // fallback that could fire would report success while discarding the
+    // diagnostic it was reading. The sibling `rd` closure a few lines down reads
+    // the same kind of slot and panics on a non-`Int`; these now agree.
+    //
+    // A slot later declared `Float` would make this live again, which is the
+    // reason to assert rather than to delete the arm.
     let rd_diag = |slot: usize| match vm.get_shared(&shared, slot).unwrap() {
         Value::Int(n) => n,
-        _ => 0,
+        other => panic!("shared diagnostic slot {slot} is not an Int: {other:?}"),
     };
     let node_count =
         reconstruct_node_count(yielded, rd_diag(RC_ERR_CODE), rd_diag(RC_ERR_DETAIL), chunk);
@@ -3221,9 +3234,22 @@ fn reconstruct_via_kel_multihead(heads: &[&ParsedFn], pc: usize, chunk: &str) ->
         VmState::Yielded(Value::Int(n)) => n,
         other => panic!("unexpected reconstruct.kel state: {other:?}"),
     };
+    // Both call sites below pass `RC_ERR_CODE` or `RC_ERR_DETAIL`, which
+    // `reconstruct.kel` declares as `Word` in its `shared data io` block, and
+    // `get_shared` reads a slot at the kind the module's layout declares. A
+    // `Word` slot therefore yields `Value::Int` and nothing else, so the second
+    // arm cannot be taken here.
+    //
+    // It previously returned 0 — which is `RC_ERR_CODE`'s "no error" value, so a
+    // fallback that could fire would report success while discarding the
+    // diagnostic it was reading. The sibling `rd` closure a few lines down reads
+    // the same kind of slot and panics on a non-`Int`; these now agree.
+    //
+    // A slot later declared `Float` would make this live again, which is the
+    // reason to assert rather than to delete the arm.
     let rd_diag = |slot: usize| match vm.get_shared(&shared, slot).unwrap() {
         Value::Int(n) => n,
-        _ => 0,
+        other => panic!("shared diagnostic slot {slot} is not an Int: {other:?}"),
     };
     let node_count =
         reconstruct_node_count(yielded, rd_diag(RC_ERR_CODE), rd_diag(RC_ERR_DETAIL), chunk);
