@@ -222,15 +222,39 @@ arm has no witness and no honest verdict from this pass** -- what is recorded is
 that the driver was identified, the setup attempted was wrong, and the correct
 harness is the one the typed-verifier tests already build.
 
-### THREE REMAIN, AND THEY ARE NAMED
+### PASS EIGHT: ARM 11 IS REACHED, AND ITS OWN COMMENT WAS RIGHT ALL ALONG
+
+**Arm 11 fires three times** on a float constant, driven through
+`typed_reject_module_via_kel` -- the public entry above `typed_run`,
+`seed_verify_typed_shared` and `typed_desc`. **Five controls do not fire it**: a
+`Word` constant, a string constant, a `bool` constant, a `bool` in a branch, and a
+unit-returning call. The union is **17 of 19**.
+
+**The arm's own comment named `Float` and was correct.** Pass six doubted it --
+`ConstValue` also has `Bool` and `Unit`, so a bool constant looked like a fixture
+needing no float support -- and that doubt was reasonable and wrong.
+
+**Why the bool fixture failed, which pass six could not say.** A `bool` literal
+compiles to `PushImmediate`, not to a pool constant, so no `ConstValue::Bool` ever
+reaches `const_scalar_size`. That fact came from an unrelated census in the same
+session, of the load-time pass's operand-range checking; **two threads explained a
+third**, which is an argument for keeping findings in one place rather than one
+document per investigation.
+
+**The route matters as much as the fixture.** Pass seven established that this
+census's recurring failure is reporting an arm unreached when its DRIVER was never
+called. Arm 11 needed both halves: the right entry point (traced up four levels to
+a public function) and the right fixture (a float constant). Either alone still
+measures nothing.
+
+### TWO REMAIN, AND THEY ARE NAMED
 
 | arm | function | note |
 |---|---|---|
 | 7 | `reconstruct_via_kel` | reconstruction path |
 | 8 | `reconstruct_via_kel_multihead` | reconstruction path |
-| 11 | `const_scalar_size` | analysis. A `bool` constant was tried in pass six and did NOT reach it |
 
-**Arms 9 and 16 are closed and their rows are removed**, rather than left in a table under a heading that
+**Arms 9, 11 and 16 are closed and their rows are removed**, rather than left in a table under a heading that
 contradicts it. Its note read: "the corpus source used a payload-free enum, which is the likely gap
 and is a lead rather than a conclusion". **The lead was right** -- a payload-bearing enum reaches it,
 with two controls that do not. A lead recorded as a lead, and later confirmed, is the cheapest kind
