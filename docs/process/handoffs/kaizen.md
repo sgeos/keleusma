@@ -12,9 +12,9 @@ line extended it to a top-level line. Read it with
 > from `v0.3.0` at `b8d78c3f`, and from `proofs` at `6537a36f`. The first commission, a broad
 > audit of the development process, has produced an unversioned first draft and six evidence
 > files under the primary checkout's `tmp/kaizen/`, listed below by path and state. Nothing is
-> versioned beyond this file. Nothing is in flight. The next step is a second-context review of
-> the draft, then the operator's reading, then integration of ruled proposals on a feature branch
-> cut from `kaizen`.
+> versioned beyond this file. Nothing is in flight. The draft has had one fresh-context review and
+> a revision. The next step is the operator's reading, then integration of ruled proposals on a
+> feature branch cut from `kaizen`.
 
 ## Charter
 
@@ -94,7 +94,7 @@ arrived.
 
 ## THE STATE
 
-The first audit draft exists and is unreviewed. It rests on six evidence passes, two run by the
+The first audit draft exists and has been through one fresh-context adversarial review, which found four blocking and nine major defects, all repaired in the second draft and recorded with their dispositions. It rests on six evidence passes, two run by the
 auditor's own commands and four by mining subagents whose reports the auditor read and partly
 checked. The draft finds no quality or speed problem in the ordinary sense and finds instead a
 verification problem and a decision-latency problem, states the trade-off as two regimes with
@@ -110,7 +110,9 @@ can take the final draft for publication.
 
 | path under `tmp/kaizen/` | state |
 |---|---|
-| `process-audit-draft.md` | DRAFT 1, about 8000 words, blog format, prose style-scanned clean, article number placeholder, not reviewed by a second context |
+| `process-audit-draft.md` | DRAFT 2, about 9000 words, blog format, prose style-scanned clean, article number placeholder, revised against one fresh-context adversarial review |
+| `process-audit-draft.v1.md` | DRAFT 1, kept for the record |
+| `review-1.md` | the adversarial review, twenty findings, each with its disposition |
 | `evidence-1-documented-process.md` | miner report, saved |
 | `evidence-2-v023-record.md` | miner report, saved |
 | `evidence-3-v030-and-proofs-record.md` | miner report, saved |
@@ -163,8 +165,9 @@ Nothing.
 3. **How the peers learn this line exists.** The operator ruled on 2026-09-08 that this line may
    contact the other lines when it makes sense for them to know, and that working without
    disclosure is acceptable until then. No contact has been made.
-4. **Whether to run a second-context review of the draft before the operator reads it.** The
-   draft's own finding eight argues for it. It costs one fresh session and no calendar time.
+4. **Whether a second review round is wanted before the operator reads the draft.** One round
+   was run, on the draft's own finding eight, and it found four blocking defects. A second round
+   on the revised draft costs one fresh session and no calendar time.
 5. **The ten proposals in the draft**, seven in a group that trades nothing away and three on
    the edge where operator attention is exchanged for latency. Each states the ruling it needs.
 
