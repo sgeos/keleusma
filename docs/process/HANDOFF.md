@@ -117,7 +117,8 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > **The narrow selectors are the same story and were swept too**: ten compile, none is verified by
 > anything. Running the suite at a 16-bit word gives 89 passing and 15 failing binaries, but the
 > failures share a PREMISE — the suite assumes a 64-bit host, down to a canary whose own constant
-> `1234567` cannot exist at that width. So the narrow widths are **unverified: neither shown broken
+> `1234567` cannot exist at that width. So the WHOLE SUITE AT a narrow width is **unverified:
+> neither shown broken
 > nor shown working.** Making the suite run there is a project, not an increment, and is not
 > recommended without deciding it is worth the cost.
 >
@@ -198,8 +199,11 @@ always-current, so it must be able to report itself stale rather than mislead a 
 >
 > The local gate was abandoned deliberately, not failed: it ran twice and finished neither time,
 > reaching step 3 of 12 in 110 minutes under unrelated machine load. **A pull request gives the same
-> checks on dedicated runners and still keeps a red off the version branch**, which is the whole
-> reason a local gate precedes a merge. Use it when the machine is loaded.
+> checks on dedicated runners and still keeps a red off the version branch.**
+>
+> **A local gate does NOT precede a merge**, as this paragraph said until 2026-09-08. CI has
+> authorized merges since 2026-08-11; the local gate is for a pre-publication run and for working
+> offline. See [GIT_STRATEGY.md](./GIT_STRATEGY.md#definition-of-green).
 >
 > ## THE LESSON THIS SESSION KEPT PAYING FOR
 >
