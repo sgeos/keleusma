@@ -5,9 +5,54 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-09-04 (session 62 CLOSE).** Validate by the ANCESTRY and CONTENT block below,
+> **REFRESHED 2026-09-08 (session 63 CLOSE).** Validate by the ANCESTRY and CONTENT block below,
 > not by a hash: a refresh takes more than one commit, so any hash written here is stale by one the
 > moment it is written.
+>
+> ## HOW TO READ WHAT SESSION 63 LEFT YOU
+>
+> **Distrust any conclusion in these documents whose instrument was never made to misbehave.** Six
+> of session 63's own instruments and figures were wrong, and **every one failed the same way: it
+> reported a clean or confident result about something it never touched.** A sweep column listed
+> WARNING locations under a PASSING verdict. A mutation test was aimed at the wrong call site and
+> PASSED, which would have recorded a mechanism doing none of the work credited to it. A probe
+> mutated an opcode its program did not contain and called the untouched module "admitted". A count
+> was read off a progress line. A remainder list omitted an entire group. A mechanism was nearly
+> credited from a filename.
+>
+> **Not one was caught by re-reading.** All six were caught by making the instrument fail on purpose,
+> or by re-deriving a number from its parts. So the rule this file already carried -- *a guard that
+> has not been made to fail is a guess* -- reaches further than it was being applied: **an
+> explanation is a guess too, and so is a measurement.**
+>
+> **Four operator decisions are queued and none is mine.** They are listed below. Nothing large
+> should start before they are answered, because each one changes what the work is.
+>
+> ## THE FOUR DECISIONS, ALL THE OPERATOR'S, IN ONE PLACE
+>
+> Each was reached by trying, not by planning, so none is a guess about what would be hard.
+>
+> **1. How does a value ENTER a `Text<N>`?** The type is built to its front door -- refusals below
+> it, flat layout, distinct nominal type, zero value cross-checked. A spike removed the refusals and
+> the compiler said `let binding declared as Text<8> but value has type Text`: the distinct-type
+> increment WORKING. `GRAMMAR.md` forbids implicit coercion, so emission needs a surface form, and
+> which one is open question 2 in `../decisions/TEXT_CAPACITY_TYPE.md`. **Do not pick it
+> unilaterally** -- it appears in every program anyone writes with the type.
+>
+> **2. Is the width bundle worth a breaking change?** `addr_bytes` is taken by 33 signatures across
+> five files, **14 of them public**, in a crate published at 0.2.2.
+>
+> **3. Should `verify()` refuse float opcodes when the feature is absent?** Evidence is COMPLETE:
+> the repair is about ten lines, was prototyped, introduces **zero new failures** across the full
+> `--no-default-features --features compile,verify` suite, and the one semantic worry is moot --
+> the LEXER refuses float literals there, so only imported bytecode is affected, which is exactly
+> where load-time refusal is right. **It is not landed because I said it was your call in a merged
+> document**, and a deferral is worth something only if it is honoured.
+>
+> **4. Does any build configuration earn a continuous-integration job?** Three of eleven feature
+> configurations and **zero of ten narrow selectors** are built by anything. Two options are costed
+> in `../decisions/FEATURE_COMBINATION_SWEEP.md` and **neither is adopted**: a per-push cost is a
+> project-level call.
 >
 > ## READ FIRST: A HOLE IN THE LOAD-TIME GUARANTEE IS PINNED OPEN, DELIBERATELY
 >
@@ -29,30 +74,32 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > `../decisions/INVALID_BYTECODE_CENSUS.md`: **46 sites, 17 examined, 29 explicitly not examined.**
 > **No site is claimed unreachable**, and a guard keeps the document from drifting from the tree.
 >
-> ## THE CENSUS IS AT 34 OF 46, AND ITS COUNT WAS WRONG THREE TIMES
+> ## THE TWO CENSUSES, AND THE PROCEDURAL RULE ONE OF THEM PAID FOR THREE TIMES
 >
-> Four sites are admitted at load and trap at the call: a reserved immediate, an unrecognised trap
-> kind, the module-level `entry_point` past the chunk count, and a native index past its table. All
-> need a corrupt artefact, so all are defence in depth — **group B above is the only one where a
-> module the compiler itself produced verifies, loads, and traps.**
+> **`InvalidBytecode` sites: 34 of 46 examined**, twelve named group by group. Four are ADMITTED at
+> load and trap at the call -- a reserved immediate, an unrecognised trap kind, the module-level
+> `entry_point` past the chunk count, and a native index past its table. **All four need a corrupt
+> artefact, so all are defence in depth.** The float case above is the ONLY one where a module the
+> compiler itself produced verifies, loads, and traps, and keeping that distinction visible is why
+> the others are reported quietly.
 >
-> **The count was wrong three times, always by adjusting the previous figure instead of re-summing
-> the per-group column.** Re-summing exposed that group G — three arena-staleness sites — was missing
-> from every list of what remained. **Derive the number from the parts; never carry it forward.**
+> **Discard arms: 17 of 19**, up from 14. Two remain, both a `rd_diag` closure reading a diagnostic
+> slot written as an integer by construction; **no fixture hypothesis exists and none should be
+> invented.**
 >
-> ## THE INSTRUMENT WARNING, WHICH IS THE MOST TRANSFERABLE THING HERE
+> **THE RULE THAT CENSUS PAID FOR THREE TIMES**, and which is worth more than either count:
 >
-> **Three of this session's own instruments reported clean or confident results about things they
-> never touched**: a sweep column listing WARNING locations under a PASSING verdict; a mutation test
-> aimed at the wrong call site that PASSED, which would have recorded a mechanism doing none of the
-> work attributed to it; and a probe that mutated an opcode its program did not contain, then
-> reported the untouched module as "admitted".
+> > **Trace an arm's callers up to a PUBLIC ENTRY POINT before reporting it unreached.**
 >
-> **None was caught by re-reading. All three were caught by making the instrument misbehave on
-> purpose.** The rule already in this file — a guard that has not been made to fail is a guess —
-> extends further than it was being applied: **an explanation is also a guess, and so is a
-> measurement.** Treat any conclusion in these documents whose instrument was never made to
-> misbehave as provisional.
+> Three false zeros came from the same cause -- arm 18, the `*_from_pipeline` family, and arm 9 --
+> each an arm reported unreached because the census never called its DRIVER. The lesson was written
+> down after the first and repeated twice anyway, which is the argument for making it procedural
+> rather than remembered. Pass five's published conclusion that "the entry-point gap is closed" was
+> **refuted** by arm 9 firing sixty times; the claim is left in place with a marker because the
+> reasoning that produced it is the transferable part.
+>
+> **And closing an arm needs BOTH halves.** Arm 11 needed the right entry point (four levels up) AND
+> the right fixture (a float constant). Either alone measures nothing.
 >
 > ## AND NINE OF ELEVEN BUILD CONFIGURATIONS ARE BUILT BY NOTHING
 >
@@ -74,37 +121,13 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > nor shown working.** Making the suite run there is a project, not an increment, and is not
 > recommended without deciding it is worth the cost.
 >
-> ## THE QUEUE IS OTHERWISE EMPTY AND BOTH LARGE ITEMS NEED THE OPERATOR
+> ## THE QUEUE IS OTHERWISE EMPTY
 >
-> **`origin/v0.2.3` is at `12951810`. Twenty-one pull requests merged, none open, tree clean**, and
-> every post-merge run on the version branch itself came back green. Nothing is held and nothing of
-> this line is unpushed.
+> **No open pull request, clean tree, nothing unpushed**, and every post-merge run on the version
+> branch green. The four decisions above are the whole of what blocks large work; this section used
+> to state two of them at length and is folded into that list so a reader meets them once.
 >
-> **Do not go looking for available work before reading the two questions below.** Both remaining
-> substantial items were ATTEMPTED this session and both turned out to need a decision that is not
-> this line's to make. Each block was found by trying, not by planning, so neither is a guess.
->
-> ### QUESTION ONE: how does a value ENTER a `Text<N>`?
->
-> A spike removed both refusals and asked the compiler. It said `let binding declared as Text<8> but
-> value has type Text` — which is the distinct-nominal-type increment WORKING AS DESIGNED. A literal
-> is static text, `Text<8>` is dynamic text, and they deliberately do not unify.
->
-> **The silent path is closed by a language rule, not by taste**: `GRAMMAR.md` states that no
-> implicit type coercion exists. So emission needs a surface form — a cast, a constructor, or a
-> method — and which one is ALREADY open question 2 in `../decisions/TEXT_CAPACITY_TYPE.md`.
-> **Do not pick it unilaterally.** It appears in every program anyone writes with the type and is far
-> more expensive to change than the layout beneath it.
->
-> Exactly two match arms had to change to admit the type, and no other pass objected. The machinery
-> below the surface is in place; only the way in is missing.
->
-> ### QUESTION TWO: is the width bundle worth a breaking change before publication?
->
-> `addr_bytes` is taken by **33 signatures across 5 files, 14 of them public**. Fourteen public
-> signatures cannot change without breaking every embedder of a crate published at 0.2.2, so this is
-> an API decision rather than the tidy-up "cheaper before a publication than after one" suggests.
->
+
 > ## `Text<N>` IS BUILT UP TO ITS FRONT DOOR
 >
 > Four increments merged: the type surface refused everywhere below it; the flat layout, a
@@ -148,6 +171,26 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > compiler/machine disagreement, `Reset` is a corrupt-module defence. Reporting both as "opcodes the
 > machine refuses" would imply two hazards where there is one.
 >
+> ## THREE PROCESS FACTS FROM SESSION 63, EACH LEARNED EXPENSIVELY
+>
+> **ASK WHAT WILL WAKE YOU BEFORE ENDING A TURN.** Raised by the operator THREE times in one
+> session. Each occurrence had the identical shape: a wake signal existed, went away, and work
+> continued as though it were still there. **Prose is not a wake signal**, and a background job
+> started with `nohup` sends no notification -- poll a done-marker you wrote, or use a harness-tracked
+> background task. If something is in flight and nothing is armed, that is a bug in the turn.
+>
+> **THE PRE-PUSH GATE CANNOT BE RUN INSIDE THE TOOL'S TEN-MINUTE CEILING UNDER LOAD.** It took
+> 3067s against a normal 233s on a contended machine, and two foreground attempts were killed
+> mid-run. The working pattern: **run the gate manually with each step's status captured
+> separately, then push with `--no-verify` and say so.** That is avoiding a redundant hour, not
+> skipping verification -- and continuous integration on the pull request is the binding check
+> either way. A backgrounded push dies of SIGPIPE after a green gate, so **verify by
+> `git ls-remote`, never by the push's exit code.**
+>
+> **DERIVE A NUMBER FROM ITS PARTS; NEVER CARRY IT FORWARD.** A census count was published wrong
+> three times, each figure produced by adjusting the previous one. Re-summing the per-group column
+> is what finally exposed that an entire group had been missing from every list of what remained.
+>
 > ## THE PROCESS FACT THAT COST THIS SESSION THE MOST
 >
 > **CI triggers only on `main`, `v*` and pull requests.** A push to a feature branch with the hook
@@ -174,13 +217,6 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > **The practice that follows**: derive a population, never pick one; and when a run is detached,
 > capture its exit status IN THE LOG, because a detached run sends no notification either.
 >
-> ## THE DISCARD-ARM CENSUS IS FINISHED AT 14 OF 19
->
-> Five passes, recorded in `../decisions/DISCARD_ARM_REACHABILITY_BRIEF.md`. **The remaining five are
-> a FIXTURE problem, not a harness problem** — every one sits inside a function the passes already
-> drove, so what is missing is source constructs, not entry points. The pass-five harness is reusable
-> as-is, which makes a sixth pass cheaper than any so far.
->
 ## Validity
 
 - **Branch**: `v0.2.3`, or a branch cut from it. If you are on `v0.3.0`, read
@@ -190,8 +226,8 @@ always-current, so it must be able to report itself stale rather than mislead a 
 **Validate by ANCESTRY and by CONTENT, never by a hash match.** A stamp requiring `HEAD~1` to equal a
 recorded parent is a claim that nothing else ever lands, and it has failed three times.
 
-**Ancestry**: `origin/v0.2.3` should contain `12951810`
-(`Merge pull request #353`). If it does not, this file predates a reset and is stale.
+**Ancestry**: `origin/v0.2.3` should contain `892cf14a`
+(`Merge pull request #373`). If it does not, this file predates a reset and is stale.
 
 **Content**, four checks that are cheap and independent:
 
@@ -208,6 +244,12 @@ recorded parent is a claim that nothing else ever lands, and it has failed three
 8. `docs/decisions/INVALID_BYTECODE_CENSUS.md` exists and
    `the_invalid_bytecode_census_still_describes_the_tree` passes. If that test fails, sites were
    added or removed and the census has stopped being exhaustive.
+9. `tests/immediate_operand_range.rs` and `tests/native_composite_canonicalization.rs` exist and
+   pass. The second is a regression guard on a boundary canonicalization whose loss opens SEVEN
+   runtime refusals at once on legitimate programs; it is invisible from either side, because the
+   compiler's baking and the runtime's dispatch each look locally correct.
+10. `docs/decisions/FEATURE_COMBINATION_SWEEP.md` exists. If it does not, this file predates the
+    build-coverage measurement and its claim that nine of eleven configurations are unbuilt.
 4. `tests/text_capacity_type.rs` exists. If it does not, `Text<N>` increment 1 is not on this branch.
 5. `tests/release_process_crate_list.rs` exists and passes. It holds BOTH release guards now — the
    publish list and the versioning policy. If either fails, the release process and the workspace
@@ -304,19 +346,29 @@ gh run list --branch v0.2.3 --limit 1
 
 ## WHAT A RESUMING SESSION SHOULD DO FIRST
 
-**ZERO (2026-09-03). CHECK THE MACHINE, PUSH THE TWO HELD COMMITS, THEN CONTINUE `Text<N>`.**
+**ZERO (2026-09-08). NOTHING IS HELD. READ THE FOUR DECISIONS AND WAIT FOR AN ANSWER.**
+
+At session 63's close: **no open pull request, clean tree, nothing unpushed**, and every finding
+recorded in `../decisions/`. There is no held branch and no interrupted merge to recover.
 
 ```sh
 pgrep -f mutation_sweep              # the v0.3.0 line's sweep; contention INVERTS its result
-git log --oneline -1 origin/v0.2.3   # expect 6af37f66 or later
+git log --oneline -1 origin/v0.2.3   # derive; do not expect a hash written here
+gh pr list --state open              # by BASE branch; the other line's appear here too
 ```
 
-Held branches: `docs/session-61-tail-channels` and `fix/wire-changelogs`, one commit each, docs-only,
-green locally. Push, gate, merge. **If the sweep is running, wait** — it scores a run over six times
-its baseline as a HANG and counts a HANG as DETECTED, so a contended run reports BETTER coverage than
-a quiet one, and the flattering direction is the dangerous one.
+**Do not go hunting for available work before reading the four decisions at the top.** Session 63
+mined out the surveyable surface: the `InvalidBytecode` class is enumerated, the build matrix and
+the narrow axis are measured, the discard-arm census is at 17 of 19 with the remainder having no
+fixture hypothesis. **What is left that is large is blocked on an answer**, and what is left that is
+unblocked is small enough that starting it before reading the queue would be choosing the lesser
+work.
 
-Then `Text<N>` increment 2, which needs construction rather than discovery. Its brief holds the
+**If the sweep is running, wait** — it scores a run over six times its baseline as a HANG and counts
+a HANG as DETECTED, so a contended run reports BETTER coverage than a quiet one, and the flattering
+direction is the dangerous one.
+
+**The `Text<N>` brief** holds the
 layout, the size formula, the precedent and both guards to copy.
 
 **A caution about this file.** It is long and largely historical. **The BANNER at the top is the
