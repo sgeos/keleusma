@@ -5756,9 +5756,25 @@ fn lower_chunk_body<'ctx>(
             //
             // The runtime clears every local to `Unit`, truncates the operand
             // stack, resets the arena's ephemeral region and rewinds to just after
-            // `Op::Stream`. The first and last are emitted here; the operand stack
-            // is already empty, since the compiler emits
-            // `Stream ; body ; PopN(1) ; Reset`.
+            // `Op::Stream`. The first and last are emitted here.
+            //
+            // ⚠ **THE EMPTY-OPERAND-STACK PREMISE IS NOW CHECKED RATHER THAN
+            // ASSERTED IN PROSE.** This comment used to say the stack "is already
+            // empty, since the compiler emits `Stream ; body ; PopN(1) ; Reset`",
+            // and nothing verified it. **A premise in a comment is the
+            // least-tested thing in a codebase**, and one sentence away — in the
+            // `Op::GetIndex` arm — an identical "the compiler emits" claim was
+            // FALSE and cost an out-of-bounds read returned as a value.
+            //
+            // The runtime TRUNCATES the operand stack at `Reset`; native code
+            // does not, because its operands are SSA values with no stack to
+            // truncate. If a value were live across the back edge, the loop top
+            // would be re-entered at a depth the entry dispatch does not produce,
+            // and the two paths would disagree about the operand stack in exactly
+            // the way a resume point colliding with a branch target does.
+            //
+            // Checking costs one comparison at lowering time and refuses only
+            // programs for which the old prose was wrong.
             //
             // **It does NOT return.** The runtime reports `VmState::Reset` as a
             // leg of its own, but the native driver collapses it — `step(a)`,
@@ -5771,6 +5787,17 @@ fn lower_chunk_body<'ctx>(
             // stack-disciplined bump arena popped at each iteration, which is the
             // model to reason in.
             Op::Reset if general_stream => {
+                if st.depth != 0 {
+                    return Err(LowerError::unsupported_op(
+                        "Reset",
+                        format!(
+                            "the operand stack holds {} entries at the rewind. The runtime \
+                             TRUNCATES it there and native code cannot, so the loop top would \
+                             be re-entered at a depth the entry dispatch never produces",
+                            st.depth
+                        ),
+                    ));
+                }
                 let top = loop_top.expect("general_stream implies a loop top");
                 for l in st.locals.iter() {
                     st.b.build_store(*l, i64t.const_zero()).unwrap();
