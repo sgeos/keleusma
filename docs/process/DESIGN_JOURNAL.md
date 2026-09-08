@@ -1,5 +1,71 @@
 # Design Journal
 
+## 2026-09-08 — [v0.3.0] The ten fired ratchets were three different stories, and one was a defect
+
+**The handoff was wrong in a way that mattered, and it was my own handoff.** It recorded the
+ten red tests as ratchets asserting the old frontier and instructed that they be *"INVERTED,
+not repaired"*. Four of them were not ratchets. They were reporting a defect that general
+`Op::Stream` lowering had just introduced, and inverting them would have encoded it.
+
+**The mechanism, which is worth remembering beyond this instance.** `degenerate_stream_yield`
+returns `Option<Vec<usize>>`, and `None` had accumulated two incompatible meanings: *this shape
+is not degenerate* and *this shape is unsafe*. That conflation was harmless while `None` led to
+one place, a refusal. General `Stream` lowering then defined its own applicability as exactly
+`Stream && degenerate_yield.is_none()` — **so it inherited every soundness rejection as a
+feature request.** A callee that can itself suspend went from refused to `Refusals: []` with
+nothing else changing.
+
+**The general lesson is about the shape of the predicate, not about streams.** A predicate whose
+negative answer is consumed by more than one caller must say WHY it declined, or the second
+caller will read the first caller's safety check as a hint.
+
+**What the differential settled that reasoning would not have.** Three shapes genuinely widened,
+and each is now witnessed by a whole yielded sequence rather than by an argument. The strongest
+is a tail that writes the private data segment: the write survives `Op::Reset`, so a lowering
+that dropped it, duplicated it, or ran it before the suspension would diverge on the second
+iteration. That subject had been pinned as refused with the comment that it was *"the condition
+most likely to be relaxed by someone who reads `PopN(1)` as bookkeeping"*. It has now been
+relaxed deliberately, and this is the evidence that was owed.
+
+**Three tests were simulations whose premise came true.** They mutated real bytecode to remove
+`Op::Stream` and asked what the yield-escape refusal would take over *"on the day `Stream`
+lowers"*. The day arrived. Each now measures the shipping backend directly, and each carries an
+additional assertion that the retired shadowing refusal is ABSENT — without it, a future refusal
+moving back in front would let the new assertions pass for the old reason.
+
+**The frontier was re-derived rather than edited, and that turned up two things I did not
+expect.** Tail position is no longer the discriminator; it is a composite that escapes the
+iteration that built it, and establishing that needs three shapes rather than two, because a
+pair leaves both "composites are the problem" and "loops are the problem" standing. Adding the
+missing shapes to the matrix then showed a third refusal class: **a composite built from a
+resumed value is refused because the resumed value has no declared width.** That corrected a
+claim elsewhere in the same file, which said composite-yielding sequence semantics could not be
+witnessed until a non-tail yield lowered. A non-tail yield lowers now. The gap is still open,
+for a different reason, and the reason is tractable — the resume value's width is the chunk's
+declared parameter-0 type, which the same function already trusts for the local slot.
+
+**A prediction recorded before the fact and missed.** For absorption 55 I predicted four
+conflicting files from the shared documentation set. The merge computes ONE, `TASKLOG.md`; the
+other three auto-merge. The prediction was built from "both sides touched this file", which is
+a necessary and not a sufficient condition for a conflict, and three of the four were appends to
+different regions.
+
+**A guard caught what reading would not have.** The pre-push hook rejected the work because
+`comment_citations` found `REVERSE_PROMPT.md` naming a test that had been renamed. **Renaming a test
+silently invalidates every document that cites it**, and the sweep that failure prompted found four
+more, one of them in a decision document. The tree already had a convention for this — a superseded
+name is written WITHOUT backticks so it does not resolve as a citation — and applying it mechanically
+across a handoff turned out to be wrong in its own way: it rewrote historical passages so they
+claimed a currently-passing test was failing. Corrected by restoring the superseded names unlinked
+and annotating the outcome beneath them.
+
+**On the instruction that was wrong.** The previous handoff said to invert all ten. It was right
+three times out of four in the classes it could see, and the fourth was the one that mattered. The
+useful correction is not "the handoff was wrong" but that **a ratchet's own message describes the
+world it was written in, and cannot tell you whether the change that fired it was correct.** Sorting
+before editing costs one pass over ten test bodies and is what separated a defect from three
+widenings.
+
 ## 2026-09-06 — [v0.3.0] Absorption 52, a feature declared rather than inherited, and a stale pending item
 
 **Predicted before merging**: no `src/` and no corpus root touched, so `native_codegen` moves by

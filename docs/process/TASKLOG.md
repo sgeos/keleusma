@@ -686,6 +686,12 @@ Current sprint source of truth.
 > followed by code is refused whatever follows it. Renamed to
 > `a_yield_with_a_trailing_expression_is_refused`.
 >
+> **RENAMED AGAIN 2026-09-08, and the shape it named now LOWERS.** General `Op::Stream` lowering
+> admits `yield a; a * a`, so the case became an agreement test. The trap question this entry
+> describes is STILL not isolated by any test, and now for a third reason: a native trap aborts the
+> process rather than returning a comparable value, so the harness cannot witness the correspondence
+> even though the shape lowers. It is recorded as reasoned, not measured.
+>
 > **The doc comment's reasoning stands and the name did not**: a trap observable would be taken by the
 > virtual machine after suspension where native code, having returned, would not, but **no test can
 > isolate that while every non-tail yield is refused**. That is the second time in two increments that

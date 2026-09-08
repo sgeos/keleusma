@@ -6,20 +6,58 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## GENERAL `Op::Stream` NOW LOWERS AND AGREES WITH THE VM — AND THE SUITE IS RED ON PURPOSE
+## THE SUITE IS GREEN AGAIN — AND FOUR OF THE TEN RED TESTS WERE A DEFECT, NOT A RATCHET
 
-**464 passed, 10 failed.** Every failure is a ratchet asserting the frontier as it stood before
-`Stream` lowered. **They must be inverted, not repaired** — the same shape as the twelve `Op::Len`
-guards, and patching them green would suppress the alarm they exist to raise.
+**483 tests pass in BOTH float configurations, every run frozen**, from `464 passed, 10 failed` at
+the previous head. **No test was deleted.**
 
-**Two shapes that were refused now EXECUTE AND AGREE**, byte-identically: `let a = yield t; yield a+1`
-and `yield t; yield t+1`. Established by a new differential, not by lowering — the frontier tests only
-ever asserted refusal, so agreement had nothing to check it.
+**The previous handoff — mine — was wrong in a way that mattered.** It recorded all ten failures as
+ratchets asserting the old frontier and said to invert rather than repair them. Four of them were
+reporting a defect that general `Op::Stream` lowering had just introduced, and inverting those four
+would have encoded it.
 
-**The most important failure is `the_yield_escape_refusal_is_shadowed_by_the_missing_stream_opcode`.**
-That shadow has lifted, exactly as the tree predicted it would *"the day `Stream` lowers"*.
-`13_telemetry_stream.kel` is now refused for the **yield-escape hazard** instead — the soundness
-refusal beneath the shadow is live and correct.
+**The mechanism, which generalises past this instance.** `degenerate_stream_yield` returns an
+`Option`, and `None` had come to mean two incompatible things: *not degenerate* and *unsafe*. That
+was harmless while `None` led to one place, a refusal. General `Stream` lowering then defined its own
+applicability as exactly `Stream && degenerate_yield.is_none()` — **so it inherited every soundness
+rejection as a feature request.** A stream calling a callee that can itself suspend went from refused
+to `Refusals: []` with nothing else changing.
+
+> **A predicate whose negative answer is consumed by more than one caller must say WHY it declined,
+> or the second caller reads the first caller's safety check as a hint.**
+
+**Three failures were correct widenings**, and each now carries a whole yielded sequence compared
+against your runtime rather than an argument. The strongest is a tail that writes the private data
+segment: the write survives `Op::Reset`, so a lowering that dropped it, duplicated it, or ran it
+before the suspension would diverge on the second iteration.
+
+**Three were simulations whose premise came true.** They mutated real bytecode to remove `Op::Stream`
+and ask what the yield-escape refusal would take over *"on the day `Stream` lowers"*. That day
+arrived, so the mutations are gone and each measures the shipping backend. The former shadowing
+tripwire is now `the_yield_escape_refusal_now_fires_unshadowed`, and it additionally asserts the
+retired refusal is ABSENT — otherwise a future refusal moving back in front would let it pass for the
+old reason. `13_telemetry_stream.kel` is refused for the yield-escape hazard, naming the site.
+
+## THE FRONTIER WAS RE-DERIVED, NOT EDITED, AND THAT FOUND SOMETHING
+
+Tail position is no longer the discriminator. **It is a composite that escapes the iteration that
+built it**, and three shapes are needed to establish that rather than two, because a pair leaves both
+*"composites are the problem"* and *"loops are the problem"* standing.
+
+Adding the shapes the matrix was missing then exposed a refusal class nothing in the tree had named:
+**a composite built from a RESUMED VALUE is refused because that value carries no declared width.**
+
+That corrected a claim in the same file, which said composite-yielding sequence semantics could not
+be witnessed until a non-tail yield lowered. A non-tail yield lowers now. The gap is still open, for
+a different reason — and a tractable one, since the resume value's width is the chunk's declared
+parameter-0 type, which the emitter already trusts for local slot 0.
+
+## A GUARD OF YOURS CAUGHT MY OWN OMISSION, AND I WANT TO SAY SO
+
+The pre-push hook rejected this work because `comment_citations` found that **this very file cited a
+test I had renamed**. Renaming a test silently invalidates every document that names it, and I would
+not have found those by reading. Four further stale citations turned up in the sweep it prompted,
+including one in `docs/decisions/YIELD_ESCAPE_REFUSAL.md`. All are corrected.
 
 ## TWO DEFECTS YOUR ORACLE CAUGHT THAT MY REASONING DID NOT
 

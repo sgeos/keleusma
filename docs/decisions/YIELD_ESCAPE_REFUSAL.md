@@ -93,12 +93,21 @@ Measured over 91 modules and 1117 chunks by
 
   **Both tripwires point at the same moment**: the `Stream` opcode landing. Whoever lands it must
   revisit the shadowing test AND this residual.
-- **The gate is shadowed today.** Every hazardous chunk is refused earlier for `Stream`, so the
-  refusal cannot fire through `lower_module` on unmutated input.
-  `the_yield_escape_refusal_is_shadowed_by_the_missing_stream_opcode` asserts that shadowing and is a
-  **tripwire: it fails on the day `Stream` lowers**, so whoever lands `Stream` must confirm this
-  refusal fires in its place.
-- **Fireability is nonetheless demonstrated**, by removing the `Stream` op from compiled bytecode and
-  observing `lower_module` return the yield-escape refusal. A guard whose only evidence is a
+- **THE GATE IS NO LONGER SHADOWED. UPDATED 2026-09-08, THE DAY `Stream` LOWERED.**
+  It WAS shadowed: every hazardous chunk was refused earlier for `Stream`, so the refusal could not
+  fire through `lower_module` on unmutated input. The tripwire that asserted the shadowing did what
+  it was written to do — **it failed on the day general `Op::Stream` lowering landed** — and it is
+  now `the_yield_escape_refusal_now_fires_unshadowed`, which asserts the opposite property: that
+  `lower_module` refuses the §4.1 module for the escaping composite AND that it is no longer refused
+  for `Stream`. The second half matters as much as the first, because without it a future refusal
+  moving back in front would let the test pass for the retired reason.
+
+  **The consequence is that this refusal has stopped being a precaution.** It is now the only thing
+  standing between the corpus and a silently wrong value, which is what the shadowing note said would
+  happen and is the reason the guard was worth writing before it could fire.
+- **Fireability was demonstrated BEFORE it could be observed directly**, by removing the `Stream` op
+  from compiled bytecode and observing `lower_module` return the yield-escape refusal. That mutation
+  is no longer needed for the primary evidence and the simulations built on it have been removed;
+  the refusal is now observed on the real module. A guard whose only evidence is a
   non-empty predicate result says nothing about whether the lowering consults it, and this line has
   shipped guards that passed while unable to fail.
