@@ -22,4 +22,5 @@ Decisions follow a three-file lifecycle. New questions start in PRIORITY or BACK
 | [INVALID_BYTECODE_CENSUS.md](./INVALID_BYTECODE_CENSUS.md) | Every site where the runtime raises `InvalidBytecode`, with a verdict per group; no site is claimed unreachable |
 | [FEATURE_COMBINATION_SWEEP.md](./FEATURE_COMBINATION_SWEEP.md) | Which feature and width configurations actually build, and which are built by nothing |
 | [NARROW_WIDTH_FAILURE_CLASSIFICATION.md](./NARROW_WIDTH_FAILURE_CLASSIFICATION.md) | A verdict for every `narrow-word-16` failure, separating the suite's wide-host assumptions from the one runtime defect among them |
+| [FLAT_FIELD_WIDTH_AUDIT.md](./FLAT_FIELD_WIDTH_AUDIT.md) | Whether the repaired opaque-width sites were the only ones, by a stated method validated against the pre-repair tree |
 | [DISCARD_ARM_REACHABILITY_BRIEF.md](./DISCARD_ARM_REACHABILITY_BRIEF.md) | Which self-hosted-stage discard arms are reached by a driven program, and what each unreached one is waiting on |

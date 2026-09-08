@@ -29,7 +29,7 @@ with the exit status captured in the log.
 | test binaries passing | 90 |
 | test binaries failing | 16 |
 | individual tests passing | 1739 |
-| **distinct failing tests** | **41** |
+| **distinct failing tests** | **41** at the time of this measurement; **33** after the repairs below |
 | completeness | the run finished; nothing was killed |
 
 **These figures supersede the 89 / 15 / 37 recorded in the sweep document**, which were taken from a
@@ -43,6 +43,14 @@ the mistake being avoided.
 
 Nine groups. **Members are enumerated so the total can be re-derived by addition** rather than taken
 on trust: 14 + 6 + 8 + 2 + 1 + 3 + 1 + 1 + 5 = 41.
+
+> **Both repaired groups are now closed (2026-09-08).** Group I was repaired by taking the opaque
+> field's width from the layout, and group F by deriving the word width in the three harness reads
+> that hard-coded eight bytes. A re-run gives **33 distinct failures across 106 binaries**, and the
+> eight that stop failing are exactly those two groups: 14 + 6 + 8 + 2 + 1 + 1 + 1 = 33.
+>
+> **Established by DIFFING the failing sets, not by comparing totals.** A total falling by eight is
+> equally consistent with fixing nine and breaking one. Nothing newly fails.
 
 | # | group | count | verdict |
 |---|---|---|---|
@@ -237,7 +245,7 @@ Run over the five affected test files:
 | 8 / 2 | 3 failures | 0 |
 | 2 / 2 | 3 failures | 3 |
 
-**The three that remain in every column are group F**, the tests that read the body in eight-byte
+**The three that remained in every column were group F**, the tests that read the body in eight-byte
 words. They are unaffected by this repair and should be.
 
 **The default configuration is unchanged, and that is the claim to scrutinise**, since it is the only
