@@ -148,6 +148,19 @@ narrow configuration because **a test that pins 64-bit checked-addition semantic
 Whether that is one test or many is **unexamined**. It is the obvious next question and it needs a
 test run per selector rather than a build.
 
+### A narrow selector is not the only way to reach a narrow width
+
+**Added 2026-09-08.** The table above reports that nothing builds any narrow selector, which is true
+and is a statement about the FEATURE matrix. It should not be read as saying narrow or skewed widths
+are unreachable. `GenericVm<W, A, F>` is generic over the word and address types independently and
+every `Word` and `Address` implementation is unconditional, so an ordinary test in the DEFAULT build
+can drive any pair of widths through a host-defined alias. `tests/composite_width_skew.rs` does
+exactly that.
+
+**Where a defect is width-dependent, it can therefore be guarded at no standing per-push cost**, which
+is a cheaper answer than the job this document recommends and does not adopt. That does not extend to
+the feature axis: a build omitting `floats` cannot be reached by an alias.
+
 ### A narrow selector is not a cross-compilation target
 
 Continuous integration builds `thumbv7em-none-eabihf` and `wasm32-unknown-unknown`. Those are
