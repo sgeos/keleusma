@@ -52,6 +52,44 @@ be witnessed until a non-tail yield lowered. A non-tail yield lowers now. The ga
 a different reason — and a tractable one, since the resume value's width is the chunk's declared
 parameter-0 type, which the emitter already trusts for local slot 0.
 
+## ⚠ A PANIC IN `src/confine.rs` ON A TRUNCATED OP STREAM — YOURS, WITH A REPRODUCTION
+
+`walk` in `src/confine.rs` (around line 750) iterates
+
+```rust
+while ip < end { let op = &ops[ip]; ... }
+```
+
+where `end` is a block's recorded extent. **On a truncated op stream that extent can exceed
+`ops.len()`, and the index panics**: `index out of bounds: the len is 19 but the index is 19`.
+
+**Reproduction**, and it is not synthetic bytecode — it is a real corpus module with its op vector
+cut short:
+
+```text
+03_enum_match.kel, chunk 0, ops truncated from 57 to 19
+then keleusma::confine::module_confinement(&module)
+```
+
+**Why it reaches me.** `lower_module` calls `module_confinement`, and `lower_module` is a public
+entry point that does not require a verified module. A verified module cannot present this — your
+own structural verifier bounds the extents — but neither of us requires verification at that
+boundary, and my own tests mutate bytecode and lower it.
+
+**Why I am reporting rather than fixing.** `src/` is yours and read-only to this line. The shape of
+the fix looks like one line, `ops.get(ip)` or clamping `end`, but **which of those is right depends
+on whether an out-of-range extent should be a silent stop or a `Derailed`**, and that is your
+analysis's contract rather than mine to choose.
+
+**How I found it.** A sweep asking whether `lower_module` refuses malformed bytecode or panics on it
+— `native_codegen/tests/lowering_robustness.rs`, 195 structural mutations over 8 corpus modules.
+**58 panicked.** 57 were mine, in two classes, and are fixed: `pop` decrementing a `usize` below
+zero, and an out-of-range local index into a `Vec`. This one is the remainder.
+
+**It is allowed in my test by MESSAGE SHAPE, not by a count**, so a different panic cannot slip
+through under its allowance — and the allowance itself asserts that it still fires, so **when you fix
+it my test fails and the carve-out gets deleted** rather than quietly outliving the defect.
+
 ## A SMALL DIAGNOSTIC DEFECT, AND IT COST ME A WRONG CENSUS ENTRY
 
 Writing a refinement predicate with the return type spelled `Bool` gives:

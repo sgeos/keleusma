@@ -769,6 +769,24 @@ struct Lower<'ctx> {
     /// claim that exceeding it "is a lowering bug, not a program error" was an
     /// assumption with nothing enforcing it.
     stack_overflow: Option<usize>,
+    /// Set when an arm popped an operand the stack did not hold.
+    ///
+    /// **Recorded rather than panicked, exactly as `stack_overflow` is.** `pop`
+    /// decremented a `usize` unconditionally, so a chunk whose op stream pops
+    /// more than it pushes underflowed and panicked with *"attempt to subtract
+    /// with overflow"* — inside a library, unrecoverably, for a caller of a
+    /// PUBLIC entry point that does not require a verified module.
+    ///
+    /// A verified module cannot reach this: `verify_stack_depth` computes the
+    /// terminal depth of every region. **But `lower_module` does not require
+    /// verification, and the tree's own tests mutate bytecode and lower it.**
+    /// Measured by `lowering_robustness.rs`: 58 of 195 structural mutations
+    /// panicked, in two classes, of which this was one.
+    ///
+    /// The poisoned pop returns a zero constant so the arm can finish building
+    /// whatever it was building; the module is discarded by the refusal below,
+    /// so no caller ever sees that IR.
+    stack_underflow: bool,
     /// Packed width of each live operand, parallel to the slot at the same
     /// depth. Grown alongside `slots` and defaulted to [`Width::Unknown`], so an
     /// arm that does not state a width cannot be mistaken for one that did.
@@ -916,6 +934,11 @@ impl<'ctx> Lower<'ctx> {
     }
 
     fn pop(&mut self) -> IntValue<'ctx> {
+        // **DO NOT PANIC ON A MALFORMED OP STREAM.** See `stack_underflow`.
+        if self.depth == 0 {
+            self.stack_underflow = true;
+            return self.i64t.const_zero();
+        }
         self.depth -= 1;
         let slot = self.slot(self.depth);
         self.b
@@ -3125,6 +3148,7 @@ fn lower_chunk_body<'ctx>(
         slots,
         depth: 0,
         stack_overflow: None,
+        stack_underflow: false,
         widths: Vec::new(),
         kinds: Vec::new(),
         // **Parameter kinds start Unknown, not Int.** A float-typed parameter
@@ -3557,10 +3581,17 @@ fn lower_chunk_body<'ctx>(
 
         match op {
             Op::GetLocal(n) => {
-                let v =
-                    st.b.build_load(i64t, st.locals[*n as usize], "gl")
-                        .unwrap()
-                        .into_int_value();
+                // **A LOCAL INDEX OUT OF RANGE IS A REFUSAL, NOT A `Vec` PANIC.**
+                // The second of the two classes `lowering_robustness.rs`
+                // measured. `verify()` bounds this; `lower_module` does not
+                // require `verify()`.
+                let Some(slot) = st.locals.get(*n as usize).copied() else {
+                    return Err(LowerError::MalformedInput(format!(
+                        "GetLocal names slot {n} in a chunk with {} locals",
+                        st.locals.len()
+                    )));
+                };
+                let v = st.b.build_load(i64t, slot, "gl").unwrap().into_int_value();
                 // A local's width is trusted ONLY when the chunk never writes
                 // it, so its value is the parameter the signature described.
                 //
@@ -3606,7 +3637,20 @@ fn lower_chunk_body<'ctx>(
                 let w = st.width_at(0);
                 let k = st.kind_at(0);
                 let v = st.pop();
-                st.b.build_store(st.locals[*n as usize], v).unwrap();
+                // **BOUNDED FOR THE SAME REASON `GetLocal` IS.** This one was
+                // missed on the first pass, and the robustness sweep did not
+                // catch the miss because its mutation set corrupted `GetLocal`
+                // and not `SetLocal`. The mutation-placement guard is what
+                // pointed here — its registered `SetLocal` entry sits on this
+                // line. **A sweep is only as wide as its mutation set**, which
+                // is the same lesson the census overhaul recorded.
+                let Some(slot) = st.locals.get(*n as usize).copied() else {
+                    return Err(LowerError::MalformedInput(format!(
+                        "SetLocal names slot {n} in a chunk with {} locals",
+                        st.locals.len()
+                    )));
+                };
+                st.b.build_store(slot, v).unwrap();
                 let idx = *n as usize;
                 if local_write_count.get(&idx).copied().unwrap_or(0) == 1 {
                     if st.local_widths.len() <= idx {
@@ -5908,6 +5952,15 @@ fn lower_chunk_body<'ctx>(
             needed: needed + 1,
             provisioned: MAX_STACK,
         });
+    }
+    // Same shape, opposite direction: an op stream that pops more than it
+    // pushes. A verified module cannot, but `lower_module` does not require
+    // verification and a panic is unrecoverable for its caller.
+    if st.stack_underflow {
+        return Err(LowerError::MalformedInput(String::from(
+            "an opcode popped an operand the stack did not hold; the chunk's op \
+             stream is not stack-balanced, which `verify()` would have rejected",
+        )));
     }
 
     Ok(func)

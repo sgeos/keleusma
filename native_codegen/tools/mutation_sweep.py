@@ -137,13 +137,25 @@ MUTATIONS = {
         'st.b.build_int_compare(IntPredicate::NE, v, i64t.const_zero(), "not")',
     ),
     # --- operand and local traffic ----------------------------------------
+    # Both re-anchored 2026-09-08, when the direct `Vec` index became a bounds-
+    # checked `get`: an out-of-range local index is now a REFUSAL rather than a
+    # panic. The mutation still says the same thing -- read or write the WRONG
+    # local -- and now says it on the index the lookup actually uses.
     "GetLocal": (
-        'st.b.build_load(i64t, st.locals[*n as usize], "gl")',
-        'st.b.build_load(i64t, st.locals[(*n as usize).saturating_sub(1)], "gl")',
+        'let Some(slot) = st.locals.get(*n as usize).copied() else {\n'
+        '                    return Err(LowerError::MalformedInput(format!(\n'
+        '                        "GetLocal names slot {n} in a chunk with {} locals",',
+        'let Some(slot) = st.locals.get((*n as usize).saturating_sub(1)).copied() else {\n'
+        '                    return Err(LowerError::MalformedInput(format!(\n'
+        '                        "GetLocal names slot {n} in a chunk with {} locals",',
     ),
     "SetLocal": (
-        "st.b.build_store(st.locals[*n as usize], v).unwrap();",
-        "st.b.build_store(st.locals[(*n as usize).saturating_sub(1)], v).unwrap();",
+        'let Some(slot) = st.locals.get(*n as usize).copied() else {\n'
+        '                    return Err(LowerError::MalformedInput(format!(\n'
+        '                        "SetLocal names slot {n} in a chunk with {} locals",',
+        'let Some(slot) = st.locals.get((*n as usize).saturating_sub(1)).copied() else {\n'
+        '                    return Err(LowerError::MalformedInput(format!(\n'
+        '                        "SetLocal names slot {n} in a chunk with {} locals",',
     ),
     "Dup": (
         "Op::Dup => {\n                let v = st.pop();\n                st.push(v);\n                st.push(v);",
