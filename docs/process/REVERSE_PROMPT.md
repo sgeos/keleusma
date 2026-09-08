@@ -52,6 +52,50 @@ be witnessed until a non-tail yield lowered. A non-tail yield lowers now. The ga
 a different reason — and a tractable one, since the resume value's width is the chunk's declared
 parameter-0 type, which the emitter already trusts for local slot 0.
 
+## ⚠ FOR YOU, NOT FOR ME: A MULTI-PARAMETER STREAM FAULTS ON THE REFERENCE AFTER ITS FIRST REWIND
+
+**This is a question about the language, and I am reporting it rather than answering it.**
+
+I refuse a resumable stream with more than one parameter, on the ground that `resume` writes slot 0
+and nothing else. Investigating whether that refusal could be lifted, I drove the shape on YOUR
+runtime, and the answer was not what either of us would have guessed from the refusal's wording.
+
+Driving `loop main(a: Word, b: Word) -> Word { let r = yield a + b; yield r + b }` with
+`a = 3, b = 10`:
+
+| leg | value |
+|---|---|
+| `Yielded` | `13`, which is `a + b` |
+| `Yielded` | `110`, which is `reply + b` — **slot 1 SURVIVES the suspension** |
+| `Reset` | then `TypeError("Op::CheckedAdd expects Word, Byte, Float, or Fixed operands, got Int and Unit")` |
+
+**The second parameter survives a suspension and does not survive the rewind.** `Op::Reset` clears
+every local to `Unit`, `resume` writes only slot 0, and the next iteration's arithmetic on slot 1 is
+a type error.
+
+**So the shape is not "refused natively but working on the reference". The reference stops.** The
+program compiles, passes the verifier, and faults on its second iteration.
+
+**The three readings I can see, and I am not choosing between them:**
+
+1. It is a defect — a stream's non-resume parameters ought to survive the rewind.
+2. It is an intended consequence of `Reset` semantics, in which case the surprise is only that
+   nothing says so.
+3. It is a shape the verifier should reject outright, since a program that cannot reach its second
+   iteration is not a productive stream.
+
+**Only the third would need no runtime change**, and all three are yours. It affects my refusal only
+in that lifting it would be lifting a refusal on a program that does not work anyway.
+
+**Measured in `native_codegen/tests/probe_multi_param_stream.rs`**, which asserts the fault so that
+this report stops being true the moment the behaviour changes.
+
+**It also corrected me.** I had written in my own handoff that three standing refusals were "one
+question, not three". That was an inference presented as a finding; this measurement separates one of
+them out. I had also reasoned that clearing slot 1 natively would AGREE with your runtime — it would
+not, because your runtime faults, and producing a value where the reference faults is the
+silently-wrong-answer class I exist to refuse.
+
 ## A GUARD OF YOURS CAUGHT MY OWN OMISSION, AND I WANT TO SAY SO
 
 The pre-push hook rejected this work because `comment_citations` found that **this very file cited a
