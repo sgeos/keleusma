@@ -1499,6 +1499,9 @@ pub fn lower_chunk<'ctx>(
             opts,
             degenerate_yield: None,
             delegated_call: None,
+            // Unreachable rather than merely absent: this path refuses
+            // `Op::Call`, so a stream chunk here has no callee to suspend.
+            suspending_callee: None,
             confinement: None,
             natives: &[],
             native_shapes: &[],
@@ -2008,6 +2011,11 @@ fn lower_module_with<'ctx>(
             opts,
             degenerate_yield: tail.as_deref(),
             delegated_call,
+            suspending_callee: if chunk.block_type == BlockType::Stream {
+                stream_suspending_callee(chunk, program)
+            } else {
+                None
+            },
             confinement: confinement.get(i).map(|v| v.as_slice()),
             natives: &program.native_names,
             native_shapes: &program.native_return_shapes,
@@ -2179,6 +2187,13 @@ struct BodyCfg<'a> {
     /// pushed, because the callee suspends on the caller's behalf. See
     /// [`delegated_suspension_plan`].
     delegated_call: Option<usize>,
+    /// `Some((op, callee))` when this is a stream chunk that calls a chunk which
+    /// can suspend. See [`stream_suspending_callee`] for why such a chunk is
+    /// refused rather than lowered by the general resumable path.
+    ///
+    /// `None` for [`lower_chunk`], which refuses `Op::Call` outright and so
+    /// cannot reach the shape at all.
+    suspending_callee: Option<(usize, usize)>,
     /// The module's declared native names, indexed by the operand of
     /// `CallVerifiedNative`/`CallExternalNative`.
     ///
@@ -2482,6 +2497,56 @@ pub fn delegated_suspension_subject(module: &Module) -> Option<(usize, usize, us
     delegated_suspension_plan(module)
 }
 
+/// The first `Op::Call` in this chunk whose callee can SUSPEND, as
+/// `(op index, callee index)`.
+///
+/// # Why this is its own function, and the defect that made it one
+///
+/// This check lived inside [`degenerate_stream_yield`] as one `return None`
+/// among several. That was safe only while `None` meant REFUSE. It stopped
+/// being safe the moment general `Op::Stream` lowering landed, because the
+/// general path is selected by exactly `Stream && degenerate_yield.is_none()`
+/// — so **every shape this predicate rejected for soundness was silently
+/// promoted into the new lowering**, including this one.
+///
+/// Measured, not argued: with the delegated flag OFF,
+///
+/// ```text
+/// yield helper(x: Word) -> Word { let r = yield x; r }
+/// loop main(a: Word) -> Word { yield helper(a) }
+/// ```
+///
+/// went from refused to `Refusals: []`. Four ratchets caught it —
+/// `delegated_suspension.rs` (three) and `yield_sequence.rs` (one) — which is
+/// what they were written for.
+///
+/// # Why the shape has to be refused
+///
+/// **The two suspension mechanisms do not compose.** A general stream's own
+/// `Op::Yield` lowers to a RETURN, so the host regains control. A callee's
+/// `Op::Yield` lowers to the `kel_yield` host CALLBACK, which inverts control.
+/// A program mixing them suspends through two different doors, and the runtime
+/// additionally overwrites the entry's resume parameter on the callee's
+/// suspension where a return-based lowering has no reason to.
+///
+/// Admitting it with the `delegated_suspension` option is a separate, narrower
+/// transform with its own plan and its own witnesses; it reaches the chunk
+/// through `degenerate_yield` rather than through this path.
+///
+/// # An unresolvable callee index counts as suspending
+///
+/// Admitting on missing evidence is the wrong default in a soundness check.
+fn stream_suspending_callee(chunk: &Chunk, module: &Module) -> Option<(usize, usize)> {
+    chunk.ops.iter().enumerate().find_map(|(ip, op)| match op {
+        Op::Call(idx, _)
+            if module.chunks.get(*idx as usize).map(|c| c.block_type) != Some(BlockType::Func) =>
+        {
+            Some((ip, *idx as usize))
+        }
+        _ => None,
+    })
+}
+
 fn degenerate_stream_yield(chunk: &Chunk, module: &Module) -> Option<Vec<usize>> {
     if chunk.block_type != BlockType::Stream {
         return None;
@@ -2503,15 +2568,13 @@ fn degenerate_stream_yield(chunk: &Chunk, module: &Module) -> Option<Vec<usize>>
     if chunk.param_count > 1 {
         return None;
     }
-    // Every callee must be `Func`, so none can suspend. An unresolvable index
-    // refuses rather than skips: admitting on missing evidence is the wrong
-    // default in a soundness check.
-    for op in ops {
-        if let Op::Call(idx, _) = op
-            && module.chunks.get(*idx as usize).map(|c| c.block_type) != Some(BlockType::Func)
-        {
-            return None;
-        }
+    // Every callee must be `Func`, so none can suspend.
+    //
+    // **THIS RETURN IS A SOUNDNESS REFUSAL AND NOT A "TRY THE OTHER PATH".**
+    // See [`stream_suspending_callee`], which now carries the check, and the
+    // note there about what returning `None` from this function came to mean.
+    if stream_suspending_callee(chunk, module).is_some() {
+        return None;
     }
 
     // EVERY `Yield` must be in TAIL POSITION: nothing but block delimiters and
@@ -2699,6 +2762,7 @@ fn lower_chunk_body<'ctx>(
         opts,
         degenerate_yield,
         delegated_call,
+        suspending_callee,
         confinement,
         natives,
         native_shapes,
@@ -2855,6 +2919,24 @@ fn lower_chunk_body<'ctx>(
     // reachable only from the entry dispatch — never by fall-through, because
     // the yield terminated its block.
     let general_stream = chunk.block_type == BlockType::Stream && degenerate_yield.is_none();
+    // **THE GENERAL PATH INHERITS THE DEGENERATE PREDICATE'S REJECTIONS, AND
+    // SOME OF THOSE WERE SOUNDNESS REFUSALS.**
+    //
+    // `general_stream` is defined immediately above as exactly "a stream the
+    // degenerate predicate declined". That was a correct definition while the
+    // only reason to decline was shape. It is not correct for the reasons that
+    // were about SAFETY — and one such reason, a callee that can itself suspend,
+    // was a bare `return None` inside that predicate.
+    //
+    // So the shape below silently moved from refused to lowered when general
+    // `Stream` support landed, and four ratchets fired. The check is restated
+    // here, at the point the general path is actually selected, rather than left
+    // to be implied by a `None` that now means two different things.
+    if general_stream && let Some((ip, callee)) = suspending_callee {
+        return Err(LowerError::UnsupportedShape(format!(
+            "this Stream chunk calls chunk {callee} at op {ip}, and that callee can              itself suspend. A stream's own yield lowers to a RETURN so the host              regains control, while a callee's yield lowers to the `kel_yield`              callback, which inverts it; the two do not compose, and the runtime              additionally overwrites this chunk's resume parameter on the callee's              suspension. Refused rather than lowered through two different doors"
+        )));
+    }
     let stream_pos = chunk.ops.iter().position(|o| matches!(o, Op::Stream));
     let yield_positions: Vec<usize> = if general_stream {
         chunk

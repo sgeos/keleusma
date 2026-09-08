@@ -360,3 +360,139 @@ pub fn corpus() -> Vec<(String, keleusma::bytecode::Module)> {
     }
     out
 }
+
+// ---------------------------------------------------------------------------
+// GENERAL (RESUMABLE) STREAM DIFFERENTIAL
+//
+// A resumable stream RETURNS at each `yield` and re-enters at the same point,
+// with its locals and its resume state in the arena. Calling it repeatedly must
+// therefore reproduce exactly the sequence the virtual machine yields.
+//
+// **WHY THIS LIVES HERE RATHER THAN IN ONE TEST FILE.** The driver names the
+// lowered function's signature by hand, and a harness that names a signature
+// cannot see it change. Extending the arena pointers to stream chunks once
+// changed the DEGENERATE chunks' signature too, and ten tests kept passing on
+// the calling convention's good manners — garbage read from registers the callee
+// never touched. The `count_params` assertion below is the guard against that,
+// and it belongs in ONE place rather than being re-derived by each file that
+// drives a stream.
+//
+// **THE ARENA IS THE INSTANCE.** Nothing here is global, so the buffers built
+// per call belong to this stream and to no other; two arenas would be two
+// independent streams.
+// ---------------------------------------------------------------------------
+
+/// Every value the virtual machine yields, bounded by the reply count.
+#[allow(dead_code)]
+pub fn general_vm_sequence(src: &str, first: i64, replies: &[i64]) -> Vec<i64> {
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for};
+
+    let m = build(src);
+    let need = required_persistent_capacity_for(&m);
+    let cap = auto_arena_capacity_for(&m, &[]).expect("arena capacity") + need + (64 << 10);
+    let mut arena = keleusma_arena::Arena::with_capacity(cap);
+    arena.resize_persistent(need).expect("persistent region");
+
+    let mut vm = Vm::new(m, &arena).expect("vm");
+    let mut out = Vec::new();
+    let mut st = vm.call(&[Value::Int(first)]).expect("vm run");
+    while out.len() < replies.len() {
+        match st {
+            VmState::Yielded(Value::Int(v)) => {
+                out.push(v);
+                let r = replies[out.len() - 1];
+                st = vm.resume(Value::Int(r)).expect("resume");
+            }
+            // The runtime reports the rewind as a leg of its own; the native
+            // driver collapses it, so it contributes no yielded value here and
+            // is offered the SAME reply as the suspension it follows.
+            VmState::Reset => {
+                let r = replies[out.len().saturating_sub(1)];
+                st = vm.resume(Value::Int(r)).expect("resume after reset");
+            }
+            other => panic!("a stream produced {other:?}"),
+        }
+    }
+    out
+}
+
+/// The same chunk as native code: one call per suspension, arena-resident state.
+#[allow(dead_code)]
+pub fn general_native_sequence(src: &str, first: i64, replies: &[i64]) -> Vec<i64> {
+    use inkwell::OptimizationLevel;
+    use inkwell::context::Context;
+    use keleusma::vm::required_persistent_capacity_for;
+    use keleusma_native::{LowerOptions, lower_module};
+
+    let m = build(src);
+    let entry = m.entry_point.expect("entry point");
+    let ctx = Context::create();
+    let lm = ctx.create_module("kel");
+    lower_module(&ctx, &lm, &m, LowerOptions::default()).expect("lower module");
+    lm.verify().expect("LLVM module verification");
+    maybe_optimize(&lm);
+    let ee = lm
+        .create_jit_execution_engine(OptimizationLevel::None)
+        .expect("jit");
+
+    let sym = format!("kel_chunk_{entry}");
+    let f = lm.get_function(&sym).expect("entry function");
+    assert_eq!(
+        f.count_params(),
+        u32::from(m.chunks[entry].param_count) + 3,
+        "a resumable stream must carry the three trailing pointers; the call below \
+         names that signature by hand and cannot detect a change to it"
+    );
+    let callable = unsafe {
+        ee.get_function::<unsafe extern "C" fn(i64, *mut u8, *mut u8, *mut u8) -> i64>(&sym)
+    }
+    .expect("entry symbol");
+
+    // Persistent carries the resume state, which is why it is sized with the
+    // backend's supplement and not with the runtime's figure alone.
+    let persistent = required_persistent_capacity_for(&m)
+        + keleusma_native::region::persistent_supplement_bytes(&m) as usize;
+    let mut privs = vec![0u8; persistent + 64];
+    let mut shared = vec![0u8; 4096];
+    let mut region =
+        vec![0u8; keleusma_native::region::host_arena_supplement_bytes(&m) as usize + 4096];
+
+    let mut out = Vec::new();
+    let mut input = first;
+    for &r in replies {
+        out.push(unsafe {
+            callable.call(
+                input,
+                shared.as_mut_ptr(),
+                privs.as_mut_ptr(),
+                region.as_mut_ptr(),
+            )
+        });
+        input = r;
+    }
+    out
+}
+
+/// Assert a resumable stream's whole yielded sequence matches the runtime's.
+///
+/// Refuses to be pointed at a program the backend declines: asserting agreement
+/// about a module that never ran is the failure mode this whole file exists to
+/// prevent.
+#[allow(dead_code)]
+pub fn assert_general_stream_agrees(src: &str, first: i64, replies: &[i64]) {
+    use keleusma_native::{LowerOptions, module_refusals};
+
+    let refusals = module_refusals(&build(src), LowerOptions::default());
+    assert!(
+        refusals.is_empty(),
+        "the backend refuses {src:?}, so this would be asserting agreement about a \
+         program it never ran: {refusals:?}"
+    );
+    let vm = general_vm_sequence(src, first, replies);
+    let nat = general_native_sequence(src, first, replies);
+    assert_eq!(
+        nat, vm,
+        "YIELD SEQUENCE differs for {src:?}\n  native={nat:?}\n  vm    ={vm:?}"
+    );
+}

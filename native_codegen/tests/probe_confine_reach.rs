@@ -70,28 +70,25 @@ fn which_shapes_reach_the_confinement_refusal() {
     );
 }
 
-/// **THE GUARD'S REACH, PROVED BY MUTATING REAL BYTECODE.**
+/// **THE GUARD'S REACH — NO LONGER A SIMULATION. THE DAY ARRIVED.**
 ///
-/// The confinement refusal adds nothing on the corpus, which is the acceptance
-/// criterion holding and is also indistinguishable from a guard that cannot
-/// fire. Measured above: it cannot, FROM SOURCE. The reference compiler refuses
-/// an early return inside a loop and refuses reassignment, so `yield` is the
-/// only route by which a loop-built composite escapes its iteration, and every
-/// chunk carrying that shape is refused for `Stream` before the placement is
-/// reached.
+/// This test used to MUTATE real bytecode, replacing `Op::Stream` and `Op::Reset`
+/// with no-ops, because every chunk carrying an escaping composite was refused
+/// for `Stream` before the placement was reached. Its own header said that
+/// accidental protection *"expires the day `Stream` lowers"*.
 ///
-/// **That is the accidental protection the obligation names, and it expires the
-/// day `Stream` lowers.** So the guard is proved reachable the way the typed
-/// verifier's conformance corpus proves its own: by mutating a real module
-/// rather than by writing a source program the language will not accept.
+/// **It has expired.** General `Op::Stream` lowering landed, and
+/// `13_telemetry_stream.kel` is now refused by the escape check itself, naming
+/// the site. The mutation is therefore removed rather than kept: a simulation
+/// whose premise has come true is no longer evidence about anything, and the
+/// premise assertion it opened with is what caught the change.
 ///
-/// `Op::Stream` and `Op::Reset` are replaced by `Op::PopN(0)`, which is a no-op
-/// and preserves every op index, so the site addresses the analysis reports stay
-/// valid.
+/// The refusal is observed through `module_refusals`, which is the boundary a
+/// consumer meets, and not by calling the analysis directly — a predicate that
+/// reports an escape while the emitter lowers the chunk anyway would satisfy a
+/// direct test and ship a wrong module.
 #[test]
-fn the_confinement_refusal_fires_once_the_stream_refusal_is_out_of_the_way() {
-    use keleusma::bytecode::Op;
-
+fn the_confinement_refusal_fires_on_the_real_module_with_no_mutation() {
     let path = common::corpus_sources()
         .into_iter()
         .find(|p| {
@@ -100,59 +97,30 @@ fn the_confinement_refusal_fires_once_the_stream_refusal_is_out_of_the_way() {
         })
         .expect("13_telemetry_stream.kel is the module written to carry the escaping shape");
     let src = std::fs::read_to_string(&path).expect("read");
-    let mut m = build(&src).expect("compiles");
+    let m = build(&src).expect("compiles");
 
-    // Confirm the premise before mutating: today this module is refused for
-    // Stream, NOT for confinement.
-    let before = keleusma_native::module_refusals(&m, keleusma_native::LowerOptions::default());
-    let before_text = before
-        .first()
+    let refusals = keleusma_native::module_refusals(&m, keleusma_native::LowerOptions::default());
+    let text = refusals
+        .iter()
         .map(|(c, e)| format!("{c}: {e}"))
-        .unwrap_or_else(|| "LOWERS".into());
-    assert!(
-        before_text.contains("Stream"),
-        "premise gone: this module is no longer refused for Stream, it says {before_text}. \
-         The mutation below is then testing something else"
-    );
+        .collect::<Vec<_>>()
+        .join(" | ");
 
-    let mut replaced = 0usize;
-    for chunk in &mut m.chunks {
-        for op in &mut chunk.ops {
-            if matches!(op, Op::Stream | Op::Reset) {
-                *op = Op::PopN(0);
-                replaced += 1;
-            }
-        }
-    }
-    assert!(
-        replaced > 0,
-        "no Stream or Reset found; the mutation applied nothing"
-    );
-
-    let after = keleusma_native::module_refusals(&m, keleusma_native::LowerOptions::default());
-    let after_text = after
-        .first()
-        .map(|(c, e)| format!("{c}: {e}"))
-        .unwrap_or_else(|| "LOWERS".into());
-
-    println!("\n================ THE GUARD'S REACH");
-    println!("  Stream/Reset ops replaced : {replaced}");
-    println!("  before the mutation       : {before_text}");
-    println!("  after the mutation        : {after_text}");
+    println!("\n================ THE GUARD'S REACH, UNMUTATED");
+    println!("  refusals: {text}");
     println!("================\n");
 
-    // **WHAT THIS ASSERTS, AND WHAT IT DELIBERATELY DOES NOT.**
-    //
-    // With `Stream` out of the way the site is still refused -- but by the
-    // PRE-EXISTING syntactic check, which sits ahead of the confinement one by
-    // design, because the confinement verdict may only ADD refusals and never
-    // remove one. So this does not assert which check fires, only that the
-    // hazard is refused. Asserting the confinement message here would fail the
-    // moment the ordering did its job.
+    // **NOT REFUSED FOR `Stream`.** Stated as its own assertion because the
+    // whole point of the change is that the shadowing refusal is gone; if it
+    // came back, the test below would still pass for the wrong reason.
     assert!(
-        after_text.contains("op 24"),
-        "with the Stream refusal out of the way the escaping site is no longer \
-         refused at all. It said: {after_text}"
+        !text.contains("does not yet support opcode Stream"),
+        "this module is refused for Stream again, so the escape refusal is \
+         shadowed once more and this test is not measuring it: {text}"
+    );
+    assert!(
+        text.contains("op 24"),
+        "the escaping site is no longer refused. It said: {text}"
     );
 
     // The analysis's own answer for that site, asserted directly. This is the
@@ -176,11 +144,8 @@ fn the_confinement_refusal_fires_once_the_stream_refusal_is_out_of_the_way() {
          the reuse the obligation is about"
     );
 
-    // **REACH, PROVED BY A MUTATION RECORDED IN THE SESSION RATHER THAN HERE.**
-    // Disabling the syntactic check makes the confinement refusal fire on this
-    // same site, naming it as `Escapes its iteration (Yielded { ip: 25 })`. That
-    // is what establishes the new check is not a guard that cannot fire. It is
-    // not a permanent test because a test that disables a neighbouring guard to
-    // observe its successor would have to keep them both, and the ordering
-    // between them is the safety property.
+    // **WHICH CHECK FIRES IS DELIBERATELY NOT ASSERTED.** The pre-existing
+    // syntactic check sits ahead of the confinement one by design, because the
+    // confinement verdict may only ADD refusals and never remove one. Naming the
+    // confinement message here would fail the moment that ordering did its job.
 }

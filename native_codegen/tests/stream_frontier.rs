@@ -89,6 +89,24 @@ const SHAPES: &[(&str, &str)] = &[
         "yield calling a function",
         "fn f(x: Word) -> Word { x * 3 }\nloop main(t: Word) -> Word { yield f(t) }",
     ),
+    // **ADDED 2026-09-08**, when general `Op::Stream` lowering left the original
+    // eight shapes with a single refusal between them. A matrix whose refusals
+    // all come from one cause locates one edge of the frontier and implies the
+    // rest is open, which is not what the backend does.
+    (
+        "yield a composite, non-tail",
+        "struct P { a: Word, b: Word }\n\
+         loop main(t: Word) -> P { let a = yield P { a: t, b: t }; yield P { a: a, b: a } }",
+    ),
+    (
+        "yield inside an if with a tail",
+        "loop main(t: Word) -> Word { if t > 0 { let a = yield t; yield a } else { yield 0 } }",
+    ),
+    (
+        "yield calling a suspending callee",
+        "yield helper(x: Word) -> Word { let r = yield x; r }\n\
+         loop main(t: Word) -> Word { yield helper(t) }",
+    ),
 ];
 
 #[test]
@@ -168,9 +186,14 @@ fn whether_a_composite_yielding_stream_can_reach_the_placement() {
         ),
         Ok(Some(why)) => {
             println!("  still refused, by: {why}");
+            // **CORRECTED 2026-09-08.** This line used to conclude that the
+            // escape refusal "remains SHADOWED ... not yet load-bearing". That
+            // was true only while `Op::Stream` was refused. It lowers now, so
+            // the refusal printed above IS the escape check, and it is the only
+            // thing between this shape and a silently wrong value.
             println!(
-                "  => the yield-escape refusal remains SHADOWED. It is a precaution,\n  \
-                 not yet load-bearing.\n================\n"
+                "  => the refusal above is now the ONE that stands between this shape\n  \
+                 and the placement. It is load-bearing, not a precaution.\n================\n"
             );
         }
         Err(why) => println!("  the reference rejects this program: {why}\n================\n"),
@@ -179,34 +202,65 @@ fn whether_a_composite_yielding_stream_can_reach_the_placement() {
 
 /// The rule the matrix implies, pinned so a change announces itself.
 ///
-/// **The discriminator is TAIL POSITION, not the yielded type.** A composite
-/// yielded in tail position lowers; a `Word` yielded with code after it does
-/// not. That single pair separates the two candidate explanations, and it rules
-/// out the one this line would have guessed — that composites are the problem,
-/// because composites are what `13_telemetry_stream.kel` yields.
+/// # **RE-DERIVED 2026-09-08. TAIL POSITION IS NO LONGER THE DISCRIMINATOR.**
 ///
-/// It also rules out "exactly one yield": "yield then more code" has exactly one
-/// and is refused.
+/// This test asserted that tail position separated what lowers from what does
+/// not, and it named the pair that established it: a composite yielded in tail
+/// position lowered, a `Word` yielded with code after it did not. **The second
+/// half stopped being true** when general `Op::Stream` lowering landed. A yield
+/// with code after it now lowers, and so does a yield inside an `if` and a yield
+/// inside a `for`.
+///
+/// The expectation is not edited to match. The discriminator is re-measured, and
+/// it is a different property:
+///
+/// **A COMPOSITE THAT ESCAPES THE ITERATION THAT BUILT IT.** Neither half alone
+/// does it — a composite yielded in tail position lowers, and a `Word` yielded
+/// from inside a `for` lowers. It is the CONJUNCTION that is refused, because
+/// every construction site has a fixed offset, so the next iteration would
+/// overwrite bytes the host still holds.
+///
+/// Three shapes, not two, because two candidate explanations survive a pair
+/// here: "composites are the problem" and "loops are the problem". The third
+/// case rules out whichever the pair leaves standing.
 #[test]
-fn the_discriminator_is_tail_position_and_not_the_yielded_type() {
+fn the_discriminator_is_a_composite_escaping_its_iteration() {
     let composite_tail =
         status("struct P { a: Word, b: Word }\nloop main(t: Word) -> P { yield P { a: t, b: t } }");
-    let word_non_tail = status("loop main(t: Word) -> Word { yield t; t * 2 }");
+    let word_in_a_loop = status(
+        "loop main(t: Word) -> Word { let xs = [1, 2]; for x in xs { let _ = yield x; } yield 0 }",
+    );
+    let composite_in_a_loop = status(
+        "struct P { a: Word, b: Word }\n\
+         loop main(t: Word) -> P {\n\
+           let xs = [1, 2];\n\
+           for x in xs { let _ = yield P { a: x, b: x }; }\n\
+           yield P { a: 0, b: 0 }\n\
+         }",
+    );
 
     println!("\n================ WHAT SEPARATES THEM");
-    println!("  composite yielded in TAIL position : {composite_tail:?}");
-    println!("  Word yielded with code AFTER it    : {word_non_tail:?}");
+    println!("  composite, NOT in a loop  : {composite_tail:?}");
+    println!("  Word, IN a loop           : {word_in_a_loop:?}");
+    println!("  composite, IN a loop      : {composite_in_a_loop:?}");
     println!("================\n");
 
     assert!(
         matches!(composite_tail, Ok(None)),
-        "a composite yielded in tail position no longer lowers, so the frontier is \
-         not where this file says: {composite_tail:?}"
+        "a composite yielded outside a loop no longer lowers, so the composite \
+         type alone would explain the refusal and this pair no longer separates \
+         the candidates: {composite_tail:?}"
     );
     assert!(
-        matches!(&word_non_tail, Ok(Some(why)) if why.contains("Stream")),
-        "a single Word yield with code after it is no longer refused for Stream, so \
-         tail position is no longer the discriminator: {word_non_tail:?}"
+        matches!(word_in_a_loop, Ok(None)),
+        "a Word yielded from inside a loop no longer lowers, so the loop alone \
+         would explain the refusal: {word_in_a_loop:?}"
+    );
+    assert!(
+        matches!(&composite_in_a_loop, Ok(Some(why)) if why.contains("yielded at op")),
+        "a composite yielded from inside a loop is no longer refused for the \
+         escape hazard. Either the guard stopped firing -- which is the silent \
+         wrong value case -- or the frontier moved again: {composite_in_a_loop:?}"
     );
 }
 
@@ -237,12 +291,21 @@ fn the_suspension_differential_drives_no_composite_yielding_subject() {
     println!("\n================ SUSPENSION DIFFERENTIAL SUBJECTS");
     println!("  Word-yielding      : {word_subjects}");
     println!("  composite-yielding : {composite_subjects}");
+    // **THE REASON HERE WAS CORRECTED 2026-09-08.** It used to say the gap
+    // "cannot be [closed] until such a stream lowers at all -- it needs a yield
+    // that is not in tail position, which is refused". A non-tail yield lowers
+    // now, so that blocker is gone and the gap is still open, for a DIFFERENT
+    // and newly visible reason: the value delivered at a resume point has no
+    // declared width, so a composite built from it is refused by the
+    // `NewComposite` width check. Measured as the "yield a composite, non-tail"
+    // row of the matrix above.
     println!(
         "  => value marshalling for a tail composite IS witnessed, in\n  \
          `what_the_native_side_yields_for_a_composite`. SEQUENCE semantics for a\n  \
-         composite-yielding stream are not, and cannot be until such a stream\n  \
-         lowers at all -- it needs a yield that is not in tail position, which is\n  \
-         refused.\n================\n"
+         composite-yielding stream are still not, and the blocker is now the\n  \
+         RESUME VALUE'S UNKNOWN WIDTH rather than the absence of Stream lowering:\n  \
+         a composite built from a resumed value is refused by the NewComposite\n  \
+         width check.\n================\n"
     );
     assert!(
         word_subjects > 0,

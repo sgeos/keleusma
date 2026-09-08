@@ -208,29 +208,37 @@ fn two_suspensions_agree_in_order() {
     }
 }
 
+/// **INVERTED 2026-09-08: THE PREMISE THIS TEST NAMED IS THE THING THAT
+/// CHANGED.**
+///
+/// It asserted that a divergent `loop fn` must be refused *"under a callback
+/// yield ABI"*, and that qualifier was load bearing rather than decorative. A
+/// stream is no longer lowered under a callback ABI: its `Op::Yield` RETURNS and
+/// the host regains control at every suspension, which is precisely the
+/// host-driven shape the old comment said such a program would need.
+///
+/// So the refusal has not been relaxed. **Its premise has been removed**, and
+/// what stands in its place is the obligation the refusal was protecting: that
+/// the host can stop the program. That is what a whole-sequence comparison
+/// checks, and a refusal never could.
+///
+/// # What remains genuinely unmeasured, and is not asserted here
+///
+/// The tail `a * a` CAN TRAP on overflow. The virtual machine takes that trap on
+/// the resume; native code re-enters at the resume point and takes it on the
+/// next call, which is the same logical position. **That correspondence is
+/// reasoned, not measured** — a native trap aborts the process rather than
+/// returning a comparable value, so this harness cannot witness it. The values
+/// below are chosen not to overflow, and the trap ordering stays an open
+/// question rather than a claim.
 #[test]
-fn a_divergent_loop_function_is_refused() {
-    // `Stream` and `Reset` are refused DELIBERATELY, not by omission. The
-    // callback ABI inverts control, so a divergent `loop fn` would spin inside
-    // native code with no way for the host to stop it. Supporting it needs a
-    // host-driven shape, which is the coroutine path.
-    // WAS `let x = yield a; x` until 2026-08-11. That shape is now ADMITTED, and
-    // its equivalence is asserted by `an_effect_free_tail_after_the_yield_...`:
-    // the block's value is discarded by the `PopN(1)` before `Reset`, so binding
-    // the resume value and returning it is dead code. The oracle was asked
-    // BEFORE the boundary was moved, not after, because "obviously equivalent"
-    // is what the previous rule's author thought too.
-    //
-    // This case still refuses, for a reason the comment above gives: the tail
-    // can TRAP, which is observable, and the virtual machine would take the trap
-    // after the suspension where native code has already returned.
-    let src = "loop main(a: Word) -> Word { yield a; a * a }";
-    let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
-    let ctx = Context::create();
-    let lm = ctx.create_module("kel");
-    assert!(
-        lower_module(&ctx, &lm, &m, LowerOptions::default()).is_err(),
-        "a divergent loop function must be refused under a callback yield ABI"
+fn a_divergent_loop_function_now_lowers_and_agrees() {
+    // The replies differ from each other and from the argument, so a lowering
+    // that returned the argument instead of the resumed value would show up.
+    common::assert_general_stream_agrees(
+        "loop main(a: Word) -> Word { yield a; a * a }",
+        7,
+        &[11, 20, 31, 40],
     );
 }
 
@@ -383,48 +391,77 @@ fn the_degenerate_stream_agrees_in_sequence_and_result() {
 /// returns `None` while the emitter lowers the chunk anyway would pass a direct
 /// test and ship a wrong module.
 #[test]
-fn shapes_outside_the_degenerate_class_are_still_refused() {
-    // The resumed value is CONSUMED, so the tail is not `[PopN(1)]`. This is the
-    // case `a_divergent_loop_function_is_refused` already pins; asserted here
-    // too because it is the condition most likely to be relaxed by someone who
-    // reads `PopN(1)` as bookkeeping.
+fn what_left_the_degenerate_class_and_where_each_shape_went() {
+    // **RENAMED AND RE-POINTED 2026-09-08.** This was
+    // `shapes_outside_the_degenerate_class_are_still_refused`, and its premise
+    // was that leaving the degenerate class meant being refused. General
+    // `Op::Stream` lowering ended that: a shape the degenerate predicate
+    // declines is now handed to the resumable path instead. **Two of the three
+    // cases below therefore moved from refused to admitted, and one did not.**
     //
-    // A tail that writes the DATA SEGMENT. That write survives `Reset` and is
-    // therefore observable, unlike a local, so the yield is not in tail position
-    // however balanced the operand stack is. This replaced a case that the
-    // 2026-08-11 generalisation legitimately admits.
-    assert_refused(
+    // The cases are kept rather than deleted. A must-not-fire case that stops
+    // firing because the rule changed is a decision, and deleting it would leave
+    // no record that the boundary moved on purpose.
+
+    // 1. A tail that writes the DATA SEGMENT. **NOW ADMITTED.** The write
+    //    survives `Op::Reset` and is observable, which is exactly why it needed
+    //    evidence rather than an argument; that evidence is
+    //    `a_trailing_expression_with_an_observable_effect_agrees`, which drives
+    //    the private-segment form and compares the whole sequence.
+    //
+    //    **Stated as a limit rather than glossed**: the SHARED-segment form
+    //    below is asserted only to lower. Driving it would need
+    //    `call_with_shared` on the runtime side, so its sequence is not
+    //    differentiated here and no claim is made that it is.
+    assert_lowers(
         "data st { n: Word }\n\
          loop main(a: Word) -> Word { yield a; st.n = a; 0 }",
     );
 
-    // TWO top-level yields: a real partition, which the degenerate form does not
-    // have. This is the multi-segment case that still needs the rotation.
-    assert_refused("loop main(a: Word) -> Word { yield a; yield a + 1 }");
+    // 2. TWO top-level yields, a real partition of the body. **NOW ADMITTED**,
+    //    and its sequence is compared in
+    //    `general_stream_sequence::two_yields_in_one_iteration_agree`. Asserted
+    //    here as lowering only, so that this file's inventory stays complete
+    //    without duplicating the subject.
+    assert_lowers("loop main(a: Word) -> Word { yield a; yield a + 1 }");
 
-    // A NESTED yield was refused here until 2026-08-11, on the depth-zero rule.
-    // **The rule deliberately widened** to tail position, and this shape is now
-    // ADMITTED — both yields end their path, so it is a control-flow join rather
-    // than a suspension. Its equivalence is asserted by
-    // `nested_yields_in_tail_position_agree_in_sequence`, which drives both arms.
+    // 3. A DELEGATED suspension. **STILL REFUSED, AND THIS IS THE CASE THAT
+    //    MATTERS.**
     //
-    // The case is moved rather than deleted. A must-not-fire case that stops
-    // firing because the rule changed is a decision, and deleting it silently
-    // would leave no record that the boundary moved on purpose.
-
-    // A DELEGATED suspension, which is the case no chunk-local reading catches.
-    //
-    // The op vector of `main` here looks degenerate: one top-level `Yield`, tail
+    // The op vector of `main` looks degenerate: one top-level `Yield`, tail
     // exactly `PopN(1)`, `Stream` first and `Reset` last. It is NOT degenerate,
     // because `helper` suspends too, and on that suspension the VM overwrites
     // `main`'s resume parameter while native code does not.
     //
-    // If this case is ever DROPPED because it looks redundant next to the others,
-    // the predicate silently starts miscompiling a shape the corpus contains:
-    // `codegen.kel` delegates its entire body this way.
+    // **This case caught a real defect on the day general `Stream` landed.** The
+    // callee check was a bare `return None` inside `degenerate_stream_yield`,
+    // and the general path is selected by exactly that predicate returning
+    // `None` — so the shape was promoted from refused to lowered with nothing
+    // else changing. It reported `Refusals: []` here and in three tests in
+    // `delegated_suspension.rs`. The backend now refuses it explicitly; see
+    // `stream_suspending_callee`.
+    //
+    // If this case is ever DROPPED because it looks redundant next to the
+    // others, the two suspension mechanisms silently start composing.
     assert_refused(
         "yield helper(x: Word) -> Word { let r = yield x; r }\n\
          loop main(a: Word) -> Word { yield helper(a) }",
+    );
+}
+
+/// Lower `src` and assert the module is ACCEPTED.
+///
+/// **Lowering is not agreement**, and every call above says where the agreement
+/// evidence for that shape lives. This exists so a shape that moved from refused
+/// to admitted still has an assertion in this file, rather than vanishing from
+/// it.
+fn assert_lowers(src: &str) {
+    let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let ctx = Context::create();
+    let lm = ctx.create_module("kel");
+    assert!(
+        lower_module(&ctx, &lm, &m, LowerOptions::default()).is_ok(),
+        "this shape is expected to lower through the resumable stream path:\n{src}"
     );
 }
 
@@ -523,29 +560,41 @@ fn an_effect_free_tail_after_the_yield_agrees_in_sequence() {
     );
 }
 
-/// MUST-NOT-FIRE for the generalisation.
+/// **INVERTED 2026-09-08. The strongest form of a trailing expression: one whose
+/// effect SURVIVES the suspension.**
 ///
-/// The rule now admits any tail that only touches the operand stack and this
-/// frame's locals. It must still refuse a tail that TRAPS, because a trap is
-/// observable and the virtual machine would take it after the suspension where
-/// native code, having already returned, would not.
+/// This test asserted that `yield a; a * a` must be refused, and its own body
+/// said it could not show why — `assert_refused` checks only that lowering errs,
+/// and the backend refused it for the yield not being in tail position rather
+/// than for the trap. That shape now lowers, and its agreement is asserted by
+/// `a_divergent_loop_function_now_lowers_and_agrees`.
+///
+/// **Rather than duplicate that subject, this case takes the harder one.** A
+/// write to the DATA SEGMENT after the suspension is observable in a way a local
+/// is not: it survives `Op::Reset`, so a lowering that dropped it, ran it twice,
+/// or ran it before the suspension would produce a different sequence on the
+/// following iterations rather than the same one. That is the property the old
+/// refusal's rationale was actually about.
+///
+/// The subject was previously pinned as refused inside
+/// `shapes_outside_the_degenerate_class_are_still_refused`, whose comment called
+/// it "the condition most likely to be relaxed by someone who reads `PopN(1)` as
+/// bookkeeping". It has now been relaxed deliberately, and this is the evidence
+/// that was owed for doing so.
 #[test]
-fn a_yield_with_a_trailing_expression_is_refused() {
-    // **RENAMED from "a tail that can trap is still refused".** The old name
-    // attributed the refusal to the trailing expression's ability to TRAP, and
-    // the body cannot show that: `assert_refused` checks only that lowering
-    // errs, not why, and the backend refuses this shape with *"does not yet
-    // support opcode Stream"* because **the yield is not in tail position**.
-    // Measured in `stream_frontier.rs`: "yield then more code" is refused
-    // whatever follows the yield, trapping or not.
-    //
-    // **The reasoning in the doc comment above still stands** — a trap observable
-    // WOULD be taken by the virtual machine after suspension where native code,
-    // having already returned, would not. That is why the refusal matters. But
-    // this test does not isolate it, and **a test that did would need a shape
-    // that lowers except for the trap, which does not exist while every non-tail
-    // yield is refused.**
-    // Checked arithmetic after the suspension. Under the trap policy this can
-    // fault, so it is not effect-free and the yield is not in tail position.
-    assert_refused("loop main(a: Word) -> Word { yield a; a * a }");
+fn a_trailing_expression_with_an_observable_effect_agrees() {
+    // `st.n` accumulates across iterations, so the yielded values diverge from
+    // the replies after the first. A lowering that lost the write would return
+    // the same sequence forever and be caught here.
+    common::assert_general_stream_agrees(
+        // PRIVATE data, not shared: the private segment lives in the
+        // persistent region and needs no host buffer, whereas a shared one must
+        // be driven through `call_with_shared` and would make this a test about
+        // the harness. Private is also the stronger subject here — it is the
+        // segment that survives `Op::Reset`.
+        "private data st { n: Word }\n\
+         loop main(a: Word) -> Word { yield st.n + a; st.n = st.n + a; 0 }",
+        7,
+        &[11, 20, 31, 40],
+    );
 }

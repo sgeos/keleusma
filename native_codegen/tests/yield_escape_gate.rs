@@ -359,32 +359,42 @@ fn what_the_backend_does_with_the_module_that_carries_the_shape() {
     );
 }
 
-/// **CAN THE REFUSAL ACTUALLY FIRE THROUGH `lower_module`?**
+/// **THE TRIPWIRE FIRED, AND THIS IS ITS DISPOSITION.**
 ///
-/// Every chunk that can carry the shape is a `loop` chunk, and a `loop` chunk
-/// opens with `Op::Stream`, which this backend refuses. So the yield-escape
-/// refusal is SHADOWED today: the module is rejected before lowering reaches
-/// the construction site.
+/// This test asserted that the yield-escape refusal was SHADOWED: every chunk
+/// that can carry the shape is a `loop` chunk, a `loop` chunk opens with
+/// `Op::Stream`, and the backend refused that opcode, so the module was rejected
+/// before lowering reached the construction site. Its header said it *"fails on
+/// the day `Stream` is lowered"*, and that whoever landed `Stream` must confirm
+/// the escape refusal fires in its place.
 ///
-/// That is worth an explicit test rather than a footnote, because a guard that
-/// cannot fire is indistinguishable from no guard, and this line has shipped
-/// several of those. What is asserted here is the shadowing itself.
+/// **That day came, and the confirmation is this test's new body.** `Stream`
+/// lowers; the §4.1 module is refused by the escape check itself, which names
+/// the construction site and the yield.
 ///
-/// **THIS TEST IS A TRIPWIRE.** It fails on the day `Stream` is lowered. Whoever
-/// lands `Stream` must then confirm that the yield-escape refusal fires in its
-/// place — because at that moment it stops being a precaution and becomes the
-/// only thing standing between the corpus and a silently wrong value.
+/// So the guard has stopped being a precaution. **It is now the only thing
+/// standing between this corpus and a silently wrong value**, which is why the
+/// assertion below is on the escape reason specifically and additionally denies
+/// the old shadowing reason. Asserting merely "refused" would pass again if some
+/// future refusal moved back in front of it.
 #[test]
-fn the_yield_escape_refusal_is_shadowed_by_the_missing_stream_opcode() {
+fn the_yield_escape_refusal_now_fires_unshadowed() {
     let m = compile_src(SECTION_4_1);
     let refusals = module_refusals(&m, LowerOptions::default());
     let text: Vec<String> = refusals.iter().map(|(s, e)| format!("{s}: {e}")).collect();
     println!("\n================ §4.1 REFUSALS TODAY\n  {text:?}");
     assert!(
-        text.iter().any(|t| t.contains("Stream")),
-        "the §4.1 module is no longer refused for Stream: {text:?}. If Stream now \
-         lowers, check that the yield-escape refusal fires in its place -- that is \
-         the whole point of this tripwire."
+        text.iter().any(|t| t.contains("yielded at op")),
+        "the §4.1 module is not refused for the yield-escaping composite, so the \
+         only guard against the silent wrong value is not firing: {text:?}"
+    );
+    assert!(
+        !text
+            .iter()
+            .any(|t| t.contains("does not yet support opcode Stream")),
+        "the module is refused for Stream again. The escape refusal is shadowed \
+         once more, so the assertion above passed without establishing that the \
+         guard is reachable: {text:?}"
     );
 }
 
@@ -437,79 +447,72 @@ fn with_the_shadow_removed_the_lowering_refuses_the_shape() {
     );
 }
 
-/// **THE BLAST RADIUS: what the soundness refusal takes over on the day
-/// `Stream` lowers.**
+/// **THE BLAST RADIUS, MEASURED DIRECTLY NOW THAT `Stream` HAS LANDED.**
 ///
-/// Today the yield-escape refusal is shadowed — every module that could trigger
-/// it is refused earlier for `Stream`. **That makes it a precaution.** When
-/// `Stream` lowers it becomes the only thing between this corpus and a silently
-/// wrong value, and the question an operator needs answered is **which modules
-/// it then refuses, and whether coverage falls.**
+/// This test used to SIMULATE the future: it removed `Op::Stream` from a copy of
+/// each corpus module and asked which ones the yield-escape refusal would then
+/// take over. It opened with a non-vacuity check — that some module is refused
+/// for `Stream` — and **that check is what failed when general `Stream` lowering
+/// landed**, reporting that the simulation had no subject left.
 ///
-/// # Simulated by mutation, not by weakening anything
+/// It has no subject because there is nothing left to simulate. The mutation is
+/// removed and the same question is asked of the shipping backend.
 ///
-/// `Op::Stream` is removed from compiled bytecode inside this test. **No guard or
-/// refusal in the lowering is relaxed** — the backend is untouched and the
-/// mutation lives and dies here.
+/// # What an operator gets from this
+///
+/// The identity of the set, which is what one weighs when deciding whether the
+/// region planner may consume a confinement verdict. **Coverage did not fall**:
+/// every module named here was refused before this increment too, for `Stream`.
+/// The refusal changed REASON, from an unimplemented feature to a soundness
+/// property, which is the whole point of having written the guard early.
 #[test]
-fn which_modules_the_soundness_refusal_takes_over_when_stream_lands() {
+fn which_modules_the_soundness_refusal_refuses_today() {
     let mods = corpus();
-    let mut taken_over: Vec<String> = Vec::new();
-    let mut already_refused_for_stream: Vec<String> = Vec::new();
+    let mut escaping: Vec<String> = Vec::new();
+    let mut refused_for_stream: Vec<String> = Vec::new();
 
     for (name, m) in &mods {
-        let before: Vec<String> = module_refusals(m, LowerOptions::default())
+        let reasons: Vec<String> = module_refusals(m, LowerOptions::default())
             .iter()
             .map(|(_, e)| e.to_string())
             .collect();
-        if !before.iter().any(|t| t.contains("Stream")) {
-            continue;
+        if reasons.iter().any(|t| t.contains("yielded at op")) {
+            escaping.push(name.clone());
         }
-        already_refused_for_stream.push(name.clone());
-
-        // Remove the shadowing opcode from a COPY.
-        let mut mutated = m.clone();
-        for c in mutated.chunks.iter_mut() {
-            c.ops.retain(|o| !matches!(o, Op::Stream));
-        }
-        let after: Vec<String> = module_refusals(&mutated, LowerOptions::default())
+        if reasons
             .iter()
-            .map(|(_, e)| e.to_string())
-            .collect();
-        if after.iter().any(|t| t.contains("yielded at op")) {
-            taken_over.push(name.clone());
+            .any(|t| t.contains("does not yet support opcode Stream"))
+        {
+            refused_for_stream.push(name.clone());
         }
     }
 
-    println!("\n================ BLAST RADIUS WHEN `Stream` LANDS");
+    println!("\n================ THE SOUNDNESS REFUSAL'S REACH ON THE CORPUS");
+    println!("  modules examined                        : {}", mods.len());
     println!(
-        "  modules currently refused for Stream        : {} {already_refused_for_stream:?}",
-        already_refused_for_stream.len()
+        "  refused for the yield-escape hazard     : {} {escaping:?}",
+        escaping.len()
     );
     println!(
-        "  ...of those, taken over by the yield-escape refusal: {} {taken_over:?}",
-        taken_over.len()
+        "  still refused for the Stream opcode     : {} {refused_for_stream:?}",
+        refused_for_stream.len()
     );
     println!(
-        "\n  COVERAGE DOES NOT FALL. Every module named here is refused TODAY, for\n  \
-         Stream. When Stream lands the refusal changes REASON rather than adding\n  \
-         a rejection -- and it changes from an unimplemented-feature refusal to a\n  \
-         SOUNDNESS one, which is the whole point of having written it early.\n================\n"
+        "\n  Every module named above was refused BEFORE general Stream lowering\n           too, for Stream. The refusal changed REASON rather than adding a\n           rejection.\n================\n"
     );
 
-    // **NON-VACUITY.** If nothing were refused for Stream, the mutation would
-    // exercise nothing and an empty take-over set would say nothing at all.
+    // **NON-VACUITY.** An empty corpus would satisfy any claim about it.
     assert!(
-        !already_refused_for_stream.is_empty(),
-        "no module is refused for Stream, so this simulation has no subject and \
-         its result is meaningless"
+        !mods.is_empty(),
+        "the corpus loaded no modules, so this result says nothing"
     );
     assert_eq!(
-        taken_over,
+        escaping,
         vec!["13_telemetry_stream.kel".to_string()],
-        "the set of modules the soundness refusal takes over has changed. Each is \
-         already refused today, so coverage does not move -- but the identity of \
-         the set is what an operator weighs when deciding whether the planner may \
-         consume a confinement verdict."
+        "the set of modules the yield-escape refusal refuses has changed. If it \
+         GREW, a module that used to lower now does not and the cause must be \
+         found before the set is edited. If it SHRANK, a module carrying the \
+         escaping shape is now being lowered, which is the silent-wrong-value \
+         case this whole file exists for."
     );
 }
