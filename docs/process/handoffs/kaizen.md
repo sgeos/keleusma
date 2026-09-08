@@ -13,9 +13,9 @@ line extended it to a top-level line. Read it with
 > audit of the development process, has produced an unversioned first draft and six evidence
 > files under the primary checkout's `tmp/kaizen/`, listed below by path and state. Nothing is
 > versioned beyond this file. Nothing is in flight. The draft has had one fresh-context review and
-> a revision, a second research pass became a third draft, and an equation-density pass became
-> a fourth. The blog's remaining passes are reference density and publication review. The next
-> step is whichever the operator prompts, with a second review round recommended before
+> a revision, a second research pass became a third draft, an equation-density pass a fourth,
+> and a reference-density pass a fifth. The blog's remaining pass is publication review. The
+> next step is whichever the operator prompts, with a second review round recommended before
 > publication review.
 
 ## Charter
@@ -96,7 +96,7 @@ arrived.
 
 ## THE STATE
 
-The audit draft is at its third version. The first was reviewed by a fresh context, which found four blocking and nine major defects, all repaired in the second. The third adds a state-of-the-art section from a second, technique-focused research pass of four parallel agents, with every source graded, and five primary sources the first survey could not reach are now verified first hand. The fourth draft adds eighteen display equations under the operator's equation-density prompt, the second of the blog's four passes. No draft after the first has been reviewed by a second context. It rests on six evidence passes, two run by the
+The audit draft is at its third version. The first was reviewed by a fresh context, which found four blocking and nine major defects, all repaired in the second. The third adds a state-of-the-art section from a second, technique-focused research pass of four parallel agents, with every source graded, and five primary sources the first survey could not reach are now verified first hand. The fourth draft added eighteen display equations under the operator's equation-density prompt, and the fifth added 108 citations under the reference-density prompt, the second and third of the blog's four passes, with the project's own documents cited as primary references by commit-pinned permalink. No draft after the first has been reviewed by a second context. It rests on six evidence passes, two run by the
 auditor's own commands and four by mining subagents whose reports the auditor read and partly
 checked. The draft finds no quality or speed problem in the ordinary sense and finds instead a
 verification problem and a decision-latency problem, states the trade-off as two regimes with
@@ -112,8 +112,8 @@ can take the final draft for publication.
 
 | path under `tmp/kaizen/` | state |
 |---|---|
-| `process-audit-draft.md` | DRAFT 4, about 13,600 words, blog format with eighteen display equations, prose style-scanned clean, math traps checked, article number placeholder, not reviewed by a second context since DRAFT 1 |
-| `process-audit-draft.v1.md`, `.v2.md`, `.v3.md` | earlier drafts, kept for the record |
+| `process-audit-draft.md` | DRAFT 5, about 14,900 words, blog format with eighteen display equations and 108 reference-style citations in three alphabetized blocks, 34 of them commit-pinned permalinks to the project's own documents, prose style-scanned clean, article number placeholder, not reviewed by a second context since DRAFT 1 |
+| `process-audit-draft.v1.md` to `.v4.md` | earlier drafts, kept for the record |
 | `review-1.md` | the adversarial review, twenty findings, each with its disposition |
 | `evidence-1-documented-process.md` | miner report, saved |
 | `evidence-2-v023-record.md` | miner report, saved |
