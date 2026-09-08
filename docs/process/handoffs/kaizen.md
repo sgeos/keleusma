@@ -14,9 +14,10 @@ line extended it to a top-level line. Read it with
 > files under the primary checkout's `tmp/kaizen/`, listed below by path and state. Nothing is
 > versioned beyond this file. Nothing is in flight. The draft has had one fresh-context review and
 > a revision, a second research pass became a third draft, an equation-density pass a fourth,
-> and a reference-density pass a fifth. The blog's remaining pass is publication review. The
-> next step is whichever the operator prompts, with a second review round recommended before
-> publication review.
+> a reference-density pass a fifth, and a publication review a sixth. All four of the blog's
+> passes are done. The draft is versioned on this branch under `docs/process/kaizen/` and is
+> not published. The next step is the operator's reading, or a second review round, then the
+> rulings on the proposals.
 
 ## Charter
 
@@ -96,7 +97,7 @@ arrived.
 
 ## THE STATE
 
-The audit draft is at its third version. The first was reviewed by a fresh context, which found four blocking and nine major defects, all repaired in the second. The third adds a state-of-the-art section from a second, technique-focused research pass of four parallel agents, with every source graded, and five primary sources the first survey could not reach are now verified first hand. The fourth draft added eighteen display equations under the operator's equation-density prompt, and the fifth added 108 citations under the reference-density prompt, the second and third of the blog's four passes, with the project's own documents cited as primary references by commit-pinned permalink. No draft after the first has been reviewed by a second context. It rests on six evidence passes, two run by the
+The audit draft is at its third version. The first was reviewed by a fresh context, which found four blocking and nine major defects, all repaired in the second. The third adds a state-of-the-art section from a second, technique-focused research pass of four parallel agents, with every source graded, and five primary sources the first survey could not reach are now verified first hand. The fourth draft added eighteen display equations, the fifth added 108 citations with the project's own documents as commit-pinned primary references, and the sixth passed the blog's publication review, expanding the literature section into a comprehensive graded survey of every source read, 140 citations in all, with every URL checked and every DOI confirmed against Crossref. The operator's standing directive was followed, the draft is committed and pushed on this branch and is not published. No draft after the first has been reviewed by a second context. It rests on six evidence passes, two run by the
 auditor's own commands and four by mining subagents whose reports the auditor read and partly
 checked. The draft finds no quality or speed problem in the ordinary sense and finds instead a
 verification problem and a decision-latency problem, states the trade-off as two regimes with
@@ -112,8 +113,8 @@ can take the final draft for publication.
 
 | path under `tmp/kaizen/` | state |
 |---|---|
-| `process-audit-draft.md` | DRAFT 5, about 14,900 words, blog format with eighteen display equations and 108 reference-style citations in three alphabetized blocks, 34 of them commit-pinned permalinks to the project's own documents, prose style-scanned clean, article number placeholder, not reviewed by a second context since DRAFT 1 |
-| `process-audit-draft.v1.md` to `.v4.md` | earlier drafts, kept for the record |
+| `process-audit-draft.md` | DRAFT 6, publication-reviewed, about 19,600 words, blog format with eighteen display equations and 140 citations, a comprehensive graded survey of every source the ten passes read, prose style-scanned clean, article number placeholder, not reviewed by a second context since DRAFT 1. **Now also versioned on this branch as `docs/process/kaizen/2026-09-08-process-audit.md` with its evidence under `docs/process/kaizen/evidence/`** |
+| `process-audit-draft.v1.md` to `.v5.md` | earlier drafts, kept for the record |
 | `review-1.md` | the adversarial review, twenty findings, each with its disposition |
 | `evidence-1-documented-process.md` | miner report, saved |
 | `evidence-2-v023-record.md` | miner report, saved |
@@ -165,9 +166,10 @@ Nothing.
 
 1. **The shape of the line**, recurring practice or discrete reviews, open by the operator's
    statement. The first audit proceeded under either.
-2. **Where audit outputs live.** This line proposes `docs/process/kaizen/` holding dated
-   reports, with any adopted change landing in the process document or script it concerns.
-   Not yet ruled.
+2. **Where audit outputs live.** The operator's publication-review prompt required the draft
+   committed and pushed, so this line placed it under `docs/process/kaizen/` on its own branch,
+   the location it had proposed. That settles nothing on the trunk. The location is ruled when
+   the line is merged.
 3. **How the peers learn this line exists.** The operator ruled on 2026-09-08 that this line may
    contact the other lines when it makes sense for them to know, and that working without
    disclosure is acceptable until then. No contact has been made.
