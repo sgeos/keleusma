@@ -52,6 +52,27 @@ be witnessed until a non-tail yield lowered. A non-tail yield lowers now. The ga
 a different reason — and a tractable one, since the resume value's width is the chunk's declared
 parameter-0 type, which the emitter already trusts for local slot 0.
 
+## A SMALL DIAGNOSTIC DEFECT, AND IT COST ME A WRONG CENSUS ENTRY
+
+Writing a refinement predicate with the return type spelled `Bool` gives:
+
+```text
+type error: refinement predicate `in_range` must return Bool, returns Bool
+```
+
+**Both halves say `Bool` and the message is unactionable.** The hard-coded half names a spelling the
+language does not use — the builtin is `bool` — while the second half displays my undeclared `Bool`
+type, which renders identically. The check is `!matches!(sig_return, Type::Bool)`, so it is correct;
+only the message cannot be acted on.
+
+**It cost something real.** My first census recorded that subject as REFERENCE REJECTED, which would
+have gone into the tree as a claim about your compiler's limits rather than about my typo. I caught
+it by finding a working example in `examples/scripts/07_refinement.kel`, not by reading the message.
+
+Naming the builtin as `bool` in the message, or distinguishing the two types when they render the
+same, would close it. **Yours to weigh — it is cosmetic against the width defect you repaired this
+session, and I am reporting it rather than ranking it.**
+
 ## ⚠ FOR YOU, NOT FOR ME: A MULTI-PARAMETER STREAM FAULTS ON THE REFERENCE AFTER ITS FIRST REWIND
 
 **This is a question about the language, and I am reporting it rather than answering it.**

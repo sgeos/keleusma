@@ -1,5 +1,69 @@
 # Design Journal
 
+## 2026-09-08 — [v0.3.0] An unguarded array index, found by a census that was about something else
+
+**The backend returned `0xabababababababab` for `xs[5]` on a three-element array.** That
+constant is the filler byte of the caller's region buffer. The reference faults
+`IndexOutOfBounds(5, 3)`; native code read forty bytes past the body and returned what it
+found — **a silently wrong value and an out-of-bounds read at an attacker-influenced
+offset, at the same time.**
+
+### The cause is the most repeatable failure this line has
+
+The `Op::GetIndex` arm carried, in a comment, *"the bound is not checked here: the compiler
+emits `Op::BoundsCheck` before the index."* **The compiler does not**, for this shape. The
+bytecode is a bare `GetIndex`. An invariant was recorded as prose, the lowering was built on
+it, and nothing tested it **because an assumption is not an assertion**.
+
+> This tree already carries the same shape three times over: the handoff's mechanism claim
+> about `static_for_in_length`, the "narrow is eleven times slower" figure that was
+> contention, and the twelve `Op::Len` guards whose root cause was one defect repeated. **A
+> premise in a comment is the least-tested thing in a codebase**, because the reader who
+> would check it is the reader who believes it.
+
+### It was not found by looking for it
+
+The increment set out to write a CENSUS: where does the native side of the deferred B35
+partial-operation contract actually stand, for each of the six operations? The
+out-of-bounds subject came back with its trap block marked `No predecessors!`. **Reading is
+not measuring**, so the subject was executed, and the execution is what settled it.
+
+The census was worth writing for its own sake — it establishes that all five writable
+subjects trap today where the contract's V0.4.0 default is a defined value, and that
+trapping is the sound interim because it matches the reference. **The defect was a side
+effect of instrumenting honestly.**
+
+### The census corrected itself twice before it could be trusted
+
+Its first detector looked for a conditional branch straight to `%trap` and called three
+GUARDED subjects unguarded; they reach the trap through an unconditional branch from a
+conditionally-entered block. Its second called every module unguarded, because each
+function receives a trap block whether or not it uses one. It now counts REACHABLE trap
+blocks **and states its own limit**: it answers "can this module trap at all", not "is the
+trap on this path".
+
+Two subjects were also mis-recorded as REFERENCE REJECTED on my own syntax error — the
+builtin is `bool`, not `Bool`, and the discriminant conversion requires its arm block.
+**Recording those as reference limitations would have been fabricated coverage**, which is
+the failure the census overhaul of 2026-09-06 was written to stop.
+
+### The fix costs no coverage, and finding that out took a second measurement
+
+Guarding alone refused two corpus chunks in `10_multbyte.kel`, whose arrays are
+PARAMETERS: `TypeTag::Composite` says only "not a scalar", so their width was `Unknown` and
+no bound could be derived. **The size was in the module all along** — `ChunkSignature`
+carries `WireShape::Flat { size }`, which is the same body length the `Body` width means,
+so the two agree by definition rather than by a second computation that could drift.
+
+Corpus refusals: **1 before, 3 with the guard alone, 1 again with the signature seeding.**
+
+### A diagnostic defect found on the way, and reported rather than fixed here
+
+Writing `Bool` where the builtin is `bool` produces *"refinement predicate `in_range` must
+return Bool, returns Bool"*. The hard-coded half of that message names a spelling the
+language does not use, so the two halves collide and the message is unactionable. It is the
+reference line's to fix.
+
 ## 2026-09-08 — [v0.3.0] Absorption 55, with a risk named beforehand that did not fire
 
 **Predicted before merging**, all three clauses recorded in the tree and committed as `f72eb6e0`
