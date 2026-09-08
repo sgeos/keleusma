@@ -319,12 +319,15 @@ and running the suite at a narrow width remains the project this document declin
 
 **~~The narrow widths are still not verified.~~ CORRECTED 2026-09-08: too broad, and in the same
 way twice more in this section.** What a suite cannot do is run AS A WHOLE at a narrow width, and
-that is what the failures below describe. **Narrow runtimes themselves are driven by 41 tests in the
+that is what the failures below describe. **Narrow runtimes themselves are driven by 40 tests in the
 DEFAULT build**, through host-defined aliases in `tests/narrow_vm.rs` and
 `tests/composite_width_skew.rs`, on every continuous-integration run. A `narrow-*` feature narrows
 the bundled `Vm` alias so the whole suite runs narrow; a host alias narrows one runtime inside one
 test. Conflating them overstates the gap. See
-[`FEATURE_COMBINATION_SWEEP.md`](./FEATURE_COMBINATION_SWEEP.md) for the count and its derivation.
+[`FEATURE_COMBINATION_SWEEP.md`](./FEATURE_COMBINATION_SWEEP.md) for the count, its derivation, and
+the reason it briefly read 41: the skew file's ninth test is a deliberate control at the DEFAULT
+widths, and counting it produced a total that a first version of the guard independently agreed
+with, for an unrelated reason. Two errors cancelling is how a wrong number survives review.
 
 Thirty-six of the forty-one failures are the suite declining to run at a width it was not written
 for. What has changed is that the failures are now understood individually rather than grouped by
