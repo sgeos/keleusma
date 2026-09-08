@@ -13,8 +13,9 @@ line extended it to a top-level line. Read it with
 > audit of the development process, has produced an unversioned first draft and six evidence
 > files under the primary checkout's `tmp/kaizen/`, listed below by path and state. Nothing is
 > versioned beyond this file. Nothing is in flight. The draft has had one fresh-context review and
-> a revision. The next step is the operator's reading, then integration of ruled proposals on a
-> feature branch cut from `kaizen`.
+> a revision, and a second research pass has been folded into a third draft. The next step is
+> a second review round on the third draft or the operator's reading, then integration of ruled
+> proposals on a feature branch cut from `kaizen`.
 
 ## Charter
 
@@ -94,7 +95,7 @@ arrived.
 
 ## THE STATE
 
-The first audit draft exists and has been through one fresh-context adversarial review, which found four blocking and nine major defects, all repaired in the second draft and recorded with their dispositions. It rests on six evidence passes, two run by the
+The audit draft is at its third version. The first was reviewed by a fresh context, which found four blocking and nine major defects, all repaired in the second. The third adds a state-of-the-art section from a second, technique-focused research pass of four parallel agents, with every source graded, and five primary sources the first survey could not reach are now verified first hand. The third draft has not been reviewed by a second context. It rests on six evidence passes, two run by the
 auditor's own commands and four by mining subagents whose reports the auditor read and partly
 checked. The draft finds no quality or speed problem in the ordinary sense and finds instead a
 verification problem and a decision-latency problem, states the trade-off as two regimes with
@@ -110,8 +111,8 @@ can take the final draft for publication.
 
 | path under `tmp/kaizen/` | state |
 |---|---|
-| `process-audit-draft.md` | DRAFT 2, about 9000 words, blog format, prose style-scanned clean, article number placeholder, revised against one fresh-context adversarial review |
-| `process-audit-draft.v1.md` | DRAFT 1, kept for the record |
+| `process-audit-draft.md` | DRAFT 3, about 12,000 words, blog format, prose style-scanned clean, article number placeholder, DRAFT 2 plus a state-of-the-art section and proposals revised against a second research pass, not yet reviewed by a second context |
+| `process-audit-draft.v1.md`, `process-audit-draft.v2.md` | DRAFT 1 and DRAFT 2, kept for the record |
 | `review-1.md` | the adversarial review, twenty findings, each with its disposition |
 | `evidence-1-documented-process.md` | miner report, saved |
 | `evidence-2-v023-record.md` | miner report, saved |
@@ -119,6 +120,10 @@ can take the final draft for publication.
 | `evidence-4-git-ci-metrics.md` | miner report, all executed, saved, raw exports under `raw/` |
 | `evidence-5-blog-format-and-process.md` | miner report, saved |
 | `evidence-6-external-survey.md` | research agent report, sources graded, not re-fetched by the auditor |
+| `evidence-7-context-and-state-techniques.md` | second research pass, context and state management for long-running agents |
+| `evidence-8-verification-techniques.md` | second research pass, verifying generated code and the agents' own instruments |
+| `evidence-9-decisions-metrics-ci.md` | second research pass, decision workflows, progress measurement, continuous-integration cost |
+| `evidence-10-coordination-and-source-verification.md` | second research pass, coordination substrates, and five primary sources verified first hand |
 | `NOTES.md` | working notes, observations, draft status |
 
 Two miner figures were not independently checked by the auditor and the draft says so, the
@@ -166,8 +171,9 @@ Nothing.
    contact the other lines when it makes sense for them to know, and that working without
    disclosure is acceptable until then. No contact has been made.
 4. **Whether a second review round is wanted before the operator reads the draft.** One round
-   was run, on the draft's own finding eight, and it found four blocking defects. A second round
-   on the revised draft costs one fresh session and no calendar time.
+   was run on the first draft and found four blocking defects. The third draft carries about
+   three thousand new words and forty new sources that no second context has checked. A round
+   costs one fresh session and no calendar time.
 5. **The ten proposals in the draft**, seven in a group that trades nothing away and three on
    the edge where operator attention is exchanged for latency. Each states the ruling it needs.
 
