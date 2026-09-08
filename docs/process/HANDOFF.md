@@ -71,7 +71,9 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > release gate's `--no-default-features` step. It is queued for the operator in `REVERSE_PROMPT.md`.
 >
 > Pinned by `tests/float_opcode_without_floats.rs`. The class is enumerated in
-> `../decisions/INVALID_BYTECODE_CENSUS.md`: **46 sites, 17 examined, 29 explicitly not examined.**
+> `../decisions/INVALID_BYTECODE_CENSUS.md`: **46 sites**, of which 34 carry an examined verdict
+> (this line said 17 and 29 until 2026-09-08, an early figure the same file then contradicted five
+> lines later; the census's per-group column is the authority).
 > **No site is claimed unreachable**, and a guard keeps the document from drifting from the tree.
 >
 > ## THE TWO CENSUSES, AND THE PROCEDURAL RULE ONE OF THEM PAID FOR THREE TIMES

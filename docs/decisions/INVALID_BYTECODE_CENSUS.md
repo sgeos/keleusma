@@ -60,7 +60,7 @@ honest; probing every member individually is not a better use of the same effort
 | C | `Fixed` fraction bits exceeding the word width | 5 | **defended**, by two checks that compose |
 | D | composite operand form mismatch | 7 | **defended**, by boundary canonicalization |
 | E | structural indices out of range | 9 | **defended at load** (8 of 9 probed) |
-| F | shared and private data-segment layout | 7 | **host-contract, confirmed** (1 of 7 probed) — but see below |
+| F | shared and private data-segment layout | 7 | **host-contract, confirmed** (2 of 7 probed) — but see below |
 | G | arena staleness after reset | 3 | **no witness found** (1 of 3 probed) — see below |
 | H | the three "should never have been emitted" | 3 | **closed 2026-09-04** |
 | I | operand-range and constant-kind checks | 6 | **mixed** — see below (5 of 6 probed) |
@@ -68,6 +68,16 @@ honest; probing every member individually is not a better use of the same effort
 
 The group sizes sum to 46, which is the population above; a table whose parts do not add to its
 stated whole has been the tell for a miscount here before.
+
+**What "examined" counts, stated because it was not.** A site is examined when a probe drove it, or
+when a stated argument covers it as a member of a class one probe reached. The per-group figures
+below are the authority; any total elsewhere is derived from them and is wrong if it disagrees.
+
+**The F row above read "1 of 7 probed" until 2026-09-08 and disagreed with the prose beneath it**,
+which said "two of F's seven" and was right: the hot-swap site was probed after that row was
+written and the row was not updated. The totals were re-derived from the prose and are unaffected.
+**A count in a table and the same count in a sentence are two places to go stale**, and this
+document has now been the tell for its own miscount twice.
 
 **Thirty-four of forty-six sites carry an examined verdict**, group by group: none of A's one, both
 of B, all five of C, all seven of D, eight of E's nine, two of F's seven, one of G's three, all three
