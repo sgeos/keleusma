@@ -284,3 +284,216 @@ fn the_same_programs_behave_identically_where_the_widths_agree() {
         other => panic!("expected a word, got {:?}", other),
     }
 }
+
+// ---------------------------------------------------------------------------
+// A differential corpus over composite SHAPES
+// ---------------------------------------------------------------------------
+//
+// The tests above cover ONE shape: a flat struct with an opaque followed by a
+// word. The packer has a separate branch for a nested composite child, an enum
+// body carries a discriminant word ahead of its payload, an array strides by
+// element size, and a tuple's access form is recovered by a different inference
+// path than a struct's. None of that is exercised by the tests above.
+//
+// # The design, and why a difference here is attributable
+//
+// Each program runs on the DEFAULT runtime and on one whose ADDRESS width is
+// sixteen bits, with the WORD held at sixty-four bits on both. Arithmetic,
+// constants, and word-sized field reads are then bit-identical by construction,
+// so any difference in result is an address-width confusion rather than a
+// narrow-word artefact.
+//
+// **`ScalarKind::Opaque` is the only kind the address width sizes**, so this
+// corpus is about opaque-bearing composites specifically. It is not a sweep of
+// the value surface, and holding the word fixed means it says nothing at all
+// about narrow-word behaviour.
+//
+// # Each entry proves it built the shape it names
+//
+// An entry whose composite is BOXED rather than flat would agree on both
+// runtimes while testing nothing, because the boxed body carries no packed
+// offsets. Every entry therefore also runs a program returning the composite
+// itself and asserts the body is flat, on both runtimes.
+//
+// # Measured coverage, and an honest negative
+//
+// Reverting each of the four repaired sites in turn: the corpus catches the
+// construction path and the arena packer, on shapes the tests above never
+// build. It does NOT catch the read side or the host decode, both of which are
+// held by their own tests above.
+//
+// **No mutation tried is caught by the corpus ALONE.** A nested child's stride
+// was shortened by one byte specifically to demonstrate unique value, on the
+// reasoning that no test above builds a nested composite. It failed as a
+// demonstration: **seventeen tests across the suite caught it**, because a
+// broken nested stride is wrong at every width and the suite already covers
+// nesting well.
+//
+// So the case for this corpus is NOT that it currently catches something
+// nothing else does. It is that it exercises the four repaired sites through
+// the nested, enum, array and tuple construction paths, so a future defect
+// confined to one of those shapes would be seen. **That is a hypothesis about
+// defects not yet found, not a measurement**, and it should not be counted as
+// coverage of anything today.
+//
+// One claim here IS made nowhere else: `every_corpus_shape_is_actually_built_flat`
+// pins that these four shapes flatten at a skewed address width rather than
+// falling back to a boxed body.
+
+/// One corpus entry: a program returning a `Word`, the value it must produce,
+/// and a program returning the composite so flatness can be checked.
+struct Shape {
+    name: &'static str,
+    src: &'static str,
+    shape_src: &'static str,
+    expect: i64,
+}
+
+const PRELUDE: &str = "use make_handle() -> Handle\nuse handle_val(Handle) -> Word\n";
+
+fn corpus() -> alloc::vec::Vec<Shape> {
+    alloc::vec![
+        Shape {
+            name: "nested composite child",
+            src: "struct Inner { h: Handle, a: Word }\n\
+                  struct Outer { i: Inner, b: Word }\n\
+                  fn main() -> Word { let o = Outer { i: Inner { h: make_handle(), a: 3 }, b: 5 }; \
+                   handle_val(o.i.h) + o.i.a * 10 + o.b }",
+            shape_src: "struct Inner { h: Handle, a: Word }\n\
+                        struct Outer { i: Inner, b: Word }\n\
+                        fn main() -> Outer { Outer { i: Inner { h: make_handle(), a: 3 }, b: 5 } }",
+            expect: 100 + 30 + 5,
+        },
+        Shape {
+            name: "enum payload after a discriminant word",
+            src: "enum Held { Wrapped(Handle, Word), Empty }\n\
+                  fn main() -> Word { let e = Held::Wrapped(make_handle(), 9); \
+                   match e { Held::Wrapped(h, n) => handle_val(h) + n, Held::Empty => 0 } }",
+            shape_src: "enum Held { Wrapped(Handle, Word), Empty }\n\
+                        fn main() -> Held { Held::Wrapped(make_handle(), 9) }",
+            expect: 109,
+        },
+        Shape {
+            name: "array striding over opaque-bearing elements",
+            src: "struct P { h: Handle, n: Word }\n\
+                  fn main() -> Word { let a = [P { h: make_handle(), n: 1 }, P { h: make_handle(), n: 2 }]; \
+                   a[1].n * 10 + a[0].n }",
+            shape_src: "struct P { h: Handle, n: Word }\n\
+                        fn main() -> [P; 2] { [P { h: make_handle(), n: 1 }, P { h: make_handle(), n: 2 }] }",
+            expect: 21,
+        },
+        Shape {
+            name: "tuple with two fields after the opaque",
+            src: "fn main() -> Word { let t = (make_handle(), 3, 4); handle_val(t.0) + t.1 * 2 + t.2 }",
+            shape_src: "fn main() -> (Handle, Word, Word) { (make_handle(), 3, 4) }",
+            expect: 100 + 6 + 4,
+        },
+    ]
+}
+
+/// Register the two natives every corpus program uses, on any runtime width.
+macro_rules! register_corpus_natives {
+    ($vm:expr) => {{
+        $vm.register_native("make_handle", |_args| {
+            Ok(GenericValue::Opaque(host_arc(Handle {
+                label: String::from("corpus"),
+            })))
+        });
+        $vm.register_native("handle_val", |_args| Ok(GenericValue::Int(100)));
+    }};
+}
+
+/// Whether a returned value carries a FLAT composite body.
+fn is_flat<W: keleusma::word::Word, F: keleusma::float::Float>(v: &GenericValue<W, F>) -> bool {
+    use keleusma::bytecode::{ArrayBody, EnumBody, StructBody, TupleBody};
+    matches!(
+        v,
+        GenericValue::Struct(StructBody::Flat(_))
+            | GenericValue::Tuple(TupleBody::Flat(_))
+            | GenericValue::Array(ArrayBody::Flat(_))
+            | GenericValue::Enum(EnumBody::Flat(_))
+    )
+}
+
+#[test]
+fn the_corpus_agrees_across_an_address_width_skew() {
+    for shape in corpus() {
+        let full = alloc::format!("{PRELUDE}{}", shape.src);
+        let program = parse(&tokenize(&full).expect("lex")).expect("parse");
+
+        // Default widths.
+        let wide = compile_with_target(&program, &Target::host()).expect("compile wide");
+        let arena_w = Arena::with_capacity(8192);
+        let mut vm_w = keleusma::vm::Vm::new(wide, &arena_w).expect("verify wide");
+        register_corpus_natives!(vm_w);
+        let got_w = match vm_w.call(&[]).expect("call wide") {
+            GenericVmState::Finished(GenericValue::Int(n)) => n,
+            other => panic!("{}: expected a word, got {:?}", shape.name, other),
+        };
+
+        // Same word, sixteen-bit address.
+        let skew =
+            compile_with_target(&program, &wide_word_narrow_address()).expect("compile skewed");
+        let arena_s = Arena::with_capacity(8192);
+        let mut vm_s: WideWordNarrowAddress<'_, '_> =
+            WideWordNarrowAddress::new(skew, &arena_s).expect("verify skewed");
+        register_corpus_natives!(vm_s);
+        let got_s = match vm_s.call(&[]).expect("call skewed") {
+            GenericVmState::Finished(GenericValue::Int(n)) => n,
+            other => panic!("{}: expected a word, got {:?}", shape.name, other),
+        };
+
+        assert_eq!(
+            got_w, shape.expect,
+            "{}: the default runtime already disagrees with the expected value, so the \
+             cross-width comparison below would be meaningless",
+            shape.name
+        );
+        assert_eq!(
+            got_s, got_w,
+            "{}: the two runtimes differ only in address width, so a difference here is an \
+             address-width confusion",
+            shape.name
+        );
+    }
+}
+
+#[test]
+fn every_corpus_shape_is_actually_built_flat() {
+    for shape in corpus() {
+        let full = alloc::format!("{PRELUDE}{}", shape.shape_src);
+        let program = parse(&tokenize(&full).expect("lex")).expect("parse");
+
+        let wide = compile_with_target(&program, &Target::host()).expect("compile wide");
+        let arena_w = Arena::with_capacity(8192);
+        let mut vm_w = keleusma::vm::Vm::new(wide, &arena_w).expect("verify wide");
+        register_corpus_natives!(vm_w);
+        let val_w = match vm_w.call(&[]).expect("call wide") {
+            GenericVmState::Finished(v) => v,
+            other => panic!("{}: {:?}", shape.name, other),
+        };
+        assert!(
+            is_flat(&val_w),
+            "{}: the composite is BOXED at the default widths, so the corpus entry above \
+             compares two boxed bodies and tests no packed offset at all",
+            shape.name
+        );
+
+        let skew =
+            compile_with_target(&program, &wide_word_narrow_address()).expect("compile skewed");
+        let arena_s = Arena::with_capacity(8192);
+        let mut vm_s: WideWordNarrowAddress<'_, '_> =
+            WideWordNarrowAddress::new(skew, &arena_s).expect("verify skewed");
+        register_corpus_natives!(vm_s);
+        let val_s = match vm_s.call(&[]).expect("call skewed") {
+            GenericVmState::Finished(v) => v,
+            other => panic!("{}: {:?}", shape.name, other),
+        };
+        assert!(
+            is_flat(&val_s),
+            "{}: the composite is BOXED at the skewed widths but flat at the default ones, \
+             which is itself a width-dependent difference",
+            shape.name
+        );
+    }
+}
