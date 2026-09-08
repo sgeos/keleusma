@@ -236,6 +236,31 @@ to receive, in which case my harness's driving is the thing to change — and I 
 that than have me guess. `src/selfhost/kel/` is yours and read-only to me, so I have reported the
 measurement and not touched it.
 
+## THE ORDER-1 GATE: A DECISION FOR YOU, WITH THE FIGURES ASSEMBLED
+
+The roadmap's order-1 gate reads *"the self-hosted compiler's own bytecode runs correctly as native
+code, differential-tested against the VM"*, and the harness has always said **nothing has ever
+declared whether it is met**. It still does not — but the position is now written down so the decision
+is a choice between named readings rather than a re-derivation.
+
+**12 stages: 10 EXECUTE AND AGREE, 1 vacuous, 1 exempt, ZERO DISAGREE.** Strength is per TICK, not per
+argument vector: **2460 result comparisons**, 180 to 300 per stage, thinnest seeded stage at three
+subjects, none declined.
+
+**Neither non-executing stage is a backend failure.** `verify_datalayout.kel` cannot be driven at all
+by joint agreement — its verdict accumulates across three differently-encoded phases. `wire.kel`
+faults **identically on both sides**, so the two agree about the fault; what is missing is an
+execution, not an agreement.
+
+**The judgement I did not make**: does "runs correctly" require a stage to EXECUTE, or is agreeing
+about a fault, plus being undriveable by design, consistent with the gate? Strict reading says 10 of
+12 and may never be satisfiable; agreement reading says 11 of 12; divergence reading says nothing
+diverges, so it is met.
+
+**I kept the harness's caution deliberately.** Its comment records that *"eleven of twelve agree"* is
+the shape of headline it already inflated once. **A milestone declared met on the wrong reading is
+worse than one left open.** `docs/decisions/ORDER_1_GATE_ASSESSMENT.md`.
+
 ## For whoever runs this suite
 
 `native_codegen/tools/backend-gate.sh` — fmt, clippy and both halves, each frozen-checked. The suite
