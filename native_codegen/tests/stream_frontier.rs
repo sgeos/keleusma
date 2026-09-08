@@ -264,57 +264,63 @@ fn the_discriminator_is_a_composite_escaping_its_iteration() {
     );
 }
 
-/// **CORRECTED: THE SHAPE NOW HAS A WITNESS, AND THE ORIGINAL FRAMING WAS
-/// WRONG.**
+/// **THE COMPOSITE-YIELDING GAP IS CLOSED. This test now guards the closure
+/// rather than recording the gap.**
 ///
-/// This test previously claimed that `yield a composite, tail` lowers with
-/// nothing executing it, and described the untested code as "a composite
-/// crossing the yield boundary". **There is no yield boundary in that
-/// lowering.** Measured in `what_the_native_side_yields_for_a_composite`: the
-/// module declares no host yield hook at all and the entry RETURNS a pointer
-/// into the caller's region. A single yield in tail position, with nothing after
-/// it, is lowered as a return.
+/// # Its three previous states, each true when written
 ///
-/// So the marshalling is the composite-RETURN ABI, and the shape is now
-/// witnessed byte-for-byte against the reference.
+/// 1. It claimed a tail composite yield lowered with nothing executing it, and
+///    described the untested code as "a composite crossing the yield boundary".
+///    **There is no yield boundary in that lowering** — measured in
+///    `what_the_native_side_yields_for_a_composite`, the module declares no host
+///    yield hook and the entry RETURNS a pointer into the caller's region. A
+///    single tail yield is lowered as a return, so the marshalling exercised is
+///    the composite-RETURN ABI.
+/// 2. It then recorded that SEQUENCE semantics for a composite-yielding stream
+///    were unwitnessed and could not be witnessed "until such a stream lowers at
+///    all -- it needs a yield that is not in tail position, which is refused".
+/// 3. General `Op::Stream` lowering removed that blocker and exposed the real
+///    one: the resumed value carried no declared width, so a composite built
+///    from it was refused by the `NewComposite` width check.
 ///
-/// What remains true, and is what this test still checks: **the suspension
-/// differential drives no composite-yielding subject.** That matters for
-/// SEQUENCE semantics — the order and count of yields for a composite-yielding
-/// stream — which is a different property from the value comparison now covered.
+/// **The width is declared** — the runtime's `resume` writes slot 0, whose type
+/// the chunk states — and with it reaching the operand stack the shape lowers.
+/// `composite_stream_sequence.rs` drives it and compares the yielded BODY BYTES
+/// against the reference across repeated suspension and resumption.
+///
+/// # What this test asserts now
+///
+/// That the evidence exists and drives a composite subject. A gap note that
+/// outlives its gap is worse than none, because it sends the next reader to
+/// build something the tree already has.
 #[test]
-fn the_suspension_differential_drives_no_composite_yielding_subject() {
-    let harness = std::fs::read_to_string("tests/yield_sequence.rs")
-        .expect("the suspension differential is a sibling of this file");
-    let composite_subjects = harness.matches("loop main(a: Word) -> P").count();
-    let word_subjects = harness.matches("loop main(a: Word) -> Word").count();
-    println!("\n================ SUSPENSION DIFFERENTIAL SUBJECTS");
-    println!("  Word-yielding      : {word_subjects}");
-    println!("  composite-yielding : {composite_subjects}");
-    // **THE REASON HERE WAS CORRECTED 2026-09-08.** It used to say the gap
-    // "cannot be [closed] until such a stream lowers at all -- it needs a yield
-    // that is not in tail position, which is refused". A non-tail yield lowers
-    // now, so that blocker is gone and the gap is still open, for a DIFFERENT
-    // and newly visible reason: the value delivered at a resume point has no
-    // declared width, so a composite built from it is refused by the
-    // `NewComposite` width check. Measured as the "yield a composite, non-tail"
-    // row of the matrix above.
+fn the_composite_yielding_sequence_gap_has_a_witness() {
+    let witness = std::fs::read_to_string("tests/composite_stream_sequence.rs")
+        .expect("the composite-yield sequence differential is a sibling of this file");
+    let composite_subjects = witness.matches("-> P {").count();
+    let compares_bodies = witness.contains("resolve(");
+
+    println!("\n================ COMPOSITE-YIELD SEQUENCE EVIDENCE");
+    println!("  composite-yielding stream subjects : {composite_subjects}");
+    println!("  compares resolved BODY BYTES       : {compares_bodies}");
     println!(
-        "  => value marshalling for a tail composite IS witnessed, in\n  \
-         `what_the_native_side_yields_for_a_composite`. SEQUENCE semantics for a\n  \
-         composite-yielding stream are still not, and the blocker is now the\n  \
-         RESUME VALUE'S UNKNOWN WIDTH rather than the absence of Stream lowering:\n  \
-         a composite built from a resumed value is refused by the NewComposite\n  \
-         width check.\n================\n"
+        "  => the gap recorded here since the frontier was first mapped is\n  \
+         CLOSED. Value marshalling for a tail composite is witnessed in\n  \
+         `what_the_native_side_yields_for_a_composite`; SEQUENCE semantics are\n  \
+         witnessed in `composite_stream_sequence.rs`.\n================\n"
+    );
+
+    assert!(
+        composite_subjects > 0,
+        "the sequence differential no longer drives a composite-yielding stream. \
+         If the subject moved, re-point this; if the shape stopped lowering, that \
+         is a regression in the resume value's declared width."
     );
     assert!(
-        word_subjects > 0,
-        "the differential drives no Word subject either, so this count says \
-         nothing about a composite gap specifically"
-    );
-    assert_eq!(
-        composite_subjects, 0,
-        "the suspension differential now drives a composite-yielding stream, so \
-         re-point this rather than delete it"
+        compares_bodies,
+        "the witness no longer resolves the reference's composite through the \
+         arena. Comparing a handle rather than a body is the recorded mistake \
+         `composite_yield_witness.rs` made and corrected: the Debug text shows \
+         the arena handle, not the bytes."
     );
 }

@@ -3154,7 +3154,33 @@ fn lower_chunk_body<'ctx>(
                             .get_nth_param(0)
                             .expect("a stream declares its resume parameter")
                             .into_int_value();
-                        st.push(rv);
+                        // **THE RESUME VALUE'S WIDTH IS DECLARED, NOT UNKNOWN.**
+                        //
+                        // It was pushed at `Width::Unknown` until 2026-09-08, and
+                        // that was an inconsistency rather than conservatism: the
+                        // runtime's `resume` writes slot 0 AND NOTHING ELSE, and
+                        // this same function already seeds `local_widths[0]` from
+                        // `width_of_tag(chunk.param_types[0])`, on the ground that
+                        // the declared signature is the only place widths are
+                        // stated. The identical value was reaching the local at a
+                        // declared width and the operand stack at none.
+                        //
+                        // **What the unknown width cost**: a composite built from
+                        // a resumed value was refused for an operand of unknown
+                        // width, which is what kept a composite-yielding stream
+                        // out of the suspension differential entirely.
+                        //
+                        // Falls back to `Unknown` rather than assuming a word when
+                        // a chunk declares no parameter type. Guessing a width is
+                        // how this backend produces a silently wrong value instead
+                        // of a fault.
+                        let rw = chunk
+                            .param_types
+                            .first()
+                            .copied()
+                            .map(width_of_tag)
+                            .unwrap_or(Width::Unknown);
+                        st.push_w(rv, rw);
                     }
                 }
                 // A block target no edge reaches. The exit of a `loop` with no
