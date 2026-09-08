@@ -112,6 +112,17 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > **This file told agents to validate it by a hash match**, which its own Validity section forbids and
 > records as having failed three times. Corrected.
 >
+> **NOTHING WATCHES THE VERSION BRANCH'S CI, AND TWO RUNS WENT RED UNNOTICED.** Merges are gated by
+> the pull request's checks; the post-merge run on `v0.2.3` is fire-and-forget. Two of this session's
+> sixteen merges left a red trunk -- one on `Install SDL3 build dependencies`, one on the self-hosted
+> subproject with no failing step recorded. **Both were transient**: the same jobs pass on the current
+> head and on the run before it, so nothing was broken and nothing needed remedying.
+>
+> The point is that **no one found out until the runs were enumerated at session end**, and I had
+> asserted "green after each merge" several times from spot-checking the most recent. The strategy
+> says a red trunk is remedied immediately; it does not say what surfaces one. Whether that deserves
+> a notification is a project-level call and is recorded, not adopted.
+>
 > **A search is not a check until it is re-run after the edit.** The sweep for the stale gate rule
 > missed `CONTRIBUTING.md`, whose wording no initial pattern matched; a widened re-sweep found it.
 >
