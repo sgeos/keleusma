@@ -1,5 +1,39 @@
 # Design Journal
 
+## 2026-09-08 — [v0.3.0] Absorption 55, with a risk named beforehand that did not fire
+
+**Predicted before merging**, all three clauses recorded in the tree and committed as `f72eb6e0`
+before the merge ran:
+
+| clause | predicted | measured |
+|---|---|---|
+| conflicting files | exactly one, `docs/process/TASKLOG.md` | **exactly one, that file** |
+| conflicts in `src/` or `tests/` | zero | **zero** |
+| backend suite | 485 passed, 0 failed | **485 passed, 0 failed** (476 + 9), both halves FROZEN |
+
+**The population moved while the work was in flight**, from 28 commits to 34, and the prediction was
+re-derived rather than carried forward. A prediction that names a population has to move when the
+population moves — recorded here because absorption 47 caught this line stating a binary count that
+had been correct two increments earlier.
+
+**THE RISK WAS NAMED BEFORE THE MEASUREMENT AND THE MEASUREMENT CLEARED IT.** Only two of the 34
+commits touch `src/`, and one is `e67bdac0 fix(vm): size a flat opaque field by the layout, not by
+the word`. This backend derives composite field offsets from that same canonical layout, so the
+prediction said in advance that if anything moved it would move in the flat-composite and
+composite-width tests and not in the stream work. Nothing moved.
+
+> **That is a stronger claim than a bare green.** "The suite passed" and "the specific way this could
+> have broken was identified in advance and did not" are different statements, and only the second
+> is evidence that the absorption was understood rather than merely survived.
+
+**The conflict was resolved by keeping both sides.** Both were appended currency notes — the sibling
+line's flat-opaque-field repair and this line's `Op::Len` disposition — describing independent work.
+Choosing between them would have destroyed a record; the resolution orders them newest first and adds
+this session's note above them.
+
+**The ownership check is clean in both directions**: nothing under `src/` or `tests/` changed on this
+line since the merge base, and after the merge those trees are byte-identical to `origin/v0.2.3`.
+
 ## 2026-09-08 — [v0.3.0] The ten fired ratchets were three different stories, and one was a defect
 
 **The handoff was wrong in a way that mattered, and it was my own handoff.** It recorded the
