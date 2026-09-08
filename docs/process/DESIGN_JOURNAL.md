@@ -2147,6 +2147,143 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-08 (second half) — a policy that reached one document, and three counts that disagreed
+
+**The arc.** Repairing the width defect exposed a false belief about what can be tested. Correcting
+that belief exposed a stale rule in the file agents read first. Correcting THAT exposed the same rule
+in five more documents. Each correction was found by following the previous one, not by planning.
+
+### The gate change that propagated to its own document and no further
+
+`GIT_STRATEGY.md` changed on 2026-08-11: continuous integration gates feature branches, the local
+gate does not. **It appears to have been the only document that changed.** `CLAUDE.md`,
+`AUTONOMOUS_IMPLEMENTATION_LOOP.md`, `PARALLEL_DEVELOPMENT.md`, `HANDOFF.md` and `CONTRIBUTING.md`
+all still directed by the superseded rule.
+
+**I followed it.** I ran a 2h30m local gate before a merge CI had already passed 22 of 22, starved my
+own parallel work badly enough to kill a measurement mid-run, and told the operator the retired rule
+was policy. The strategy document names this exact failure: *"the expensive failure is the local
+one"*.
+
+**The sweep's own failure is the transferable part.** My first pattern set missed `CONTRIBUTING.md`,
+whose wording ("mandatory pre-merge gate") no initial pattern matched. It surfaced only on a widened
+re-sweep AFTER editing. **Re-running the search afterwards is what turns a search into a check.**
+
+Two documents were deliberately left: the journal, because append-only means append-only, and
+`RELEASE_PROCESS.md`, whose statement is correct for a release.
+
+### Three counts for one census, and a convention that was backwards
+
+The `InvalidBytecode` census had 34 of 46 in its prose, 17 in `HANDOFF.md`, and a per-group table
+summing to 33. The table was stale by one row: group F read "1 of 7 probed" while the prose said
+"two of F's seven" and was right.
+
+**Fixing it required defining "examined", which had never been stated** — and the first definition
+was BACKWARDS. It said a class argument extends to every member, which would make all seven of F
+examined, contradicting the table it had just been used to reconcile. **It agreed with the total
+anyway**, because the table was correct and the prose was the half that had drifted, so a wrong rule
+produced a right number.
+
+**A convention invented to settle a count must be checked against something other than that count.**
+It was caught by re-reading it against the document's own remainder statement.
+
+### The same shape twice more
+
+A coverage figure of 41 was confirmed by a guard that independently derived 41 — two errors
+cancelling, the truth being 40. The guard over-counted a test whose name says it runs on a WIDE
+runtime, because a COMMENT inside it mentions a narrow helper; the document had counted a control
+test as coverage.
+
+**Agreement is the most dangerous evidence**, and this session produced it twice in different media.
+A number that matches expectation is the one least likely to be re-examined.
+
+### Group A, closed by a witness already in the logs
+
+The census's last wholly unexamined group is the conversion every `?` over the flat scalar codec
+passes through. No probe was needed: it had fired twice in the pre-repair `narrow-word-16` run, from
+ordinary programs, caused by the width defect repaired earlier the same session. The repair closes
+that route and **not the class** — the distinction this tree carries a retraction for.
+
+### The discard-arm census closed at nineteen, by a different kind of answer
+
+Arms 7 and 8 are dead rather than unreached: the slots their fallback guards are declared `Word`, and
+a `Word` slot yields an `Int`. Every earlier arm was closed by driving it; these by showing no input
+reaches them. **The proof was the change itself** — replace a dead arm with a panic, run the corpus
+green — but only because a probe first confirmed the code runs 507 times. That probe initially
+reported ZERO, an artefact of `cargo test` capturing output from passing tests, which would have made
+the green run silence rather than evidence.
+
+## 2026-09-08 — a wrong answer in the flat-composite core, and a capability that was there all along
+
+**The arc.** Session 63 left a measurement unfinished: eighteen of thirty-seven `narrow-word-16`
+failures in an unexamined remainder, and the other nineteen grouped **by test name**. Finishing it
+properly found a defect. Repairing the defect exposed a false belief about what can be tested, and
+correcting that belief turned out to be worth more than the repair.
+
+**Why the census remainder was NOT chosen instead.** My own document rates it low value: groups F and
+J are host-contract surfaces, the class of the native array-length finding rather than a hole in the
+guarantee. Finishing an enumeration because it is three-quarters done is completeness, not value.
+
+### The defect: one field, two authorities
+
+`ScalarKind::Opaque` is sized by the ADDRESS width. The compiler bakes field offsets from that
+layout, the typed verifier sizes operands from it, the marshalling layer reports field sizes from it.
+**The runtime disagreed in four places, each assuming a WORD**: the construction path rewrote the
+registry index to a one-word `Int`, the arena packer advanced by that width, the flat scalar read
+read it back as a word, and the host decode asked for a word's worth of bytes from an
+already-sized field.
+
+The default target makes the two widths equal, so all four agreed by coincidence. Where they differ,
+every field after an opaque sat at an offset the baked access disagreed with. **The worst symptom was
+not a fault**: two structures differing in a `Word` field compared equal.
+
+**The repair deliberately answers no design question.** Whether the field is a registry index (a
+word) or a host handle (an address) is genuinely open. Three of four subsystems already treat the
+layout as the authority, so the runtime now asks it. The open question stays open, and the runtime
+follows whatever it is eventually answered.
+
+### The belief that was wrong
+
+I then wrote, in a merged document, that the construction path **could not** be guarded without a
+continuous-integration job in a configuration nothing builds.
+
+`GenericVm<W, A, F>` is generic over word and address independently; every `Word` and every `Address`
+implementation is unconditional. **A host-defined alias reaches any width pair in the default build.**
+`Target::embedded_8` has shipped a skewed pair — eight-bit word, sixteen-bit address — all along.
+
+So a width-dependent defect costs nothing standing to guard. The sweep document's "the configuration
+a defect lives in is the configuration nothing builds" **binds the feature axis and not the width
+axis**, and that distinction is now written into it.
+
+### What the instruments did this time
+
+**One measurement was invalid and caught only because its result was implausible.** A width-matrix
+run reported seven failures at `narrow-address-16` including two tests that had just passed. It had
+compiled against a source file being mutated for an unrelated experiment at that moment. Re-run
+serially on a quiescent tree: one failure, as expected. **A measurement taken while its subject is
+being edited measures neither state.**
+
+**A prediction was falsified and is recorded as such.** I predicted the failures would track the
+word/address divergence and vanish at a coherent 2/2 width. Five did. Three did not, and they turned
+out to be a different class — test harnesses reading the body in hard-coded eight-byte units.
+
+**A demonstration failed.** Extending the guard to four composite shapes, I shortened a nested
+child's stride to prove the corpus caught something nothing else did. Seventeen tests caught it. The
+corpus's value is a hypothesis about defects not yet found, and the file says so.
+
+**A fail-fast run nearly produced the opposite conclusion.** The first attempt at that measurement
+stopped after the first failing binary and showed only the corpus failing. The tree already records
+this trap for the build phase; it applies to the test phase too.
+
+### The counts, and how they were established
+
+41 to 33 distinct failures at `narrow-word-16`, across 106 binaries. **Established by diffing the
+failing sets**, not by comparing totals: a total falling by eight is equally consistent with fixing
+nine and breaking one. Nothing newly failed. The remaining 33 are seven premise groups, 14 + 6 + 8 +
+2 + 1 + 1 + 1.
+
+**The narrow widths are still not verified.** Three tests passing at a width is three tests.
+
 ## 2026-09-05 — sweeping the axes nothing builds, and three instruments that lied
 
 **The arc.** One idea pursued to its ends: *the configuration a defect lives in tends to be the

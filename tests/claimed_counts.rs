@@ -446,3 +446,246 @@ fn the_invalid_bytecode_census_still_describes_the_tree() {
          document is that every site carries a verdict."
     );
 }
+
+/// The narrow-runtime coverage figure the decision documents state must not
+/// exceed what the tree actually holds.
+///
+/// # The claim this guards, and why it needed guarding
+///
+/// Four documents said, in various wordings, that the narrow widths are
+/// unexercised. They are not: `tests/narrow_vm.rs` and
+/// `tests/composite_width_skew.rs` define host aliases for narrow and skewed
+/// runtimes and drive them in the DEFAULT build, on every continuous-integration
+/// run. The corrections state a count. **A count in prose is the thing this tree
+/// has watched go stale three times** — the census paragraph was wrong three
+/// times, and `CLAUDE.md` carried a stale stage count in two places — so writing
+/// a fresh number and walking away would repeat the pattern one level up.
+///
+/// # The asymmetry is deliberate: at least, not exactly
+///
+/// The document's figure becomes FALSE if coverage drops below it, and merely
+/// conservative if coverage grows. An exact-equality guard would fire on every
+/// added narrow-runtime test, which is friction against the behaviour the
+/// project wants, and a guard that punishes good changes gets its number bumped
+/// without thought or deleted outright.
+///
+/// **Do not tighten this to equality.**
+///
+/// # Comments are stripped, and that is not a detail
+///
+/// A first version of this guard matched alias names anywhere in a test's text
+/// and derived 41, which agreed exactly with the figure the document then
+/// stated. **That agreement was two errors cancelling.** It counted
+/// `narrow_declared_multiword_long_division_on_wide_runtime` — a test whose name
+/// says it runs on a WIDE runtime — because a comment inside it mentions a
+/// narrow helper; and the document had counted all nine tests in the skew file,
+/// including one that is a deliberate control at the DEFAULT widths.
+///
+/// The true figure is 32 + 8 = 40. **A number that matches expectation is the
+/// one least likely to be re-examined**, which is why the check against the
+/// hand-derived split mattered more than the total.
+///
+/// # The attribution rule, and what it misses
+///
+/// A test counts when the CODE of its body — comments removed — names one of the
+/// narrow or skewed runtime aliases those files define, or calls a helper that
+/// does. **A test reaching a narrow runtime through a deeper indirection is not
+/// counted**, so the derived figure is a lower bound.
+///
+/// The two files are named explicitly. A third file introducing its own narrow
+/// alias would not be seen here.
+#[test]
+fn the_narrow_runtime_coverage_claim_still_describes_the_tree() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    // Aliases and helpers that reach a narrow or skewed runtime, taken from the
+    // two files' own type aliases rather than invented here.
+    const REACHES: &[&str] = &[
+        "NarrowVm",
+        "NarrowWordF64Vm",
+        "RetroVm",
+        "SixFiveOhTwo",
+        "WideWordNarrowAddress",
+        "run_i16",
+        "run_bool_i16",
+        "run_i16_data",
+    ];
+
+    /// Tests in `src` whose body code names something in `REACHES`.
+    fn attributed(src: &str) -> usize {
+        let lines: Vec<&str> = src.lines().collect();
+        let mut count = 0;
+        let mut i = 0;
+        while i < lines.len() {
+            let is_test_fn = lines[i].starts_with("fn ")
+                && i > 0
+                && lines[i - 1].trim_start().starts_with("#[test]");
+            if is_test_fn {
+                // The body runs to the next top-level item.
+                let mut j = i + 1;
+                while j < lines.len()
+                    && !(lines[j].starts_with("fn ")
+                        || lines[j].starts_with("#[test]")
+                        || lines[j].starts_with("type ")
+                        || lines[j].starts_with("struct ")
+                        || lines[j].starts_with("impl "))
+                {
+                    j += 1;
+                }
+                // Strip line comments: an alias named only in prose does not
+                // mean the test drives that runtime.
+                let code: String = lines[i..j]
+                    .iter()
+                    .map(|l| l.split("//").next().unwrap_or(""))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if REACHES.iter().any(|a| code.contains(a)) {
+                    count += 1;
+                }
+                i = j;
+            } else {
+                i += 1;
+            }
+        }
+        count
+    }
+
+    let mut derived = 0usize;
+    for rel in ["tests/narrow_vm.rs", "tests/composite_width_skew.rs"] {
+        let src = std::fs::read_to_string(root.join(rel))
+            .unwrap_or_else(|_| panic!("read {rel}; if it was renamed, update this guard"));
+        derived += attributed(&src);
+    }
+
+    assert!(
+        derived > 0,
+        "no test was attributed to a narrow runtime, so the alias list no longer matches anything \
+         and this guard is reporting a comfortable zero rather than checking the claim"
+    );
+
+    let doc = std::fs::read_to_string(root.join("docs/decisions/FEATURE_COMBINATION_SWEEP.md"))
+        .expect("read FEATURE_COMBINATION_SWEEP.md");
+
+    // Parse the figure OUT of the document. A guard carrying its own copy of the
+    // number would check the tree against itself and keep passing while the
+    // document drifted.
+    const MARKER: &str = " tests, in every continuous-integration";
+    let stated: usize = doc
+        .split(MARKER)
+        .next()
+        .filter(|head| head.len() < doc.len())
+        .and_then(|head| {
+            let digits: String = head
+                .trim_end()
+                .chars()
+                .rev()
+                .take_while(|c| c.is_ascii_digit())
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            digits.parse().ok()
+        })
+        .expect(
+            "the sweep document no longer states the narrow-runtime coverage figure in the \
+             expected form. If the wording changed, update this extraction; a guard that finds \
+             nothing to check is worse than no guard.",
+        );
+
+    assert!(
+        derived >= stated,
+        "the documents claim {stated} tests drive a narrow or skewed runtime and this scan finds \
+         only {derived}. Coverage has been REMOVED, which makes the claim false. Restore the \
+         coverage or correct the documents — do not lower the figure to match without saying why \
+         the tests went away."
+    );
+}
+
+/// The census's per-group table must add up to the totals its prose states.
+///
+/// # The drift this catches, which happened twice
+///
+/// The document already warns that "a table whose parts do not add to its
+/// stated whole has been the tell for a miscount here before". It then became
+/// the tell again: the group F row read "1 of 7 probed" while the prose beneath
+/// it said "two of F's seven", because a second site was probed and the row was
+/// not updated. The two disagreed for long enough that a third figure — 17
+/// examined — was still circulating in `HANDOFF.md` five lines from the correct
+/// one.
+///
+/// A count in a table and the same count in a sentence are two places to go
+/// stale independently. This checks they agree.
+///
+/// # What it does NOT check
+///
+/// Whether either figure is TRUE of the tree. The sibling guard
+/// `the_invalid_bytecode_census_still_describes_the_tree` checks the site total
+/// against the source; this one checks the document against itself, which is a
+/// weaker and different claim. Both are needed: a self-consistent document can
+/// still describe a tree that has moved.
+#[test]
+fn the_census_group_table_adds_up_to_its_stated_totals() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let doc = std::fs::read_to_string(root.join("docs/decisions/INVALID_BYTECODE_CENSUS.md"))
+        .expect("read INVALID_BYTECODE_CENSUS.md");
+
+    let mut sites = 0usize;
+    let mut examined = 0usize;
+    let mut rows = 0usize;
+    for line in doc.lines() {
+        // `| A | description | 1 | verdict |`
+        let cols: Vec<&str> = line.split('|').map(str::trim).collect();
+        if cols.len() < 6 {
+            continue;
+        }
+        let group = cols[1];
+        if group.len() != 1 || !group.chars().all(|c| c.is_ascii_uppercase()) {
+            continue;
+        }
+        let Ok(n) = cols[3].parse::<usize>() else {
+            continue;
+        };
+        let verdict = cols[4];
+        rows += 1;
+        sites += n;
+        // "(k of n probed)" gives a partial count; "not examined" gives none;
+        // anything else is a class verdict covering the whole group.
+        examined += if let Some(rest) = verdict.split(" of ").next().and_then(|head| {
+            head.rfind('(')
+                .map(|i| &head[i + 1..])
+                .and_then(|d| d.parse::<usize>().ok())
+        }) {
+            rest
+        } else if verdict.contains("not examined") {
+            0
+        } else {
+            n
+        };
+    }
+
+    assert!(
+        rows >= 8,
+        "only {rows} group rows were parsed, so the table's shape changed and this guard is \
+         checking almost nothing rather than checking the table"
+    );
+
+    let stated_sites = 46usize;
+    assert_eq!(
+        sites, stated_sites,
+        "the group rows sum to {sites} sites, not the {stated_sites} the document states. \
+         Re-derive the totals by summing the per-group column — adjusting the total instead is \
+         how group G went missing from every remainder list."
+    );
+
+    // The prose states the examined total in words and then enumerates it.
+    assert!(
+        doc.contains("Thirty-five of forty-six sites carry an examined verdict"),
+        "the census no longer states its examined total in the expected form; update this \
+         extraction rather than deleting the check"
+    );
+    assert_eq!(
+        examined, 35,
+        "the group rows sum to {examined} examined sites and the prose says thirty-five. One of \
+         them moved without the other. The per-group column is the authority."
+    );
+}

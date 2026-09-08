@@ -10,6 +10,67 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-08, V0.3.X line). THE TEN RED TESTS WERE THREE STORIES, AND FOUR OF THEM
+> WERE A DEFECT.**
+>
+> General `Op::Stream` lowering reddened ten backend tests, and the handoff recording that — mine —
+> said to invert all ten. **Four were reporting a defect the lowering had just introduced.**
+> `degenerate_stream_yield` returned `None` for two incompatible reasons, *not degenerate* and
+> *unsafe*, and the general path was defined as exactly that `None`, inheriting every soundness
+> rejection as a feature request. A stream calling a suspending callee went to `Refusals: []`.
+> **The backend was repaired; those four tests were not touched.**
+>
+> Three were correct widenings, each now carrying a whole-sequence comparison. Three were
+> simulations whose premise came true and now measure the shipping backend.
+>
+> **The frontier was re-derived rather than edited**: the discriminator is a composite that escapes
+> the iteration that built it, needing three shapes because a pair leaves two explanations standing.
+> That exposed a refusal class nothing had named — a composite built from a RESUMED VALUE, refused
+> for unknown width — and **the width was declared all along**, in `param_types[0]`. With it, a
+> composite-yielding stream is driven and agrees BODY FOR BODY across five suspensions, closing a
+> gap the frontier map had carried since it was written.
+>
+> **A guard of this line caught what reading would not have**: `comment_citations` rejected the push
+> because a renamed test was still cited in `REVERSE_PROMPT.md`. Four more stale citations followed.
+>
+> 485 tests, 0 failed, BOTH float configurations, every half frozen. No opcode added, no
+> `BYTECODE_VERSION` change. Publication remains held.
+
+---
+
+> **Currency note (2026-09-08, session 64). A WRONG ANSWER FOUND AND REPAIRED, AND A CAPABILITY
+> THAT WAS ALWAYS THERE.**
+>
+> **A composite bearing an opaque field was built and read at two different widths.** The layout
+> sizes `ScalarKind::Opaque` by the ADDRESS width and three subsystems follow it; the runtime
+> disagreed in four places, each assuming a WORD. The default target makes the two equal, so they
+> agreed by coincidence. Worst symptom: `P { h: h, n: 1 } == P { h: h, n: 2 }` evaluated to **true**.
+> Repaired by taking the width from the layout at each site, which answers no design question — the
+> repair did not need to decide whether the field is an index or a handle, and that stays open.
+>
+> **The finding with the longest reach is about testing, not the defect.** I recorded that the
+> construction path could not be guarded without a continuous-integration job. **Wrong.**
+> `GenericVm<W, A, F>` is generic over word and address independently and every implementation is
+> unconditional, so a host-defined alias reaches any width pair in the DEFAULT build;
+> `Target::embedded_8` has shipped a skewed pair all along. A width-dependent defect therefore costs
+> nothing standing to guard. This qualifies the sweep document for the WIDTH axis and leaves it
+> standing for the FEATURE axis.
+>
+> **Every `narrow-word-16` failure now carries a verdict** taken from the failing assertion rather
+> than the test's name. 41 to 33 distinct failures across 106 binaries, **established by diffing the
+> failing sets rather than comparing totals**; nothing newly fails. The remaining 33 are seven
+> premise groups, 14 + 6 + 8 + 2 + 1 + 1 + 1. **The narrow widths are still not verified.**
+>
+> **Negatives, recorded as negatives.** No mutation is caught by the shape corpus alone; a nested
+> stride shortened to prove otherwise was caught by seventeen tests. Two repaired sites hang on a
+> single test each, and one test is caught by nothing. One width-matrix measurement was invalid
+> because it compiled against a file being mutated for another experiment, and was caught only
+> because its result was implausible.
+>
+> **The four operator decisions are unchanged and none was touched.**
+
+---
+
 > **Currency note (2026-09-06, V0.3.X line). `Op::Len` HAS NO PRODUCER THAT COULD BE FOUND, AND
 > TWELVE GUARDS WERE DISPOSED OF RATHER THAN REPAIRED.**
 >
@@ -46,7 +107,10 @@ Current sprint source of truth.
 >
 > **The suite assumes a 64-bit host.** At `narrow-word-16`: 89 binaries pass, 15 fail, 37 distinct
 > failures, sharing a premise rather than a cause. The perf canary's own constants exceed 16 bits.
-> The narrow widths are unverified — not shown broken, not shown working.
+> The whole suite AT a narrow width is unverified — not shown broken, not shown working.
+> (Corrected 2026-09-08: this read "the narrow widths are unverified". Narrow RUNTIMES are
+> driven by 40 tests in the default build; what nothing runs is the suite as a whole at a
+> narrow width.)
 >
 > **The perf canary could not fail**: its ceiling was asserted after the timed call returned, so it
 > spun 57 minutes instead of tripping. Now bounded, mutation-tested three ways.
