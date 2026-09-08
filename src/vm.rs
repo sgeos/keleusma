@@ -3599,8 +3599,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     }
 
     /// Read a flat scalar field at `offset` of kind `kind` from a resolved
-    /// composite body, resolving an `Opaque` field's stored `word_bytes`
-    /// index back to its `Arc` through the ephemeral registry (B28 P3).
+    /// composite body, resolving an `Opaque` field's stored registry index
+    /// back to its `Arc` through the ephemeral registry (B28 P3). That index
+    /// occupies the width `ScalarKind::Opaque` gives it, which is the ADDRESS
+    /// width; this doc comment said `word_bytes` while the layout had already
+    /// moved to the address width, and the code matched the comment.
     /// Non-reference kinds delegate to `read_scalar_le`.
     ///
     /// Returns an error if an opaque index does not resolve. A well-formed
@@ -3618,16 +3621,27 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     ) -> Result<crate::bytecode::GenericValue<W, F>, VmError> {
         use crate::value_layout::ScalarKind;
         if matches!(kind, ScalarKind::Opaque) {
-            let index = match crate::bytecode::GenericValue::<W, F>::read_scalar_le(
-                bytes,
-                offset,
-                ScalarKind::Int,
-                word_bytes,
-                float_bytes,
-            )? {
-                crate::bytecode::GenericValue::Int(w) => w.to_i64() as usize,
-                _ => unreachable!("read_scalar_le with Int kind yields Int"),
-            };
+            // The field's width is whatever the LAYOUT says it is, which sizes
+            // an opaque by the ADDRESS width. Reading it as a word disagreed
+            // with the offsets the compiler bakes from that same layout on any
+            // target whose word and address widths differ. The index is read
+            // UNSIGNED: it is a registry position, and sign-extending it from a
+            // narrow field would produce a nonsensical index rather than a
+            // clean resolve failure.
+            let field =
+                ScalarKind::Opaque.size_in_bytes(word_bytes, float_bytes, self.module_addr_bytes());
+            let mut buf = [0u8; 8];
+            let src = field
+                .checked_add(offset)
+                .filter(|_| field <= buf.len())
+                .and_then(|end| bytes.get(offset..end))
+                .ok_or_else(|| {
+                    VmError::InvalidBytecode(alloc::string::String::from(
+                        "flat opaque field read out of bounds",
+                    ))
+                })?;
+            buf[..field].copy_from_slice(src);
+            let index = u64::from_le_bytes(buf) as usize;
             // B33: push the POD index form rather than resolving the `Arc`,
             // so the operand stack holds no global-heap pointer. The `Arc` is
             // materialised from the index only at a host boundary (native
@@ -5675,22 +5689,25 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     // Intern opaque fields on the flat construction path
                     // (B28 P3). Decide flatness first. A struct/enum Flat
                     // operand is flat by the compiler's decision, which the
-                    // named type makes reliable, so an opaque field is flat
-                    // (interned). Tuple and array are value-driven and their
-                    // access form is recovered by the compiler's lightweight
-                    // inference, which cannot recover an opaque element type;
-                    // to keep construction and access in agreement, an opaque
-                    // element keeps the tuple/array boxed (`flat_field_size`
-                    // is `None` for `Opaque`, so a tuple holding one is not
-                    // flattened). On the flat path each `Opaque` is replaced
-                    // by its registry index packed as a word.
-                    // A struct/enum Flat operand is flat by the compiler's
-                    // decision, which the named type makes reliable, so its
-                    // reference fields are flat. Tuple and array are
-                    // value-driven and keep a reference element boxed
-                    // (opaque via `flat_field_size` being `None`, text via
-                    // the explicit exclusion), because their access form is
-                    // recovered by lightweight inference (B28 P3).
+                    // named type makes reliable, so its reference fields are
+                    // flat. Tuple and array are value-driven: an opaque
+                    // element IS flat-eligible (`flat_tuple_element_with_refs`
+                    // admits both the host `Arc` and the internal index form,
+                    // and `tests/flat_ref_tuple.rs` pins that a tuple and an
+                    // array holding one flatten), while a text element stays
+                    // boxed below the host pointer width.
+                    //
+                    // On the flat path each `Opaque` becomes its registry
+                    // index, packed at the width the LAYOUT gives
+                    // `ScalarKind::Opaque` -- the ADDRESS width, not a word.
+                    // The index was formerly rewritten to a one-word `Int`
+                    // here, which put every field after an opaque at an offset
+                    // the compiler-baked access disagreed with wherever the two
+                    // widths are selected apart. An earlier form of this
+                    // comment claimed an opaque element kept a tuple boxed
+                    // because `flat_field_size` answered `None`; the tests
+                    // above show it did not, so the claim is removed rather
+                    // than carried forward.
                     let flat = match operand {
                         NCO::Flat {
                             kind: CK::Struct | CK::Enum,
@@ -5710,23 +5727,29 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     if flat {
                         for v in values.iter_mut() {
                             match v {
-                                // An opaque on the stack is the POD registry
-                                // index (B33); convert it to the one-word `Int`
-                                // the packer writes, with no re-intern.
-                                crate::bytecode::GenericValue::OpaqueRef(idx) => {
-                                    *v = crate::bytecode::GenericValue::Int(W::from_i64_wrap(
-                                        *idx as i64,
-                                    ));
-                                }
+                                // An opaque on the stack is already the POD
+                                // registry index (B33) and is packed in that
+                                // form, with no re-intern.
+                                //
+                                // It is deliberately NOT rewritten to an `Int`
+                                // here. An `Int` field is one WORD wide, while
+                                // the layout sizes `ScalarKind::Opaque` by the
+                                // ADDRESS width, and the compiler bakes every
+                                // field offset from that layout. Collapsing the
+                                // index to an `Int` made the packer advance by a
+                                // word and put every later field at an offset
+                                // the baked access disagreed with. The default
+                                // target makes the two widths equal, so the
+                                // disagreement was invisible there and appeared
+                                // only where they are selected apart.
+                                crate::bytecode::GenericValue::OpaqueRef(_) => {}
                                 // Defensive: a raw `Opaque` `Arc` reaching the
                                 // pack path (not via the operand stack, which
                                 // carries `OpaqueRef`) interns to its index.
                                 crate::bytecode::GenericValue::Opaque(arc) => {
                                     let idx =
                                         self.intern_ephemeral_opaque(alloc::sync::Arc::clone(arc));
-                                    *v = crate::bytecode::GenericValue::Int(W::from_i64_wrap(
-                                        idx as i64,
-                                    ));
+                                    *v = crate::bytecode::GenericValue::OpaqueRef(idx as u32);
                                 }
                                 // A genuinely-owned `StaticStr` (a host-supplied
                                 // string, not a constant load, which now arrives

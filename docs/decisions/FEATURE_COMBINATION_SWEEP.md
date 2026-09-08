@@ -171,6 +171,15 @@ is recorded rather than adopted: the standing per-push cost is the operator's ca
 
 ## Running the tests under `narrow-word-16`: the open question, answered
 
+> **SUPERSEDED 2026-09-08 in one conclusion, and it is the section's headline.** Every failure has
+> since been classified individually in
+> [`NARROW_WIDTH_FAILURE_CLASSIFICATION.md`](./NARROW_WIDTH_FAILURE_CLASSIFICATION.md). **Five of
+> them were a runtime defect, not a test premise**, so the claim below that "the reason is not a
+> runtime defect" is REFUTED and is marked as such where it appears. The counts here are also a
+> lower bound: the finished run has **41** distinct failures across **16** binaries, not 37 across
+> 15. The rest of this section stands, and is kept because how the wrong conclusion was reached is
+> the useful part.
+
 The section above said whether the narrow-selector test failures were "one test or many" was
 unexamined, and that answering it needed a test run rather than a build. **A question raised in a
 durable document and then abandoned reads as a lead for someone else**, so it was run.
@@ -192,19 +201,29 @@ the counts are otherwise a total rather than a lower bound. **A first draft of t
 passing**, a figure read while the run was still going and corrected here, which is the reason to
 take a count from a finished run rather than from a progress line.
 
-### The answer is "many", and the reason is not a runtime defect
+### The answer is "many", and the reason is ~~not~~ MOSTLY not a runtime defect
+
+**This heading was wrong as first written, and the row that carried the error is in the table
+below.** Five of these failures are a defect in the virtual machine. The rest of the paragraph is
+accurate for the other thirty-six.
 
 The failures cluster, and the clusters share a premise rather than a cause in the virtual machine:
 
 | group | size | what they presuppose |
 |---|---|---|
 | `*_narrows_to_the_declared_width` (add, sub, mul, div, the checked forms, int-to-float) | 9 | a module declaring a NARROW width running on a WIDER runtime. At a 16-bit runtime that premise is void |
-| opaque and flat-composite layout | 5 | offsets and handle widths taken at the host's natural width |
+| opaque and flat-composite layout | 5 | **THIS ROW WAS THE DEFECT.** Its guess -- "handle widths taken at the host's natural width" -- was close to the mechanism, and it was still filed as a test premise |
 | float-width classification | 5 | the encodable float widths available at the default configuration |
 | the remainder | 18 | not individually examined |
 
 **Per-test verdicts were NOT made.** The grouping is by name and by the premise the name implies,
 which is weaker evidence than reading each test, and it is recorded at that strength deliberately.
+
+**Recording the weakness was not enough to stop it misleading.** The opaque row above names a
+plausible mechanism and files it under "what they presuppose", and a reader with the surrounding
+prose would take it as another test assumption. Reading the five assertions found a wrong ANSWER
+sitting among them. **A caveat about an instrument's strength does not make its output safe to
+build on.**
 
 ### The worked example, which settles the character of the whole set
 
@@ -217,14 +236,17 @@ It is not. The program the test compiles is
 outside a 16-bit word's range**, whose maximum is 32767. The test's own parameters cannot be
 represented at the width it was asked to run at. It is written for a wide word.
 
-That is the character of this whole set: **the suite assumes a 64-bit host runtime**, and running it
-at 16 bits mostly measures that assumption. It is a statement about the tests, not about the
-runtime's portability.
+That is the character of MOST of this set: **the suite assumes a 64-bit host runtime**, and running
+it at 16 bits mostly measures that assumption. For thirty-six of the forty-one that is a statement
+about the tests. For the other five it was a statement about the runtime, and the word "mostly" was
+carrying more weight here than it could bear.
 
 ### What this does and does not license
 
-**It does not say the narrow widths are broken.** Nothing here demonstrates a defect in the virtual
-machine at a narrow word. Every configuration still compiles, which the section above establishes.
+**~~It does not say the narrow widths are broken.~~ RETRACTED 2026-09-08.** This said nothing here
+demonstrated a defect in the virtual machine at a narrow word. Five of the failures did, and reading
+them is all it took. Every configuration still compiles, which the section above establishes, but
+compiling was never the question.
 
 **It does not say they work, either.** A suite that cannot run at a width cannot vouch for it. The
 honest position is that the narrow widths are **unverified**, and now measurably so rather than

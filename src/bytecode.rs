@@ -615,6 +615,18 @@ pub(crate) fn flat_field_size<W: crate::word::Word, F: crate::float::Float>(
     float_bytes: usize,
     addr_bytes: usize,
 ) -> Option<usize> {
+    // The internal registry-index form of an opaque contributes the width the
+    // LAYOUT gives `ScalarKind::Opaque`, which is the address width, not a
+    // word. The compiler bakes every field offset from that same layout, so
+    // taking the width from it here is what keeps construction and access in
+    // agreement on a target whose word and address widths are selected apart.
+    if matches!(v, GenericValue::OpaqueRef(_)) {
+        return Some(crate::value_layout::ScalarKind::Opaque.size_in_bytes(
+            word_bytes,
+            float_bytes,
+            addr_bytes,
+        ));
+    }
     if let Some(kind) = flat_tuple_scalar_kind(v) {
         return Some(kind.size_in_bytes(word_bytes, float_bytes, addr_bytes));
     }
@@ -1421,7 +1433,27 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         crate::flat_value::FlatComposite::build_in_arena(arena, size, |dst| {
             let mut off = 0usize;
             for v in values {
-                if let Some(kind) = flat_tuple_scalar_kind(v) {
+                // An opaque field holds the ephemeral registry index, written
+                // at the width the layout gives `ScalarKind::Opaque` (the
+                // address width). An index too large for that field aborts the
+                // pack rather than truncating: the caller then boxes the
+                // composite, which is correct but slower, where a truncated
+                // index would silently name the wrong host object.
+                if let GenericValue::OpaqueRef(index) = v {
+                    let field = crate::value_layout::ScalarKind::Opaque.size_in_bytes(
+                        word_bytes,
+                        float_bytes,
+                        addr_bytes,
+                    );
+                    let le = u64::from(*index).to_le_bytes();
+                    if field > le.len() || le[field..].iter().any(|&b| b != 0) {
+                        return Err(());
+                    }
+                    dst.get_mut(off..off + field)
+                        .ok_or(())?
+                        .copy_from_slice(&le[..field]);
+                    off += field;
+                } else if let Some(kind) = flat_tuple_scalar_kind(v) {
                     let field = kind.size_in_bytes(word_bytes, float_bytes, addr_bytes);
                     v.write_scalar_le(dst, off, word_bytes, float_bytes)
                         .map_err(|_| ())?;
@@ -5036,5 +5068,89 @@ mod materialise_kstrings_tests {
             }
             other => panic!("expected Struct, got {:?}", other),
         }
+    }
+}
+
+#[cfg(test)]
+mod opaque_field_width_tests {
+    use super::*;
+    use crate::value_layout::ScalarKind;
+
+    type V = Value;
+
+    /// The word and address widths are selected INDEPENDENTLY, by the
+    /// `narrow-word-*` and `narrow-address-*` feature families, so a target on
+    /// which they differ is a supported configuration rather than a
+    /// hypothetical. These tests pass the two widths explicitly, so they hold
+    /// the agreement in the default build, where the runtime's own widths are
+    /// equal and would hide any disagreement between them.
+    const WORD: usize = 2;
+    const FLOAT: usize = 4;
+    const ADDR: usize = 8;
+
+    /// An opaque field occupies the width the LAYOUT gives it.
+    ///
+    /// The compiler bakes every field offset from that layout, so a packer
+    /// that advanced by some other width would place each following field
+    /// where the baked access does not look for it. Sizing the whole body is
+    /// the cheapest observation of that disagreement.
+    #[test]
+    fn an_opaque_field_occupies_the_width_the_layout_gives_it() {
+        let arena = keleusma_arena::Arena::with_capacity(1024);
+        let values = [V::OpaqueRef(7), V::Int(1)];
+        let body = V::pack_flat_in_arena(&values, 0, WORD, FLOAT, ADDR, &arena)
+            .expect("pack succeeds")
+            .expect("an opaque plus an int is flat-eligible");
+        let expected = ScalarKind::Opaque.size_in_bytes(WORD, FLOAT, ADDR)
+            + ScalarKind::Int.size_in_bytes(WORD, FLOAT, ADDR);
+        assert_eq!(
+            body.byte_len(),
+            expected,
+            "the packed body must be as long as the layout says, or every field \
+             after the opaque sits at an offset the compiler-baked access disagrees with"
+        );
+    }
+
+    /// The field AFTER an opaque begins where the layout puts it.
+    ///
+    /// A body of the right total length could still be laid out wrongly, so
+    /// this reads the following field's bytes at the layout's offset rather
+    /// than trusting the size assertion above.
+    #[test]
+    fn the_field_after_an_opaque_begins_at_the_layout_offset() {
+        let arena = keleusma_arena::Arena::with_capacity(1024);
+        let values = [V::OpaqueRef(7), V::Int(0x0102)];
+        let body = V::pack_flat_in_arena(&values, 0, WORD, FLOAT, ADDR, &arena)
+            .expect("pack succeeds")
+            .expect("an opaque plus an int is flat-eligible");
+        let bytes = body.resolve(&arena).expect("resolves under this epoch");
+        let opaque_width = ScalarKind::Opaque.size_in_bytes(WORD, FLOAT, ADDR);
+        assert_eq!(
+            &bytes[..opaque_width],
+            &[7, 0, 0, 0, 0, 0, 0, 0],
+            "the registry index occupies the whole opaque field"
+        );
+        assert_eq!(
+            &bytes[opaque_width..opaque_width + WORD],
+            &[0x02, 0x01],
+            "the following word begins immediately after the opaque field"
+        );
+    }
+
+    /// An index too large for the field aborts the pack instead of truncating.
+    ///
+    /// A truncated index would still resolve, to the WRONG host object, which
+    /// is the failure mode a bounds check cannot catch downstream. Returning
+    /// `None` boxes the composite, which is slower and correct.
+    #[test]
+    fn an_index_too_wide_for_the_field_refuses_to_pack() {
+        let arena = keleusma_arena::Arena::with_capacity(1024);
+        // A one-byte address field cannot hold index 256.
+        let values = [V::OpaqueRef(256), V::Int(1)];
+        let packed = V::pack_flat_in_arena(&values, 0, WORD, FLOAT, 1, &arena).expect("pack call");
+        assert!(
+            packed.is_none(),
+            "an index that does not fit the opaque field must fall back to a boxed body"
+        );
     }
 }
