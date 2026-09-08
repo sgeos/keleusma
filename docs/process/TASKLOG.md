@@ -10,6 +10,37 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-08, session 64). A WRONG ANSWER FOUND AND REPAIRED, AND A CAPABILITY
+> THAT WAS ALWAYS THERE.**
+>
+> **A composite bearing an opaque field was built and read at two different widths.** The layout
+> sizes `ScalarKind::Opaque` by the ADDRESS width and three subsystems follow it; the runtime
+> disagreed in four places, each assuming a WORD. The default target makes the two equal, so they
+> agreed by coincidence. Worst symptom: `P { h: h, n: 1 } == P { h: h, n: 2 }` evaluated to **true**.
+> Repaired by taking the width from the layout at each site, which answers no design question — the
+> repair did not need to decide whether the field is an index or a handle, and that stays open.
+>
+> **The finding with the longest reach is about testing, not the defect.** I recorded that the
+> construction path could not be guarded without a continuous-integration job. **Wrong.**
+> `GenericVm<W, A, F>` is generic over word and address independently and every implementation is
+> unconditional, so a host-defined alias reaches any width pair in the DEFAULT build;
+> `Target::embedded_8` has shipped a skewed pair all along. A width-dependent defect therefore costs
+> nothing standing to guard. This qualifies the sweep document for the WIDTH axis and leaves it
+> standing for the FEATURE axis.
+>
+> **Every `narrow-word-16` failure now carries a verdict** taken from the failing assertion rather
+> than the test's name. 41 to 33 distinct failures across 106 binaries, **established by diffing the
+> failing sets rather than comparing totals**; nothing newly fails. The remaining 33 are seven
+> premise groups, 14 + 6 + 8 + 2 + 1 + 1 + 1. **The narrow widths are still not verified.**
+>
+> **Negatives, recorded as negatives.** No mutation is caught by the shape corpus alone; a nested
+> stride shortened to prove otherwise was caught by seventeen tests. Two repaired sites hang on a
+> single test each, and one test is caught by nothing. One width-matrix measurement was invalid
+> because it compiled against a file being mutated for another experiment, and was caught only
+> because its result was implausible.
+>
+> **The four operator decisions are unchanged and none was touched.**
+
 > **Currency note (2026-09-05, session 63 close). THE SWEEPS, AND THREE CORRECTED INSTRUMENTS.**
 >
 > **Nine pull requests merged.** The through-line: *the configuration a defect lives in tends to be
