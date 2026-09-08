@@ -255,11 +255,57 @@ of the layout is caught by one of the three; making the size query itself answer
 caught by two. **The third, which pins the refusal of an over-wide index, was NOT caught by either
 mutation** and guards only that fallback.
 
-**No guard covers the construction path's rewrite of the index.** Restoring it would be invisible in
-the default build, because the collapse to an `Int` is only wrong where a word and an address differ,
-and no continuous-integration job selects a configuration where they do. That is the same structural
-gap this document's parent records: **the configuration a defect lives in is the configuration
-nothing builds.**
+**~~No guard covers the construction path's rewrite of the index.~~ CLOSED, and the reasoning behind
+it was wrong.** This said restoring the collapse would be invisible in the default build because no
+continuous-integration job selects a configuration where the two widths differ. **No job has to.**
+See the section below.
+
+`tests/composite_width_skew.rs` now drives the whole mechanism end to end at two skews, in the
+default build. Its coverage was measured by reverting each of the four repaired sites in turn:
+
+| reverted site | tests that caught it |
+|---|---|
+| the construction path collapsing the index to a one-word `Int` | 3 |
+| the arena packer advancing by a word | 5 |
+| the flat scalar read taking a word | **1** |
+| the host decode asking for a word | **1** |
+
+**Two sites are held by a single test each.** The read side is observable only by resolving the
+index back to its host object, because with a handful of opaques the index fits in one byte and
+every other test reads the same number at either width. **One test in that file is caught by no
+mutation at all** and is documented there as a witness to the reported symptom rather than as a
+guard.
+
+## A width skew needs no feature selection, and that qualifies this document's parent
+
+The finding above rested on an assumption worth stating plainly, because it was **false**: that
+reaching a configuration where the word and address widths differ requires selecting a `narrow-*`
+feature, and therefore a continuous-integration job.
+
+**It does not.** `GenericVm<W, A, F>` is public and generic over the word, address and float types
+independently, and every `Word` (`i8`, `i16`, `i32`, `i64`) and every `Address` (`u8`, `u16`, `u32`,
+`u64`) is implemented unconditionally. A host-defined alias therefore reaches **any** pair of widths
+in the default build. The `narrow-*` features only choose which pair the bundled `Vm` alias uses.
+
+**And a skewed pair already ships as a named target.** `Target::embedded_8` declares an eight-bit
+word with a sixteen-bit address, and the `addr_bits_log2` field's own documentation names the 6502 as
+the machine it stands for. The defect this document records was reachable through a shipped
+constructor, not only through a feature nobody builds.
+
+### What this does and does not change
+
+**For the FEATURE axis, the parent document's finding stands.** A build that omits `floats` while
+enabling `verify` cannot be reached by a host alias; it needs the feature selection, and nothing
+selects it. That is what left the float hole unexercised.
+
+**For the WIDTH axis it is weaker than stated.** The behaviour is reachable from an ordinary test in
+the default build, so a width-dependent defect can be guarded at no standing cost — no job, no
+matrix, nothing added to every push. That is a better position than the parent document assumed, and
+it was available the whole time.
+
+**It does not make the narrow widths verified.** What is covered is one mechanism, at two skews, by
+seven tests. The thirty-six failures classified above as wide-host assumptions are untouched by this,
+and running the suite at a narrow width remains the project this document declines to start.
 
 ## What this document does not establish
 
