@@ -129,6 +129,13 @@ Call-site analysis of all five, after pass five:
 | 16 | `assemble_enum_layouts` | `self_host_compile_full` and `..._scratch` | **driven** in pass five |
 
 **Every one of the five sits inside a function the passes DID call.** The entry-point gap is closed;
+
+> **REFUTED BY PASS SEVEN, and left in place because the reasoning is the lesson.** Arm 9's function
+> is reached only through drivers pass five never called, and it fires sixty times when they are.
+> The claim below was arrived at by tracing each arm to its *immediately enclosing* function and
+> stopping there; the question is whether a PUBLIC entry point reaches it, which is a longer chain.
+> See the pass-seven section.
+
 what remains is that these are fallback branches for constructs the six small fixtures never
 contained -- a constant kind not used, an enum layout shape a payload-free enum does not produce, a
 reconstruction case those programs do not reach.
@@ -175,16 +182,55 @@ A function returning a `Byte` constant **panics** through `self_host_compile_ful
 refusing cleanly. Whether that construct is inside the supported subset is not determined here; it is
 recorded because a panic and a refusal are different outcomes and only one is a documented boundary.
 
-### FOUR REMAIN, AND THEY ARE NAMED
+### PASS SEVEN: ARM 9 IS REACHED, AND THE ENTRY-POINT GAP WAS NOT CLOSED
+
+**Arm 9 fires sixty times** on a six-fixture spread, driven through
+`validate_module_via_kel` and `analyze_stream_chunk`. The union is **16 of 19**.
+
+**It was a false zero, and pass five's central conclusion is wrong because of it.**
+That pass declared "the entry-point gap is closed" and "every one of the five sits
+inside a function the passes DID call". `analyze_op_heap` is reached only through
+`run_analyze_kel`, whose public drivers are `validate_module_via_kel`,
+`analyze_stream_chunk` and `assemble_resource_bounds`. **Had pass five driven any
+of them, arm 9 would have fired sixty times rather than zero.** It did not, so it
+did not.
+
+So the remaining arms were never purely a fixture problem. **They are a mix**, and
+the way to tell which is to trace an arm's callers up to a public entry point
+before concluding anything about its fixtures.
+
+**This is the third time this census has produced a false zero from an undriven
+driver** -- arm 18 first, whose failure the brief retains as its lesson, then the
+`*_from_pipeline` family in pass five, now this. The lesson has been recorded twice
+and repeated anyway, which suggests the check needs to be procedural rather than
+remembered: **trace the call chain to a public entry point before reporting an arm
+unreached.**
+
+### The pass-seven probe was itself vacuous before it was fixed
+
+Six fixtures were first driven through `self_host_compile_full` and neither arm
+fired. That entry point calls neither function. **The probe was measuring nothing,
+in exactly the way it was written to detect** -- and was caught only by asking why
+an arm that should fire on nearly every op had fired on none.
+
+### Arm 11 is still unreached, and the attempt is recorded rather than the verdict
+
+`const_scalar_size` is reached only through `typed_desc`, whose only caller is
+`seed_verify_typed_shared`. Driving that with a virtual machine built from the
+USER module panics: it expects the stage's machine, not the subject's. **So the
+arm has no witness and no honest verdict from this pass** -- what is recorded is
+that the driver was identified, the setup attempted was wrong, and the correct
+harness is the one the typed-verifier tests already build.
+
+### THREE REMAIN, AND THEY ARE NAMED
 
 | arm | function | note |
 |---|---|---|
 | 7 | `reconstruct_via_kel` | reconstruction path |
 | 8 | `reconstruct_via_kel_multihead` | reconstruction path |
-| 9 | `analyze_op_heap` | analysis |
 | 11 | `const_scalar_size` | analysis. A `bool` constant was tried in pass six and did NOT reach it |
 
-**Arm 16 is closed and its row is removed**, rather than left in a table under a heading that
+**Arms 9 and 16 are closed and their rows are removed**, rather than left in a table under a heading that
 contradicts it. Its note read: "the corpus source used a payload-free enum, which is the likely gap
 and is a lead rather than a conclusion". **The lead was right** -- a payload-bearing enum reaches it,
 with two controls that do not. A lead recorded as a lead, and later confirmed, is the cheapest kind
