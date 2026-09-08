@@ -679,13 +679,13 @@ fn the_census_group_table_adds_up_to_its_stated_totals() {
 
     // The prose states the examined total in words and then enumerates it.
     assert!(
-        doc.contains("Thirty-four of forty-six sites carry an examined verdict"),
+        doc.contains("Thirty-five of forty-six sites carry an examined verdict"),
         "the census no longer states its examined total in the expected form; update this \
          extraction rather than deleting the check"
     );
     assert_eq!(
-        examined, 34,
-        "the group rows sum to {examined} examined sites and the prose says thirty-four. One of \
+        examined, 35,
+        "the group rows sum to {examined} examined sites and the prose says thirty-five. One of \
          them moved without the other. The per-group column is the authority."
     );
 }

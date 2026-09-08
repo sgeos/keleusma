@@ -55,7 +55,7 @@ honest; probing every member individually is not a better use of the same effort
 
 | # | group | sites | verdict |
 |---|---|---|---|
-| A | flat scalar decode failure, converted from the codec error | 1 | not examined |
+| A | flat scalar decode failure, converted from the codec error | 1 | **REACHABLE, witnessed** — see below |
 | B | float opcode without the `floats` feature | 2 | **REACHABLE -- see below** |
 | C | `Fixed` fraction bits exceeding the word width | 5 | **defended**, by two checks that compose |
 | D | composite operand form mismatch | 7 | **defended**, by boundary canonicalization |
@@ -93,12 +93,11 @@ written and the row was not updated. The totals were re-derived from the prose a
 **A count in a table and the same count in a sentence are two places to go stale**, and this
 document has now been the tell for its own miscount twice.
 
-**Thirty-four of forty-six sites carry an examined verdict**, group by group: none of A's one, both
+**Thirty-five of forty-six sites carry an examined verdict**, group by group: A's one, both
 of B, all five of C, all seven of D, eight of E's nine, two of F's seven, one of G's three, all three
 of H, five of I's six, and one of J's three.
 
-**The remaining twelve** are group A's single site, one in E, five in F, two in G, one in I, and two
-in J.
+**The remaining eleven** are one in E, five in F, two in G, one in I, and two in J.
 
 **Two corrections are folded into that tally, and both are the same defect.** Earlier revisions of
 this line said fifteen remaining and then eleven, and **both omitted group G entirely** — the
@@ -112,6 +111,46 @@ the same message are credited with it. The groups were formed the same way. Read
 "message classes examined", not as lines of source visited — a weaker claim than the bare number
 suggests, and it was overdue. A census whose entries are unexamined opinions is worse than a
 short one that says which sites were looked at.
+
+## Group A is reachable, and this session's own defect is what fired it
+
+The site is `From<ScalarError> for VmError`, which **every `?` over the flat scalar codec passes
+through**. The census flagged it as the one conversion its grep happened to catch, and said so as
+evidence that the class has members the scan cannot enumerate. It sat unexamined because no probe had
+been aimed at it.
+
+**No probe was needed in the end.** It fired twice, unprompted, in the pre-repair `narrow-word-16`
+run:
+
+> `call: InvalidBytecode("flat scalar codec: OutOfBounds")`
+
+in `tuple_with_opaque_element_flattens_and_resolves` and
+`tuple_with_opaque_and_trailing_scalars_offsets`. Both are ordinary programs on a real runtime. The
+cause was the opaque-field width disagreement repaired earlier in this session, recorded in
+[`NARROW_WIDTH_FAILURE_CLASSIFICATION.md`](./NARROW_WIDTH_FAILURE_CLASSIFICATION.md).
+
+### The route is closed; the class is not
+
+After the repair the message appears **zero** times in `narrow-word-16`, in `narrow-address-16`, and
+in the default suite — three finished runs, and a statement about those three rather than about every
+configuration.
+
+**That closes one route, and the class stays live.** The site's reach is the union of every `?` over
+the scalar codec, which this document's instrument cannot enumerate; it says so in its own opening.
+The distinction is the one this tree keeps re-learning: an opcode was declared producerless and
+another line found four producers within the hour, after which the rule became *no producer FOUND*,
+never *unreachable*.
+
+### The error kind misattributes the fault, exactly as in group F
+
+The message says the bytecode is malformed. **It was not.** The artefact was correct and the runtime
+disagreed with its own layout about how wide a field is. A host reading that message goes and
+inspects their module, which is the wrong thing.
+
+This is the same defect group F records for the hot-swap site, reached from the opposite direction —
+there a host argument error was reported as `InvalidBytecode`, here a runtime bug was. **Not
+repaired**: changing which variant a public API returns is a breaking change and the operator's call,
+alongside the API-shaped decisions already queued.
 
 ## Group B is reachable, and it is a real deployment shape
 
