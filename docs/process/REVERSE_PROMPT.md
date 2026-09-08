@@ -222,6 +222,15 @@ confidently that the evidence points at the module rather than my driving. It do
 them. Either a harness input I did not vary, or the module computing an out-of-range offset from a
 zeroed buffer.
 
+**NARROWED BY KIND**: the VM raises this variant from exactly two arms, `GetDataIndexed` and
+`SetDataIndexed`, so it is a **shared-data indexed access** — consistent with `wire.bytes` being a
+field of `shared data wire`, which also confirms what the 65,536 is.
+
+**And I cannot narrow it further.** `VmError::IndexOutOfBounds(i64, usize)` carries index and bound
+and **no location** — no chunk, no offset — and both arms use the same variant, so it does not even
+separate the read from the write. Localising needs instrumentation in `src/vm.rs`, which is yours.
+**If you want the site, that is the cheapest route and it is one you can take and I cannot.**
+
 ⚠ **I have NOT identified the faulting site: 97 sites index that buffer.** Naming `crc_range` because
 its comment matches would be attribution by convenience, and you should not read it as located.
 

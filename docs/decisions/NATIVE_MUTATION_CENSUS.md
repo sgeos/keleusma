@@ -122,6 +122,16 @@
 > - a harness input **not** among the four varied, or
 > - the module's own logic computing an out-of-range offset from a zeroed buffer.
 >
+> **THE KIND OF ACCESS IS NARROWED (2026-09-07).** The virtual machine raises this variant from
+> exactly two places: the `GetDataIndexed` and `SetDataIndexed` arms. **So it is a SHARED-DATA indexed
+> access, not a local array index** — consistent with `wire.bytes` being a field of
+> `shared data wire { len: Word, bytes: [Byte; 65536], ... }`, which also confirms what the 65,536 is.
+>
+> **Why it cannot be narrowed further from here.** `VmError::IndexOutOfBounds(i64, usize)` carries the
+> index and the bound and **no location** — no chunk, no instruction offset. Localising the site needs
+> instrumentation in `src/vm.rs`, which this line does not own. Both raise sites use the same variant,
+> so the error text does not even distinguish the read from the write.
+>
 > ⚠ **THE FAULTING SITE IS NOT IDENTIFIED. 97 sites index `wire.bytes`**, and naming `crc_range`
 > because its comment is the one that matches would be attribution by convenience. What is
 > established is the BUFFER and the DESIGN INTENT for at least one class of over-index — not which
