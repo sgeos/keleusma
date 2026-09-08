@@ -13,6 +13,72 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-08 (second half) — a policy that reached one document, and three counts that disagreed
+
+**The arc.** Repairing the width defect exposed a false belief about what can be tested. Correcting
+that belief exposed a stale rule in the file agents read first. Correcting THAT exposed the same rule
+in five more documents. Each correction was found by following the previous one, not by planning.
+
+### The gate change that propagated to its own document and no further
+
+`GIT_STRATEGY.md` changed on 2026-08-11: continuous integration gates feature branches, the local
+gate does not. **It appears to have been the only document that changed.** `CLAUDE.md`,
+`AUTONOMOUS_IMPLEMENTATION_LOOP.md`, `PARALLEL_DEVELOPMENT.md`, `HANDOFF.md` and `CONTRIBUTING.md`
+all still directed by the superseded rule.
+
+**I followed it.** I ran a 2h30m local gate before a merge CI had already passed 22 of 22, starved my
+own parallel work badly enough to kill a measurement mid-run, and told the operator the retired rule
+was policy. The strategy document names this exact failure: *"the expensive failure is the local
+one"*.
+
+**The sweep's own failure is the transferable part.** My first pattern set missed `CONTRIBUTING.md`,
+whose wording ("mandatory pre-merge gate") no initial pattern matched. It surfaced only on a widened
+re-sweep AFTER editing. **Re-running the search afterwards is what turns a search into a check.**
+
+Two documents were deliberately left: the journal, because append-only means append-only, and
+`RELEASE_PROCESS.md`, whose statement is correct for a release.
+
+### Three counts for one census, and a convention that was backwards
+
+The `InvalidBytecode` census had 34 of 46 in its prose, 17 in `HANDOFF.md`, and a per-group table
+summing to 33. The table was stale by one row: group F read "1 of 7 probed" while the prose said
+"two of F's seven" and was right.
+
+**Fixing it required defining "examined", which had never been stated** — and the first definition
+was BACKWARDS. It said a class argument extends to every member, which would make all seven of F
+examined, contradicting the table it had just been used to reconcile. **It agreed with the total
+anyway**, because the table was correct and the prose was the half that had drifted, so a wrong rule
+produced a right number.
+
+**A convention invented to settle a count must be checked against something other than that count.**
+It was caught by re-reading it against the document's own remainder statement.
+
+### The same shape twice more
+
+A coverage figure of 41 was confirmed by a guard that independently derived 41 — two errors
+cancelling, the truth being 40. The guard over-counted a test whose name says it runs on a WIDE
+runtime, because a COMMENT inside it mentions a narrow helper; the document had counted a control
+test as coverage.
+
+**Agreement is the most dangerous evidence**, and this session produced it twice in different media.
+A number that matches expectation is the one least likely to be re-examined.
+
+### Group A, closed by a witness already in the logs
+
+The census's last wholly unexamined group is the conversion every `?` over the flat scalar codec
+passes through. No probe was needed: it had fired twice in the pre-repair `narrow-word-16` run, from
+ordinary programs, caused by the width defect repaired earlier the same session. The repair closes
+that route and **not the class** — the distinction this tree carries a retraction for.
+
+### The discard-arm census closed at nineteen, by a different kind of answer
+
+Arms 7 and 8 are dead rather than unreached: the slots their fallback guards are declared `Word`, and
+a `Word` slot yields an `Int`. Every earlier arm was closed by driving it; these by showing no input
+reaches them. **The proof was the change itself** — replace a dead arm with a panic, run the corpus
+green — but only because a probe first confirmed the code runs 507 times. That probe initially
+reported ZERO, an artefact of `cargo test` capturing output from passing tests, which would have made
+the green run silence rather than evidence.
+
 ## 2026-09-08 — a wrong answer in the flat-composite core, and a capability that was there all along
 
 **The arc.** Session 63 left a measurement unfinished: eighteen of thirty-seven `narrow-word-16`
