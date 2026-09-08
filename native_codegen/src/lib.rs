@@ -1499,6 +1499,8 @@ pub fn lower_chunk<'ctx>(
             opts,
             degenerate_yield: None,
             delegated_call: None,
+            // No module, so no signature table.
+            own_signature: None,
             // Unreachable rather than merely absent: this path refuses
             // `Op::Call`, so a stream chunk here has no callee to suspend.
             suspending_callee: None,
@@ -2011,6 +2013,7 @@ fn lower_module_with<'ctx>(
             opts,
             degenerate_yield: tail.as_deref(),
             delegated_call,
+            own_signature: program.signatures.get(i),
             suspending_callee: if chunk.block_type == BlockType::Stream {
                 stream_suspending_callee(chunk, program)
             } else {
@@ -2187,6 +2190,14 @@ struct BodyCfg<'a> {
     /// pushed, because the callee suspends on the caller's behalf. See
     /// [`delegated_suspension_plan`].
     delegated_call: Option<usize>,
+    /// This chunk's OWN signature descriptor, when the module ships one.
+    ///
+    /// **Distinct from `chunk_signatures`, which is the whole table**: that is
+    /// indexed by CALLEE at a call site, and a chunk cannot find its own entry
+    /// there without knowing its index. Carried separately so a parameter's
+    /// declared flat shape can seed its width — `TypeTag::Composite` says only
+    /// "not a scalar", while `WireShape::Flat` carries the body's byte size.
+    own_signature: Option<&'a keleusma::bytecode::ChunkSignature>,
     /// `Some((op, callee))` when this is a stream chunk that calls a chunk which
     /// can suspend. See [`stream_suspending_callee`] for why such a chunk is
     /// refused rather than lowered by the general resumable path.
@@ -2749,6 +2760,83 @@ fn build_typed_return<'ctx>(b: &Builder<'ctx>, func: FunctionValue<'ctx>, v: Int
     }
 }
 
+/// Trap when a runtime array index is out of range, or REFUSE when the range is
+/// not statically known.
+///
+/// # Why this exists
+///
+/// The `Op::GetIndex` arms lowered `base + index * stride` and loaded, with no
+/// check, on the recorded premise that *"the compiler emits `Op::BoundsCheck`
+/// before the index"*. **It does not.** A three-element array indexed at 5
+/// returned the caller region's filler bytes where the reference faults
+/// `IndexOutOfBounds(5, 3)` — a silently wrong value and an out-of-bounds read
+/// at an attacker-influenced offset.
+///
+/// # Where the bound comes from
+///
+/// The array operand's tracked [`Width::Body`] is the body's byte size, and the
+/// element stride is known at the site, so the element count is their quotient.
+/// That is the same size the reference packs the body at, so the two agree by
+/// construction rather than by a second computation that could drift.
+///
+/// # Why an unknown size REFUSES rather than passes through
+///
+/// An unguarded load is the defect this function exists to close. When the body
+/// size is not tracked, no bound can be derived, and the only two options are to
+/// refuse or to emit the load that was just measured returning foreign memory.
+/// **Refusing is the conservative-verification stance and the whole reason this
+/// backend has refusals at all.**
+///
+/// # The comparison is UNSIGNED, deliberately
+///
+/// A negative index becomes a very large unsigned value and is caught by the
+/// same test, which is what `Op::BoundsCheck` already does. A signed comparison
+/// would need two branches and would let `-1` through one of them.
+fn guard_array_index<'ctx>(
+    ctx: &'ctx Context,
+    func: FunctionValue<'ctx>,
+    st: &mut Lower<'ctx>,
+    trap_bb: BasicBlock<'ctx>,
+    i64t: inkwell::types::IntType<'ctx>,
+    elem_bytes: u64,
+    op: &str,
+) -> Result<(), LowerError> {
+    // Stack shape at an index site is `[.., array, index]`, so the array is one
+    // deeper than the top.
+    let body = match st.width_at(1) {
+        Width::Body(n) => u64::from(n),
+        other => {
+            return Err(LowerError::unsupported_op(
+                op,
+                format!(
+                    "an array indexed by a runtime value whose body size is not                      tracked ({other:?}), so no bound can be derived. Lowering it                      unguarded returns whatever lies at base + index * stride,                      which is a wrong value rather than a fault"
+                ),
+            ));
+        }
+    };
+    if elem_bytes == 0 {
+        return Err(LowerError::unsupported_op(
+            op,
+            "an array whose element stride is zero, so the element count is not              defined"
+                .to_string(),
+        ));
+    }
+    let count = body / elem_bytes;
+    let index = st.peek();
+    let cont = ctx.append_basic_block(func, "idxinbounds");
+    let bad =
+        st.b.build_int_compare(
+            IntPredicate::UGE,
+            index,
+            i64t.const_int(count, false),
+            "idxoob",
+        )
+        .unwrap();
+    st.b.build_conditional_branch(bad, trap_bb, cont).unwrap();
+    st.b.position_at_end(cont);
+    Ok(())
+}
+
 fn lower_chunk_body<'ctx>(
     ctx: &'ctx Context,
     module: &LlvmModule<'ctx>,
@@ -2762,6 +2850,7 @@ fn lower_chunk_body<'ctx>(
         opts,
         degenerate_yield,
         delegated_call,
+        own_signature,
         suspending_callee,
         confinement,
         natives,
@@ -3005,6 +3094,26 @@ fn lower_chunk_body<'ctx>(
     for (i, t) in chunk.param_types.iter().enumerate() {
         if i < local_widths.len() {
             local_widths[i] = width_of_tag(*t);
+        }
+    }
+    // **A COMPOSITE PARAMETER'S BODY SIZE COMES FROM THE SIGNATURE, NOT THE
+    // TAG.** `TypeTag::Composite` says only "not a scalar", so an array
+    // parameter's width was `Unknown` and every bound derived from it was
+    // unavailable — which cost two corpus chunks the moment array indexing
+    // started requiring a bound. `WireShape::Flat` carries the body's byte
+    // length at the module's declared widths, which is exactly the `Body`
+    // width's meaning, so the two agree by definition rather than by a second
+    // computation that could drift.
+    //
+    // The table is ADDITIVE and may be absent or short; an entry that is not
+    // `Flat` leaves the tag's answer in place rather than overwriting it.
+    if let Some(sig) = own_signature {
+        for (i, shape) in sig.params.iter().enumerate() {
+            if let keleusma::bytecode::WireShape::Flat { size, .. } = shape
+                && i < local_widths.len()
+            {
+                local_widths[i] = Width::Body(*size);
+            }
         }
     }
 
@@ -5246,9 +5355,29 @@ fn lower_chunk_body<'ctx>(
             // Flat array element read. The same address-plus-typed-load as a
             // field, with a RUNTIME index and a compile-time element size.
             //
-            // The bound is not checked here: the compiler emits `Op::BoundsCheck`
-            // before the index, which this backend already lowers and which peeks
-            // rather than pops for exactly this reason.
+            // ⚠ **THIS ARM CARRIED A FALSE PREMISE UNTIL 2026-09-08.** It said:
+            // *"The bound is not checked here: the compiler emits
+            // `Op::BoundsCheck` before the index."* **The compiler does not.**
+            // Measured — `fn main(i: Word) -> Word { let xs = [1, 2, 3]; xs[i] }`
+            // compiles to
+            //
+            // ```text
+            // ... NewComposite(Array, count 3) SetLocal(1) GetLocal(1) GetLocal(0) GetIndex(Flat)
+            // ```
+            //
+            // with no `BoundsCheck` anywhere. The premise was written into a
+            // comment and never checked, and the lowering rested on it.
+            //
+            // **What that cost**: with `i = 5` the reference faults
+            // `IndexOutOfBounds(5, 3)` and native code returned
+            // `0xabababababababab`, the filler byte of the caller's region — an
+            // out-of-bounds read at `base + index * stride` for a RUNTIME index,
+            // returned as a value. Both halves of the worst case at once: a
+            // silently wrong answer, and a read the host did not authorise.
+            //
+            // The bound is now checked here, from the array operand's tracked
+            // body size, and the shape is REFUSED when that size is unknown.
+            // See [`guard_array_index`].
             Op::GetIndex(keleusma::bytecode::ArrayElem::Flat { kind }) => {
                 use keleusma::value_layout::ScalarKind as SK;
                 let elem: u64 = match kind {
@@ -5286,6 +5415,9 @@ fn lower_chunk_body<'ctx>(
                         ));
                     }
                 };
+                // **GUARD BEFORE POPPING**: the widths are read off the stack
+                // while the operands are still on it.
+                guard_array_index(ctx, func, &mut st, trap_bb, i64t, elem, "GetIndex")?;
                 // The index is popped BEFORE the array, matching the virtual
                 // machine's order; reversing them reads the array handle as an
                 // index and indexes by a pointer.
@@ -5415,7 +5547,20 @@ fn lower_chunk_body<'ctx>(
                 st.push_w(addr, Width::Body(u32::from(*size)));
             }
             // The same, indexed: the element offset is `index * size`.
+            // **THE NESTED ARM HAD THE SAME UNGUARDED SHAPE.** It produces an
+            // ADDRESS rather than a loaded value, so an out-of-range index here
+            // hands the rest of the lowering a pointer outside the body and the
+            // wrong read happens later, at a field access that looks correct.
             Op::GetIndex(keleusma::bytecode::ArrayElem::FlatNested { size, .. }) => {
+                guard_array_index(
+                    ctx,
+                    func,
+                    &mut st,
+                    trap_bb,
+                    i64t,
+                    u64::from(*size),
+                    "GetIndex",
+                )?;
                 let index = st.pop();
                 let parent = st.pop();
                 let byte =
