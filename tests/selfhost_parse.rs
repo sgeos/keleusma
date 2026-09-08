@@ -3512,17 +3512,36 @@ fn both_feeds_cost_by_input_size() {
 #[cfg(feature = "self-host")]
 /// **EVERY STAGE SOURCE'S TOKEN COUNT, WHICH IS WHAT SIZES THE COLLECTING FEED.**
 ///
-/// An instrument. Measured 2026-08-20:
+/// An instrument. **The table below is a DATED SNAPSHOT and will drift**; the
+/// test prints live counts, and those are the figures to use. Nothing checks the
+/// snapshot, because this test is `#[ignore]`d.
+///
+/// Measured 2026-09-08:
 ///
 /// ```text
-///   lexer 2,785      parse 33,445     reconstruct 6,897   codegen 16,448
-///   analyze 3,964    wire 24,836      verify_structural 1,639
+///   lexer 3,163      parse 34,544     reconstruct 7,553   codegen 16,480
+///   analyze 3,964    wire 24,806      verify_structural 1,639
 ///   verify_depth 1,820   verify_yield 1,630   verify_typed 3,381
 ///   verify_types 2,065   verify_datalayout 388
 /// ```
 ///
-/// **`parse.kel` is 33,445 and the handoff recorded 32,907**, which had drifted.
-/// Derive the number here rather than quoting prose.
+/// # This comment drifted, which is the point it was written to make
+///
+/// The previous snapshot was taken 2026-08-20 and read `lexer 2,785 parse 33,445
+/// reconstruct 6,897 codegen 16,448 wire 24,836`. **Five of the twelve had moved
+/// by 2026-09-08** — parse by 1,099 tokens, reconstruct by 656, lexer by 378 —
+/// and nothing reported it, because an `#[ignore]`d test runs only when someone
+/// asks for it and nobody had.
+///
+/// The comment ended with *"derive the number here rather than quoting prose"*,
+/// having been written after the handoff quoted a stale 32,907. **It then became
+/// the stale prose it warned against.** A figure copied into a comment is a
+/// second copy of a fact the code already computes, and an ignored test is the
+/// one place where such a copy can rot indefinitely.
+///
+/// **This is why the snapshot is now labelled as one.** It is illustrative of
+/// magnitude, nothing asserts it, and a reader who needs a real number should run
+/// the test with `--ignored`.
 #[test]
 #[ignore = "instrument"]
 fn stage_source_token_counts() {
