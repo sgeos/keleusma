@@ -232,6 +232,22 @@ Commit after completing a prompted request. Each commit should represent one log
 combining unrelated changes in a single commit. The AI agent commits once after all tasks in a prompt
 are complete, including the `REVERSE_PROMPT.md` update.
 
+> **UNRESOLVED, FLAGGED 2026-09-08, NOT DECIDED HERE.** The paragraph above and the feature-branch
+> rules earlier in this document disagree, and both are stated as current. **"Commits once after all
+> tasks in a prompt are complete"** is the rule here; **"a session should commit freely to checkpoint
+> work rather than hold a single large uncommitted change"** is the rule under *Feature branches*,
+> which also says a session may take several commits passing through red states.
+>
+> They can be partly reconciled — checkpoints on the branch, one final commit carrying the channel
+> update — but the wording does not say that, and an agent reading either section alone will follow
+> it. **Which governs is a process decision and is the operator's**, so it is recorded rather than
+> settled. `CLAUDE.md` currently repeats the once-per-prompt form, faithfully summarising the half it
+> quotes.
+>
+> A second, smaller divergence between this document and practice: the commit-message template above
+> gives `Co-Authored-By: Claude <noreply@anthropic.com>`, while recent commits carry a
+> model-specific name. Recorded, not changed.
+
 ## Pre-Push Checklist
 
 Before pushing, verify:
