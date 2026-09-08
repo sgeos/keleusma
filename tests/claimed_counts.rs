@@ -600,3 +600,92 @@ fn the_narrow_runtime_coverage_claim_still_describes_the_tree() {
          the tests went away."
     );
 }
+
+/// The census's per-group table must add up to the totals its prose states.
+///
+/// # The drift this catches, which happened twice
+///
+/// The document already warns that "a table whose parts do not add to its
+/// stated whole has been the tell for a miscount here before". It then became
+/// the tell again: the group F row read "1 of 7 probed" while the prose beneath
+/// it said "two of F's seven", because a second site was probed and the row was
+/// not updated. The two disagreed for long enough that a third figure — 17
+/// examined — was still circulating in `HANDOFF.md` five lines from the correct
+/// one.
+///
+/// A count in a table and the same count in a sentence are two places to go
+/// stale independently. This checks they agree.
+///
+/// # What it does NOT check
+///
+/// Whether either figure is TRUE of the tree. The sibling guard
+/// `the_invalid_bytecode_census_still_describes_the_tree` checks the site total
+/// against the source; this one checks the document against itself, which is a
+/// weaker and different claim. Both are needed: a self-consistent document can
+/// still describe a tree that has moved.
+#[test]
+fn the_census_group_table_adds_up_to_its_stated_totals() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let doc = std::fs::read_to_string(root.join("docs/decisions/INVALID_BYTECODE_CENSUS.md"))
+        .expect("read INVALID_BYTECODE_CENSUS.md");
+
+    let mut sites = 0usize;
+    let mut examined = 0usize;
+    let mut rows = 0usize;
+    for line in doc.lines() {
+        // `| A | description | 1 | verdict |`
+        let cols: Vec<&str> = line.split('|').map(str::trim).collect();
+        if cols.len() < 6 {
+            continue;
+        }
+        let group = cols[1];
+        if group.len() != 1 || !group.chars().all(|c| c.is_ascii_uppercase()) {
+            continue;
+        }
+        let Ok(n) = cols[3].parse::<usize>() else {
+            continue;
+        };
+        let verdict = cols[4];
+        rows += 1;
+        sites += n;
+        // "(k of n probed)" gives a partial count; "not examined" gives none;
+        // anything else is a class verdict covering the whole group.
+        examined += if let Some(rest) = verdict.split(" of ").next().and_then(|head| {
+            head.rfind('(')
+                .map(|i| &head[i + 1..])
+                .and_then(|d| d.parse::<usize>().ok())
+        }) {
+            rest
+        } else if verdict.contains("not examined") {
+            0
+        } else {
+            n
+        };
+    }
+
+    assert!(
+        rows >= 8,
+        "only {rows} group rows were parsed, so the table's shape changed and this guard is \
+         checking almost nothing rather than checking the table"
+    );
+
+    let stated_sites = 46usize;
+    assert_eq!(
+        sites, stated_sites,
+        "the group rows sum to {sites} sites, not the {stated_sites} the document states. \
+         Re-derive the totals by summing the per-group column — adjusting the total instead is \
+         how group G went missing from every remainder list."
+    );
+
+    // The prose states the examined total in words and then enumerates it.
+    assert!(
+        doc.contains("Thirty-five of forty-six sites carry an examined verdict"),
+        "the census no longer states its examined total in the expected form; update this \
+         extraction rather than deleting the check"
+    );
+    assert_eq!(
+        examined, 35,
+        "the group rows sum to {examined} examined sites and the prose says thirty-five. One of \
+         them moved without the other. The per-group column is the authority."
+    );
+}
