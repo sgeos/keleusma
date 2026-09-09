@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-09 (session 65) — composite kinds withheld with witnesses, the width skew audited clean on three axes, and a historical defect shape turned into a guard
+**Date**: 2026-09-09 (session 65 CLOSE) — four classes measured clean, nine guards that did not check what they claimed repaired, and three of my own claims corrected
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -163,6 +163,32 @@ strip would have missed it.
 **A run that executed no tests is not a pass.** The first demonstration reported
 `0 passed; 0 failed; 0 filtered out` because the binary is gated on `self-host`, and I nearly read
 that as the comment being harmless.
+
+## WHAT I GOT WRONG THIS SESSION, KEPT BECAUSE THE CORRECTIONS COST SOMETHING
+
+| claim | outcome |
+|---|---|
+| a red CI job was the **feature-set** trap | **wrong** — the same test fails under default features. The real cause: I ran the guards BEFORE the last edit and only `cargo fmt --check` after it |
+| "every guard I wrote had a first-draft defect" | **overstated** — four of seven. Two were got right before shipping; one guard was fine and my characterisation of its output was wrong |
+| two CI jobs looked **stuck** at 90 minutes | **wrong baseline** — those two take 60 minutes each and ~52 had elapsed. I nearly escalated a non-problem |
+
+**And I fixed what the guard caught, not the class.** The citation guard scans two documents, flagged
+two bare file names in one, and I corrected exactly those — leaving the identical names in the task
+log's newest note because nothing pointed at them. **Same one-of-two-sites shape, committed while
+cataloguing it.**
+
+**A measured recommendation left as the operator's call.** Should the task log be scanned by the
+citation guard? Not whole: sixty of its citations name identifiers that no longer exist, and
+inspection shows most are legitimate — pins deleted as the work moved on. **A currency note is a
+dated record, so its names going stale is the file working correctly.** Scanning only the newest note
+would be bounded and meaningful, but it needs a rule for where a note begins and puts a recurring
+cost on whoever writes the next one. Recorded, not adopted.
+
+**A figure confirmed rather than trusted.** This file's CI timing — about 61 minutes with a
+~59-minute critical-path job, measured 2026-09-08 — was independently reproduced today: `Test` and
+`Test (self-host feature)` each take about 60 minutes and start together. **Three pushes to one
+branch therefore cost three full cycles**, which is the argument for batching fixes rather than
+pushing them as found.
 
 ## FOURTH INCREMENT: A DEFECT SHAPE TURNED INTO A ONE-SECOND CHECK
 
