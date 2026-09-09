@@ -1,6 +1,34 @@
 # What the standing stream refusals need
 
-**Status: OPEN. This document frames a decision and does not take it.** It exists because the
+**Status: LARGELY CLOSED, 2026-09-09. Two of the three refusals this document framed are gone;
+the third turned out not to be the question this document is about.** The framing below is kept
+because its reasoning about the spill is what was implemented, and because **its central grouping
+was WRONG and the correction is the useful part.**
+
+> ⚠ **THIS DOCUMENT SAID THREE REFUSALS WERE ONE QUESTION — "what survives the return". Two were.**
+>
+> | refusal | outcome |
+> |---|---|
+> | operands stacked beneath a `yield` | **spill slice**, driven and agreeing over six suspensions |
+> | operand stack non-empty at `Op::Reset` | **needed no storage at all** — the runtime TRUNCATES there, so discarding agrees |
+> | a resume point that is also a branch target | **still refused, and it is a JOIN question** — the spill preserves entries across a RETURN and says nothing about two edges carrying different values into one block |
+>
+> The `Reset` case is the sharper lesson. A refusal had been added for it hours earlier, replacing a
+> prose premise with a check — the right instinct, recorded as such. **But the check encoded an
+> assumption never tested against `src/vm.rs`.** Replacing a comment with a check does not make the
+> belief true; it only makes it visible.
+
+**The three decisions this document said had to be settled first were settled as it recommended**:
+one slice at the module ceiling rather than one per yield, sized from `MAX_STACK` — a figure the
+backend already enforces with a refusal, so no second computation can drift from it; widths and
+kinds recorded per site and never re-inferred; and a `Width::Body` operand refused, because carrying
+a pointer into fixed-offset region storage across a suspension would defeat the yield-escape
+refusal rather than honour it.
+
+---
+
+**Original framing follows. Status when written: OPEN. This document frames a decision and does not
+take it.** It exists because the
 alternative — inventing a layout while implementing one — is how a differential oracle
 returns a wrong answer instead of a refusal.
 
