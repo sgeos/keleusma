@@ -10,6 +10,31 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-09, session 65, eighth increment). FOUR MORE, AND THE DEFECT COMMITTED
+> INSIDE ITS OWN FIX.**
+>
+> A THIRD silent false pass: `tests/stage_command_reach.rs` has a helper that strips comments, whose
+> doc cites "four recorded instances of a guard firing on the prose that explains it", while three
+> PRESENCE assertions beside it searched the RAW driver. Change `CMD_STEP`'s value, leave the
+> original text in a comment, and the test reports 2 passed, 0 failed.
+>
+> **Three files now, each documenting the hazard in its own prose while guarding one of two
+> readers.** Plus three ANCHOR-LOCATES repaired; one historical note failed three tests in
+> `composite_escape_routes.rs` with nothing wrong in the source it read.
+> `forward_data_reference.rs` is the subtle one: its positions feed an ORDERING assertion, so a
+> comment can change which declaration appears first and make the test assert the wrong thing rather
+> than fail.
+>
+> **I committed the same defect inside its own fix** -- mixing stripped and raw offsets in one edit,
+> caught by running the tests rather than reading the edit. That is the most useful result here: the
+> class is not carelessness that attention prevents.
+>
+> **Two controls measured nothing** because they did not compile (renaming a used constant; adding
+> an opcode to an exhaustively matched enum). Both were replaced by controls that build.
+>
+> **Seven guards now examined.** Only one needs a string-aware strip, its assertion being an ABSENCE
+> one; the other six fail loudly. Deliberately not unified.
+
 > **Currency note (2026-09-09, session 65, seventh increment). THE SWEEP, AND A FALSE PASS ON THE
 > HISTORICAL DEFECT.**
 >
