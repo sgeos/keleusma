@@ -13,6 +13,92 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-09 — the three composite kinds, and a prediction wrong in both halves
+
+**The increment.** The last extraction of the type channel has four of its eight kinds moved to
+the pipeline. Four do not move: the branch pair, already withheld with a recorded reason, and the
+three composite kinds. This increment gives each of the three a **measured verdict with an
+executable witness**, and moves none of them.
+
+Deciding not to move something is a real outcome here. The branch pair set that precedent: it was
+built, measured, and withheld because both error directions were unsound. What was missing for the
+composite kinds was not a decision but evidence — the doc comment said only that "the two
+representations disagree about what a node IS", which is a reason to look rather than a finding.
+
+### THE PREDICTION WAS WRONG IN BOTH HALVES, AND IT WAS WRITTEN DOWN FIRST
+
+Recorded before measuring, from reading the two sides:
+
+| predicted | measured |
+|---|---|
+| **kind 7 MOVES**, since the declared field count is already on the wire | **WRONG. It does not move**, and the count is not on the wire at all |
+| **kinds 5 and 6 do not move**, blocked on a missing type-ANNOTATION record | **verdict right, mechanism wrong.** They are blocked on the pipeline refusing the whole program |
+
+The value of writing it first is that neither half can now be quietly revised into agreement. Had
+I measured first, "the annotation is missing" is exactly the sort of plausible mechanism I would
+have kept, because the verdict it supports turned out correct.
+
+**The kind-7 miss is the instructive one.** I reasoned that `field_sets_from_pipeline` already
+returns declared field sets, so the count was one lookup away. It is — for a struct you can NAME.
+The struct-literal record does not say which struct it builds.
+
+### KIND 7: THE WITNESS IS A PROOF, NOT A SURVEY
+
+The record carries the composite's flat SIZE and the GIVEN field count. The reference's row needs
+the DECLARED count. So the question is whether size determines count, and it does not:
+
+| struct | flat size | declared fields |
+|---|---|---|
+| one `Word` | 8 | 1 |
+| eight `Byte` | 8 | 8 |
+
+Both eight bytes wide. A literal supplying one field to each produces a **byte-identical**
+struct-literal record, while the reference **accepts** the first and **rejects** the second with
+"struct `B` expects 8 fields, got 1" — precisely the error kind 7 exists to carry.
+
+So no function of that record reproduces the reference's verdict. Emitting a row would reject a
+correct program or lose the check. **Both directions unsound**, the branch pair's shape exactly.
+
+**THE FIRST WITNESS PAIR I DRAFTED WAS BROKEN, AND THE PROBE CAUGHT IT.** I used an eight-field
+literal of the Byte struct as the rejected half. It IS rejected — for a Byte-versus-Word literal
+type error, which has nothing to do with field counts. A witness pair that differs for the wrong
+reason proves nothing, and it would have read as a proof. The test now asserts the rejection
+MESSAGE, not merely the rejection.
+
+### KINDS 5 AND 6: THERE IS NO FOREST TO EXTRACT FROM
+
+On every program these kinds exist to reject — a field access or an index applied to a scalar —
+reconstruction refuses outright: the record range does not reduce to one node. The obstacle is not
+a missing datum, it is that the input never becomes a tree.
+
+**A consequence worth stating separately: the extraction PANICS on those inputs**, and it is a
+public function. Measured across eight ill-typed programs, four panic and four return rows.
+
+**Proportionality, and it is bounded twice over.** `self_hosted_compile` compiles with the
+reference FIRST and surfaces the reference's own error, so a program the reference rejects never
+reaches the pipeline; and it wraps the pipeline in `catch_unwind` besides. **The shipping compiler
+is not exposed.** Exposure is to direct callers of the extraction API, which today are tests.
+
+### BOTH GUARDS WERE MADE TO FAIL, AND ON THE RIGHT ASSERTION
+
+A guard that has not been made to fail is a guess.
+
+| mutation | result |
+|---|---|
+| shrink the accepted struct so the sizes no longer collide | kind-7 guard fails on the record-equality assertion |
+| swap one witness for an ill-typed program the pipeline CAN reconstruct | kinds-5/6 guard fails on the reconstruction assertion |
+
+Each failed on the assertion it was written to make rather than on an earlier one, which is the
+part that matters: a guard that fails for an unrelated reason under mutation has not been shown to
+check what it claims.
+
+### WHAT WOULD UNBLOCK KIND 7, RECORDED AND NOT STARTED
+
+A record naming the literal's struct. `parse.kel` **resolves the identity already** — the field
+records preceding a literal carry INDICES, and only a resolved declaration yields an index — and
+then drops it. That is a record-stream change, which is the operator's call on this fork, and it
+is not begun here.
+
 ## 2026-09-08 (second half) — a policy that reached one document, and three counts that disagreed
 
 **The arc.** Repairing the width defect exposed a false belief about what can be tested. Correcting

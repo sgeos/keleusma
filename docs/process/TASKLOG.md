@@ -10,6 +10,34 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-09, session 65). THE THREE COMPOSITE KINDS: MEASURED, ALL WITHHELD.**
+>
+> The type channel's last extraction has four of its eight kinds on the pipeline. The three
+> COMPOSITE kinds — field access, index access, struct literal — previously carried only a note
+> that the two representations "disagree about what a node IS". Each now has a **measured verdict
+> and an executable witness**, and **none moves**.
+>
+> **Kinds 5 and 6**: reconstruction refuses the programs these kinds exist to reject, so there is
+> no forest to extract a row from. **Kind 7**: the struct-literal record carries the composite's
+> flat SIZE and the GIVEN field count, not the struct's identity, and size does not determine the
+> declared count — a struct of one `Word` and one of eight `Byte`s are both eight bytes wide, and
+> supplying one field to each produces a **byte-identical record** while the reference accepts one
+> and rejects the other for exactly the field-count reason. Emitting a row would reject a correct
+> program or lose the check; **both directions unsound**, the branch pair's shape.
+>
+> **The prediction was written before measuring and was wrong in both halves** — kind 7 was
+> predicted to move, and kinds 5 and 6 were predicted blocked on a missing annotation record rather
+> than on the program never becoming a tree. Recorded as missed rather than revised.
+>
+> **Beside the slice**: `expression_rows_from_pipeline` PANICS on four of eight ill-typed programs.
+> **The shipping compiler is not exposed** — `self_hosted_compile` compiles with the reference
+> first and never reaches the pipeline for a program the reference rejects, and wraps it in
+> `catch_unwind` besides. Recorded on the function, not repaired.
+>
+> **Unblocking kind 7 needs a record naming the literal's struct.** `parse.kel` resolves the
+> identity already and discards it. That is a record-stream change and the operator's call; not
+> begun. **The four operator decisions are unchanged and none was touched.**
+
 > **Currency note (2026-09-08, session 64). A WRONG ANSWER FOUND AND REPAIRED, AND A CAPABILITY
 > THAT WAS ALWAYS THERE.**
 >
