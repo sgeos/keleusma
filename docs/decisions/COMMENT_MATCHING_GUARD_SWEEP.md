@@ -89,6 +89,34 @@ a fix.
 The same distinction this repository records for `Op::IsStruct`, declared producerless with four
 producers found within the hour.
 
+## I FIXED WHAT THE GUARD CAUGHT, NOT THE CLASS — MEASURED AFTERWARDS
+
+`tests/comment_citations.rs` scans two documents: the handoff and the reverse prompt. It flagged two
+bare file names in the reverse prompt, and they were corrected.
+
+**The same two names were also in the task log's newest currency note, and were not corrected**,
+because nothing flagged them. That is the identical one-of-two-sites shape this document catalogues
+in other people's guards, committed while cataloguing it. They are paths now.
+
+**The append-only design journal keeps its bare names deliberately.** Its entries are dated records
+of what was written, not live claims, and correcting them would edit history to satisfy a guard that
+does not read it.
+
+### SHOULD THE TASK LOG BE SCANNED? MEASURED, AND LEFT AS THE OPERATOR'S CALL
+
+Scanning it whole is **not** viable: measured with the guard's own resolver, **sixty** of its
+citations name identifiers that no longer exist. Inspection shows most are legitimate — pins deleted
+as the work moved on, such as a test asserting the self-hosted compiler could not yet compile
+`wire.kel`, removed when it could. **A currency note is a dated record of a past state**, so its
+names going stale is the file working correctly.
+
+**The newest note is different**: it is the live status, and its citations should resolve. Scanning
+only the most recent note is a bounded and meaningful check.
+
+It is **not adopted here**. It needs a rule for where a note begins and ends, and it puts a
+recurring cost on whoever writes the next one. That is a per-increment cost and therefore the
+operator's call, recorded with its measurement rather than taken.
+
 ## THE MOST USEFUL RESULT IS NOT THE COUNT
 
 Three of the repaired files **document the hazard in their own prose** and guarded one of two

@@ -18,10 +18,10 @@ Current sprint source of truth.
 > a comment line begins with `//` and cannot match a pattern required to start the trimmed line --
 > a property of the search, not a judgement about the file.
 >
-> **The last three.** `selfhost_bare_for` asserts the ABSENCE of a removed refusal in raw
+> **The last three.** `tests/selfhost_bare_for.rs` asserts the ABSENCE of a removed refusal in raw
 > `parse.kel`; a historical note naming it makes the guard report the stage "still defines or
 > raises" it -- a false failure that names a cause which does not exist.
-> `selfhost_driver_parity` counts seeding calls against a calibration, so a comment adds a phantom.
+> `tests/selfhost_driver_parity.rs` counts seeding calls against a calibration, so a comment adds a phantom.
 > **Only the false-FAILURE direction was verified for the parity guard**, and nothing claims more.
 >
 > **The block-comment gap: measured at ZERO, then tripwired rather than parsed.** No source these
