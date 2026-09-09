@@ -19,10 +19,42 @@ that matters**, and it had not been asked.
 
 ## The scope, and why it is finite
 
-`ScalarKind::Opaque` is the **only** kind the address width sizes. Every other kind is a function of
-the word width or the float width, so a site assuming a word is correct for them. The audit reduces
-to: which sites determine the byte width of an **opaque** field, and does each take that width from
-the layout or assume one.
+`ScalarKind::Opaque` is the **only** kind the address width sizes, so the audit reduces to: which
+sites determine the byte width of an **opaque** field, and does each take that width from the layout
+or assume one.
+
+> **CORRECTED 2026-09-09. The sentence that used to justify this scope was false**, and it failed in
+> the same way the defect it was reasoning about did. It read:
+>
+> > Every other kind is a function of the word width or the float width, so a site assuming a word
+> > is correct for them.
+>
+> **A site assuming a word is NOT correct for a float.** `ScalarKind::Float` is sized by the FLOAT
+> width, which is selected independently of the word — `narrow-float-32` exists apart from the
+> `narrow-word-*` family, and `GenericVm<i64, u64, f32>` reaches the skew with no feature at all. A
+> word assumption is correct for a float only where the two widths happen to be equal, which is
+> **precisely the coincidence that hid the opaque defect**. The scope was right; the argument for it
+> was an instance of the error being audited.
+>
+> **The float class was then measured, and it is CLEAN.** See
+> `tests/flat_float_field_width.rs`. The configuration that can expose the defect is a module
+> declaring a narrower float than the runtime provides — the load check refuses only a WIDER one —
+> and every field reads correctly there.
+>
+> **That result is worth only as much as the corpus's reach**, so the reach was established rather
+> than assumed. Mis-sizing the layout itself is an EQUIVALENT mutation, invisible in every case,
+> because the compiler's offsets and the runtime's strides both derive from it and move together.
+> The defect needs two authorities: taking the VM's float width from the runtime type instead of the
+> module header is caught, with a silently wrong integer rather than a fault, exactly as the opaque
+> defect presented.
+>
+> **This is another premise carried in prose that governed a decision while being wrong** — the
+> class this line already records for a `wire.kel` comment citing region offsets an order of
+> magnitude wrong, and for the retracted claim that the expression table's order is content. No
+> count is given here on purpose: a tally of instances is the kind of figure that drifts, and this
+> document is about a claim that went unchecked because nobody thought to check it.
+>
+> The reader who would check such a sentence is the reader who believes it.
 
 ## The method, in three searches
 

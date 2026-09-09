@@ -13,6 +13,70 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-09 (second) — an audit's scope argument was an instance of the error it was auditing
+
+**The increment.** `FLAT_FIELD_WIDTH_AUDIT.md` audited every site that sizes an **opaque** flat
+field, after one of them returned a silently wrong answer. It justified stopping at opaque with one
+sentence, and **that sentence is false**:
+
+> Every other kind is a function of the word width or the float width, so a site assuming a word is
+> correct for them.
+
+**A site assuming a word is not correct for a float.** `ScalarKind::Float` is sized by the FLOAT
+width, selected independently of the word — `narrow-float-32` exists apart from the `narrow-word-*`
+family, and `GenericVm<i64, u64, f32>` reaches the skew with no feature at all. A word assumption is
+correct for a float only where the two widths happen to be equal, **which is exactly the coincidence
+that hid the opaque defect**.
+
+So the audit's scope was right and its argument for that scope was an instance of the error being
+audited. The document is corrected in place rather than rewritten, because the reasoning failure is
+the more useful half.
+
+### THE MEASURED RESULT IS CLEAN, AND IT COST THREE ATTEMPTS TO MAKE IT MEAN ANYTHING
+
+**Attempt one proved nothing and looked like a result.** Six flat-composite shapes with float
+fields, run at a matched width — module `f32` on an `f32` runtime — all correct. Then the check on
+the check: mis-size the layout itself and see whether the corpus notices. **It did not.** All six
+still passed.
+
+**That mutation was EQUIVALENT, and understanding why is the finding.** Every site derives its
+float width from one layout, so changing the layout moves the compiler's baked offsets and the
+runtime's strides together. The result is a wasteful layout, not a wrong one. **That coherence is
+precisely the property the opaque field lacked**, where four sites bypassed the layout entirely.
+
+**So the defect shape needs two authorities, which needs the module's declared float width to
+differ from the runtime's.** The load check refuses a module whose float is WIDER than the runtime
+and admits one that is NARROWER, so a module compiled for a 32-bit-float target running on a
+64-bit-float runtime is supported — and is the configuration that can expose the defect. Attempt
+two ran the corpus there. Still clean.
+
+**Attempt three established the reach.** Taking the VM's float width from the runtime type instead
+of the module header is one site disagreeing with the layout — the opaque defect transposed. Three
+of the six cases catch it, reporting `Int(181461843968)` where `Int(42)` was expected: a silently
+wrong value rather than a fault, the same signature the opaque defect had.
+
+**The three that catch it are the three that read a field POSITIONED AFTER a float.** The three that
+do not are reading the float itself, which lands in the same place under either width. That is the
+property the corpus needs, and the test asserts it by name rather than inventorying constructs — a
+construct list is a proxy for coverage and this line has twice shipped a coverage assertion that was
+itself vacuous.
+
+### WHAT THIS DOES AND DOES NOT ESTABLISH
+
+**Establishes**: for the six shapes measured, in the configuration capable of exposing the defect,
+with a corpus shown able to fail, the float class is clean.
+
+**Does not establish**: that no float-width site is wrong. Six shapes are not the class, and the
+corpus reaches only what the six construct. It is "no defect found", never "no defect exists" — the
+same distinction the audit itself records for `Op::IsStruct`, where producerless was declared and
+four producers were found within the hour.
+
+### A COUNT WAS WRITTEN AND THEN REMOVED, DELIBERATELY
+
+The correction first called this "the third premise-in-a-comment this line has found governing a
+decision while being wrong". **I had not derived that number.** Writing an unverified tally inside a
+correction about an unverified claim is the failure mode with the shortest possible distance between
+the lesson and the repeat. The document names the class and gives two instances without counting.
 ## 2026-09-09 — the three composite kinds, and a prediction wrong in both halves
 
 **The increment.** The last extraction of the type channel has four of its eight kinds moved to
