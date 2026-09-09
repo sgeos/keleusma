@@ -33,10 +33,10 @@ cases ran out. `docs/decisions/COMMENT_MATCHING_GUARD_SWEEP.md` lists thirteen f
 repaired, three safe by construction, one not in the class.** A line-prefix search is safe because a
 comment line begins with `//` — a property of the search, not a judgement about the file.
 
-**The last three.** `selfhost_bare_for` asserts the **absence** of a removed refusal in raw
+**The last three.** `tests/selfhost_bare_for.rs` asserts the **absence** of a removed refusal in raw
 `parse.kel`, and a historical note naming it makes the guard report that the stage *"still defines or
 raises"* it — **a false failure that names a cause which does not exist**, sending its reader after a
-definition that is a comment. `selfhost_driver_parity` counts seeding calls against a calibration, so
+definition that is a comment. `tests/selfhost_driver_parity.rs` counts seeding calls against a calibration, so
 a comment adds a phantom. **Only the false-failure direction was verified for the parity guard**, and
 nothing claims more.
 
