@@ -10,6 +10,48 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-09, session 65, seventh increment). THE SWEEP, AND A FALSE PASS ON THE
+> HISTORICAL DEFECT.**
+>
+> Two instances of the comment-matching class were found by reading. Asking the class question
+> mechanically -- which test files search source for a CODE-SHAPED literal without stripping
+> comments -- found **twelve**.
+>
+> **The one that mattered is the opposite direction from the first two.** Those are ABSENCE
+> assertions, where a comment causes a noisy false FAILURE. `wire_self_compile_status.rs` asserts
+> the PRESENCE of `forst.forin_count = 0;`, the exact line whose absence WAS the historical defect,
+> and a comment satisfying a presence assertion is a **silent false PASS**. Measured by isolating
+> the test: with the real reset deleted and the text left in a comment, it reported **ok**.
+>
+> **The file was not fooled** -- a sibling BEHAVIOURAL test failed, because deleting the reset really
+> breaks the stage. **That backstop is incidental**: narrow the behavioural test and this assertion
+> becomes the only defence, and it does not hold.
+>
+> **The first run nearly produced the wrong answer.** It showed the FILE failing, which reads as
+> "not fooled"; only isolating the single test separated "the file fails" from "this assertion
+> holds". Those are different claims.
+>
+> There are now three comment-strippers with three risk profiles, each documenting why it is not
+> shared with the others.
+
+> **Currency note (2026-09-09, session 65, sixth increment). THE SAME CLASS, IN THE FILE THAT
+> DOCUMENTS THE CLASS.**
+>
+> Scoping the comment-matching defect by class found a second instance in `tests/op_tag_tables.rs`,
+> **whose own doc cites a divergence detector broken by a commented-out `for` loop.** It has two
+> source extractions: `decoder_arms` strips comments then locates its anchor; `stage_tag_table` did
+> the reverse, so the anchor search was comment-blind. **One comment line failed FOUR tests**, with
+> nothing wrong in the stage.
+>
+> **The shape is the recurring one** -- a case handled for one construct and not the one beside it,
+> here with both siblings in one file and one of them correct. Knowing a hazard and guarding one of
+> two sites is the failure, not ignorance of the hazard.
+>
+> **The two comment-strippers are deliberately NOT unified.** The radix guard's is string-aware
+> because its assertion is an ABSENCE one, where an early truncation means a missed offender passes
+> silently; this one's anchors fail loudly instead. Both helpers now carry the comparison so a
+> future reader does not tidy them in either direction.
+
 > **Currency note (2026-09-09, session 65, fifth increment). A GUARD THAT COULD NOT COEXIST WITH A
 > COMMENT ABOUT WHAT IT GUARDS.**
 >

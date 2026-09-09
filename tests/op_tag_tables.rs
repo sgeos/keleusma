@@ -79,6 +79,16 @@ fn balanced_braces(src: &str, from: usize) -> &str {
 /// **A COMMENT HAS ALREADY BROKEN AN INSTRUMENT ON THIS TREE**: a divergence detector matched a
 /// commented-out `for k in 0..3` and predicted four diverging functions against an observed two.
 /// The finding was right and the instrument was wrong.
+///
+/// # Why this truncates at the first `//` while the radix guard's helper does not
+///
+/// `tests/call_chunk_index_limit.rs` needs a STRING-AWARE strip, because truncating inside a
+/// literal such as `"http://a"` would drop a real occurrence and its assertion is an ABSENCE one --
+/// a missed offender passes silently. **Here the failure direction is the opposite.** This strip
+/// feeds extractions whose anchors are `const data wire {` and a function signature; truncating
+/// early can only make an anchor or a field go missing, and both fail loudly, through an `expect`
+/// or through the bijection assertion reporting a gap. The naive form is therefore correct here and
+/// wrong there, and the two are deliberately not unified.
 fn strip_line_comments(src: &str) -> String {
     src.lines()
         .map(|l| match l.find("//") {
@@ -97,10 +107,20 @@ fn strip_line_comments(src: &str) -> String {
 /// looks: if a non-tag field were ever inserted among the tags, the bijection assertion in
 /// `the_stage_tag_table_assigns_each_number_once_and_leaves_no_gap` fires.
 fn stage_tag_table() -> BTreeMap<String, i64> {
-    let start = CODEGEN_KEL
+    // **STRIP BEFORE LOCATING, NOT AFTER.** This searched the RAW source for the anchor and
+    // stripped only the block it found, so a comment mentioning `const data wire {` sent the
+    // extraction to the comment. Measured: one such line in `codegen.kel` failed FOUR tests in
+    // this file, with nothing wrong in the stage.
+    //
+    // Its sibling `decoder_arms` already had the order right, which is the shape this tree keeps
+    // meeting -- a case handled for one construct and not for the one beside it. Worth noting that
+    // this file's own doc cites a divergence detector broken by a commented-out `for` loop, so the
+    // hazard was known here and the guard against it was applied to one of the two extractions.
+    let stripped = strip_line_comments(CODEGEN_KEL);
+    let start = stripped
         .find("const data wire {")
         .expect("the stage's wire constant block");
-    let block = strip_line_comments(balanced_braces(CODEGEN_KEL, start));
+    let block = balanced_braces(&stripped, start).to_string();
     let mut out = BTreeMap::new();
     for line in block.lines() {
         let line = line.trim().trim_end_matches(',');

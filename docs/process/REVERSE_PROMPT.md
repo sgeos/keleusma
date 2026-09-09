@@ -26,6 +26,58 @@ They are the reason the large work is blocked, and nothing below decides any of 
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
 
+## SEVENTH INCREMENT: THE SWEEP, AND A FALSE PASS ON THE HISTORICAL DEFECT
+
+Two instances of the comment-matching class were found by **reading**. Asking the class question
+**mechanically** — which test files search source for a code-shaped literal without stripping
+comments — found **twelve**. That is the difference between finding instances and finding a class.
+
+**The one that mattered runs the opposite direction from the first two.** Those are **absence**
+assertions, where a comment causes a noisy false *failure*. `wire_self_compile_status.rs` asserts the
+**presence** of `forst.forin_count = 0;` — the exact line whose absence *was* the historical `wire.kel`
+defect — and a comment satisfying a presence assertion is a **silent false pass**.
+
+**Measured by isolating the test**: with the real reset deleted and the identical text left in a
+comment, it reported **ok**.
+
+**The file was not fooled.** A sibling *behavioural* test failed, because deleting the reset really
+does break the stage. **But that backstop is incidental**: narrow the behavioural test, or change the
+stage so deletion no longer breaks byte identity, and this assertion is the only defence and does not
+hold. A guard named for the historical repair should not depend on a different test to be right.
+
+**I nearly reported this wrongly.** The first run showed the *file* failing, which reads as "not
+fooled". Only isolating the single test separated "the file fails" from "this assertion holds".
+
+**Three comment-strippers now exist with three risk profiles** — string-aware for the absence guard,
+naive for the two whose truncation fails loudly — and each says why it is not shared.
+
+## SIXTH INCREMENT: THE SAME CLASS AGAIN, IN THE FILE THAT DOCUMENTS THE CLASS
+
+Scoping the comment-matching defect **by class rather than by where I looked** found a second
+instance — in `tests/op_tag_tables.rs`, **whose own doc cites a divergence detector broken by a
+commented-out `for k in 0..3`.**
+
+It has two source extractions. `decoder_arms` strips comments and **then** locates its anchor.
+`stage_tag_table` did the reverse — `find` on the raw source, stripping only the block it found — so
+the anchor search itself was comment-blind. **Measured: one comment line mentioning the anchor
+failed four tests in that file**, with nothing wrong in the stage.
+
+**The shape is the one this tree keeps meeting**: a case handled for one construct and not for the
+one beside it, as with `rewrite_pattern_enum_name`, `check_pattern_against_type`, and `forin_count`.
+Here both siblings sit in one file, one of them already correct, under a doc warning about the exact
+hazard. **Knowing a hazard and guarding one of two sites is the recurring failure, not ignorance of
+it.**
+
+**The two comment-strippers are deliberately not unified, and both now say why.** The radix guard's
+is string-aware because its assertion is an **absence** one, where an early truncation means a
+missed offender passes silently. Here an early truncation makes an anchor or a field go missing and
+fails loudly. The naive form is correct in one and wrong in the other, so tidying them together
+would either add unneeded complexity or remove a needed guard.
+
+**Both directions mutation-tested**: the comment that broke four tests now passes, and a duplicate
+tag number still fails three. The second matters as much as the first — an extraction can be made
+comment-proof by making it find nothing at all.
+
 ## FIFTH INCREMENT: A GUARD THAT COULD NOT COEXIST WITH A COMMENT ABOUT WHAT IT GUARDS
 
 This repository records **four** instances of a guard matching prose it was never meant to read. One

@@ -73,15 +73,41 @@ fn several_functions_may_each_contain_a_bare_for() {
 ///
 /// **A behavioural guard alone would keep passing if the reset were restored some other way**,
 /// leaving the explanation above quietly false. This ties the pin to the repair it describes.
+///
+/// # IT SEARCHED PROSE AS WELL AS CODE, AND A COMMENT SATISFIED IT
+///
+/// These are PRESENCE assertions, so a comment carrying the same text passes them while the real
+/// reset is gone. Measured, by isolating this test: with `forst.forin_count = 0;` deleted and the
+/// identical text left in a comment, **this test reported `ok`.**
+///
+/// **The file was not fooled — a sibling BEHAVIOURAL test failed** on the same tree, because
+/// deleting the reset really does break the stage. But that backstop is INCIDENTAL: narrow the
+/// behavioural test, or change the stage so the deletion no longer breaks byte identity, and this
+/// assertion becomes the only defence and does not hold. A guard that advertises itself as pinning
+/// the historical repair should not depend on a different test to be right.
+///
+/// The strip truncates at the first `//` rather than tracking string literals, and that is correct
+/// HERE for a reason worth stating: these are presence assertions, so an early truncation can only
+/// hide a real occurrence and **fail loudly**. `tests/call_chunk_index_limit.rs` needs a
+/// string-aware strip because its assertion is an ABSENCE one, where the same truncation lets a
+/// real offender pass silently. Same helper shape, opposite risk; they are deliberately not shared.
 #[test]
 fn the_bare_for_counter_is_reset_beside_its_analogue() {
     const STAGE: &str = include_str!("../src/selfhost/kel/parse.kel");
+    let code: String = STAGE
+        .lines()
+        .map(|l| match l.find("//") {
+            Some(i) => &l[..i],
+            None => l,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(
-        STAGE.contains("forst.forlimit_count = 0;"),
+        code.contains("forst.forlimit_count = 0;"),
         "the `limit` form's counter is no longer reset per function"
     );
     assert!(
-        STAGE.contains("forst.forin_count = 0;"),
+        code.contains("forst.forin_count = 0;"),
         "the bare form's counter is no longer reset per function. It is the analogue of \
          `forlimit_count` and was missing from this reset for exactly that reason once"
     );
