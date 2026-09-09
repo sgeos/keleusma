@@ -90,14 +90,14 @@ fn outcome(m: &Module) -> Result<&'static str, (String, String)> {
 ///
 /// Every mutation lowers the whole module, so cost per mutation grows with
 /// module size. See the note at the call site.
-const MUTATIONS_PER_MODULE: usize = 27;
+const MUTATIONS_PER_MODULE: usize = 45;
 
 /// Structural corruptions, each a named function from a module to a module.
 fn mutants(base: &Module) -> Vec<(String, Module)> {
     let mut out: Vec<(String, Module)> = Vec::new();
     // Stride the chunks so the sample spreads across the module rather than
     // clustering at its start, where the entry chunk's shape is unrepresentative.
-    let per_chunk = 27usize; // 3 positions x 9 corruption kinds
+    let per_chunk = 45usize; // 5 positions x 9 corruption kinds
     let want_chunks = MUTATIONS_PER_MODULE.div_ceil(per_chunk).max(1);
     let stride = base.chunks.len().div_ceil(want_chunks).max(1);
     for (ci, chunk) in base.chunks.iter().enumerate().step_by(stride) {
@@ -107,9 +107,24 @@ fn mutants(base: &Module) -> Vec<(String, Module)> {
         }
         // Sample rather than sweep: the point is coverage of KINDS, and a full
         // cross-product over a 1074-chunk corpus is a sweep this file is not.
-        for &frac in &[0usize, 1, 2] {
-            let at = n * frac / 3;
-
+        //
+        // ⚠ **THE POSITION SET NEVER INCLUDED THE END, AND THAT WAS AN ACCIDENT
+        // OF AN EXPRESSION RATHER THAN A CHOICE.** It was `n * frac / 3` for
+        // `frac` in 0..3, giving 0, n/3 and 2n/3 — so for a 57-op chunk it hit
+        // 0, 19 and 38 and never 56.
+        //
+        // **The tail is the structurally interesting part.** A chunk ends in
+        // `Return`, or in `PopN(1); Reset` for a stream, and the lowering treats
+        // exactly those specially: the degenerate-stream tail walk, the `Reset`
+        // back edge, and the missing-terminator path that synthesises a `Unit`
+        // return. None of it was ever perturbed.
+        //
+        // Found by asking of this file the question that produced three other
+        // findings this session: which parameter here was CHOSEN, and which one
+        // merely fell out of an expression? The count of positions was chosen.
+        // Their placement was not.
+        let last = n - 1;
+        for at in [0usize, n / 3, 2 * n / 3, last.saturating_sub(1), last] {
             let mut t = base.clone();
             t.chunks[ci].ops.truncate(at);
             out.push((format!("chunk {ci}: truncated to {at} of {n}"), t));
