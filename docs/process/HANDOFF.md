@@ -69,6 +69,15 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > **No census site is claimed unreachable**, and guards keep both censuses from drifting from the
 > tree.
 >
+> ## THE STATE THIS SESSION CLOSED IN, VERIFIED RATHER THAN ASSERTED
+>
+> Seventeen pull requests merged, working tree clean, no open pull requests, nothing unpushed, no
+> background work running. Every check in the Validity section below was RUN against the tree at
+> close, not copied forward.
+>
+> **Trunk runs: fifteen green, two red.** Both reds are the transient failures described further
+> down; the same jobs pass on the final head. The final merge's own run is green.
+>
 > ## WHERE THE NUMBERS STAND, AND WHICH ARE SELF-CHECKING
 >
 > | | | |
@@ -102,7 +111,11 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > **A number that matches expectation is the one least likely to be re-examined**, so check a claim
 > against something other than the thing it was built to explain.
 >
-> ## THREE PROCESS FACTS, EACH LEARNED AT COST
+> ## FOUR PROCESS FACTS, EACH LEARNED AT COST
+>
+> **This heading said THREE and had four items under it.** The trunk-CI fact was inserted without
+> renumbering the heading -- the same defect as the validity list below, in the same file, on the
+> same day. A count in a heading is a second copy of a fact the list already holds.
 >
 > **The 2026-08-11 gate change reached one document and stopped.** `GIT_STRATEGY.md` says CI gates
 > feature branches and the local gate does not. Five other documents still said otherwise, so a
@@ -114,7 +127,7 @@ always-current, so it must be able to report itself stale rather than mislead a 
 >
 > **NOTHING WATCHES THE VERSION BRANCH'S CI, AND TWO RUNS WENT RED UNNOTICED.** Merges are gated by
 > the pull request's checks; the post-merge run on `v0.2.3` is fire-and-forget. Two of this session's
-> sixteen merges left a red trunk -- one on `Install SDL3 build dependencies`, one on the self-hosted
+> seventeen merges left a red trunk -- one on `Install SDL3 build dependencies`, one on the self-hosted
 > subproject with no failing step recorded. **Both were transient**: the same jobs pass on the current
 > head and on the run before it, so nothing was broken and nothing needed remedying.
 >
@@ -136,8 +149,9 @@ always-current, so it must be able to report itself stale rather than mislead a 
 **Validate by ANCESTRY and by CONTENT, never by a hash match.** A stamp requiring `HEAD~1` to equal a
 recorded parent is a claim that nothing else ever lands, and it has failed three times.
 
-**Ancestry**: `origin/v0.2.3` should contain `9e950cb6`
-(`Merge pull request #386`). If it does not, this file predates a reset and is stale.
+**Ancestry**: `origin/v0.2.3` should contain `639108fd`
+(`Merge pull request #392`), the session's final merge. If it does not, this file predates a reset
+and is stale.
 
 **Content**, cheap and independent checks. **They were numbered 1, 2, 3, 7, 8, 9, 10, 4, 5, 6 until
 2026-09-08** — each insertion took the next unused number instead of renumbering, so the list read as
