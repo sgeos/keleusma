@@ -39,6 +39,52 @@ Every figure here is re-derivable by summing the per-binary result lines, which 
 produced; the earlier document records a count taken from a progress line and corrected, and that is
 the mistake being avoided.
 
+## 2026-09-09: NINE REPAIRED, NONE EXCLUDED — AND THE TOTAL IS A COINCIDENCE
+
+**Groups A and B are no longer wholly "test assumes a wide host".** Nine of their members are
+repaired so they RUN at a narrow width, rather than being excluded from it.
+
+| what was wrong | repair |
+|---|---|
+| three tests asserted a rejection names `word_bits_log2` | that is which check caught it, not that it was caught. At a narrow build the word already matches and the ADDRESS check fires. They now assert a width mismatch on any declared width — and not "any error", which would let an unrelated rejection pass |
+| six tests hard-coded a 64-bit word in a target whose subject is the FLOAT | the compiler refuses `word_bits_log2 = 6` against a runtime maximum of 4, so they failed on a dimension they are not about. They now take `RUNTIME_WORD_BITS_LOG2` and its siblings |
+
+**Excluding `tests/narrow_vm.rs` would have been ONE LINE** — it already excludes `narrow-word-8` —
+and would have turned six failures into silence. Exclusions compound; that route was refused.
+
+**Three of the nine were introduced by the session that repaired them.**
+`tests/flat_float_field_width.rs` and `tests/module_runtime_width_skew.rs` were added on 2026-09-09
+and hard-code a 64-bit target, failing with the identical error. **The class appeared inside its own
+audit**, which is the same shape recorded three times that day.
+
+### THE MEASUREMENT, AND WHY THE TOTAL MUST NOT BE READ AS "UNCHANGED"
+
+Diffed, not subtracted, as this document requires:
+
+| | |
+|---|---|
+| distinct failures before the last repair | 36 |
+| distinct failures after | **33** |
+| fixed | 3 |
+| **newly broken** | **0** |
+| binaries green | 98 → 100 |
+
+**The 33 above is NOT the 33 recorded elsewhere in this document.** That figure was measured on a
+tree without this session's new test files; today's is a different population that happens to total
+the same. **Reading them as "unchanged" would be a coincidence mistaken for continuity** — the error
+this document exists to prevent, which is why the earlier 41-to-33 move was established by diffing
+the failing SETS.
+
+The `narrow_vm.rs` six were measured on that file directly, six failing to none, before the
+whole-suite runs.
+
+### REACH WAS DEMONSTRATED AT THE NARROW BUILD, NOT ASSUMED
+
+A repaired test that passes at a new width may have stopped checking there. Two mutations say
+otherwise: making a target no longer wider on the float fails at BOTH widths, and the width mutation
+that takes the virtual machine's word from the runtime type still fails both axes of the skew corpus
+under `narrow-word-16`.
+
 ## Verdicts
 
 Nine groups. **Members are enumerated so the total can be re-derived by addition** rather than taken
