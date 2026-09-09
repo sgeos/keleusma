@@ -30,11 +30,10 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > a codec conversion each report a fault as `InvalidBytecode` when the artefact was fine. Changing
 > which variant a public API returns is a breaking change.
 >
-> ## WHAT SESSION 65 DID, AND THE ONE SENTENCE THAT CARRIES IT
+> ## WHAT SESSION 65 DID, IN TWO HALVES
 >
-> Four measurement increments, plus this refresh. **Every result was a negative** — nothing found
-> broken — and the fourth also left behind a guard that would have caught a defect this tree has
-> already suffered.
+> **The first half measured four classes and found every one clean.** The second half found NINE
+> GUARDS THAT DID NOT CHECK WHAT THEY CLAIMED, which is the half worth reading.
 >
 > | increment | result |
 > |---|---|
@@ -42,6 +41,46 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > | the FLOAT flat-field class | **clean**, and the audit's scope argument that excluded it was FALSE |
 > | the module-versus-runtime width skew, WORD and ADDRESS | **clean**, including the axis the opaque defect lived on |
 > | the counter class the `forin_count` defect belonged to | **clean**, and now guarded |
+> | **the comment-matching guard class** | **NINE guards repaired**, swept mechanically, closed in `../decisions/COMMENT_MATCHING_GUARD_SWEEP.md` |
+>
+> ## THE SECOND HALF: GUARDS THAT MATCHED PROSE
+>
+> The tree had recorded FOUR instances of a guard matching text it was never meant to read. Two more
+> were found by reading, which raised the real question: **how many are there?** Deriving the
+> population mechanically — test files that read source and search it for a code-shaped literal —
+> found THIRTEEN. **Nine were exposed.**
+>
+> **THE DIRECTION RULE IS THE TRANSFERABLE PART.** The right comment-strip is not the same for every
+> guard, and choosing by appearance is wrong in both directions:
+>
+> | assertion | what an early truncation costs |
+> |---|---|
+> | **ABSENCE** | a missed offender **passes silently** — needs a string-aware strip |
+> | PRESENCE, anchor, count | **fails loudly** — the naive strip is correct |
+>
+> Only ONE of the nine needs the complex form. **They are deliberately not unified**; sharing a
+> helper would add cost to eight and remove a needed guard from one.
+>
+> **THREE FILES DOCUMENTED THE HAZARD IN THEIR OWN PROSE AND GUARDED ONE OF TWO READERS ANYWAY.**
+> The failure is not ignorance of the hazard.
+>
+> **AND THE DEFECT WAS COMMITTED INSIDE ITS OWN FIX**: an edit removing this shape mixed stripped
+> and raw offsets and had to be caught by running the tests. **That is the evidence the class is
+> mechanical rather than a lapse of attention**, and it is why a mechanical sweep found what four
+> documented prior incidents had not.
+>
+> ## WHAT I GOT WRONG, RECORDED BECAUSE THE CORRECTIONS COST SOMETHING
+>
+> | claim | outcome |
+> |---|---|
+> | a red CI job was the FEATURE-SET trap | **wrong** — the same test fails under default features; the real cause was running the guards BEFORE the last edit |
+> | "every guard I wrote had a first-draft defect" | **overstated** — four of seven |
+> | two jobs looked STUCK at 90 minutes | **wrong baseline** — those two take 60 minutes each; ~52 had elapsed |
+>
+> **AND I FIXED WHAT THE GUARD CAUGHT, NOT THE CLASS.** The citation guard scans two documents,
+> flagged two bare file names in one, and I corrected exactly those — leaving the identical names in
+> the task log's newest note because nothing pointed at them. Same one-of-two-sites shape, committed
+> while cataloguing it.
 >
 > **A negative with demonstrated reach is a result; a negative without one is silence dressed as a
 > result.** Every corpus here was made to fail before its passing was believed, and the first float
@@ -110,8 +149,12 @@ always-current, so it must be able to report itself stale rather than mislead a 
 **Validate by ANCESTRY and by CONTENT, never by a hash match.** A stamp requiring `HEAD~1` to equal a
 recorded parent is a claim that nothing else ever lands, and it has failed three times.
 
-**Ancestry**: `origin/v0.2.3` should contain `5fbad3a0` (`Merge pull request #397`), session 65's
-last code merge. If it does not, this file predates a reset and is stale.
+**Ancestry**: `origin/v0.2.3` should contain `64f9d104` (`Merge pull request #402`), the last merge
+before this refresh. If it does not, this file predates a reset and is stale.
+
+**It said `5fbad3a0` was "session 65's last code merge"**, which five later merges made false. The
+CHECK was still sound — an anchor only has to be an ancestor — but the description was not, so the
+wording now says what it is: the last merge before the refresh, which cannot go stale the same way.
 
 **Content**, cheap and independent checks. **They were numbered 1, 2, 3, 7, 8, 9, 10, 4, 5, 6 until
 2026-09-08** — each insertion took the next unused number instead of renumbering, so the list read as
@@ -151,6 +194,11 @@ though four checks were missing. The content was always correct; only the orderi
     the census document against ITSELF, which is a different and weaker claim than the sibling guard
     that checks it against the source; both are needed, because a self-consistent document can still
     describe a tree that has moved.
+14. `docs/decisions/COMMENT_MATCHING_GUARD_SWEEP.md` exists, `tests/block_comment_tripwire.rs`
+    passes, and `every_file_the_comment_matching_sweep_names_still_exists` passes. The last checks
+    that every guard the sweep names is still there; the tripwire fails if a BLOCK comment appears
+    in a source one of those guards reads, since none of the nine strips handles one. **Exposure was
+    measured at zero when written**, and the tripwire is what keeps that true rather than assumed.
 13. **Session 65's four artefacts exist and pass.** `tests/flat_float_field_width.rs` and
     `tests/module_runtime_width_skew.rs` need `floats`; `tests/selfhost_counter_reset.rs` needs
     `self-host`; the two composite-kind witnesses live in `tests/selfhost_typecheck.rs` and need
