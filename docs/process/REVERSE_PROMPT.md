@@ -26,6 +26,31 @@ They are the reason the large work is blocked, and nothing below decides any of 
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
 
+## SEVENTH INCREMENT: THE SWEEP, AND A FALSE PASS ON THE HISTORICAL DEFECT
+
+Two instances of the comment-matching class were found by **reading**. Asking the class question
+**mechanically** — which test files search source for a code-shaped literal without stripping
+comments — found **twelve**. That is the difference between finding instances and finding a class.
+
+**The one that mattered runs the opposite direction from the first two.** Those are **absence**
+assertions, where a comment causes a noisy false *failure*. `wire_self_compile_status.rs` asserts the
+**presence** of `forst.forin_count = 0;` — the exact line whose absence *was* the historical `wire.kel`
+defect — and a comment satisfying a presence assertion is a **silent false pass**.
+
+**Measured by isolating the test**: with the real reset deleted and the identical text left in a
+comment, it reported **ok**.
+
+**The file was not fooled.** A sibling *behavioural* test failed, because deleting the reset really
+does break the stage. **But that backstop is incidental**: narrow the behavioural test, or change the
+stage so deletion no longer breaks byte identity, and this assertion is the only defence and does not
+hold. A guard named for the historical repair should not depend on a different test to be right.
+
+**I nearly reported this wrongly.** The first run showed the *file* failing, which reads as "not
+fooled". Only isolating the single test separated "the file fails" from "this assertion holds".
+
+**Three comment-strippers now exist with three risk profiles** — string-aware for the absence guard,
+naive for the two whose truncation fails loudly — and each says why it is not shared.
+
 ## SIXTH INCREMENT: THE SAME CLASS AGAIN, IN THE FILE THAT DOCUMENTS THE CLASS
 
 Scoping the comment-matching defect **by class rather than by where I looked** found a second

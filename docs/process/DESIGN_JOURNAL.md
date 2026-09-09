@@ -13,6 +13,61 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-09 (seventh) — the sweep, and a false PASS on the historical defect
+
+**Two instances of the comment-matching class had been found by reading. This one asks the class
+question mechanically**: which test files search source for a CODE-SHAPED literal without stripping
+comments? **Twelve.**
+
+That is the difference between finding instances and finding the class. The first two were noticed;
+these were derived from the property.
+
+### THE ONE THAT MATTERED IS THE OPPOSITE DIRECTION FROM THE FIRST TWO
+
+The two already fixed are **absence** assertions, where a comment causes a **false failure** —
+noisy, and someone investigates. `wire_self_compile_status.rs` asserts the **presence** of
+`forst.forin_count = 0;`, the exact line whose absence WAS the historical `wire.kel` defect. A
+comment satisfying a presence assertion is a **false pass**: silent.
+
+**Measured, by isolating the test**: with the real reset deleted and the identical text left in a
+comment, `the_bare_for_counter_is_reset_beside_its_analogue` reported **ok**.
+
+### BUT THE FILE WAS NOT FOOLED, AND THE DISTINCTION IS THE FINDING
+
+A sibling **behavioural** test failed on the same tree, because deleting the reset really does break
+the stage. So the file caught it while the guard named for the repair did not.
+
+**That backstop is INCIDENTAL.** Narrow the behavioural test, or change the stage so the deletion no
+longer breaks byte identity, and this assertion becomes the only defence — and it does not hold. A
+guard that advertises itself as pinning the historical repair should not depend on a different test
+to be right.
+
+**I nearly reported this wrongly.** The first run showed the FILE failing, 2 passed 1 failed, which
+reads as "not fooled". Only isolating the single test separated "the file fails" from "this
+assertion holds", and those are different claims. Reporting the file's verdict would have closed the
+question with the wrong answer.
+
+### THE THIRD STRIPPER, AND WHY THERE ARE NOW THREE
+
+| guard | assertion | early truncation costs |
+|---|---|---|
+| the radix guard | ABSENCE | a missed offender **passes silently** — needs string-awareness |
+| `op_tag_tables` | anchors, bijection | an anchor goes missing, **fails loudly** — naive is fine |
+| this one | PRESENCE | a real occurrence is hidden, **fails loudly** — naive is fine |
+
+Same helper shape, different risk, so they stay separate and each says why. Unifying them on
+appearance would add complexity to two and remove a needed guard from one.
+
+### BOTH DIRECTIONS MUTATION-TESTED, AND THE SECOND IS NOT OPTIONAL
+
+| mutation | result |
+|---|---|
+| reset deleted, text left in a comment | now **fails** |
+| reset present AND a comment mentions it | still **passes** |
+
+The second is what stops the fix from punishing someone for documenting the repair — which, in a
+tree that writes historical notes as a matter of course, would be a guaranteed future failure.
+
 ## 2026-09-09 (sixth) — the same class again, in the file that documents the class
 
 **Scoping by class rather than by where I looked.** The fifth increment fixed one guard exposed to

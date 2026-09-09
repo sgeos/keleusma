@@ -10,6 +10,30 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-09, session 65, seventh increment). THE SWEEP, AND A FALSE PASS ON THE
+> HISTORICAL DEFECT.**
+>
+> Two instances of the comment-matching class were found by reading. Asking the class question
+> mechanically -- which test files search source for a CODE-SHAPED literal without stripping
+> comments -- found **twelve**.
+>
+> **The one that mattered is the opposite direction from the first two.** Those are ABSENCE
+> assertions, where a comment causes a noisy false FAILURE. `wire_self_compile_status.rs` asserts
+> the PRESENCE of `forst.forin_count = 0;`, the exact line whose absence WAS the historical defect,
+> and a comment satisfying a presence assertion is a **silent false PASS**. Measured by isolating
+> the test: with the real reset deleted and the text left in a comment, it reported **ok**.
+>
+> **The file was not fooled** -- a sibling BEHAVIOURAL test failed, because deleting the reset really
+> breaks the stage. **That backstop is incidental**: narrow the behavioural test and this assertion
+> becomes the only defence, and it does not hold.
+>
+> **The first run nearly produced the wrong answer.** It showed the FILE failing, which reads as
+> "not fooled"; only isolating the single test separated "the file fails" from "this assertion
+> holds". Those are different claims.
+>
+> There are now three comment-strippers with three risk profiles, each documenting why it is not
+> shared with the others.
+
 > **Currency note (2026-09-09, session 65, sixth increment). THE SAME CLASS, IN THE FILE THAT
 > DOCUMENTS THE CLASS.**
 >
