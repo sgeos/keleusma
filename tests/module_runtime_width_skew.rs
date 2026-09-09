@@ -107,11 +107,23 @@ struct Case {
     separates: bool,
 }
 
+/// One step narrower than the build emits, which is what "narrower than the runtime" has to mean
+/// when the build itself is narrow.
+///
+/// **A literal 4-against-6 does not survive a narrow build.** Under `narrow-word-16` the compiler
+/// refuses `word_bits_log2 = 6` outright — runtime maximum 4 — so this file could not run there,
+/// which is the defect this session repaired in `tests/narrow_vm.rs` and introduced here while
+/// auditing it. Deriving both ends from the build keeps the SKEW, which is the property, rather
+/// than a particular pair of widths, which is not.
+fn one_step_narrower(build: u8) -> u8 {
+    build.saturating_sub(1).max(2)
+}
+
 fn module_narrower(src: &str, word_log2: u8, addr_log2: u8) -> keleusma::bytecode::Module {
     let target = Target {
         word_bits_log2: word_log2,
         addr_bits_log2: addr_log2,
-        float_bits_log2: 6,
+        float_bits_log2: keleusma::bytecode::RUNTIME_FLOAT_BITS_LOG2,
         has_floats: true,
         has_strings: false,
     };
@@ -193,7 +205,11 @@ const ADDRESS_CASES: &[Case] = &[
 #[test]
 fn a_module_declaring_a_narrower_word_than_the_runtime_reads_every_field_correctly() {
     for case in WORD_CASES {
-        let module = module_narrower(case.src, 4, 6);
+        let module = module_narrower(
+            case.src,
+            one_step_narrower(keleusma::bytecode::RUNTIME_WORD_BITS_LOG2),
+            keleusma::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
+        );
         let arena = Arena::with_capacity(65536);
         let mut vm: WideVm<'_, '_> = WideVm::new(module, &arena).expect("verify");
         let got = word_of(vm.call(&[]).expect("call"), case.label);
@@ -212,7 +228,11 @@ fn a_module_declaring_a_narrower_word_than_the_runtime_reads_every_field_correct
 #[test]
 fn a_module_declaring_a_narrower_address_than_the_runtime_reads_every_field_correctly() {
     for case in ADDRESS_CASES {
-        let module = module_narrower(case.src, 6, 4);
+        let module = module_narrower(
+            case.src,
+            keleusma::bytecode::RUNTIME_WORD_BITS_LOG2,
+            one_step_narrower(keleusma::bytecode::RUNTIME_ADDRESS_BITS_LOG2),
+        );
         let arena = Arena::with_capacity(65536);
         let mut vm: WideVm<'_, '_> = WideVm::new(module, &arena).expect("verify");
         vm.register_native("make_handle", |_args| {

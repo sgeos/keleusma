@@ -108,8 +108,14 @@ const CASES: &[Case] = &[
 
 fn module_for(src: &str, float_bits_log2: u8) -> keleusma::bytecode::Module {
     let target = Target {
-        word_bits_log2: 6,
-        addr_bits_log2: 6,
+        // **THE BUILD'S WIDTH, NOT A LITERAL 64.** The float is this file's subject; the word and
+        // address are incidental. Hard-coded 6, the compiler refused the whole target under
+        // `narrow-word-16` -- runtime maximum 4 -- so this file could not run at a narrow width at
+        // all. **That is the defect this session repaired in `tests/narrow_vm.rs`, introduced here
+        // by the same session while auditing it.** Taking the build's own maxima keeps the float
+        // claim intact at every width.
+        word_bits_log2: keleusma::bytecode::RUNTIME_WORD_BITS_LOG2,
+        addr_bits_log2: keleusma::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
         float_bits_log2,
         has_floats: true,
         has_strings: false,
