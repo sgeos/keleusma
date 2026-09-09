@@ -479,6 +479,40 @@ fn arena_for(m: &Module) -> keleusma_arena::Arena {
 /// because 64 bought nothing measurable and the cost is real.
 const SEEDS: usize = 24;
 
+/// **THE SEED COUNT WAS WIDENED AND MEASURED. THE SEED RANGE WAS NOT.**
+///
+/// Until 2026-09-08 every seed produced a SMALL NON-NEGATIVE value: seeds 4
+/// through 23 were simply the constants 0 to 19. So a differential that ran
+/// hundreds of comparisons per module had never driven a negative number, and
+/// never driven a boundary.
+///
+/// **That is the same shape as "a sweep is only as wide as its mutation set",
+/// arriving on a different instrument.** The count was audited because it is a
+/// number in the source; the range was not, because it is a consequence of an
+/// expression.
+///
+/// The redundant small constants are replaced with the values arithmetic
+/// actually breaks at. `i64::MIN` is the one that matters most: its negation and
+/// `i64::MIN / -1` are unrepresentable, and the hand-written differential in
+/// `differential.rs` already pins that pair precisely because it is where a bare
+/// `sdiv` has undefined behaviour on exactly the input the reference answers.
+/// **The corpus differential could not have caught the same defect in a corpus
+/// module.**
+///
+/// A handful of small constants is kept: they exercise loop trip counts and
+/// array indices that a boundary value would send straight to a refusal or a
+/// trap, so replacing all of them would trade one blind spot for another.
+///
+/// **THE REACH IS BOUNDED AND MEASURED, NOT ASSUMED.** A module whose entry
+/// takes no parameters, or whose entry is a stream, sees ONE argument vector
+/// whatever this table says. `seed_range_reach.rs` measures the population that
+/// can see a second seed at all: **26 of 69 corpus modules.** So "the
+/// differential drives negatives and boundaries" is a claim about those 26 and
+/// must not be quoted about the corpus.
+///
+/// **The boundaries found nothing.** The differential stayed green. That is a
+/// negative result over a surface that previously had no coverage at all, and
+/// it is worth exactly that much.
 fn args_for_seed(n: usize, seed: usize) -> Vec<i64> {
     (0..n)
         .map(|i| match seed {
@@ -486,7 +520,31 @@ fn args_for_seed(n: usize, seed: usize) -> Vec<i64> {
             1 => 5,
             2 => 0,
             3 => (n as i64 - i as i64) * 3 + 1,
-            k => (k - 4) as i64,
+            // --- boundaries, added 2026-09-08 ---
+            4 => -1,
+            5 => i64::MIN,
+            6 => i64::MAX,
+            7 => i64::MIN + 1,
+            8 => -((i as i64 + 1) * 3 + 1),
+            // Mixed signs and mixed magnitudes, so a defect needing two
+            // parameters to DIFFER is at least reachable — the diagonal note
+            // below still applies to every other seed.
+            9 => {
+                if i % 2 == 0 {
+                    i64::MIN
+                } else {
+                    i64::MAX
+                }
+            }
+            10 => {
+                if i % 2 == 0 {
+                    -1
+                } else {
+                    1
+                }
+            }
+            11 => i64::MAX - i as i64,
+            k => (k - 12) as i64,
         })
         .collect()
 }
