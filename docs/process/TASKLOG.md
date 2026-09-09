@@ -10,6 +10,24 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-09, session 65, sixth increment). THE SAME CLASS, IN THE FILE THAT
+> DOCUMENTS THE CLASS.**
+>
+> Scoping the comment-matching defect by class found a second instance in `tests/op_tag_tables.rs`,
+> **whose own doc cites a divergence detector broken by a commented-out `for` loop.** It has two
+> source extractions: `decoder_arms` strips comments then locates its anchor; `stage_tag_table` did
+> the reverse, so the anchor search was comment-blind. **One comment line failed FOUR tests**, with
+> nothing wrong in the stage.
+>
+> **The shape is the recurring one** -- a case handled for one construct and not the one beside it,
+> here with both siblings in one file and one of them correct. Knowing a hazard and guarding one of
+> two sites is the failure, not ignorance of the hazard.
+>
+> **The two comment-strippers are deliberately NOT unified.** The radix guard's is string-aware
+> because its assertion is an ABSENCE one, where an early truncation means a missed offender passes
+> silently; this one's anchors fail loudly instead. Both helpers now carry the comparison so a
+> future reader does not tidy them in either direction.
+
 > **Currency note (2026-09-09, session 65, fifth increment). A GUARD THAT COULD NOT COEXIST WITH A
 > COMMENT ABOUT WHAT IT GUARDS.**
 >

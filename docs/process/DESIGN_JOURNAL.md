@@ -13,6 +13,54 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-09 (sixth) — the same class again, in the file that documents the class
+
+**Scoping by class rather than by where I looked.** The fifth increment fixed one guard exposed to
+the comment-matching defect. The class question is whether there are others, and the answer was
+found in `tests/op_tag_tables.rs` — **the file whose own doc cites a divergence detector broken by
+a commented-out `for k in 0..3`.**
+
+It has two source extractions. `decoder_arms` strips comments and **then** locates its anchor.
+`stage_tag_table` did the reverse: `find("const data wire {")` on the RAW source, stripping only the
+block it found. So the anchor search itself was comment-blind.
+
+**Measured: one comment line mentioning the anchor failed FOUR tests in that file**, with nothing
+wrong in the stage.
+
+### THE SHAPE IS THE ONE THIS TREE KEEPS MEETING
+
+A case handled for one construct and not for the one beside it. `rewrite_pattern_enum_name`
+rewriting enum names in patterns but not struct names; `check_pattern_against_type` called for match
+arms but not parameters; `forin_count` reset omitted while its documented analogue was reset. **Here
+both siblings live in one file, one of them correct, under a doc warning about the exact hazard.**
+
+Knowing a hazard and guarding one of two sites is the recurring failure, not ignorance of the
+hazard.
+
+### THE TWO STRIPPERS ARE DELIBERATELY NOT UNIFIED, AND THE CODE SAYS WHY
+
+The radix guard's helper is **string-aware**; this one truncates at the first `//`. That looks like
+an inconsistency to be tidied, and tidying it in either direction would be wrong:
+
+| guard | assertion | what an early truncation costs |
+|---|---|---|
+| the radix guard | ABSENCE — no site may use the old radix | a missed offender **passes silently** |
+| `op_tag_tables` | anchors and a bijection | an anchor or field goes missing and **fails loudly**, via `expect` or a reported gap |
+
+**The naive form is correct in one and wrong in the other because the failure directions differ.**
+A future reader unifying them would either add unneeded complexity or remove a needed guard, so
+both helpers now carry the comparison.
+
+### MUTATIONS
+
+| mutation | result |
+|---|---|
+| the comment that broke four tests | now **passes** |
+| a duplicate tag number in the stage table | still **fails three tests** |
+
+The second matters as much as the first: an extraction can be made comment-proof by making it find
+nothing at all.
+
 ## 2026-09-09 (fifth) — a guard that could not coexist with a comment about what it guards
 
 **The class.** This repository records **four** instances of a guard matching prose it was never
