@@ -26,6 +26,32 @@ They are the reason the large work is blocked, and nothing below decides any of 
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
 
+## FIFTH INCREMENT: A GUARD THAT COULD NOT COEXIST WITH A COMMENT ABOUT WHAT IT GUARDS
+
+This repository records **four** instances of a guard matching prose it was never meant to read. One
+guard is still exposed. `every_site_in_the_call_packing_family_agrees_on_the_radix` asserts that
+**no** site splits a `Call` record on the old eight-bit radix, and it searched raw source lines.
+
+**Measured**: adding a plain historical note — *"the Call record once split its chunk field as
+`count * 256`"* — to a source file **fails the test**, with nothing wrong in the tree.
+
+**The remedy already in the file is the part that worried me.** It records flagging itself once,
+"the third time a guard in this repository has done that", and the fix applied was to skip the whole
+file. That costs reach, and it is the fix a later reader copies.
+
+**The obvious fix introduces the opposite defect.** Truncating at the first `//` cuts inside a string
+literal like `"http://a"` and drops a **real** occurrence — and for an absence assertion that is the
+dangerous direction, since a missed offender passes silently where a matched comment merely fails
+loudly. The strip is therefore string-aware. **Block comments are not handled and the code says so.**
+
+Three mutations: the historical comment now passes, a real code site still fails, and a real site
+after a string containing `//` still fails. **The third is what justifies the complexity** — a naive
+strip would have missed it.
+
+**A run that executed no tests is not a pass.** The first demonstration reported
+`0 passed; 0 failed; 0 filtered out` because the binary is gated on `self-host`, and I nearly read
+that as the comment being harmless.
+
 ## FOURTH INCREMENT: A DEFECT SHAPE TURNED INTO A ONE-SECOND CHECK
 
 The first four increments produced measured negatives. This one took a defect that **actually

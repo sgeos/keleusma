@@ -13,6 +13,61 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-09 (fifth) — a guard that could not coexist with a comment about what it guards
+
+**The class.** This repository records **four** instances of a guard matching prose it was never
+meant to read: a must-fire guard firing on the comment explaining the fix it guarded, a no-copies
+guard flagging itself, a witness extractor matching its own English header, and a corpus reader
+matching `for k in 0..3` inside a comment. Four instances is a class, so the question is which
+guards are still exposed.
+
+**One is.** `every_site_in_the_call_packing_family_agrees_on_the_radix` asserts that **no** site
+splits a `Call` record on the old eight-bit radix, and it searched raw source lines. Measured:
+adding a plain historical note — *"the Call record once split its chunk field as `count * 256`"* —
+to a source file **fails the test**, with nothing wrong in the tree.
+
+**The already-applied remedy is the part that worried me.** The file records flagging ITSELF once,
+calling it "the third time a guard in this repository has done that", and the fix was to skip the
+whole file. That costs reach, and it is the fix a later reader copies: the next file that gains such
+a comment gets skipped too, and the guard quietly stops covering it.
+
+### THE OBVIOUS FIX INTRODUCES THE OPPOSITE DEFECT
+
+Truncating at the first `//` is wrong on `let s = "http://a"; let x = count * 256;` — it cuts inside
+the string literal and drops a REAL occurrence. **For an absence assertion that is the dangerous
+direction**: a missed offender passes silently, where a matched comment merely fails loudly.
+
+So the strip is string-aware, tracking double-quoted strings with backslash escapes and truncating
+only at a `//` outside one. Both `.rs` and `.kel` use `//`, so one helper serves both.
+
+**Block comments are NOT handled, and the code says so** rather than leaving it to be discovered. A
+`/* … count * 256 … */` would still match. The four recorded instances were all line comments, and a
+block-comment scanner needs cross-line state this per-line walk does not carry.
+
+### THREE MUTATIONS, AND THE THIRD IS WHY THE COMPLEXITY IS THERE
+
+| mutation | before | after |
+|---|---|---|
+| a historical COMMENT naming the old radix | **fails** | passes |
+| a real code site | fails | **still fails** |
+| a real site after a string containing `//` | fails | **still fails** |
+
+The third separates the string-aware strip from a naive `split("//")`, which would have passed it —
+that is, missed a real offender. Without that case the extra code would have been unjustified.
+
+### THE SELF-SKIP IS KEPT, AND FOR A DIFFERENT REASON THAN BEFORE
+
+Stripping comments does not make the file safe to scan: its pattern list lives in **string
+literals**, which are code. The exclusion stays, but it is now the only exclusion the guard needs,
+rather than the first of a growing list.
+
+### AND THE RUN THAT ALMOST SAID "NO HAZARD"
+
+The first demonstration reported `0 passed; 0 failed; 0 filtered out` and I nearly read it as the
+comment being harmless. The binary is gated on `self-host` and ran **nothing**. Same shape as the
+`--no-fail-fast` rule this tree already carries: **a run that executed no tests is not a pass**, and
+the number that says so is the test count, not the exit status.
+
 ## 2026-09-09 (fourth) — a defect shape turned into a one-second check
 
 **The increment.** Four increments this session produced measured negatives in the width and
