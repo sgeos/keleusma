@@ -5,140 +5,99 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-09-08 (session 64 CLOSE).** Validate by the ANCESTRY and CONTENT block below,
+> **REFRESHED 2026-09-09 (session 65 CLOSE).** Validate by the ANCESTRY and CONTENT block below,
 > not by a hash: a refresh takes more than one commit, so any hash written here is stale by one the
 > moment it is written.
 >
-> ## READ FIRST: THE RUNTIME RETURNED A WRONG ANSWER, AND IT IS REPAIRED
+> ## THE FOUR DECISIONS ARE THE OPERATOR'S, NONE HAS MOVED, AND THEY LEAD FOR A REASON
 >
-> A composite bearing an **opaque** field was built and read at two different widths:
->
-> ```
-> P { h: h, n: 1 } == P { h: h, n: 2 }   evaluated to true
-> ```
->
-> Two structures differing in a `Word` field compared **equal**. **A silent wrong answer outranks
-> every refusal this tree has catalogued**, which is why it leads.
->
-> `ScalarKind::Opaque` is sized by the ADDRESS width, and the compiler, the typed verifier and the
-> marshalling layer all follow that layout. The runtime disagreed in four places, each assuming a
-> WORD. The default target makes the two widths equal, so all four agreed by coincidence.
->
-> **The repair answers no design question, deliberately.** Whether the field is a registry INDEX
-> (arguing for a word) or a host HANDLE (arguing for an address) is genuinely open. Three of four
-> subsystems already treat the layout as the authority, so each runtime site now asks it. **Do not
-> promote that into a fifth decision on my account.** Recorded in
-> `../decisions/NARROW_WIDTH_FAILURE_CLASSIFICATION.md` and `../decisions/FLAT_FIELD_WIDTH_AUDIT.md`.
->
-> ## THE FINDING WITH THE LONGEST REACH: A WIDTH SKEW NEEDS NO FEATURE
->
-> I wrote in a merged document that one of those sites **could not** be guarded without a
-> continuous-integration job in a configuration nothing builds. **That was wrong**, and it is worth
-> more than the repair.
->
-> `GenericVm<W, A, F>` is generic over the word and address types independently, and every `Word`
-> and every `Address` implementation is unconditional. **A host-defined alias reaches any pair of
-> widths in the DEFAULT build.** `Target::embedded_8` has shipped an eight-bit word with a
-> sixteen-bit address -- the 6502 -- all along.
->
-> So a width-dependent defect costs nothing standing to guard. **This does not extend to features**:
-> a build omitting `floats` cannot be reached by an alias, which is why the hole below survives.
->
-> ## THE FOUR DECISIONS, ALL THE OPERATOR'S, AND NONE MOVED
+> **The large remaining work is blocked on these and the small remaining work is not worth choosing
+> over them.** Session 65 ran four increments without touching any of them; that is the pattern to
+> continue, not a sign they can be decided locally.
 >
 > 1. **How does a value ENTER a `Text<N>`?** It appears in every program anyone writes with the
 >    type. Open question 2 in `../decisions/TEXT_CAPACITY_TYPE.md`.
 > 2. **Is the width bundle worth a breaking change?** 33 signatures, 14 public, published crate.
-> 3. **Should `verify()` refuse float opcodes when the feature is absent?** Evidence COMPLETE: ten
->    lines, prototyped, **zero new failures**, and the semantic worry is moot because the lexer
->    refuses float literals there. Unlanded only because I said it was your call in a merged
->    document, and a deferral is worth something only if honoured.
-> 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked for
->    the WIDTH axis, unchanged for the FEATURE axis. See the finding above.
+> 3. **Should `verify()` refuse float opcodes when the `floats` feature is absent?** Evidence
+>    COMPLETE: ten lines, prototyped, **zero new failures**, and the semantic worry is moot because
+>    the lexer refuses float literals in that build. Unlanded only because a merged document said it
+>    was the operator's call, and a deferral is worth something only if honoured. **This is the cheap
+>    one.**
+> 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
+>    the WIDTH axis, unchanged on the FEATURE axis.
 >
 > Two smaller API-shaped observations sit beside them, recorded and not repaired: a hot-swap site and
 > a codec conversion each report a fault as `InvalidBytecode` when the artefact was fine. Changing
 > which variant a public API returns is a breaking change.
 >
-> ## THE HOLE THAT IS STILL PINNED OPEN
+> ## WHAT SESSION 65 DID, AND THE ONE SENTENCE THAT CARRIES IT
 >
-> A float-using module verifies, loads, and traps `InvalidBytecode` on a runtime built without the
-> `floats` feature -- the class `verify()` exists to exclude. Pinned by
-> `tests/float_opcode_without_floats.rs`. **Unchanged this session**; it is decision 3.
+> Four increments, **four measured negatives and one guard that would have caught a real defect.**
 >
-> **No census site is claimed unreachable**, and guards keep both censuses from drifting from the
-> tree.
+> | increment | result |
+> |---|---|
+> | the three COMPOSITE expression kinds | all three **WITHHELD**, each with an executable witness |
+> | the FLOAT flat-field class | **clean**, and the audit's scope argument that excluded it was FALSE |
+> | the module-versus-runtime width skew, WORD and ADDRESS | **clean**, including the axis the opaque defect lived on |
+> | the counter class the `forin_count` defect belonged to | **clean**, and now guarded |
 >
-> ## THE STATE THIS SESSION CLOSED IN, VERIFIED RATHER THAN ASSERTED
+> **A negative with demonstrated reach is a result; a negative without one is silence dressed as a
+> result.** Every corpus here was made to fail before its passing was believed, and the first float
+> probe written was exactly that silence until it was mutated.
 >
-> Seventeen pull requests merged, working tree clean, no open pull requests, nothing unpushed, no
-> background work running. Every check in the Validity section below was RUN against the tree at
-> close, not copied forward.
+> ## THE THREE THINGS WORTH MORE THAN THE FINDINGS
 >
-> **Trunk runs: fifteen green, two red.** Both reds are the transient failures described further
-> down; the same jobs pass on the final head. The final merge's own run is green.
+> **ONE. AN AUDIT'S SCOPE ARGUMENT WAS AN INSTANCE OF THE ERROR IT WAS AUDITING.**
+> `FLAT_FIELD_WIDTH_AUDIT.md` justified examining only the opaque field by saying every other kind
+> is a function of the word or float width, *"so a site assuming a word is correct for them."* False
+> for `Float`, whose width is selected independently — **the exact coincidence that hid the opaque
+> defect**. The scope was right and the argument for it repeated the mistake. Corrected in place.
 >
-> ## WHERE THE NUMBERS STAND, AND WHICH ARE SELF-CHECKING
+> **TWO. A COHERENT MUTATION IS AN EQUIVALENT MUTATION, AND IT LOOKS LIKE A PASSING TEST.**
+> Mis-sizing the LAYOUT changes nothing observable, because the compiler's baked offsets and the
+> runtime's strides both derive from it and move together. **That coherence is precisely what the
+> opaque field lacked.** A width defect needs TWO AUTHORITIES, and the module header versus the
+> runtime type parameter is where they come from. The load check refuses a module WIDER than the
+> runtime and admits one NARROWER, so a module compiled small and run on a large host is the
+> configuration that exposes them. **Every configuration in `composite_width_skew.rs` is MATCHED and
+> therefore cannot.**
 >
-> | | | |
-> |---|---|---|
-> | `narrow-word-16` distinct failures | **33** of 106 binaries, was 41 | diffed, not subtracted |
-> | discard-arm census | **19 of 19**, closed | -- |
-> | `InvalidBytecode` census | **35 of 46**, eleven open | **guarded** |
-> | narrow or skewed runtimes exercised per run | **40** | **guarded** |
+> **THREE. A GUARD MUTATION-TESTED AGAINST A HISTORICAL DEFECT IS A DIFFERENT OBJECT.** The invented
+> mutation asks whether a guard *can* fail. The historical one asks whether it would have earned its
+> cost. `tests/selfhost_counter_reset.rs` was tested by **deleting the 2026-08-27 repair**, which
+> reproduces the `forin_count` defect and makes the guard name the field.
 >
-> **The 41-to-33 move was established by DIFFING the failing sets**, not by comparing totals: a total
-> falling by eight is equally consistent with fixing nine and breaking one.
+> ## WHAT WAS PREDICTED WRONG, AND WHAT WAS HYPOTHESISED WRONG
 >
-> **Do not drive the census to 46 of 46.** Its own methodology says probing every member of a class
-> is not a better use of the same effort, and the eleven that remain are siblings inside classes that
-> already carry verdicts, plus host-contract surfaces.
+> Recorded because they were written down BEFORE measuring and are not revised to match.
 >
-> ## HOW TO READ WHAT SESSION 64 LEFT YOU
+> | claim | outcome |
+> |---|---|
+> | kind 7 (struct literal) **moves** — the declared count is on the wire | **wrong**, it is not on the wire at all |
+> | kinds 5 and 6 blocked on a missing ANNOTATION record | verdict right, **mechanism wrong** — the pipeline refuses the whole program |
+> | the width survivors are BOXED, so both widths agree | **wrong**, all shapes are flat |
+> | the survivors read zero neighbours and are right by luck | **wrong**, a non-zero neighbour changes nothing |
 >
-> Session 63 opened with six instruments that reported clean results about things they never touched.
-> **This session's characteristic failure was different**, and naming it is worth more than the
-> findings list.
+> **The boxing hypothesis was the likely one and the explanation was already written down in a
+> sibling test**, which records that a boxed composite agrees on both runtimes. Checking it stopped a
+> plausible wrong cause entering the tree — the way two of the four `wire.kel` causes were first
+> diagnosed.
 >
-> **Narrow measured claims were compressed into broad flat ones**, four times, all mine. "No job
-> selects a narrow width" became "narrow widths are not exercised". "This file excludes the eight-bit
-> selectors" became "the eight-bit case is least exercised". Each compression dropped the qualifier
-> that was doing the work.
+> ## ONE OPEN QUESTION LEFT DELIBERATELY OPEN
 >
-> **And agreement is the most dangerous evidence.** A coverage figure of 41 was confirmed by a guard
-> that independently derived 41 -- two errors cancelling; the truth was 40. A counting convention
-> invented to settle a total was checked only against that total, agreed with it, and was backwards.
-> **A number that matches expectation is the one least likely to be re-examined**, so check a claim
-> against something other than the thing it was built to explain.
+> Two word cases — an array element and a byte-leading struct — do not separate a word-width
+> divergence. **Three hypotheses excluded, mechanism unestablished.** What IS established is a
+> characterization covering every case measured: all-`Word` composites read past their first field
+> separate; first fields, byte-leading structs and array elements do not. **That is a stated LIMIT,
+> not a defect** — every shape answers correctly on the unmutated tree.
 >
-> ## FOUR PROCESS FACTS, EACH LEARNED AT COST
+> ## THE PROCESS FACT THIS SESSION ADDED
 >
-> **This heading said THREE and had four items under it.** The trunk-CI fact was inserted without
-> renumbering the heading -- the same defect as the validity list below, in the same file, on the
-> same day. A count in a heading is a second copy of a fact the list already holds.
->
-> **The 2026-08-11 gate change reached one document and stopped.** `GIT_STRATEGY.md` says CI gates
-> feature branches and the local gate does not. Five other documents still said otherwise, so a
-> session spent 2h30m of the contended machine on a gate CI had already superseded in about an hour. All
-> are corrected; `DESIGN_JOURNAL.md` keeps the old rule because it is an append-only record.
->
-> **This file told agents to validate it by a hash match**, which its own Validity section forbids and
-> records as having failed three times. Corrected.
->
-> **NOTHING WATCHES THE VERSION BRANCH'S CI, AND TWO RUNS WENT RED UNNOTICED.** Merges are gated by
-> the pull request's checks; the post-merge run on `v0.2.3` is fire-and-forget. Two of this session's
-> seventeen merges left a red trunk -- one on `Install SDL3 build dependencies`, one on the self-hosted
-> subproject with no failing step recorded. **Both were transient**: the same jobs pass on the current
-> head and on the run before it, so nothing was broken and nothing needed remedying.
->
-> The point is that **no one found out until the runs were enumerated at session end**, and I had
-> asserted "green after each merge" several times from spot-checking the most recent. The strategy
-> says a red trunk is remedied immediately; it does not say what surfaces one. Whether that deserves
-> a notification is a project-level call and is recorded, not adopted.
->
-> **A search is not a check until it is re-run after the edit.** The sweep for the stale gate rule
-> missed `CONTRIBUTING.md`, whose wording no initial pattern matched; a widened re-sweep found it.
->
+> **A CANCELLED RUN LEAVES `gh pr checks` REPORTING NOTHING, AND A WAITER KEYED ON "NOTHING PENDING"
+> CALLS THAT GREEN.** Written into a waiter in this session despite the rule being in this very file.
+> Requiring a POSITIVE pass count is the fix. Also met again: `gh run list --branch` returned zero
+> runs for a branch that had one, and a stale trunk list, in the same call — **check the instrument
+> before doubting the result.**
 
 ## Validity
 
@@ -149,9 +108,8 @@ always-current, so it must be able to report itself stale rather than mislead a 
 **Validate by ANCESTRY and by CONTENT, never by a hash match.** A stamp requiring `HEAD~1` to equal a
 recorded parent is a claim that nothing else ever lands, and it has failed three times.
 
-**Ancestry**: `origin/v0.2.3` should contain `639108fd`
-(`Merge pull request #392`), the session's final merge. If it does not, this file predates a reset
-and is stale.
+**Ancestry**: `origin/v0.2.3` should contain `0d3058d8` (`Merge pull request #396`). If it does not,
+this file predates a reset and is stale.
 
 **Content**, cheap and independent checks. **They were numbered 1, 2, 3, 7, 8, 9, 10, 4, 5, 6 until
 2026-09-08** — each insertion took the next unused number instead of renumbering, so the list read as
@@ -191,6 +149,11 @@ though four checks were missing. The content was always correct; only the orderi
     the census document against ITSELF, which is a different and weaker claim than the sibling guard
     that checks it against the source; both are needed, because a self-consistent document can still
     describe a tree that has moved.
+13. **Session 65's four artefacts exist and pass.** `tests/flat_float_field_width.rs` and
+    `tests/module_runtime_width_skew.rs` need `floats`; `tests/selfhost_counter_reset.rs` needs
+    `self-host`; the two composite-kind witnesses live in `tests/selfhost_typecheck.rs` and need
+    `self-host` too. **A default-feature run silently skips the last three**, which is the same trap
+    item 7 records.
 
 **Do not trust the counts in this file without re-deriving them.** The construct-support boundary
 last read **96 SOk / 1 Refuses / 3 Diverges / 1 RefRejects** over 101 cases. It is ratcheted at
@@ -204,6 +167,38 @@ calling `boundary_cases` and then demands at least two occurrences of it in this
 adding a case silently turns the document red instead of leaving it quietly wrong. **The refresh of
 2026-09-03 deleted one of the two and broke that test**, which the pre-push hook cannot see, because
 its routine tier excludes the `selfhost_*` binaries. If you rewrite this block, keep two.
+
+## WHAT A RESUMING SESSION SHOULD DO FIRST
+
+**READ THE FOUR DECISIONS AT THE TOP AND WAIT FOR AN ANSWER.** They are the only things blocking
+work larger than an increment.
+
+**Session 65 demonstrated that unblocked work remains and is worth doing**, so "blocked" is not
+"idle": four increments landed without touching a decision. What it also demonstrated is the shape
+that pays — **take a defect the tree has ALREADY SUFFERED and ask whether its shape is mechanical**,
+rather than auditing where a defect might be. That produced the one artefact of the session that
+would have caught something.
+
+```sh
+pgrep -f mutation_sweep              # the v0.3.0 line's sweep; contention INVERTS its result
+git log --oneline -1 origin/v0.2.3   # derive; do not expect a hash written here
+gh pr list --state open              # by BASE branch; the other line's appear here too
+gh run list --branch v0.2.3 --limit 3   # NOTHING ELSE WATCHES THE TRUNK
+```
+
+**Do not invent urgency** from whatever those report. A pull request mid-CI is the normal state of
+this workflow.
+
+**A caution about this file.** It is long and largely historical. **The BANNER at the top is the
+resume prompt**; sections below are accumulated findings, several describing states that have since
+moved. Where a section disagrees with the banner, the banner is newer.
+
+**There is a SUPERSEDED duplicate of this very heading further down, and of this very paragraph.**
+The 2026-09-09 refresh added a second copy of both rather than removing the first — noticed while
+checking this file's structure, which is the check that caught a severed intro and a dropped section
+on the previous refresh. The lower copy is kept because its numbered items carry findings the banner
+does not repeat: read this one for what to DO and that one for what is KNOWN.
+
 
 ## RUN THE SUITE WITH `--no-fail-fast`, AND THE REASON IS NOT TIDINESS
 
