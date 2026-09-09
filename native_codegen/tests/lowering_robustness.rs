@@ -90,14 +90,14 @@ fn outcome(m: &Module) -> Result<&'static str, (String, String)> {
 ///
 /// Every mutation lowers the whole module, so cost per mutation grows with
 /// module size. See the note at the call site.
-const MUTATIONS_PER_MODULE: usize = 12;
+const MUTATIONS_PER_MODULE: usize = 27;
 
 /// Structural corruptions, each a named function from a module to a module.
 fn mutants(base: &Module) -> Vec<(String, Module)> {
     let mut out: Vec<(String, Module)> = Vec::new();
     // Stride the chunks so the sample spreads across the module rather than
     // clustering at its start, where the entry chunk's shape is unrepresentative.
-    let per_chunk = 15usize; // 3 positions x 5 corruption kinds
+    let per_chunk = 27usize; // 3 positions x 9 corruption kinds
     let want_chunks = MUTATIONS_PER_MODULE.div_ceil(per_chunk).max(1);
     let stride = base.chunks.len().div_ceil(want_chunks).max(1);
     for (ci, chunk) in base.chunks.iter().enumerate().step_by(stride) {
@@ -142,6 +142,33 @@ fn mutants(base: &Module) -> Vec<(String, Module)> {
                 let mut c = base.clone();
                 c.chunks[ci].ops[at] = Op::Call(u16::MAX, 0);
                 out.push((format!("chunk {ci}: op {at} -> Call(nonexistent)"), c));
+
+                // **THE OPERANDS THAT INDEX TABLES**, which is where both fixed
+                // panic classes lived. The first mutation set corrupted control
+                // flow and local slots and stopped there; a table index out of
+                // range is the same shape as `GetLocal(huge)` and was simply not
+                // tried.
+                let mut nv = base.clone();
+                nv.chunks[ci].ops[at] = Op::CallVerifiedNative(u16::MAX, 0);
+                out.push((
+                    format!("chunk {ci}: op {at} -> CallVerifiedNative(huge)"),
+                    nv,
+                ));
+
+                let mut ne = base.clone();
+                ne.chunks[ci].ops[at] = Op::CallExternalNative(u16::MAX, 0);
+                out.push((
+                    format!("chunk {ci}: op {at} -> CallExternalNative(huge)"),
+                    ne,
+                ));
+
+                let mut gd = base.clone();
+                gd.chunks[ci].ops[at] = Op::GetData(u32::MAX / 2);
+                out.push((format!("chunk {ci}: op {at} -> GetData(huge)"), gd));
+
+                let mut gdi = base.clone();
+                gdi.chunks[ci].ops[at] = Op::GetDataIndexed(u32::MAX / 2, u32::MAX / 2);
+                out.push((format!("chunk {ci}: op {at} -> GetDataIndexed(huge)"), gdi));
             }
         }
     }
@@ -261,5 +288,107 @@ fn lowering_malformed_bytecode_refuses_rather_than_panicking() {
         "  ({} upstream panic(s) in `confine.rs`, reported to the `v0.2.3` line \
          and allowed here by message shape)\n",
         upstream.len()
+    );
+}
+
+/// **THE OTHER PUBLIC ENTRY POINTS, WHICH THE SWEEP ABOVE DOES NOT REACH.**
+///
+/// `lower_module` is not the only function this crate exposes that accepts
+/// module data a caller may not have verified. **The region planners are the
+/// ones that matter most**: a HOST calls `host_arena_supplement_bytes` and
+/// `persistent_supplement_bytes` to size the buffers it will pass in, so a panic
+/// there is reached without lowering anything at all — and a host sizing a
+/// buffer is exactly the caller least able to recover from one.
+///
+/// # Why this is a separate test rather than more mutations
+///
+/// The sweep above measures whether lowering REFUSES. This measures whether a
+/// planner RETURNS. They are different questions about the same inputs, and
+/// folding them together would let a planner panic be reported as a lowering
+/// refusal.
+///
+/// # Non-vacuity
+///
+/// A planner that returned early on every mutant would pass this while
+/// exercising nothing, so the sizes are collected and at least one must be
+/// non-zero. **A sweep that never reached the code is worse than no sweep** —
+/// the census harness on this line fabricated coverage exactly that way.
+#[test]
+fn the_host_facing_planners_return_rather_than_panicking() {
+    use keleusma_native::region;
+
+    let corpus = common::corpus();
+    assert!(!corpus.is_empty(), "the corpus loaded nothing");
+    install_location_hook();
+
+    let mut calls = 0usize;
+    let mut nonzero = 0usize;
+    let mut panics: Vec<(String, String, String, String)> = Vec::new();
+
+    for (name, m) in &corpus {
+        for (what, mutant) in mutants(m) {
+            calls += 1;
+            *LAST_PANIC_FILE.lock().unwrap() = None;
+            let r = catch_unwind(AssertUnwindSafe(|| {
+                let a = region::host_arena_supplement_bytes(&mutant);
+                let b = region::persistent_supplement_bytes(&mutant);
+                // Per-chunk planners, driven at an index that EXISTS and one
+                // that does not, because an out-of-range index is exactly what a
+                // host with a stale entry point would pass.
+                let c = region::region_total_bytes(&mutant, 0, 0);
+                let d = region::region_total_bytes(&mutant, usize::MAX, 0);
+                let e = region::plan_call_site_regions(&mutant, 0).len() as u32;
+                let f = region::plan_call_site_regions(&mutant, usize::MAX).len() as u32;
+                let g = keleusma_native::delegated_suspension_subject(&mutant).is_some() as u32;
+                a + b + c + d + e + f + g
+            }));
+            match r {
+                Ok(total) => {
+                    if total > 0 {
+                        nonzero += 1;
+                    }
+                }
+                Err(e) => {
+                    let msg = e
+                        .downcast_ref::<String>()
+                        .cloned()
+                        .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
+                        .unwrap_or_else(|| "non-string panic".to_string());
+                    let file = LAST_PANIC_FILE
+                        .lock()
+                        .unwrap()
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_string());
+                    panics.push((name.clone(), what, file, msg.chars().take(110).collect()));
+                }
+            }
+        }
+    }
+
+    println!("\n================ HOST-FACING PLANNERS ON MALFORMED INPUT");
+    println!("  planner calls          : {calls}");
+    println!("  returning a non-zero size : {nonzero}");
+    println!("  PANICKED               : {}", panics.len());
+    for (n, w, f, m) in panics.iter().take(8) {
+        println!("    {n} :: {w}\n      [{f}] {m}");
+    }
+    println!("================\n");
+
+    assert!(
+        calls > 100,
+        "only {calls} planner calls were made, too few to describe their behaviour"
+    );
+    assert!(
+        nonzero > 0,
+        "every planner call returned zero for every mutant, so this exercised \
+         nothing but early returns and its clean result means nothing"
+    );
+    assert!(
+        panics.is_empty(),
+        "{} of {calls} planner calls PANICKED. A host calls these to SIZE THE \
+         BUFFERS it will pass in, so this is reached without lowering anything. \
+         First: {:?}",
+        panics.len(),
+        panics.first()
     );
 }
