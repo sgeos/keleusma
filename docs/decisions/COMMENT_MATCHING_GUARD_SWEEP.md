@@ -19,19 +19,19 @@ punctuation. That property, not inspection, produced the list.
 
 | file | what it does | verdict |
 |---|---|---|
-| `call_chunk_index_limit` | ABSENCE: no site may use the old radix | **repaired** — string-aware strip |
-| `op_tag_tables` | anchor, then a bijection | **repaired** — one of its two extractions located on raw source |
-| `wire_self_compile_status` | PRESENCE of the historical repair | **repaired** — a comment satisfied it |
-| `stage_command_reach` | PRESENCE of three command declarations | **repaired** — a comment satisfied them |
-| `composite_escape_routes` | anchor on the opcode enum | **repaired** |
-| `forest_child_channels` | anchor on the body struct | **repaired** |
-| `forward_data_reference` | two anchors feeding an ORDERING claim | **repaired** |
-| `selfhost_bare_for` | ABSENCE of a removed refusal, plus a window | **repaired** |
-| `selfhost_driver_parity` | COUNTS seeding calls | **repaired** |
-| `consts_region_composition` | line prefix via `trim_start().starts_with` | **safe by construction** |
-| `selfhost_parse` | line prefix | **safe by construction** |
-| `selfhost_typecheck` | line prefix, and sources it defines itself | **safe by construction** |
-| `reconstruct_failure_modes` | searches ERROR MESSAGES, not source | **not in the class** |
+| `tests/call_chunk_index_limit.rs` | ABSENCE: no site may use the old radix | **repaired** — string-aware strip |
+| `tests/op_tag_tables.rs` | anchor, then a bijection | **repaired** — one of its two extractions located on raw source |
+| `tests/wire_self_compile_status.rs` | PRESENCE of the historical repair | **repaired** — a comment satisfied it |
+| `tests/stage_command_reach.rs` | PRESENCE of three command declarations | **repaired** — a comment satisfied them |
+| `tests/composite_escape_routes.rs` | anchor on the opcode enum | **repaired** |
+| `tests/forest_child_channels.rs` | anchor on the body struct | **repaired** |
+| `tests/forward_data_reference.rs` | two anchors feeding an ORDERING claim | **repaired** |
+| `tests/selfhost_bare_for.rs` | ABSENCE of a removed refusal, plus a window | **repaired** |
+| `tests/selfhost_driver_parity.rs` | COUNTS seeding calls | **repaired** |
+| `tests/consts_region_composition.rs` | line prefix via `trim_start().starts_with` | **safe by construction** |
+| `tests/selfhost_parse.rs` | line prefix | **safe by construction** |
+| `tests/selfhost_typecheck.rs` | line prefix, and sources it defines itself | **safe by construction** |
+| `tests/reconstruct_failure_modes.rs` | searches ERROR MESSAGES, not source | **not in the class** |
 
 **A line-prefix search is safe because a comment line begins with `//`** and therefore cannot match
 a pattern that must start the trimmed line. That is a property of the search, not a judgement about
@@ -49,7 +49,7 @@ directions.
 | **anchor** | the anchor goes missing and the `expect` **fails loudly** |
 | **COUNT** | a phantom or a miss, both **loud** as a mismatch |
 
-Only `call_chunk_index_limit` needs a string-aware strip, because truncating inside `"http://a"`
+Only `tests/call_chunk_index_limit.rs` needs a string-aware strip, because truncating inside `"http://a"`
 would drop a real occurrence and its assertion is the one where that is silent. The rest fail
 loudly, so the naive form is correct in each.
 
