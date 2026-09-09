@@ -191,34 +191,43 @@ fn an_operand_stacked_beneath_the_yield_agrees() {
     );
 }
 
-/// **A yield inside a branch WITH CODE AFTER IT — REFUSED, and that is the
-/// designed answer rather than a gap.**
+/// **A RESUME POINT THAT IS ALSO A BRANCH TARGET — inverted, and it took a
+/// restructure rather than a relaxation.**
 ///
-/// Its resume point lands on the `Op::Else`, so the resume edge (empty stack) and
-/// the fall-through (carrying the branch's value) disagree about the operand
-/// stack. Reconciling them is a spill question, and this backend refuses rather
-/// than inventing a layout the differential could not vouch for.
+/// This asserted refusal, on the reading that the resume edge arrives with an
+/// empty operand stack while the fall-through carries the branch's value, so the
+/// two "disagree" and reconciling them was a spill question.
 ///
-/// # A first version of this test asserted the wrong thing
+/// **Measured on the ops, they agree.** For this subject:
 ///
-/// It used `if t > 0 { yield t } else { yield 0 }` and expected agreement. Yields
-/// in tail position of both arms are DEGENERATE, already handled by the existing
-/// path, and that chunk carries no arena pointers at all — **the signature
-/// assertion caught it** rather than letting this file claim credit for a shape it
-/// never exercised.
+/// ```text
+///  9 Yield          <- resume point 10
+/// 10 Else(13)       <- branches to 13
+/// 12 Yield          <- resume point 13   *** also the Else target ***
+/// 13 EndIf
+/// ```
+///
+/// Both edges reach op 13 at depth ONE: the then-arm's `Else` carries the
+/// branch's value, and the resume edge delivers the resumed value. The
+/// disagreement was an artefact of the entry dispatch entering op 13 directly and
+/// noting it at depth zero, with the resume value pushed inside the block
+/// afterwards.
+///
+/// The resume edge now enters a dedicated block that delivers the operands and
+/// branches in at the depth every other edge carries. **Nothing was relaxed** —
+/// the depth note is still an assertion, and it still fires on a real
+/// disagreement.
+///
+/// # Why the replies alternate
+///
+/// A subject that took one arm every time would exercise one resume point and
+/// prove nothing about the join. These cross the branch on successive
+/// iterations, so both arms' suspensions and the shared tail are all driven.
 #[test]
-fn a_yield_inside_an_if_with_a_tail_is_refused() {
-    let src =
-        "loop main(t: Word) -> Word { if t > 0 { let a = yield t; yield a } else { yield 0 } }\n";
-    let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
-    let r = module_refusals(&m, LowerOptions::default());
-    assert!(
-        !r.is_empty(),
-        "a suspension inside an expression now lowers. If a spill layout was added, \
-         this must become an AGREEMENT test rather than being deleted."
-    );
-    assert!(
-        r.iter().any(|(_, e)| e.to_string().contains("operand")),
-        "refused, but not for the operand-stack reason this file is about: {r:?}"
+fn a_resume_point_that_is_also_a_branch_target_agrees() {
+    common::assert_general_stream_agrees(
+        "loop main(t: Word) -> Word { if t > 0 { let a = yield t; yield a } else { yield 0 } }",
+        7,
+        &[11, -3, 20, -5, 31, 40],
     );
 }

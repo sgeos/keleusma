@@ -522,16 +522,31 @@ fn nested_yields_in_tail_position_agree_in_sequence() {
     );
 }
 
-/// MUST-NOT-FIRE for the tail-position rule.
+/// **INVERTED 2026-09-09. The rule this guarded has been superseded, and the
+/// shape it pinned as refused now agrees.**
 ///
-/// The rule admits a yield only when nothing but block delimiters and one
-/// `PopN(1)` runs between it and `Reset`. These do work after the suspension, so
-/// each must still be refused. Without them the rule could be relaxed to "any
-/// nested yield" and nothing would catch it.
+/// It was the must-not-fire for the TAIL-POSITION rule, which admitted a yield
+/// only when nothing but block delimiters and one `PopN(1)` ran between it and
+/// `Reset`. This subject does work after the suspension inside a branch, so the
+/// rule refused it — correctly, for that rule.
+///
+/// **That rule governs the DEGENERATE path only.** The general resumable path
+/// returns at each yield and re-enters, so post-suspension work is exactly what
+/// it is for; the last thing standing in this subject's way was the resume point
+/// colliding with a branch target, and the resume edge now enters its own block.
+///
+/// The case is inverted rather than deleted, and it keeps its subject. A
+/// must-not-fire that stops firing because the rule changed is a decision, and
+/// deleting it would leave no record that the boundary moved on purpose.
+///
+/// The replies cross the branch on successive iterations, so both arms run.
 #[test]
-fn yields_not_in_tail_position_are_still_refused() {
-    // Work after the yield inside the branch: the `+ 1` runs post-suspension.
-    assert_refused("loop main(a: Word) -> Word { if a > 0 { (yield a) + 1 } else { yield 0 } }");
+fn work_after_a_suspension_inside_a_branch_agrees() {
+    common::assert_general_stream_agrees(
+        "loop main(a: Word) -> Word { if a > 0 { (yield a) + 1 } else { yield 0 } }",
+        7,
+        &[11, -3, 20, -5, 31],
+    );
 }
 
 /// The shape the tail-position rule refused until the allowlist was replaced by

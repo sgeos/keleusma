@@ -3078,34 +3078,28 @@ fn lower_chunk_body<'ctx>(
     } else {
         Vec::new()
     };
-    // **A RESUME POINT THAT IS ALSO A BRANCH TARGET IS REFUSED, NOT UNIFIED.**
+    // **A RESUME POINT MAY ALSO BE A BRANCH TARGET, AND IT IS NO LONGER REFUSED.**
     //
-    // The two paths into such a block disagree about the operand stack: the
-    // resume edge arrives with nothing on it, while the fall-through carries the
-    // branch's value. Reconciling them means deciding what the suspended
-    // expression's context was, which is a spill question — and inventing an
-    // answer is how a differential oracle gets a wrong result rather than a
-    // refusal.
+    // It was, on the reading that the two edges "disagree about the operand
+    // stack: the resume edge arrives with nothing on it, while the fall-through
+    // carries the branch's value". **Measured on the actual ops, they AGREE.**
+    // For `if t > 0 { let a = yield t; yield a } else { yield 0 }`:
     //
-    // Found by measurement: `if t > 0 { let a = yield t; yield a } else { .. }`
-    // put a resume point exactly on the `Op::Else`, and the depth note asserted
-    // `0` against `1`.
-    if general_stream {
-        let branch_targets: std::collections::BTreeSet<usize> = targets.iter().copied().collect();
-        for &y in &yield_positions {
-            if branch_targets.contains(&(y + 1)) {
-                return Err(LowerError::unsupported_op(
-                    "Yield",
-                    format!(
-                        "the resume point after the yield at op {y} is also a branch target, \
-                         so the resume edge and the fall-through disagree about the operand \
-                         stack; no spill layout is defined for a suspension inside an \
-                         expression"
-                    ),
-                ));
-            }
-        }
-    }
+    // ```text
+    //  9 Yield          <- resume point 10
+    // 10 Else(13)       <- branches to 13
+    // 12 Yield          <- resume point 13   *** also the Else target ***
+    // 13 EndIf
+    // ```
+    //
+    // Both edges reach op 13 at depth ONE: the then-arm's `Else` carries the
+    // branch's value, and the resume edge delivers the resumed value. The
+    // disagreement was an artefact of the DISPATCH noting the resume point at
+    // depth zero and the block then pushing the resume value inside itself.
+    //
+    // The resume edge now gets its own block, which delivers the operands and
+    // branches to the shared block at the depth the branch edge already carries.
+    // See the `Op::Yield` arm.
 
     let loop_top: Option<usize> = match (general_stream, stream_pos) {
         (true, Some(p)) if p + 1 < chunk.ops.len() => {
@@ -3125,6 +3119,14 @@ fn lower_chunk_body<'ctx>(
     let blocks: BTreeMap<usize, BasicBlock> = targets
         .iter()
         .map(|&t| (t, ctx.append_basic_block(func, &format!("op{t}"))))
+        .collect();
+    // One block per suspension, entered ONLY from the entry dispatch. It is
+    // filled in when the walk reaches the corresponding `Op::Yield`, because the
+    // operands it must deliver are known only then.
+    let resume_blocks: BTreeMap<usize, BasicBlock> = yield_positions
+        .iter()
+        .filter(|&&y| y + 1 < chunk.ops.len())
+        .map(|&y| (y, ctx.append_basic_block(func, &format!("resume{y}"))))
         .collect();
 
     // Parameter widths come from the chunk's declared signature, which is the
@@ -3284,8 +3286,13 @@ fn lower_chunk_body<'ctx>(
         let mut cases: Vec<(inkwell::values::IntValue<'ctx>, BasicBlock<'ctx>)> = Vec::new();
         for (k, &y) in yield_positions.iter().enumerate() {
             if y + 1 < chunk.ops.len() {
-                cases.push((i64t.const_int((k + 1) as u64, false), blocks[&(y + 1)]));
-                note!(y + 1, 0);
+                // **THE DISPATCH ENTERS A DEDICATED BLOCK, NOT THE SHARED ONE.**
+                // The resume block delivers the operands and then branches to
+                // `y + 1` at the depth every other edge carries, so the shared
+                // block has ONE depth agreed by all its predecessors. Entering
+                // `y + 1` directly is what made a resume point that is also a
+                // branch target look irreconcilable.
+                cases.push((i64t.const_int((k + 1) as u64, false), resume_blocks[&y]));
             }
         }
         note!(top, 0);
@@ -3303,76 +3310,12 @@ fn lower_chunk_body<'ctx>(
                 Some(&d) => {
                     st.depth = d;
                     dead = false;
-                    // **A RESUME POINT RECEIVES THE RESUME VALUE AS PARAMETER 0**,
-                    // which becomes the yield expression's result — the same
-                    // convention the runtime uses, where `resume` writes slot 0
-                    // and pushes it as the suspended frame's yield value.
-                    //
-                    // Reachable ONLY from the dispatch: the yield before it
-                    // returned, so nothing falls through into this block.
-                    if general_stream && i > 0 && matches!(chunk.ops[i - 1], Op::Yield) {
-                        // **RELOAD BENEATH, THEN THE RESUME VALUE ON TOP.** The
-                        // stack at the yield was `[e0 .. e_{d-2}, yielded]`, so
-                        // the entries come back bottom-first and the resume value
-                        // takes the place the yielded value occupied. Reversing
-                        // this returns the operands upside down, and nothing but
-                        // a whole-sequence comparison would notice.
-                        if let Some(saved) = spilled.get(&(i - 1)).cloned() {
-                            let fb = stream_frame_base
-                                .expect("a general stream addresses its frame from the region");
-                            for (slot, (w, k)) in saved.into_iter().enumerate() {
-                                let addr = unsafe {
-                                    st.b.build_in_bounds_gep(
-                                        i8t,
-                                        fb,
-                                        &[i64t.const_int(spill_off + (slot as u64) * 8, false)],
-                                        "spillrp",
-                                    )
-                                    .unwrap()
-                                };
-                                let lv =
-                                    st.b.build_load(i64t, addr, "spillr")
-                                        .unwrap()
-                                        .into_int_value();
-                                lv.as_instruction()
-                                    .expect("a load is an instruction")
-                                    .set_alignment(1)
-                                    .expect("1 is a power of two");
-                                st.push_k(lv, w, k);
-                            }
-                        }
-                        let rv = func
-                            .get_nth_param(0)
-                            .expect("a stream declares its resume parameter")
-                            .into_int_value();
-                        // **THE RESUME VALUE'S WIDTH IS DECLARED, NOT UNKNOWN.**
-                        //
-                        // It was pushed at `Width::Unknown` until 2026-09-08, and
-                        // that was an inconsistency rather than conservatism: the
-                        // runtime's `resume` writes slot 0 AND NOTHING ELSE, and
-                        // this same function already seeds `local_widths[0]` from
-                        // `width_of_tag(chunk.param_types[0])`, on the ground that
-                        // the declared signature is the only place widths are
-                        // stated. The identical value was reaching the local at a
-                        // declared width and the operand stack at none.
-                        //
-                        // **What the unknown width cost**: a composite built from
-                        // a resumed value was refused for an operand of unknown
-                        // width, which is what kept a composite-yielding stream
-                        // out of the suspension differential entirely.
-                        //
-                        // Falls back to `Unknown` rather than assuming a word when
-                        // a chunk declares no parameter type. Guessing a width is
-                        // how this backend produces a silently wrong value instead
-                        // of a fault.
-                        let rw = chunk
-                            .param_types
-                            .first()
-                            .copied()
-                            .map(width_of_tag)
-                            .unwrap_or(Width::Unknown);
-                        st.push_w(rv, rw);
-                    }
+                    // **NOTHING IS DELIVERED HERE.** The resume edge
+                    // enters its own block, which pushes the operands and then
+                    // branches in at this depth. Doing it inside the shared block
+                    // gave the block two different depths depending on which edge
+                    // entered it, which is what made a resume point that is also a
+                    // branch target look irreconcilable.
                 }
                 // A block target no edge reaches. The exit of a `loop` with no
                 // `break` is the real case: it is a legitimate program, not a
@@ -5864,6 +5807,61 @@ fn lower_chunk_body<'ctx>(
                     }
                 }
                 spilled.insert(i, saved);
+                // **FILL THIS SUSPENSION'S RESUME BLOCK NOW**, while the
+                // operands it must deliver are known. It pushes them and branches
+                // to `i + 1` at the resulting depth, so the shared block agrees
+                // with every other edge entering it.
+                //
+                // The builder position and the operand depth are SAVED AND
+                // RESTORED around this: a leaked position writes the return
+                // instruction below into the resume block instead of here.
+                if let Some(&rb) = resume_blocks.get(&i) {
+                    let here = st.b.get_insert_block().expect("mid-chunk");
+                    let saved_depth = st.depth;
+                    st.b.position_at_end(rb);
+                    st.depth = 0;
+                    if let Some(saved) = spilled.get(&i).cloned() {
+                        let fb = stream_frame_base
+                            .expect("a general stream addresses its frame from the region");
+                        for (slot, (w, k)) in saved.into_iter().enumerate() {
+                            let addr = unsafe {
+                                st.b.build_in_bounds_gep(
+                                    i8t,
+                                    fb,
+                                    &[i64t.const_int(spill_off + (slot as u64) * 8, false)],
+                                    "spillrp",
+                                )
+                                .unwrap()
+                            };
+                            let lv =
+                                st.b.build_load(i64t, addr, "spillr")
+                                    .unwrap()
+                                    .into_int_value();
+                            lv.as_instruction()
+                                .expect("a load is an instruction")
+                                .set_alignment(1)
+                                .expect("1 is a power of two");
+                            st.push_k(lv, w, k);
+                        }
+                    }
+                    let rv = func
+                        .get_nth_param(0)
+                        .expect("a stream declares its resume parameter")
+                        .into_int_value();
+                    st.push_w(
+                        rv,
+                        chunk
+                            .param_types
+                            .first()
+                            .copied()
+                            .map(width_of_tag)
+                            .unwrap_or(Width::Unknown),
+                    );
+                    note!(i + 1, st.depth);
+                    st.b.build_unconditional_branch(blocks[&(i + 1)]).unwrap();
+                    st.depth = saved_depth;
+                    st.b.position_at_end(here);
+                }
                 let k = yield_positions
                     .iter()
                     .position(|&y| y == i)

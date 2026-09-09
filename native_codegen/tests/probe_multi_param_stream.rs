@@ -196,3 +196,29 @@ fn the_runtime_faults_on_a_second_parameter_after_the_rewind() {
          the cause is not slot 1 being cleared: {f}"
     );
 }
+
+/// **WHY IS A RESUME POINT ALSO A BRANCH TARGET, AND AT WHAT DEPTHS?**
+///
+/// The last refusal that is a gap in this backend. Printed rather than reasoned
+/// about, because the previous two dispositions on this frontier were both
+/// settled by reading what the ops actually are.
+#[test]
+fn what_the_branch_target_collision_looks_like() {
+    use keleusma::bytecode::Op;
+    let src =
+        "loop main(t: Word) -> Word { if t > 0 { let a = yield t; yield a } else { yield 0 } }";
+    let m = try_compile(src).expect("compiles");
+    let entry = m.entry_point.expect("entry");
+    println!("\n================ THE JOIN SHAPE");
+    for (i, op) in m.chunks[entry].ops.iter().enumerate() {
+        let mark = match op {
+            Op::Yield => "  <- YIELD, so the next op is a RESUME point",
+            Op::If(t) | Op::Else(t) | Op::EndLoop(t) | Op::Break(t) | Op::BreakIf(t) => {
+                Box::leak(format!("  <- branches to op {t}").into_boxed_str())
+            }
+            _ => "",
+        };
+        println!("  {i:3} {op:?}{mark}");
+    }
+    println!("================\n");
+}
