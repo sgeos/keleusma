@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-09 (session 65) — the three composite kinds of the type channel withheld with witnesses, and the float flat-field class audited clean
+**Date**: 2026-09-09 (session 65) — composite kinds withheld with witnesses, and the module-versus-runtime width skew audited clean on all three axes
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,29 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## THIRD INCREMENT: ONE PROPERTY, THREE AXES, AND A REFUTED HYPOTHESIS
+
+The float result was not a finding about floats. **Three widths are carried independently — word,
+float, address — and each has two possible authorities**: the module header the compiler baked every
+offset from, and the runtime type parameter of `GenericVm`. The load check does not force agreement.
+It refuses a module whose width is **wider** than the runtime and admits one that is **narrower**, so
+a module compiled for a small target and run on a large host is supported — and is where a second
+authority becomes visible. **That is how the opaque defect presented.**
+
+**The existing skew tests cannot see it.** Every configuration in `composite_width_skew.rs` is
+matched; a matched pair cannot expose a second authority because both readings coincide.
+
+**Both remaining axes are clean**, including the address axis the original defect lived on, which had
+no coverage in this form. Word: 3 of 6 catch the mutation. Address: 2 of 3. **Each mutation fails
+only its own axis**, so the two tests are independent rather than one guard firing twice.
+
+**A probable hypothesis was tested and refuted.** Two word cases survive the mutation. Boxing was the
+likely explanation — a sibling test records that a boxed composite agrees on both runtimes — and it
+is **excluded**: all four shapes are flat at both module widths. Constant folding is excluded too.
+The cause is unestablished and the test says so, recording what was ruled out. Had I not checked, a
+plausible wrong cause would have entered the tree, which is how two of the four `wire.kel` causes
+were first diagnosed wrongly.
 
 ## SECOND INCREMENT: AN AUDIT'S SCOPE ARGUMENT WAS AN INSTANCE OF THE ERROR IT AUDITED
 

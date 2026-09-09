@@ -10,6 +10,25 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-09, session 65, third increment). ONE PROPERTY, THREE AXES.**
+>
+> The float audit was one instance of a general property: **three widths are carried independently
+> -- word, float, address -- and each has TWO POSSIBLE AUTHORITIES**, the module header the compiler
+> baked offsets from and the runtime type parameter of `GenericVm`. The load check refuses a module
+> WIDER than the runtime and admits one that is NARROWER, so a module compiled small and run on a
+> large host is supported and is where a second authority becomes visible. **That is how the opaque
+> defect presented.**
+>
+> **The existing skew tests cannot see it**: every configuration in `composite_width_skew.rs` is
+> MATCHED, and a matched pair cannot expose a second authority. Both remaining axes measure CLEAN,
+> including the address axis the original defect lived on, which had no coverage in this form.
+> Word: 3 of 6 cases catch the mutation. Address: 2 of 3. Each mutation fails only its own axis.
+>
+> **A probable hypothesis about the survivors was tested and refuted.** Two word cases read
+> correctly under the mutation; boxing was the likely cause and is EXCLUDED -- all four shapes are
+> flat at both module widths -- as is constant folding. The cause is unestablished and the document
+> says so, recording what was ruled out rather than guessing a third.
+
 > **Currency note (2026-09-09, session 65, second increment). AN AUDIT'S SCOPE ARGUMENT WAS WRONG;
 > THE CLASS IT EXCLUDED IS CLEAN.**
 >
