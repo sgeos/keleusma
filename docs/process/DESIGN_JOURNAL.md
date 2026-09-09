@@ -13,6 +13,62 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-09 (third) — one property, three axes, and a refuted hypothesis
+
+**The increment.** The float audit was not a finding about floats. It was one instance of a general
+property: **three widths are carried independently — word, float and address — and each has two
+possible authorities**, the module header the compiler baked offsets from, and the runtime type
+parameter of `GenericVm`. The load check does not force them to agree; it refuses a module whose
+width is WIDER than the runtime and admits one that is NARROWER.
+
+So a module compiled for a small target and run on a large host is a supported configuration, and it
+is where a second authority becomes visible. **That is how the opaque defect presented.**
+
+**The existing skew tests cannot see this.** Every configuration in `composite_width_skew.rs` is
+MATCHED — a sixteen-bit-address module on a `u16` runtime. A matched pair cannot expose a second
+authority, because the two readings coincide. The skew that matters here is between the module and
+the runtime, not between two widths of one target.
+
+**Both remaining axes measure clean**, including the address axis the original defect lived on,
+which had no coverage in this form.
+
+### REACH, AND THE ORTHOGONALITY THAT MAKES IT TWO TESTS RATHER THAN ONE
+
+| axis | cases | caught the width mutation |
+|---|---|---|
+| word | 6 | 3 |
+| address | 3 | 2 |
+
+Each mutation fails **only its own axis**. That is the check that the two tests are independent
+rather than one guard firing twice, and it is cheap to run and easy to omit.
+
+### THE SURVIVORS: A HYPOTHESIS THAT WAS PROBABLE, TESTED, AND FALSE
+
+Two word cases — an array element and a byte-then-word struct — read correctly under the mutation. I
+recorded that as unexplained, then went back for it, because **an unexplained survivor reads as a
+missing guard and sends the next reader hunting**.
+
+| hypothesis | verdict |
+|---|---|
+| the read is constant-folded, so no flat body is touched | **excluded** — an array built from a host call survives identically |
+| the composite is BOXED, so both widths agree | **excluded** — all four shapes report a FLAT body at both module widths |
+
+**The second was the likely one and it was wrong.** `composite_width_skew.rs` records precisely that
+a boxed composite agrees on both runtimes, and asserts flatness for that reason — so the explanation
+was sitting in a sibling test, already written down, and it does not apply. Had I not checked, a
+plausible wrong cause would have gone into the tree, which is exactly how two of the four `wire.kel`
+causes were first diagnosed wrongly.
+
+**The cause remains unestablished, and the document says so.** What is recorded is what has been
+ruled out. Two excluded hypotheses are worth more to the next reader than a confident third guess.
+
+### THE SHAPE OF THIS SESSION'S THREE INCREMENTS
+
+All three produced **measured negatives**: the composite kinds do not move, the float class is
+clean, the word and address axes are clean. Each carries a guard shown able to fail. A negative with
+demonstrated reach is a result; a negative without one is silence dressed as a result, and the first
+probe written for the float axis was exactly that until it was mutated.
+
 ## 2026-09-09 (second) — an audit's scope argument was an instance of the error it was auditing
 
 **The increment.** `FLAT_FIELD_WIDTH_AUDIT.md` audited every site that sizes an **opaque** flat
