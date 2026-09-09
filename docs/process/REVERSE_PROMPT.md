@@ -26,6 +26,35 @@ They are the reason the large work is blocked, and nothing below decides any of 
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
 
+## EIGHTH INCREMENT: FOUR MORE, AND THE DEFECT COMMITTED INSIDE ITS OWN FIX
+
+**A third silent false pass.** `tests/stage_command_reach.rs` has a helper that strips comments and
+whose doc cites *"four recorded instances of a guard firing on the prose that explains it"*, while
+three **presence** assertions beside it searched the raw driver. Change `CMD_STEP`'s value, leave the
+original text in a comment, and the test reports **2 passed, 0 failed**.
+
+**Three files now**, each documenting the hazard in its own prose while guarding one of two readers.
+
+**Three anchor-locates repaired.** One historical note failed three tests in
+`composite_escape_routes.rs` with nothing wrong in the source it read.
+**`forward_data_reference.rs` is the subtle one**: its positions feed an `at_fn < at_blk` ordering
+assertion, so a comment can change which declaration appears first and make the test assert the wrong
+thing about the stage rather than fail loudly.
+
+**I committed the same defect inside its own fix** — computing one offset from the stripped copy
+while the slice beside it indexed the raw string. Caught by running the tests, not by reading the
+edit. **That is the most useful result of the increment**: it shows the class is not carelessness
+that attention prevents, which is why a mechanical sweep found instances that four documented prior
+incidents did not.
+
+**Two controls measured nothing** because they did not compile — renaming a constant used elsewhere,
+and adding an opcode to an exhaustively matched enum. Both replaced by controls that build; the
+second shows the extraction panics loudly rather than returning an empty list.
+
+**Seven guards examined.** Only the radix guard needs the string-aware strip, its assertion being an
+**absence** one; the other six fail loudly and the naive form is correct. Deliberately not unified —
+sharing a helper would add cost to six and remove a needed guard from one.
+
 ## SEVENTH INCREMENT: THE SWEEP, AND A FALSE PASS ON THE HISTORICAL DEFECT
 
 Two instances of the comment-matching class were found by **reading**. Asking the class question

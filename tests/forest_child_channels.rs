@@ -36,15 +36,16 @@ const DRIVER: &str = include_str!("../src/selfhost/mod.rs");
 
 /// The fields of the flattened-body struct, as the driver declares them.
 fn body_fields() -> Vec<(String, String)> {
-    let at = DRIVER
+    let driver = code_only(DRIVER);
+    let at = driver
         .find("pub struct Body {")
         .expect("the driver declares the flattened body");
-    let open = at + DRIVER[at..].find('{').expect("a brace");
+    let open = at + driver[at..].find('{').expect("a brace");
     let close = open
-        + DRIVER[open..]
+        + driver[open..]
             .find("\n}")
             .expect("the struct closes at column zero");
-    DRIVER[open + 1..close]
+    driver[open + 1..close]
         .lines()
         .filter_map(|l| {
             let t = l.trim().trim_end_matches(',');
@@ -144,4 +145,24 @@ fn a_calls_arguments_are_not_in_the_two_child_fields() {
         "the pipeline no longer reports both call sites, which would mean the forest itself is \
          missing them rather than a naive walk being unable to reach them: {sites:?}"
     );
+}
+
+/// Source with `//` line comments removed, so an anchor search matches CODE.
+///
+/// **Locating on RAW source is the defect this removes.** A comment naming the anchor sends the
+/// extraction to the comment; measured elsewhere in this repository, one such line failed four
+/// tests in a file with nothing wrong in the code it read.
+///
+/// Truncating at the first `//` rather than tracking string literals is correct for an anchor
+/// search: an early truncation can only make the anchor go missing, which fails loudly through the
+/// `expect` below. `tests/call_chunk_index_limit.rs` needs a string-aware strip instead, because its
+/// assertion is an ABSENCE one where the same truncation lets a real offender pass silently.
+fn code_only(src: &str) -> String {
+    src.lines()
+        .map(|l| match l.find("//") {
+            Some(i) => &l[..i],
+            None => l,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }

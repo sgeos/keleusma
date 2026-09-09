@@ -124,10 +124,15 @@ fn verify_types_kel_is_refused_at_the_chunk_that_reads_a_later_block() {
 
     // The structural claim the diagnosis rests on, checked against the source rather than
     // remembered: `ty_direct` reads `tyb`, and `tyb` is declared after it.
-    let at_fn = VERIFY_TYPES
+    // **THE ORDERING CLAIM BELOW IS THE REASON THIS STRIPS FIRST.** These positions feed an
+    // `at_fn < at_blk` assertion, so a comment naming either anchor does not merely break an
+    // extraction -- it moves a position and can change which declaration appears to come first.
+    // That would make this test assert the wrong thing about the stage rather than fail loudly.
+    let verify_types = code_only(VERIFY_TYPES);
+    let at_fn = verify_types
         .find("fn ty_direct(")
         .expect("verify_types.kel declares ty_direct");
-    let at_blk = VERIFY_TYPES
+    let at_blk = verify_types
         .find("private data tyb {")
         .expect("verify_types.kel declares the tyb block");
     assert!(
@@ -135,11 +140,11 @@ fn verify_types_kel_is_refused_at_the_chunk_that_reads_a_later_block() {
         "`tyb` is no longer declared after `ty_direct`, so the mechanism recorded here cannot \
          be what refuses this file"
     );
-    let body_end = VERIFY_TYPES[at_fn..]
+    let body_end = verify_types[at_fn..]
         .find("\n}")
         .expect("ty_direct has a body");
     assert!(
-        VERIFY_TYPES[at_fn..at_fn + body_end].contains("tyb."),
+        verify_types[at_fn..at_fn + body_end].contains("tyb."),
         "`ty_direct` no longer reads the `tyb` block"
     );
 }
@@ -177,4 +182,24 @@ fn the_corpus_covers_every_stage_except_the_one_this_file_explains() {
          JOINED it, this whole file is retired; if another stage has LEFT it, that is a \
          regression and needs its own explanation"
     );
+}
+
+/// Source with `//` line comments removed, so an anchor search matches CODE.
+///
+/// **Locating on RAW source is the defect this removes.** A comment naming the anchor sends the
+/// extraction to the comment; measured elsewhere in this repository, one such line failed four
+/// tests in a file with nothing wrong in the code it read.
+///
+/// Truncating at the first `//` rather than tracking string literals is correct for an anchor
+/// search: an early truncation can only make the anchor go missing, which fails loudly through the
+/// `expect` below. `tests/call_chunk_index_limit.rs` needs a string-aware strip instead, because its
+/// assertion is an ABSENCE one where the same truncation lets a real offender pass silently.
+fn code_only(src: &str) -> String {
+    src.lines()
+        .map(|l| match l.find("//") {
+            Some(i) => &l[..i],
+            None => l,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }

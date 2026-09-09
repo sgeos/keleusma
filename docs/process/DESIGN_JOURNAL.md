@@ -13,6 +13,60 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-09 (eighth) — four more, a third file guarding one of two readers, and the defect committed inside its own fix
+
+**A third silent false pass.** `tests/stage_command_reach.rs` has `driver_command_numbers`, which
+strips comments and whose doc cites *"four recorded instances of a guard firing on the prose that
+explains it."* Beside it, three PRESENCE assertions searched the **raw** driver. Change `CMD_STEP`
+to a different value, leave `// was: CMD_STEP: i64 = 175;` next to it, and the test reports
+**2 passed, 0 failed**.
+
+**That is three files, each documenting the hazard in its own prose while guarding one of two
+readers** — `op_tag_tables`, `wire_self_compile_status`, and this one. **The failure is not
+ignorance of the hazard.**
+
+### THREE ANCHOR-LOCATES, AND ONE OF THEM CAN ASSERT THE WRONG THING RATHER THAN FAIL
+
+`composite_escape_routes`, `forest_child_channels` and `forward_data_reference` searched raw source
+for a declaration anchor and extracted from wherever they found it. Measured: one historical note
+reading ``// `pub enum Op {` once carried 69 variants`` failed **three** tests with nothing wrong in
+`src/bytecode.rs`.
+
+**`forward_data_reference` is the subtle one.** Its two positions feed an `at_fn < at_blk` ORDERING
+assertion, so a comment naming either anchor moves a position and can change which declaration
+appears to come first. That makes the test assert the wrong thing about the stage rather than fail.
+
+### I COMMITTED THE DEFECT INSIDE ITS OWN FIX
+
+My first edit to that file computed `body_end` from the STRIPPED copy while the slice beside it
+still indexed the RAW string. Mixed offsets, and the test failed.
+
+**That is the same one-of-two-sites shape the edit existed to remove.** It was caught by running the
+tests, not by reading the edit. **This is the most useful thing the increment produced**: it shows
+the class is not carelessness that attention prevents, which is why a mechanical sweep found
+instances that four documented prior incidents did not.
+
+### TWO CONTROLS THAT MEASURED NOTHING, AND WHAT REPLACED THEM
+
+| attempted control | why it measured nothing |
+|---|---|
+| rename `CMD_STEP` | used elsewhere, so the test failed to BUILD — not a verdict about the guard |
+| add an opcode to `Op` | broke exhaustive matches elsewhere, so the test never built |
+
+Both were replaced by controls that compile: changing a constant's VALUE, and pointing an anchor at
+a name that does not exist. The second shows the extraction **panics loudly** rather than returning
+an empty list, which is the property that mattered.
+
+**And a process slip**: `git checkout` to undo a control mutation reverted my own uncommitted fix in
+the same file. Re-applied and re-verified rather than assumed.
+
+### THE DIRECTION RULE NOW SPANS SEVEN GUARDS
+
+Only the radix guard needs the string-aware strip, because its assertion is an ABSENCE one where an
+early truncation lets a real offender pass silently. The other six fail loudly, so the naive form is
+correct in each. **They are deliberately not unified**, and each carries the comparison — sharing a
+helper would add cost to six and remove a needed guard from one.
+
 ## 2026-09-09 (seventh) — the sweep, and a false PASS on the historical defect
 
 **Two instances of the comment-matching class had been found by reading. This one asks the class
