@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-09 (session 65) — composite kinds withheld with witnesses, and the module-versus-runtime width skew audited clean on all three axes
+**Date**: 2026-09-09 (session 65) — composite kinds withheld with witnesses, the width skew audited clean on three axes, and a historical defect shape turned into a guard
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,37 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## FOURTH INCREMENT: A DEFECT SHAPE TURNED INTO A ONE-SECOND CHECK
+
+The first four increments produced measured negatives. This one took a defect that **actually
+happened** and asked whether its shape is mechanical.
+
+The `wire.kel` self-compilation failure's last cause was one line: `forin_count` was never added to
+the per-function reset that already cleared its own documented analogue `forlimit_count`, and it
+indexes an emitted record as `7 * forin_count`, so every function after the first emitted a record
+pointing past its own parts. **Finding it took prefix bisection, a rebuilt dependency chain, delta
+debugging and a five-line synthetic, with two of the four causes first diagnosed wrongly.**
+
+The shape is a grep, and `tests/selfhost_counter_reset.rs` now is one.
+
+**The class is clean** — three members, all in `parse.kel`. `aq_k` matched the dangerous shape on
+the first pass and reading its assignments cleared it: it is reset at both of its construct entry
+points, a **stricter** scope than per-function rather than a weaker one. Reporting it without
+reading those two lines would have been a false finding.
+
+**It deliberately does not check that a reset dominates its use.** That needs control-flow analysis
+it has no business doing, and the sound resets sit at two different scopes, so demanding either
+would flag the other.
+
+**Mutation-tested against the historical defect**: deleting the 2026-08-27 repair reproduces it and
+the guard names the field. A guard tested against a real past defect is a different object from one
+tested against an invented mutation — the invented one asks whether it *can* fail, the historical
+one whether it would have earned its cost.
+
+**Its own reach was checked**, because all three members sitting in one file reads like a broken
+scan. The accumulator half fires in all twelve stages; being multiplied into an index is what is
+rare, and `parse.kel` is the stage that emits records with packed arguments.
 
 ## THIRD INCREMENT: ONE PROPERTY, THREE AXES, AND A REFUTED HYPOTHESIS
 
