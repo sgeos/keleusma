@@ -10,6 +10,32 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-09, session 65, fourth increment). A DEFECT SHAPE TURNED INTO A CHECK.**
+>
+> The `wire.kel` self-compilation failure's last cause was one line: `forin_count` was never added
+> to the per-function reset that already cleared its documented analogue `forlimit_count`, and it
+> indexes a record as `7 * forin_count`. Finding it took prefix bisection, a rebuilt dependency
+> chain, delta debugging and a five-line synthetic, **with two of the four causes first diagnosed
+> wrongly**. The shape -- a field that accumulates, is multiplied into a record index, and is never
+> assigned zero -- is a grep, and `tests/selfhost_counter_reset.rs` now is one.
+>
+> **The class is clean.** Three members, all in `parse.kel`. `aq_k` matched the dangerous shape on
+> the first pass and was cleared by reading its assignments: it is reset at both construct entry
+> points, a STRICTER scope than per-function, not a weaker one.
+>
+> **The guard does not check that a reset DOMINATES its use** -- that needs control-flow analysis,
+> and the sound resets sit at two different scopes, so demanding either would flag the other. It
+> checks the weaker property that catches the actual defect.
+>
+> **Mutation-tested against the HISTORICAL defect**: deleting the 2026-08-27 repair reproduces it
+> and the guard names the field. A guard tested against a real past defect is a different object
+> from one tested against an invented mutation.
+>
+> **Its reach was checked too.** All three members sit in one file, which reads like a broken scan;
+> the accumulator half in fact fires in all twelve stages, and being multiplied into an index is
+> what is rare. `parse.kel` emits records with packed arguments, so the concentration follows from
+> what the stage does rather than from where the guard looked.
+
 > **Currency note (2026-09-09, session 65, third increment). ONE PROPERTY, THREE AXES.**
 >
 > The float audit was one instance of a general property: **three widths are carried independently

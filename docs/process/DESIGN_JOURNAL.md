@@ -13,6 +13,69 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-09 (fourth) — a defect shape turned into a one-second check
+
+**The increment.** Four increments this session produced measured negatives in the width and
+extraction space. This one changed class of target: instead of auditing where a defect might be, it
+took a defect that **actually happened** and asked whether its shape is mechanical.
+
+**It is.** `wire.kel` failed to self-compile byte-identically, and the last of four causes was one
+line: `forin_count`, the bare `for` form's program-order counter, was never added to the
+per-function reset that already cleared its own documented analogue `forlimit_count`. It indexes an
+emitted record's argument as `7 * forin_count`, so the second and every later function containing a
+bare `for` emitted a record pointing past its own parts.
+
+**That took prefix bisection, a rebuilt dependency chain, delta debugging and a five-line synthetic
+to find, and two of the four causes were first diagnosed wrongly along the way.** The shape —
+a field that accumulates and is then multiplied into a record index, and is never assigned zero —
+is a grep.
+
+### THE CLASS IS CLEAN, AND ONE MEMBER LOOKED LIKE A FINDING
+
+Three members, all in `parse.kel`. `forlimit_count` and `forin_count` are reset per function.
+**`aq_k` matched the dangerous shape on the first pass** — accumulates, multiplied into a slot
+index, absent from the per-function reset — and reading its assignments cleared it: it is reset at
+both of its construct entry points, which is a **stricter** scope than the per-function one, not a
+weaker one. Reporting it without reading those two lines would have been a false finding.
+
+### WHAT THE GUARD DELIBERATELY DOES NOT CHECK
+
+It does not check that a reset **dominates** its use. That needs control-flow analysis it has no
+business doing, and the sound resets here sit at two different scopes — per function for two
+counters, per construct for the third — so demanding either scope would flag the other. It checks
+the weaker property that catches the actual defect: a counter in this class is assigned zero
+somewhere in its own stage. **Before the repair, `forin_count` was assigned zero nowhere at all.**
+
+### THE MUTATION THAT MATTERS IS THE HISTORICAL ONE
+
+Deleting the 2026-08-27 repair reproduces the defect, and the guard names the field. Deleting the
+sibling's reset as well is caught too, and breaking the extraction trips the non-vacuity bound
+rather than passing silently.
+
+**A guard mutation-tested against a real historical defect is a different object from one tested
+against an invented mutation.** The invented mutation asks whether the guard can fail; the
+historical one asks whether it would have earned its cost.
+
+### AND THE GUARD'S OWN REACH WAS CHECKED, WHICH CHANGED HOW ITS RESULT READS
+
+All three members sit in one file, which reads exactly like an extraction that silently matches
+only that file. It is not: the accumulator half fires in **every one of the twelve stage sources**,
+one field in the smallest and thirty-five in `parse.kel`. What is rare is being multiplied into an
+index, and `parse.kel` is the stage that emits records with packed arguments — **the concentration
+follows from what the stage does, not from where the guard looked.**
+
+A throwaway script written to measure this had a loop-break bug that under-counted the
+index-multiplier column. It was caught by disagreeing with a figure measured earlier, and the wrong
+number was not quoted. The reach half of that script had no such bug, which is why its answer still
+stands.
+
+### A FIGURE WAS WRITTEN AND REMOVED
+
+The guard's doc first said "thirty-five accumulating fields across `parse.kel`". True, and
+**unguarded** — it would drift with every increment and nothing would check it, which is a defect
+this line has recorded seven times. Only the class size is stated now, and the non-vacuity
+assertion is what keeps it honest.
+
 ## 2026-09-09 (third) — one property, three axes, and a refuted hypothesis
 
 **The increment.** The float audit was not a finding about floats. It was one instance of a general
