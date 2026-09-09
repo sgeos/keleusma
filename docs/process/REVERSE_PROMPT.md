@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-09 (session 65) — the three composite kinds of the type channel measured, all three withheld, each with an executable witness
+**Date**: 2026-09-09 (session 65) — the three composite kinds of the type channel withheld with witnesses, and the float flat-field class audited clean
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,32 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## SECOND INCREMENT: AN AUDIT'S SCOPE ARGUMENT WAS AN INSTANCE OF THE ERROR IT AUDITED
+
+`FLAT_FIELD_WIDTH_AUDIT.md` justified auditing only the OPAQUE flat field with one sentence: every
+other kind is a function of the word or the float width, **"so a site assuming a word is correct for
+them."** That is **false for `Float`** — a float field is sized by the float width, selected
+independently of the word, and a word assumption is correct only where the two happen to be equal.
+**That is the exact coincidence that hid the opaque defect.** The scope was right; the argument for
+it repeated the mistake being audited. Corrected in place.
+
+**The excluded class was then measured, and it is clean** — six flat-composite shapes, in the
+configuration capable of exposing the defect: a module declaring a **narrower** float than the
+runtime provides, which the load check admits since it refuses only a wider one.
+
+**Two earlier attempts proved nothing, and the second is worth more than the result.** Mis-sizing
+the LAYOUT is an **equivalent mutation** — invisible in all six cases, because the compiler's
+offsets and the runtime's strides both derive from it and move together. That coherence is precisely
+what the opaque field lacked. The defect needs **two authorities**: taking the VM's float width from
+the runtime type rather than the module header supplies one, and three of six cases then catch it
+with a **silently wrong value** rather than a fault — the opaque defect's own signature.
+
+The three that catch it are the three that read a field **positioned after** a float; the others
+read the float itself and land in the same place either way. `tests/flat_float_field_width.rs`
+asserts that property by name rather than inventorying constructs.
+
+**"No defect found", never "no defect exists."** Six shapes are not the class.
 
 ## WHAT THIS SESSION DID: THREE VERDICTS, NO KINDS MOVED, AND THAT IS THE OUTCOME
 

@@ -10,6 +10,27 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-09, session 65, second increment). AN AUDIT'S SCOPE ARGUMENT WAS WRONG;
+> THE CLASS IT EXCLUDED IS CLEAN.**
+>
+> `FLAT_FIELD_WIDTH_AUDIT.md` justified auditing only the OPAQUE field with a sentence saying every
+> other kind is a function of the word or float width, "so a site assuming a word is correct for
+> them". **False for `Float`**, which is sized by the float width, selected independently of the
+> word -- the same coincidence that hid the opaque defect. The scope was right; the argument for it
+> was an instance of the error being audited. Corrected in place.
+>
+> **The float class was then measured and is CLEAN**, over six flat-composite shapes, in the
+> configuration capable of exposing the defect: a module declaring a NARROWER float than the runtime
+> provides, which the load check admits since it refuses only a wider one.
+>
+> **Two earlier attempts proved nothing and the second is the instructive one.** Mis-sizing the
+> LAYOUT is an equivalent mutation, invisible in all six cases, because every site derives from it
+> and they move together -- exactly the coherence the opaque field lacked. The defect needs TWO
+> AUTHORITIES. Taking the VM's float width from the runtime type rather than the module header
+> supplies one, and three of six cases catch it with a silently wrong value rather than a fault.
+>
+> **"No defect found", never "no defect exists."** Six shapes are not the class.
+
 > **Currency note (2026-09-09, session 65). THE THREE COMPOSITE KINDS: MEASURED, ALL WITHHELD.**
 >
 > The type channel's last extraction has four of its eight kinds on the pipeline. The three
