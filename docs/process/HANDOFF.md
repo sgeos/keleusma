@@ -32,7 +32,9 @@ always-current, so it must be able to report itself stale rather than mislead a 
 >
 > ## WHAT SESSION 65 DID, AND THE ONE SENTENCE THAT CARRIES IT
 >
-> Four increments, **four measured negatives and one guard that would have caught a real defect.**
+> Four measurement increments, plus this refresh. **Every result was a negative** — nothing found
+> broken — and the fourth also left behind a guard that would have caught a defect this tree has
+> already suffered.
 >
 > | increment | result |
 > |---|---|
@@ -108,8 +110,8 @@ always-current, so it must be able to report itself stale rather than mislead a 
 **Validate by ANCESTRY and by CONTENT, never by a hash match.** A stamp requiring `HEAD~1` to equal a
 recorded parent is a claim that nothing else ever lands, and it has failed three times.
 
-**Ancestry**: `origin/v0.2.3` should contain `0d3058d8` (`Merge pull request #396`). If it does not,
-this file predates a reset and is stale.
+**Ancestry**: `origin/v0.2.3` should contain `5fbad3a0` (`Merge pull request #397`), session 65's
+last code merge. If it does not, this file predates a reset and is stale.
 
 **Content**, cheap and independent checks. **They were numbered 1, 2, 3, 7, 8, 9, 10, 4, 5, 6 until
 2026-09-08** — each insertion took the next unused number instead of renumbering, so the list read as
