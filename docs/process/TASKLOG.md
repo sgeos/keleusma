@@ -10,6 +10,29 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-09, session 65, ninth increment). THE CLASS IS CLOSED, WITH A
+> POPULATION AND A VERDICT PER FILE.**
+>
+> `docs/decisions/COMMENT_MATCHING_GUARD_SWEEP.md` lists thirteen files carrying the shape: **nine
+> repaired, three safe by construction, one not in the class.** A line-prefix search is safe because
+> a comment line begins with `//` and cannot match a pattern required to start the trimmed line --
+> a property of the search, not a judgement about the file.
+>
+> **The last three.** `tests/selfhost_bare_for.rs` asserts the ABSENCE of a removed refusal in raw
+> `parse.kel`; a historical note naming it makes the guard report the stage "still defines or
+> raises" it -- a false failure that names a cause which does not exist.
+> `tests/selfhost_driver_parity.rs` counts seeding calls against a calibration, so a comment adds a phantom.
+> **Only the false-FAILURE direction was verified for the parity guard**, and nothing claims more.
+>
+> **The block-comment gap: measured at ZERO, then tripwired rather than parsed.** No source these
+> guards read carries a real block comment, but Keleusma supports them, so the risk is latent.
+> Teaching nine helpers cross-line state buys nothing today; `tests/block_comment_tripwire.rs` fails
+> if one ever appears. **That trades certainty for proportionality and is the judgement most worth
+> reviewing.**
+>
+> **The transferable rule**: only an ABSENCE assertion loses silently to an early truncation.
+> Everything else fails loudly, so the naive strip is correct in eight of the nine.
+
 > **Currency note (2026-09-09, session 65, eighth increment). FOUR MORE, AND THE DEFECT COMMITTED
 > INSIDE ITS OWN FIX.**
 >

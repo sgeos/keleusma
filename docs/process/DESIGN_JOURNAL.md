@@ -13,6 +13,62 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-09 (ninth) — closing the class, and choosing a tripwire over nine parsers
+
+**The class is closed with a population and a verdict per file**, not abandoned when the obvious
+cases ran out. `docs/decisions/COMMENT_MATCHING_GUARD_SWEEP.md` lists thirteen files carrying the
+shape: **nine repaired, three safe by construction, one not in the class.**
+
+**A line-prefix search is safe because a comment line begins with `//`** and cannot match a pattern
+required to start the trimmed line. That is a property of the search rather than a judgement about
+the file, which is why those three need no change and the document says so.
+
+### THE LAST THREE, AND A CONFIDENTLY WRONG FAILURE
+
+`selfhost_bare_for` asserts the ABSENCE of a removed refusal in raw `parse.kel`. Measured: a
+historical note reading *"the pe_bare_for refusal was removed when the form became supported"* makes
+it report that the stage **"still defines or raises"** it. **That is not merely a false failure; it
+is a false failure that names a cause which does not exist**, sending its reader to hunt a
+definition that is a comment.
+
+`selfhost_driver_parity` counts seeding calls and is calibrated against a count, so a comment naming
+one adds a phantom. Its doc already records the paren-matching that removed its WINDOW hazard; this
+is a different one in the same function.
+
+**For the parity guard only the false-FAILURE direction was verified.** Its ability to detect a real
+difference rests on its existing counted-and-calibrated design; no compiling mutation was built for
+that, and neither the document nor the commit claims one.
+
+### THE BLOCK-COMMENT GAP: MEASURED, THEN TRIPWIRED RATHER THAN PARSED
+
+All nine strips handle `//` and none handles `/* … */`. The document recorded that as a bare
+limitation; this measured it.
+
+**Exposure today is ZERO.** No source any of these guards reads carries a real block comment: the
+only `/*` in the stage sources is inside a LINE comment describing the `+`, `-` and `*` operators,
+and every occurrence under `src/*.rs` is inside a doc comment or a test string literal.
+
+**But Keleusma supports block comments** -- the lexer skips them and has tests for the multi-line
+and unterminated cases -- so the risk is latent rather than absent.
+
+**Teaching nine helpers cross-line state is real complexity bought for no current exposure.** The
+increment is a tripwire instead: it fails if a block comment ever appears in one of those files and
+names the document. **This is the judgement most worth reviewing in the increment** -- it trades
+certainty for proportionality. The guards remain unable to handle a block comment; the check only
+ensures nobody introduces one unnoticed.
+
+**The detector must not fire on what is recorded as harmless.** A `/*` inside a line comment or a
+string literal is not a block comment, and this tree contains both shapes. A second test pins them,
+because without it, tightening the detector until it reported nothing would look like a fix -- the
+too-loose direction this whole class is about, aimed at the class's own instrument.
+
+### WHAT THE NINE FIXES WOULD HAVE READ AS WITHOUT THE DOCUMENT
+
+Nine unrelated repairs. The population table is what makes the class visible and hands the next
+reader the direction rule, which is the part that generalises beyond this repository: **only an
+ABSENCE assertion loses silently to an early truncation.** Everything else fails loudly, so the
+naive strip is correct in eight of nine.
+
 ## 2026-09-09 (eighth) — four more, a third file guarding one of two readers, and the defect committed inside its own fix
 
 **A third silent false pass.** `tests/stage_command_reach.rs` has `driver_command_numbers`, which

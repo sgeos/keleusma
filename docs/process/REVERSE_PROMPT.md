@@ -26,6 +26,37 @@ They are the reason the large work is blocked, and nothing below decides any of 
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
 
+## NINTH INCREMENT: THE CLASS CLOSED, AND A TRIPWIRE CHOSEN OVER NINE PARSERS
+
+**The class is closed with a population and a verdict per file**, not abandoned when the obvious
+cases ran out. `docs/decisions/COMMENT_MATCHING_GUARD_SWEEP.md` lists thirteen files: **nine
+repaired, three safe by construction, one not in the class.** A line-prefix search is safe because a
+comment line begins with `//` — a property of the search, not a judgement about the file.
+
+**The last three.** `tests/selfhost_bare_for.rs` asserts the **absence** of a removed refusal in raw
+`parse.kel`, and a historical note naming it makes the guard report that the stage *"still defines or
+raises"* it — **a false failure that names a cause which does not exist**, sending its reader after a
+definition that is a comment. `tests/selfhost_driver_parity.rs` counts seeding calls against a calibration, so
+a comment adds a phantom. **Only the false-failure direction was verified for the parity guard**, and
+nothing claims more.
+
+**The block-comment gap: measured, then tripwired rather than parsed.** All nine strips handle `//`
+and none handles `/* … */`. **Exposure today is zero** — the only `/*` in the stage sources is inside
+a line comment about the `+`, `-` and `*` operators, and every `src/*.rs` occurrence is in a doc
+comment or test string. But Keleusma supports block comments, so the risk is latent.
+
+Teaching nine helpers cross-line state is complexity bought for no current exposure, so
+`tests/block_comment_tripwire.rs` fails if one ever appears and names the document. **That trades
+certainty for proportionality, and is the judgement most worth reviewing**: the guards remain unable
+to handle a block comment; the check only ensures nobody introduces one unnoticed.
+
+Its detector deliberately does not fire on a `/*` inside a line comment or a string literal, both of
+which this tree contains, and a second test pins those shapes — without it, tightening the detector
+until it reported nothing would look like a fix.
+
+**The transferable rule**: only an **absence** assertion loses silently to an early truncation.
+Everything else fails loudly, so the naive strip is correct in eight of the nine.
+
 ## EIGHTH INCREMENT: FOUR MORE, AND THE DEFECT COMMITTED INSIDE ITS OWN FIX
 
 **A third silent false pass.** `tests/stage_command_reach.rs` has a helper that strips comments and

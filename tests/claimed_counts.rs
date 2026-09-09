@@ -879,3 +879,65 @@ fn the_only_test_gated_out_of_every_ci_configuration_is_the_known_one() {
          {KNOWN} is."
     );
 }
+
+/// Every file the comment-matching sweep names must exist.
+///
+/// # Why a path check rather than an identifier one
+///
+/// `tests/comment_citations.rs` resolves backtick-quoted IDENTIFIERS in the two resume channels. It
+/// cannot help here: the sweep document cites **files**, and a path contains characters that its
+/// shape filter deliberately skips. Written as bare names instead, all twelve citations resolved to
+/// nothing — measured — and nothing anywhere would have said so.
+///
+/// **A document whose claims nothing verifies is the thing this session spent nine increments
+/// removing.** Writing one is a poor way to end that, so the claims are checked here: if a guard in
+/// the table is renamed or deleted, the row naming it fails rather than quietly describing a tree
+/// that has moved.
+///
+/// The check is deliberately weak — existence, not content. It cannot tell whether the file still
+/// strips comments, and it does not pretend to; the per-file guards do that, and each was
+/// mutation-tested when it was repaired.
+#[test]
+fn every_file_the_comment_matching_sweep_names_still_exists() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let doc_path = root.join("docs/decisions/COMMENT_MATCHING_GUARD_SWEEP.md");
+    let Ok(doc) = std::fs::read_to_string(&doc_path) else {
+        // The sweep document is optional in the sense that a branch may predate it; a missing
+        // file is not a failing claim. A PRESENT file with a broken claim is.
+        return;
+    };
+
+    let mut named = std::collections::BTreeSet::new();
+    for piece in doc.split('`') {
+        let t = piece.trim();
+        // **A GLOB IS NOT A PATH CLAIM.** The document says "every occurrence under `src/*.rs`",
+        // which is prose about a set of files rather than a citation of one. The first draft of
+        // this guard reported it as a missing file -- a guard manufacturing its own finding, which
+        // this file's own comment records learning twice before, once from a wrapped identifier and
+        // once from a filename. This is the third, from a glob.
+        if (t.starts_with("tests/") || t.starts_with("src/") || t.starts_with("docs/"))
+            && (t.ends_with(".rs") || t.ends_with(".kel") || t.ends_with(".md"))
+            && !t.contains('*')
+        {
+            named.insert(t.to_string());
+        }
+    }
+
+    // **NON-VACUITY.** A parse that matched nothing would pass while checking nothing, which is
+    // the exact failure the document catalogues. Thirteen files are tabulated plus this document
+    // and the tripwire; requiring ten leaves room for the table to change shape.
+    assert!(
+        named.len() >= 10,
+        "only {} paths were parsed out of the sweep document, so this guard is reading its \
+         formatting rather than its claims",
+        named.len()
+    );
+
+    let missing: Vec<&String> = named.iter().filter(|p| !root.join(p).exists()).collect();
+    assert!(
+        missing.is_empty(),
+        "the comment-matching sweep names files that no longer exist: {missing:?}. Either the \
+         guard was renamed, in which case the table needs the new name, or it was deleted, in \
+         which case the row should say so rather than vanish"
+    );
+}

@@ -122,7 +122,9 @@ fn the_bare_form_yields_a_module_with_the_plain_loop_shape() {
 #[test]
 fn the_boundary_marks_the_bare_for_case_supported() {
     const BOUNDARY: &str = include_str!("selfhost_codegen.rs");
-    let table: String = BOUNDARY
+    // Window on CODE: a comment naming the function would start the window early.
+    let boundary_code = code_only(BOUNDARY);
+    let table: String = boundary_code
         .lines()
         .skip_while(|l| !l.contains("fn boundary_cases()"))
         .take_while(|l| !l.starts_with('}'))
@@ -225,7 +227,7 @@ fn the_bare_and_limit_forms_have_different_lowerings() {
 fn the_bare_form_refusal_is_gone_from_the_stage() {
     const PARSE: &str = include_str!("../src/selfhost/kel/parse.kel");
     assert!(
-        !PARSE.contains("pe_bare_for"),
+        !code_only(PARSE).contains("pe_bare_for"),
         "`parse.kel` still defines or raises the bare-`for` refusal. The form is \
          supported now, so a reachable refusal would be a contradiction and an \
          unreachable one would be a diagnostic no input can produce."
@@ -297,4 +299,26 @@ fn every_stage_reaches_the_bare_lowering() {
          That omission produced a correct loop whose every operand was zero, and \
          it is the failure this assertion exists for."
     );
+}
+
+/// Source with `//` line comments removed, so a search matches CODE rather than prose.
+///
+/// **Measured**: a historical note in `parse.kel` naming the removed refusal made the absence
+/// assertion below report that the stage *"still defines or raises"* it — a confidently wrong
+/// failure sending its reader to hunt something that is not there.
+///
+/// Truncating at the first `//` rather than tracking string literals is correct for these searches:
+/// an early truncation can only hide an occurrence, which makes an absence assertion pass where it
+/// should fail — but here the strings sought are Keleusma identifiers that never appear inside a
+/// string literal in this stage, and the window search below fails loudly instead.
+/// `tests/call_chunk_index_limit.rs` needs the string-aware form because its patterns are
+/// arithmetic that can legitimately sit beside a URL.
+fn code_only(src: &str) -> String {
+    src.lines()
+        .map(|l| match l.find("//") {
+            Some(i) => &l[..i],
+            None => l,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
