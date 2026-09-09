@@ -10,6 +10,30 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-09, session 65, fifth increment). A GUARD THAT COULD NOT COEXIST WITH A
+> COMMENT ABOUT WHAT IT GUARDS.**
+>
+> This repository records FOUR instances of a guard matching prose it was never meant to read. One
+> guard is still exposed: `every_site_in_the_call_packing_family_agrees_on_the_radix` asserts that
+> NO site splits a `Call` record on the old eight-bit radix, and searched raw source. **Adding a
+> plain historical note naming the old radix fails the test with nothing wrong in the tree.**
+>
+> **The remedy already in the file is the worry.** It records flagging itself once and the fix was
+> to skip the whole file -- which costs reach and is the fix a later reader copies.
+>
+> **The obvious fix introduces the opposite defect.** Truncating at the first `//` cuts inside a
+> string literal like `"http://a"` and drops a REAL occurrence, which for an absence assertion is
+> the dangerous direction. The strip is string-aware; block comments are explicitly NOT handled and
+> the code says so.
+>
+> Three mutations: the historical comment now passes, a real code site still fails, and a real site
+> after a string containing `//` still fails. **The third is why the complexity is justified** -- a
+> naive strip would have missed it.
+>
+> **A run that executed no tests is not a pass.** The first demonstration reported
+> `0 passed; 0 failed; 0 filtered out` because the binary is gated on `self-host`, and it was nearly
+> read as the comment being harmless.
+
 > **Currency note (2026-09-09, session 65, fourth increment). A DEFECT SHAPE TURNED INTO A CHECK.**
 >
 > The `wire.kel` self-compilation failure's last cause was one line: `forin_count` was never added
