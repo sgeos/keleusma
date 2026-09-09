@@ -34,6 +34,20 @@
 //! `forin_count`, reset per function, and `aq_k`, reset at both of its construct entry points.
 //! **No member was found unreset.**
 //!
+//! # THE CLASS SITS IN ONE STAGE, AND THAT IS A REACH RESULT RATHER THAN A SUSPICIOUS ONE
+//!
+//! All three members are in `parse.kel`, which reads like an extraction that only matches one
+//! file. It is not. The accumulator half of the extraction fires in **every one of the twelve
+//! stage sources**, from one accumulating field in the smallest to thirty-five in `parse.kel`, so
+//! the scan is not blind to the others' syntax.
+//!
+//! What is rare is the second half: being multiplied into an index. `parse.kel` is the stage that
+//! **emits records with packed arguments**, so it is the stage where a counter becomes an offset
+//! into a record's own parts. The concentration follows from what the stage does.
+//!
+//! Checking this mattered: a guard that reports clean about files it never really examined is the
+//! failure this tree opened a session with, six instruments deep.
+//!
 //! No count of the wider accumulator population is quoted here. It would drift with every
 //! increment and nothing would check it, which is a defect this line has recorded seven times. The
 //! only figure stated is the class size, and the assertion below is what keeps it honest.
