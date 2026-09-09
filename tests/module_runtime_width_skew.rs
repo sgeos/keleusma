@@ -44,23 +44,38 @@
 //! that sits BEFORE the skewed-width field, or reading that field itself, lands in the same place
 //! under either width. Those are controls: they prove the corpus is not simply broken.
 //!
-//! # TWO WORD CASES DO NOT SEPARATE, AND TWO EXPLANATIONS HAVE BEEN EXCLUDED
+//! # WHICH SHAPES SEPARATE, MEASURED — AND THREE EXCLUDED EXPLANATIONS
 //!
-//! An array element and a byte-then-word struct read correctly under the word mutation. **The cause
-//! is not established.** What is recorded here is what has been RULED OUT, because an unexplained
-//! survivor reads as a missing guard and sends the next reader hunting for one:
+//! Two word cases — an array element and a byte-then-word struct — read correctly under the word
+//! mutation. **The mechanism is not established.** Three hypotheses have been tested and excluded,
+//! recorded because an unexplained survivor reads as a missing guard and sends the next reader
+//! hunting for one:
 //!
 //! | hypothesis | verdict |
 //! |---|---|
 //! | the read is constant-folded, so no flat body is touched | **excluded** — an array built from a host call survives identically |
-//! | the composite is BOXED, so both widths agree | **excluded** — all four shapes report a FLAT body at both module widths |
+//! | the composite is BOXED, so both widths agree | **excluded** — every shape reports a FLAT body at both module widths |
+//! | an over-wide read pulls in ZERO neighbours and is right by luck | **excluded** — adding a non-zero field after the one read changes nothing |
 //!
 //! The second was the likely one: `tests/composite_width_skew.rs` records that a boxed composite
 //! agrees on both runtimes and asserts flatness for exactly that reason. It does not apply here.
+//! All three survivors and separators compile to the **same** opcode, a flat `GetField` or
+//! `GetIndex` carrying an `Int` kind, so the path is not the difference either.
 //!
-//! **Whichever path those two reads take, it is not the one the mutation perturbs**, so they are
-//! marked as not separating. They are kept because they are correct and cheap, not because they
-//! extend coverage — and the guard below counts only the measured separators.
+//! **What IS established is a characterization, and it covers every case measured:**
+//!
+//! | shape | separates the two readings |
+//! |---|---|
+//! | all-`Word` composite, field not first | **yes** |
+//! | all-`Word` composite, FIRST field | no — offset zero is the same under any width |
+//! | composite with a leading `Byte` | no |
+//! | array element, any position | no |
+//!
+//! **That is a stated LIMIT, not a defect.** Every shape answers correctly on the unmutated tree.
+//! What the table says is that this corpus's word-axis sensitivity comes entirely from homogeneous
+//! word composites read past their first field, so **arrays and byte-leading structs are not
+//! checked against a word-width divergence by this file**. A later reader wanting that coverage
+//! needs a different instrument, not more cases of the same shape.
 
 use keleusma::bytecode::GenericValue;
 use keleusma::compiler::compile_with_target;
