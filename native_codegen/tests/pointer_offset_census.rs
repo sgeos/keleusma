@@ -38,6 +38,7 @@
 //! | composite field write and read | constant — the layout's field offset |
 //! | composite body base | constant — the site's planned offset |
 //! | **flat array element** | **runtime, guarded by `guard_array_index`** |
+//! | operand spill store and reload | constant — `spill_off` plus a compile-time slot index |
 //!
 //! # What this test can and cannot do
 //!
@@ -51,7 +52,12 @@
 ///
 /// **Re-derive rather than trust.** It moves whenever a site is added or
 /// removed.
-const RECORDED_GEP_SITES: usize = 12;
+const RECORDED_GEP_SITES: usize = 14;
+// 12 -> 14 on 2026-09-09, when the operand spill slice landed. Both new sites
+// take a COMPILE-TIME constant offset: the slice base plus a slot index the
+// emitter counts out at lowering time, never a value the program supplies.
+// Classified here rather than absorbed into the count, which is the whole
+// contract of this file.
 
 fn gep_sites() -> Vec<(usize, String)> {
     let src = std::fs::read_to_string("src/lib.rs").expect("the emitter is readable");

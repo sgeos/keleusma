@@ -843,6 +843,19 @@ impl<'ctx> Lower<'ctx> {
         self.slots[depth.min(self.slots.len() - 1)]
     }
 
+    /// Load the operand living at stack index `idx`, counted from the BOTTOM.
+    ///
+    /// `width_at` counts from the top and `slot` is indexed from the bottom;
+    /// mixing the two is how a spill saves the wrong entries in the wrong order,
+    /// so both conventions are named wherever they meet.
+    fn slot_value(&mut self, idx: usize) -> IntValue<'ctx> {
+        let p = self.slot(idx);
+        self.b
+            .build_load(self.i64t, p, "spillv")
+            .unwrap()
+            .into_int_value()
+    }
+
     fn push(&mut self, v: IntValue<'ctx>) {
         self.push_w(v, Width::Unknown);
     }
@@ -2919,6 +2932,10 @@ fn lower_chunk_body<'ctx>(
         None
     };
     let locals_off = u64::from(crate::region::plan_chunk_region(chunk).bytes);
+    // **THE SPILL SLICE SITS AFTER THE LOCALS**, both inside the ephemeral
+    // region. See `region::stream_spill_bytes` for why it is sized at
+    // `MAX_STACK` slots and why that bound cannot be exceeded.
+    let spill_off = locals_off + u64::from(crate::region::stream_locals_bytes(chunk));
 
     let locals: Vec<_> = (0..chunk.local_count as usize)
         .map(|i| match stream_frame_base {
@@ -3203,6 +3220,17 @@ fn lower_chunk_body<'ctx>(
 
     // Operand-stack depth at each merge point, recorded per incoming edge.
     let mut tdepth: BTreeMap<usize, usize> = BTreeMap::new();
+    // What each `Op::Yield` pushed into the spill slice, by op index: the
+    // `(width, kind)` of every operand beneath the yielded value, bottom-first.
+    //
+    // **RECORDED, NEVER RE-INFERRED.** The resume point restores exactly these
+    // pairs. Re-deriving them would be a second computation of the same
+    // quantity, free to disagree with the first — and a value restored at the
+    // wrong width is a silently wrong number rather than a fault.
+    //
+    // The yield at `y` is always walked before its resume point at `y + 1`, so
+    // the entry is present by the time the reload needs it.
+    let mut spilled: BTreeMap<usize, Vec<(Width, OperandKind)>> = BTreeMap::new();
     macro_rules! note {
         ($t:expr, $d:expr) => {{
             let (t, d) = ($t, $d);
@@ -3283,6 +3311,36 @@ fn lower_chunk_body<'ctx>(
                     // Reachable ONLY from the dispatch: the yield before it
                     // returned, so nothing falls through into this block.
                     if general_stream && i > 0 && matches!(chunk.ops[i - 1], Op::Yield) {
+                        // **RELOAD BENEATH, THEN THE RESUME VALUE ON TOP.** The
+                        // stack at the yield was `[e0 .. e_{d-2}, yielded]`, so
+                        // the entries come back bottom-first and the resume value
+                        // takes the place the yielded value occupied. Reversing
+                        // this returns the operands upside down, and nothing but
+                        // a whole-sequence comparison would notice.
+                        if let Some(saved) = spilled.get(&(i - 1)).cloned() {
+                            let fb = stream_frame_base
+                                .expect("a general stream addresses its frame from the region");
+                            for (slot, (w, k)) in saved.into_iter().enumerate() {
+                                let addr = unsafe {
+                                    st.b.build_in_bounds_gep(
+                                        i8t,
+                                        fb,
+                                        &[i64t.const_int(spill_off + (slot as u64) * 8, false)],
+                                        "spillrp",
+                                    )
+                                    .unwrap()
+                                };
+                                let lv =
+                                    st.b.build_load(i64t, addr, "spillr")
+                                        .unwrap()
+                                        .into_int_value();
+                                lv.as_instruction()
+                                    .expect("a load is an instruction")
+                                    .set_alignment(1)
+                                    .expect("1 is a power of two");
+                                st.push_k(lv, w, k);
+                            }
+                        }
                         let rv = func
                             .get_nth_param(0)
                             .expect("a stream declares its resume parameter")
@@ -5760,20 +5818,52 @@ fn lower_chunk_body<'ctx>(
             // the same lowered code driven with two arenas is two independent
             // streams.
             Op::Yield if general_stream => {
-                // **REFUSED, NOT SPILLED.** Anything beneath the yielded value
-                // would have to survive the return too, and inventing a spill
-                // layout here is how a differential oracle gets a wrong answer.
-                if st.depth != 1 {
-                    return Err(LowerError::unsupported_op(
-                        "Yield",
-                        format!(
-                            "a resumable stream whose operand stack holds {} entries at the \
-                             yield: everything beneath the yielded value would have to \
-                             survive the return, and no spill layout is defined",
-                            st.depth
-                        ),
-                    ));
+                // **SPILLED, NO LONGER REFUSED.** Everything beneath the yielded
+                // value has to survive the return; operands are SSA values and do
+                // not, so they go to the ephemeral slice and come back at the
+                // resume point.
+                //
+                // **A `Body` OPERAND IS STILL REFUSED, AND THAT IS THE POINT.** A
+                // `Width::Body` is a POINTER INTO THE FIXED-OFFSET REGION.
+                // Preserving it faithfully across the suspension would hand the
+                // host a handle to bytes the next iteration overwrites — a second
+                // route to exactly the hazard the yield-escape refusal exists to
+                // stop. The spill must not become the thing that defeats it.
+                let deep = st.depth.saturating_sub(1);
+                let mut saved: Vec<(Width, OperandKind)> = Vec::new();
+                if deep > 0 {
+                    let fb = stream_frame_base
+                        .expect("a general stream addresses its frame from the region");
+                    for slot in 0..deep {
+                        // `width_at` is measured from the TOP, so the entry at
+                        // stack index `slot` is `depth - 1 - slot` from the top.
+                        let back = st.depth - 1 - slot;
+                        let w = st.width_at(back);
+                        if let Width::Body(bytes) = w {
+                            return Err(LowerError::UnsupportedShape(format!(
+                                "a yield with a {bytes}-byte composite BODY stacked beneath the \
+                                 yielded value. Its operand is a pointer into region storage the \
+                                 next iteration overwrites, so carrying it across the suspension \
+                                 would defeat the yield-escape refusal rather than honour it"
+                            )));
+                        }
+                        let k = st.kind_at(back);
+                        let v = st.slot_value(slot);
+                        let addr = unsafe {
+                            st.b.build_in_bounds_gep(
+                                i8t,
+                                fb,
+                                &[i64t.const_int(spill_off + (slot as u64) * 8, false)],
+                                "spillp",
+                            )
+                            .unwrap()
+                        };
+                        let ins = st.b.build_store(addr, v).unwrap();
+                        ins.set_alignment(1).expect("1 is a power of two");
+                        saved.push((w, k));
+                    }
                 }
+                spilled.insert(i, saved);
                 let k = yield_positions
                     .iter()
                     .position(|&y| y == i)
@@ -5831,17 +5921,25 @@ fn lower_chunk_body<'ctx>(
             // stack-disciplined bump arena popped at each iteration, which is the
             // model to reason in.
             Op::Reset if general_stream => {
-                if st.depth != 0 {
-                    return Err(LowerError::unsupported_op(
-                        "Reset",
-                        format!(
-                            "the operand stack holds {} entries at the rewind. The runtime \
-                             TRUNCATES it there and native code cannot, so the loop top would \
-                             be re-entered at a depth the entry dispatch never produces",
-                            st.depth
-                        ),
-                    ));
-                }
+                // **TRUNCATE, DO NOT REFUSE — AND THIS CORRECTS A REFUSAL ADDED
+                // EARLIER THE SAME DAY.**
+                //
+                // That refusal said native code "cannot" truncate the operand
+                // stack and so the loop top would be re-entered at a depth the
+                // entry dispatch never produces. **The premise was wrong in the
+                // half that mattered.** `src/vm.rs` at `Op::Reset` truncates the
+                // stack to just the locals, so DISCARDING the operands is
+                // exactly what the reference does — and discarding them leaves
+                // depth zero, which is precisely the depth the dispatch produces.
+                //
+                // The values are abandoned rather than stored: they live in
+                // operand slots nothing reads again. Nothing is emitted for this.
+                //
+                // The earlier refusal was not wrong to exist — it replaced a
+                // prose premise with a check, which is the right instinct. It was
+                // wrong to assume the disagreement was unresolvable without
+                // reading what the reference does at the same opcode.
+                st.depth = 0;
                 let top = loop_top.expect("general_stream implies a loop top");
                 for l in st.locals.iter() {
                     st.b.build_store(*l, i64t.const_zero()).unwrap();

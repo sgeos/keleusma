@@ -232,6 +232,43 @@ pub fn stream_locals_bytes(chunk: &Chunk) -> u32 {
     align_up(u32::from(chunk.local_count).saturating_mul(8))
 }
 
+/// Ephemeral bytes reserved for OPERANDS that must survive a suspension.
+///
+/// # The problem this solves
+///
+/// A stream's locals live in the arena and survive the return at a `yield`.
+/// **Its operand stack does not** — operands are SSA values, and a function that
+/// returns keeps none of them. So a `yield` with anything stacked beneath the
+/// yielded value was refused: everything under the top would have to cross the
+/// return and there was nowhere to put it.
+///
+/// # Why this size, and why it cannot be exceeded
+///
+/// [`crate::MAX_STACK`] slots. **That is not a fresh estimate** — it is the
+/// provisioning ceiling the backend already applies to every chunk's operand
+/// stack, and a chunk that exceeds it is already refused with
+/// `OperandStackTooDeep` before reaching any suspension. So the slice is an
+/// upper bound the emitter enforces elsewhere rather than one asserted here.
+///
+/// Taking the number from where the system already states it is the same
+/// principle that sized the array bound from `WireShape::Flat` and the resume
+/// width from `param_types[0]`. A second computation of the same quantity is
+/// free to drift from the first; this one cannot.
+///
+/// **Fixed and static**, so the worst-case memory bound moves by a known
+/// constant and nothing dynamic is introduced — which is what makes it
+/// admissible for this project at all.
+///
+/// Reserved for every stream chunk, like [`stream_locals_bytes`] and for the
+/// same reason: a predicate disagreeing with the lowering's own would be a worse
+/// defect than a few unused bytes.
+pub fn stream_spill_bytes(chunk: &Chunk) -> u32 {
+    if chunk.block_type != keleusma::bytecode::BlockType::Stream {
+        return 0;
+    }
+    align_up((crate::MAX_STACK as u32).saturating_mul(8))
+}
+
 /// **The PERSISTENT bytes a host must add when running this module natively.**
 ///
 /// One word per stream chunk, holding the resume state: which `yield` to
@@ -707,7 +744,8 @@ pub fn region_total_bytes(
     let mut total = align_up(
         plan_chunk_region(chunk)
             .bytes
-            .saturating_add(stream_locals_bytes(chunk)),
+            .saturating_add(stream_locals_bytes(chunk))
+            .saturating_add(stream_spill_bytes(chunk)),
     );
     for op in &chunk.ops {
         if let Op::Call(idx, _) = op {

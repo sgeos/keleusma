@@ -99,6 +99,10 @@ const SHAPES: &[(&str, &str)] = &[
          loop main(t: Word) -> P { let a = yield P { a: t, b: t }; yield P { a: a, b: a } }",
     ),
     (
+        "two yields in one expression",
+        "loop main(t: Word) -> Word { (yield t) + (yield t + 1) }",
+    ),
+    (
         "yield inside an if with a tail",
         "loop main(t: Word) -> Word { if t > 0 { let a = yield t; yield a } else { yield 0 } }",
     ),

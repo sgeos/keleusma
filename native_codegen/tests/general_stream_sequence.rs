@@ -161,6 +161,36 @@ fn two_yields_in_one_iteration_agree() {
     );
 }
 
+/// **AN OPERAND STACKED BENEATH THE YIELDED VALUE — the shape the spill slice
+/// exists for.**
+///
+/// `(yield t) + (yield t + 1)` leaves the FIRST yield's resumed value on the
+/// operand stack while the SECOND yield suspends. Operands are SSA values and do
+/// not survive a return, so this was refused until the ephemeral spill slice
+/// landed: *"everything beneath the yielded value would have to survive the
+/// return, and no spill layout is defined"*.
+///
+/// # Why a whole-sequence comparison and not a lowering check
+///
+/// The reload order is the thing most likely to be wrong, and it is invisible to
+/// anything weaker. The stack at the yield is `[e0 .. e_{d-2}, yielded]`, so the
+/// entries must come back bottom-first with the resume value on top. **Restoring
+/// them reversed still lowers, still verifies, and still returns numbers** — it
+/// simply returns the wrong ones, on the second iteration and afterwards.
+///
+/// The replies differ from each other and from the argument, and the body ADDS
+/// the two resumed values, so a lowering that restored the wrong entry or the
+/// right entry at the wrong width diverges immediately rather than coincidentally
+/// agreeing.
+#[test]
+fn an_operand_stacked_beneath_the_yield_agrees() {
+    common::assert_general_stream_agrees(
+        "loop main(t: Word) -> Word { (yield t) + (yield t + 1) }",
+        7,
+        &[11, 20, 31, 40, 55, 60],
+    );
+}
+
 /// **A yield inside a branch WITH CODE AFTER IT — REFUSED, and that is the
 /// designed answer rather than a gap.**
 ///
