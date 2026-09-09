@@ -6,6 +6,24 @@ Architectural and design decisions for Keleusma.
 
 Decisions follow a three-file lifecycle. New questions start in PRIORITY or BACKLOG. When resolved, they move to RESOLVED with rationale. Decisions are numbered sequentially within each file.
 
+## What a `*_BRIEF.md` is, and what its absence of a marker does NOT mean
+
+This directory also holds many `*_BRIEF.md` files, most paired with a
+`*_COMPLETION_CONDITION.txt`. They are **dated working documents written for a single
+increment**, not live plans. A brief captures the rationale, the prior failures, and the
+specific wrong turns to avoid for the work it was written for; its companion states the
+observable end state that increment was judged against.
+
+**Do not resume a brief's goals without checking the tree first.** Several briefs describe
+work that is now complete, and **most carry no marker saying so**, because marking them was
+never the convention — only a handful say `landed` or similar. **The absence of a status
+marker therefore says nothing about whether the work is done.** The tree is the authority;
+the brief records how a past increment was reasoned about.
+
+Only the substantive decision and evidence documents are indexed below. The briefs are not,
+deliberately: an index of every increment's working notes would need maintaining on every
+increment, and a table that drifts is worse than no table.
+
 ## Contents
 
 | Document | Description |
