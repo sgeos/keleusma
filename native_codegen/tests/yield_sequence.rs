@@ -142,6 +142,25 @@ fn native_sequence(src: &str, args: &[i64], replies: &[i64]) -> (Vec<i64>, i64) 
     let sym = format!("kel_chunk_{idx}");
     let out = match args.len() {
         1 => {
+            // **ASSERT THE SIGNATURE BEFORE NAMING IT.** A harness that writes
+            // `extern "C" fn(..)` by hand cannot see the callee's signature change, and
+            // this file is the recorded instance: extending the arena pointers to stream
+            // chunks once changed the DEGENERATE ones too, and ten tests here kept
+            // passing on the calling convention's good manners — garbage read from
+            // registers the callee never touched.
+            //
+            // The handoff has warned "BEFORE CHANGING ANY LOWERED SIGNATURE, GREP THE
+            // HARNESSES" and named this file ever since. **The guard was added to the
+            // newer drivers and never to the two it was written about.** Found by
+            // auditing a completion condition, not by a failure.
+            assert_eq!(
+                lm.get_function(&sym)
+                    .expect("entry function")
+                    .count_params(),
+                u32::from(m.chunks[idx].param_count),
+                "a `yield fn` chunk carries NO trailing pointers; the call below names \
+         that signature by hand and cannot detect a change to it"
+            );
             let f = unsafe { ee.get_function::<unsafe extern "C" fn(i64) -> i64>(&sym) }
                 .expect("symbol");
             unsafe { f.call(args[0]) }
@@ -312,6 +331,25 @@ fn native_stream_sequence(src: &str, args: &[i64], replies: &[i64]) -> Vec<i64> 
         .expect("jit");
 
     let sym = format!("kel_chunk_{idx}");
+    // **ASSERT THE SIGNATURE BEFORE NAMING IT.** A harness that writes
+    // `extern "C" fn(..)` by hand cannot see the callee's signature change, and
+    // this file is the recorded instance: extending the arena pointers to stream
+    // chunks once changed the DEGENERATE ones too, and ten tests here kept
+    // passing on the calling convention's good manners — garbage read from
+    // registers the callee never touched.
+    //
+    // The handoff has warned "BEFORE CHANGING ANY LOWERED SIGNATURE, GREP THE
+    // HARNESSES" and named this file ever since. **The guard was added to the
+    // newer drivers and never to the two it was written about.** Found by
+    // auditing a completion condition, not by a failure.
+    assert_eq!(
+        lm.get_function(&sym)
+            .expect("entry function")
+            .count_params(),
+        u32::from(m.chunks[idx].param_count),
+        "a DEGENERATE stream carries no trailing pointers — that distinction is \
+         load-bearing, and this assertion is what makes a change to it visible"
+    );
     let f = unsafe { ee.get_function::<unsafe extern "C" fn(i64) -> i64>(&sym) }.expect("symbol");
 
     let mut out = Vec::new();

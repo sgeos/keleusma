@@ -85,10 +85,53 @@ fn agree_on(src: &str, label: &str) {
     let ee = lm
         .create_jit_execution_engine(OptimizationLevel::None)
         .expect("jit");
-    let f = unsafe {
-        ee.get_function::<unsafe extern "C" fn(i64) -> i64>(&format!("kel_chunk_{entry}"))
-    }
-    .expect("entry symbol");
+    // **ASSERT THE SIGNATURE BEFORE NAMING IT.** A harness naming
+    // `extern "C" fn(..)` by hand cannot see the callee's signature change, and
+    // this line has one recorded instance of ten tests passing on the calling
+    // convention's good manners after exactly that. This subject builds no
+    // composite and is no stream, so it carries its parameters and nothing else;
+    // if that stops being true, the call below reads registers the callee never
+    // wrote.
+    // ⚠ **THIS ASSERTION FIRED THE MOMENT IT WAS ADDED: left 4, right 1.**
+    //
+    // The subject BUILDS A COMPOSITE, so its entry carries the three trailing
+    // pointers — and this harness had been calling it through
+    // `extern "C" fn(i64) -> i64`. The shared, private and region pointers were
+    // whatever the calling convention left in those registers, and the composite
+    // lowering wrote through one of them.
+    //
+    // **The test passed anyway**, which is precisely the recorded failure mode:
+    // ten tests in `yield_sequence.rs` once passed the same way. An agreement
+    // reached through registers the caller never set is not evidence about the
+    // packed width or about anything else.
+    //
+    // Found by auditing a completion condition that required every hand-written
+    // signature to be guarded — not by a failure.
+    // **DERIVED, NOT ASSUMED.** A first fix hard-coded "plus three pointers",
+    // which was right for the composite-building subject and WRONG FOR ITS
+    // SIBLING — the same mistake in the other direction, caught within a minute
+    // by the sibling test. Only two entry shapes are valid: the declared
+    // parameters alone, or those plus the three arena pointers.
+    let declared = u32::from(m.chunks[entry].param_count);
+    let actual = lm
+        .get_function(&format!("kel_chunk_{entry}"))
+        .expect("entry function")
+        .count_params();
+    assert!(
+        actual == declared || actual == declared + 3,
+        "{label}: the entry takes {actual} parameters, which is neither the \
+         declared {declared} nor those plus the three arena pointers. The calls \
+         below name their signatures by hand and cannot describe a third shape"
+    );
+    let with_pointers = actual == declared + 3;
+
+    // Buffers the callee may legitimately write. Sized from the planner rather
+    // than guessed, and filled with a non-zero pattern so a read of
+    // uninitialised space is distinguishable from a real zero.
+    let mut shared = vec![0u8; 4096];
+    let mut privs = vec![0u8; keleusma::vm::required_persistent_capacity_for(&m) + 4096];
+    let mut region =
+        vec![0xCDu8; keleusma_native::region::host_arena_supplement_bytes(&m) as usize + 4096];
 
     // **NON-VACUITY.** Values chosen so the float multiply MOVES the result: an
     // agreement on inputs where the float path is the identity would prove
@@ -103,7 +146,25 @@ fn agree_on(src: &str, label: &str) {
             keleusma::vm::VmState::Finished(Value::Int(v)) => v,
             other => panic!("{label}: unexpected VM outcome {other:?}"),
         };
-        let nv = unsafe { f.call(arg) };
+        let sym = format!("kel_chunk_{entry}");
+        let nv = if with_pointers {
+            let f = unsafe {
+                ee.get_function::<unsafe extern "C" fn(i64, *mut u8, *mut u8, *mut u8) -> i64>(&sym)
+            }
+            .expect("entry symbol");
+            unsafe {
+                f.call(
+                    arg,
+                    shared.as_mut_ptr(),
+                    privs.as_mut_ptr(),
+                    region.as_mut_ptr(),
+                )
+            }
+        } else {
+            let f = unsafe { ee.get_function::<unsafe extern "C" fn(i64) -> i64>(&sym) }
+                .expect("entry symbol");
+            unsafe { f.call(arg) }
+        };
         assert_eq!(
             vmv, nv,
             "{label}: native disagrees with the reference at {arg}"
