@@ -13,6 +13,48 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-10 (twentieth) — the third width, from both sides
+
+The nineteenth increment left the runtime's float at `f64`, so the float authority was swept from
+the module side only. It is now swept from both, and the corpus USES a float rather than only
+declaring one.
+
+**`f32` runtimes.** All sixteen word-address pairs now run on both float runtimes, so a module
+declaring a sixty-four-bit float meets a runtime that cannot host it and is refused at load -- the
+same asymmetry already swept on the other two widths.
+
+**A float in a body.** A `Float` field between the opaque and the word after it puts the float
+width into a computed OFFSET, exactly as the address width enters through the opaque. **The value
+read back is the integer field, never the float**, because a shape whose expected value were a
+computed float would report an `f32`-versus-`f64` rounding difference as a wrong answer, and that
+is a width difference the sweep is not entitled to call a defect.
+
+**21504 cells: 6800 ran and were correct, 14192 refused at load, 512 refused at compile, nothing
+else.** Green at the default build, three narrow selectors, and a build with `floats` ABSENT, where
+the float shape compiles out and the rest is unaffected.
+
+**Both refusal counts land on their own closed forms.** The 512 are the float shape against the
+sixteen no-float descriptors on each of thirty-two runtimes. The 6800 match the per-cell prediction
+exactly.
+
+**The prediction had to get BETTER to accommodate the float shape, which is the useful part.** It
+previously assumed every shape runs under every admissible descriptor, so it could be a product. A
+shape needing floats cannot run where the descriptor declares none, and that refusal comes from the
+COMPILER rather than the loader. It now models each shape's own requirement, which is a truer
+statement of what the sweep claims than the version it replaced.
+
+**The control gives 200 findings**, against 120 on the sixteen-runtime grid and twelve on the
+single-runtime sweep, still on exactly one shape -- and the count matches its own closed form:
+eighty on no-float descriptors, eighty at `f5`, forty at `f6`, the last halved because only `f64`
+runtimes admit a sixty-four-bit float.
+
+**Three analytic agreements now stand** between a measured count and an independently derived one:
+the cells that load, the cells the compiler refuses, and the findings the control produces. Each
+tests the HARNESS rather than the runtime, and a sweep that skipped a runtime or refused for the
+wrong reason would break them.
+
+---
+
 ## 2026-09-10 (nineteenth) — the second authority, and a check the narrow builds caught
 
 **Every width is carried TWICE** -- by the module header and by the runtime type parameters of

@@ -644,7 +644,65 @@ second authority neither masks it nor creates it.
 ### What this does NOT establish
 
 - The grid varies the word and address of the runtime and holds its float at `f64`. The float
-  authority is exercised only from the module side.
+  authority is exercised only from the module side. **Closed the same day; see the fifth addendum.**
 - Thirteen shapes is still not every construct, and the source-derived population of this census is
   still a lower bound.
 - No group in the table above that carries a probe count is closed by this.
+
+
+## Addendum, 2026-09-10 (fifth): the third width, from both sides
+
+The fourth addendum left the runtime's float fixed at `f64`, so the float authority was swept from
+the module side only. Two changes close it.
+
+**`f32` runtimes.** Each of the sixteen word-address pairs now runs on both float runtimes, so a
+module declaring a sixty-four-bit float meets a runtime that cannot host it and must be refused at
+load, the same asymmetry already swept on the other two widths.
+
+**A shape that uses a float.** Without one the float width affected only admissibility and never a
+computed offset. A `Float` field between the opaque and the word that follows it puts the float
+width into an offset exactly as the address width enters through the opaque. **The value read back
+is the integer field, never the float** -- a shape whose expected value were a computed float would
+report an `f32`-versus-`f64` rounding difference as a wrong answer, which is a width difference the
+sweep is not entitled to call a defect.
+
+### Result
+
+| | |
+|---|---|
+| cells | **21504** (32 runtimes by 48 descriptors by 14 shapes) |
+| ran and returned the expected value | **6800** |
+| refused at load | **14192** |
+| refused at compile | **512** |
+| faulted or wrong | **0** |
+
+Green at the default build, at `narrow-word-8`, `narrow-word-16` and `narrow-address-8`, and in a
+build with the `floats` feature absent, where the float shape is compiled out and the rest of the
+sweep is unaffected.
+
+### Both refusal counts land on their closed forms
+
+The 512 compile refusals are the float shape against every descriptor declaring no floats: sixteen
+such descriptors on each of thirty-two runtimes. The 6800 that ran match the per-cell prediction
+exactly.
+
+**The prediction had to get better to accommodate the float shape**, and that is an improvement
+rather than an accommodation. It previously assumed every shape runs under every admissible
+descriptor, so it could be a product. A shape that needs floats cannot run where the descriptor
+declares none, and its refusal comes from the COMPILER rather than the loader. The prediction now
+models each shape's own requirement, which is a truer statement of what the sweep claims.
+
+### The control
+
+Reintroducing the sub-floor address produces **200 findings**, against 120 on the sixteen-runtime
+grid and twelve on the single-runtime sweep, still on exactly one shape. The count matches its own
+closed form: eighty on no-float descriptors, eighty at `f5`, and forty at `f6`, the last halved
+because only the `f64` runtimes admit a sixty-four-bit float.
+
+### What this does NOT establish
+
+- Fourteen shapes is still not every construct, and the source-derived population of this census is
+  still a lower bound.
+- No group in the table above that carries a probe count is closed by this.
+- The float shape exercises the float width in a LAYOUT offset. Float arithmetic across a
+  width-mismatched pair is not swept here.

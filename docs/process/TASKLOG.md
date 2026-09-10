@@ -10,6 +10,22 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-10, session 65, twentieth increment). ALL THREE WIDTHS, BOTH
+> AUTHORITIES.**
+>
+> `f32` runtimes join the grid and the corpus gains a shape that USES a float in a layout offset, so
+> the float width is no longer swept from the module side alone. **21504 cells: 6800 ran and were
+> correct, 14192 refused at load, 512 refused at compile.** Green at the default build, three narrow
+> selectors, and a build with `floats` ABSENT.
+>
+> **Three independently derived counts now agree with measurement** -- the cells that load, the
+> cells the compiler refuses, and the 200 findings the control produces. Each tests the harness
+> rather than the runtime.
+>
+> **The prediction had to get better**: it assumed every shape runs under every admissible
+> descriptor, which a float-using shape breaks. It now models each shape's own requirement. See
+> `docs/decisions/INVALID_BYTECODE_CENSUS.md`.
+
 > **Currency note (2026-09-10, session 65, nineteenth increment). THE SECOND AUTHORITY IS SWEPT
 > TOO.**
 >

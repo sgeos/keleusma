@@ -76,20 +76,32 @@ struct Shape {
     name: &'static str,
     src: &'static str,
     expect: i64,
+    /// Whether the program cannot compile for a target that declares no floats.
+    ///
+    /// **This exists because the prediction below must model what each shape
+    /// NEEDS, not only what each descriptor offers.** Before a float-using
+    /// shape joined the corpus, every shape ran under every admissible
+    /// descriptor and the prediction could ignore the distinction. It cannot
+    /// now, and a prediction that ignored it would report a correct refusal as
+    /// a harness fault.
+    needs_floats: bool,
 }
 
 fn corpus() -> Vec<Shape> {
-    alloc::vec![
+    #[allow(unused_mut)]
+    let mut v = alloc::vec![
         Shape {
             name: "scalar arithmetic",
             src: "fn main() -> Word { 1 + 2 }",
             expect: 3,
+            needs_floats: false,
         },
         Shape {
             name: "word field after an opaque",
             src: "struct P { h: Handle, n: Word }\n\
                   fn main() -> Word { let p = P { h: make_handle(), n: 7 }; p.n }",
             expect: 7,
+            needs_floats: false,
         },
         Shape {
             name: "nested composite child",
@@ -98,6 +110,7 @@ fn corpus() -> Vec<Shape> {
                   fn main() -> Word { let o = Outer { i: Inner { h: make_handle(), a: 3 }, b: 5 }; \
                    o.i.a * 10 + o.b }",
             expect: 35,
+            needs_floats: false,
         },
         Shape {
             name: "array stride over opaque-bearing elements",
@@ -105,6 +118,7 @@ fn corpus() -> Vec<Shape> {
                   fn main() -> Word { let a = [P { h: make_handle(), n: 1 }, \
                    P { h: make_handle(), n: 2 }]; a[1].n * 10 + a[0].n }",
             expect: 21,
+            needs_floats: false,
         },
         Shape {
             name: "enum payload after a discriminant",
@@ -112,11 +126,13 @@ fn corpus() -> Vec<Shape> {
                   fn main() -> Word { let e = Held::Wrapped(make_handle(), 9); \
                    match e { Held::Wrapped(h, n) => n, Held::Empty => 0 } }",
             expect: 9,
+            needs_floats: false,
         },
         Shape {
             name: "tuple with fields after an opaque",
             src: "fn main() -> Word { let t = (make_handle(), 3, 4); t.1 * 2 + t.2 }",
             expect: 10,
+            needs_floats: false,
         },
         // ------------------------------------------------------------------
         // ADDED 2026-09-10. The six above caught the only defect known on this
@@ -136,6 +152,7 @@ fn corpus() -> Vec<Shape> {
             src: "struct P { h: Handle, f: Fixed<4>, n: Word }\n\
                   fn main() -> Word { let p = P { h: make_handle(), f: 2Fixed<4>, n: 7 }; p.n }",
             expect: 7,
+            needs_floats: false,
         },
         Shape {
             // A scalar that is ONE BYTE at every word width. Every other scalar
@@ -146,6 +163,7 @@ fn corpus() -> Vec<Shape> {
             src: "struct P { h: Handle, b: Byte, n: Word }\n\
                   fn main() -> Word { let p = P { h: make_handle(), b: 5Byte, n: 7 }; p.n }",
             expect: 7,
+            needs_floats: false,
         },
         Shape {
             // Stride COMPOSED with a field offset: the array's element size is
@@ -155,6 +173,7 @@ fn corpus() -> Vec<Shape> {
                   fn main() -> Word { let s = S { h: make_handle(), a: [4, 5], n: 6 }; \
                    s.a[1] * 10 + s.n }",
             expect: 56,
+            needs_floats: false,
         },
         Shape {
             // A COMPOSITE payload behind a discriminant word: the enum body's
@@ -165,6 +184,7 @@ fn corpus() -> Vec<Shape> {
                   fn main() -> Word { let e = Held::Wrapped(Inner { h: make_handle(), a: 8 }); \
                    match e { Held::Wrapped(i) => i.a, Held::Empty => 0 } }",
             expect: 8,
+            needs_floats: false,
         },
         Shape {
             // A const parameter ERASED to a literal at monomorphization, where
@@ -175,6 +195,7 @@ fn corpus() -> Vec<Shape> {
             src: "fn first<const n: Word>(a: [Word; n]) -> Word { a[0] }\n\
                   fn main() -> Word { first::<2>([4, 5]) }",
             expect: 4,
+            needs_floats: false,
         },
         Shape {
             // A MULTI-LIMB value over the word: the only shape whose
@@ -183,6 +204,7 @@ fn corpus() -> Vec<Shape> {
             src: "fn low<const n: Word>(m: Multiword<n>) -> Word { m[0] }\n\
                   fn main() -> Word { low::<2>((7, 0) as Multiword<2>) }",
             expect: 7,
+            needs_floats: false,
         },
         Shape {
             // Stride NESTED rather than composed: the outer index multiplies an
@@ -190,8 +212,30 @@ fn corpus() -> Vec<Shape> {
             name: "array of arrays",
             src: "fn main() -> Word { let a = [[1, 2], [3, 4]]; a[0][1] * 10 + a[1][0] }",
             expect: 23,
+            needs_floats: false,
         },
-    ]
+    ];
+    // THE THIRD WIDTH, USED RATHER THAN ONLY DECLARED.
+    //
+    // Without this shape the float width affects only ADMISSIBILITY: a module
+    // declaring a float the runtime cannot host is refused, and nothing else in
+    // the corpus ever places a float in a body. Here one sits between the
+    // opaque and the word that follows it, so the float width enters a computed
+    // OFFSET exactly as the address width does through the opaque.
+    //
+    // **The value read back is the integer field, never the float.** A shape
+    // whose expected value were a computed float would report a rounding
+    // difference between an `f32` and an `f64` runtime as a wrong answer, which
+    // is a width difference the sweep is not entitled to call a defect.
+    #[cfg(feature = "floats")]
+    v.push(Shape {
+        name: "word field after an opaque and a Float",
+        src: "struct P { h: Handle, f: Float, n: Word }\n\
+              fn main() -> Word { let p = P { h: make_handle(), f: 2Float, n: 7 }; p.n }",
+        expect: 7,
+        needs_floats: true,
+    });
+    v
 }
 
 /// What one (target, program) cell did.
@@ -385,14 +429,28 @@ fn no_accepted_target_lets_an_ordinary_program_reach_invalid_bytecode() {
     // shape stops running, that is worth a reader's attention even though neither is a defect.
     // The figure is derived from the corpus and descriptor set rather than written as a literal,
     // so adding either moves it.
+    // **THE EXPECTED TOTAL IS NOW PER CELL, NOT A PRODUCT.** It was
+    // `descriptors * shapes` while every shape could run under every
+    // descriptor. A float-using shape cannot run where the descriptor declares
+    // no floats, and its refusal is CORRECT; a product would report that as the
+    // sweep having changed shape.
+    let expected_to_run: usize = targets()
+        .iter()
+        .map(|(_, t)| {
+            corpus()
+                .iter()
+                .filter(|s| !s.needs_floats || t.has_floats)
+                .count()
+        })
+        .sum();
     assert_eq!(
         ran,
-        targets().len() * corpus().len(),
+        expected_to_run,
         "not every accepted descriptor ran every shape: {ran} of {} cells ran ({compile_refused} \
          compile-refused, {load_refused} load-refused, {other} other). None of those outcomes is \
          unsafe, but the sweep's shape has changed and the document describing it is now stale. \
          The cells that did not run:\n{}",
-        targets().len() * corpus().len(),
+        expected_to_run,
         not_run.join("\n")
     );
 }
@@ -499,7 +557,14 @@ fn sweep_runtime<
             && target.addr_bits_log2 <= A::BITS_LOG2
             && (!target.has_floats || target.float_bits_log2 <= F::BITS_LOG2)
         {
-            t.predicted += corpus().len();
+            // A shape that needs floats does not run where the descriptor
+            // declares none, and that refusal comes from the COMPILER rather
+            // than the loader. The prediction has to model the shape's own
+            // requirement or it would count a correct refusal as a fault.
+            t.predicted += corpus()
+                .iter()
+                .filter(|s| !s.needs_floats || target.has_floats)
+                .count();
         }
         for shape in corpus() {
             match run_cell_on::<W, A, F>(&target, &shape) {
@@ -525,18 +590,41 @@ fn sweep_runtime<
 /// out; what is NOT written out is any width number beside them. Each runtime's
 /// widths come from the trait, so a change to either family cannot leave a stale
 /// number here.
+/// The label for one runtime, built from the width traits so no number is
+/// written beside a type.
+fn rt_label<W: keleusma::word::Word, A: keleusma::address::Address, F: keleusma::float::Float>()
+-> String {
+    format!(
+        "w{}/a{}/f{}",
+        W::BITS_LOG2,
+        A::BITS_LOG2,
+        <F as keleusma::float::Float>::BITS_LOG2
+    )
+}
+
+/// Both float runtimes for one (word, address) pair.
+///
+/// **The float is the third authority and the grid held it fixed until
+/// 2026-09-10.** A module declaring a sixty-four-bit float against an `f32`
+/// runtime must be refused at load, the same asymmetry already swept on the
+/// word and the address.
+macro_rules! pair {
+    ($t:expr, $w:ty, $a:ty) => {
+        sweep_runtime::<$w, $a, f64>(&rt_label::<$w, $a, f64>(), $t);
+        sweep_runtime::<$w, $a, f32>(&rt_label::<$w, $a, f32>(), $t);
+    };
+}
+
+/// **THE GRID.** Every implemented word paired with every implemented address,
+/// each on both float runtimes.
+///
+/// The pairs are concrete Rust types, so the types themselves must be written
+/// out; what is NOT written out is any width number beside them. Each runtime's
+/// widths come from the trait, so a change to either family cannot leave a
+/// stale number here.
 macro_rules! grid {
     ($t:expr, $( ($w:ty, $a:ty) ),+ $(,)?) => {
-        $(
-            sweep_runtime::<$w, $a, f64>(
-                &format!(
-                    "w{}/a{}",
-                    <$w as keleusma::word::Word>::BITS_LOG2,
-                    <$a as keleusma::address::Address>::BITS_LOG2
-                ),
-                $t,
-            );
-        )+
+        $( pair!($t, $w, $a); )+
     };
 }
 
