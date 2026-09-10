@@ -30,18 +30,44 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > a codec conversion each report a fault as `InvalidBytecode` when the artefact was fine. Changing
 > which variant a public API returns is a breaking change.
 >
-> ## WHAT SESSION 65 DID, IN TWO HALVES
+> ## WHAT SESSION 65 DID, IN THREE LINES OF WORK
 >
-> **The first half measured four classes and found every one clean.** The second half found NINE
-> GUARDS THAT DID NOT CHECK WHAT THEY CLAIMED, which is the half worth reading.
+> | line | result |
+> |---|---|
+> | four MEASUREMENT classes | every one **clean**, each with a guard shown able to fail |
+> | the COMMENT-MATCHING guard class | **NINE guards repaired**, swept mechanically, closed in `../decisions/COMMENT_MATCHING_GUARD_SWEEP.md` |
+> | the NARROW-WIDTH suite | **twenty-nine failures repaired, NONE excluded**; 36 to 13 |
 >
-> | increment | result |
+> | measurement increment | result |
 > |---|---|
 > | the three COMPOSITE expression kinds | all three **WITHHELD**, each with an executable witness |
 > | the FLOAT flat-field class | **clean**, and the audit's scope argument that excluded it was FALSE |
 > | the module-versus-runtime width skew, WORD and ADDRESS | **clean**, including the axis the opaque defect lived on |
 > | the counter class the `forin_count` defect belonged to | **clean**, and now guarded |
-> | **the comment-matching guard class** | **NINE guards repaired**, swept mechanically, closed in `../decisions/COMMENT_MATCHING_GUARD_SWEEP.md` |
+>
+> ## THE THIRD LINE: THE NARROW WIDTH RUNS WHAT CAN RUN THERE
+>
+> The standing claim was *"the whole suite at a narrow width is unverified -- not shown broken, not
+> shown working."* **36 -> 33 -> 13**, binaries green 98 to 102, **nothing newly broken at any
+> step**, every figure from **diffing the failing SETS** rather than subtracting.
+>
+> **NOT ONE TEST WAS EXCLUDED, AND THE EASY ROUTE WAS AVAILABLE THROUGHOUT.** `tests/narrow_vm.rs`
+> already excludes `narrow-word-8`; one line would have extended that and turned six failures into
+> silence. Exclusions compound.
+>
+> **The thirteen that remain are REAL wide-word dependency, checked rather than assumed.** Seven are
+> programs declaring `require word >= 32` -- and those programs are the SELF-HOSTED STAGE SOURCES,
+> fourteen of which declare it. One asserts a 64-bit constant that does not exist at sixteen bits.
+> **Making any of them pass would weaken a program's stated requirement.**
+>
+> **The claim is sharper, not closed**: the narrow width runs everything that can run there, and what
+> cannot is enumerated with a reason. That is NOT "the narrow widths are verified" -- one corpus's
+> narrow-width REACH is unproven, and the probe that would have shown it was INVALID, failing at
+> neither width. Recorded because it was nearly reported as evidence the corpus had gone vacuous.
+>
+> **What IS established for every derived target**: at the default build the derived widths are
+> IDENTICAL to the hard-coded ones they replaced, so default behaviour is unchanged by construction
+> rather than by observation.
 >
 > ## THE SECOND HALF: GUARDS THAT MATCHED PROSE
 >
@@ -149,7 +175,7 @@ always-current, so it must be able to report itself stale rather than mislead a 
 **Validate by ANCESTRY and by CONTENT, never by a hash match.** A stamp requiring `HEAD~1` to equal a
 recorded parent is a claim that nothing else ever lands, and it has failed three times.
 
-**Ancestry**: `origin/v0.2.3` should contain `64f9d104` (`Merge pull request #402`), the last merge
+**Ancestry**: `origin/v0.2.3` should contain `b74380a2` (`Merge pull request #406`), the last merge
 before this refresh. If it does not, this file predates a reset and is stale.
 
 **It said `5fbad3a0` was "session 65's last code merge"**, which five later merges made false. The
@@ -159,6 +185,12 @@ wording now says what it is: the last merge before the refresh, which cannot go 
 **Content**, cheap and independent checks. **They were numbered 1, 2, 3, 7, 8, 9, 10, 4, 5, 6 until
 2026-09-08** — each insertion took the next unused number instead of renumbering, so the list read as
 though four checks were missing. The content was always correct; only the ordering lied.
+
+**AND IT HAPPENED TWICE MORE, ON 2026-09-09, IN THIS FILE.** Item 14 was inserted above item 13, and
+item 15 above item 14, by the same agent that had just read the paragraph above. The second was
+noticed while adding it; the first had gone unnoticed for a whole refresh. **Knowing the failure
+does not prevent it** — checking the rendered ORDER does, which is a different act from writing the
+next number. Both are corrected.
 
 1. `scripts/fingerprint.sh` reports `0x4327_63E1`. If it differs, a release was rolled since this was
    written and every version-adjacent statement here needs re-reading.
@@ -194,16 +226,22 @@ though four checks were missing. The content was always correct; only the orderi
     the census document against ITSELF, which is a different and weaker claim than the sibling guard
     that checks it against the source; both are needed, because a self-consistent document can still
     describe a tree that has moved.
-14. `docs/decisions/COMMENT_MATCHING_GUARD_SWEEP.md` exists, `tests/block_comment_tripwire.rs`
-    passes, and `every_file_the_comment_matching_sweep_names_still_exists` passes. The last checks
-    that every guard the sweep names is still there; the tripwire fails if a BLOCK comment appears
-    in a source one of those guards reads, since none of the nine strips handles one. **Exposure was
-    measured at zero when written**, and the tripwire is what keeps that true rather than assumed.
 13. **Session 65's four artefacts exist and pass.** `tests/flat_float_field_width.rs` and
     `tests/module_runtime_width_skew.rs` need `floats`; `tests/selfhost_counter_reset.rs` needs
     `self-host`; the two composite-kind witnesses live in `tests/selfhost_typecheck.rs` and need
     `self-host` too. **A default-feature run silently skips the last three**, which is the same trap
     item 7 records.
+
+14. `docs/decisions/COMMENT_MATCHING_GUARD_SWEEP.md` exists, `tests/block_comment_tripwire.rs`
+    passes, and `every_file_the_comment_matching_sweep_names_still_exists` passes. The last checks
+    that every guard the sweep names is still there; the tripwire fails if a BLOCK comment appears
+    in a source one of those guards reads, since none of the nine strips handles one. **Exposure was
+    measured at zero when written**, and the tripwire is what keeps that true rather than assumed.
+15. `docs/decisions/NARROW_WIDTH_FAILURE_CLASSIFICATION.md` records a residue of **THIRTEEN** and
+    names the cause of each. If it still says thirty-three, this file predates the narrow-width
+    repair. **Do not re-derive that figure by subtracting** — the document's own rule is to diff the
+    failing SETS, and this session twice met a total that concealed what it was hiding: once a
+    reduction masking three new failures, once a count coincidentally matching a stale one.
 
 **Do not trust the counts in this file without re-deriving them.** The construct-support boundary
 last read **96 SOk / 1 Refuses / 3 Diverges / 1 RefRejects** over 101 cases. It is ratcheted at
