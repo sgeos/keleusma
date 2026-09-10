@@ -1,5 +1,16 @@
 //! Arithmetic honours the module's DECLARED float width, not the runtime's.
 //!
+//! # THE WORD AND ADDRESS ARE A NEUTRAL BACKDROP, AND ARE DERIVED
+//!
+//! Every target here varies ONE dimension, the float; the word and address are only there to make
+//! a valid descriptor. Hard-coded at 64 bits they made the compiler refuse the whole target under
+//! `narrow-word-16` — runtime maximum 4 — so all fourteen tests failed on a dimension none of them
+//! is about, and the file could not run at a narrow width at all.
+//!
+//! **The declared-versus-runtime float skew survives the change**, which is the property: a narrow
+//! WORD build does not narrow the FLOAT runtime, so declaring a 32-bit float against an `f64`
+//! runtime still separates declared from actual at every width.
+//!
 //! # Why a test at the default width would prove nothing
 //!
 //! When the declared and runtime widths are equal, the narrowing is the
@@ -82,8 +93,8 @@ use keleusma::vm::{DEFAULT_ARENA_CAPACITY, GenericVm, GenericVmState};
 /// narrowing with float narrowing. This isolates the variable.
 fn f32_declaring_target() -> Target {
     Target {
-        word_bits_log2: 6,
-        addr_bits_log2: 6,
+        word_bits_log2: keleusma::bytecode::RUNTIME_WORD_BITS_LOG2,
+        addr_bits_log2: keleusma::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
         float_bits_log2: 5,
         has_floats: true,
         has_strings: false,
@@ -338,8 +349,8 @@ fn every_encodable_float_width_is_classified_and_none_is_skipped() {
 
     for bits in 0u8..=6 {
         let target = Target {
-            word_bits_log2: 6,
-            addr_bits_log2: 6,
+            word_bits_log2: keleusma::bytecode::RUNTIME_WORD_BITS_LOG2,
+            addr_bits_log2: keleusma::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
             float_bits_log2: bits,
             has_floats: true,
             has_strings: false,
@@ -420,8 +431,8 @@ fn every_encodable_float_width_is_classified_and_none_is_skipped() {
 fn a_target_claiming_floats_at_a_non_format_width_is_refused() {
     for bits in [0u8, 1, 2, 3, 4] {
         let target = Target {
-            word_bits_log2: 6,
-            addr_bits_log2: 6,
+            word_bits_log2: keleusma::bytecode::RUNTIME_WORD_BITS_LOG2,
+            addr_bits_log2: keleusma::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
             float_bits_log2: bits,
             has_floats: true,
             has_strings: false,
@@ -443,8 +454,8 @@ fn a_target_claiming_floats_at_a_non_format_width_is_refused() {
 fn a_target_claiming_floats_at_a_real_width_still_compiles() {
     for bits in [5u8, 6] {
         let target = Target {
-            word_bits_log2: 6,
-            addr_bits_log2: 6,
+            word_bits_log2: keleusma::bytecode::RUNTIME_WORD_BITS_LOG2,
+            addr_bits_log2: keleusma::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
             float_bits_log2: bits,
             has_floats: true,
             has_strings: false,
@@ -466,8 +477,8 @@ fn a_target_claiming_floats_at_a_real_width_still_compiles() {
 #[test]
 fn the_no_floats_sentinel_still_compiles_a_float_free_program() {
     let target = Target {
-        word_bits_log2: 6,
-        addr_bits_log2: 6,
+        word_bits_log2: keleusma::bytecode::RUNTIME_WORD_BITS_LOG2,
+        addr_bits_log2: keleusma::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
         float_bits_log2: 0,
         has_floats: false,
         has_strings: false,
