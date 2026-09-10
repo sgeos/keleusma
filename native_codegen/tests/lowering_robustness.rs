@@ -407,3 +407,133 @@ fn the_host_facing_planners_return_rather_than_panicking() {
         panics.first()
     );
 }
+
+/// **THE TWO ENTRY POINTS THE SWEEP ABOVE DOES NOT REACH, AND THEY WERE NAMED IN
+/// ITS OWN BRIEF.**
+///
+/// # How this gap was found
+///
+/// Not by a failure. By re-reading a completion condition after judging the work
+/// complete. It required, of each public entry point taking module or chunk
+/// data, **either** that malformed input is refused rather than panicking **or**
+/// that the entry point is not covered and why. `lower_chunk` and
+/// `module_lowered_op_indices` were neither. The claim in the handoff — "the
+/// entry points a host actually calls" — was true and narrower than the clause
+/// it was standing in for.
+///
+/// **A coverage claim broader than its measurement is the failure this line has
+/// on record as fabricated coverage.** This closes the gap rather than narrowing
+/// the claim, because the two are cheap to drive.
+///
+/// # What each one is
+///
+/// `lower_chunk` is a genuinely separate path: no module, so it refuses
+/// `Op::Call` outright and carries no signature table, no confinement verdicts
+/// and no native names. Its refusals therefore fire on inputs the module path
+/// accepts, which is exactly why a shared sweep does not cover it.
+///
+/// `module_lowered_op_indices` runs the module path in DIAGNOSTIC mode, with a
+/// refusal sink and a visit log. That mode collects where the whole-module path
+/// returns early, so it reaches code the plain path does not.
+///
+/// # Deliberately NOT covered, and named so the clause is satisfied
+///
+/// `host_native_declarations` takes an **LLVM module**, not bytecode. Its input
+/// class is a different one entirely — nothing a bytecode mutation can express —
+/// so it is out of this sweep's scope rather than an omission from it.
+#[test]
+fn the_remaining_entry_points_refuse_rather_than_panicking() {
+    use keleusma_native::{lower_chunk, module_lowered_op_indices, module_refusals};
+
+    let corpus = common::corpus();
+    assert!(!corpus.is_empty(), "the corpus loaded nothing");
+    install_location_hook();
+
+    let mut calls = 0usize;
+    let mut chunk_refusals = 0usize;
+    let mut chunk_lowered = 0usize;
+    let mut panics: Vec<(String, String, String, String)> = Vec::new();
+
+    for (name, m) in &corpus {
+        for (what, mutant) in mutants(m) {
+            calls += 1;
+            *LAST_PANIC_FILE.lock().unwrap() = None;
+            let r = catch_unwind(AssertUnwindSafe(|| {
+                // The whole-module diagnostic path.
+                let (refs, _ix) = module_lowered_op_indices(&mutant, LowerOptions::default());
+                // The plain refusal query, asserted rather than assumed covered.
+                let _ = module_refusals(&mutant, LowerOptions::default());
+                // The SINGLE-CHUNK path, on the entry chunk when there is one.
+                let mut ok = 0usize;
+                if let Some(e) = mutant.entry_point
+                    && let Some(chunk) = mutant.chunks.get(e)
+                {
+                    let ctx = inkwell::context::Context::create();
+                    let lm = ctx.create_module("kel_one");
+                    match lower_chunk(&ctx, &lm, chunk, "one", LowerOptions::default()) {
+                        Ok(_) => ok = 1,
+                        Err(_) => ok = 2,
+                    }
+                }
+                (refs.len(), ok)
+            }));
+            match r {
+                Ok((_, 1)) => chunk_lowered += 1,
+                Ok((_, 2)) => chunk_refusals += 1,
+                Ok(_) => {}
+                Err(e) => {
+                    let msg = e
+                        .downcast_ref::<String>()
+                        .cloned()
+                        .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
+                        .unwrap_or_else(|| "non-string panic".to_string());
+                    let file = LAST_PANIC_FILE
+                        .lock()
+                        .unwrap()
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_string());
+                    panics.push((name.clone(), what, file, msg.chars().take(110).collect()));
+                }
+            }
+        }
+    }
+
+    println!("\n================ THE REMAINING ENTRY POINTS");
+    println!("  calls                       : {calls}");
+    println!("  `lower_chunk` refused       : {chunk_refusals}");
+    println!("  `lower_chunk` lowered       : {chunk_lowered}");
+    println!("  PANICKED                    : {}", panics.len());
+    for (n, w, f, m) in panics.iter().take(6) {
+        println!("    {n} :: {w}\n      [{f}] {m}");
+    }
+    println!("================\n");
+
+    // **NON-VACUITY.** `lower_chunk` refuses `Op::Call` outright, so a sweep
+    // where it refused EVERYTHING would exercise one early return and say
+    // nothing. It must both accept and decline across the population.
+    assert!(
+        calls > 100,
+        "only {calls} calls, too few to describe anything"
+    );
+    assert!(
+        chunk_refusals > 0,
+        "`lower_chunk` refused nothing, so its refusal paths went unexercised"
+    );
+    assert!(
+        chunk_lowered > 0,
+        "`lower_chunk` lowered nothing, so every call died at an early return and \
+         a clean result here means only that the front door works"
+    );
+
+    let ours: Vec<_> = panics
+        .iter()
+        .filter(|(_, _, file, _)| !file.contains("confine.rs"))
+        .collect();
+    assert!(
+        ours.is_empty(),
+        "{} of {calls} calls PANICKED inside the BACKEND on one of the entry \
+         points the earlier sweep did not reach. First: {:?}",
+        ours.len(),
+        ours.first()
+    );
+}

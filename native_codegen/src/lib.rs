@@ -3048,6 +3048,28 @@ fn lower_chunk_body<'ctx>(
     // reachable only from the entry dispatch — never by fall-through, because
     // the yield terminated its block.
     let general_stream = chunk.block_type == BlockType::Stream && degenerate_yield.is_none();
+    // **A GENERAL STREAM NEEDS THE FRAME POINTERS, AND `lower_chunk` HAS NONE.**
+    //
+    // The single-chunk entry point receives no module, so it declares neither the
+    // private pointer that carries the resume state nor the region pointer that
+    // carries the locals and the spill slice. Everything below `expect`s both.
+    //
+    // **Measured, in code written the same day**: driving `lower_chunk` over
+    // mutated corpus chunks panicked with *"a general stream declares the private
+    // pointer"*. A panic is unrecoverable for the caller, and this is a public
+    // entry point — the same class of defect this file has closed twice already,
+    // reached through the one path the earlier sweep did not drive.
+    //
+    // Found by re-reading a completion condition after judging the work done, not
+    // by a failing test.
+    if general_stream && (private_base.is_none() || stream_frame_base.is_none()) {
+        return Err(LowerError::UnsupportedShape(String::from(
+            "a resumable stream lowered without a module: the single-chunk entry point \
+             declares neither the private pointer that holds the resume state nor the \
+             region pointer that holds the locals and the spill slice, so there is \
+             nowhere for the coroutine frame to live",
+        )));
+    }
     // **THE GENERAL PATH INHERITS THE DEGENERATE PREDICATE'S REJECTIONS, AND
     // SOME OF THOSE WERE SOUNDNESS REFUSALS.**
     //
