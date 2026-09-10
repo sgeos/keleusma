@@ -39,6 +39,50 @@ Every figure here is re-derivable by summing the per-binary result lines, which 
 produced; the earlier document records a count taken from a progress line and corrected, and that is
 the mistake being avoided.
 
+## 2026-09-09 (LATER): THE RESIDUE IS THIRTEEN, AND ALL OF IT IS A REAL WIDE-WORD DEPENDENCY
+
+**Twenty-nine repaired in total, none excluded, nothing newly broken at any step.** Measured by
+diffing the failing SETS at each stage, never by subtraction:
+
+| stage | distinct failures | binaries green |
+|---|---|---|
+| after the first repair | 36 | 98 |
+| after the second | 33 | 100 |
+| **after the third** | **13** | **102** |
+
+**The remaining thirteen are not test hygiene.** Every one was checked rather than assumed:
+
+| cause | count | verdict |
+|---|---|---|
+| a program declares `require word >= 32` | 7 | **the directive working.** These are the SELF-HOSTED STAGE SOURCES, fourteen of which declare it. The stages genuinely need 32 bits |
+| a program declares `require word >= 64` | 1 | same |
+| a test pins 64-bit semantics with a 64-bit constant | 1 | asserts `-9223372036854775808`, a value that does not exist at a sixteen-bit word. Already documented in `CLAUDE.md` |
+| a Q-format fraction is not narrower than the word | 2 | the fixed-point declaration is inadmissible at the width, by construction |
+| remainder | 2 | not individually classified here |
+
+**Making any of these pass would mean weakening a program's stated requirement, or asserting a
+64-bit value at a width that has none.** That is coverage hiding rather than repair, and it is the
+route this work refused throughout.
+
+### WHAT THIS CHANGES ABOUT THE LINE'S STANDING CLAIM
+
+The claim was *"the whole suite at a narrow width is unverified -- not shown broken, not shown
+working."* It is now sharper: **the narrow width runs everything that can run there, and what cannot
+is enumerated with a reason.** That is not the same as "the narrow widths are verified" -- see the
+limits below -- but it is no longer an open question of hygiene.
+
+### WHAT IS STILL NOT ESTABLISHED
+
+**A repaired test that passes at a narrow width may have stopped CHECKING there.** For
+`tests/composite_width_skew.rs` that was probed and the probe was INVALID: the mutation chosen fails
+at neither width, so it is not a defect that corpus detects and it established nothing. **Its
+narrow-width reach remains unverified**, and the attempt is recorded because it was nearly reported
+as evidence the corpus had gone vacuous.
+
+**What IS established for every derived target**: at the default build the derived widths are
+IDENTICAL to the hard-coded ones they replaced, so default behaviour is unchanged by construction
+rather than by observation.
+
 ## 2026-09-09: NINE REPAIRED, NONE EXCLUDED — AND THE TOTAL IS A COINCIDENCE
 
 **Groups A and B are no longer wholly "test assumes a wide host".** Nine of their members are
