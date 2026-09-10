@@ -10,6 +10,21 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-10, session 65, seventeenth increment). THE TARGET-DESCRIPTOR AXIS IS
+> SWEPT, AND IT IS CLEAN.**
+>
+> `tests/target_descriptor_axis.rs` sweeps every descriptor the compiler ACCEPTS against six shapes
+> whose layout is width-derived. **288 cells, all ran, all correct**, and green under all four
+> narrow selectors. **The control reproduces the sixteenth increment's defect through the same
+> harness**: with the address floor removed, twelve findings, each named by descriptor and shape,
+> alongside ninety correctly classified compile refusals.
+>
+> **Only one shape of six reaches that defect.** A small corpus could have missed it entirely.
+>
+> The census records what this does NOT establish: the population is still a lower bound, six shapes
+> is not every construct, and no group carrying a probe count is closed by it. See
+> `docs/decisions/INVALID_BYTECODE_CENSUS.md`.
+
 > **Currency note (2026-09-10, session 65, sixteenth increment). A MISSING WIDTH FLOOR, FOUND
 > UNDER THE REACH THAT WAS UNPROVEN.**
 >

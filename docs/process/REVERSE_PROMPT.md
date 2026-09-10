@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-10 (session 65, sixteenth increment) — a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
+**Date**: 2026-09-10 (session 65, seventeenth increment) — the target-descriptor axis swept clean over 288 cells with a control that reproduces the defect; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,36 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## SEVENTEENTH INCREMENT: THE AXIS THE CENSUS NEVER VARIED, SWEPT AND CLEAN
+
+The lead the sixteenth increment opened is now measured. `tests/target_descriptor_axis.rs` sweeps
+**every target descriptor the compiler accepts** -- word and address from the narrowest implemented
+width to the runtime's maximum, each with no floats and with every float format the runtime
+implements -- against six shapes chosen for the constructs whose layout is WIDTH-DERIVED.
+
+**48 descriptors by 6 shapes, 288 cells, and every cell RAN and returned the expected value.**
+Nothing refused, nothing faulted, no wrong answers. Green as well under all four narrow selectors,
+including the two eight-bit ones, where the descriptor space shrinks with the runtime's maxima.
+
+**The control is what makes that mean anything.** Removing the address floor and admitting sub-floor
+widths produces TWELVE findings, each named by descriptor and shape, reproducing the sixteenth
+increment's defect through this harness -- and the same run classifies ninety compile-time refusals
+correctly, so the refusal path is exercised too.
+
+**Only ONE shape of six reaches it.** The array stride multiplies an element size, so a zero-byte
+scalar surfaces there and is absorbed everywhere else. A corpus of five ordinary programs could have
+missed the defect entirely. That is an argument about how thin any small corpus's evidence is, not a
+claim that this one suffices.
+
+**The first draft of the sweep was wrong, and the sweep said so on its first run.** It required at
+least one cell to be REFUSED, assuming some admissible descriptor would be rejected. None is. The
+check asserted a property that had not been measured, inside a test written to measure properties.
+It now constrains the descriptor set's SPREAD, which is what non-vacuity actually needs.
+
+**What this does not establish** is written into the census beside the result: the population is
+still a lower bound, six shapes is not every construct, and no group carrying a probe count is
+closed by this.
 
 ## SIXTEENTH INCREMENT: A DEFECT UNDER THE UNPROVEN REACH, AND THE ARGUMENT APPLIED TO ONE WIDTH OF THREE
 

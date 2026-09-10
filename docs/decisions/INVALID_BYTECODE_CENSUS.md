@@ -483,3 +483,66 @@ census's REACH rather than a live hole. Three things follow, and only the first 
 
 **The next pass should ask each group's question again with the target descriptor as a variable**,
 not only the program.
+
+## Addendum, 2026-09-10 (second): the target-descriptor axis, swept
+
+The addendum above says the next pass should ask each group's question with the target descriptor as
+a variable rather than only the program. That sweep now exists as
+`tests/target_descriptor_axis.rs`.
+
+### What it varies, and how the bounds are obtained
+
+Every descriptor the compiler ACCEPTS: the word and address widths from the narrowest implemented
+one up to the runtime's maximum, each paired with no floats and with every float format the runtime
+implements. The bounds come from `RUNTIME_*_BITS_LOG2` and from the `Word` and `Address` trait
+impls, never from literals, so the sweep follows a build rather than describing one.
+
+Against a corpus of six shapes chosen for the constructs whose layout is width-derived: scalar
+arithmetic, a word field after an opaque, a nested composite child, an array striding over
+opaque-bearing elements, an enum payload after a discriminant, and a tuple with fields after an
+opaque. **Every expected value fits in an eight-bit word**, so a legitimate overflow at the narrow
+end cannot be mistaken for an artefact defect.
+
+### Result at the default build, 2026-09-10
+
+**48 descriptors by 6 shapes, 288 cells. Every cell RAN and returned the expected value.** Nothing
+was refused at compile time or at load, nothing faulted, and no cell returned a wrong answer.
+
+The sweep is also green under `narrow-word-8`, `narrow-word-16`, `narrow-address-8` and
+`narrow-address-16`, where the descriptor space shrinks with the runtime's maxima.
+
+### The sweep is shown able to report, which is the part that makes the result mean anything
+
+Removing the address floor and admitting sub-floor widths produces **twelve findings**, each named
+by descriptor and shape:
+
+```text
+w3/a2/nofloat / array stride over opaque-bearing elements: NewComposite flat operand on non-flat values
+```
+
+That is the defect of the first addendum, reproduced through this harness. The same run classified
+ninety compile-time refusals correctly, so the refusal path is exercised too.
+
+**Only one shape of the six reaches it.** The array stride is the shape that multiplies an element
+size, so a zero-byte scalar shows up there and is absorbed elsewhere. A corpus of five ordinary
+programs could easily have missed the defect entirely, which is an argument about how thin the
+evidence from any small corpus is, not a claim that this one is sufficient.
+
+### What the first draft of the sweep got wrong
+
+It required at least one cell to be REFUSED, on the assumption that some admissible descriptor would
+be rejected for these programs. **The sweep failed on its first run and said so.** Every descriptor
+the compiler accepts compiles and loads every shape in this corpus. The check asserted a property
+that had not been measured, inside a test written to measure properties, and it now constrains the
+descriptor set's SPREAD instead, which is what non-vacuity actually requires.
+
+### What this does NOT establish
+
+- **The census's population is still a lower bound.** This adds one axis. It does not make the
+  source-derived enumeration complete, and nothing here should be read as closing group A, F, G, I
+  or J, whose verdicts carry probe counts for the reason those counts exist.
+- The corpus is six shapes. A clean sweep over it is evidence about those shapes across the whole
+  descriptor space, not about every construct the language admits.
+- The sweep runs one runtime, the default `Vm` for the build. A module declaring narrower widths is
+  admitted by the load check, which is the skew this exercises; a runtime narrower than the module
+  is refused and is not part of this axis.
