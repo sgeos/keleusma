@@ -30,6 +30,32 @@
 //!
 //! Each is applied to a COPY, so no mutation escapes its own case.
 
+//! # Cost, stated here rather than in a commit message
+//!
+//! Measured at the stamp, 3350 mutations per sweep over all 69 corpus modules:
+//!
+//! | test | runtime |
+//! |---|---|
+//! | the host-facing planners | ~8s |
+//! | `lower_module` on malformed bytecode | ~27s |
+//! | the remaining entry points | ~68s |
+//!
+//! **Roughly 100 seconds, and the everyday suite's non-corpus half runs in about
+//! 290.** That is a real share of the budget and is recorded so the next person
+//! widening this can weigh it — the last widening made without measuring first
+//! ran past ten minutes and was killed.
+//!
+//! **Re-derive rather than trust these**: they move with the corpus and with the
+//! mutation set.
+//!
+//! # What the sample omits
+//!
+//! `MUTATIONS_PER_MODULE` caps each module, and the chunks are strided, so a
+//! module with many chunks has most of them unmutated. The five op POSITIONS are
+//! the start, two interior thirds, and the last two — an op elsewhere in a long
+//! chunk is never corrupted. **A clean result is therefore evidence about the
+//! KINDS of corruption listed below, not about every op in the corpus.**
+
 use keleusma::bytecode::{Module, Op};
 use keleusma_native::{LowerOptions, lower_module};
 use std::panic::{AssertUnwindSafe, catch_unwind};
