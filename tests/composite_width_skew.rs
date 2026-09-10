@@ -85,9 +85,20 @@ type WideWordNarrowAddress<'a, 'arena> = GenericVm<'a, 'arena, i64, u16, f64>;
 /// A sixty-four-bit word with a sixteen-bit address, floats included so the
 /// descriptor is admissible on the default runtime.
 fn wide_word_narrow_address() -> Target {
+    // **THE SKEW IS THE SUBJECT, SO BOTH ENDS MOVE WITH THE BUILD.** A literal 6-against-4 is not
+    // emittable under `narrow-word-16`, where the compiler's maximum is 4 — the file could not run
+    // at a narrow width. Pinning the word to the build's maximum and the address one step below it
+    // keeps the ADDRESS NARROWER THAN THE WORD, which is the configuration the opaque defect was
+    // first measured in. A particular pair of widths is not the property; their ordering is.
+    // The address is capped by the RUNTIME ALIAS too, not only by the word. `WideWordNarrowAddress`
+    // fixes it at `u16`, so a module declaring wider is refused at load — which a first attempt at
+    // this change did, breaking the DEFAULT build by asking for 5 against the alias's 4. Caught by
+    // running rather than by reading the edit.
+    const ALIAS_ADDR_BITS_LOG2: u8 = 4; // `u16`, the alias below
+    let word = keleusma::bytecode::RUNTIME_WORD_BITS_LOG2;
     Target {
-        word_bits_log2: 6,
-        addr_bits_log2: 4,
+        word_bits_log2: word,
+        addr_bits_log2: word.saturating_sub(1).clamp(2, ALIAS_ADDR_BITS_LOG2),
         ..Target::host()
     }
 }
