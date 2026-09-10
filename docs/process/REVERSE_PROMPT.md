@@ -164,6 +164,34 @@ strip would have missed it.
 `0 passed; 0 failed; 0 filtered out` because the binary is gated on `self-host`, and I nearly read
 that as the comment being harmless.
 
+## THE NARROW-WIDTH LINE REACHED ITS FLOOR: 36 -> 13, NONE EXCLUDED
+
+The standing claim was *"the whole suite at a narrow width is unverified — not shown broken, not
+shown working."* **Twenty-nine failures repaired, nothing newly broken, and no test excluded.**
+
+| stage | distinct failures | binaries green |
+|---|---|---|
+| start | 36 | 98 |
+| after deriving `tests/narrow_vm.rs` and my own two files | 33 | 100 |
+| after `tests/float_arith_width.rs` and `tests/composite_width_skew.rs` | **13** | **102** |
+
+Every figure came from **diffing the failing sets**, never subtraction — a rule that earned its keep
+twice here, once when a reduction concealed three new failures of my own, and once when a total
+coincidentally matched a stale recorded figure.
+
+**The thirteen that remain are real wide-word dependencies, checked rather than assumed.** Seven are
+programs declaring `require word >= 32` — the **self-hosted stage sources**, fourteen of which
+declare it, so the refusal is the directive working. One pins 64-bit semantics with a constant that
+does not exist at sixteen bits. Two are Q-format fractions inadmissible at the width by
+construction.
+
+**Making any of them pass would mean weakening a program's stated requirement**, which is coverage
+hiding rather than repair.
+
+**The claim is now sharper, not finished**: the narrow width runs everything that can run there, and
+what cannot is enumerated with a reason. That is not "the narrow widths are verified" — one
+corpus's narrow-width REACH is still unproven, and the probe that would have shown it was invalid.
+
 ## WHAT I GOT WRONG THIS SESSION, KEPT BECAUSE THE CORRECTIONS COST SOMETHING
 
 | claim | outcome |
