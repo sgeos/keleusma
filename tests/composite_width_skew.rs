@@ -94,13 +94,55 @@ fn wide_word_narrow_address() -> Target {
     // fixes it at `u16`, so a module declaring wider is refused at load — which a first attempt at
     // this change did, breaking the DEFAULT build by asking for 5 against the alias's 4. Caught by
     // running rather than by reading the edit.
+    // **THE FLOOR OF 2 WAS WRONG, AND IT WAS THE CLASS UNDER REPAIR APPEARING INSIDE THE REPAIR.**
+    // This clamp read `.clamp(2, ..)` until 2026-09-10. Under `narrow-word-8` the word is 3, one
+    // step below it is 2, and 2 is a FOUR-BIT address -- not a width any runtime implements, and
+    // one the layout sizes an opaque at zero bytes. The target compiled anyway and the fault
+    // surfaced much later as a runtime `InvalidBytecode` about non-flat operands. The floor is now
+    // taken from the narrowest type carrying `Address`, so it cannot drift below what exists.
     const ALIAS_ADDR_BITS_LOG2: u8 = 4; // `u16`, the alias below
+    let floor = <u8 as keleusma::address::Address>::BITS_LOG2;
     let word = keleusma::bytecode::RUNTIME_WORD_BITS_LOG2;
     Target {
         word_bits_log2: word,
-        addr_bits_log2: word.saturating_sub(1).clamp(2, ALIAS_ADDR_BITS_LOG2),
+        addr_bits_log2: word
+            .saturating_sub(1)
+            .clamp(floor, ALIAS_ADDR_BITS_LOG2.max(floor)),
         ..Target::host()
     }
+}
+
+/// **THE PREMISE OF THIS WHOLE FILE, ASSERTED RATHER THAN ASSUMED.**
+///
+/// Every test below is about a runtime whose word and address widths DIFFER.
+/// Both targets are derived from the build, and a derivation can collapse: if
+/// the address ends up equal to the word, the tests still pass and test
+/// NOTHING, which is the quietest possible failure. This states the premise so
+/// a build that cannot express the skew says so instead of going vacuous.
+///
+/// It is expected to FAIL under `narrow-word-8`, and that failure is the
+/// correct report: with the word already at the narrowest implemented width
+/// there is no narrower address to pair it with, so the file has no subject
+/// there. That is a build the file cannot cover, not a defect it has found.
+#[test]
+fn the_skew_this_file_depends_on_is_not_degenerate() {
+    let skewed = wide_word_narrow_address();
+    assert!(
+        skewed.addr_bits_log2 < skewed.word_bits_log2,
+        "the derived target has a {}-bit word and a {}-bit address, which is NOT a skew; every \
+         test in this file would pass while exercising nothing. With the word at the narrowest \
+         implemented width there is no narrower address, so this build cannot host the subject",
+        skewed.word_bits(),
+        skewed.address_bits(),
+    );
+    let six = Target::embedded_8();
+    assert!(
+        six.addr_bits_log2 > six.word_bits_log2,
+        "the 6502-class target is meant to skew the OTHER way, a narrow word with a wider \
+         address; it now reads {}-bit word against {}-bit address",
+        six.word_bits(),
+        six.address_bits(),
+    );
 }
 
 /// Reads the field that sits AFTER the opaque, which is the one a wrong opaque

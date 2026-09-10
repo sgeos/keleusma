@@ -1104,3 +1104,33 @@ fn is_width_mismatch(msg: &str) -> bool {
         || msg.contains("addr_bits_log2")
         || msg.contains("float_bits_log2")
 }
+
+/// **THE PARAGRAPH ABOVE WAS A CLAIM UNTIL THIS TEST EXISTED.**
+///
+/// Widening an assertion from a fixed wording to a predicate trades precision for reach, and the
+/// trade is only safe while the predicate still refuses the wrong thing. Nothing checked that.
+/// The doc asserted the property; a later edit relaxing this to "any rejection at all" would have
+/// made three tests in this file pass on any failure whatsoever, and every one of them would still
+/// have reported ok.
+///
+/// The negative cases are real `VmError` wordings from elsewhere in the runtime, not invented
+/// strings, so a message that genuinely changes shape shows up here rather than being assumed.
+#[test]
+fn the_width_mismatch_acceptor_refuses_rejections_for_other_reasons() {
+    for other in [
+        "bytecode version 1 is not supported by this runtime",
+        "flat opaque field read out of bounds",
+        "NewComposite flat operand on non-flat values",
+        "stack underflow",
+        "",
+    ] {
+        assert!(
+            !is_width_mismatch(other),
+            "the acceptor admitted {other:?}, which is not a width mismatch; the three tests              using it would then pass on a rejection for any reason and check nothing"
+        );
+    }
+    assert!(
+        is_width_mismatch("bytecode declares addr_bits_log2 = 6 but this Vm runs at 4"),
+        "the acceptor must still admit the real width rejection, or it has been narrowed into          uselessness rather than widened"
+    );
+}

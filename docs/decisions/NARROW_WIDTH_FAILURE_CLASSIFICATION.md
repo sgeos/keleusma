@@ -450,3 +450,34 @@ earlier. That run had compiled against a source file being mutated for an unrela
 same moment. The figures above come from a serial re-run on a quiescent tree. **A measurement taken
 while its subject is being edited measures neither state**, and the only reason it was caught is that
 the result was implausible enough to re-examine.
+
+## Addendum, 2026-09-10: the eight-bit selectors, and the reach that was unproven
+
+The residue of thirteen and everything above it is a `narrow-word-16` measurement. Two things were
+established on 2026-09-10 that this document could not previously say.
+
+**The unproven reach is now proven, for one build.** The claim left standing was that
+`tests/composite_width_skew.rs` might run at a narrow width while exercising nothing, and that the
+probe attempted at the time was INVALID because it failed at neither width. A valid probe now
+exists. Two of the four runtime sites that ask the layout for the opaque width were reverted in turn
+to asking for a word. Each failed at the DEFAULT build, which is the control that makes the probe
+mean something, and each also failed under `narrow-word-16`. One of the two failed strictly more
+tests at the narrow width than at the default. **That build is not a degraded copy of the default
+configuration.** No reach claim is made for any other narrow selector.
+
+**The eight-bit selectors were run over this file and they are not clean.** Under `narrow-word-8`
+it loses two tests and under `narrow-address-8` it loses eight. Both losses are inadmissible by
+construction, in the same category as the seven stage sources that declare `require word >= 32`:
+
+- one corpus entry expects the value 135, which does not exist in an eight-bit word;
+- both targets the file drives declare a SIXTEEN-BIT address, which a `narrow-address-8` build
+  cannot host, so their modules are refused at compile time;
+- with the word already at the narrowest implemented width there is no narrower address, so the
+  file's own skew premise cannot be met under `narrow-word-8`. The file now says so in a test
+  rather than passing while exercising nothing.
+
+**A defect was found underneath.** The derivation that produced the skewed target clamped the
+address to a floor of 2, a four-bit address, which is not a width any runtime implements and which
+the layout sizes at zero bytes. It compiled. See
+[`TARGET_WIDTH_FLOOR.md`](./TARGET_WIDTH_FLOOR.md). The residue count above is unaffected, since
+that build was never in the swept configuration.

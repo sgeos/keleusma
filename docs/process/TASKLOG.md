@@ -10,6 +10,34 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-10, session 65, sixteenth increment). A MISSING WIDTH FLOOR, FOUND
+> UNDER THE REACH THAT WAS UNPROVEN.**
+>
+> `Target::validate_against_runtime` checked that the word, address and float widths did not EXCEED
+> the runtime's and never checked the other end. A target declaring `addr_bits_log2 = 2` compiles;
+> the layout sizes an opaque by the ADDRESS width, four bits is zero bytes, and the fault surfaces
+> at run time as `InvalidBytecode("NewComposite flat operand on non-flat values")`, naming neither
+> the width nor the target. **The floor argument was already in the tree, twice, applied to the
+> FLOAT width only.** See `docs/decisions/TARGET_WIDTH_FLOOR.md`.
+>
+> **It was found by a derivation that produced one, and the derivation was this session's own** --
+> a clamp with a floor of 2, written in the narrow-width work, in the file whose subject is width
+> disagreement. Sixth instance of the class under repair appearing inside the repair.
+>
+> **The unproven reach is proven for ONE build, with a valid control.** Two of the four layout-asking
+> sites reverted to asking for a word; each failed at the DEFAULT build and each also failed under
+> `narrow-word-16`, one strictly more there. No claim is made for the other selectors, and the
+> eight-bit ones are measured and NOT clean, enumerated with reasons in
+> `docs/decisions/NARROW_WIDTH_FAILURE_CLASSIFICATION.md`.
+>
+> **The parity guard's silent direction is measured**, superseding the note below: a real seeding
+> deleted with its text left in a comment FAILS the guard, and with the strip disabled the same
+> mutation reports `ok`. The strip is load-bearing.
+>
+> **`docs/decisions/GUARD_REACH_CENSUS.md`** derives the population from git rather than recall:
+> eighteen files, **sixteen record a demonstration of their own guard failing, two do not**, both
+> named with the cost of closing them and deliberately left unrepaired.
+
 > **Currency note (2026-09-09, session 65, ninth increment). THE CLASS IS CLOSED, WITH A
 > POPULATION AND A VERDICT PER FILE.**
 >
@@ -22,7 +50,8 @@ Current sprint source of truth.
 > `parse.kel`; a historical note naming it makes the guard report the stage "still defines or
 > raises" it -- a false failure that names a cause which does not exist.
 > `tests/selfhost_driver_parity.rs` counts seeding calls against a calibration, so a comment adds a phantom.
-> **Only the false-FAILURE direction was verified for the parity guard**, and nothing claims more.
+> Only the false-FAILURE direction was verified for the parity guard AT THE TIME; the other
+> direction was measured on 2026-09-10 and is recorded in the note above.
 >
 > **The block-comment gap: measured at ZERO, then tripwired rather than parsed.** No source these
 > guards read carries a real block comment, but Keleusma supports them, so the risk is latent.
