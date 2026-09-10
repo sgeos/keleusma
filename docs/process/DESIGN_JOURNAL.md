@@ -13,6 +13,72 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-10 (sixteenth) — a missing width floor, found under the reach that was unproven
+
+**Subject: this session's own residue.** Two guard-reach claims the tree said it had NOT
+established, and the question of how many more there were. Closing the first found a defect.
+
+**`Target::validate_against_runtime` had no floor.** It checked that the word, address and float
+widths did not EXCEED the runtime's and never checked the other end. `addr_bits_log2 = 2` compiles.
+The layout sizes an opaque by the ADDRESS width, four bits is zero bytes, and the fault surfaces at
+run time as `InvalidBytecode("NewComposite flat operand on non-flat values")` -- naming neither the
+width nor the target, and pointing its reader at composite construction, the one place there is
+nothing wrong.
+
+**The argument was already in the tree, twice, applied to one width of three.**
+`validate_program_for_target` refuses `float_bits_log2` below 5 because such widths "are not
+formats ... so a target declaring one produces bytecode nothing will run", and
+`tests/float_arith_width.rs` records the provenance from the V0.3.0 line: widths 0, 1 and 2 collapse
+to ZERO BYTES. Neither sentence is about floats. `1 << bits_log2` over eight is zero below 3
+whichever field it names. Both floors now come from the trait impls rather than literals.
+
+**It was found by a derivation that produced one, and the derivation was mine.** The skew corpus
+clamps an address one step below the build's word with a floor of 2; under `narrow-word-8` the word
+is 3. Sixth instance this session of the class under repair appearing inside the repair, recorded
+because the frequency is now evidence about the work rather than about any one edit.
+
+**The premise guard is the transferable part.** Every test in that file is about widths that DIFFER,
+both targets are derived, and a derivation can collapse. Had the address come out equal to the word,
+all ten tests would have passed while exercising nothing, and no assertion would have reported it.
+The file now asserts its own premise and fails loudly where the build cannot host a skew. A build
+the file cannot cover is a different thing from a defect it has found.
+
+**The reach is proven for one build, with the control the earlier probe lacked.** Two of the four
+layout-asking sites reverted to asking for a word: each failed at the DEFAULT build, and each also
+failed under `narrow-word-16`, one strictly more there. The earlier attempt failed at neither width
+and was nearly reported as evidence the corpus had gone vacuous.
+
+**The parity guard's silent direction, superseding the ninth entry below.** A real seeding deleted
+with the identical text left in a comment FAILS the guard, naming the slot and both counts. Then the
+control: with the strip disabled and the same mutation in place, the guard reported `ok`. **The
+control matters more than the result** -- it shows the strip is load-bearing rather than decorative.
+
+**The census.** `docs/decisions/GUARD_REACH_CENSUS.md` derives the population from git rather than
+recall. Eighteen files; sixteen record a demonstration of their own guard failing; **two do not**,
+named with the cost of closing them and left unrepaired, because inventing a fourth near-identical
+test is not obviously worth more than saying plainly that two files rest on a property nothing
+checks. Three were repaired in passing, each of which had stated the property in PROSE while nothing
+checked it.
+
+**The census that claims to enumerate that class does not name the site.**
+
+`docs/decisions/INVALID_BYTECODE_CENSUS.md` asks, at each site, whether a module a SUPPORTED
+PRODUCER emitted and `verify()` ACCEPTED can reach it. One did, and no group names that message.
+
+**The axis is the reason.** The census enumerated by the error constructed at each site and reasoned
+about what a PROGRAM can express. A degenerate TARGET DESCRIPTOR is a different axis: the program is
+ordinary and the module is malformed by the width it declares. The population derivation does not
+reach that axis, and the assumption that the target is well-formed was never stated.
+
+The route is closed, so this is a record of the census's REACH, not a live hole. **What is NOT
+established is whether other sites are reachable the same way**, and the addendum says the next pass
+should ask each group's question with the target descriptor as a variable rather than only the
+program.
+
+**The doc build caught the last defect.** Two intra-doc links from public documentation to a
+`pub(crate)` item failed `cargo doc -D warnings` while tests, clippy and fmt were all green. That is
+the exact gap the project records as how V0.2.1 shipped with a red CI Doc job.
+
 ## 2026-09-09 (ninth) — closing the class, and choosing a tripwire over nine parsers
 
 **The class is closed with a population and a verdict per file**, not abandoned when the obvious

@@ -449,3 +449,37 @@ Groups F and J, the host-contract surfaces, are what remain unexamined alongside
 unprobed members of E and I. Groups F and J are host-contract surfaces and are lower value: a
 host that supplies a mis-sized buffer or an unregistered native has broken a stated contract, which
 is the same class as the native array-length finding rather than a hole in the guarantee.
+
+## Addendum, 2026-09-10: a site witnessed from a supported producer that this census does not name
+
+The census's question is *"can a module that a supported producer emitted, and that `verify()`
+accepted, reach this site?"* On 2026-09-10 one did, and the message it raised appears nowhere in the
+groups above:
+
+```text
+InvalidBytecode("NewComposite flat operand on non-flat values")   src/vm.rs
+```
+
+The producer was `compile_with_target` with a target declaring `addr_bits_log2 = 2`. That width was
+accepted because `Target::validate_against_runtime` had no floor. The layout sizes an opaque by the
+address width, four bits is zero bytes, and the value stopped being flat-eligible while the
+compiler's baked access still expected a flat body. See
+[`TARGET_WIDTH_FLOOR.md`](./TARGET_WIDTH_FLOOR.md).
+
+**The route is closed** — the width is now refused at compile time — so this is a record of the
+census's REACH rather than a live hole. Three things follow, and only the first is certain.
+
+1. **Fact.** A compiler-produced, verified module reached that site, and no group in this census
+   names that message. Whether the site is a member of an existing group, group D most plausibly,
+   is not determined here; the census does not publish a per-line classification and guessing one
+   would be worse than leaving it open.
+2. **Inference.** The census enumerated by the error CONSTRUCTED at a site and reasoned about each
+   group's reachability from the shapes a program can express. A degenerate TARGET DESCRIPTOR is a
+   different axis: the program is ordinary and the module is malformed by the width it declares.
+   Nothing in the population derivation reaches that axis.
+3. **Not established.** Whether other sites are reachable along the same axis. The floor closes the
+   two widths that had none, but the census's reasoning about what a supported producer can emit
+   assumed a well-formed target throughout, and that assumption is now known to have been unstated.
+
+**The next pass should ask each group's question again with the target descriptor as a variable**,
+not only the program.

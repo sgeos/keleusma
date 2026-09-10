@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-09 (session 65 CLOSE) — four classes measured clean, nine guards that did not check what they claimed repaired, and three of my own claims corrected
+**Date**: 2026-09-10 (session 65, sixteenth increment) — a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -26,6 +26,91 @@ They are the reason the large work is blocked, and nothing below decides any of 
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
 
+## SIXTEENTH INCREMENT: A DEFECT UNDER THE UNPROVEN REACH, AND THE ARGUMENT APPLIED TO ONE WIDTH OF THREE
+
+The session's own residue was the subject: two guard-reach claims it had NOT established, and the
+question of how many more there were. Closing the first found a defect in the runtime.
+
+**`Target::validate_against_runtime` had no floor.** It checked that the word, address and float
+widths did not EXCEED the runtime's and never checked the other end. A target declaring
+`addr_bits_log2 = 2` compiles. The layout sizes an opaque by the ADDRESS width, four bits is zero
+bytes, and the fault surfaces at run time as `InvalidBytecode("NewComposite flat operand on
+non-flat values")` -- a message naming neither the width nor the target, pointing its reader at
+composite construction, which is the one place there is nothing wrong.
+
+**The argument was already in the tree, twice, applied to the float width only.**
+`validate_program_for_target` refuses `float_bits_log2` below 5 because such widths "are not
+formats ... so a target declaring one produces bytecode nothing will run", and
+`tests/float_arith_width.rs` records where that came from: the V0.3.0 line observed that widths 0,
+1 and 2 collapse to ZERO BYTES. Neither sentence is about floats. `1 << bits_log2` over eight is
+zero below 3 whichever field it names.
+
+**It was found by a derivation that produced one, and the derivation was mine.**
+`composite_width_skew.rs` clamps an address one step below the build's word, with a floor of 2.
+Under `narrow-word-8` the word is 3 and the clamp handed back a four-bit address. **That is the
+sixth time this session the class under repair has appeared inside the repair**, and it is recorded
+because the frequency is now evidence about the work rather than about any one edit.
+
+**The premise guard is the transferable part.** Every test in that file is about widths that
+DIFFER, both targets are derived, and a derivation can collapse. If the address came out equal to
+the word, all ten tests would pass while exercising nothing. Nothing would have reported it. The
+file now asserts its own premise and fails loudly under `narrow-word-8`, where the word is already
+at the narrowest implemented width and no narrower address exists. **A build the file cannot cover
+is a different thing from a defect it has found**, and the message says which.
+
+## THE REACH THAT WAS UNPROVEN IS PROVEN, FOR ONE BUILD, WITH A VALID CONTROL
+
+Two of the four runtime sites that ask the layout for the opaque width were reverted to asking for
+a word. **Each failed at the DEFAULT build** -- the control that makes the probe mean anything --
+**and each also failed under `narrow-word-16`**. One failed STRICTLY MORE tests at the narrow width
+than at the default, so that build is not a degraded copy of the default. The earlier attempt
+failed at neither width and was nearly reported as evidence the corpus had gone vacuous.
+
+No reach claim is made for any other selector. The eight-bit ones were run over this file and are
+NOT clean: two losses at `narrow-word-8` and eight at `narrow-address-8`, every one inadmissible by
+construction, enumerated with its reason. The clamp repair removed a third that was the zero-byte
+opaque rather than a property of the corpus.
+
+## THE PARITY GUARD'S SILENT DIRECTION, AND THE CONTROL THAT MATTERS MORE THAN THE RESULT
+
+Only the false-FAILURE direction had been checked. Measured now: a real seeding call deleted from
+the shipping driver with the identical text left in a comment. The guard FAILED, naming the slot
+and both counts. **Then the control: with the comment strip disabled and the same mutation in
+place, the guard reported `ok`.** The strip is load-bearing, which is a stronger statement than the
+guard merely passing.
+
+## AND THE CENSUS THAT CLAIMS TO ENUMERATE THAT CLASS DOES NOT NAME THE SITE
+
+`docs/decisions/INVALID_BYTECODE_CENSUS.md` asks, at each site, whether a module a SUPPORTED
+PRODUCER emitted and `verify()` ACCEPTED can reach it. One did, and no group names that message.
+
+**The axis is the reason.** The census enumerated by the error constructed at each site and reasoned
+about what a PROGRAM can express. A degenerate TARGET DESCRIPTOR is a different axis: the program is
+ordinary and the module is malformed by the width it declares. The population derivation does not
+reach that axis, and the assumption that the target is well-formed was never stated.
+
+The route is closed, so this is a record of the census's REACH, not a live hole. **What is NOT
+established is whether other sites are reachable the same way**, and the addendum says the next pass
+should ask each group's question with the target descriptor as a variable rather than only the
+program.
+
+## THE CENSUS: SIXTEEN DEMONSTRATED, TWO CITED-BUT-NOT
+
+`docs/decisions/GUARD_REACH_CENSUS.md`. The population is DERIVED -- the test files added or
+modified between `639108fd` and `b74380a2` -- not recalled. Eighteen files. Sixteen record a
+demonstration of their own guard failing. **Two do not**: `composite_escape_routes.rs`, whose
+measured statements are about the tree rather than about the guard, and
+`forest_child_channels.rs`, which cites a measurement made on a DIFFERENT guard. Both are named
+with the cost of closing them, and neither is repaired. Inventing a fourth near-identical test is
+not obviously worth more than saying plainly that two files rest on a property nothing checks.
+
+**Three were repaired during the census.** `narrow_vm.rs`'s widened predicate said in prose that it
+"deliberately does NOT accept any error at all" -- a claim, with nothing checking it; a later edit
+relaxing it would have made three tests vacuous with all three still green. `forward_data_reference.rs`
+documents that a comment naming an anchor can make its ordering assertion report the WRONG STRUCTURE
+as a pass, and nothing checked that either. Both now have negative cases, and both were shown to
+fail when the mechanism they depend on is removed.
+
 ## NINTH INCREMENT: THE CLASS CLOSED, AND A TRIPWIRE CHOSEN OVER NINE PARSERS
 
 **The class is closed with a population and a verdict per file**, not abandoned when the obvious
@@ -37,8 +122,9 @@ comment line begins with `//` — a property of the search, not a judgement abou
 `parse.kel`, and a historical note naming it makes the guard report that the stage *"still defines or
 raises"* it — **a false failure that names a cause which does not exist**, sending its reader after a
 definition that is a comment. `tests/selfhost_driver_parity.rs` counts seeding calls against a calibration, so
-a comment adds a phantom. **Only the false-failure direction was verified for the parity guard**, and
-nothing claims more.
+a comment adds a phantom. The false-failure direction was verified then; **the silent-false-pass
+direction was measured on 2026-09-10 and the strip shown load-bearing** (see the sixteenth increment
+above).
 
 **The block-comment gap: measured, then tripwired rather than parsed.** All nine strips handle `//`
 and none handles `/* … */`. **Exposure today is zero** — the only `/*` in the stage sources is inside
