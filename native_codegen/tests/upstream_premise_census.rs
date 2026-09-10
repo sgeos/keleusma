@@ -37,6 +37,26 @@
 //! **Two of seven were unchecked and one of those was live.** Both are now
 //! checks rather than prose.
 //!
+//! # ⚠ WHAT THIS CENSUS DOES NOT COVER, AND IT IS THE CLASS THAT BIT HARDEST
+//!
+//! **Neither of the two WRONG refusals this line produced would have matched
+//! this phrase list.** They read *"native code CANNOT truncate the operand stack
+//! at `Reset`"* and *"the two edges DISAGREE about the operand stack"* — claims
+//! about **what the runtime does** and about **the lowering's own structure**.
+//! The list above was built entirely around claims about the COMPILER's output.
+//!
+//! **Widening to cover them was measured and rejected.** Adding "the runtime",
+//! "the reference", bare "cannot" and "disagree" takes the population from 29
+//! lines to **132**, and this census earns its keep by DISPOSITIONING each entry
+//! by what a false premise would cost. A 132-row table is one nobody maintains,
+//! and an unmaintained table is worse than none because it looks like coverage —
+//! the same reason `test_population_guard.rs` pins a count rather than 475 names.
+//!
+//! So the honest scope is: **claims about what the compiler emits, and claims of
+//! impossibility.** A claim about the RUNTIME's behaviour is not caught here and
+//! must be checked the way both of those were — by reading `src/vm.rs` at the
+//! same opcode.
+//!
 //! # What this test can and cannot do
 //!
 //! It counts premise-shaped comments. **It cannot tell a true premise from a
@@ -55,6 +75,12 @@ const PREMISE_PHRASES: &[&str] = &[
     "cannot happen",
     "never emits",
     "always emits",
+    // **WIDENED 2026-09-10 to impossibility claims**, after this census was
+    // found to miss the class that produced the session's two WRONG refusals.
+    // See the scope note in the header.
+    "cannot be",
+    "can never",
+    "impossible",
 ];
 
 /// Lines of `src/lib.rs` carrying at least one premise phrase, at the stamp.
@@ -62,7 +88,15 @@ const PREMISE_PHRASES: &[&str] = &[
 /// **Re-derive this rather than trusting it.** It moves with every increment
 /// that adds or removes such a comment, including this file's own prose being
 /// quoted into the emitter.
-const RECORDED_PREMISE_LINES: usize = 12;
+const RECORDED_PREMISE_LINES: usize = 29;
+// 12 -> 29 with the impossibility phrases. The seventeen new lines were read,
+// and they fall in one class: **statements of what the backend DECLINES** —
+// "an unknown width cannot be placed", "`Op::Add` cannot be lowered without
+// knowing its operands". A false premise there costs a REFUSAL, which is safe.
+//
+// The one that is a bound rather than a decline is the spill slice's
+// "why that bound cannot be exceeded", and it IS enforced: a chunk deeper than
+// `MAX_STACK` is refused by the recorded `stack_overflow`, not assumed away.
 
 fn premise_lines() -> Vec<(usize, String)> {
     let src = std::fs::read_to_string("src/lib.rs").expect("the emitter is readable");
