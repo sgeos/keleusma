@@ -590,3 +590,61 @@ it corrected one written the same day.
 Thirteen shapes is more than six and is still not every construct. The negative result is evidence
 about these shapes across the whole descriptor space. No group in the table above that carries a
 probe count is closed by it, and the population derived from source remains a lower bound.
+
+
+## Addendum, 2026-09-10 (fourth): the SECOND authority, swept
+
+The sweep above varies the module's declared widths against ONE runtime, the build's default `Vm`.
+That is only half the axis.
+
+**Every width is carried twice**: by the module header `compile_with_target` writes, and by the
+runtime type parameters of `GenericVm<W, A, F>`. The load check refuses a module WIDER than the
+runtime and admits one NARROWER, and that asymmetry is where the second authority becomes visible.
+It is where the original opaque-width defect lived.
+
+`Word` is implemented for `i8`, `i16`, `i32` and `i64` and `Address` for `u8`, `u16`, `u32` and
+`u64`, all unconditionally, so **sixteen runtime pairs are constructible in the default build** with
+no `narrow-*` feature. `tests/composite_width_skew.rs` already relies on that for two hand-picked
+runtimes; the grid generalises it from two points to all sixteen.
+
+### Result
+
+| | |
+|---|---|
+| cells | **9984** (16 runtimes by 48 descriptors by 13 shapes) |
+| ran and returned the expected value | **3900** |
+| refused at load | **6084** |
+| refused at compile, faulted, or wrong | **0** |
+
+Every load refusal is a module declaring a width wider than its runtime, which is **the guarantee
+working**. Green at the default build and at all four narrow selectors.
+
+### The harness is checked against an independent path
+
+The loader's documented rule is that a module is admitted when no declared width exceeds the
+runtime's. Evaluating that rule per cell, from the descriptor and the runtime's own trait constants,
+yields a prediction the loader never sees. The measured 3900 agrees with it exactly. **A sweep that
+silently skipped a runtime, or a refusal arriving from some check other than the width one, would
+break the agreement**, so this tests the harness rather than the runtime.
+
+**The first version of that check was wrong, and the narrow builds caught it.** It used a closed
+form, the product of two triangular numbers, which assumes the runtime grid and the descriptor set
+span the same widths. They do not: the grid is over concrete Rust types and is identical in every
+build, while the descriptor set shrinks with the build's maxima. The form was right at the default
+build and wrong at all four narrow selectors, reporting 2730 ran against 1170 predicted under
+`narrow-word-16`. The per-cell rule makes no assumption about how the two sets relate.
+
+### The control, and what it says about the defect
+
+Reintroducing the sub-floor address produces **120 findings**, against twelve on the single-runtime
+sweep, still on exactly one shape. They appear on **every runtime that admits the module**. That is
+a statement about the defect's nature: it is a property of the MODULE's declared width, and the
+second authority neither masks it nor creates it.
+
+### What this does NOT establish
+
+- The grid varies the word and address of the runtime and holds its float at `f64`. The float
+  authority is exercised only from the module side.
+- Thirteen shapes is still not every construct, and the source-derived population of this census is
+  still a lower bound.
+- No group in the table above that carries a probe count is closed by this.

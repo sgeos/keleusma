@@ -13,6 +13,44 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-10 (nineteenth) — the second authority, and a check the narrow builds caught
+
+**Every width is carried TWICE** -- by the module header and by the runtime type parameters of
+`GenericVm<W, A, F>`. The load check refuses a module WIDER than the runtime and admits one
+NARROWER, and that asymmetry is where the second authority becomes visible. It is where the
+original opaque-width defect lived. The descriptor sweep varied only the module.
+
+`Word` and `Address` are implemented for four types each, unconditionally, so **sixteen runtime
+pairs are constructible in the DEFAULT build**. The grid generalises `composite_width_skew.rs`'s
+two hand-picked runtimes to all sixteen.
+
+**9984 cells: 3900 ran and returned the expected value, 6084 were refused at load, nothing else.**
+Every refusal is a module wider than its runtime, which is the guarantee working. Green at the
+default build and all four narrow selectors.
+
+**The harness is checked against an independent path.** The loader's documented rule, evaluated per
+cell from the descriptor and the runtime's own trait constants, predicts which cells load without
+the loader's involvement. The measured 3900 agrees exactly. A sweep that skipped a runtime, or a
+refusal from some check other than the width one, would break the agreement.
+
+**The first version of that check was WRONG and the narrow builds caught it.** It used a closed
+form -- the product of two triangular numbers -- which assumes the runtime grid and the descriptor
+set span the same widths. They do not: the grid is over concrete Rust types and is identical in
+every build, while the descriptor set shrinks with the build's maxima. Right at the default build,
+wrong at all four narrow selectors: 2730 ran against 1170 predicted under `narrow-word-16`.
+
+**The control says something about the defect, not only about the harness.** Reintroducing the
+sub-floor address produces **120 findings** against twelve on the single-runtime sweep, still on
+exactly one shape, and they appear on EVERY runtime that admits the module. The defect is a
+property of the module's declared width; the second authority neither masks it nor creates it.
+
+**A tooling note worth keeping.** Writing Rust source through a non-raw Python triple-quoted string
+silently reinterprets backslash sequences: a Rust line continuation is consumed as a PYTHON
+continuation and `\n` becomes a real newline. Three assertion messages reached the tree mangled but
+still compiling, so nothing failed. Use a raw string.
+
+---
+
 ## 2026-09-10 (eighteenth) — a wider corpus found nothing, and corrected a claim anyway
 
 The seventeenth increment wrote down that six shapes is not every construct. **Seven were added,

@@ -396,3 +396,223 @@ fn no_accepted_target_lets_an_ordinary_program_reach_invalid_bytecode() {
         not_run.join("\n")
     );
 }
+
+// ---------------------------------------------------------------------------
+// THE SECOND AUTHORITY
+// ---------------------------------------------------------------------------
+//
+// Every width is carried TWICE: by the module header that `compile_with_target`
+// writes, and by the runtime type parameters of `GenericVm<W, A, F>`. The load
+// check refuses a module WIDER than the runtime and admits one NARROWER, and
+// that asymmetry is where the second authority becomes visible. It is where the
+// original opaque-width defect lived.
+//
+// The sweep above varies the module and holds the runtime at the build's
+// default `Vm`. So it exercises the narrower-module direction only at whichever
+// runtime the build happens to provide.
+//
+// `Word` is implemented for `i8`, `i16`, `i32` and `i64`, and `Address` for
+// `u8`, `u16`, `u32` and `u64`, all unconditionally. **Sixteen runtime pairs are
+// therefore constructible in the DEFAULT build**, with no `narrow-*` feature.
+// `tests/composite_width_skew.rs` already relies on that for two hand-picked
+// runtimes; this generalises it from two points to the whole grid.
+
+/// One cell, on an explicitly chosen runtime rather than the build's default.
+///
+/// The natives are built through the width traits rather than from literals,
+/// because a literal `100` would infer to the runtime's word only by accident
+/// of it fitting, and would stop compiling the moment a narrower word joined
+/// the grid.
+fn run_cell_on<
+    W: keleusma::word::Word,
+    A: keleusma::address::Address,
+    F: keleusma::float::Float,
+>(
+    target: &Target,
+    shape: &Shape,
+) -> Cell {
+    let full = format!("{PRELUDE}{}", shape.src);
+    let Ok(tokens) = tokenize(&full) else {
+        return Cell::CompileRefused;
+    };
+    let Ok(program) = parse(&tokens) else {
+        return Cell::CompileRefused;
+    };
+    let Ok(module) = compile_with_target(&program, target) else {
+        return Cell::CompileRefused;
+    };
+    let arena = Arena::with_capacity(8192);
+    let Ok(mut vm) = keleusma::vm::GenericVm::<'_, '_, W, A, F>::new(module, &arena) else {
+        return Cell::LoadRefused;
+    };
+    vm.register_native("make_handle", |_args| {
+        Ok(GenericValue::Opaque(host_arc(Handle)))
+    });
+    vm.register_native("handle_val", |_args| {
+        Ok(GenericValue::Int(W::from_i64_wrap(100)))
+    });
+    match vm.call(&[]) {
+        Ok(keleusma::vm::GenericVmState::Finished(GenericValue::Int(n))) => {
+            let got = keleusma::word::Word::to_i64(n);
+            if got == shape.expect {
+                Cell::Ran
+            } else {
+                Cell::WrongAnswer(got)
+            }
+        }
+        Ok(other) => Cell::OtherFault(format!("unexpected final state: {other:?}")),
+        Err(VmError::InvalidBytecode(m)) => Cell::InvalidBytecodeAtRuntime(m),
+        Err(e) => Cell::OtherFault(format!("{e:?}")),
+    }
+}
+
+/// Tally for one runtime across the whole descriptor and shape space.
+#[derive(Default)]
+struct Tally {
+    ran: usize,
+    /// How many cells SHOULD load, computed from the documented rule rather
+    /// than from the loader. See the closed-form check at the end of the grid.
+    predicted: usize,
+    compile_refused: usize,
+    load_refused: usize,
+    other: usize,
+    findings: Vec<String>,
+    wrong: Vec<String>,
+}
+
+fn sweep_runtime<
+    W: keleusma::word::Word,
+    A: keleusma::address::Address,
+    F: keleusma::float::Float,
+>(
+    rt: &str,
+    t: &mut Tally,
+) {
+    for (label, target) in targets() {
+        // **THE INDEPENDENT PATH.** The loader's rule is that a module is
+        // admitted when no declared width exceeds the runtime's. Evaluating
+        // that here, from the descriptor and the runtime's own trait constants,
+        // gives a prediction the loader never sees. A harness that silently
+        // skipped a runtime, or a refusal arriving from some check other than
+        // the width one, would break the agreement.
+        if target.word_bits_log2 <= W::BITS_LOG2
+            && target.addr_bits_log2 <= A::BITS_LOG2
+            && (!target.has_floats || target.float_bits_log2 <= F::BITS_LOG2)
+        {
+            t.predicted += corpus().len();
+        }
+        for shape in corpus() {
+            match run_cell_on::<W, A, F>(&target, &shape) {
+                Cell::Ran => t.ran += 1,
+                Cell::CompileRefused => t.compile_refused += 1,
+                Cell::LoadRefused => t.load_refused += 1,
+                Cell::OtherFault(_) => t.other += 1,
+                Cell::WrongAnswer(got) => t.wrong.push(format!(
+                    "runtime {rt} / {label} / {}: expected {}, got {got}",
+                    shape.name, shape.expect
+                )),
+                Cell::InvalidBytecodeAtRuntime(m) => t
+                    .findings
+                    .push(format!("runtime {rt} / {label} / {}: {m}", shape.name)),
+            }
+        }
+    }
+}
+
+/// **THE GRID.** Every implemented word paired with every implemented address.
+///
+/// The pairs are concrete Rust types, so the types themselves must be written
+/// out; what is NOT written out is any width number beside them. Each runtime's
+/// widths come from the trait, so a change to either family cannot leave a stale
+/// number here.
+macro_rules! grid {
+    ($t:expr, $( ($w:ty, $a:ty) ),+ $(,)?) => {
+        $(
+            sweep_runtime::<$w, $a, f64>(
+                &format!(
+                    "w{}/a{}",
+                    <$w as keleusma::word::Word>::BITS_LOG2,
+                    <$a as keleusma::address::Address>::BITS_LOG2
+                ),
+                $t,
+            );
+        )+
+    };
+}
+
+/// The same question as the sweep above, asked of the OTHER authority.
+///
+/// A load refusal here is the guarantee WORKING: a module declaring a width
+/// wider than the runtime must be refused, and most of this grid is exactly
+/// that. Only a module that compiled, loaded, and then faulted is a finding.
+#[test]
+fn no_runtime_and_module_width_pair_reaches_invalid_bytecode() {
+    let mut t = Tally::default();
+    grid!(
+        &mut t,
+        (i8, u8),
+        (i8, u16),
+        (i8, u32),
+        (i8, u64),
+        (i16, u8),
+        (i16, u16),
+        (i16, u32),
+        (i16, u64),
+        (i32, u8),
+        (i32, u16),
+        (i32, u32),
+        (i32, u64),
+        (i64, u8),
+        (i64, u16),
+        (i64, u32),
+        (i64, u64),
+    );
+
+    // **BOTH DIRECTIONS OF NON-VACUITY.** Cells must actually run, and cells
+    // must actually be refused -- unlike the single-runtime sweep, where
+    // requiring a refusal was an unmeasured assumption, here a refusal is
+    // GUARANTEED by the load check for any module wider than its runtime, and
+    // its absence would mean the grid had collapsed to one runtime.
+    assert!(
+        t.ran > 0,
+        "no cell ran on any runtime, so this grid measured nothing"
+    );
+    assert!(
+        t.load_refused > 0,
+        "no module was refused at load anywhere in a grid that pairs narrow runtimes with \
+         wide modules; the load-time width check is not being exercised"
+    );
+    assert!(
+        t.findings.is_empty(),
+        "a module that COMPILED and LOADED raised InvalidBytecode on some runtime:\n{}",
+        t.findings.join("\n")
+    );
+    assert!(
+        t.wrong.is_empty(),
+        "a module that compiled and loaded returned the WRONG ANSWER on some runtime, which \
+         nothing else reports:\n{}",
+        t.wrong.join("\n")
+    );
+
+    // **THE RAN COUNT IS PREDICTED BY AN INDEPENDENT PATH.**
+    //
+    // The first version of this check used a closed form: the product of two
+    // triangular numbers, on the assumption that the runtime grid and the
+    // descriptor set span the same widths. **They do not.** The grid is over
+    // CONCRETE Rust types and is the same in every build, while the descriptor
+    // set shrinks with the build's maxima. The form was right at the default
+    // build and wrong at all four narrow selectors, which is where it failed --
+    // 2730 ran against 1170 predicted under `narrow-word-16`.
+    //
+    // The prediction now comes from evaluating the loader's documented rule per
+    // cell, which holds in every build because it makes no assumption about how
+    // the two sets relate. Agreement tests the HARNESS, not the runtime.
+    assert_eq!(
+        t.ran, t.predicted,
+        "the number of cells that LOADED disagrees with the documented \
+         module-no-wider-than-runtime rule: {} ran, {} predicted, {} refused at load. Either the \
+         harness is not pairing what it claims to pair, or a refusal came from a check other \
+         than the width one",
+        t.ran, t.predicted, t.load_refused
+    );
+}

@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-10 (session 65, eighteenth increment) — the descriptor sweep widened to 624 cells, which found no new defect and corrected the characterisation of the old one; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
+**Date**: 2026-09-10 (session 65, nineteenth increment) — the runtime authority swept too, 9984 cells against an independent prediction of which should load; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,42 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## NINETEENTH INCREMENT: THE SECOND AUTHORITY, AND A CHECK THAT THE NARROW BUILDS CAUGHT
+
+**Every width is carried TWICE** -- by the module header and by the runtime type parameters of
+`GenericVm<W, A, F>`. The load check refuses a module WIDER than the runtime and admits one
+NARROWER, and that asymmetry is where the second authority becomes visible. It is where the
+original opaque-width defect lived. The descriptor sweep varied only the module.
+
+`Word` and `Address` are implemented for four types each, unconditionally, so **sixteen runtime
+pairs are constructible in the DEFAULT build**. The grid generalises `composite_width_skew.rs`'s
+two hand-picked runtimes to all sixteen.
+
+**9984 cells: 3900 ran and returned the expected value, 6084 were refused at load, nothing else.**
+Every refusal is a module wider than its runtime, which is the guarantee working. Green at the
+default build and all four narrow selectors.
+
+**The harness is checked against an independent path.** The loader's documented rule, evaluated per
+cell from the descriptor and the runtime's own trait constants, predicts which cells load without
+the loader's involvement. The measured 3900 agrees exactly. A sweep that skipped a runtime, or a
+refusal from some check other than the width one, would break the agreement.
+
+**The first version of that check was WRONG and the narrow builds caught it.** It used a closed
+form -- the product of two triangular numbers -- which assumes the runtime grid and the descriptor
+set span the same widths. They do not: the grid is over concrete Rust types and is identical in
+every build, while the descriptor set shrinks with the build's maxima. Right at the default build,
+wrong at all four narrow selectors: 2730 ran against 1170 predicted under `narrow-word-16`.
+
+**The control says something about the defect, not only about the harness.** Reintroducing the
+sub-floor address produces **120 findings** against twelve on the single-runtime sweep, still on
+exactly one shape, and they appear on EVERY runtime that admits the module. The defect is a
+property of the module's declared width; the second authority neither masks it nor creates it.
+
+**A tooling note worth keeping.** Writing Rust source through a non-raw Python triple-quoted string
+silently reinterprets backslash sequences: a Rust line continuation is consumed as a PYTHON
+continuation and `\n` becomes a real newline. Three assertion messages reached the tree mangled but
+still compiling, so nothing failed. Use a raw string.
 
 ## EIGHTEENTH INCREMENT: A WIDER CORPUS FOUND NOTHING, AND CORRECTED A CLAIM ANYWAY
 

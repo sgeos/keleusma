@@ -10,6 +10,26 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-10, session 65, nineteenth increment). THE SECOND AUTHORITY IS SWEPT
+> TOO.**
+>
+> Every width is carried by the module header AND by `GenericVm<W, A, F>`. Sixteen runtime pairs are
+> constructible in the default build, so the grid generalises `composite_width_skew.rs`'s two
+> hand-picked runtimes to all sixteen. **9984 cells: 3900 ran and were correct, 6084 refused at
+> load** -- every refusal a module wider than its runtime, which is the guarantee working. Green at
+> all four narrow selectors.
+>
+> **The harness is checked against an independent path**: the loader's documented rule, evaluated
+> per cell, predicts which cells load, and the measured count agrees exactly.
+>
+> **The first version of that check was wrong and the narrow builds caught it.** A closed form
+> assuming the runtime grid and descriptor set span the same widths; they do not, since the grid is
+> over concrete types and identical in every build.
+>
+> **The control gives 120 findings against twelve**, still on one shape, on every runtime that
+> admits the module -- so the defect is a property of the module's declared width, and the second
+> authority neither masks nor creates it. See `docs/decisions/INVALID_BYTECODE_CENSUS.md`.
+
 > **Currency note (2026-09-10, session 65, eighteenth increment). A WIDER CORPUS FOUND NOTHING,
 > AND CORRECTED A CLAIM ANYWAY.**
 >
