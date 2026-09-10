@@ -39,6 +39,8 @@
 //! | composite body base | constant — the site's planned offset |
 //! | **flat array element** | **runtime, guarded by `guard_array_index`** |
 //! | operand spill store and reload | constant — `spill_off` plus a compile-time slot index |
+//! | **nested array element** | **runtime, guarded by `guard_array_index`** — formed by integer ADD, not a gep |
+//! | four int-to-pointer conversions | each takes an address already formed above; they add no offset of their own |
 //!
 //! # What this test can and cannot do
 //!
@@ -52,18 +54,45 @@
 ///
 /// **Re-derive rather than trust.** It moves whenever a site is added or
 /// removed.
-const RECORDED_GEP_SITES: usize = 14;
+const RECORDED_GEP_SITES: usize = 19;
 // 12 -> 14 on 2026-09-09, when the operand spill slice landed. Both new sites
 // take a COMPILE-TIME constant offset: the slice base plus a slot index the
 // emitter counts out at lowering time, never a value the program supplies.
 // Classified here rather than absorbed into the count, which is the whole
 // contract of this file.
 
+/// Every way an address is FORMED in the emitter, not just the one this census
+/// was born from.
+///
+/// # ⚠ THIS LIST WAS ONE ENTRY LONG AND THAT WAS THE BLIND SPOT
+///
+/// The census matched `build_in_bounds_gep` alone, because the defect that
+/// prompted it — the unguarded flat array index — used a gep. **The NESTED array
+/// arm does the same arithmetic with `build_int_add` on the raw address**, and
+/// was therefore invisible to a file whose header claimed to cover "every
+/// pointer-arithmetic site in the emitter".
+///
+/// It is guarded, so nothing was wrong. **The CLAIM was broader than the
+/// measurement**, which is the shape this line records as fabricated coverage.
+///
+/// Found by asking of this census the question that produced the session's other
+/// findings: *what shape was the checker cast in?*
+const ADDRESS_FORMS: &[&str] = &[
+    // A pointer plus a byte offset.
+    "build_in_bounds_gep",
+    // The same arithmetic done on the address as an INTEGER, which a gep-only
+    // matcher cannot see.
+    "build_int_add(parent",
+    // An integer becoming a pointer: where a computed address enters pointer
+    // space and every later use trusts it.
+    "build_int_to_ptr",
+];
+
 fn gep_sites() -> Vec<(usize, String)> {
     let src = std::fs::read_to_string("src/lib.rs").expect("the emitter is readable");
     src.lines()
         .enumerate()
-        .filter(|(_, l)| l.contains("build_in_bounds_gep"))
+        .filter(|(_, l)| ADDRESS_FORMS.iter().any(|f| l.contains(f)))
         .map(|(i, l)| (i + 1, l.trim().to_string()))
         .collect()
 }
