@@ -528,6 +528,9 @@ size, so a zero-byte scalar shows up there and is absorbed elsewhere. A corpus o
 programs could easily have missed the defect entirely, which is an argument about how thin the
 evidence from any small corpus is, not a claim that this one is sufficient.
 
+**That characterisation was refined on the same day by widening the corpus, and it was incomplete.**
+See the third addendum below: striding is NOT the discriminating property.
+
 ### What the first draft of the sweep got wrong
 
 It required at least one cell to be REFUSED, on the assumption that some admissible descriptor would
@@ -546,3 +549,44 @@ descriptor set's SPREAD instead, which is what non-vacuity actually requires.
 - The sweep runs one runtime, the default `Vm` for the build. A module declaring narrower widths is
   admitted by the load check, which is the skew this exercises; a runtime narrower than the module
   is refused and is not part of this axis.
+
+
+## Addendum, 2026-09-10 (third): the corpus widened, and what it sharpened
+
+The addendum above says a clean sweep over six shapes is evidence about those shapes and not about
+every construct. Seven shapes were added, each for a width-derived layout property the first six do
+not stress rather than for variety:
+
+| added shape | the property it stresses |
+|---|---|
+| a word field after an opaque and a `Fixed<4>` | a scalar sized by the WORD whose default fraction count is DERIVED from that width, so its semantics move with the descriptor |
+| a word field after an opaque and a `Byte` | the only field whose offset contribution is descriptor-INVARIANT while its neighbours' are not |
+| an array inside a struct after an opaque | stride COMPOSED with a field offset |
+| a composite payload inside an enum | a body whose own offsets are computed behind a discriminant the descriptor sizes |
+| a const-generic array length | a const parameter ERASED to a literal that then feeds a size |
+| a `Multiword<2>` limb index | the only representation that is a COUNT of words rather than one |
+| an array of arrays | stride NESTED, the outer index multiplying a size that is itself an array's |
+
+### Result
+
+**48 descriptors by 13 shapes, 624 cells, every one RAN and returned the expected value**, at the
+default build and at all four narrow selectors including both eight-bit ones. The sweep names any
+cell that does not run, so a shape refused everywhere could not be mistaken for coverage.
+
+### What widening SHARPENED, which is the real result
+
+The control was re-run against the larger corpus and produces **exactly the same twelve findings, on
+exactly the same one shape.** Two of the seven additions also stride -- an array inside a struct, and
+an array of arrays -- and **neither reaches the defect.**
+
+So the earlier characterisation was incomplete. Striding is not the discriminating property. The
+element must itself CONTAIN the address-sized scalar: the reachable shape is an array whose ELEMENT
+is a composite bearing an opaque, and an array of words or of arrays strides just as much while
+reaching nothing. **A widened corpus that finds no new defect can still correct a claim**, and here
+it corrected one written the same day.
+
+### What this does NOT establish
+
+Thirteen shapes is more than six and is still not every construct. The negative result is evidence
+about these shapes across the whole descriptor space. No group in the table above that carries a
+probe count is closed by it, and the population derived from source remains a lower bound.

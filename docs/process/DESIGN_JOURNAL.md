@@ -13,6 +13,52 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-10 (eighteenth) — a wider corpus found nothing, and corrected a claim anyway
+
+The seventeenth increment wrote down that six shapes is not every construct. **Seven were added,
+each for a width-derived layout property the first six do not stress** -- a `Fixed<4>` whose default
+fraction count is derived from the word width, a `Byte` whose offset contribution is
+descriptor-invariant while its neighbours' are not, stride COMPOSED with a field offset, stride
+NESTED inside another array, a composite behind an enum discriminant, a const parameter erased to a
+literal that feeds a size, and a `Multiword<2>` limb index.
+
+**624 cells, every one ran and returned the expected value**, at the default build and at all four
+narrow selectors including both eight-bit ones. The sweep now NAMES any cell that does not run, so a
+shape refused everywhere cannot be mistaken for coverage.
+
+**The value is not the negative result.** Re-running the control against the larger corpus produces
+**exactly the same twelve findings on exactly the same one shape**. Two of the seven additions also
+stride, and NEITHER reaches the defect. So the characterisation written the same day -- *"the array
+stride multiplies an element size, so a zero-byte scalar surfaces there"* -- **was incomplete**.
+Striding is not the discriminating property. The element must itself CONTAIN the address-sized
+scalar. An array of words, or of arrays, strides just as much and reaches nothing.
+
+**A widened corpus that finds no new defect can still correct a claim.** That is the transferable
+part, and it is the second time this session a measurement's chief value was overturning a sentence
+rather than finding a fault.
+
+## THE INSTRUMENT DEFECT THAT COST THIS SESSION AN HOUR
+
+I started a second verification gate while the first was still running, having deleted the status
+file they both append to. The record interleaved two runs -- `CLIPPY=0` from one, the `ALLDONE` from
+the other, which had FAILED clippy -- and **no line could be attributed to a run**. Then I edited
+the gate script while it was executing.
+
+That is the shape `NARROW_WIDTH_FAILURE_CLASSIFICATION.md` already records, *"a measurement taken
+while its subject is being edited measures neither state"*, applied to my own log two increments
+after writing it down.
+
+**The repository already solves this and I did not use it.** `scripts/gate-in-worktree.sh` names its
+log per gate and per commit and pins the run to an immutable commit in a detached worktree, and its
+header states the reasoning verbatim: the rule that a gate result is valid only for the tip it ran
+against "stops being a discipline anyone has to remember and becomes a property of the mechanism."
+
+Its warning about STOPPING a gate was also correct in detail: a path-scoped kill of the driver left
+`cargo test --features self-host` reparented and still running, exactly as its header says, and the
+second target-scoped kill is not optional. The ad-hoc gate now writes one status file per run.
+
+---
+
 ## 2026-09-10 (seventeenth) — the axis the census never varied
 
 The lead the sixteenth increment opened is now measured. `tests/target_descriptor_axis.rs` sweeps

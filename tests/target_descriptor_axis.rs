@@ -118,6 +118,79 @@ fn corpus() -> Vec<Shape> {
             src: "fn main() -> Word { let t = (make_handle(), 3, 4); t.1 * 2 + t.2 }",
             expect: 10,
         },
+        // ------------------------------------------------------------------
+        // ADDED 2026-09-10. The six above caught the only defect known on this
+        // axis in exactly ONE of their number -- the array stride, because
+        // striding MULTIPLIES an element size, so a zero-byte scalar surfaces
+        // there and is absorbed everywhere else. Each shape below is here for a
+        // layout property the first six do not stress, named in its comment.
+        // Variety is not the criterion; a second plain struct would add cells
+        // and no information.
+        // ------------------------------------------------------------------
+        Shape {
+            // A scalar whose width is the WORD but whose value is a Q-format
+            // encoding, sitting between the opaque and the word that follows it.
+            // The default fraction count is DERIVED from the word width, so this
+            // is the one shape whose semantics move with the descriptor.
+            name: "word field after an opaque and a Fixed",
+            src: "struct P { h: Handle, f: Fixed<4>, n: Word }\n\
+                  fn main() -> Word { let p = P { h: make_handle(), f: 2Fixed<4>, n: 7 }; p.n }",
+            expect: 7,
+        },
+        Shape {
+            // A scalar that is ONE BYTE at every word width. Every other scalar
+            // in the corpus is sized by a width the descriptor moves, so this is
+            // the only field whose offset contribution is descriptor-invariant
+            // while its neighbours' are not.
+            name: "word field after an opaque and a Byte",
+            src: "struct P { h: Handle, b: Byte, n: Word }\n\
+                  fn main() -> Word { let p = P { h: make_handle(), b: 5Byte, n: 7 }; p.n }",
+            expect: 7,
+        },
+        Shape {
+            // Stride COMPOSED with a field offset: the array's element size is
+            // multiplied inside a body that already has an opaque ahead of it.
+            name: "array inside a struct after an opaque",
+            src: "struct S { h: Handle, a: [Word; 2], n: Word }\n\
+                  fn main() -> Word { let s = S { h: make_handle(), a: [4, 5], n: 6 }; \
+                   s.a[1] * 10 + s.n }",
+            expect: 56,
+        },
+        Shape {
+            // A COMPOSITE payload behind a discriminant word: the enum body's
+            // own offsets are computed relative to a header the descriptor sizes.
+            name: "composite payload inside an enum",
+            src: "struct Inner { h: Handle, a: Word }\n\
+                  enum Held { Wrapped(Inner), Empty }\n\
+                  fn main() -> Word { let e = Held::Wrapped(Inner { h: make_handle(), a: 8 }); \
+                   match e { Held::Wrapped(i) => i.a, Held::Empty => 0 } }",
+            expect: 8,
+        },
+        Shape {
+            // A const parameter ERASED to a literal at monomorphization, where
+            // the erased value then feeds an array SIZE. The width analyses see
+            // no symbolic constant, so this checks the erased size against the
+            // descriptor rather than against the source.
+            name: "const-generic array length",
+            src: "fn first<const n: Word>(a: [Word; n]) -> Word { a[0] }\n\
+                  fn main() -> Word { first::<2>([4, 5]) }",
+            expect: 4,
+        },
+        Shape {
+            // A MULTI-LIMB value over the word: the only shape whose
+            // representation is a count of words rather than a single one.
+            name: "multiword limb index",
+            src: "fn low<const n: Word>(m: Multiword<n>) -> Word { m[0] }\n\
+                  fn main() -> Word { low::<2>((7, 0) as Multiword<2>) }",
+            expect: 7,
+        },
+        Shape {
+            // Stride NESTED rather than composed: the outer index multiplies an
+            // element size that is itself an array's total size.
+            name: "array of arrays",
+            src: "fn main() -> Word { let a = [[1, 2], [3, 4]]; a[0][1] * 10 + a[1][0] }",
+            expect: 23,
+        },
     ]
 }
 
@@ -228,15 +301,28 @@ fn targets() -> Vec<(String, Target)> {
 fn no_accepted_target_lets_an_ordinary_program_reach_invalid_bytecode() {
     let mut findings: Vec<String> = Vec::new();
     let mut wrong: Vec<String> = Vec::new();
+    let mut not_run: Vec<String> = Vec::new();
     let (mut ran, mut compile_refused, mut load_refused, mut other) = (0, 0, 0, 0);
 
     for (label, target) in targets() {
         for shape in corpus() {
             match run_cell(&target, &shape) {
                 Cell::Ran => ran += 1,
-                Cell::CompileRefused => compile_refused += 1,
-                Cell::LoadRefused => load_refused += 1,
-                Cell::OtherFault(_) => other += 1,
+                Cell::CompileRefused => {
+                    compile_refused += 1;
+                    // **NAME THE SHAPE, NOT JUST THE COUNT.** A shape refused
+                    // under every descriptor contributes no evidence, and a bare
+                    // total cannot distinguish that from one refused nowhere.
+                    not_run.push(format!("{label} / {} (compile)", shape.name));
+                }
+                Cell::LoadRefused => {
+                    load_refused += 1;
+                    not_run.push(format!("{label} / {} (load)", shape.name));
+                }
+                Cell::OtherFault(m) => {
+                    other += 1;
+                    not_run.push(format!("{label} / {}: {m}", shape.name));
+                }
                 Cell::WrongAnswer(got) => wrong.push(format!(
                     "{label} / {}: expected {}, got {got}",
                     shape.name, shape.expect
@@ -304,7 +390,9 @@ fn no_accepted_target_lets_an_ordinary_program_reach_invalid_bytecode() {
         targets().len() * corpus().len(),
         "not every accepted descriptor ran every shape: {ran} of {} cells ran ({compile_refused} \
          compile-refused, {load_refused} load-refused, {other} other). None of those outcomes is \
-         unsafe, but the sweep's shape has changed and the document describing it is now stale",
-        targets().len() * corpus().len()
+         unsafe, but the sweep's shape has changed and the document describing it is now stale. \
+         The cells that did not run:\n{}",
+        targets().len() * corpus().len(),
+        not_run.join("\n")
     );
 }

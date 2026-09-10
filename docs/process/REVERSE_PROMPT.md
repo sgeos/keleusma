@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-10 (session 65, seventeenth increment) — the target-descriptor axis swept clean over 288 cells with a control that reproduces the defect; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
+**Date**: 2026-09-10 (session 65, eighteenth increment) — the descriptor sweep widened to 624 cells, which found no new defect and corrected the characterisation of the old one; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,50 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## EIGHTEENTH INCREMENT: A WIDER CORPUS FOUND NOTHING, AND CORRECTED A CLAIM ANYWAY
+
+The seventeenth increment wrote down that six shapes is not every construct. **Seven were added,
+each for a width-derived layout property the first six do not stress** -- a `Fixed<4>` whose default
+fraction count is derived from the word width, a `Byte` whose offset contribution is
+descriptor-invariant while its neighbours' are not, stride COMPOSED with a field offset, stride
+NESTED inside another array, a composite behind an enum discriminant, a const parameter erased to a
+literal that feeds a size, and a `Multiword<2>` limb index.
+
+**624 cells, every one ran and returned the expected value**, at the default build and at all four
+narrow selectors including both eight-bit ones. The sweep now NAMES any cell that does not run, so a
+shape refused everywhere cannot be mistaken for coverage.
+
+**The value is not the negative result.** Re-running the control against the larger corpus produces
+**exactly the same twelve findings on exactly the same one shape**. Two of the seven additions also
+stride, and NEITHER reaches the defect. So the characterisation written the same day -- *"the array
+stride multiplies an element size, so a zero-byte scalar surfaces there"* -- **was incomplete**.
+Striding is not the discriminating property. The element must itself CONTAIN the address-sized
+scalar. An array of words, or of arrays, strides just as much and reaches nothing.
+
+**A widened corpus that finds no new defect can still correct a claim.** That is the transferable
+part, and it is the second time this session a measurement's chief value was overturning a sentence
+rather than finding a fault.
+
+## THE INSTRUMENT DEFECT THAT COST THIS SESSION AN HOUR
+
+I started a second verification gate while the first was still running, having deleted the status
+file they both append to. The record interleaved two runs -- `CLIPPY=0` from one, the `ALLDONE` from
+the other, which had FAILED clippy -- and **no line could be attributed to a run**. Then I edited
+the gate script while it was executing.
+
+That is the shape `NARROW_WIDTH_FAILURE_CLASSIFICATION.md` already records, *"a measurement taken
+while its subject is being edited measures neither state"*, applied to my own log two increments
+after writing it down.
+
+**The repository already solves this and I did not use it.** `scripts/gate-in-worktree.sh` names its
+log per gate and per commit and pins the run to an immutable commit in a detached worktree, and its
+header states the reasoning verbatim: the rule that a gate result is valid only for the tip it ran
+against "stops being a discipline anyone has to remember and becomes a property of the mechanism."
+
+Its warning about STOPPING a gate was also correct in detail: a path-scoped kill of the driver left
+`cargo test --features self-host` reparented and still running, exactly as its header says, and the
+second target-scoped kill is not optional. The ad-hoc gate now writes one status file per run.
 
 ## SEVENTEENTH INCREMENT: THE AXIS THE CENSUS NEVER VARIED, SWEPT AND CLEAN
 

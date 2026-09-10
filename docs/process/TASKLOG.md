@@ -10,6 +10,22 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-10, session 65, eighteenth increment). A WIDER CORPUS FOUND NOTHING,
+> AND CORRECTED A CLAIM ANYWAY.**
+>
+> Seven shapes added to `tests/target_descriptor_axis.rs`, each for a width-derived layout property
+> the first six do not stress. **624 cells, all ran, all correct**, at the default build and all
+> four narrow selectors. The sweep now NAMES any cell that does not run.
+>
+> **The control produces exactly the same twelve findings on exactly the same one shape.** Two of
+> the seven additions also stride and neither reaches the defect, so the same-day characterisation
+> -- that striding is what exposes it -- **was incomplete**. The element must itself CONTAIN the
+> address-sized scalar.
+>
+> **An instrument defect cost an hour**: two concurrent gates appending to one status file, so no
+> line was attributable. `scripts/gate-in-worktree.sh` already solves this and was not used. Its
+> warning that killing the driver leaves cargo children reparented was also correct in detail.
+
 > **Currency note (2026-09-10, session 65, seventeenth increment). THE TARGET-DESCRIPTOR AXIS IS
 > SWEPT, AND IT IS CLEAN.**
 >
