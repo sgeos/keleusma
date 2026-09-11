@@ -19,6 +19,8 @@ use keleusma::parser::parse;
 use keleusma::vm::{Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for};
 use keleusma_native::{LowerOptions, module_refusals};
 
+mod common;
+
 fn try_compile(src: &str) -> Result<Module, String> {
     let toks = tokenize(src).map_err(|e| format!("lex: {e:?}"))?;
     let ast = parse(&toks).map_err(|e| format!("parse: {e:?}"))?;
@@ -221,4 +223,96 @@ fn what_the_branch_target_collision_looks_like() {
         println!("  {i:3} {op:?}{mark}");
     }
     println!("================\n");
+}
+
+/// **DOES THE CORPUS CONTAIN A GENERAL STREAM? MEASURED BY VISITS, AFTER A
+/// SIGNATURE-BASED PROBE GOT IT WRONG.**
+///
+/// # The wrong probe, kept as the reason this one is shaped differently
+///
+/// The first attempt classified a stream chunk as general when its lowered
+/// function carried the three arena pointers, and reported **26 of 28 corpus
+/// modules taking the general path** — which would have made the ISA census's
+/// `Reset` disposition stale and sent me to "correct" an accurate README.
+///
+/// **The signature does not say that.** `needs_region` is decided per MODULE: a
+/// module where any chunk builds a composite gives EVERY chunk the pointers, so
+/// a degenerate stream in such a module looks identical to a general one. The
+/// emitter's own comment at `needs_region` records this exact hazard — *"adding
+/// the pointers to every stream changed the signature of the degenerate chunks
+/// too"* — and I had read it earlier the same day.
+///
+/// # What is measured instead
+///
+/// Whether the lowering VISITS the `Op::Reset` index, which is the property the
+/// census reports and is not confounded by module-level decisions. A known
+/// general stream is driven alongside as a positive control, because a probe
+/// that reports "none" everywhere is indistinguishable from one that cannot
+/// report anything.
+#[test]
+fn the_corpus_contains_no_general_stream_and_the_control_proves_the_probe_works() {
+    use keleusma::bytecode::Op;
+    use keleusma_native::module_lowered_op_indices;
+
+    let corpus = common::corpus();
+    assert!(!corpus.is_empty(), "the corpus loaded nothing");
+
+    let mut with_reset = 0usize;
+    let mut visited = 0usize;
+    for (_name, m) in &corpus {
+        let (_r, indices) = module_lowered_op_indices(m, LowerOptions::default());
+        for (ci, chunk) in m.chunks.iter().enumerate() {
+            let resets: Vec<usize> = chunk
+                .ops
+                .iter()
+                .enumerate()
+                .filter(|(_, o)| matches!(o, Op::Reset))
+                .map(|(i, _)| i)
+                .collect();
+            if resets.is_empty() {
+                continue;
+            }
+            with_reset += 1;
+            if let Some(Some(seen)) = indices.get(ci)
+                && resets.iter().any(|r| seen.contains(r))
+            {
+                visited += 1;
+            }
+        }
+    }
+
+    // **THE POSITIVE CONTROL.** A stream the general path certainly takes.
+    let ctrl = try_compile("loop main(t: Word) -> Word { let a = yield t; yield a + 1 }")
+        .expect("the control compiles");
+    let centry = ctrl.entry_point.expect("entry");
+    let (_cr, cix) = module_lowered_op_indices(&ctrl, LowerOptions::default());
+    let creset = ctrl.chunks[centry]
+        .ops
+        .iter()
+        .position(|o| matches!(o, Op::Reset))
+        .expect("the control carries a Reset");
+    let control_visited = matches!(cix.get(centry), Some(Some(seen)) if seen.contains(&creset));
+
+    println!("\n================ DOES ANYTHING VISIT `Op::Reset`?");
+    println!("  corpus chunks carrying a Reset : {with_reset}");
+    println!("  ...where it was VISITED        : {visited}");
+    println!("  control (a general stream)     : visited = {control_visited}");
+    println!(
+        "\n  The corpus figure being zero is a fact about the CORPUS. The control\n  \
+         shows the backend visits `Reset` whenever a general stream appears, so\n  \
+         the census's disposition is accurate and stays.\n================\n"
+    );
+
+    assert!(with_reset > 0, "no corpus chunk carries a Reset");
+    assert!(
+        control_visited,
+        "the control's Reset was not visited, so this probe cannot report a \
+         positive and its zero above means nothing"
+    );
+    assert_eq!(
+        visited, 0,
+        "a corpus chunk now visits `Op::Reset`, so the ISA lowering census's \
+         disposition -- Reset accepted by a route it does not instrument -- has \
+         become stale and must be re-derived rather than left standing"
+    );
 }

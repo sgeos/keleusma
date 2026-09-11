@@ -34,8 +34,14 @@
 ///
 /// **Derive this, do not transcribe it.** A count in this tree once read
 /// "nineteen" while the block it described held twenty-nine.
-const RECORDED_TEST_FUNCTIONS: usize = 475;
-// 474 when the figure was derived from git at the previous head, plus THIS
+const RECORDED_TEST_FUNCTIONS: usize = 476;
+// 475 -> 476 on 2026-09-10: one added,
+// `the_corpus_contains_no_general_stream_and_the_control_proves_the_probe_works`.
+// Two scaffolding probes written in the same increment were REMOVED, both
+// subsumed by that one, so the net is a single name — accounted for here in the
+// way the failure message demands rather than absorbed into the figure.
+//
+// 474 when the figure was first derived from git at an earlier head, plus THIS
 // FILE'S OWN test. The guard fired on its own arrival, which is the first
 // evidence that it fires at all — and the update is accountable in the way the
 // failure message demands: the one added name is named here.
