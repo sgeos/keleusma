@@ -13,6 +13,73 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-11 (fiftieth) — the direct-operand form, and a test name that encoded a tally
+
+The forty-ninth increment named a limit no prior sizing had modelled: a field read standing as a
+DIRECT OPERAND types nothing, because an operand row carries a tag or a name id and has no form for
+a field read. This closes it.
+
+### WHAT CHANGED
+
+One arm in the host's operand reporter, one arm in the stage's resolver, and a widened collection
+pass. `operand_form` gains **form 2**, whose value is a field-read ROW INDEX. The stage resolves it
+with `ty_field_operand`, which is the binding case's `tyb_field_tag` behind a range check — **the
+same join, deliberately not a second resolver**, because `let a = p.x; a + true` and `p.x + true`
+differ only in whether a name stands between the read and the comparison.
+
+The field-read table now collects **every** read with a plain-name base, wherever it appears,
+deduplicated by the `(base, field)` pair. A read that is both bound by a `let` and used directly is
+one row addressed from both sides.
+
+### THE SHORTCUT THAT WAS REFUSED, RECORDED WHERE THE FORM IS DEFINED
+
+Form 2 was avoidable. Registering each direct-operand read under an **invented name**, emitting the
+form-3 binding row the `let` case already emits, and reporting form 1 would have worked with **no
+stage change at all**, and every test would have passed.
+
+It is refused because the invented name IS the join. Nothing in any source file spells it, so the
+host would be asserting that this operand and that binding are the same thing — the decision this
+channel exists to leave with the stage — hidden behind an identifier no reader can look up.
+
+### OPT-IN, BECAUSE TEN CALLERS COMPARE AGAINST THE PIPELINE
+
+Ten call sites build node tables that are compared against the pipeline's own extraction, which
+produces no field-read operand and cannot. The field-read index is therefore a parameter of a
+separate entry point, supplied only by the driver that also supplies the tables the form points
+into. With an empty index every operand behaves exactly as before.
+
+### THE FORM REACHES FIVE NODE KINDS, AND EACH APPLIES A DIFFERENT RULE
+
+Binary operator, condition, array element, branch pair, and function tail against its declared
+return. Both halves are pinned per kind: a wrong tag shows as a missed rejection on the ill-typed
+side, and a tag where none belongs shows as a REJECTED valid program on the well-typed side — the
+error a rejection corpus cannot detect, which the previous increment demonstrated the hard way.
+
+A second control pins that a field read whose declared type is another STRUCT still types NOTHING.
+Two struct-typed reads of different types in one body must not be made to disagree; were struct
+identity to reach the scalar tag space, the predicate every operand goes through would start
+refusing valid programs.
+
+### A PROCESS FINDING: A TEST NAME THAT ENCODED A TALLY
+
+`the_field_read_channel_reaches_three_base_forms_and_not_two` was one increment old and already
+wrong, and correcting it meant a rename rippling through five documents plus the citation guard's
+own commentary. **A name that encodes a count needs renaming every time the count moves, and every
+citation of it goes stale at that moment.** Renamed to
+`the_field_read_channel_records_what_it_does_not_reach`; the tallies live in the body, where moving
+one costs a diff rather than a sweep.
+
+### WHAT IS LEFT
+
+Two cases, and they are a different kind of gap from the one just closed. A field of an ARRAY
+ELEMENT and a field of a MATCH BINDING both need a type **the source states nowhere** — an element
+type projected out of an array, and a variant payload's type. The direct-operand case was a missing
+CHANNEL, which is why it cost one arm on each side.
+
+No new fold phase, no new opcode, no `BYTECODE_VERSION` change.
+
+---
+
 ## 2026-09-11 (forty-ninth) — the field-read channel lands, and a well-typed control finds a false rejection
 
 The forty-eighth increment sized the field-read edge at **three of five** and said the cheap
@@ -67,7 +134,7 @@ local".
 
 ### WHAT REMAINS UNREACHED, AND ONE OF IT IS A DIFFERENT LIMIT THAN EXPECTED
 
-`the_field_read_channel_reaches_three_base_forms_and_not_two` pins three reached base forms and
+`the_field_read_channel_records_what_it_does_not_reach` pins three reached base forms and
 three unreached cases. Writing it surfaced that the sizing spike's five cases conflated two axes:
 
 | unreached | why |

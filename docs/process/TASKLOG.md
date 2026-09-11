@@ -53,6 +53,25 @@ Current sprint source of truth.
 > Third artifact in two increments whose answer was true when written and is now about a DIFFERENT
 > QUESTION. The pattern is staleness of SUBJECT, not of fact.
 
+> **Currency note (2026-09-11, session 65, fiftieth increment). THE DIRECT-OPERAND FIELD READ IS
+> REACHED, AND A TEST NAME THAT ENCODED A TALLY IS GONE.**
+>
+> An operand row gains a FORM for a field read, resolved through the binding case's own join. No new
+> source of type information was needed; the tables already existed and the stage already searched
+> them. A synthetic name would have worked with no stage change and is refused where the form is
+> defined, because the invented name IS the join.
+>
+> **Pinned per node kind, both halves.** The form reaches five kinds applying five different rules,
+> and a wrong tag fails differently from a tag where none belongs.
+>
+> **`the_field_read_channel_reaches_three_base_forms_and_not_two` was one increment old and already
+> wrong.** Renaming it rippled through five documents and the citation guard's own commentary. A name
+> encoding a tally goes stale every time the tally moves; the pin is now
+> `the_field_read_channel_records_what_it_does_not_reach` and the tallies live in its body.
+>
+> **What is left is a different kind of gap**: a field of an array element and a field of a match
+> binding both need a type the source states NOWHERE.
+
 > **Currency note (2026-09-11, session 65, forty-ninth increment). THE FIELD-READ CHANNEL IS IN,
 > AND A WELL-TYPED CONTROL FOUND A FALSE REJECTION THAT PREDATES IT.**
 >
@@ -69,7 +88,7 @@ Current sprint source of truth.
 > checker that rejects everything scores perfectly against one.
 >
 > **What remains unreached is pinned by
-> `the_field_read_channel_reaches_three_base_forms_and_not_two`**, and one of its three cases is a
+> `the_field_read_channel_records_what_it_does_not_reach`**, and one of its three cases is a
 > limit the sizing spike could not model: a field read standing as a DIRECT OPERAND rather than a
 > `let` initialiser. "Three of five" and "three base forms of five cases" are different statements.
 

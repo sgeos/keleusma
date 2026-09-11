@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-11 (session 65, forty-ninth increment) — the field-read channel lands for the three base forms declaration lookup reaches, and the well-typed controls added for it found a FALSE REJECTION that predates the work: every program using a `match` arm binding was refused, well typed or not
+**Date**: 2026-09-11 (session 65, fiftieth increment) — the direct-operand field read is reached by an operand FORM rather than new type information, leaving two cases that need a type the source states nowhere; and a test name that encoded a tally was renamed after one increment made it wrong
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,40 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## FIFTIETH INCREMENT: THE DIRECT-OPERAND FORM, AND A NAME THAT ENCODED A TALLY
+
+**One arm on each side.** `operand_form` gains form 2, whose value is a field-read ROW INDEX; the
+stage resolves it through the binding case's own join behind a range check. `p.x + true` now types
+where only `let a = p.x; a + true` did. **No new source of type information was needed** — the
+struct-binding and field-tag tables already existed and the stage already searched them. What was
+missing was a way for an operand to point at a read.
+
+**The shortcut was refused and the refusal is recorded where the form is defined.** A synthetic name
+would have made this work with NO stage change: register the read under an invented name, emit the
+existing form-3 binding row, report form 1. Every test would pass. It is wrong because the invented
+name IS the join — nothing in any source spells it, so the host would be asserting that this operand
+and that binding are the same thing, hidden behind an identifier no reader can look up.
+
+**The form reaches five node kinds and each applies a different rule**: binary operator, condition,
+array element, branch pair, and function tail against its declared return. Both halves are pinned
+per kind, because a wrong tag shows as a missed rejection while a tag where none belongs shows as a
+REJECTED valid program — the error the previous increment demonstrated a rejection corpus cannot
+detect.
+
+### A process finding worth more than one increment
+
+The pin that recorded what the channel does not reach carried its tallies IN ITS NAME -- three base
+forms and two unreached. It was ONE INCREMENT OLD and already wrong, and correcting it rippled a
+rename through five documents plus the citation guard's own commentary. The dead name is not quoted
+here, because this file is one of the two the guard checks for exactly that. **A name that encodes a tally needs renaming every time the tally moves**, and every
+citation of it goes stale at that moment. Renamed to a count-free pin; the tallies live in the body.
+
+### What is left, and it is a different kind of gap
+
+A field of an ARRAY ELEMENT and a field of a MATCH BINDING. Both need a type **the source states
+nowhere** — an element type projected out of an array, a variant payload's type. The case just
+closed was a missing CHANNEL, which is why it cost one arm on each side.
 
 ## FORTY-NINTH INCREMENT: THE CHANNEL LANDS, AND A WELL-TYPED CONTROL FINDS A FALSE REJECTION
 
@@ -177,7 +211,7 @@ on the chain -- the hop bound is a decision rather than a limit of the approach.
 
 **The limit MOVED rather than vanished.** Its next edge was a FIELD READ, and the
 forty-ninth increment above moved it again: what remains is pinned by
-`the_field_read_channel_reaches_three_base_forms_and_not_two`. The field-read pin this
+`the_field_read_channel_records_what_it_does_not_reach`. The field-read pin this
 paragraph used to name no longer exists and is deliberately not quoted, since a claim
 document that names a missing test asserts something no reader can check.
 

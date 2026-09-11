@@ -491,12 +491,15 @@ fn tyb_of(v: Word) -> Word {
 //
 // Form 0 is already a tag. Form 1 is a NAME, which resolves first against the
 // solver's proved bindings and then against the declared rows, so a derived
-// binding and a declared one are reached by the same call.
+// binding and a declared one are reached by the same call. Form 2 is a FIELD
+// READ, addressed by row index, which needs neither: both its joins read declared
+// tables, so it resolves the same way in every round.
 fn tyb_operand(v: Word, f: Word) -> Word {
     if f == 0 { v } else {
+    if f == 2 { ty_field_operand(v) } else {
         ty.hit = tyb_of(v);
         if ty.hit != 0 { ty.hit } else { ty_resolve(1, v) }
-    }
+    } }
 }
 
 // The tag expression node `e` yields, or 0 when the stage cannot prove one.
@@ -628,6 +631,7 @@ fn tyb_solve() -> Word {
 
 fn ty_resolve(f: Word, v: Word) -> Word {
     if f == 0 { v } else {
+    if f == 2 { ty_field_operand(v) } else {
         ty.hit = ty_direct(v);
         if ty.hit == 0 {
             // ONE ALIAS HOP, AND THE BOUND IS DELIBERATE. `let a = g()` binds
@@ -642,7 +646,22 @@ fn ty_resolve(f: Word, v: Word) -> Word {
             ty.alias = ty_alias_of(v);
             if ty.alias == 0 { ty_unknown() } else { ty_direct(ty.alias) }
         } else { ty.hit }
-    }
+    } }
+}
+
+// An operand that IS a field read, addressed by its row index.
+//
+// **THE OPERAND CASE AND THE BINDING CASE ARE THE SAME JOIN**, which is why this
+// is `tyb_field_tag` with a range check rather than a second resolver. `let a =
+// p.x; a + true` and `p.x + true` differ only in whether a name stands between
+// the read and the comparison, and giving them separate paths is how the two come
+// to disagree about a program that means one thing.
+//
+// An index outside the table yields UNKNOWN rather than a rejection, for the same
+// reason the type-index check inside does: a host and a stage that disagree about
+// a table are not evidence that the subject program is ill-typed.
+fn ty_field_operand(k: Word) -> Word {
+    if k >= ty_bounded128(ty.fbn) { ty_unknown() } else { tyb_field_tag(k) }
 }
 
 // --- THE FOLD, AS A RESUMABLE STREAM ----------------------------------------

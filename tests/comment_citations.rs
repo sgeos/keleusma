@@ -547,7 +547,7 @@ fn no_allow_list_entry_is_stale() {
 /// excused from being checked. The three comments were repointed at the field-read pin next,
 /// and THAT name went the same way on 2026-09-11 when the field-read channel landed — the
 /// retired names are not quoted here, because this file's own guard would refuse them. They
-/// now name `the_field_read_channel_reaches_three_base_forms_and_not_two`, which holds the
+/// now name `the_field_read_channel_records_what_it_does_not_reach`, which holds the
 /// edge that genuinely remains. **A comment citing the CURRENT edge is a comment that will need
 /// rewriting again**, which is the cost of citing a moving boundary and is cheaper than
 /// citing a fixed one that has stopped being true.
