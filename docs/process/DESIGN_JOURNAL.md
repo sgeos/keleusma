@@ -13,6 +13,31 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-11 (forty-sixth) — the sizing spike sizes work that is done
+
+Having found that type rejection's edge has moved to a FIELD READ, the obvious next step was to read
+the sizing spike that measures what reaching further costs. It reports **"local propagation reaches
+5 of 5"**, which invites the reading that the remaining step is small.
+
+**It is a measurement of work already completed.** Every one of its five cases is a let-bound
+literal, a call return, or a composition of the two -- and the stage now reaches all of them. The
+spike was written when the edge WAS the literal operand; local resolution and the bounded arithmetic
+fixpoint moved that edge afterwards.
+
+**Its corpus contains no field read**, which is where the edge actually sits. So "5 of 5" sizes the
+step behind us, not the one in front, and **the field-read step is unsized**.
+
+**Kept rather than deleted**, with the limitation recorded in the spike itself. Its result is still
+the reason the literal-to-local step was known to be cheap before it was taken, which is why it was
+taken at all. What it cannot do is size what comes next.
+
+**This is the third artifact in two increments whose answer was true when written and is now about a
+different question** -- after the retired literal-only test and the Order 1 cell that cited it. The
+pattern is not staleness of FACTS but staleness of SUBJECT: the instrument still works, and the
+question moved out from under it.
+
+---
+
 ## 2026-09-11 (forty-fifth) — the other half of Order 1 was stale too
 
 With every region kind routed, the remaining Order 1 obligation was "source types before type

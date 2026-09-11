@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-11 (session 65, forty-fifth increment) — the other half of Order 1 was stale too; type rejection passed literals and its edge is now a field read; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
+**Date**: 2026-09-11 (session 65, forty-sixth increment) — the sizing spike measures work already done, so the field-read step is unsized; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,29 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## FORTY-SIXTH INCREMENT: THE SIZING SPIKE SIZES WORK THAT IS DONE
+
+Having found that type rejection's edge has moved to a FIELD READ, the obvious next step was to read
+the sizing spike that measures what reaching further costs. It reports **"local propagation reaches
+5 of 5"**, which invites the reading that the remaining step is small.
+
+**It is a measurement of work already completed.** Every one of its five cases is a let-bound
+literal, a call return, or a composition of the two -- and the stage now reaches all of them. The
+spike was written when the edge WAS the literal operand; local resolution and the bounded arithmetic
+fixpoint moved that edge afterwards.
+
+**Its corpus contains no field read**, which is where the edge actually sits. So "5 of 5" sizes the
+step behind us, not the one in front, and **the field-read step is unsized**.
+
+**Kept rather than deleted**, with the limitation recorded in the spike itself. Its result is still
+the reason the literal-to-local step was known to be cheap before it was taken, which is why it was
+taken at all. What it cannot do is size what comes next.
+
+**This is the third artifact in two increments whose answer was true when written and is now about a
+different question** -- after the retired literal-only test and the Order 1 cell that cited it. The
+pattern is not staleness of FACTS but staleness of SUBJECT: the instrument still works, and the
+question moved out from under it.
 
 ## FORTY-FIFTH INCREMENT: THE OTHER HALF OF ORDER 1 WAS STALE TOO
 

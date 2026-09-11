@@ -10,6 +10,20 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-11, session 65, forty-sixth increment). THE SIZING SPIKE MEASURES THE
+> STEP BEHIND US.**
+>
+> It reports "local propagation reaches 5 of 5", and every one of its five cases is a let-bound
+> literal, a call return, or a composition -- **all now reached**. Its corpus contains **no field
+> read**, which is where the edge sits.
+>
+> So **the field-read step is UNSIZED**, and "5 of 5" must not be read as "the remaining step is
+> small". The limitation is recorded in the spike itself; it is kept because its result is why the
+> literal-to-local step was known to be cheap before it was taken.
+>
+> Third artifact in two increments whose answer was true when written and is now about a DIFFERENT
+> QUESTION. The pattern is staleness of SUBJECT, not of fact.
+
 > **Currency note (2026-09-11, session 65, forty-fifth increment). TYPE REJECTION PASSED LITERALS
 > SOME TIME AGO; THE ROADMAP DID NOT KNOW.**
 >

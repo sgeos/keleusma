@@ -2030,6 +2030,24 @@ fn prototype_tag(
 /// currently-missed rejection falls to local propagation, the next increment is a
 /// tagger over records the pipeline already emits. If some need unification, the
 /// next increment is much larger and should be planned as such.
+///
+/// # **THIS SPIKE NOW SIZES WORK THAT IS DONE, AND ITS ANSWER MUST NOT BE READ AS
+/// SIZING WHAT REMAINS** (recorded 2026-09-11)
+///
+/// It reports "5 of 5", and every one of its five cases is a let-bound literal,
+/// a call return, or a composition of the two -- **all of which the stage now
+/// reaches**. It was written when the edge was the literal operand; local
+/// resolution and the bounded arithmetic fixpoint have since moved that edge.
+///
+/// **The corpus contains no FIELD READ**, which is where the edge actually sits,
+/// pinned by `a_derived_operand_from_a_field_read_is_still_unreached`. So "5 of
+/// 5" is a measurement of work already completed, not of the gap in front of it,
+/// and a reader taking it as "the remaining step is small" would be sizing from
+/// the wrong corpus.
+///
+/// Kept rather than deleted: the result is still the reason the literal-to-local
+/// step was known to be cheap before it was taken, and that history is why the
+/// step was taken at all. **Sizing the field-read step needs its own cases.**
 #[test]
 fn sizing_how_far_local_propagation_reaches() {
     use keleusma::ast::{Expr, Pattern, Stmt, TypeExpr};
