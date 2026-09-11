@@ -6490,6 +6490,86 @@ fn window_emit_slots(
     Ok(out)
 }
 
+/// Enum-variant records as `(first-of-enum flag, reserved, discriminant)`.
+///
+/// **The first field is a BOUNDARY, not a name index.** The enum section
+/// interleaves a type name with that enum's variants, so the stage walks it with
+/// a cursor and needs to know only where an enum begins; the host supplies the
+/// boundary it legitimately knows and never the name.
+fn enum_variant_fields(module: &Module) -> Vec<i64> {
+    let mut out = Vec::new();
+    for l in &module.enum_layouts {
+        for (k, v) in l.variants.iter().enumerate() {
+            out.push(i64::from(k == 0));
+            out.push(0);
+            out.push(v.disc);
+        }
+    }
+    out
+}
+
+/// Emit the whole `ENUM_VARIANTS` region by STREAMING, one record per call.
+fn window_emit_variants(
+    stage: &Module,
+    blob: &[u8],
+    variant_fields: &[i64],
+    want: usize,
+) -> Result<Vec<u8>, SelfHostError> {
+    const CMD_BEGIN: i64 = 184;
+    const CMD_STEP: i64 = 185;
+    const FIELDS: usize = 3;
+
+    let m = stage.clone();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify wire.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+
+    for (i, &b) in blob.iter().enumerate() {
+        vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(b))
+            .expect("blob");
+    }
+
+    let began = enter_wire(&mut vm, &mut shared, CMD_BEGIN)?;
+    if began < 0 {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!("wire.kel refused the variant stream with {began}"),
+        });
+    }
+
+    let mut out = vec![0u8; want];
+    for (j, row) in variant_fields.as_chunks::<FIELDS>().0.iter().enumerate() {
+        for (f, &v) in row.iter().enumerate() {
+            vm.set_shared(&mut shared, FIN_SLOT + f, Value::Int(v))
+                .expect("variant field");
+        }
+        let wrote = enter_wire(&mut vm, &mut shared, CMD_STEP)?;
+        if wrote <= 0 {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!("wire.kel refused variant record {j} with {wrote}"),
+            });
+        }
+        let stride = wrote as usize;
+        let at = j * stride;
+        if at + stride > want {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!(
+                    "variant record {j} would end at {} in a {want}-byte region",
+                    at + stride
+                ),
+            });
+        }
+        for k in 0..stride {
+            out[at + k] = match vm.get_shared(&shared, 1 + k).expect("read") {
+                Value::Byte(b) => b,
+                other => panic!("shared byte slot held {other:?}"),
+            };
+        }
+    }
+    Ok(out)
+}
+
 /// Emit a module's `CONSTS` region by STREAMING, one constant record per call.
 ///
 /// # Why this path exists at all, when `fl_walk` already emits a byte-identical region
@@ -7117,6 +7197,27 @@ pub fn wire_windowed_via_kel(
                         detail: alloc::format!(
                             "the self-hosted DATA_SLOTS region is {} bytes and the reference \
                              reserved {len}; the host's run grouping and the encoder disagree",
+                            win.len()
+                        ),
+                    });
+                }
+                out[base..base + len].copy_from_slice(&win);
+                continue;
+            }
+        }
+        // ENUM_VARIANTS TAKES THE CURSOR STREAM, commands 184 and 185. Not the
+        // slot stream's shape: the enum section interleaves a type name with
+        // each enum's variants, so the stage walks rather than indexes and the
+        // host supplies only the boundary.
+        if kind == crate::wire_schema::kind::ENUM_VARIANTS {
+            let fields = enum_variant_fields(module);
+            if !fields.is_empty() {
+                let win = window_emit_variants(&stage, &blob, &fields, len)?;
+                if win.len() != len {
+                    return Err(SelfHostError::Unsupported {
+                        detail: alloc::format!(
+                            "the self-hosted ENUM_VARIANTS region is {} bytes and the reference \
+                             reserved {len}; the host's variant walk and the encoder disagree",
                             win.len()
                         ),
                     });

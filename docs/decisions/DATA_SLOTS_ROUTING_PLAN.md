@@ -2,8 +2,9 @@
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
 
-**Status**: **COMPLETE as of 2026-09-11.** Both halves are implemented and `DATA_SLOTS` is routed
-byte-identically across the corpus.
+**Status**: **COMPLETE as of 2026-09-11, and `ENUM_VARIANTS` followed the same day** on a
+DIFFERENT shape. Both kinds are routed byte-identically across the corpus; the self-hosted share is
+99% and two kinds remain skipped, both needing an emitter written.
 Written 2026-09-10 after three increments of reading, one of which over-claimed and one of which is
 corrected below.
 
@@ -197,5 +198,23 @@ emits one variant and advances by one -- except that the host tells it when a re
 variant of its enum, and the stage then advances one extra to step over the type name. The host
 supplies structure it legitimately knows, the boundary, and never a name index it cannot check.
 
-That is a different design from the slot stream rather than a copy of it, and it needs its own
-plan before its own code. The slot slice's value here is the method, not the shape.
+That is a different design from the slot stream rather than a copy of it. **It landed on
+2026-09-11** as commands 184 and 185, driven across an enum boundary and mutation-checked: removing
+the type-name skip fails the test, and a cursor walked past its section is refused. The slot slice's
+value here was the METHOD, not the shape.
+
+### What growing `wire.kel` cost, enumerated rather than discovered
+
+Four new functions moved TWO recorded figures, and the second was found by enumerating rather than
+by a failure:
+
+| figure | was | is | where |
+|---|---|---|---|
+| constant-forest nodes | 1,194 | **1,209**, margin 156 | guarded by `tests/module_input_node_budget.rs` |
+| chunk count, from the COMPILED module | 486 | 490 | `tests/selfhost_chunk_names.rs` |
+| chunk count, from the PARSED source | 486 | 490 | `tests/selfhost_parse.rs` |
+
+**The last two are the same figure with two independent derivations**, and they moved together,
+which is what such a pair should do. The plan warned that `wire.kel` is itself a measured stage; it
+named the node count and did not name the chunk count, so the prediction was right and the
+enumeration was short by one.

@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-11 (session 65, fortieth increment) — `ENUM_VARIANTS` is not the same shape as the slot slice, and the corrected design is recorded; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
+**Date**: 2026-09-11 (session 65, forty-first increment) — `ENUM_VARIANTS` routed to 99%, and two stale figures the stage growth moved, one found by enumerating; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,48 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## FORTY-FIRST INCREMENT: `ENUM_VARIANTS` ROUTED, AND TWO FIGURES THE STAGE GROWTH MOVED
+
+The cursor design landed as commands 184 and 185. **`no_region_the_driver_routes_disagrees_with_the_reference`
+passed on the first run again** -- the region is byte-identical for every corpus stage, and the only
+failure was the share figure asking to be told the new number.
+
+| | before | after |
+|---|---|---|
+| self-hosted share of corpus region bytes | 98% | **99%** |
+| skipped region kinds | three | **two** -- `ENUM_LAYOUTS`, `PARAM_TYPES`, both needing an emitter WRITTEN |
+| computed share | -- | **unchanged** |
+
+**Driven and mutation-checked**: three records across an enum boundary match the reference byte for
+byte, removing the type-name skip fails it, and a cursor walked past its section is refused.
+
+## THE PART WORTH KEEPING: A GUARD CAUGHT WHAT MY LOCAL RUN COULD NOT
+
+Continuous integration failed on `selfhost_chunk_names.rs`, which pins `wire.kel`'s chunk count.
+Four new functions moved it from **486 to 490** -- a function is a chunk, so the figure moved by
+exactly four.
+
+**My local check could not have caught it.** `cargo test -p keleusma --test selfhost_chunk_names`
+reported *"0 passed; 0 filtered out"*: the test is `self-host`-gated and that invocation does not
+enable the feature. CI runs `--workspace`, where cargo's feature UNIFICATION turns `self-host` on
+because another member requires it. **`-p keleusma --test X` and `--workspace` are different feature
+sets**, and a test can be silently absent from the first while running in the second.
+
+That is the rule *a run that executed no tests is not a pass* arriving through a channel I had not
+considered: not a filter, but a feature set that omits the test entirely.
+
+**I predicted this class and under-enumerated it.** The plan said `wire.kel` is itself a measured
+stage and growing it perturbs the corpus's figures. I guarded the NODE count with a new test and
+never thought of the CHUNK count.
+
+**So I enumerated instead of fixing the instance, and found a second live site**:
+`tests/selfhost_parse.rs` pins the same 486, derived from the PARSED source rather than the compiled
+module. Two independent derivations of one figure, which moved together as such a pair should. The
+workspace run then confirmed those two were the only failures.
+
+**Had I fixed only the failing one, CI would have caught the other and I would have called it a
+surprise.** It is the one-of-two-sites shape this session has now met eight times.
 
 ## FORTIETH INCREMENT: `ENUM_VARIANTS` IS NOT THE SAME SHAPE, AND MY PLAN SAID IT WAS
 

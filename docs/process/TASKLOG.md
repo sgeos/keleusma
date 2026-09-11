@@ -10,6 +10,21 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-11, session 65, forty-first increment). `ENUM_VARIANTS` IS ROUTED, AND
+> A GUARD CAUGHT WHAT THE LOCAL RUN COULD NOT.**
+>
+> Share **98% to 99%**; skipped kinds **three to two** (`ENUM_LAYOUTS`, `PARAM_TYPES`, both needing
+> an emitter written); computed share unchanged. Driven across an enum boundary and
+> mutation-checked.
+>
+> **CI failed on `wire.kel`'s chunk count, 486 to 490.** `cargo test -p keleusma --test X` does NOT
+> enable `self-host`; CI's `--workspace` unifies it on. **Different feature sets**, and a test can
+> be silently absent from one.
+>
+> **Enumerated rather than fixed**: a SECOND live site pins the same figure in
+> `tests/selfhost_parse.rs`, from the parsed source rather than the compiled module. The workspace
+> run confirmed those two were the only failures. Node count 1,194 to 1,209, margin 156.
+
 > **Currency note (2026-09-11, session 65, fortieth increment). `ENUM_VARIANTS` IS NOT THE SAME
 > SHAPE AS THE SLOT SLICE.**
 >

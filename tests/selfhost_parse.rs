@@ -2980,9 +2980,13 @@ fn wire_kel_parses_correctly_now_that_the_bare_loop_form_is_supported() {
     const WIRE: &str = include_str!("../src/selfhost/kel/wire.kel");
     let parsed = keleusma::selfhost::try_parse_functions(WIRE)
         .expect("wire.kel must parse now that the bare `for` form is lowered");
+    // **490 SINCE 2026-09-11, UP FROM 486.** The name-aware slot and variant streams added four
+    // functions to `wire.kel`, and a function is a chunk. The same figure is pinned in
+    // `tests/selfhost_chunk_names.rs`, from the COMPILED module rather than the parsed source;
+    // both moved together, which is what a figure with two independent derivations should do.
     assert_eq!(
         parsed.functions.len(),
-        486,
+        490,
         "`wire.kel` parsed to {} chunks. The count is pinned because it is the corpus worst \
          case and the thing the chunk cap is sized against: PARSE_CHUNK_CAP is {}, so a \
          stage growing toward it is visible here rather than at the wall.",
