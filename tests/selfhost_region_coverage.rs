@@ -394,13 +394,13 @@ fn the_skipped_region_kinds_are_the_ones_on_record() {
     // was correct, and the over-correction came from reading a dispatch table instead of the
     // formatter bodies.
     assert!(
-        skipped.len() <= 2,
-        "{} kinds are skipped: {skipped:02x?}. TWO are on record after `DATA_SLOTS` and \
-         `ENUM_VARIANTS` were routed on 2026-09-11 -- `ENUM_LAYOUTS` and `PARAM_TYPES`, both \
-         still needing an emitter written. More means the driver has stopped routing something \
-         it used to. Those two were the first kinds whose records carry a NAME, and they took \
-         DIFFERENT shapes: the slot section indexes, the enum section interleaves and needs a \
-         cursor",
+        skipped.len() <= 1,
+        "{} kinds are skipped: {skipped:02x?}. ONE is on record after `DATA_SLOTS`, \
+         `ENUM_VARIANTS` and `ENUM_LAYOUTS` were routed on 2026-09-11 -- `PARAM_TYPES`. More \
+         means the driver has stopped routing something it used to. Those three were the first \
+         kinds whose records carry a NAME, and each took a DIFFERENT shape: the slot section \
+         indexes, the variant section interleaves and needs a cursor, and the layout section \
+         steps a whole enum at a time while accumulating a variant range",
         skipped.len()
     );
 }
@@ -418,7 +418,7 @@ fn the_skipped_region_kinds_are_the_ones_on_record() {
 /// | standing | regions | what Keleusma decides |
 /// |---|---|---|
 /// | **computed** | `NAMES`, `STRING_POOL`, `CONSTS` | the stage walks the module blob and derives every byte |
-/// | **mixed** | `CHUNKS`, `DATA_SLOTS`, `ENUM_VARIANTS` | the stage computes the name index -- and for `CHUNKS` three range cursors too; the remaining fields per record come from the host |
+/// | **mixed** | `CHUNKS`, `DATA_SLOTS`, `ENUM_VARIANTS`, `ENUM_LAYOUTS` | the stage computes the name index, plus three range cursors for `CHUNKS` and a variant range for `ENUM_LAYOUTS`; the remaining fields per record come from the host |
 /// | **encoded, not derived** | `HEADER` | the host reads the scalars off the `Module`; the stage decides offsets, widths and endianness |
 ///
 /// `wire.kel` makes the same distinction about the record formatters it carries

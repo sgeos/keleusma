@@ -13,6 +13,51 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-11 (forty-third) — ENUM_LAYOUTS routed, and a third derivation I missed
+
+The third and last ROUTABLE region kind. `PARAM_TYPES` alone remains, and it needs an emitter
+WRITTEN rather than routed.
+
+**This one computes TWO of its four fields.** The type name comes from the interner, as the other
+two kinds' do, and `variants_first` is ACCUMULATED in the stage rather than relayed -- the same
+accumulate-then-advance `ck_stream_step` performs for its three ranges. The host supplies only the
+variant count and the minimum payload, and the count does double duty: a record field AND the
+distance the cursor travels to the next enum's type name.
+
+**Three kinds, three shapes, none a copy.** The slot section indexes; the variant section
+interleaves and walks with a boundary flag; the layout section steps a whole enum at a time while
+accumulating a range.
+
+**Verified it actually routed rather than emitting an empty region** -- the `STRUCT_AUX` trap, where
+a byte identity on an empty region passes while emitting nothing. Skipped set now `[1e]`.
+Mutation-checked ONCE PER STAGE-COMPUTED FIELD: advancing the cursor by one fails it, freezing the
+accumulator fails it.
+
+## THREE WAYS A LOCAL RUN CAN SAY LESS THAN IT APPEARS TO, AND I MET ALL THREE TODAY
+
+`wire.kel`'s chunk count has **THREE** independent derivations. My enumeration found two and missed
+`tests/wire_self_compile_status.rs`; continuous integration failed on it. All three now read 492,
+and the third says so in its own message.
+
+**The run that was supposed to confirm the enumeration could not have.**
+
+| how the run under-reported | which one |
+|---|---|
+| guards executed BEFORE the last edit | recorded earlier this session |
+| `-p keleusma --test X` never enables `self-host`; `--workspace` unifies it on | found by continuous integration |
+| **`cargo test` stops at the FIRST failing binary**; nextest runs them all | found by continuous integration |
+
+**A fourth was self-inflicted in the same hour.** A workspace run was still in flight while its
+subject was edited, and it then reported NO failures -- which cannot be true, since the third site
+was still stale when it began. Its result belongs to no tree. **Discarded rather than read as a
+pass**, which is the same rule this session already recorded when two gates shared one log file.
+
+**The shape common to all four is that the run did less than I believed it did**, and only the
+first and the last were written down beforehand. Believing a green result requires knowing what the
+command actually covered.
+
+---
+
 ## 2026-09-11 (forty-second) — the handoff refreshed after sixteen increments
 
 It was refreshed at the twenty-fourth increment and the session is at the forty-first. In between,

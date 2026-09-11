@@ -10,6 +10,21 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-11, session 65, forty-third increment). `ENUM_LAYOUTS` IS ROUTED; ONE
+> KIND LEFT.**
+>
+> `PARAM_TYPES` alone remains, needing an emitter WRITTEN rather than routed. This kind computes
+> **two of its four fields**: the type name from the interner and `variants_first` accumulated in
+> the stage. Three kinds, three shapes, none a copy.
+>
+> **`wire.kel`'s chunk count has THREE derivations, not two.** My enumeration found two and missed
+> `tests/wire_self_compile_status.rs`; CI failed on it. All three now read **492**.
+>
+> **Four ways a local run under-reported, all met today**: guards run before the last edit;
+> `-p keleusma --test X` omitting `self-host`; **`cargo test` stopping at the first failing
+> binary**; and a run edited while in flight, whose clean result belonged to no tree and was
+> discarded. The common shape is that the run did less than I believed it did.
+
 > **Currency note (2026-09-11, session 65, forty-second increment). THE HANDOFF IS CURRENT
 > AGAIN.**
 >

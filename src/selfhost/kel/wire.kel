@@ -2666,6 +2666,16 @@ private data nm {
     // So the enum stream walks instead of indexing, and the host says where an
     // enum begins.
     vcur: Word,
+    // The enum-LAYOUT cursor and its variant-range accumulator.
+    //
+    // `tcur` walks the enum section a whole enum at a time: a type name, then
+    // that enum's variants, then the next type name. `vfirst` is the running
+    // total of variants emitted, which is what the encoder writes into each
+    // record's `variants_first` -- the same accumulate-then-advance the chunk
+    // stream does for its three ranges, and the reason this region has TWO
+    // stage-computed fields rather than one.
+    tcur: Word,
+    vfirst: Word,
     ctag: Word,
     cpay: Word,
     cfirst: Word,
@@ -4662,7 +4672,9 @@ fn dispatch_window(cmd: Word) -> Word {
     if cmd == 183 { ds_name_step() } else {
     if cmd == 184 { ev_name_begin() } else {
     if cmd == 185 { ev_name_step() } else {
-    0 - 97 }}}}}}}}}}}}}}}}
+    if cmd == 186 { el_name_begin() } else {
+    if cmd == 187 { el_name_step() } else {
+    0 - 97 }}}}}}}}}}}}}}}}}}
 }
 
 fn dispatch_driver2(cmd: Word) -> Word {
@@ -4804,7 +4816,48 @@ fn ev_name_step() -> Word {
     } }
 }
 
-fn highest_command() -> Word { 185 }
+// --- THE ENUM-LAYOUT STREAM (commands 186 and 187) --------------------------
+//
+// **TWO OF THE FOUR FIELDS ARE THE STAGE'S**, which is a stronger standing than
+// the slot and variant streams, where only the name is. The type NAME comes from
+// the interner, and `variants_first` is accumulated here rather than relayed,
+// exactly as `ck_stream_step` accumulates its three ranges. The host supplies the
+// variant COUNT and the minimum payload, both of which it decides.
+//
+// The count does double duty: it is a record field AND the distance the cursor
+// must travel to reach the next enum's type name. So the stage needs nothing the
+// record does not already carry.
+fn el_name_begin() -> Word {
+    nm.jj = mi_window_prepare();
+    if nm.jj < 0 { nm.jj } else {
+        nm.tcur = nm.ebase;
+        nm.vfirst = 0;
+        nm.cnt
+    }
+}
+
+// One enum-layout record. `fin[0]` is the variant count, `fin[1]` the minimum
+// payload.
+//
+// `variants_first` is written BEFORE the accumulator advances, so each enum's
+// range starts where the previous one ended. That is the ordering the whole
+// region depends on, and it is why the accumulator must persist: a step that
+// restarted it would emit a structurally valid region whose every later range
+// points somewhere wrong.
+fn el_name_step() -> Word {
+    if nm.tcur >= nm.cnt { 0 - 257 } else {
+    if wire.fin[0] < 0 { 0 - 257 } else {
+        nm.sink = put_u32(elay_off_type_name(), wire.nmap[nm.tcur]);
+        nm.sink = put_u32(elay_off_variants_first(), nm.vfirst);
+        nm.sink = put_u32(elay_off_variants_count(), wire.fin[0]);
+        nm.sink = put_u32(elay_off_min_payload(), wire.fin[1]);
+        nm.vfirst = nm.vfirst + wire.fin[0];
+        nm.tcur = nm.tcur + 1 + wire.fin[0];
+        elay_stride()
+    } }
+}
+
+fn highest_command() -> Word { 187 }
 
 // --- THE ENTRY, AS A COROUTINE ----------------------------------------------
 //

@@ -13905,3 +13905,86 @@ fn the_name_aware_variant_step_refuses_a_cursor_past_the_section() {
          bad boundary flag would read another section's name"
     );
 }
+
+/// **THE LAYOUT STREAM COMPUTES TWO OF ITS FOUR FIELDS.**
+///
+/// The slot and variant streams take only their NAME from the stage. This one
+/// also accumulates `variants_first`, the running total of variants emitted,
+/// exactly as `ck_stream_step` accumulates its three ranges. The host supplies
+/// the variant count and the minimum payload, both of which it decides -- and
+/// the count does double duty, being the distance the cursor travels to the next
+/// enum's type name.
+///
+/// Two enums, so the second record's `variants_first` is non-zero and the cursor
+/// has to have stepped over the first enum's variants to find the second type
+/// name. A stream that advanced by one per record would land on a VARIANT name
+/// and this test would say so.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_enum_layout_stream_accumulates_its_variant_range() {
+    use keleusma::wire_schema::kind;
+
+    let src = "enum E { A, B, C }\n\
+               enum F { D, G }\n\
+               fn main() -> Word { (E::A as Word) + (F::D as Word) }";
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let artifact = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+    let view = keleusma_wire::WireView::parse(&artifact).expect("reference parses");
+    let region = view
+        .find_region(kind::ENUM_LAYOUTS)
+        .expect("the reference emitted an ENUM_LAYOUTS region");
+    let bytes = view.region_bytes(&region).expect("payload");
+    const STRIDE: usize = 16;
+    assert!(
+        bytes.len() >= 2 * STRIDE,
+        "the region is {} bytes, fewer than the two records this drives",
+        bytes.len()
+    );
+
+    // (variant count, minimum payload) per enum, in declaration order.
+    let rows: Vec<[i64; 2]> = module
+        .enum_layouts
+        .iter()
+        .map(|l| [l.variants.len() as i64, i64::from(l.min_payload)])
+        .collect();
+    assert_eq!(rows.len(), 2, "the source declares two enums");
+
+    let (blob, _names) = keleusma::selfhost::module_input(&module);
+    let mut vm = vm_for(WIRE_KEL);
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    for (i, b) in blob.iter().enumerate() {
+        vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(*b))
+            .expect("blob");
+    }
+    let began = match enter(&mut vm, &mut shared, 186).expect("begin") {
+        VmState::Yielded(Value::Int(n)) => n,
+        other => panic!("unexpected state from the begin: {other:?}"),
+    };
+    assert!(began > 0, "the begin refused with {began}");
+
+    for (j, row) in rows.iter().enumerate() {
+        for (f, v) in row.iter().enumerate() {
+            vm.set_shared(&mut shared, FIN_SLOT + f, Value::Int(*v))
+                .expect("layout field");
+        }
+        let wrote = match enter(&mut vm, &mut shared, 187).expect("step") {
+            VmState::Yielded(Value::Int(n)) => n,
+            other => panic!("unexpected state from the step: {other:?}"),
+        };
+        assert_eq!(wrote, STRIDE as i64, "record {j} returned {wrote}");
+        let mut got = Vec::with_capacity(STRIDE);
+        for i in 0..STRIDE {
+            match vm.get_shared(&shared, 1 + i).expect("read") {
+                Value::Byte(b) => got.push(b),
+                other => panic!("slot {i} is not a Byte: {other:?}"),
+            }
+        }
+        let want = &bytes[j * STRIDE..(j + 1) * STRIDE];
+        assert_eq!(
+            got, want,
+            "enum-layout record {j} differs from the reference's. The count and payload came \
+             from the declaration, so a difference is in the NAME or the accumulated \
+             `variants_first` -- both of which this stage computes"
+        );
+    }
+}

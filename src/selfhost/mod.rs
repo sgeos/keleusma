@@ -6570,6 +6570,83 @@ fn window_emit_variants(
     Ok(out)
 }
 
+/// Enum-layout records as `(variant count, minimum payload)`.
+///
+/// **Only two of the record's four fields.** The type NAME comes from the
+/// stage's interner and `variants_first` is accumulated in the stage, so the
+/// host supplies only what it decides. The count does double duty: it is a
+/// field AND the distance the stage's cursor travels to the next enum.
+fn enum_layout_fields(module: &Module) -> Vec<i64> {
+    let mut out = Vec::new();
+    for l in &module.enum_layouts {
+        out.push(l.variants.len() as i64);
+        out.push(i64::from(l.min_payload));
+    }
+    out
+}
+
+/// Emit the whole `ENUM_LAYOUTS` region by STREAMING, one record per call.
+fn window_emit_enum_layouts(
+    stage: &Module,
+    blob: &[u8],
+    layout_fields: &[i64],
+    want: usize,
+) -> Result<Vec<u8>, SelfHostError> {
+    const CMD_BEGIN: i64 = 186;
+    const CMD_STEP: i64 = 187;
+    const FIELDS: usize = 2;
+
+    let m = stage.clone();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify wire.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+
+    for (i, &b) in blob.iter().enumerate() {
+        vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(b))
+            .expect("blob");
+    }
+
+    let began = enter_wire(&mut vm, &mut shared, CMD_BEGIN)?;
+    if began < 0 {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!("wire.kel refused the enum-layout stream with {began}"),
+        });
+    }
+
+    let mut out = vec![0u8; want];
+    for (j, row) in layout_fields.as_chunks::<FIELDS>().0.iter().enumerate() {
+        for (f, &v) in row.iter().enumerate() {
+            vm.set_shared(&mut shared, FIN_SLOT + f, Value::Int(v))
+                .expect("layout field");
+        }
+        let wrote = enter_wire(&mut vm, &mut shared, CMD_STEP)?;
+        if wrote <= 0 {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!("wire.kel refused enum-layout record {j} with {wrote}"),
+            });
+        }
+        let stride = wrote as usize;
+        let at = j * stride;
+        if at + stride > want {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!(
+                    "enum-layout record {j} would end at {} in a {want}-byte region",
+                    at + stride
+                ),
+            });
+        }
+        for k in 0..stride {
+            out[at + k] = match vm.get_shared(&shared, 1 + k).expect("read") {
+                Value::Byte(b) => b,
+                other => panic!("shared byte slot held {other:?}"),
+            };
+        }
+    }
+    Ok(out)
+}
+
 /// Emit a module's `CONSTS` region by STREAMING, one constant record per call.
 ///
 /// # Why this path exists at all, when `fl_walk` already emits a byte-identical region
@@ -7218,6 +7295,27 @@ pub fn wire_windowed_via_kel(
                         detail: alloc::format!(
                             "the self-hosted ENUM_VARIANTS region is {} bytes and the reference \
                              reserved {len}; the host's variant walk and the encoder disagree",
+                            win.len()
+                        ),
+                    });
+                }
+                out[base..base + len].copy_from_slice(&win);
+                continue;
+            }
+        }
+        // ENUM_LAYOUTS TAKES ITS OWN STREAM, commands 186 and 187. TWO of its
+        // four fields are the stage's -- the type name from the interner and
+        // `variants_first` accumulated in the stage -- which is a stronger
+        // standing than the two kinds routed before it.
+        if kind == crate::wire_schema::kind::ENUM_LAYOUTS {
+            let fields = enum_layout_fields(module);
+            if !fields.is_empty() {
+                let win = window_emit_enum_layouts(&stage, &blob, &fields, len)?;
+                if win.len() != len {
+                    return Err(SelfHostError::Unsupported {
+                        detail: alloc::format!(
+                            "the self-hosted ENUM_LAYOUTS region is {} bytes and the reference \
+                             reserved {len}; the host's enum walk and the encoder disagree",
                             win.len()
                         ),
                     });
