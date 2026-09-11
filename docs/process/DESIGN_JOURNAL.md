@@ -13,6 +13,40 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-11 (forty-seventh) — the citation guard caught me naming a retired test
+
+A documentation-only pull request failed two continuous-integration jobs.
+`the_current_claim_documents_cite_nothing_that_does_not_exist` fired on this very file, which
+named the RETIRED test while explaining that it is retired.
+
+**The guard is right and the fix is the claim, not the allowlist.** A current-claim document that
+names an identifier existing nowhere asserts something no reader can check, and the guard cannot
+distinguish a deliberate negative from a stale citation. This is the second time this session -- the
+first was a begin command the slot stream did not have -- and both times the temptation was to
+widen an exemption rather than reword.
+
+**IT FAILED IN TWO CONFIGURATIONS I DID NOT RUN.** I ran the guards under default features and
+under `self-host`; it failed under `--no-default-features` and `--features signatures`. That is the
+feature-set lesson **that I had already written down in the handoff**, arriving in a new place: not
+a gated test absent from a run, but a guard whose verdict differs by configuration.
+
+**So I ran both document guards in every configuration continuous integration uses**, rather than
+fixing the one that failed and assuming. All four pass for `comment_citations`; `claimed_counts`
+reports ZERO tests under `--no-default-features`, which is itself worth knowing -- that guard does
+not exist in that configuration, so a claim it protects is unprotected there.
+
+**AND I DID IT A THIRD TIME WHILE WRITING THIS ENTRY.** The first draft named the phantom begin
+command as an example of naming a phantom, and the guard failed again on the very paragraph
+describing the rule. **Knowing the failure does not prevent it; running the check does** -- which is
+the same sentence `HANDOFF.md` already carries about numbering its own validity list, arrived at
+independently in a different file.
+
+**The transferable rule is now four items long and this is the fourth**: before believing a green
+guard, know which CONFIGURATIONS it ran in, not only which binaries and not only whether it stopped
+early.
+
+---
+
 ## 2026-09-11 (forty-sixth) — the sizing spike sizes work that is done
 
 Having found that type rejection's edge has moved to a FIELD READ, the obvious next step was to read

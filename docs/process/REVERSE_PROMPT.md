@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-11 (session 65, forty-sixth increment) — the sizing spike measures work already done, so the field-read step is unsized; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
+**Date**: 2026-09-11 (session 65, forty-seventh increment) — a citation guard caught a retired test named in this file, in two configurations I had not run; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,38 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## FORTY-SEVENTH INCREMENT: THE CITATION GUARD CAUGHT ME NAMING A RETIRED TEST
+
+A documentation-only pull request failed two continuous-integration jobs.
+`the_current_claim_documents_cite_nothing_that_does_not_exist` fired on this very file, which
+named the RETIRED test while explaining that it is retired.
+
+**The guard is right and the fix is the claim, not the allowlist.** A current-claim document that
+names an identifier existing nowhere asserts something no reader can check, and the guard cannot
+distinguish a deliberate negative from a stale citation. This is the second time this session -- the
+first was a begin command the slot stream did not have -- and both times the temptation was to
+widen an exemption rather than reword.
+
+**IT FAILED IN TWO CONFIGURATIONS I DID NOT RUN.** I ran the guards under default features and
+under `self-host`; it failed under `--no-default-features` and `--features signatures`. That is the
+feature-set lesson **that I had already written down in the handoff**, arriving in a new place: not
+a gated test absent from a run, but a guard whose verdict differs by configuration.
+
+**So I ran both document guards in every configuration continuous integration uses**, rather than
+fixing the one that failed and assuming. All four pass for `comment_citations`; `claimed_counts`
+reports ZERO tests under `--no-default-features`, which is itself worth knowing -- that guard does
+not exist in that configuration, so a claim it protects is unprotected there.
+
+**AND I DID IT A THIRD TIME WHILE WRITING THIS ENTRY.** The first draft named the phantom begin
+command as an example of naming a phantom, and the guard failed again on the very paragraph
+describing the rule. **Knowing the failure does not prevent it; running the check does** -- which is
+the same sentence `HANDOFF.md` already carries about numbering its own validity list, arrived at
+independently in a different file.
+
+**The transferable rule is now four items long and this is the fourth**: before believing a green
+guard, know which CONFIGURATIONS it ran in, not only which binaries and not only whether it stopped
+early.
 
 ## FORTY-SIXTH INCREMENT: THE SIZING SPIKE SIZES WORK THAT IS DONE
 
@@ -54,8 +86,10 @@ question moved out from under it.
 With every region kind routed, the remaining Order 1 obligation was "source types before type
 rejection reaches beyond literals". **Reading before acting, that is stale as well.**
 
-`the_rules_reach_only_literal_direct_occurrences` -- the test the roadmap cites as pinning the
-limitation -- is **RETIRED**, and the file says why: local resolution reaches a `let` bound to a
+The test the roadmap cites as pinning that limitation is **RETIRED**. Its name is deliberately not
+repeated here: a current-claim document that names an identifier existing nowhere in the tree
+asserts something no reader can check, and `tests/comment_citations.rs` refuses it -- which is how
+this sentence was caught. The file that retired it says why: local resolution reaches a `let` bound to a
 literal and a call taking a declared return type, so those programs are ordinary members of the
 rejection corpus now. **A bounded fixpoint reaches an ARITHMETIC result too**, with no depth limit
 on the chain -- the hop bound is a decision rather than a limit of the approach.

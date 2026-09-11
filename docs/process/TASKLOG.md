@@ -10,6 +10,21 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-11, session 65, forty-seventh increment). A DOCS-ONLY CHANGE FAILED
+> TWO CONFIGURATIONS I DID NOT RUN.**
+>
+> `the_current_claim_documents_cite_nothing_that_does_not_exist` fired on `REVERSE_PROMPT.md` for
+> naming the retired literal-only test while explaining that it is retired. **The fix is the claim,
+> not the allowlist** -- second time this session, after a begin command the slot stream did not
+> have.
+>
+> It failed under `--no-default-features` and `--features signatures`; I had run default and
+> `self-host`. **Both document guards are now run in every configuration CI uses.** Note that
+> `claimed_counts` reports ZERO tests under `--no-default-features`, so what it protects is
+> unprotected there.
+>
+> Fourth item in the rule: before believing a green guard, know which CONFIGURATIONS it ran in.
+
 > **Currency note (2026-09-11, session 65, forty-sixth increment). THE SIZING SPIKE MEASURES THE
 > STEP BEHIND US.**
 >
