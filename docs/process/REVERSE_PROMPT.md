@@ -6,171 +6,77 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## THE SUITE IS GREEN AGAIN — AND FOUR OF THE TEN RED TESTS WERE A DEFECT, NOT A RATCHET
+## `Op::Stream` AND `Op::Reset` ARE COMPLETE EXCEPT FOR SHAPES THAT SHOULD BE REFUSED
 
-**483 tests pass in BOTH float configurations, every run frozen**, from `464 passed, 10 failed` at
-the previous head. **No test was deleted.**
+You asked whether the lowering was complete as prescribed. It was not — five refusals stood. **Three
+are now closed, and the three needed three DIFFERENT things**, which is what my own framing document
+got wrong when it grouped them as one question:
 
-**The previous handoff — mine — was wrong in a way that mattered.** It recorded all ten failures as
-ratchets asserting the old frontier and said to invert rather than repair them. Four of them were
-reporting a defect that general `Op::Stream` lowering had just introduced, and inverting those four
-would have encoded it.
-
-**The mechanism, which generalises past this instance.** `degenerate_stream_yield` returns an
-`Option`, and `None` had come to mean two incompatible things: *not degenerate* and *unsafe*. That
-was harmless while `None` led to one place, a refusal. General `Stream` lowering then defined its own
-applicability as exactly `Stream && degenerate_yield.is_none()` — **so it inherited every soundness
-rejection as a feature request.** A stream calling a callee that can itself suspend went from refused
-to `Refusals: []` with nothing else changing.
-
-> **A predicate whose negative answer is consumed by more than one caller must say WHY it declined,
-> or the second caller reads the first caller's safety check as a hint.**
-
-**Three failures were correct widenings**, and each now carries a whole yielded sequence compared
-against your runtime rather than an argument. The strongest is a tail that writes the private data
-segment: the write survives `Op::Reset`, so a lowering that dropped it, duplicated it, or ran it
-before the suspension would diverge on the second iteration.
-
-**Three were simulations whose premise came true.** They mutated real bytecode to remove `Op::Stream`
-and ask what the yield-escape refusal would take over *"on the day `Stream` lowers"*. That day
-arrived, so the mutations are gone and each measures the shipping backend. The former shadowing
-tripwire is now `the_yield_escape_refusal_now_fires_unshadowed`, and it additionally asserts the
-retired refusal is ABSENT — otherwise a future refusal moving back in front would let it pass for the
-old reason. `13_telemetry_stream.kel` is refused for the yield-escape hazard, naming the site.
-
-## THE FRONTIER WAS RE-DERIVED, NOT EDITED, AND THAT FOUND SOMETHING
-
-Tail position is no longer the discriminator. **It is a composite that escapes the iteration that
-built it**, and three shapes are needed to establish that rather than two, because a pair leaves both
-*"composites are the problem"* and *"loops are the problem"* standing.
-
-Adding the shapes the matrix was missing then exposed a refusal class nothing in the tree had named:
-**a composite built from a RESUMED VALUE is refused because that value carries no declared width.**
-
-That corrected a claim in the same file, which said composite-yielding sequence semantics could not
-be witnessed until a non-tail yield lowered. A non-tail yield lowers now. The gap is still open, for
-a different reason — and a tractable one, since the resume value's width is the chunk's declared
-parameter-0 type, which the emitter already trusts for local slot 0.
-
-## ⚠ A PANIC IN `src/confine.rs` ON A TRUNCATED OP STREAM — YOURS, WITH A REPRODUCTION
-
-`walk` in `src/confine.rs` (around line 750) iterates
-
-```rust
-while ip < end { let op = &ops[ip]; ... }
-```
-
-where `end` is a block's recorded extent. **On a truncated op stream that extent can exceed
-`ops.len()`, and the index panics**: `index out of bounds: the len is 19 but the index is 19`.
-
-**Reproduction**, and it is not synthetic bytecode — it is a real corpus module with its op vector
-cut short:
-
-```text
-03_enum_match.kel, chunk 0, ops truncated from 57 to 19
-then keleusma::confine::module_confinement(&module)
-```
-
-**Why it reaches me.** `lower_module` calls `module_confinement`, and `lower_module` is a public
-entry point that does not require a verified module. A verified module cannot present this — your
-own structural verifier bounds the extents — but neither of us requires verification at that
-boundary, and my own tests mutate bytecode and lower it.
-
-**Why I am reporting rather than fixing.** `src/` is yours and read-only to this line. The shape of
-the fix looks like one line, `ops.get(ip)` or clamping `end`, but **which of those is right depends
-on whether an out-of-range extent should be a silent stop or a `Derailed`**, and that is your
-analysis's contract rather than mine to choose.
-
-**How I found it.** A sweep asking whether `lower_module` refuses malformed bytecode or panics on it
-— `native_codegen/tests/lowering_robustness.rs`. **1206 structural mutations over all 69 corpus
-modules; 49 panic, and every one of them is this defect.** Zero are mine, after fixing two classes
-of my own that the same sweep found: `pop` decrementing a `usize` below zero, and an out-of-range
-local index into a `Vec`.
-
-**Three different mutations reach it**, which is worth knowing when you pick the fix: truncating a
-chunk's op stream, and pointing an `Else` or `EndLoop` target out of range. All three make a block's
-recorded extent exceed `ops.len()`, so a single guard closes all three.
-
-**A correction I owe you about my first report.** I initially classified panics by the MUTATION that
-provoked them and attributed three of these to my own backend. They are yours, and I would have sent
-you looking in the wrong crate. The sweep now attributes by the panic's ORIGIN FILE, captured
-through a panic hook, because `catch_unwind` hands back the payload and not the location.
-
-**It is allowed in my test by MESSAGE SHAPE, not by a count**, so a different panic cannot slip
-through under its allowance — and the allowance itself asserts that it still fires, so **when you fix
-it my test fails and the carve-out gets deleted** rather than quietly outliving the defect.
-
-## A SMALL DIAGNOSTIC DEFECT, AND IT COST ME A WRONG CENSUS ENTRY
-
-Writing a refinement predicate with the return type spelled `Bool` gives:
-
-```text
-type error: refinement predicate `in_range` must return Bool, returns Bool
-```
-
-**Both halves say `Bool` and the message is unactionable.** The hard-coded half names a spelling the
-language does not use — the builtin is `bool` — while the second half displays my undeclared `Bool`
-type, which renders identically. The check is `!matches!(sig_return, Type::Bool)`, so it is correct;
-only the message cannot be acted on.
-
-**It cost something real.** My first census recorded that subject as REFERENCE REJECTED, which would
-have gone into the tree as a claim about your compiler's limits rather than about my typo. I caught
-it by finding a working example in `examples/scripts/07_refinement.kel`, not by reading the message.
-
-Naming the builtin as `bool` in the message, or distinguishing the two types when they render the
-same, would close it. **Yours to weigh — it is cosmetic against the width defect you repaired this
-session, and I am reporting it rather than ranking it.**
-
-## ⚠ FOR YOU, NOT FOR ME: A MULTI-PARAMETER STREAM FAULTS ON THE REFERENCE AFTER ITS FIRST REWIND
-
-**This is a question about the language, and I am reporting it rather than answering it.**
-
-I refuse a resumable stream with more than one parameter, on the ground that `resume` writes slot 0
-and nothing else. Investigating whether that refusal could be lifted, I drove the shape on YOUR
-runtime, and the answer was not what either of us would have guessed from the refusal's wording.
-
-Driving `loop main(a: Word, b: Word) -> Word { let r = yield a + b; yield r + b }` with
-`a = 3, b = 10`:
-
-| leg | value |
+| refusal | what it actually needed |
 |---|---|
-| `Yielded` | `13`, which is `a + b` |
-| `Yielded` | `110`, which is `reply + b` — **slot 1 SURVIVES the suspension** |
-| `Reset` | then `TypeError("Op::CheckedAdd expects Word, Byte, Float, or Fixed operands, got Int and Unit")` |
+| operand stack non-empty at `Reset` | **nothing** — your `Op::Reset` truncates the stack, so discarding agrees |
+| operands stacked beneath a `yield` | an ephemeral spill slice at `MAX_STACK` slots |
+| resume point that is also a branch target | a dedicated block for the resume edge |
 
-**The second parameter survives a suspension and does not survive the rewind.** `Op::Reset` clears
-every local to `Unit`, `resume` writes only slot 0, and the next iteration's arithmetic on slot 1 is
-a type error.
+**The two that remain should remain.** A multi-parameter stream faults on YOUR runtime after its
+first rewind, so lifting my refusal would lift it on a program that does not work. A stream calling
+a suspending callee mixes a returning suspension with a callback one, and they do not compose.
 
-**So the shape is not "refused natively but working on the reference". The reference stops.** The
-program compiles, passes the verifier, and faults on its second iteration.
+Every closure is driven against your runtime and agrees on the whole yielded sequence — including a
+composite-yielding stream compared BODY BYTES across five suspensions, which closes a gap the
+frontier map had carried since it was written.
 
-**The three readings I can see, and I am not choosing between them:**
+**`Op::Reset` still emits no arena reset**, and I want that on the record rather than buried: it
+clears the locals and relies on every composite site having a fixed offset, so the next iteration
+overwrites exactly the bytes a reset would have reclaimed. You licensed the fixed-offset lowering.
+**The bottom-ephemeral region is not cleared**, which is unobservable today only because every site
+is written before it is read. You said that distinction may matter in future; this is where it will
+surface.
 
-1. It is a defect — a stream's non-resume parameters ought to survive the rewind.
-2. It is an intended consequence of `Reset` semantics, in which case the surprise is only that
-   nothing says so.
-3. It is a shape the verifier should reject outright, since a program that cannot reach its second
-   iteration is not a productive stream.
+## THREE DEFECTS, AND THE WORST ONE RETURNED YOUR OWN BUFFER'S BYTES
 
-**Only the third would need no runtime change**, and all three are yours. It affects my refusal only
-in that lifting it would be lifting a refusal on a program that does not work anyway.
+**An unguarded array index.** `xs[5]` on a three-element array returned `0xabababababababab` — the
+filler byte of the caller's region buffer — where you fault `IndexOutOfBounds(5, 3)`. A silently
+wrong value AND an out-of-bounds read at a runtime offset. The cause was a comment claiming the
+compiler emits `Op::BoundsCheck` before the index. **It does not.**
 
-**Measured in `native_codegen/tests/probe_multi_param_stream.rs`**, which asserts the fault so that
-this report stops being true the moment the behaviour changes.
+**A soundness hole general `Stream` lowering introduced.** `degenerate_stream_yield` returned `None`
+for two incompatible reasons — *not degenerate* and *unsafe* — and the new path was defined as
+exactly that `None`, inheriting every soundness rejection as a feature request.
 
-**It also corrected me.** I had written in my own handoff that three standing refusals were "one
-question, not three". That was an inference presented as a finding; this measurement separates one of
-them out. I had also reasoned that clearing slot 1 natively would AGREE with your runtime — it would
-not, because your runtime faults, and producing a value where the reference faults is the
-silently-wrong-answer class I exist to refuse.
+**58 panics on a public entry point**, plus a later one in `lower_chunk`. All refuse now.
 
-## A GUARD OF YOURS CAUGHT MY OWN OMISSION, AND I WANT TO SAY SO
+## ⚠ TWO QUESTIONS STILL WITH YOU, NEITHER ACTED ON AS OF THIS WRITING
 
-The pre-push hook rejected this work because `comment_citations` found that **this very file cited a
-test I had renamed**. Renaming a test silently invalidates every document that names it, and I would
-not have found those by reading. Four further stale citations turned up in the sweep it prompted,
-including one in `docs/decisions/YIELD_ESCAPE_REFUSAL.md`. All are corrected.
+Both carry reproductions further down this file. Stating the status rather than assuming they were
+received:
+
+1. **A `confine.rs` index panic on a truncated op stream.** `while ip < end { let op = &ops[ip]; .. }`
+   where a block's recorded extent can exceed `ops.len()`. **Three mutation kinds reach it and one
+   guard closes all three.** My sweep allows it BY ORIGIN FILE and asserts it still fires, so your
+   fix will fail my test and delete the carve-out rather than let it outlive the defect.
+2. **A multi-parameter stream faults after its first rewind** — `TypeError` on `Int` and `Unit`,
+   because `Op::Reset` clears slot 1 and only slot 0 is written on resume. Defect, intended
+   consequence, or a shape the verifier should reject? **Only the third needs no runtime change.**
+
+## WHAT I GOT WRONG, SO YOU CAN WEIGH WHAT I REPORT
+
+Recorded because a line that only reports its successes is not one you can calibrate against.
+
+- **Twice a refusal described MY LOWERING and read as a fact about your language.** *"Native code
+  cannot truncate"* — you truncate. *"The two edges disagree"* — they agree.
+- **A probe I wrote would have sent me to "correct" an accurate document**, by inferring the stream
+  path from a signature that `needs_region` decides per MODULE.
+- **Seven of my own completion-condition clauses were unmet**, two of them hiding live defects.
+- A conflict prediction of four files against an actual one; a cost estimate wrong by thirtyfold; an
+  unverified hash in a banner; a push reported as landed when it had died with SIGPIPE.
+
+## ABSORPTION 56 IS IN, AND YOUR WIDTH CHANGE WAS THE NAMED RISK
+
+84 commits. All three predicted clauses hit exactly. `d9eeba69 fix(target): refuse a width below the
+narrowest implemented one` was named in advance as the plausible breaker, because this backend is
+width-sensitive where your runtime is not. **46 width-sensitive tests ran and passed** — which is a
+different claim from "the suite was green", and the one worth making.
 
 ## TWO DEFECTS YOUR ORACLE CAUGHT THAT MY REASONING DID NOT
 
