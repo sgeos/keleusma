@@ -43,12 +43,14 @@
 //!   programs. This project has four recorded instances of a suite whose
 //!   coverage was a property of its cases rather than of the thing under test,
 //!   and one of them was this corpus.
-//! - **Tags reach only what the source declares or literally initialises**, plus
-//!   one alias hop for a `let` bound to a call. An operand whose type is DERIVED
-//!   from a FIELD READ or an INDEX is still unknown and still accepted;
-//!   `a_derived_operand_from_a_field_read_is_still_unreached` pins that edge.
-//!   **An ARITHMETIC result is no longer among them** — a bounded fixpoint reaches
-//!   it, per `a_derived_operand_is_now_reached_and_the_chain_has_no_depth_limit`.
+//! - **Tags reach what the source declares or literally initialises**, one alias
+//!   hop for a `let` bound to a call, an ARITHMETIC result through a bounded
+//!   fixpoint (`a_derived_operand_is_now_reached_and_the_chain_has_no_depth_limit`),
+//!   and a FIELD READ whose base is a plain name the source types
+//!   (`a_field_read_initialiser_is_now_reached`). An operand whose type comes from
+//!   an INDEX, or from a field read whose base is an array element or a match
+//!   binding, is still unknown and still accepted;
+//!   `the_field_read_channel_reaches_three_base_forms_and_not_two` pins that edge.
 //!   The hop bound is a decision rather than a limit of the approach.
 //! - **Unknown never rejects, by design.** A stage that cannot type an operand
 //!   accepts it, because rejecting a valid program is a language change rather
@@ -507,6 +509,48 @@ fn occurrence_rows(ast: &keleusma::ast::Program) -> OccurrenceRows {
         }
     }
 
+    /// Every name a pattern binds, collected recursively.
+    ///
+    /// **A MATCH ARM BINDS NAMES AND THIS WALK USED TO MISS THEM**, which made the
+    /// stage REJECT well-typed programs: the arm's `p` was an occurrence that
+    /// resolved to neither a local nor a top-level declaration, so the
+    /// classification rule refused it. That is the unsound direction -- rejecting a
+    /// valid program is a language change -- and it is the same class as the `for`
+    /// loop variable already pinned in this file. Found on 2026-09-11 by the
+    /// well-typed controls added for the field-read channel, not by the rejection
+    /// corpus, which is what those controls are for.
+    ///
+    /// Recursive because a pattern nests: `E::W(Inner { a, b })` binds two names
+    /// two levels down, and stopping at the top level would leave the same defect
+    /// one layer in.
+    fn pattern_bindings(p: &Pattern, out: &mut BTreeSet<String>) {
+        match p {
+            Pattern::Variable(n, _) => {
+                out.insert(n.clone());
+            }
+            Pattern::Enum(_, _, ps, _) | Pattern::Tuple(ps, _) => {
+                for q in ps {
+                    pattern_bindings(q, out);
+                }
+            }
+            Pattern::Struct(_, fps, _) => {
+                for f in fps {
+                    // SHORTHAND BINDS THE FIELD'S OWN NAME. `P { x }` with no
+                    // sub-pattern binds `x`, and treating the absent sub-pattern as
+                    // binding nothing would leave exactly the defect this function
+                    // exists to close, one form over.
+                    match &f.pattern {
+                        Some(q) => pattern_bindings(q, out),
+                        None => {
+                            out.insert(f.name.clone());
+                        }
+                    }
+                }
+            }
+            Pattern::Literal(..) | Pattern::Wildcard(_) => {}
+        }
+    }
+
     struct Occ {
         locals: BTreeSet<String>,
         seen: Vec<(String, i64, i64)>,
@@ -529,6 +573,16 @@ fn occurrence_rows(ast: &keleusma::ast::Program) -> OccurrenceRows {
                 Expr::Ident { name, .. } => {
                     let local = i64::from(self.locals.contains(name));
                     self.seen.push((name.clone(), local, 0));
+                }
+                Expr::Match { arms, .. } => {
+                    // FUNCTION-WIDE, like the `let` handling above and for the same
+                    // reason: this approximation does not model scope, and a name
+                    // treated as local outside its arm is ACCEPTED where a name
+                    // treated as unresolved inside it is REJECTED. Only one of those
+                    // two errors can change the language.
+                    for a in arms {
+                        pattern_bindings(&a.pattern, &mut self.locals);
+                    }
                 }
                 _ => {}
             }
@@ -915,7 +969,182 @@ fn expression_nodes_resolvable(
 ///
 /// **The host no longer answers the question.** It says "type 2, field name 7";
 /// whether type 2 declares name 7 is the stage's to determine.
-type FieldSets = (Vec<i64>, Vec<i64>, Vec<i64>, Vec<(i64, i64)>);
+type FieldSets = (Vec<i64>, Vec<i64>, Vec<i64>, Vec<(i64, i64)>, Vec<i64>);
+
+/// The declared field-name index space and the struct type index space.
+///
+/// **THE SINGLE DEFINITION OF BOTH, because two channels now read them.**
+/// [`field_sets`] seeds its interner from this and [`field_read_channel`] resolves
+/// against it; a second walk agreeing with the first by inspection is exactly the
+/// arrangement this file already records two off-by-one defects against.
+///
+/// Returns `(field name -> index, struct name -> type index)`. Field names are
+/// interned in declaration order across all structs, which is the order the flat
+/// field table is built in, so an index here addresses the same field there.
+fn declared_field_index(
+    ast: &keleusma::ast::Program,
+) -> (
+    std::collections::BTreeMap<String, i64>,
+    std::collections::BTreeMap<String, i64>,
+) {
+    use keleusma::ast::TypeDef;
+    use std::collections::BTreeMap;
+
+    let mut names: BTreeMap<String, i64> = BTreeMap::new();
+    let mut types: BTreeMap<String, i64> = BTreeMap::new();
+    for t in &ast.types {
+        if let TypeDef::Struct(d) = t {
+            types.insert(d.name.clone(), types.len() as i64);
+            for f in &d.fields {
+                let next = names.len() as i64;
+                names.entry(f.name.clone()).or_insert(next);
+            }
+        }
+    }
+    (names, types)
+}
+
+/// `(struct-binding rows, field-read rows, the form-3 binding rows addressing them)`.
+type FieldReadChannel = (Vec<(i64, i64, i64)>, Vec<(i64, i64)>, Vec<BindingRow>);
+
+/// The two syntactic facts a field-read initialiser rests on, kept SEPARATE so
+/// the stage joins them.
+///
+/// `names` is [`binding_rows`]' name space, extended in place: a base or bound
+/// name the binding walk never registered still needs an id, and assigning one
+/// here keeps a single space rather than opening a second.
+///
+/// **WHAT THE HOST SAYS.** That `p` is written with struct type `P` (a declared
+/// parameter, a `let` annotation, or a struct literal naming itself); that `p`
+/// takes whatever `g` returns; and that `a` is written `= p.x`. Every one of
+/// those is spelled in the source.
+///
+/// **WHAT IT DOES NOT SAY.** That `a` is a `Word`. Reaching that needs `P`'s
+/// declared field set, which arrives on its own channel, and the join is the
+/// stage's -- pinned by
+/// `withholding_the_field_sets_accepts_the_same_field_read_program`, which
+/// withholds that channel and shows the same program is then accepted.
+///
+/// **THE BASE MUST BE A PLAIN NAME.** `a[0].x` and a match binding's `p.x` are
+/// both out of reach: the first needs an array's element type projected out of
+/// the initialiser and the second needs a variant payload's type, and no `let`
+/// or parameter states either. Producing no row means the stage accepts, which is
+/// this project's documented conservative stance rather than an oversight.
+fn field_read_channel(
+    ast: &keleusma::ast::Program,
+    names: &mut std::collections::BTreeMap<String, i64>,
+) -> FieldReadChannel {
+    use keleusma::ast::{Expr, Pattern, Stmt, TypeExpr};
+    use keleusma::visitor::Visitor;
+
+    let (field_names, type_index) = declared_field_index(ast);
+    let id_of = |names: &mut std::collections::BTreeMap<String, i64>, n: &str| -> i64 {
+        let next = names.len() as i64 + 1;
+        *names.entry(n.to_string()).or_insert(next)
+    };
+
+    // Collected as SPELLINGS first and interned after, so the id space is
+    // extended in one place and a name mentioned twice cannot take two ids.
+    struct Walk {
+        /// `(name, struct name)` -- the source states the type outright.
+        declared: Vec<(String, String)>,
+        /// `(name, function name)` -- the source states one alias hop.
+        aliased: Vec<(String, String)>,
+        /// `(bound name, base name, field name)`.
+        reads: Vec<(String, String, String)>,
+    }
+    impl Visitor for Walk {
+        fn visit_stmt(&mut self, stmt: &Stmt) {
+            if let Stmt::Let(l) = stmt
+                && let Pattern::Variable(n, _) = &l.pattern
+            {
+                // An ANNOTATION outranks the initialiser: `let p: P = q` states
+                // the type where the initialiser only passes one along.
+                if let Some(TypeExpr::Named(t, ..)) = &l.type_expr {
+                    self.declared.push((n.clone(), t.clone()));
+                } else {
+                    match &l.value {
+                        Expr::StructInit { name, .. } => {
+                            self.declared.push((n.clone(), name.clone()));
+                        }
+                        Expr::Call { name, .. } => {
+                            self.aliased.push((n.clone(), name.clone()));
+                        }
+                        Expr::FieldAccess { object, field, .. } => {
+                            if let Expr::Ident { name: base, .. } = object.as_ref() {
+                                self.reads.push((n.clone(), base.clone(), field.clone()));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            self.walk_stmt(stmt);
+        }
+    }
+
+    let mut walk = Walk {
+        declared: Vec::new(),
+        aliased: Vec::new(),
+        reads: Vec::new(),
+    };
+    for f in &ast.functions {
+        // A declared PARAMETER whose type names a struct. The same fact as a
+        // `let` annotation, read off the signature.
+        for prm in &f.params {
+            if let (Pattern::Variable(n, _), Some(TypeExpr::Named(t, ..))) =
+                (&prm.pattern, &prm.type_expr)
+            {
+                walk.declared.push((n.clone(), t.clone()));
+            }
+        }
+        // A declared RETURN type that names a struct, keyed by the function's own
+        // name, so an alias row through a call reaches it in one hop.
+        if let TypeExpr::Named(t, ..) = &f.return_type {
+            walk.declared.push((f.name.clone(), t.clone()));
+        }
+        walk.visit_block(&f.body);
+    }
+
+    let mut sbinds: Vec<(i64, i64, i64)> = Vec::new();
+    for (n, t) in &walk.declared {
+        // A type name that is not a declared struct yields NO ROW. `Bool` is the
+        // case this file already records: an ordinary named type that is not a
+        // primitive and not a struct, and claiming a struct index for it would
+        // type a field read against the wrong declaration.
+        if let Some(&ti) = type_index.get(t) {
+            let id = id_of(names, n);
+            sbinds.push((id, ti, 0));
+        }
+    }
+    for (n, target) in &walk.aliased {
+        // An alias row is emitted whether or not the target has a struct row: the
+        // stage does that lookup, and filtering here would be the host deciding
+        // that the hop leads nowhere.
+        let id = id_of(names, n);
+        let tid = id_of(names, target);
+        sbinds.push((id, tid, 1));
+    }
+
+    let mut reads: Vec<(i64, i64)> = Vec::new();
+    let mut extra: Vec<BindingRow> = Vec::new();
+    for (n, base, field) in &walk.reads {
+        // A field name no struct declares has no index in the shared space, and
+        // inventing one would make the stage search for a name it can never match
+        // -- indistinguishable from a field that exists but is not declared on the
+        // base's type, which is a DIFFERENT rejection on a DIFFERENT channel.
+        let Some(&fi) = field_names.get(field) else {
+            continue;
+        };
+        let id = id_of(names, n);
+        let bid = id_of(names, base);
+        let k = reads.len() as i64;
+        reads.push((bid, fi));
+        extra.push((id, k, 3));
+    }
+
+    (sbinds, reads, extra)
+}
 
 fn field_sets(ast: &keleusma::ast::Program) -> FieldSets {
     use keleusma::ast::{Expr, Pattern, Stmt, TypeDef, TypeExpr};
@@ -923,7 +1152,12 @@ fn field_sets(ast: &keleusma::ast::Program) -> FieldSets {
     use std::collections::BTreeMap;
 
     // One shared index space for every field name either side mentions.
-    let mut names: BTreeMap<String, i64> = BTreeMap::new();
+    //
+    // SEEDED FROM [`declared_field_index`] rather than built here, because the
+    // field-read channel needs the SAME indices and two walks that agree today
+    // are two walks that can drift. The declaration pass below still interns, and
+    // does so idempotently: every declared name is already present.
+    let mut names: BTreeMap<String, i64> = declared_field_index(ast).0;
     let intern = |n: &str, names: &mut BTreeMap<String, i64>| -> i64 {
         let next = names.len() as i64;
         *names.entry(n.to_string()).or_insert(next)
@@ -933,6 +1167,11 @@ fn field_sets(ast: &keleusma::ast::Program) -> FieldSets {
     let mut first: Vec<i64> = Vec::new();
     let mut count: Vec<i64> = Vec::new();
     let mut flat: Vec<i64> = Vec::new();
+    // PARALLEL TO `flat`, NOT A SECOND TABLE WITH ITS OWN ORDER. The stage reads
+    // `sftag` at whichever position of `sfield` matched, so the two must be built
+    // in one pass; building them separately is how a tag table comes to describe a
+    // different field than the name at the same index.
+    let mut ftag: Vec<i64> = Vec::new();
     for t in &ast.types {
         if let TypeDef::Struct(d) = t {
             type_index.insert(d.name.clone(), first.len() as i64);
@@ -941,6 +1180,10 @@ fn field_sets(ast: &keleusma::ast::Program) -> FieldSets {
             for f in &d.fields {
                 let i = intern(&f.name, &mut names);
                 flat.push(i);
+                // A declared SPELLING, through the same map every other declared
+                // type goes through. A field whose type is not a primitive tags as
+                // 0, which types nothing and therefore accepts.
+                ftag.push(type_tag(&f.type_expr));
             }
         }
     }
@@ -995,7 +1238,7 @@ fn field_sets(ast: &keleusma::ast::Program) -> FieldSets {
         })
         .collect();
 
-    (first, count, flat, accesses)
+    (first, count, flat, accesses, ftag)
 }
 
 /// The stage's verdict for a program, with its operand pairs marshalled in.
@@ -1030,6 +1273,15 @@ struct StageInput<'a> {
     nodes_resolvable: Option<&'a [ResolvableNode]>,
     /// `(name id, tag)` rows the stage resolves a form-1 operand through.
     bindings: &'a [BindingRow],
+    /// `(name id, value, form)` rows giving a name's STRUCT type. Form 0 is a
+    /// struct type index; form 1 is a name id the stage hops through once.
+    ///
+    /// A channel of its own rather than a widening of `bindings`, because a
+    /// struct index in the scalar tag space would be compared by
+    /// `ty_pair_disagrees` against every operand that space reaches.
+    sbinds: &'a [(i64, i64, i64)],
+    /// `(base name id, field name index)` rows a form-3 binding row addresses.
+    freads: &'a [(i64, i64)],
 }
 
 fn stage_verdict(input: &StageInput<'_>) -> bool {
@@ -1055,8 +1307,10 @@ fn stage_verdict_counting(input: &StageInput<'_>) -> (bool, usize) {
         nodes,
         nodes_resolvable,
         bindings,
+        sbinds,
+        freads,
     } = *input;
-    static EMPTY_SETS: FieldSets = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    static EMPTY_SETS: FieldSets = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let sets = sets.unwrap_or(&EMPTY_SETS);
     static EMPTY_OCC: OccurrenceRows = (Vec::new(), Vec::new(), false);
     let occ = occ.unwrap_or(&EMPTY_OCC);
@@ -1229,7 +1483,7 @@ fn stage_verdict_counting(input: &StageInput<'_>) -> (bool, usize) {
     const AN_SLOT: usize = SFIELD_SLOT + 256;
     const ATYPE_SLOT: usize = AN_SLOT + 1;
     const ANAME_SLOT: usize = ATYPE_SLOT + 256;
-    let (sfirst, scount, sfield, accesses) = sets;
+    let (sfirst, scount, sfield, accesses, sftag) = sets;
     assert!(
         sfirst.len() <= 64 && sfield.len() <= 256 && accesses.len() <= 256,
         "field-set tables overflow"
@@ -1361,6 +1615,16 @@ fn stage_verdict_counting(input: &StageInput<'_>) -> (bool, usize) {
     const ALIAS_SLOT: usize = BFORM_SLOT + 128;
     const EAF_SLOT: usize = ALIAS_SLOT + 1;
     const EBF_SLOT: usize = EAF_SLOT + 256;
+    // SLICE 7, appended after `ebf` and derived from it for the same reason every
+    // constant above is derived from its predecessor.
+    const SFTAG_SLOT: usize = EBF_SLOT + 256;
+    const SBN_SLOT: usize = SFTAG_SLOT + 256;
+    const SBNAME_SLOT: usize = SBN_SLOT + 1;
+    const SBVAL_SLOT: usize = SBNAME_SLOT + 128;
+    const SBFORM_SLOT: usize = SBVAL_SLOT + 128;
+    const FBN_SLOT: usize = SBFORM_SLOT + 128;
+    const FBBASE_SLOT: usize = FBN_SLOT + 1;
+    const FBFIELD_SLOT: usize = FBBASE_SLOT + 128;
     // The resolvable table REPLACES the tag-only one when present, so the two are
     // never seeded together. Widening every operand to a form here means the
     // stage sees one shape regardless of which caller built the table.
@@ -1427,6 +1691,74 @@ fn stage_verdict_counting(input: &StageInput<'_>) -> (bool, usize) {
             keleusma::bytecode::Value::Int(*f),
         )
         .expect("bform");
+    }
+    // SLICE 7. The declared field TAGS travel PARALLEL to `sfield`, so they are
+    // written over the same range rather than over their own count: a tag table
+    // shorter than the name table would leave the stage reading a stale slot for
+    // the last field, and one longer would describe a field that is not there.
+    assert_eq!(
+        sftag.len(),
+        sfield.len(),
+        "the field tag table and the field name table must be the same length, or \
+         a tag describes a different field than the name beside it"
+    );
+    for (i, t) in sftag.iter().enumerate() {
+        vm.set_shared(
+            &mut shared,
+            SFTAG_SLOT + i,
+            keleusma::bytecode::Value::Int(*t),
+        )
+        .expect("sftag");
+    }
+    assert!(
+        sbinds.len() <= 128 && freads.len() <= 128,
+        "the field-read channel overflows"
+    );
+    vm.set_shared(
+        &mut shared,
+        SBN_SLOT,
+        keleusma::bytecode::Value::Int(sbinds.len() as i64),
+    )
+    .expect("sbn");
+    for (i, (n, v, f)) in sbinds.iter().enumerate() {
+        vm.set_shared(
+            &mut shared,
+            SBNAME_SLOT + i,
+            keleusma::bytecode::Value::Int(*n),
+        )
+        .expect("sbname");
+        vm.set_shared(
+            &mut shared,
+            SBVAL_SLOT + i,
+            keleusma::bytecode::Value::Int(*v),
+        )
+        .expect("sbval");
+        vm.set_shared(
+            &mut shared,
+            SBFORM_SLOT + i,
+            keleusma::bytecode::Value::Int(*f),
+        )
+        .expect("sbform");
+    }
+    vm.set_shared(
+        &mut shared,
+        FBN_SLOT,
+        keleusma::bytecode::Value::Int(freads.len() as i64),
+    )
+    .expect("fbn");
+    for (i, (b, f)) in freads.iter().enumerate() {
+        vm.set_shared(
+            &mut shared,
+            FBBASE_SLOT + i,
+            keleusma::bytecode::Value::Int(*b),
+        )
+        .expect("fbbase");
+        vm.set_shared(
+            &mut shared,
+            FBFIELD_SLOT + i,
+            keleusma::bytecode::Value::Int(*f),
+        )
+        .expect("fbfield");
     }
     // THE STAGE IS A COROUTINE NOW, so drive it to a verdict rather than calling
     // it once. It yields `PENDING` (63) per folded row and the verdict when the
@@ -1990,7 +2322,8 @@ fn the_stage_agrees_with_the_reference_on_the_whole_corpus() {
 // above, and the whole-corpus test drives them through the resolving path.
 //
 // The limit it recorded has not vanished, it has MOVED, and
-// `a_derived_operand_from_a_field_read_is_still_unreached` holds the new edge.
+// `the_field_read_channel_reaches_three_base_forms_and_not_two` holds the new
+// edge: a field read whose base is an array element or a match binding.
 
 // ---------------------------------------------------------------------------
 // SIZING SPIKE: what would it take to reach a non-literal operand?
@@ -2039,11 +2372,13 @@ fn prototype_tag(
 /// reaches**. It was written when the edge was the literal operand; local
 /// resolution and the bounded arithmetic fixpoint have since moved that edge.
 ///
-/// **The corpus contains no FIELD READ**, which is where the edge actually sits,
-/// pinned by `a_derived_operand_from_a_field_read_is_still_unreached`. So "5 of
-/// 5" is a measurement of work already completed, not of the gap in front of it,
-/// and a reader taking it as "the remaining step is small" would be sizing from
-/// the wrong corpus.
+/// **The corpus contains no FIELD READ**, which is where the edge sat when this
+/// note was written. That step has since been taken for the three base forms
+/// declaration lookup reaches, and the edge is now the two it does not, pinned by
+/// `the_field_read_channel_reaches_three_base_forms_and_not_two`. So "5 of 5" is a
+/// measurement of work already completed, not of the gap in front of it, and a
+/// reader taking it as "the remaining step is small" would be sizing from the
+/// wrong corpus.
 ///
 /// Kept rather than deleted: the result is still the reason the literal-to-local
 /// step was known to be cheap before it was taken, and that history is why the
@@ -2207,8 +2542,27 @@ fn prim_tag(p: &keleusma::ast::PrimType) -> i64 {
 
 /// Drive the stage with the binding table and resolvable operands.
 fn stage_verdict_resolving(src: &str) -> bool {
+    stage_verdict_resolving_with(src, true)
+}
+
+/// [`stage_verdict_resolving`], with the struct field sets optionally WITHHELD.
+///
+/// **Withholding is the instrument, not a convenience.** A field read types only
+/// if the stage joins the base's struct type to that type's declared field set. If
+/// the host had already done that join, removing the field sets would change
+/// nothing and the program would still be rejected. That the same program is
+/// ACCEPTED without them is what distinguishes a join from a marshalled answer,
+/// and it is the same test `the_stage_and_not_the_host_resolves_an_operand`
+/// applies to the binding table.
+fn stage_verdict_resolving_with(src: &str, with_sets: bool) -> bool {
     let ast = parse(&tokenize(src).expect("lex")).expect("parse");
-    let (names, mut bindings) = binding_rows(&ast);
+    let (mut names, mut bindings) = binding_rows(&ast);
+    // BEFORE the expression walk, because a name bound by a FIELD READ is not
+    // registered by the binding walk -- `let a = p.x` is neither a literal, a call
+    // nor an operator expression -- and an operand spelling `a` would otherwise
+    // collapse to form 0 and type nothing.
+    let (sbinds, freads, field_bindings) = field_read_channel(&ast, &mut names);
+    bindings.extend(field_bindings);
     let (nodes, derived) = expression_nodes_and_derived(&ast, &names);
     // FORM 2: the binding takes whatever expression node `idx` yields. The host
     // says only WHICH node the initialiser is -- a syntactic fact, like a literal
@@ -2220,6 +2574,7 @@ fn stage_verdict_resolving(src: &str) -> bool {
         }
     }
     let (dparams, sites, arg_pairs) = decl_call_rows(&ast);
+    let sets = field_sets(&ast);
     stage_verdict(&StageInput {
         pairs: &arg_pairs,
         nodes: &[],
@@ -2227,8 +2582,10 @@ fn stage_verdict_resolving(src: &str) -> bool {
         bindings: &bindings,
         dparams: &dparams,
         sites: &sites,
-        sets: Some(&field_sets(&ast)),
+        sets: if with_sets { Some(&sets) } else { None },
         occ: Some(&occurrence_rows(&ast)),
+        sbinds: &sbinds,
+        freads: &freads,
         ..Default::default()
     })
 }
@@ -2253,11 +2610,12 @@ fn stage_verdict_resolving(src: &str) -> bool {
 ///
 /// # What this does NOT establish
 ///
-/// Four cases are a case list, and the tags reach only what the source declares
-/// or literally initialises. An operand whose type comes from a FIELD READ or an
-/// INDEX is still UNKNOWN and still accepted, pinned by
-/// `a_derived_operand_from_a_field_read_is_still_unreached`. **An ARITHMETIC
-/// result is no longer in that set**: a bounded fixpoint reaches it.
+/// Four cases are a case list. An operand whose type comes from an INDEX is still
+/// UNKNOWN and still accepted, and so is a FIELD READ whose base is an array
+/// element or a match binding, pinned by
+/// `the_field_read_channel_reaches_three_base_forms_and_not_two`. **An ARITHMETIC
+/// result is no longer in that set**, and neither is a field read whose base is a
+/// plain name the source types.
 #[test]
 fn resolution_reaches_an_operand_that_is_not_a_literal() {
     let cases: &[(&str, &str)] = &[
@@ -2395,18 +2753,32 @@ fn a_derived_operand_is_now_reached_and_the_chain_has_no_depth_limit() {
     }
 }
 
-/// **WHAT A DERIVED OPERAND STILL DOES NOT REACH**, so the next increment knows
-/// where the edge is.
+/// **THE FIELD-READ EDGE, AS FAR AS DECLARATION LOOKUP REACHES.**
 ///
-/// `tyb_node_tag` proves a tag only for an operator node whose two operands agree.
-/// A field read and an index are other node kinds, so a `let` bound to one is
-/// still UNKNOWN and therefore ACCEPTED -- the safe direction, and the same one
-/// the single alias hop takes.
+/// The pin that stood here said, in its own failure message, to move the case
+/// into a positive test once the stage reached it. This is that move rather than a
+/// new pin, and the retired pin's name is deliberately not quoted: a citation that
+/// resolves to nothing cannot be wrong out loud.
 ///
-/// This is a PIN, not an aspiration: if a later increment reaches these, it fails
-/// here and the author records what it now reaches.
+/// **The doc comment above this one went with it.** It read "what a derived
+/// operand still does not reach" and said a `let` bound to a field read is UNKNOWN
+/// and therefore accepted, which is the opposite of what the test below asserts. A
+/// replaced test whose doc comment survives is a comment that documents its
+/// successor and contradicts it.
+///
+/// The subject is the one the retired pin named: the base is a DECLARED PARAMETER,
+/// the field is declared `Word`, and the addition against a `bool` is the
+/// rejection.
+///
+/// # Two joins, both the stage's
+///
+/// The base name to a struct type, then that type and the field name to the
+/// field's declared tag. The host reports three syntactic facts -- `p` is written
+/// `P`, `a` is written `= p.x`, and `P` declares `x` as `Word` -- and none of them
+/// is the conclusion. [`withholding_the_field_sets_accepts_the_same_field_read_program`]
+/// is what makes that checkable.
 #[test]
-fn a_derived_operand_from_a_field_read_is_still_unreached() {
+fn a_field_read_initialiser_is_now_reached() {
     let src = "struct P { x: Word }\n\
                fn main(p: P) -> Word { let a = p.x; let b = true; a + b }";
     let mut for_ref = parse(&tokenize(src).expect("lex")).expect("parse");
@@ -2415,10 +2787,266 @@ fn a_derived_operand_from_a_field_read_is_still_unreached() {
         "the reference ACCEPTS this, so it measures nothing"
     );
     assert!(
-        stage_verdict_resolving(src),
-        "the stage now reaches a field-read initialiser. Record what it reaches and \
-         move this case into the positive test above."
+        !stage_verdict_resolving(src),
+        "the stage accepts a field-read initialiser the reference rejects"
     );
+}
+
+/// **THE JOIN IS THE STAGE'S, AND THIS IS HOW THAT IS CHECKED RATHER THAN ASSERTED.**
+///
+/// Withhold the declared field sets and the SAME program is accepted. A host that
+/// had already decided `a` is a `Word` would go on rejecting it, because the
+/// conclusion would travel in the binding row rather than being recomputed from a
+/// table that is no longer there.
+///
+/// The converse direction matters too and is covered by
+/// [`a_field_read_initialiser_is_now_reached`]: a test that only showed acceptance
+/// without the sets would be satisfied by a stage that accepted everything.
+#[test]
+fn withholding_the_field_sets_accepts_the_same_field_read_program() {
+    let src = "struct P { x: Word }\n\
+               fn main(p: P) -> Word { let a = p.x; let b = true; a + b }";
+    assert!(
+        stage_verdict_resolving_with(src, false),
+        "the stage still rejects with the field sets withheld, so the field tag is \
+         not being looked up -- it is arriving already decided"
+    );
+}
+
+/// **WHICH BASES THE CHANNEL REACHES, MEASURED RATHER THAN ASSERTED.**
+///
+/// `sizing_how_far_declaration_lookup_reaches_a_field_read` measured three of five
+/// forms reachable by declaration lookup and named the two that are not. This
+/// applies that measurement to the stage and pins BOTH halves, because a test that
+/// listed only the reached forms could not tell a widened channel from a broken
+/// one.
+///
+/// # What remains unreached, and why none of it is an oversight
+///
+/// - **A field of an ARRAY ELEMENT.** `let a = q[0].x` has a base that is not a
+///   plain name, and `let q = [P { x: 1 }]` states an ARRAY type from which the
+///   element type would have to be projected. No `let` or parameter writes the
+///   element type down.
+/// - **A field read that is a DIRECT OPERAND** rather than a `let` initialiser.
+///   This channel binds a NAME to a field read; an operand row carries a tag or a
+///   name id and has no form for a field read, so `p.x + true` types nothing even
+///   where `p` is a declared parameter. **This is a different limit from the base
+///   forms**, and it surfaced while writing this test rather than before it.
+/// - **A field of a MATCH BINDING**, which runs into both: `p` types from the
+///   VARIANT PAYLOAD, which no binding statement states, and the subset has no
+///   block-bodied match arm to bind the read through in the first place.
+///
+/// All are ACCEPTED by the stage while the reference rejects them. That is a
+/// missed rejection, not an unsound one: this stage may not refuse a program it
+/// cannot type, because rejecting a valid program is a language change.
+#[test]
+fn the_field_read_channel_reaches_three_base_forms_and_not_two() {
+    // Reached. Each is a program the reference rejects for the SAME reason -- a
+    // field typed `Word` added to a `bool` -- so the only variable is the base.
+    const REACHED: &[(&str, &str)] = &[
+        (
+            "base is a declared parameter",
+            "struct P { x: Word }\n\
+             fn main(p: P) -> Word { let a = p.x; a + true }",
+        ),
+        (
+            "base is a let bound to a struct literal",
+            "struct P { x: Word }\n\
+             fn main() -> Word { let p = P { x: 1 }; let a = p.x; a + true }",
+        ),
+        (
+            "base is a let bound to a call",
+            "struct P { x: Word }\nfn g() -> P { P { x: 1 } }\n\
+             fn main() -> Word { let p = g(); let a = p.x; a + true }",
+        ),
+    ];
+    for (label, src) in REACHED {
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+        assert!(
+            compile(&program).is_err(),
+            "{label}: the reference ACCEPTS this, so it is not a missed rejection"
+        );
+        assert!(
+            !stage_verdict_resolving(src),
+            "{label}: the stage accepts a field read the reference rejects"
+        );
+    }
+
+    // Unreached, and RECORDED rather than quietly absent. Each is still a program
+    // the reference rejects, so the day one becomes reachable this assertion fails
+    // and says which.
+    //
+    // **THE THIRD ENTRY IS A DIFFERENT LIMIT FROM THE OTHER TWO, and writing this
+    // test is what surfaced it.** The channel reaches a field read as a `let`
+    // INITIALISER. A field read standing directly as an operand is not reached at
+    // all, whatever its base, because the expression table's operand forms carry a
+    // tag or a name id and nothing else. The match case runs into BOTH limits at
+    // once -- the subset has no block-bodied match arm to bind through, so the
+    // field read there cannot be anything but a direct operand -- and calling it
+    // "the variant payload" alone would have named one cause for two.
+    const UNREACHED: &[(&str, &str)] = &[
+        (
+            "base is an array element",
+            "struct P { x: Word }\n\
+             fn main() -> Word { let q = [P { x: 1 }]; let a = q[0].x; a + true }",
+        ),
+        (
+            "the field read is a direct operand rather than an initialiser",
+            "struct P { x: Word }\nfn main(p: P) -> Word { p.x + true }",
+        ),
+        (
+            "base is a match binding, which is also a direct operand",
+            "struct P { x: Word }\nenum E { W(P), N }\n\
+             fn main() -> Word { let e = E::W(P { x: 1 }); \
+              match e { E::W(p) => p.x + true, E::N => 0 } }",
+        ),
+    ];
+    for (label, src) in UNREACHED {
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+        assert!(
+            compile(&program).is_err(),
+            "{label}: the reference ACCEPTS this, so it measures nothing"
+        );
+        assert!(
+            stage_verdict_resolving(src),
+            "{label}: the stage now REACHES this base form. Move it into the reached \
+             list above and say in the doc comment what made it reachable"
+        );
+    }
+}
+
+/// **A MATCH ARM BINDS NAMES, AND UNTIL 2026-09-11 THIS STAGE SAID OTHERWISE.**
+///
+/// The occurrence channel collected locals from parameters and `let` statements
+/// and from nowhere else, so an arm's binding resolved to neither a local nor a
+/// top-level declaration and the classification rule REFUSED it. Every program in
+/// this file that used a match binding was rejected, well typed or not.
+///
+/// **This is the unsound direction.** `verify_structural` and its siblings may
+/// over-approximate because an over-approximation defers to a runtime guard; a
+/// type checker has no such latitude, because rejecting a valid program is a
+/// LANGUAGE CHANGE. The defect is the same class as the `for` loop variable
+/// already pinned in this file, which is the second time this channel has missed a
+/// binder.
+///
+/// **Found by a WELL-TYPED CONTROL, not by the rejection corpus**, while adding
+/// controls for the field-read channel. A corpus of rejections alone cannot detect
+/// a checker that rejects too much — it would score perfectly — which is the
+/// argument this file's header makes and this is the instance that tested it.
+///
+/// The last case is the MUST-FIRE control. Without it, "collect every name in
+/// sight as a local" would satisfy the first three while destroying the rule.
+#[test]
+fn a_match_arm_binding_is_not_reported_as_an_unresolved_name() {
+    const ACCEPTED: &[(&str, &str)] = &[
+        (
+            "a plain payload binding",
+            "enum E { W(Word), N }\n\
+             fn main() -> Word { let e = E::W(1); match e { E::W(p) => p + 1, E::N => 0 } }",
+        ),
+        (
+            "a payload binding read for a field",
+            "struct P { x: Word }\nenum E { W(P), N }\n\
+             fn main() -> Word { let e = E::W(P { x: 1 }); \
+              match e { E::W(p) => p.x + 1, E::N => 0 } }",
+        ),
+        (
+            // SHORTHAND, whose binder is the FIELD NAME and not a sub-pattern. The
+            // wildcard arm is the reference's exhaustiveness requirement on a
+            // struct match, not part of what is being measured.
+            "a struct pattern in shorthand form",
+            "struct P { x: Word }\n\
+             fn main(p: P) -> Word { match p { P { x } => x + 1, _ => 0 } }",
+        ),
+        (
+            // TWO BINDERS ONE LEVEL DOWN, which is what makes the walk's recursion
+            // load-bearing rather than decorative: a top-level-only collector types
+            // neither `p` nor `k`.
+            "a payload binding two names",
+            "struct P { x: Word }\nenum E { W(P, Word), N }\n\
+             fn main(e: E) -> Word { match e { E::W(p, k) => p.x + k, E::N => 0 } }",
+        ),
+    ];
+    for (label, src) in ACCEPTED {
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+        assert!(
+            compile(&program).is_ok(),
+            "{label}: the REFERENCE rejects this, so it is not a well-typed control"
+        );
+        assert!(
+            stage_verdict_resolving(src),
+            "{label}: the stage REJECTS a well-typed program, which is a language \
+             change rather than a conservative choice"
+        );
+    }
+
+    // MUST FIRE. A name no arm binds and no declaration carries is still refused.
+    let src = "enum E { W(Word), N }\n\
+               fn main() -> Word { let e = E::W(1); match e { E::W(p) => nowhere + 1, E::N => 0 } }";
+    let program = parse(&tokenize(src).expect("lex")).expect("parse");
+    assert!(
+        compile(&program).is_err(),
+        "the reference ACCEPTS an unresolved name, so this control measures nothing"
+    );
+    assert!(
+        !stage_verdict_resolving(src),
+        "the stage accepts an unresolved name inside a match arm, so the fix for the \
+         binding case widened the rule instead of correcting it"
+    );
+}
+
+/// **THE HALF THAT CAN FAIL.** Every case here is WELL TYPED and must be accepted.
+///
+/// A channel that typed a field read as the wrong tag, or that let a struct index
+/// leak into the scalar tag space, would reject one of these while every rejection
+/// test above went on passing. That failure mode is the reason this file's header
+/// says the well-typed side grows with every slice.
+#[test]
+fn well_typed_field_reads_are_still_accepted() {
+    const CASES: &[(&str, &str)] = &[
+        (
+            "a field read used at its own type",
+            "struct P { x: Word }\n\
+             fn main(p: P) -> Word { let a = p.x; a + 1 }",
+        ),
+        (
+            "a bool field read used as a bool",
+            "struct P { b: bool }\n\
+             fn main(p: P) -> bool { let a = p.b; a }",
+        ),
+        (
+            "two structs declaring the same field name at different types",
+            "struct P { x: Word }\nstruct Q { x: bool }\n\
+             fn main(p: P, q: Q) -> Word { let a = p.x; let b = q.x; if b { a } else { 0 } }",
+        ),
+        (
+            "a struct-typed value passed to a struct-typed parameter",
+            "struct P { x: Word }\nfn take(p: P) -> Word { p.x }\n\
+             fn main() -> Word { let p = P { x: 1 }; take(p) }",
+        ),
+        (
+            "a field whose type is another struct",
+            "struct I { n: Word }\nstruct O { i: I }\n\
+             fn main(o: O) -> Word { let a = o.i; let b = a.n; b + 1 }",
+        ),
+        (
+            "a field read inside a match arm",
+            "struct P { x: Word }\nenum E { W(P), N }\n\
+             fn main(e: E) -> Word { match e { E::W(p) => p.x + 1, E::N => 0 } }",
+        ),
+    ];
+    for (label, src) in CASES {
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+        assert!(
+            compile(&program).is_ok(),
+            "{label}: the REFERENCE rejects this, so it is not a well-typed control"
+        );
+        assert!(
+            stage_verdict_resolving(src),
+            "{label}: the stage REJECTS a well-typed program, which is a language \
+             change rather than a conservative choice"
+        );
+    }
 }
 
 /// **THE CHECK THAT MAKES THE COROUTINE CONVERSION MEAN SOMETHING.**
@@ -2957,7 +3585,7 @@ fn the_struct_field_sets_agree_between_the_pipeline_and_the_reference() {
         let ast = keleusma::parser::parse(&keleusma::lexer::tokenize(src).expect("lex"))
             .expect("the reference must parse a probe before it says anything about the stage");
 
-        let (first, count, flat, _accesses) = field_sets(&ast);
+        let (first, count, flat, _accesses, _ftags) = field_sets(&ast);
         let got = keleusma::selfhost::field_sets_from_pipeline(src);
 
         // The reference does not return type names, so its declaration order is read from the
@@ -3073,7 +3701,7 @@ fn a_trait_or_impl_declaration_is_not_collected_as_a_struct() {
     // would be about a malformed input rather than about the driver.
     let ast = keleusma::parser::parse(&keleusma::lexer::tokenize(WITH_TRAIT).expect("lex"))
         .expect("the reference must accept the probe");
-    let (_, count, _, _) = field_sets(&ast);
+    let (_, count, _, _, _) = field_sets(&ast);
     assert_eq!(
         count,
         vec![2],
@@ -4730,9 +5358,10 @@ fn a_field_or_index_on_a_scalar_is_refused_before_any_row_could_be_extracted() {
 // here is wired into the stage.
 //
 // The spike above sizes the step BEHIND us: its five cases are let-bound
-// literals and call returns, all of which the stage now reaches. This one takes
-// the edge where it actually sits, pinned by
-// `a_derived_operand_from_a_field_read_is_still_unreached`.
+// literals and call returns, all of which the stage now reaches. This one sized
+// the step that followed, and its result -- three forms of five -- is what the
+// field-read channel was built to, with the remaining two pinned as unreached by
+// `the_field_read_channel_reaches_three_base_forms_and_not_two`.
 // ---------------------------------------------------------------------------
 
 /// The declared name of a primitive, for the two this corpus uses.

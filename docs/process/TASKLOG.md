@@ -53,6 +53,26 @@ Current sprint source of truth.
 > Third artifact in two increments whose answer was true when written and is now about a DIFFERENT
 > QUESTION. The pattern is staleness of SUBJECT, not of fact.
 
+> **Currency note (2026-09-11, session 65, forty-ninth increment). THE FIELD-READ CHANNEL IS IN,
+> AND A WELL-TYPED CONTROL FOUND A FALSE REJECTION THAT PREDATES IT.**
+>
+> `a_derived_operand_from_a_field_read_is_still_unreached` is **RETIRED**. A form-3 binding row
+> proves the tag of `let a = p.x` through two joins the STAGE performs, over a struct-binding table
+> and a field-tag table parallel to the declared field names. Withholding the field sets makes the
+> same program ACCEPTED, which is what distinguishes a join from a marshalled answer.
+>
+> **The finding matters more than the feature.** Every program using a `match` arm binding was
+> REJECTED, well typed or not, because the occurrence channel collected locals from parameters and
+> `let` statements and from nowhere else. That is the unsound direction: rejecting a valid program
+> is a language change. It predates the increment (confirmed at `HEAD` with the tree stashed) and it
+> is the SECOND binder that channel has missed. **A rejection corpus could not have found it** — a
+> checker that rejects everything scores perfectly against one.
+>
+> **What remains unreached is pinned by
+> `the_field_read_channel_reaches_three_base_forms_and_not_two`**, and one of its three cases is a
+> limit the sizing spike could not model: a field read standing as a DIRECT OPERAND rather than a
+> `let` initialiser. "Three of five" and "three base forms of five cases" are different statements.
+
 > **Currency note (2026-09-11, session 65, forty-fifth increment). TYPE REJECTION PASSED LITERALS
 > SOME TIME AGO; THE ROADMAP DID NOT KNOW.**
 >

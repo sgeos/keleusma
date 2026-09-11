@@ -13,6 +13,81 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-11 (forty-ninth) — the field-read channel lands, and a well-typed control finds a false rejection
+
+The forty-eighth increment sized the field-read edge at **three of five** and said the cheap
+majority could land while the two projection cases stayed recorded. This lands it, and the more
+important result is not the channel.
+
+### THE CHANNEL
+
+`verify_types.kel` gains a form-3 binding row. `let a = p.x` now proves a tag, through **two joins
+the stage performs**:
+
+1. the base name to a STRUCT TYPE, over a new `sbname`/`sbval`/`sbform` table, and
+2. that type together with the field name to the field's DECLARED TAG, over a new `sftag` table held
+   parallel to the existing `sfield` names.
+
+The host reports three syntactic facts and none of the conclusions: `p` is written `P`, `a` is
+written `= p.x`, and `P` declares `x` as `Word`.
+
+**STRUCT IDENTITY IS DELIBERATELY NOT A TAG.** Folding struct indices into the scalar tag space
+1..4 would put struct-typed operands into every channel `ty_pair_disagrees` feeds, the
+argument-claim rows among them, where a mismatch this slice never reasoned about would REJECT a
+valid program. The identity travels in a channel nothing else reads.
+
+**No new fold phase and no change to the declared step bound.** The field bindings resolve inside
+the existing bounded fixpoint, which already runs once before the first row.
+
+**The join is checkable rather than asserted.** `withholding_the_field_sets_accepts_the_same_field_read_program`
+withholds the declared field sets and shows the same program is then ACCEPTED. A host that had
+already decided `a` is a `Word` would go on rejecting it.
+
+### THE FINDING, WHICH IS WORTH MORE THAN THE CHANNEL
+
+**The stage rejected well-typed programs that bind a name in a `match` arm.** The occurrence channel
+collected locals from parameters and `let` statements and from nowhere else, so an arm's `p`
+resolved to neither a local nor a top-level declaration and the classification rule refused it.
+
+- **This is the unsound direction.** The sibling `verify_*` stages may over-approximate because an
+  over-approximation defers to a runtime guard. A type checker may not: rejecting a valid program
+  is a LANGUAGE CHANGE.
+- **It predates this increment**, confirmed by running the probe against `HEAD` with the working
+  tree stashed, on a program with no struct and no field read, so none of the new code could fire.
+- **It is the second binder this channel has missed**, after the `for` loop variable already pinned
+  in the same file.
+- **A rejection corpus could never have found it.** A checker that rejects everything scores
+  perfectly against one. It was found by a WELL-TYPED CONTROL added for the field-read work, which
+  is the argument this file's header has made since slice 0 and this is the instance that tested it.
+
+Fixed by collecting pattern binders recursively, shorthand struct fields included, and pinned by
+`a_match_arm_binding_is_not_reported_as_an_unresolved_name` with a must-fire control: a name no arm
+binds and no declaration carries is still refused, so the fix cannot have been "call everything a
+local".
+
+### WHAT REMAINS UNREACHED, AND ONE OF IT IS A DIFFERENT LIMIT THAN EXPECTED
+
+`the_field_read_channel_reaches_three_base_forms_and_not_two` pins three reached base forms and
+three unreached cases. Writing it surfaced that the sizing spike's five cases conflated two axes:
+
+| unreached | why |
+|---|---|
+| base is an array element | the base is not a plain name, and the `let` states an ARRAY from which the element type would have to be projected |
+| **the field read is a DIRECT OPERAND** | the channel binds a NAME to a field read; an operand row carries a tag or a name id and has no form for a field read, so `p.x + true` types nothing even where `p` is a declared parameter |
+| base is a match binding | BOTH of the above: the payload type is stated nowhere, and the subset has no block-bodied match arm to bind the read through |
+
+**The direct-operand limit was not in the sizing spike's model.** Its five cases all placed the
+field read directly as an operand, and it measured a host-side lookup rather than the channel, so
+the distinction could not appear. Recorded here because "three of five" and "three base forms of
+five cases" are not the same statement, and the second is the true one.
+
+### COST
+
+No new opcode. No `BYTECODE_VERSION` change. The stage gains eight tables and three scratch slots
+in its shared block and three functions; the fold, its phases and its step bound are untouched.
+
+---
+
 ## 2026-09-11 (forty-eighth) — the field-read step is partially cheap, and now measured
 
 The previous increment found that the existing sizing spike measures a step already taken, leaving

@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-11 (session 65, forty-eighth increment) — the field-read edge is sized: declaration lookup reaches three of five, the other two need type projection; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
+**Date**: 2026-09-11 (session 65, forty-ninth increment) — the field-read channel lands for the three base forms declaration lookup reaches, and the well-typed controls added for it found a FALSE REJECTION that predates the work: every program using a `match` arm binding was refused, well typed or not
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,54 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## FORTY-NINTH INCREMENT: THE CHANNEL LANDS, AND A WELL-TYPED CONTROL FINDS A FALSE REJECTION
+
+### The finding first, because it matters more than the feature
+
+**The stage REJECTED well-typed programs that bind a name in a `match` arm.** The occurrence
+channel collected locals from parameters and `let` statements only, so an arm's `p` resolved to
+neither a local nor a declaration and the classification rule refused it.
+
+- **This is the unsound direction.** The sibling `verify_*` stages may over-approximate, because an
+  over-approximation defers to a runtime guard. A type checker may not: rejecting a valid program
+  is a LANGUAGE CHANGE.
+- **It predates this increment.** Confirmed by stashing the working tree and running the probe at
+  `HEAD`, on a program with no struct and no field read, so no new code could fire.
+- **It is the SECOND binder this channel has missed**, after the `for` loop variable already pinned
+  in the same file.
+- **A rejection corpus could not have found it.** A checker that rejects everything scores
+  perfectly against one. It was found by a **well-typed control** added for the field-read work.
+
+Fixed by collecting pattern binders recursively, shorthand struct fields included, and pinned with a
+must-fire control so the fix cannot have been "call every name a local".
+
+### The channel
+
+`let a = p.x` now proves a tag, through two joins the STAGE performs: the base name to a struct
+type, then that type and the field name to the field's declared tag. The host reports that `p` is
+written `P`, that `a` is written `= p.x`, and that `P` declares `x` as `Word`. None of those is the
+conclusion, and withholding the declared field sets makes the same program ACCEPTED, which is what
+tells a join from a marshalled answer.
+
+**Struct identity is deliberately not a tag.** Folding struct indices into the scalar space 1..4
+would put struct operands into every channel the disagreement predicate feeds, where a mismatch this
+slice never reasoned about would reject a valid program.
+
+**No new fold phase, no change to the declared step bound, no new opcode, no `BYTECODE_VERSION`
+change.**
+
+### What remains, and one item is a limit the sizing did not model
+
+| unreached | why |
+|---|---|
+| base is an array element | the base is not a plain name, and the `let` states an ARRAY |
+| **the field read is a DIRECT OPERAND** | the channel binds a NAME to a field read; an operand row has no form for one, so `p.x + true` types nothing even with `p` declared |
+| base is a match binding | both of the above at once |
+
+**"Three of five" and "three base forms of five cases" are not the same statement.** The sizing
+spike placed every field read directly as an operand and measured a host-side lookup, so the
+direct-operand limit could not appear in it. The second statement is the true one.
 
 ## FORTY-EIGHTH INCREMENT: THE FIELD-READ STEP IS PARTIALLY CHEAP, AND NOW MEASURED
 
@@ -127,10 +175,11 @@ literal and a call taking a declared return type, so those programs are ordinary
 rejection corpus now. **A bounded fixpoint reaches an ARITHMETIC result too**, with no depth limit
 on the chain -- the hop bound is a decision rather than a limit of the approach.
 
-**The limit MOVED rather than vanished.** Its new edge is a FIELD READ, pinned by
-`a_derived_operand_from_a_field_read_is_still_unreached`. Both named tests exist and pass. A
-host-side sizing spike already measures what reaching further would cost and is explicitly not
-wired into the stage.
+**The limit MOVED rather than vanished.** Its next edge was a FIELD READ, and the
+forty-ninth increment above moved it again: what remains is pinned by
+`the_field_read_channel_reaches_three_base_forms_and_not_two`. The field-read pin this
+paragraph used to name no longer exists and is deliberately not quoted, since a claim
+document that names a missing test asserts something no reader can check.
 
 **Both halves of that sentence are now corrected in the roadmap cell itself**, not only in the
 channels, because that cell is where the stale figure would be copied FROM -- which is exactly how

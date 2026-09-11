@@ -544,9 +544,13 @@ fn no_allow_list_entry_is_stale() {
 /// so nothing failed while three comments and one handoff entry said something untrue.
 ///
 /// **A citation in this register is not a citation that is right.** It is one that has been
-/// excused from being checked. The three comments now name
-/// `a_derived_operand_from_a_field_read_is_still_unreached`, which holds the edge that
-/// genuinely remains.
+/// excused from being checked. The three comments were repointed at the field-read pin next,
+/// and THAT name went the same way on 2026-09-11 when the field-read channel landed — the
+/// retired names are not quoted here, because this file's own guard would refuse them. They
+/// now name `the_field_read_channel_reaches_three_base_forms_and_not_two`, which holds the
+/// edge that genuinely remains. **A comment citing the CURRENT edge is a comment that will need
+/// rewriting again**, which is the cost of citing a moving boundary and is cheaper than
+/// citing a fixed one that has stopped being true.
 #[test]
 fn the_unresolved_backlog_is_recorded() {
     assert_eq!(

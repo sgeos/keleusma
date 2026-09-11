@@ -232,6 +232,46 @@ shared data ty {
     alias: Word,
     eaf: [Word; 256],
     ebf: [Word; 256],
+    // SLICE 7: A FIELD READ AS AN INITIALISER.
+    //
+    // `let a = p.x` was the last initialiser shape in the corpus whose operand
+    // this stage could not type. It needs TWO joins, and neither of them belongs
+    // to the host:
+    //
+    //   1. the base name `p` to a STRUCT TYPE, and
+    //   2. that type together with the field name `x` to the field's DECLARED TAG.
+    //
+    // **STRUCT IDENTITY IS DELIBERATELY NOT A TAG.** Scalar tags 1..4 are what
+    // `ty_pair_disagrees` compares, and folding struct indices into the same
+    // space would put struct-typed operands into every channel that predicate
+    // feeds -- the argument-claim rows among them -- where a mismatch this slice
+    // never reasoned about would REJECT a valid program. A type checker has no
+    // conservative direction in the rejecting sense, so the identity travels in
+    // a channel nothing else reads.
+    //
+    //   sftag[i]              the declared TAG of the field named by `sfield[i]`
+    //   sbname[s]/sbval[s]    a name whose struct type the source states
+    //   sbform[s]             0  `sbval[s]` is a struct type index
+    //                         1  `sbval[s]` is a NAME id, reached by one alias hop
+    //   fbbase[k]/fbfield[k]  field read `k`: the base NAME id and the field NAME
+    //                         index, addressed by a form-3 binding row's value
+    //
+    // Appended last, per the convention the earlier slices learned the hard way.
+    sftag: [Word; 256],
+    sbn: Word,
+    sbname: [Word; 128],
+    sbval: [Word; 128],
+    sbform: [Word; 128],
+    fbn: Word,
+    fbbase: [Word; 128],
+    fbfield: [Word; 128],
+    // Scratch, one per search. `ty.hit` is shared by three searches that never
+    // nest; these two DO nest -- the field lookup runs inside the struct lookup's
+    // result -- so sharing an accumulator would have the inner search overwrite
+    // the outer one's answer.
+    sbhit: Word,
+    sbali: Word,
+    ftag: Word,
 }
 
 // The verdict constants, named rather than spelled as bare integers at the call sites, so a later
@@ -386,7 +426,11 @@ fn ty_direct(v: Word) -> Word {
             // as a lookup is concerned, and keeping them in one arm is what stops
             // a rule from reaching one and missing the other.
             if ty.bform[b] == 0 { ty.btag[b] } else {
-            if ty.bform[b] == 2 { tyb.bres[b] } else { ty.hit } }
+            if ty.bform[b] == 2 { tyb.bres[b] } else {
+            // FORM 3, a FIELD READ, is direct for the same reason form 2 is: the
+            // solver proved it before the fold began, so a lookup finds a tag
+            // rather than a shape it would have to re-derive per row.
+            if ty.bform[b] == 3 { tyb.bres[b] } else { ty.hit } } }
         } else { ty.hit };
     }
     ty.hit
@@ -471,6 +515,79 @@ fn tyb_node_tag(e: Word) -> Word {
     }
 }
 
+// The struct type of name `n`, OFFSET BY ONE so that 0 can mean "not stated".
+//
+// Index 0 is a real struct, so a bare index cannot carry "unknown" as well. The
+// offset is the cheapest way to keep the two apart, and getting it wrong would
+// type every unbound name as the first declared struct.
+//
+// ONE ALIAS HOP, matching `ty_resolve`'s bound and chosen for the same reason:
+// `let p = g()` states that `p` takes whatever `g` returns, and `g`'s own row is
+// direct, so one hop reaches it. A longer chain yields 0, which types nothing and
+// therefore ACCEPTS.
+fn ty_struct_of(n: Word) -> Word {
+    ty.sbhit = 0;
+    for s in 0..ty_bounded128(ty.sbn) limit 128 {
+        ty.sbhit = if ty.sbname[s] == n {
+            if ty.sbform[s] == 0 { ty.sbval[s] + 1 } else { ty.sbhit }
+        } else { ty.sbhit };
+    }
+    if ty.sbhit != 0 { ty.sbhit } else {
+        ty.sbali = 0;
+        for s in 0..ty_bounded128(ty.sbn) limit 128 {
+            ty.sbali = if ty.sbname[s] == n {
+                if ty.sbform[s] == 1 { ty.sbval[s] } else { ty.sbali }
+            } else { ty.sbali };
+        }
+        ty.sbhit = 0;
+        for s in 0..ty_bounded128(ty.sbn) limit 128 {
+            ty.sbhit = if ty.sbname[s] == ty.sbali {
+                if ty.sbform[s] == 0 { ty.sbval[s] + 1 } else { ty.sbhit }
+            } else { ty.sbhit };
+        }
+        // A name id of 0 is no name, so an absent alias cannot match a row by
+        // accident. The second scan runs regardless because the language is total
+        // and a skipped loop would cost the same bound anyway.
+        if ty.sbali == 0 { 0 } else { ty.sbhit }
+    }
+}
+
+// The DECLARED TAG of field name `f` in struct type `t`, or 0 when `t` declares
+// no such field.
+//
+// The same walk `ty_field_declared` performs, reading the PARALLEL tag table at
+// whichever position matched instead of reporting a boolean. Two functions rather
+// than one returning both, because the membership rule wants only the boolean and
+// should not pay for a tag it discards.
+fn ty_field_tag(t: Word, f: Word) -> Word {
+    ty.ftag = 0;
+    for i in 0..ty_bounded(ty.scount[t]) limit 64 {
+        ty.ftag = if ty.sfield[ty.sfirst[t] + i] == f {
+            ty.sftag[ty.sfirst[t] + i]
+        } else { ty.ftag };
+    }
+    ty.ftag
+}
+
+// The tag a form-3 binding row proves, or 0.
+//
+// `k` addresses the field-read table. BOTH JOINS HAPPEN HERE: the base name to a
+// struct type, then that type and the field name to the declared tag. A host that
+// supplied either conclusion would be marshalling the answer, which is the
+// objection this file records at its head, and
+// `withholding_the_field_sets_accepts_the_same_field_read_program` is what makes
+// the claim checkable rather than asserted.
+//
+// An out-of-range type index yields UNKNOWN rather than a rejection. A host and a
+// stage that disagree about the table are not evidence that the subject program
+// is ill-typed, and this stage may not refuse a program it cannot type.
+fn tyb_field_tag(k: Word) -> Word {
+    ty.sbhit = ty_struct_of(ty.fbbase[k]);
+    if ty.sbhit == 0 { ty_unknown() } else {
+    if ty.sbhit - 1 >= ty_bounded(ty.stn) { ty_unknown() } else {
+        ty_field_tag(ty.sbhit - 1, ty.fbfield[k]) } }
+}
+
 // Prove what can be proved, in at most `tyb_rounds()` passes.
 //
 // A BOUNDED FIXPOINT RATHER THAN A LOOKUP, which is what the derived-operand gap
@@ -488,6 +605,19 @@ fn tyb_solve() -> Word {
             for b in 0..ty.bn limit 128 {
                 if ty.bform[b] == 2 andalso tyb.bres[b] == 0 {
                     tyb.bres[b] = tyb_node_tag(ty.btag[b]);
+                    tyb.moved = if tyb.bres[b] != 0 { 1 } else { tyb.moved };
+                }
+                // A FIELD READ, proved by the SAME fixpoint rather than a pass of
+                // its own. It does not need the rounds today -- both its joins read
+                // declared tables -- but a later slice that lets a base name be
+                // proved rather than declared gets the ordering for free, and a
+                // second solver would be a second place for the two to disagree.
+                if ty.bform[b] == 3 andalso tyb.bres[b] == 0 {
+                    tyb.bres[b] = if ty.btag[b] >= ty_bounded128(ty.fbn) {
+                        ty_unknown()
+                    } else {
+                        tyb_field_tag(ty.btag[b])
+                    };
                     tyb.moved = if tyb.bres[b] != 0 { 1 } else { tyb.moved };
                 }
             }
