@@ -53,6 +53,119 @@ Current sprint source of truth.
 > Third artifact in two increments whose answer was true when written and is now about a DIFFERENT
 > QUESTION. The pattern is staleness of SUBJECT, not of fact.
 
+> **Currency note (2026-09-11, session 65, fifty-fourth increment). EVERY STAGE INPUT CHANNEL NOW
+> HAS A PROGRAM WHOSE VERDICT DEPENDS ON IT.**
+>
+> The file's central claim is that the host supplies syntax and the STAGE joins. Two channels had a
+> withholding proof; nine did not. Withholding each in turn across a rejected corpus and an accepted
+> one, **all eleven are depended on**, each with a named program rather than a tally.
+>
+> **The first run was one-directional and got one channel wrong.** Watching only for a flip to
+> ACCEPT reported the declared-parameter-counts channel as depended on by nothing — but withholding
+> it puts every call-site index out of range and the stage REFUSES that, so the verdict is rejection
+> either way. **A channel whose absence trips a fail-closed guard is invisible to a one-directional
+> instrument.**
+>
+> **What this does NOT establish**: that the stage DERIVES its conclusion from each channel.
+> Dependence is necessary evidence for the join claim, not sufficient. A channel that flips nothing
+> may equally be a corpus gap.
+
+> **Currency note (2026-09-11, session 65, fifty-third increment). THREE CENSUS GAPS WERE WAITING ON
+> A NODE KIND THAT ALREADY EXISTED.**
+>
+> All three were recorded as needing "an agreement between a DECLARED type and an ACTUAL one", which
+> is the only thing node kind 8 does. It was named after the function tail, its first and for a long
+> time only caller. **A constant named after its first caller reads as a special case even when it
+> is a general rule.**
+>
+> **Four cells closed with no new kind. Census now 15 covered, 1 gap**, from 8 and 8 at its first run.
+>
+> **The reuse had a consequence a test found**: "kind 8" no longer means "a function tail", so the
+> pipeline differential that selects rows by kind was comparing four uses against a subset.
+> Narrowing its filter would have been the wrong repair; the new rows are opt-in instead.
+>
+> The remaining gap is the negation operand's "must NOT be bool" — a NEGATIVE requirement no kind
+> expresses, left open as a decision rather than an oversight.
+
+> **Currency note (2026-09-11, session 65, fifty-second increment). THE RULE-SHAPE CENSUS FOUND
+> EIGHT GAPS WHERE THE INVENTORY SAID THE RULES WERE COMPLETE.**
+>
+> Sixteen cells, each a rule SHAPE crossed with a syntactic FORM, each a program the reference
+> rejects. **First run 8 covered and 8 gaps; after closing what needed no stage change, 11 and 5.**
+>
+> **Two surprises.** "A scalar cannot be projected" was a gap for BOTH its forms — the rule and its
+> node kinds existed, but the set of names it could fire on held only `let`s with a primitive
+> ANNOTATION, so a declared parameter reached no rule at all. **A rule that is present and
+> unreachable looks identical, from any inventory, to one that is present and working.** And
+> "logical operands must be bool" was absent, which agreement cannot substitute for: `n andalso m`
+> with two words AGREES.
+>
+> **Any claim that the rules are complete must now say that the inventory counts shapes rather than
+> the forms each shape reaches.** The census is itself not exhaustive and says so.
+>
+> Five gaps remain, each named in the test with the mechanism closing it would need.
+
+> **Currency note (2026-09-11, session 65, fifty-first increment). A CLAIM IN THE TWO NOTES BELOW
+> WAS FALSE, AND CHECKING IT CLOSED TWO GAPS.**
+>
+> Those notes said the remaining field-read cases need "a type the source states nowhere". **They
+> do not.** An enum declaration lists each variant's payload types in order and a pattern says which
+> variant and position a name binds at; an array type expression carries its element type directly.
+> The claim had been reasoned about rather than checked, and it had already been copied into five
+> places.
+>
+> **The match-binding case is now reached**, for two coordinate tables and one scan: the host reports
+> where a pattern binds and what the declaration says is there, and the stage matches the triples.
+> Withholding the declaration side makes the same program accepted.
+>
+> **A second gap surfaced from a test written for something else**: the expression walk emitted NO
+> node for a match, so match arms were never compared and every program whose arms disagree was
+> accepted. Invisible from the rule list, which records the fifteen shapes as complete — the
+> match-arms rule is the same SHAPE as the `if`-branches rule, implemented for one of its two
+> syntactic forms. **A rule inventory counts shapes, not the forms each shape reaches.**
+>
+> **What is left is one case**: a field of an array element, whose base is an index expression rather
+> than a name. The element type is written down; a base FORM on the field-read row is what is missing.
+
+> **Currency note (2026-09-11, session 65, fiftieth increment). THE DIRECT-OPERAND FIELD READ IS
+> REACHED, AND A TEST NAME THAT ENCODED A TALLY IS GONE.**
+>
+> An operand row gains a FORM for a field read, resolved through the binding case's own join. No new
+> source of type information was needed; the tables already existed and the stage already searched
+> them. A synthetic name would have worked with no stage change and is refused where the form is
+> defined, because the invented name IS the join.
+>
+> **Pinned per node kind, both halves.** The form reaches five kinds applying five different rules,
+> and a wrong tag fails differently from a tag where none belongs.
+>
+> **`the_field_read_channel_reaches_three_base_forms_and_not_two` was one increment old and already
+> wrong.** Renaming it rippled through five documents and the citation guard's own commentary. A name
+> encoding a tally goes stale every time the tally moves; the pin is now
+> `the_field_read_channel_records_what_it_does_not_reach` and the tallies live in its body.
+>
+> **What is left is a different kind of gap**: a field of an array element and a field of a match
+> binding both need a type the source states NOWHERE.
+
+> **Currency note (2026-09-11, session 65, forty-ninth increment). THE FIELD-READ CHANNEL IS IN,
+> AND A WELL-TYPED CONTROL FOUND A FALSE REJECTION THAT PREDATES IT.**
+>
+> `a_derived_operand_from_a_field_read_is_still_unreached` is **RETIRED**. A form-3 binding row
+> proves the tag of `let a = p.x` through two joins the STAGE performs, over a struct-binding table
+> and a field-tag table parallel to the declared field names. Withholding the field sets makes the
+> same program ACCEPTED, which is what distinguishes a join from a marshalled answer.
+>
+> **The finding matters more than the feature.** Every program using a `match` arm binding was
+> REJECTED, well typed or not, because the occurrence channel collected locals from parameters and
+> `let` statements and from nowhere else. That is the unsound direction: rejecting a valid program
+> is a language change. It predates the increment (confirmed at `HEAD` with the tree stashed) and it
+> is the SECOND binder that channel has missed. **A rejection corpus could not have found it** — a
+> checker that rejects everything scores perfectly against one.
+>
+> **What remains unreached is pinned by
+> `the_field_read_channel_records_what_it_does_not_reach`**, and one of its three cases is a
+> limit the sizing spike could not model: a field read standing as a DIRECT OPERAND rather than a
+> `let` initialiser. "Three of five" and "three base forms of five cases" are different statements.
+
 > **Currency note (2026-09-11, session 65, forty-fifth increment). TYPE REJECTION PASSED LITERALS
 > SOME TIME AGO; THE ROADMAP DID NOT KNOW.**
 >

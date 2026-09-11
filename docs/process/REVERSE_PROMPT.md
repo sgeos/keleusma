@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-11 (session 65, forty-eighth increment) — the field-read edge is sized: declaration lookup reaches three of five, the other two need type projection; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
+**Date**: 2026-09-11 (session 65, fifty-fourth increment) — every one of the stage's eleven input channels now has a named program whose verdict depends on it; the first, one-directional run of that census got one channel wrong, and my prediction of which would be inert was wrong too
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,251 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## FIFTY-FOURTH INCREMENT: WHICH INPUT CHANNELS ANY VERDICT DEPENDS ON
+
+**The claim being measured is the central one**: the host supplies SYNTAX and the STAGE performs the
+join. Two channels had a withholding proof; the other nine were credited with work nothing checked.
+
+**Result: all eleven channels are depended on.** Each has at least one NAMED program whose verdict
+changes when that channel alone is withheld — named rather than counted, because a tally cannot be
+checked and an attribution can.
+
+### The first run was one-directional and got a channel wrong
+
+Measuring only "does an ill-typed program flip to ACCEPT" reported the declared-parameter-counts
+channel as depended on by nothing. **It is not unused**: withholding it puts every call-site index
+out of range, and the stage REFUSES an out-of-range index rather than skipping it, so the program is
+rejected either way for different reasons. **A channel whose absence trips a fail-closed guard is
+invisible to a one-directional instrument.** A well-typed corpus and change-in-either-direction made
+it observable.
+
+**My prediction of which channels would be inert was wrong** — I guessed the operand pairs and the
+call sites; it was neither.
+
+### What it establishes, and what it does not
+
+**Establishes**: the stage reads all eleven. **Does not establish**: that it DERIVES its conclusion
+from each — a channel can be read and still be redundant with a conclusion arriving elsewhere.
+Dependence is necessary evidence for the claim about where the join lives, not sufficient. And a
+channel that flips nothing is not thereby inert; it may be a corpus gap, and this instrument cannot
+tell those apart.
+
+### An assertion that replaced itself
+
+The test first pinned the set of channels nothing depended on, expecting it non-empty, with a
+failure message saying an empty set is the good outcome and the assertion should be replaced. It
+became empty and the message was followed. **A non-vacuity assertion that says what to do when it
+stops holding is worth more than one that merely fails.**
+
+## FIFTY-THIRD INCREMENT: A KIND THAT WAS ALREADY GENERAL, UNDER A NAME THAT HID IT
+
+The census left five gaps. **Three of them said the same thing**: "an agreement between a DECLARED
+type and an ACTUAL one" — which is the only thing node kind 8 does. The constant was called
+`TAIL_VS_RETURN`, after the function tail, its first and for a long time only caller, and **I wrote
+that mechanism down three times without seeing the kind was already there.**
+
+**A constant named after its first caller reads as a special case even when it is a general rule.**
+That is the previous finding one level up: there a rule was present and unreachable; here a kind was
+present and unrecognised.
+
+**Four cells closed with no new kind** — array index against `Word`, a `let` against its annotation,
+an assignment against its declared field, and a tuple index through the existing projection kind.
+**Census: 15 covered, 1 gap**, from 8 and 8.
+
+### Measured before writing, not after
+
+A **Byte** index is rejected by the reference, so the requirement is `Word` exactly rather than "some
+integer". And `let q: P = p` with a named type is ACCEPTED, so a named annotation must require
+NOTHING — safe by measurement rather than by luck.
+
+### The consequence of the reuse, which a test found
+
+Once three more constructs use kind 8, **"kind 8" no longer means "a function tail"**, and the
+pipeline differential that selects rows by kind compared four uses against a subset. **Narrowing that
+test's filter would have been the wrong repair** — it would still have compared two populations while
+reading as if it did not. The new rows are OPT-IN instead, the pattern the field-read index set.
+
+### The one gap left, and why it stays
+
+"Must not be bool", for the negation operand. Every kind here states a POSITIVE requirement. A
+negative one needs its own kind, and one operator does not justify it. Left open as a decision.
+
+## FIFTY-SECOND INCREMENT: THE RULE-SHAPE CENSUS
+
+The previous finding was that **a rule inventory counts SHAPES, not the syntactic FORMS each shape
+reaches**. One accidental hit is a reason to enumerate the class, so this crosses the shapes against
+the forms and measures every cell.
+
+**First run: 8 covered, 8 gaps. After closing what needed no stage change: 11 covered, 5 gaps.**
+
+### The two surprises, which justify the census by themselves
+
+**"A scalar cannot be projected" was a gap for BOTH its forms.** The rule exists and its node kinds
+exist — but the set of names it could fire on held only `let`s carrying a primitive ANNOTATION. Not a
+declared PARAMETER, not a `let` bound to a literal. **A rule that is present and unreachable looks
+identical, from any inventory, to a rule that is present and working.**
+
+**"Logical operator operands must be bool" was absent**, and agreement cannot substitute for it:
+`n andalso m` with two `Word`s AGREES. **Two operands can agree and still both be wrong.**
+
+### Closed, and with what
+
+Three rules newly applied with the EXISTING condition kind and no stage change — the `when` guard,
+the `not` operand, each logical operand. Two widened by enlarging the scalar set. The literal source
+is restricted to four literal kinds, because `Literal::Fixed` yields an indexable `Multiword` and
+calling it scalar would reject a valid `m[0]`; I could not write that program with the syntax I
+tried, which is a reason to avoid the hazard rather than assume it away.
+
+### The five that remain, each with its mechanism
+
+Let annotation against initialiser, and assignment target against value — both want an agreement
+between a DECLARED and an ACTUAL type, which the existing claims channel carries, except that it
+carries TAGS and so reaches a literal but not a name. Tuple index on a scalar — a third expression
+variant with the same rule. Array index must be a word — "must be T" for T other than bool has no
+kind. Negation operand must not be bool — a NEGATIVE requirement, the weakest case in the table.
+
+**The census is not exhaustive and says so.** These are the forms I thought of, which is the same
+kind of list that missed match arms.
+
+### A process failure, repeated
+
+An edit script aborted on an assertion after `cargo fmt` reformatted what it was matching, so nothing
+was written, and the test run that followed reported the unchanged result. I read that as the fixes
+having no effect. **Second occurrence in two increments, and the first was already recorded** —
+recording a failure mode did not prevent it. Scripts now exit naming the replacement that failed, and
+the diff is checked before a test run is believed. A related miss: the compiler emitted `unreachable
+pattern` for a guarded arm placed after an unguarded one, and my build grep filtered warnings out.
+
+## FIFTY-FIRST INCREMENT: A FALSE CLAIM OF MINE, AND THE TWO GAPS CHECKING IT CLOSED
+
+### The correction comes first because it is the point
+
+For two increments I wrote that the remaining field-read cases **"need a type the source states
+nowhere"**. **That was false for both**, and reading the abstract syntax tree settled it in one step:
+an enum declaration lists each variant's payload types in order and a pattern says which variant and
+position a name binds at; an array type expression carries its element type directly.
+
+**It had been reasoned about rather than checked**, and it was the premise that would have justified
+stopping. It reached the roadmap, the tasklog, this file, the design journal and a test doc comment
+before anyone looked at the data types it was about.
+
+### What that bought
+
+**The match-binding case, for two tables and one scan.** Its base is a plain NAME, so the field-read
+row and the operand form already handled it; what was missing was a third source for resolving a
+name to a struct type. The host reports where a pattern binds (use site) and what the declaration
+says is there (definition); the stage matches three coordinates. Withholding the declaration side
+makes the same program accepted.
+
+### A second gap, found by a test written for something else
+
+A case was added to prove the stage discriminates between two VARIANTS of one enum. It failed,
+because **the expression walk emitted no node for a match at all** — match arms were never compared,
+and every program whose arms disagree was accepted.
+
+**This was invisible from the rule list**, which records the fifteen enumerated shapes as complete.
+The match-arms rule is the SAME SHAPE as the `if`-branches rule, and the shape had been implemented
+while one of its two syntactic forms had not. A rule inventory counts shapes; it does not count the
+syntactic forms each shape reaches. Worth carrying to any future "the rules are complete" claim.
+
+Closed with the existing branch-pair kind and no stage change.
+
+### A process note on the edit itself
+
+One scripted edit aborted on a sanity assertion for a snippet I did not intend to change, so the
+write never happened — and the test run that followed reported the OLD failure. I read that as the
+fix not working before noticing the traceback above it. **An edit script that can abort before its
+write, followed immediately by a test run, produces a result attributable to neither tree.** Same
+class as the run-edited-while-in-flight finding already on record.
+
+### What is left
+
+One case: a field of an ARRAY ELEMENT. Its base is an index expression rather than a name, so no
+field-read row can address it. The element type IS written down; what is missing is a base FORM on
+the field-read row.
+
+## FIFTIETH INCREMENT: THE DIRECT-OPERAND FORM, AND A NAME THAT ENCODED A TALLY
+
+**One arm on each side.** `operand_form` gains form 2, whose value is a field-read ROW INDEX; the
+stage resolves it through the binding case's own join behind a range check. `p.x + true` now types
+where only `let a = p.x; a + true` did. **No new source of type information was needed** — the
+struct-binding and field-tag tables already existed and the stage already searched them. What was
+missing was a way for an operand to point at a read.
+
+**The shortcut was refused and the refusal is recorded where the form is defined.** A synthetic name
+would have made this work with NO stage change: register the read under an invented name, emit the
+existing form-3 binding row, report form 1. Every test would pass. It is wrong because the invented
+name IS the join — nothing in any source spells it, so the host would be asserting that this operand
+and that binding are the same thing, hidden behind an identifier no reader can look up.
+
+**The form reaches five node kinds and each applies a different rule**: binary operator, condition,
+array element, branch pair, and function tail against its declared return. Both halves are pinned
+per kind, because a wrong tag shows as a missed rejection while a tag where none belongs shows as a
+REJECTED valid program — the error the previous increment demonstrated a rejection corpus cannot
+detect.
+
+### A process finding worth more than one increment
+
+The pin that recorded what the channel does not reach carried its tallies IN ITS NAME -- three base
+forms and two unreached. It was ONE INCREMENT OLD and already wrong, and correcting it rippled a
+rename through five documents plus the citation guard's own commentary. The dead name is not quoted
+here, because this file is one of the two the guard checks for exactly that. **A name that encodes a tally needs renaming every time the tally moves**, and every
+citation of it goes stale at that moment. Renamed to a count-free pin; the tallies live in the body.
+
+### What is left, and it is a different kind of gap
+
+A field of an ARRAY ELEMENT and a field of a MATCH BINDING. Both need a type **the source states
+nowhere** — an element type projected out of an array, a variant payload's type. The case just
+closed was a missing CHANNEL, which is why it cost one arm on each side.
+
+## FORTY-NINTH INCREMENT: THE CHANNEL LANDS, AND A WELL-TYPED CONTROL FINDS A FALSE REJECTION
+
+### The finding first, because it matters more than the feature
+
+**The stage REJECTED well-typed programs that bind a name in a `match` arm.** The occurrence
+channel collected locals from parameters and `let` statements only, so an arm's `p` resolved to
+neither a local nor a declaration and the classification rule refused it.
+
+- **This is the unsound direction.** The sibling `verify_*` stages may over-approximate, because an
+  over-approximation defers to a runtime guard. A type checker may not: rejecting a valid program
+  is a LANGUAGE CHANGE.
+- **It predates this increment.** Confirmed by stashing the working tree and running the probe at
+  `HEAD`, on a program with no struct and no field read, so no new code could fire.
+- **It is the SECOND binder this channel has missed**, after the `for` loop variable already pinned
+  in the same file.
+- **A rejection corpus could not have found it.** A checker that rejects everything scores
+  perfectly against one. It was found by a **well-typed control** added for the field-read work.
+
+Fixed by collecting pattern binders recursively, shorthand struct fields included, and pinned with a
+must-fire control so the fix cannot have been "call every name a local".
+
+### The channel
+
+`let a = p.x` now proves a tag, through two joins the STAGE performs: the base name to a struct
+type, then that type and the field name to the field's declared tag. The host reports that `p` is
+written `P`, that `a` is written `= p.x`, and that `P` declares `x` as `Word`. None of those is the
+conclusion, and withholding the declared field sets makes the same program ACCEPTED, which is what
+tells a join from a marshalled answer.
+
+**Struct identity is deliberately not a tag.** Folding struct indices into the scalar space 1..4
+would put struct operands into every channel the disagreement predicate feeds, where a mismatch this
+slice never reasoned about would reject a valid program.
+
+**No new fold phase, no change to the declared step bound, no new opcode, no `BYTECODE_VERSION`
+change.**
+
+### What remains, and one item is a limit the sizing did not model
+
+| unreached | why |
+|---|---|
+| base is an array element | the base is not a plain name, and the `let` states an ARRAY |
+| **the field read is a DIRECT OPERAND** | the channel binds a NAME to a field read; an operand row has no form for one, so `p.x + true` types nothing even with `p` declared |
+| base is a match binding | both of the above at once |
+
+**"Three of five" and "three base forms of five cases" are not the same statement.** The sizing
+spike placed every field read directly as an operand and measured a host-side lookup, so the
+direct-operand limit could not appear in it. The second statement is the true one.
 
 ## FORTY-EIGHTH INCREMENT: THE FIELD-READ STEP IS PARTIALLY CHEAP, AND NOW MEASURED
 
@@ -127,10 +372,11 @@ literal and a call taking a declared return type, so those programs are ordinary
 rejection corpus now. **A bounded fixpoint reaches an ARITHMETIC result too**, with no depth limit
 on the chain -- the hop bound is a decision rather than a limit of the approach.
 
-**The limit MOVED rather than vanished.** Its new edge is a FIELD READ, pinned by
-`a_derived_operand_from_a_field_read_is_still_unreached`. Both named tests exist and pass. A
-host-side sizing spike already measures what reaching further would cost and is explicitly not
-wired into the stage.
+**The limit MOVED rather than vanished.** Its next edge was a FIELD READ, and the
+forty-ninth increment above moved it again: what remains is pinned by
+`the_field_read_channel_records_what_it_does_not_reach`. The field-read pin this
+paragraph used to name no longer exists and is deliberately not quoted, since a claim
+document that names a missing test asserts something no reader can check.
 
 **Both halves of that sentence are now corrected in the roadmap cell itself**, not only in the
 channels, because that cell is where the stale figure would be copied FROM -- which is exactly how
