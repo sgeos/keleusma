@@ -77,9 +77,9 @@ interner call and the step calls under the driver's buffer handling.
 comes back -- which that function guarantees by construction. A `DATA_SLOTS` driver written the same
 way inherits it.
 
-**The question it leaves is sharper and smaller, and it changes the answer.** There is no
-`ds_stream_begin`, and the two commands that DO call `mi_window_prepare()` each do something else as
-well: 174 zeroes the chunk range cursors, and 170 emits the `NAMES` records into the window. Either
+**The question it leaves is sharper and smaller, and it changes the answer.** The slot stream had
+no begin of its own, and the two commands that DO call `mi_window_prepare()` each do something else
+as well: 174 zeroes the chunk range cursors, and 170 emits the `NAMES` records into the window. Either
 would run the interner; both are misuses, one chunk-specific and the other writing bytes the driver
 would discard.
 

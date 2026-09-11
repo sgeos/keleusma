@@ -96,7 +96,7 @@ result survives for as long as the driver hands back the same buffer, which that
 construction. A `DATA_SLOTS` driver written the same way inherits the property.
 
 **The question it leaves behind is sharper and smaller: WHICH command runs the interner for a slot
-pass.** There is no `ds_stream_begin`, and the two existing commands that call `mi_window_prepare()`
+pass.** The slot stream had no begin of its own, and the two existing commands that call `mi_window_prepare()`
 both do something else as well -- command 174 zeroes the chunk range cursors, and command 170 emits
 the `NAMES` records into the window. Either would work and both are misuses: one is chunk-specific,
 the other writes bytes the driver would discard.
