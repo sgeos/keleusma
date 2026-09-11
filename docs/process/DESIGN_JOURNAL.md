@@ -13,6 +13,40 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-10 (thirty-second) — I over-corrected a claim that was already right
+
+The previous increment "sharpened" `selfhost_region_coverage.rs` from *"all four wait on the
+name-interning route"* to *"two are INTEGRATION and two are INVENTION"*, on the evidence that
+`DATA_SLOTS` and `ENUM_VARIANTS` are dispatchable at commands 178 and 181, beside the routed 179
+and 180.
+
+**That was wrong, and the original sentence was right.** Dispatchable is not routable. Reading what
+each formatter READS rather than which command dispatches it:
+
+| formatter | first fields | routed |
+|---|---|---|
+| `sh_stream_step` (SHAPES) | tag, kind, reserved, size | yes |
+| `sg_stream_step` (SIGNATURES) | params_first, params_count, ret, resume | yes |
+| `ds_stream_step` (DATA_SLOTS) | **`dslot_off_name`** | no |
+| `ev_stream_step` (ENUM_VARIANTS) | **`evar_off_name`** | no |
+
+**The criterion is whether the record carries a NAME INDEX**, and it explains the whole set at
+once. `SHARED_LAYOUT` and `DATA_INIT` were routed earlier on exactly that ground, and the driver
+says so in its own comment. `ENUM_LAYOUTS` has `elay_off_type_name`, so it sits with the unrouted
+two even though it has no emitter yet. A host-supplied name index could disagree with the interner
+that produced `NAMES` -- the hazard the chunk path avoids by taking its index from its own
+interner -- so the name route is a SOUNDNESS requirement, not a convenience.
+
+**That criterion is the genuine sharpening, and it is the opposite of what I wrote.** Restored,
+with the over-correction recorded in place rather than quietly replaced.
+
+**The failure has a name: I read a dispatch table instead of the function bodies.** It is the same
+shape as the message-based census classification two increments ago, which also read a surface
+that looked like a taxonomy and was not. Twice in one session, the cheap signal was the wrong
+signal, and the expensive one -- reading the code -- was the only one that settled it.
+
+---
+
 ## 2026-09-10 (thirty-first) — "all four waiting on one thing" was two different things
 
 With Order 1 established as available, the next slice is one of the four region kinds the driver

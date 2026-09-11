@@ -10,6 +10,21 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-10, session 65, thirty-second increment). THE PREVIOUS NOTE
+> OVER-CORRECTED A CLAIM THAT WAS ALREADY RIGHT.**
+>
+> `DATA_SLOTS` and `ENUM_VARIANTS` are dispatchable at 178 and 181, but **dispatchable is not
+> routable**. Their formatters read a NAME INDEX (`dslot_off_name`, `evar_off_name`); the routed
+> `SHAPES` and `SIGNATURES` read none, and `SHARED_LAYOUT` and `DATA_INIT` were routed earlier on
+> exactly that ground.
+>
+> **The criterion is whether the record carries a name index**, and it explains the whole set. A
+> host-supplied index could disagree with the interner that produced `NAMES`, so the name route is
+> a SOUNDNESS requirement. All four do wait on it, as the original comment said.
+>
+> **The failure was reading a dispatch table instead of the function bodies** -- the same shape as
+> the message-based census classification two increments earlier.
+
 > **Currency note (2026-09-10, session 65, thirty-first increment). THE NEXT ORDER 1 SLICE IS
 > NAMED AND SIZED.**
 >

@@ -367,30 +367,37 @@ fn the_skipped_region_kinds_are_the_ones_on_record() {
     // kind is routed for EVERY stage. That is the conservative reading and the right one: a kind
     // routed for most inputs is not a kind the driver covers.
     //
-    // **THE FOUR ARE NOT ONE OBLIGATION, AND THIS COMMENT SAID THEY WERE.** It read "all four
-    // waiting on the name-interning route", which is one sentence covering two different states,
-    // measured 2026-09-10:
+    // **WHAT SEPARATES A ROUTED KIND FROM A SKIPPED ONE IS WHETHER ITS RECORD CARRIES A NAME
+    // INDEX.** Measured 2026-09-10 by reading what each formatter READS, not which command
+    // dispatches it:
     //
-    // | kind | state |
-    // |---|---|
-    // | `DATA_SLOTS` | emitter `ds_stream_step` exists and is DISPATCHABLE at command 178 |
-    // | `ENUM_VARIANTS` | emitter `ev_stream_step` exists and is DISPATCHABLE at command 181 |
-    // | `ENUM_LAYOUTS` | READERS only (`elay_*`); no emitter written |
-    // | `PARAM_TYPES` | no emitter written |
+    // | formatter | first fields | routed |
+    // |---|---|---|
+    // | `sh_stream_step` (SHAPES) | tag, kind, reserved, size | yes |
+    // | `sg_stream_step` (SIGNATURES) | params_first, params_count, ret, resume | yes |
+    // | `ds_stream_step` (DATA_SLOTS) | **`dslot_off_name`** | no |
+    // | `ev_stream_step` (ENUM_VARIANTS) | **`evar_off_name`** | no |
     //
-    // The driver routes `SHAPES` and `SIGNATURES` -- commands 179 and 180, the immediate
-    // neighbours of the two unrouted ones -- and everything else falls into its `_ => continue`.
-    // So the first two are INTEGRATION and the second two are still INVENTION, which is the
-    // distinction the roadmap's Order 1 cell draws and this comment collapsed.
+    // `SHARED_LAYOUT` and `DATA_INIT` were routed earlier on the same ground, and the driver says
+    // so: neither carries a name index. `ENUM_LAYOUTS` has `elay_off_type_name`, so it is on the
+    // same side as the two above even though it has no emitter yet.
     //
-    // Routing the first two would raise the PRODUCED share and leave the COMPUTED share
-    // untouched, because these records format fields the host decides. The test below exists to
-    // make sure that cannot be read as the compiler deriving more of its own artifact.
+    // A host-supplied name index could disagree with the interner that produced `NAMES`, which is
+    // the hazard the chunk path avoids by taking its index from its own interner. So the name
+    // route is a soundness requirement, not a convenience.
+    //
+    // **AN EARLIER VERSION OF THIS COMMENT, WRITTEN THE SAME DAY, CLAIMED THE OPPOSITE.** It said
+    // `DATA_SLOTS` and `ENUM_VARIANTS` were "INTEGRATION" rather than "INVENTION" because both are
+    // dispatchable -- at commands 178 and 181, beside the routed 179 and 180. **Dispatchable is
+    // not routable.** The sentence it replaced, that all four wait on the name-interning route,
+    // was correct, and the over-correction came from reading a dispatch table instead of the
+    // formatter bodies.
     assert!(
         skipped.len() <= 4,
         "{} kinds are skipped: {skipped:02x?}. FOUR are on record after `DATA_INIT` was \
          routed -- `ENUM_VARIANTS`, `ENUM_LAYOUTS`, `DATA_SLOTS` and `PARAM_TYPES`. More means \
-         the driver has stopped routing something it used to",
+         the driver has stopped routing something it used to. All four wait on the name-interning \
+         route",
         skipped.len()
     );
 }

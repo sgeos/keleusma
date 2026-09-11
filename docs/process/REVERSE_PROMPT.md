@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-10 (session 65, thirty-first increment) — two of the four skipped region kinds are dispatchable and merely unrouted, a named slice rather than a vague blocker; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
+**Date**: 2026-09-10 (session 65, thirty-second increment) — the previous increment over-corrected a claim that was already right; the real criterion is whether a record carries a name index; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,38 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## THIRTY-SECOND INCREMENT: I OVER-CORRECTED A CLAIM THAT WAS ALREADY RIGHT
+
+The previous increment "sharpened" `selfhost_region_coverage.rs` from *"all four wait on the
+name-interning route"* to *"two are INTEGRATION and two are INVENTION"*, on the evidence that
+`DATA_SLOTS` and `ENUM_VARIANTS` are dispatchable at commands 178 and 181, beside the routed 179
+and 180.
+
+**That was wrong, and the original sentence was right.** Dispatchable is not routable. Reading what
+each formatter READS rather than which command dispatches it:
+
+| formatter | first fields | routed |
+|---|---|---|
+| `sh_stream_step` (SHAPES) | tag, kind, reserved, size | yes |
+| `sg_stream_step` (SIGNATURES) | params_first, params_count, ret, resume | yes |
+| `ds_stream_step` (DATA_SLOTS) | **`dslot_off_name`** | no |
+| `ev_stream_step` (ENUM_VARIANTS) | **`evar_off_name`** | no |
+
+**The criterion is whether the record carries a NAME INDEX**, and it explains the whole set at
+once. `SHARED_LAYOUT` and `DATA_INIT` were routed earlier on exactly that ground, and the driver
+says so in its own comment. `ENUM_LAYOUTS` has `elay_off_type_name`, so it sits with the unrouted
+two even though it has no emitter yet. A host-supplied name index could disagree with the interner
+that produced `NAMES` -- the hazard the chunk path avoids by taking its index from its own
+interner -- so the name route is a SOUNDNESS requirement, not a convenience.
+
+**That criterion is the genuine sharpening, and it is the opposite of what I wrote.** Restored,
+with the over-correction recorded in place rather than quietly replaced.
+
+**The failure has a name: I read a dispatch table instead of the function bodies.** It is the same
+shape as the message-based census classification two increments ago, which also read a surface
+that looked like a taxonomy and was not. Twice in one session, the cheap signal was the wrong
+signal, and the expensive one -- reading the code -- was the only one that settled it.
 
 ## THIRTY-FIRST INCREMENT: "ALL FOUR WAITING ON ONE THING" WAS TWO DIFFERENT THINGS
 
