@@ -10,6 +10,22 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-11, session 65, thirty-seventh increment). THE SLICE IS BUDGETED.**
+>
+> **Command 178 is already driven** by a test feeding it a name from the reference's record, so the
+> name-aware step must be ADDITIVE. The slice adds TWO commands -- a begin and a name-aware step --
+> and `highest_command` moves 181 to 183.
+>
+> **`wire.kel` is itself a measured stage**: 1,148 constant-forest nodes against a 1,365 table, a
+> margin of 217, and 475 chunks. Two new functions grow the very stage the corpus measures, and it
+> must still emit its own regions.
+>
+> The plan says to re-measure the node count after the stage edit and before the driver edit, so a
+> cap failure is attributed to stage growth rather than routing. See
+> `docs/decisions/DATA_SLOTS_ROUTING_PLAN.md`.
+>
+> **Four self-corrections in this arc, each from reading one level deeper, none reaching code.**
+
 > **Currency note (2026-09-11, session 65, thirty-sixth increment). THE `nmap` ASSUMPTION HOLDS;
 > THE SLICE NEEDS A BEGIN FOR A DIFFERENT REASON.**
 >

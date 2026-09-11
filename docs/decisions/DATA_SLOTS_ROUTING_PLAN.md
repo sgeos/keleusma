@@ -102,6 +102,29 @@ decides; only the name index becomes the stage's own.
 cannot be read as the compiler deriving more of its own artifact, and it should still hold
 afterwards.
 
+## TWO CONSTRAINTS FOUND ON 2026-09-11 THAT MAKE THIS A BUDGETED SLICE, NOT A CASUAL ONE
+
+**Command 178's contract is already driven.**
+`the_four_record_formatters_lay_out_a_record_the_reference_agrees_with` feeds `ds_stream_step` a
+name index taken from the reference's own record, and that is legitimate for the claim it makes --
+whether the stage lays a record out the way the format specifies. Changing 178 to read the interner
+would break it for no gain. **The name-aware step must be an ADDITIVE command**, leaving 178 as the
+formatter it is, which matches the preference this file records elsewhere for additive commands over
+flags on a proven path.
+
+So the slice adds TWO commands, not one: a begin whose body is `mi_window_prepare()`, and a
+name-aware step. `highest_command` moves from 181 to 183.
+
+**`wire.kel` is itself one of the eleven measured stages, and its margin is not large.** It carries
+**1,148 constant-forest nodes against a node table holding 1,365** -- a margin of 217 -- and 475
+chunks. Two new functions add chunks and constants to the very stage the corpus measures, and the
+stage must still emit its own regions afterwards.
+
+**That is the reason this has not been done casually, and it belongs in the sizing rather than being
+discovered during the change.** The slice must be budgeted against that margin, and the node count
+should be re-measured after the stage edit and before the driver edit, so a cap failure is
+attributed to the stage growth rather than to the routing.
+
 ## Not in scope
 
 `ENUM_VARIANTS` is the same shape with the enum base, and should follow only after `DATA_SLOTS` is

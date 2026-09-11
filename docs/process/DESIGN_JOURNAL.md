@@ -13,6 +13,34 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-11 (thirty-seventh) — the slice is budgeted, not casual
+
+Going to implement, two constraints surfaced that change the shape of the work rather than its
+conclusion.
+
+**Command 178 is already driven.** `the_four_record_formatters_lay_out_a_record_the_reference_agrees_with`
+feeds `ds_stream_step` a name index from the reference's own record, which is legitimate for the
+claim it makes -- whether the stage lays a record out as the format specifies. Changing 178 to read
+the interner would break that for no gain, so **the name-aware step must be ADDITIVE**. The slice
+adds TWO commands, a begin and a name-aware step, and `highest_command` moves 181 to 183.
+
+**`wire.kel` is itself one of the eleven measured stages.** It carries **1,148 constant-forest nodes
+against a node table holding 1,365** -- a margin of 217 -- and 475 chunks. Two new functions add
+chunks and constants to the very stage the corpus measures, and that stage must still emit its own
+regions afterwards.
+
+**That is why this has not been done casually, and it belongs in the sizing rather than being
+discovered mid-change.** The plan now says to re-measure the node count after the stage edit and
+before the driver edit, so a cap failure is attributed to stage growth rather than to routing.
+
+**This arc has now corrected itself four times**, each time by reading one level deeper: a dispatch
+table, then a field list, then an assumption's consequence, now a contract and a budget. **Every
+correction made the slice larger and better specified, and none of them reached code.** The plan is
+executable now in a way it was not three increments ago, and the cost of getting there was entirely
+in reading.
+
+---
+
 ## 2026-09-11 (thirty-sixth) — the assumption holds, and the slice still needs a begin
 
 The plan named one assumption to check before anything else: that `wire.nmap` survives between the

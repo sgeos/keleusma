@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-11 (session 65, thirty-sixth increment) — the nmap-survival assumption holds, and the slice needs a begin for a different reason than the plan guessed; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
+**Date**: 2026-09-11 (session 65, thirty-seventh increment) — the slice is two additive commands budgeted against wire.kel's own node margin; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,32 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## THIRTY-SEVENTH INCREMENT: THE SLICE IS BUDGETED, NOT CASUAL, AND TWO CONSTRAINTS SAY WHY
+
+Going to implement, two constraints surfaced that change the shape of the work rather than its
+conclusion.
+
+**Command 178 is already driven.** `the_four_record_formatters_lay_out_a_record_the_reference_agrees_with`
+feeds `ds_stream_step` a name index from the reference's own record, which is legitimate for the
+claim it makes -- whether the stage lays a record out as the format specifies. Changing 178 to read
+the interner would break that for no gain, so **the name-aware step must be ADDITIVE**. The slice
+adds TWO commands, a begin and a name-aware step, and `highest_command` moves 181 to 183.
+
+**`wire.kel` is itself one of the eleven measured stages.** It carries **1,148 constant-forest nodes
+against a node table holding 1,365** -- a margin of 217 -- and 475 chunks. Two new functions add
+chunks and constants to the very stage the corpus measures, and that stage must still emit its own
+regions afterwards.
+
+**That is why this has not been done casually, and it belongs in the sizing rather than being
+discovered mid-change.** The plan now says to re-measure the node count after the stage edit and
+before the driver edit, so a cap failure is attributed to stage growth rather than to routing.
+
+**This arc has now corrected itself four times**, each time by reading one level deeper: a dispatch
+table, then a field list, then an assumption's consequence, now a contract and a budget. **Every
+correction made the slice larger and better specified, and none of them reached code.** The plan is
+executable now in a way it was not three increments ago, and the cost of getting there was entirely
+in reading.
 
 ## THIRTY-SIXTH INCREMENT: THE ASSUMPTION HOLDS, AND THE SLICE STILL NEEDS A BEGIN
 
