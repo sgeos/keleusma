@@ -13,6 +13,47 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-10 (twenty-third) — the sites the instrument cannot see
+
+`INVALID_BYTECODE_CENSUS.md` derives its population by grepping for the variant where it is
+CONSTRUCTED, and says plainly what that misses: a site propagating the error from a helper, or
+mapping another kind into it, does not appear. It also notes that one such conversion exists and is
+included only because the grep happened to see it.
+
+**That conversion is `impl From<ScalarError> for VmError`, and the grep counts it as ONE site.** It
+is one construction and many reaching paths: a malformed artefact arrives through every call that
+can raise a `ScalarError`, and the table attributes all of them to a single group-A row.
+
+**Enumerated: six call sites in `src/vm.rs` and four in `src/marshall.rs`**, each converting
+through `?` in a `VmError`-returning function or an explicit `map_err(VmError::from)`. All ten were
+read individually rather than assumed from the pattern. So "the population is a lower bound" now
+has a number against it -- 46 constructed sites plus ten paths collapsed into one of them --
+and `tests/invalid_bytecode_indirect_sites.rs` keeps it current. **A failure there is not a defect;
+it means the census's figure has gone stale**, which is exactly what a lower bound cannot tell you
+on its own.
+
+**An overclaim caught by measuring it.** The guard strips comments, and the natural justification --
+both files' documentation names these functions, so an unstripped count would include prose -- is
+FALSE today. Raw and stripped counts are both 6 and 4, because every prose mention omits the
+opening parenthesis the pattern requires. The strip is defensive, not load-bearing; the file says
+so, and its decoy carries the offending shape deliberately so the guard still fails without it.
+
+## THE CURRENCY GUARD FIRED, WHICH IS THE FIRST TIME THIS SESSION
+
+Adding that file pushed the integration-test count past the tolerance in `tests/claimed_counts.rs`,
+which reported that `CLAUDE.md` states 101 files against a tree holding 112.
+
+**Re-derived rather than adjusted**: 1282 lib tests under `self-host`, 1275 under default features,
+1327 integration `#[test]` functions across 112 files. Both occurrences in `CLAUDE.md` updated.
+
+**The attribution was made truthful rather than convenient.** The line has always read "Measured
+<date> at <hash>", and the obvious move was to write the current HEAD. That hash names a tree with
+111 files, not 112, because the measurement includes the file the same commit adds. **No hash can
+be written there truthfully**, and the line now says that instead of naming one that is wrong by
+one.
+
+---
+
 ## 2026-09-10 (twenty-second) — the last two census entries, resolved oppositely
 
 `GUARD_REACH_CENSUS.md` had two entries reading "cited, not demonstrated". Both are now settled,

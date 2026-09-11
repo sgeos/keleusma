@@ -718,3 +718,47 @@ because only the `f64` runtimes admit a sixty-four-bit float.
   `f32` runtime and an `f64` one and must agree bit-for-bit, on the same witnesses that file
   already established as width-discriminating. Mutation-checked: removing the `Op::Add` narrowing
   fails it.
+
+
+## Addendum, 2026-09-10 (sixth): the sites the instrument cannot see, counted
+
+The population above is derived by grepping for the variant where it is CONSTRUCTED, and this
+document states what that misses: a site propagating the error from a helper, or mapping another
+error kind into it, does not appear. It also notes that one such conversion exists and is included
+only because the grep happened to see it.
+
+**That conversion is `impl From<ScalarError> for VmError`, and the grep counts it as ONE site.** It
+is one construction and many reaching paths. A malformed artefact arrives at it through every call
+that can raise a `ScalarError`, and the table attributes all of them to a single group-A row.
+
+### The paths, enumerated
+
+`GenericValue::read_scalar_le` and `GenericValue::write_scalar_le` are the only functions returning
+`Result<_, ScalarError>` that the runtime calls. Every call to either, in a function whose error
+type is `VmError`, is a path to `InvalidBytecode` the variant grep does not see:
+
+| file | call sites |
+|---|---|
+| `src/vm.rs` | **6** |
+| `src/marshall.rs` | **4** |
+
+Each converts through `?` in a `VmError`-returning function or through an explicit
+`map_err(VmError::from)`; all ten were read individually rather than assumed from the pattern.
+
+**So "the population is a lower bound" now has a number against it.** Forty-six constructed sites,
+plus ten reaching paths collapsed into one of them. That does not make the enumeration complete --
+the reasoning above applies to any future conversion, and only this one exists today -- but it
+replaces an unquantified caveat with a count that a guard keeps current.
+
+`tests/invalid_bytecode_indirect_sites.rs` pins the pair. **A failure there is not a defect**; it
+means this document's population figure has gone stale, which is precisely what a lower bound
+cannot tell you on its own.
+
+### An overclaim caught by measuring it
+
+The guard strips comments before counting, and the natural justification -- that both files'
+documentation names these functions, so an unstripped count would include prose -- **is false
+today**. Raw and stripped counts are both 6 and 4, because every prose mention omits the opening
+parenthesis the pattern requires. The strip is defensive, not load-bearing, and the file says so;
+its decoy carries the offending shape deliberately so the guard still fails if the strip is
+removed.

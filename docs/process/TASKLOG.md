@@ -10,6 +10,23 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-10, session 65, twenty-third increment). THE POPULATION'S LOWER BOUND
+> NOW HAS A NUMBER, AND A CURRENCY GUARD FIRED.**
+>
+> `impl From<ScalarError> for VmError` is ONE construction and many reaching paths; the census's
+> variant grep counts it once. **Enumerated: six call sites in `src/vm.rs`, four in
+> `src/marshall.rs`**, all read individually. `tests/invalid_bytecode_indirect_sites.rs` keeps the
+> pair current, and a failure there means the census figure is stale rather than that a defect
+> exists.
+>
+> **An overclaim was caught by measuring it**: the comment strip in that guard is defensive, not
+> load-bearing, because every prose mention omits the parenthesis the pattern needs.
+>
+> **`tests/claimed_counts.rs` fired for the first time this session.** Re-derived, not adjusted:
+> **1282 lib tests under `self-host`, 1275 default, 1327 integration `#[test]` functions across 112
+> files.** The "Measured <date> at <hash>" line now says no hash can be written truthfully there,
+> because the measurement includes the files the same commit adds.
+
 > **Currency note (2026-09-10, session 65, twenty-second increment). THE GUARD CENSUS IS CLOSED,
 > AND ITS LAST TWO ENTRIES RESOLVED OPPOSITELY.**
 >
