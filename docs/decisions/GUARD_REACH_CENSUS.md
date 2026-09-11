@@ -2,8 +2,10 @@
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
 
-**Status**: population derived, verdict recorded for every member. Two members were repaired in the
-course of the census; two remain "cited, not demonstrated" and are named rather than omitted.
+**Status**: population derived, verdict recorded for every member, and every member now rests on
+either a demonstrated check or a measured argument that no check is possible. Three were repaired
+in the course of the census and one more afterwards; the last is recorded as safe by construction
+with the measurement that established it.
 
 ## The question, and why it is not the same as "do the tests pass"
 
@@ -50,18 +52,26 @@ observed result, so a reader of the guard can see why it is trusted.
 | `wire_self_compile_status.rs` | measured reporting `ok` with the real reset deleted and its text left in a comment |
 | `forward_data_reference.rs` | **repaired 2026-09-10**, see below |
 
-**Cited, not demonstrated in the file** — the hazard is documented and a measurement is referred
-to, but it was made on a DIFFERENT guard. A reader has no way to tell whether this one
-discriminates.
+**Both remaining entries were resolved on 2026-09-10, and they resolved DIFFERENTLY.** The
+judgement recorded here previously was that inventing a fourth near-identical test might be worth
+less than saying plainly that two files rest on an unchecked property. That judgement was reversed
+on new information: the guard added to `forward_data_reference.rs` under the same argument was
+mutation-checked, and with its comment strip removed it FAILS. The pattern is load-bearing rather
+than ceremonial, at least once, which is the thing the earlier judgement was uncertain about.
 
-| file | what is missing, and what closing it would cost |
+Asking the question of each file produced opposite answers, which is the useful part.
+
+| file | verdict |
 |---|---|
-| `composite_escape_routes.rs` | its measured statements are about the TREE (zero iterating loops emit a value-carrying `Break`), not about the guard's ability to fail. Three anchor-locates were repaired here; none has a negative case. Cost: one synthetic-source test per locate, in the shape used in `forward_data_reference.rs` |
-| `forest_child_channels.rs` | its strip cites a measurement made elsewhere, that "one such line failed four tests". Cost: the same one test |
+| `forest_child_channels.rs` | **repaired, and the strip shown load-bearing.** Its extraction splits on `": "`, which a comment satisfies as readily as a field: a line reading `// channel: Vec<u32>` becomes the pair `("// channel", "Vec<u32>")` and enters the field list as a seventh channel that does not exist. Measured — with the strip removed the new guard fails, reporting the phantom |
+| `composite_escape_routes.rs` | **safe by construction, established by measurement rather than inspection.** Removing `code_only` entirely leaves all ten tests in the file passing. A comment cannot contribute an opcode name: a line beginning `//` is skipped, and the anchor line itself fails the uppercase-identifier test, so two independent filters reject it |
 
-Neither is repaired here. The census records the gap; whether to close it is a separate judgement
-about proportion, and inventing a fourth near-identical test is not obviously worth more than
-saying plainly that two files rest on a property nothing checks.
+**The first attempt at a guard for `composite_escape_routes.rs` was VACUOUS and was reverted rather
+than shipped.** A decoy naming the anchor in a comment produced the identical opcode list with the
+strip removed, so it demonstrated nothing; retargeting it at the per-line filters did no better,
+because removing either filter still leaves the phantom rejected by the other. **A test that cannot
+fail is worse than no test, because it reads as coverage**, so the file keeps its strip and gains
+no guard, and this table records why.
 
 ## The three repaired during the census
 

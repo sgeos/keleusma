@@ -36,7 +36,17 @@ const DRIVER: &str = include_str!("../src/selfhost/mod.rs");
 
 /// The fields of the flattened-body struct, as the driver declares them.
 fn body_fields() -> Vec<(String, String)> {
-    let driver = code_only(DRIVER);
+    fields_in(DRIVER)
+}
+
+/// The extraction itself, taking its source as an argument.
+///
+/// **Split out so it can be given a DECOY.** Reading the `include_str!`
+/// constant directly made the locate untestable, and the guard census of
+/// 2026-09-10 listed this file as citing the comment-matching hazard while
+/// demonstrating nothing about its own resistance to it.
+fn fields_in(raw: &str) -> Vec<(String, String)> {
+    let driver = code_only(raw);
     let at = driver
         .find("pub struct Body {")
         .expect("the driver declares the flattened body");
@@ -53,6 +63,52 @@ fn body_fields() -> Vec<(String, String)> {
                 .map(|(n, ty)| (n.to_string(), ty.to_string()))
         })
         .collect()
+}
+
+/// **THE STRIP IS LOAD-BEARING HERE, AND THIS MEASURES IT.**
+///
+/// The split below is on `": "`, which a COMMENT satisfies as readily as a
+/// field does. A line reading `// channel: Vec<u32>` splits into the pair
+/// `("// channel", "Vec<u32>")` and enters the field list as a seventh
+/// channel that does not exist. The count assertion beneath would then fail
+/// naming a channel nobody declared, or -- worse, if a real field were removed
+/// in the same edit -- would pass on a phantom standing in for it.
+///
+/// Both directions are pinned. The decoy must yield exactly the real fields,
+/// and the real declaration must still be found, because an extraction can be
+/// made comment-proof by being made to find nothing and that failure is
+/// invisible from a green run.
+///
+/// Measured: with `code_only` removed, the first assertion FAILS, reporting the
+/// phantom. This guard is not decorative.
+#[test]
+fn a_comment_shaped_like_a_field_does_not_become_a_channel() {
+    const DECOY: &str = "pub struct Body {\n    \
+                         root: i64,\n    \
+                         // channel: Vec<u32>\n    \
+                         kinds: Vec<i64>,\n}\n";
+    let got = fields_in(DECOY);
+    assert_eq!(
+        got,
+        vec![
+            ("root".to_string(), "i64".to_string()),
+            ("kinds".to_string(), "Vec<i64>".to_string()),
+        ],
+        "a comment containing `: ` entered the field list as a channel. The walk below would \
+         then be checked against a channel the driver does not declare"
+    );
+
+    const PLAIN: &str = "pub struct Body {\n    root: i64,\n    kinds: Vec<i64>,\n}\n";
+    assert_eq!(
+        fields_in(PLAIN),
+        got,
+        "the comment changed what was extracted"
+    );
+    assert!(
+        !fields_in(PLAIN).is_empty(),
+        "the extraction found no fields at all, which is how a source reader is made \
+         comment-proof by being made useless"
+    );
 }
 
 /// **THE CHILD CHANNELS ARE EXACTLY SIX, AND A SEVENTH CANNOT ARRIVE UNNOTICED.**

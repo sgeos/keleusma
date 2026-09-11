@@ -10,6 +10,22 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-10, session 65, twenty-second increment). THE GUARD CENSUS IS CLOSED,
+> AND ITS LAST TWO ENTRIES RESOLVED OPPOSITELY.**
+>
+> `forest_child_channels.rs` is **repaired**: its extraction splits on `": "`, which a comment
+> satisfies, so `// channel: Vec<u32>` became a seventh channel. With the strip removed the new
+> guard fails, naming the phantom.
+>
+> `composite_escape_routes.rs` is **safe by construction, measured**: removing `code_only` leaves
+> all ten of its tests passing, because two independent per-line filters reject any comment.
+>
+> **A vacuous guard was reverted rather than shipped.** Two attempts at a guard for that file could
+> not be made to fail. A test that cannot fail is worse than no test, because it reads as coverage.
+>
+> The reversal of the census's earlier "not worth a fourth test" judgement is recorded with the new
+> information that justified it. See `docs/decisions/GUARD_REACH_CENSUS.md`.
+
 > **Currency note (2026-09-10, session 65, twenty-first increment). A NAMED GAP WAS MOSTLY NOT A
 > GAP.**
 >

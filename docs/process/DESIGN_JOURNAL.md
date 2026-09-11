@@ -13,6 +13,37 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-10 (twenty-second) — the last two census entries, resolved oppositely
+
+`GUARD_REACH_CENSUS.md` had two entries reading "cited, not demonstrated". Both are now settled,
+and **the useful part is that asking the same question of each produced OPPOSITE answers.**
+
+**`forest_child_channels.rs`: repaired, strip shown load-bearing.** Its extraction splits on
+`": "`, which a COMMENT satisfies as readily as a field. A line reading `// channel: Vec<u32>`
+becomes the pair `("// channel", "Vec<u32>")` and enters the field list as a seventh channel that
+does not exist -- and if a real field were removed in the same edit, a phantom would stand in for
+it and the count would still pass. Measured: with the strip removed the new guard fails, naming
+the phantom.
+
+**`composite_escape_routes.rs`: safe by construction, established by MEASUREMENT.** Removing
+`code_only` entirely leaves all ten tests in that file passing. A comment cannot contribute an
+opcode name, because a line beginning `//` is skipped and the anchor line itself fails the
+uppercase-identifier test -- two independent filters, either of which suffices.
+
+**My first guard for that file was VACUOUS, and I reverted it rather than shipping it.** The decoy
+produced the identical opcode list with the strip removed, so it demonstrated nothing. Retargeting
+it at the per-line filters did no better: removing either filter still leaves the phantom rejected
+by the other. **A test that cannot fail is worse than no test, because it reads as coverage.** The
+brief for this increment listed that exact trap, and the measurement still had to tell me.
+
+**A reversed judgement, with its reason recorded.** The census had argued that a fourth
+near-identical test might be worth less than stating the gap. That was reversed on new
+information -- the guard added to `forward_data_reference.rs` under the same argument was
+mutation-checked and fails with its strip removed -- and the census says so rather than presenting
+the new verdict as though it had always held.
+
+---
+
 ## 2026-09-10 (twenty-first) — a gap I named was mostly not a gap
 
 The twentieth increment ended by naming "float arithmetic across a width-mismatched pair" as
