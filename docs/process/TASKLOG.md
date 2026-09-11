@@ -10,6 +10,19 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-10, session 65, twenty-first increment). A NAMED GAP WAS MOSTLY NOT A
+> GAP.**
+>
+> The previous note named float arithmetic across a width-mismatched pair as unswept.
+> `tests/float_arith_width.rs` already covers it, mutation-tested over eight of ten narrowing
+> sites. **A limitation of the sweep is not a limitation of the tree**, and the census now says so
+> in place.
+>
+> **The genuinely absent part is closed**: that file ran every case on ONE runtime, establishing the
+> declared width governs there rather than that the answer is runtime-independent. The same
+> declared-`f32` module now runs on an `f32` and an `f64` runtime and must agree bit-for-bit, on the
+> witnesses already established as width-discriminating. Removing the `Op::Add` narrowing fails it.
+
 > **Currency note (2026-09-10, session 65, twentieth increment). ALL THREE WIDTHS, BOTH
 > AUTHORITIES.**
 >

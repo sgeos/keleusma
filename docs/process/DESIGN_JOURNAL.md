@@ -13,6 +13,31 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-10 (twenty-first) — a gap I named was mostly not a gap
+
+The twentieth increment ended by naming "float arithmetic across a width-mismatched pair" as
+unswept. **That sentence was nearly a mis-reading of the tree.**
+`tests/float_arith_width.rs` covers exactly that property -- arithmetic honours the module's
+DECLARED float width, not the runtime's -- with every test declaring a 32-bit float on a 64-bit
+runtime, eight of ten narrowing sites established by MUTATION, and the other two argued
+witness-free for a reason rather than merely unwitnessed.
+
+**A limitation of the sweep is not a limitation of the tree**, and writing the first as though it
+were the second is the quiet way a document overstates what is missing. Corrected in place.
+
+**The part that WAS genuinely absent is now present.** That file runs every case on ONE runtime, so
+it establishes the declared width governs THERE -- not that the answer is independent of the
+runtime, which is what the phrase "honours the declared width" actually claims. The two authorities
+are the point. The same declared-`f32` module now runs on an `f32` runtime and an `f64` one and
+must agree BIT-FOR-BIT, on the same four witnesses that file already established as
+width-discriminating, with the vacuity check re-asserted rather than inherited so a witness that
+stopped discriminating fails loudly instead of agreeing trivially.
+
+**Mutation-checked**: removing the `Op::Add` narrowing fails the new differential as well as the
+existing test.
+
+---
+
 ## 2026-09-10 (twentieth) — the third width, from both sides
 
 The nineteenth increment left the runtime's float at `f64`, so the float authority was swept from

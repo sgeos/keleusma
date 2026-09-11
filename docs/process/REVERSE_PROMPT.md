@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-10 (session 65, twentieth increment) — all three widths swept from both authorities, 21504 cells with three independent counts agreeing; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
+**Date**: 2026-09-10 (session 65, twenty-first increment) — a gap I had named turned out to be mostly covered elsewhere, and the part genuinely missing is closed; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,29 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## TWENTY-FIRST INCREMENT: A GAP I NAMED WAS MOSTLY NOT A GAP, AND THE PART THAT WAS IS CLOSED
+
+The twentieth increment ended by naming "float arithmetic across a width-mismatched pair" as
+unswept. **That sentence was nearly a mis-reading of the tree.**
+`tests/float_arith_width.rs` covers exactly that property -- arithmetic honours the module's
+DECLARED float width, not the runtime's -- with every test declaring a 32-bit float on a 64-bit
+runtime, eight of ten narrowing sites established by MUTATION, and the other two argued
+witness-free for a reason rather than merely unwitnessed.
+
+**A limitation of the sweep is not a limitation of the tree**, and writing the first as though it
+were the second is the quiet way a document overstates what is missing. Corrected in place.
+
+**The part that WAS genuinely absent is now present.** That file runs every case on ONE runtime, so
+it establishes the declared width governs THERE -- not that the answer is independent of the
+runtime, which is what the phrase "honours the declared width" actually claims. The two authorities
+are the point. The same declared-`f32` module now runs on an `f32` runtime and an `f64` one and
+must agree BIT-FOR-BIT, on the same four witnesses that file already established as
+width-discriminating, with the vacuity check re-asserted rather than inherited so a witness that
+stopped discriminating fails loudly instead of agreeing trivially.
+
+**Mutation-checked**: removing the `Op::Add` narrowing fails the new differential as well as the
+existing test.
 
 ## TWENTIETH INCREMENT: THE THIRD WIDTH, FROM BOTH SIDES
 

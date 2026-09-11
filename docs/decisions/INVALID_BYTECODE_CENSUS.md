@@ -705,4 +705,16 @@ because only the `f64` runtimes admit a sixty-four-bit float.
   still a lower bound.
 - No group in the table above that carries a probe count is closed by this.
 - The float shape exercises the float width in a LAYOUT offset. Float arithmetic across a
-  width-mismatched pair is not swept here.
+  width-mismatched pair is not swept here -- **and stating it that way was nearly a mis-reading of
+  the tree.** It is not an open gap. `tests/float_arith_width.rs` covers exactly that property,
+  that arithmetic honours the module's DECLARED float width and not the runtime's, with every test
+  declaring a 32-bit float on a 64-bit runtime and eight of ten narrowing sites established by
+  mutation, the other two argued witness-free for a reason rather than merely unwitnessed. A
+  limitation of this sweep is not a limitation of the tree, and the two must not be conflated.
+
+  What WAS genuinely absent there, and is now present, is the two-authority differential: that file
+  ran every case on ONE runtime, so it established the declared width governs *there* rather than
+  that the answer is independent of the runtime. The same declared-`f32` module now runs on an
+  `f32` runtime and an `f64` one and must agree bit-for-bit, on the same witnesses that file
+  already established as width-discriminating. Mutation-checked: removing the `Op::Add` narrowing
+  fails it.
