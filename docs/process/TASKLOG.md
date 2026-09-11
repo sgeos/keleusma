@@ -10,6 +10,20 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-11, session 65, forty-eighth increment). THE FIELD-READ EDGE IS SIZED:
+> THREE OF FIVE.**
+>
+> `sizing_how_far_declaration_lookup_reaches_a_field_read` measures it. Two declaration lookups and
+> no unification reach a field of a struct literal, a field of a field, and a field of a call
+> result. **They do NOT reach** a field of an ARRAY ELEMENT or of a MATCH BINDING -- both need a
+> type projected out of an array or a variant payload rather than looked up.
+>
+> **So the next increment can be scoped**: the cheap majority lands as a tagger extension over
+> declarations the pipeline already has, with the two projection cases recorded as unreached.
+>
+> Non-vacuity runs both ways -- the spike fails if it types none, and fails if it types all, which
+> would mean the corpus no longer contains the edge. Each case also asserts the REFERENCE rejects it.
+
 > **Currency note (2026-09-11, session 65, forty-seventh increment). A DOCS-ONLY CHANGE FAILED
 > TWO CONFIGURATIONS I DID NOT RUN.**
 >

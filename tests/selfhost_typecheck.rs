@@ -4722,3 +4722,242 @@ fn a_field_or_index_on_a_scalar_is_refused_before_any_row_could_be_extracted() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// SIZING SPIKE: what would it take to reach a FIELD READ?
+//
+// A MEASUREMENT, NOT AN IMPLEMENTATION, exactly as the spike above is. Nothing
+// here is wired into the stage.
+//
+// The spike above sizes the step BEHIND us: its five cases are let-bound
+// literals and call returns, all of which the stage now reaches. This one takes
+// the edge where it actually sits, pinned by
+// `a_derived_operand_from_a_field_read_is_still_unreached`.
+// ---------------------------------------------------------------------------
+
+/// The declared name of a primitive, for the two this corpus uses.
+///
+/// A wider tagger would map the whole type surface; doing so here would be
+/// sizing a different thing.
+fn alloc_prim_name(p: keleusma::ast::PrimType) -> String {
+    format!("{p:?}")
+}
+
+/// The type name a `let` binds, when the initialiser states it outright.
+///
+/// **Only two initialiser forms state it**: a struct literal names its own type,
+/// and a call to a declared function has a declared return type. Anything else
+/// returns `None`, which is the honest answer rather than a guess.
+fn let_struct_name(
+    e: &keleusma::ast::Expr,
+    rets: &std::collections::BTreeMap<String, String>,
+) -> Option<String> {
+    use keleusma::ast::Expr;
+    match e {
+        Expr::StructInit { name, .. } => Some(name.clone()),
+        Expr::Call { name, .. } => rets.get(name).cloned(),
+        _ => None,
+    }
+}
+
+/// Tag of `base.field`, by declaration lookup alone.
+///
+/// **No unification, no inference.** The struct declaration states each field's
+/// type and the `let` states the base's type; this walks a nested access by
+/// repeating the same two lookups. If either is unavailable the answer is zero,
+/// meaning "cannot type", which is what the stage would do.
+fn field_read_tag(
+    e: &keleusma::ast::Expr,
+    let_types: &std::collections::BTreeMap<String, String>,
+    structs: &std::collections::BTreeMap<String, Vec<(String, String)>>,
+) -> i64 {
+    use keleusma::ast::Expr;
+    fn type_of(
+        e: &keleusma::ast::Expr,
+        let_types: &std::collections::BTreeMap<String, String>,
+        structs: &std::collections::BTreeMap<String, Vec<(String, String)>>,
+    ) -> Option<String> {
+        match e {
+            Expr::Ident { name, .. } => let_types.get(name).cloned(),
+            Expr::FieldAccess { object, field, .. } => {
+                let owner = type_of(object, let_types, structs)?;
+                structs
+                    .get(&owner)?
+                    .iter()
+                    .find(|(n, _)| n == field)
+                    .map(|(_, t)| t.clone())
+            }
+            _ => None,
+        }
+    }
+    match e {
+        Expr::FieldAccess { .. } => match type_of(e, let_types, structs).as_deref() {
+            // The two scalar tags this corpus needs; a wider tagger would map
+            // the whole type surface, and doing so here would be sizing a
+            // different thing.
+            Some("Word") => 1,
+            Some("bool") => 2,
+            _ => 0,
+        },
+        _ => 0,
+    }
+}
+
+/// **HOW MUCH OF THE FIELD-READ EDGE FALLS TO DECLARATION LOOKUP.**
+///
+/// Each case is a program the reference REJECTS, and each is labelled with the
+/// least information that would decide it. The measurement is how many the two
+/// lookups above can type.
+///
+/// **The answer decides the shape of the next increment**, and a partial result
+/// is the most useful outcome: it would mean the cheap cases can land while the
+/// expensive ones stay recorded as unreached, rather than the whole edge waiting
+/// on inference it may not need.
+#[cfg(feature = "self-host")]
+#[test]
+fn sizing_how_far_declaration_lookup_reaches_a_field_read() {
+    use keleusma::ast::{Expr, Stmt, TypeExpr};
+
+    const CASES: &[(&str, &str, &str)] = &[
+        (
+            "field of a struct literal",
+            "struct P { x: Word }\nfn main() -> Word { let p = P { x: 1 }; p.x + true }",
+            "lookup: let initialiser names the type, declaration names the field",
+        ),
+        (
+            "field of a field",
+            "struct I { n: Word }\nstruct O { i: I }\n\
+             fn main() -> Word { let o = O { i: I { n: 1 } }; o.i.n + true }",
+            "lookup: the same two, applied twice",
+        ),
+        (
+            "field of a call result",
+            "struct P { x: Word }\nfn g() -> P { P { x: 1 } }\n\
+             fn main() -> Word { let p = g(); p.x + true }",
+            "lookup: declared return type, then the declaration",
+        ),
+        (
+            "field of an array element",
+            "struct P { x: Word }\n\
+             fn main() -> Word { let a = [P { x: 1 }]; a[0].x + true }",
+            "NOT a lookup: the let initialiser states an ARRAY, and the element \
+             type has to be projected out of it",
+        ),
+        (
+            "field of a match binding",
+            "struct P { x: Word }\nenum E { W(P), N }\n\
+             fn main() -> Word { let e = E::W(P { x: 1 }); \
+              match e { E::W(p) => p.x + true, E::N => 0 } }",
+            "NOT a lookup: the binding's type comes from the VARIANT PAYLOAD, \
+             which no `let` states",
+        ),
+    ];
+
+    let mut typed = 0usize;
+    let mut untyped: Vec<&str> = Vec::new();
+
+    for (label, src, _needs) in CASES {
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+
+        // NON-VACUITY: the reference must actually reject, or the case is not on
+        // the edge at all and typing it would prove nothing.
+        assert!(
+            compile(&program).is_err(),
+            "{label}: the reference ACCEPTS this program, so it is not a missed \
+             rejection and does not belong in a corpus about reaching them"
+        );
+
+        // Declarations, read straight out of the program.
+        let mut structs: std::collections::BTreeMap<String, Vec<(String, String)>> =
+            std::collections::BTreeMap::new();
+        for t in &program.types {
+            if let keleusma::ast::TypeDef::Struct(sd) = t {
+                let fields = sd
+                    .fields
+                    .iter()
+                    .filter_map(|f| match &f.type_expr {
+                        TypeExpr::Named(n, ..) => Some((f.name.clone(), n.clone())),
+                        TypeExpr::Prim(p, _) => Some((f.name.clone(), alloc_prim_name(*p))),
+                        _ => None,
+                    })
+                    .collect();
+                structs.insert(sd.name.clone(), fields);
+            }
+        }
+        let mut rets: std::collections::BTreeMap<String, String> =
+            std::collections::BTreeMap::new();
+        for f in &program.functions {
+            if let TypeExpr::Named(n, ..) = &f.return_type {
+                rets.insert(f.name.clone(), n.clone());
+            }
+        }
+
+        // `let` bindings whose initialiser states a type outright.
+        let mut let_types: std::collections::BTreeMap<String, String> =
+            std::collections::BTreeMap::new();
+        for f in &program.functions {
+            for st in &f.body.stmts {
+                if let Stmt::Let(l) = st
+                    && let keleusma::ast::Pattern::Variable(name, _) = &l.pattern
+                    && let Some(t) = let_struct_name(&l.value, &rets)
+                {
+                    let_types.insert(name.clone(), t);
+                }
+            }
+        }
+
+        // Find the first field read anywhere in the function bodies and ask
+        // whether the lookups can type it.
+        let mut found = 0i64;
+        let mut visit = |e: &Expr| {
+            if let Expr::BinOp { left, right, .. } = e {
+                for side in [left.as_ref(), right.as_ref()] {
+                    let t = field_read_tag(side, &let_types, &structs);
+                    if t != 0 {
+                        found = t;
+                    }
+                }
+            }
+        };
+        for f in &program.functions {
+            for st in &f.body.stmts {
+                if let Stmt::Expr(e) = st {
+                    visit(e);
+                }
+            }
+            if let Some(tail) = &f.body.tail_expr {
+                visit(tail);
+                // One case puts the field read inside a MATCH ARM rather than at
+                // the tail, so the arms are walked too.
+                if let Expr::Match { arms, .. } = tail.as_ref() {
+                    arms.iter().for_each(|a| visit(&a.expr));
+                }
+            }
+        }
+
+        if found != 0 {
+            typed += 1;
+        } else {
+            untyped.push(label);
+        }
+    }
+
+    std::eprintln!(
+        "declaration lookup types {typed} of {} field-read cases; unreached: {untyped:?}",
+        CASES.len()
+    );
+
+    // **NON-VACUITY IN BOTH DIRECTIONS.** A spike that typed everything would
+    // not have found the edge, and one that typed nothing would not be measuring
+    // the lookups at all.
+    assert!(
+        typed > 0,
+        "declaration lookup typed NONE of the field-read cases, so either the \
+         lookups are broken or the corpus does not exercise them"
+    );
+    assert!(
+        typed < CASES.len(),
+        "declaration lookup typed EVERY case, so this corpus no longer contains \
+         the edge and needs harder cases before it can size anything"
+    );
+}

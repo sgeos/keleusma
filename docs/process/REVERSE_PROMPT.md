@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-11 (session 65, forty-seventh increment) — a citation guard caught a retired test named in this file, in two configurations I had not run; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
+**Date**: 2026-09-11 (session 65, forty-eighth increment) — the field-read edge is sized: declaration lookup reaches three of five, the other two need type projection; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,39 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## FORTY-EIGHTH INCREMENT: THE FIELD-READ STEP IS PARTIALLY CHEAP, AND NOW MEASURED
+
+The previous increment found that the existing sizing spike measures a step already taken, leaving
+the field-read edge **unsized**. This sizes it, with its own cases.
+
+**Result: declaration lookup types 3 of 5.** The two it does not reach are a field of an ARRAY
+ELEMENT and a field of a MATCH BINDING.
+
+| case | reached by lookup |
+|---|---|
+| field of a struct literal | yes |
+| field of a field | yes |
+| field of a call result | yes |
+| field of an array element | **no** -- the `let` states an ARRAY; the element type must be projected out of it |
+| field of a match binding | **no** -- the binding's type comes from the VARIANT PAYLOAD, which no `let` states |
+
+**The mechanism is two lookups and no unification**: a `let` whose initialiser is a struct literal
+or a call states its type outright, and a struct declaration states each field's. Nested access
+repeats the pair. Nothing is inferred.
+
+**So the next increment can be scoped rather than feared.** The cheap majority can land as a tagger
+extension over declarations the pipeline already has, with the two projection cases recorded as
+still unreached -- instead of the whole edge waiting on inference it may not need.
+
+**Non-vacuity runs both ways, deliberately.** The spike fails if it types NONE, which would mean the
+lookups are broken, and it fails if it types EVERY case, which would mean the corpus no longer
+contains the edge. Each case also asserts the REFERENCE rejects the program, so a case that stopped
+being a missed rejection cannot sit in the corpus unnoticed.
+
+**The two unreached cases were predicted and then measured, not asserted.** Writing the prediction
+into the corpus labels and letting the run decide is the difference between a sizing and a guess --
+and this session has already recorded what happens when a plausible prediction goes in unchecked.
 
 ## FORTY-SEVENTH INCREMENT: THE CITATION GUARD CAUGHT ME NAMING A RETIRED TEST
 

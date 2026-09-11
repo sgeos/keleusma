@@ -13,6 +13,41 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-11 (forty-eighth) — the field-read step is partially cheap, and now measured
+
+The previous increment found that the existing sizing spike measures a step already taken, leaving
+the field-read edge **unsized**. This sizes it, with its own cases.
+
+**Result: declaration lookup types 3 of 5.** The two it does not reach are a field of an ARRAY
+ELEMENT and a field of a MATCH BINDING.
+
+| case | reached by lookup |
+|---|---|
+| field of a struct literal | yes |
+| field of a field | yes |
+| field of a call result | yes |
+| field of an array element | **no** -- the `let` states an ARRAY; the element type must be projected out of it |
+| field of a match binding | **no** -- the binding's type comes from the VARIANT PAYLOAD, which no `let` states |
+
+**The mechanism is two lookups and no unification**: a `let` whose initialiser is a struct literal
+or a call states its type outright, and a struct declaration states each field's. Nested access
+repeats the pair. Nothing is inferred.
+
+**So the next increment can be scoped rather than feared.** The cheap majority can land as a tagger
+extension over declarations the pipeline already has, with the two projection cases recorded as
+still unreached -- instead of the whole edge waiting on inference it may not need.
+
+**Non-vacuity runs both ways, deliberately.** The spike fails if it types NONE, which would mean the
+lookups are broken, and it fails if it types EVERY case, which would mean the corpus no longer
+contains the edge. Each case also asserts the REFERENCE rejects the program, so a case that stopped
+being a missed rejection cannot sit in the corpus unnoticed.
+
+**The two unreached cases were predicted and then measured, not asserted.** Writing the prediction
+into the corpus labels and letting the run decide is the difference between a sizing and a guess --
+and this session has already recorded what happens when a plausible prediction goes in unchecked.
+
+---
+
 ## 2026-09-11 (forty-seventh) — the citation guard caught me naming a retired test
 
 A documentation-only pull request failed two continuous-integration jobs.
