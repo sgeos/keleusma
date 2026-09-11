@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-10 (session 65, twenty-first increment) — a gap I had named turned out to be mostly covered elsewhere, and the part genuinely missing is closed; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
+**Date**: 2026-09-10 (session 65, twenty-third increment) — the InvalidBytecode sites a variant grep cannot see are enumerated, and a currency guard caught CLAUDE.md's test figures going stale; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,74 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## TWENTY-THIRD INCREMENT: THE SITES THE INSTRUMENT CANNOT SEE, COUNTED
+
+`INVALID_BYTECODE_CENSUS.md` derives its population by grepping for the variant where it is
+CONSTRUCTED, and says plainly what that misses: a site propagating the error from a helper, or
+mapping another kind into it, does not appear. It also notes that one such conversion exists and is
+included only because the grep happened to see it.
+
+**That conversion is `impl From<ScalarError> for VmError`, and the grep counts it as ONE site.** It
+is one construction and many reaching paths: a malformed artefact arrives through every call that
+can raise a `ScalarError`, and the table attributes all of them to a single group-A row.
+
+**Enumerated: six call sites in `src/vm.rs` and four in `src/marshall.rs`**, each converting
+through `?` in a `VmError`-returning function or an explicit `map_err(VmError::from)`. All ten were
+read individually rather than assumed from the pattern. So "the population is a lower bound" now
+has a number against it -- 46 constructed sites plus ten paths collapsed into one of them --
+and `tests/invalid_bytecode_indirect_sites.rs` keeps it current. **A failure there is not a defect;
+it means the census's figure has gone stale**, which is exactly what a lower bound cannot tell you
+on its own.
+
+**An overclaim caught by measuring it.** The guard strips comments, and the natural justification --
+both files' documentation names these functions, so an unstripped count would include prose -- is
+FALSE today. Raw and stripped counts are both 6 and 4, because every prose mention omits the
+opening parenthesis the pattern requires. The strip is defensive, not load-bearing; the file says
+so, and its decoy carries the offending shape deliberately so the guard still fails without it.
+
+## THE CURRENCY GUARD FIRED, WHICH IS THE FIRST TIME THIS SESSION
+
+Adding that file pushed the integration-test count past the tolerance in `tests/claimed_counts.rs`,
+which reported that `CLAUDE.md` states 101 files against a tree holding 112.
+
+**Re-derived rather than adjusted**: 1282 lib tests under `self-host`, 1275 under default features,
+1327 integration `#[test]` functions across 112 files. Both occurrences in `CLAUDE.md` updated.
+
+**The attribution was made truthful rather than convenient.** The line has always read "Measured
+<date> at <hash>", and the obvious move was to write the current HEAD. That hash names a tree with
+111 files, not 112, because the measurement includes the file the same commit adds. **No hash can
+be written there truthfully**, and the line now says that instead of naming one that is wrong by
+one.
+
+## TWENTY-SECOND INCREMENT: THE LAST TWO CENSUS ENTRIES RESOLVED, AND THEY RESOLVED OPPOSITELY
+
+`GUARD_REACH_CENSUS.md` had two entries reading "cited, not demonstrated". Both are now settled,
+and **the useful part is that asking the same question of each produced OPPOSITE answers.**
+
+**`forest_child_channels.rs`: repaired, strip shown load-bearing.** Its extraction splits on
+`": "`, which a COMMENT satisfies as readily as a field. A line reading `// channel: Vec<u32>`
+becomes the pair `("// channel", "Vec<u32>")` and enters the field list as a seventh channel that
+does not exist -- and if a real field were removed in the same edit, a phantom would stand in for
+it and the count would still pass. Measured: with the strip removed the new guard fails, naming
+the phantom.
+
+**`composite_escape_routes.rs`: safe by construction, established by MEASUREMENT.** Removing
+`code_only` entirely leaves all ten tests in that file passing. A comment cannot contribute an
+opcode name, because a line beginning `//` is skipped and the anchor line itself fails the
+uppercase-identifier test -- two independent filters, either of which suffices.
+
+**My first guard for that file was VACUOUS, and I reverted it rather than shipping it.** The decoy
+produced the identical opcode list with the strip removed, so it demonstrated nothing. Retargeting
+it at the per-line filters did no better: removing either filter still leaves the phantom rejected
+by the other. **A test that cannot fail is worse than no test, because it reads as coverage.** The
+brief for this increment listed that exact trap, and the measurement still had to tell me.
+
+**A reversed judgement, with its reason recorded.** The census had argued that a fourth
+near-identical test might be worth less than stating the gap. That was reversed on new
+information -- the guard added to `forward_data_reference.rs` under the same argument was
+mutation-checked and fails with its strip removed -- and the census says so rather than presenting
+the new verdict as though it had always held.
 
 ## TWENTY-FIRST INCREMENT: A GAP I NAMED WAS MOSTLY NOT A GAP, AND THE PART THAT WAS IS CLOSED
 
