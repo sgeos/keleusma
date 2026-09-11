@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-11 (session 65, thirty-eighth increment) — the node margin is 171, not the 217 the plan assumed, and a guard now derives it; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
+**Date**: 2026-09-11 (session 65, thirty-ninth increment) — `DATA_SLOTS` is routed byte-identically and the self-hosted share is 98%, with the computed share unchanged as predicted; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,39 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## THIRTY-NINTH INCREMENT: `DATA_SLOTS` IS ROUTED, AND THE SHARE WENT 81% TO 98%
+
+The driver half landed. `slot_run_fields` groups consecutive slots sharing a name and visibility
+into runs -- mirroring the encoder including its `u16::MAX` chunking, so a chunked run emits several
+records all carrying the same run index -- and `window_emit_slots` drives commands 182 and 183 on
+one virtual machine and ONE shared buffer.
+
+**`no_region_the_driver_routes_disagrees_with_the_reference` passed on the first run.** The region
+is byte-identical for every corpus stage. The only failure was the share figure, which is the test
+asking to be told the new number rather than a defect.
+
+| | before | after |
+|---|---|---|
+| self-hosted share of corpus region bytes | 81% | **98%** |
+| skipped region kinds | four | **three** |
+| computed share | -- | **unchanged** |
+
+**The computed share not moving is the part worth checking, and it was predicted in advance.** The
+stage supplies this region's NAME from its own interner and the host decides every other field --
+the `CHUNKS` standing, not the `NAMES` one. `DATA_SLOTS` joins `CHUNKS` as **mixed** in the
+provenance table, and the test that exists to stop the headline figure being over-read still holds.
+Saying beforehand which number should move, and which should not, is what makes the one that did
+mean something.
+
+**`DATA_SLOTS` is the first routed kind whose record carries a NAME.** Every kind routed before it
+carried none, which is precisely what let the host supply every field. That is why the interner
+route had to exist before the routing, and why five increments went into reading before one line
+changed.
+
+**Verified**: 180 wire tests, 147 codegen tests including the boundary pin and the byte-identical
+scaffold, all five region-coverage tests with updated figures, the node budget at 1,202 of 1,365,
+`fmt`, and clippy with `-D warnings` across the full feature set.
 
 ## THIRTY-EIGHTH INCREMENT: THE MARGIN THE SLICE IS SIZED AGAINST WAS STALE BY A QUARTER
 

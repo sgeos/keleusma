@@ -13,6 +13,41 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-11 (thirty-ninth) — DATA_SLOTS is routed, and the share went 81% to 98%
+
+The driver half landed. `slot_run_fields` groups consecutive slots sharing a name and visibility
+into runs -- mirroring the encoder including its `u16::MAX` chunking, so a chunked run emits several
+records all carrying the same run index -- and `window_emit_slots` drives commands 182 and 183 on
+one virtual machine and ONE shared buffer.
+
+**`no_region_the_driver_routes_disagrees_with_the_reference` passed on the first run.** The region
+is byte-identical for every corpus stage. The only failure was the share figure, which is the test
+asking to be told the new number rather than a defect.
+
+| | before | after |
+|---|---|---|
+| self-hosted share of corpus region bytes | 81% | **98%** |
+| skipped region kinds | four | **three** |
+| computed share | -- | **unchanged** |
+
+**The computed share not moving is the part worth checking, and it was predicted in advance.** The
+stage supplies this region's NAME from its own interner and the host decides every other field --
+the `CHUNKS` standing, not the `NAMES` one. `DATA_SLOTS` joins `CHUNKS` as **mixed** in the
+provenance table, and the test that exists to stop the headline figure being over-read still holds.
+Saying beforehand which number should move, and which should not, is what makes the one that did
+mean something.
+
+**`DATA_SLOTS` is the first routed kind whose record carries a NAME.** Every kind routed before it
+carried none, which is precisely what let the host supply every field. That is why the interner
+route had to exist before the routing, and why five increments went into reading before one line
+changed.
+
+**Verified**: 180 wire tests, 147 codegen tests including the boundary pin and the byte-identical
+scaffold, all five region-coverage tests with updated figures, the node budget at 1,202 of 1,365,
+`fmt`, and clippy with `-D warnings` across the full feature set.
+
+---
+
 ## 2026-09-11 (thirty-eighth) — the margin the slice is sized against was stale by a quarter
 
 The plan's first step is to measure `wire.kel`'s node budget before editing it, so a later cap

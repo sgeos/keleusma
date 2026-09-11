@@ -10,6 +10,20 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-11, session 65, thirty-ninth increment). `DATA_SLOTS` IS ROUTED, AND
+> THE SELF-HOSTED SHARE IS 98%.**
+>
+> Both halves of the slice landed. **The region is byte-identical for every corpus stage**, and
+> `no_region_the_driver_routes_disagrees_with_the_reference` passed on the first run; the only
+> failure was the share figure asking to be told the new number.
+>
+> Share **81% to 98%**; skipped kinds **four to three** (`ENUM_VARIANTS`, `ENUM_LAYOUTS`,
+> `PARAM_TYPES`); **computed share unchanged, as predicted** -- the stage supplies the name and the
+> host decides the rest, which is the `CHUNKS` standing. `DATA_SLOTS` joins `CHUNKS` as MIXED.
+>
+> **It is the first routed kind whose record carries a name**, which is why the interner route had
+> to exist first. See `docs/decisions/DATA_SLOTS_ROUTING_PLAN.md`, now complete.
+
 > **Currency note (2026-09-11, session 65, thirty-eighth increment). THE NODE MARGIN IS 171, NOT
 > 217.**
 >

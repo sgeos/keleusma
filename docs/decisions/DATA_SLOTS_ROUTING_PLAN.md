@@ -2,7 +2,8 @@
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
 
-**Status**: **the STAGE half is implemented and driven** as of 2026-09-11; the DRIVER half is not.
+**Status**: **COMPLETE as of 2026-09-11.** Both halves are implemented and `DATA_SLOTS` is routed
+byte-identically across the corpus.
 Written 2026-09-10 after three increments of reading, one of which over-claimed and one of which is
 corrected below.
 
@@ -24,8 +25,30 @@ host-decided fields taken from that record and the name coming from the stage. *
 setting `sbase` to zero fails it. A sibling test confirms an out-of-range run index is refused
 rather than reading another section's name.
 
-**What remains is the driver**: routing `kind::DATA_SLOTS` to the pair, one record per call, in the
-shape `window_emit_chunks` already uses.
+**The driver landed the same day.** `slot_run_fields` groups consecutive slots sharing a name and
+visibility into runs, mirroring the encoder including its `u16::MAX` chunking, and supplies the RUN
+INDEX where the formatter takes a name. `window_emit_slots` drives the pair on one virtual machine
+and ONE shared buffer.
+
+### Result
+
+`no_region_the_driver_routes_disagrees_with_the_reference` passed on the first run: the region is
+**byte-identical for every corpus stage**. The only test that failed was the share figure, asking
+to be told the new number.
+
+| | before | after |
+|---|---|---|
+| self-hosted share of corpus region bytes | 81% | **98%** |
+| skipped region kinds | four | **three** -- `ENUM_VARIANTS`, `ENUM_LAYOUTS`, `PARAM_TYPES` |
+| computed share | unchanged | **unchanged** |
+
+**The computed share not moving is the part worth checking, and it was predicted.** The stage
+supplies this region's name from its own interner and the host decides every other field, which is
+the `CHUNKS` standing rather than the `NAMES` one. `DATA_SLOTS` joins `CHUNKS` as **mixed** in the
+provenance table, and `the_computed_share_is_smaller_than_the_produced_share` still holds.
+
+`DATA_SLOTS` is the **first routed kind whose record carries a name**. Every kind routed before it
+carried none, which is what let the host supply every field.
 
 ## Where this sits
 
