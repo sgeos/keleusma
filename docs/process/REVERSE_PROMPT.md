@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-10 (session 65, twenty-sixth increment) — this line of work had added a census site without telling the census, and the guard that should have caught it was blind by design; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
+**Date**: 2026-09-10 (session 65, twenty-seventh increment) — a per-line census classification was attempted, failed, and is recorded as a failed method rather than shipped as a guess; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,34 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## TWENTY-SEVENTH INCREMENT: THE CLASSIFICATION METHOD FAILED, AND THAT IS THE RESULT
+
+Naming the unprobed members of census groups E and I needs a per-line classification of the
+forty-seven sites, which the document has never published. **It was attempted and the method
+failed**, and the failure is recorded rather than the guess.
+
+**Assigning each site by what its MESSAGE says** produced group sizes disagreeing with the table in
+four places, with two assignments demonstrably wrong on inspection:
+
+- `"no entry point"` and `"empty call stack"` would not place. Neither is an index out of range, a
+  composite operand form, a data-segment layout, or any other group's stated subject -- yet both
+  are in the population and the table's parts sum to its whole.
+- Group H tallied at four; its own section names exactly three. The fourth was a message that
+  READS like a should-never-have-been-emitted case and is not one.
+
+**A classification with two known errors is worse than none**, because this document's value is
+that every site carries a verdict, and a wrong row silently moves a verdict onto a site it was
+never made about. The messages were written to help a reader diagnose a fault, not to encode a
+taxonomy, and several are equally plausible under two group definitions.
+
+**What a sound derivation needs is recorded**: reading each site's surrounding code against the
+group's stated subject. Until then the unprobed members can be counted and not named -- the state
+the document has been in since it was written, now with the reason written down instead of assumed.
+
+**This is the third time this session a measurement's output was a corrected or refused claim
+rather than a new fact**, and the second time the honest result was to ship nothing but the
+reasoning.
 
 ## TWENTY-SIXTH INCREMENT: THIS LINE OF WORK ADDED A CENSUS SITE AND DID NOT TELL THE CENSUS
 

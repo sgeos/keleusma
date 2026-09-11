@@ -846,3 +846,38 @@ refusal and a distinct error variant respectively, each recorded with the text t
 
 It does not make the group unreachable by a hand-built artefact, which the wire format admits and
 which this census has never claimed to cover for any group.
+
+
+## Addendum, 2026-09-10 (eighth): a per-line classification was attempted and is NOT published
+
+The first addendum says this document "does not publish a per-line classification and guessing one
+would be worse than leaving it open", and the group-K row above repeats it. That is not a
+preference. **It was attempted on 2026-09-10 and the method failed.**
+
+### The method, and how it failed
+
+All forty-seven construction sites were extracted with their messages and assigned to groups by
+what each message says. The derived group sizes then disagreed with the table in four places, and
+**two assignments were demonstrably wrong on inspection**:
+
+- `"no entry point"` and `"empty call stack"` were left unplaced. Neither is an index out of
+  range, a composite operand form, a data-segment layout, or any other group's stated subject,
+  yet both are in the population and the table's parts sum to its whole. They belong somewhere,
+  and the messages do not say where.
+- Group H was tallied at four and its own section names exactly three: `Op::Len` on a flat array,
+  `Op::Len` on a flat tuple, and `Op::IsStruct` on a flat struct. The fourth was a message that
+  reads like a should-never-have-been-emitted case and is not one.
+
+**A classification with two known errors is worse than none**, because the value of this document
+is that every site carries a verdict and a wrong row silently moves a verdict onto a site it was
+never made about.
+
+### What a sound derivation would require
+
+Reading each site's surrounding code against the group's stated subject, rather than matching its
+message. The messages were written to help a reader diagnose a fault, not to encode a taxonomy, and
+several are equally plausible under two group definitions.
+
+Until that is done, the unprobed members of groups E and I cannot be NAMED, only counted — which
+is the state this document has been in since it was written, now with the reason recorded rather
+than assumed.

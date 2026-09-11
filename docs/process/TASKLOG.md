@@ -10,6 +10,17 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-10, session 65, twenty-seventh increment). THE PER-LINE
+> CLASSIFICATION WAS ATTEMPTED AND THE METHOD FAILED.**
+>
+> Assigning each of the forty-seven sites by its MESSAGE disagreed with the table in four groups,
+> with two assignments wrong on inspection: `"no entry point"` and `"empty call stack"` would not
+> place at all, and group H tallied at four against the three its own section names.
+>
+> **A classification with two known errors is worse than none.** What a sound derivation needs --
+> reading each site's context against the group's stated subject -- is recorded. Until then the
+> unprobed members of E and I can be counted and not named.
+
 > **Currency note (2026-09-10, session 65, twenty-sixth increment). THE CENSUS POPULATION WAS
 > STALE, AND THE STALE SITE WAS OURS.**
 >

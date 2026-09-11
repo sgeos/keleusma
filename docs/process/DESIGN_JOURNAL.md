@@ -13,6 +13,36 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-10 (twenty-seventh) — the classification method failed, and that is the result
+
+Naming the unprobed members of census groups E and I needs a per-line classification of the
+forty-seven sites, which the document has never published. **It was attempted and the method
+failed**, and the failure is recorded rather than the guess.
+
+**Assigning each site by what its MESSAGE says** produced group sizes disagreeing with the table in
+four places, with two assignments demonstrably wrong on inspection:
+
+- `"no entry point"` and `"empty call stack"` would not place. Neither is an index out of range, a
+  composite operand form, a data-segment layout, or any other group's stated subject -- yet both
+  are in the population and the table's parts sum to its whole.
+- Group H tallied at four; its own section names exactly three. The fourth was a message that
+  READS like a should-never-have-been-emitted case and is not one.
+
+**A classification with two known errors is worse than none**, because this document's value is
+that every site carries a verdict, and a wrong row silently moves a verdict onto a site it was
+never made about. The messages were written to help a reader diagnose a fault, not to encode a
+taxonomy, and several are equally plausible under two group definitions.
+
+**What a sound derivation needs is recorded**: reading each site's surrounding code against the
+group's stated subject. Until then the unprobed members can be counted and not named -- the state
+the document has been in since it was written, now with the reason written down instead of assumed.
+
+**This is the third time this session a measurement's output was a corrected or refused claim
+rather than a new fact**, and the second time the honest result was to ship nothing but the
+reasoning.
+
+---
+
 ## 2026-09-10 (twenty-sixth) — we added a census site and did not tell the census
 
 Deriving the `InvalidBytecode` population from source to name the unprobed members of groups E and
