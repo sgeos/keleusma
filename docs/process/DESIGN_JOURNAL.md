@@ -13,6 +13,34 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-11 (forty-second) — the handoff refreshed after sixteen increments
+
+It was refreshed at the twenty-fourth increment and the session is at the forty-first. In between,
+the premise it carried -- that the large work is blocked -- was corrected, and two region kinds were
+routed. **A resuming agent would have read that Order 1 was blocked and that no name-carrying region
+kind was reachable**, both of which are now false.
+
+The banner leads with what changed and what it cost:
+
+- **81% to 99%**, two kinds routed, `highest_command` 181 to 185, and the two kinds that remain need
+  an emitter WRITTEN rather than routed.
+- **The five increments of reading that preceded one line of behaviour**, four of which corrected
+  something that would otherwise have been built on, none of which reached code.
+- **The feature-set trap**: `cargo test -p keleusma --test X` does not enable `self-host` and CI's
+  `--workspace` unifies it on, so a gated test can be absent locally and run in continuous
+  integration.
+
+**Three validity items added**, for the host-contract observation, the node budget, and the pair of
+tests that pin `wire.kel`'s chunk count from two independent derivations. The list reads 1 to 21
+with no inversion, **checked by rendering it** rather than by writing the next number -- the
+distinction this file has paid for three times.
+
+Every check was run rather than copied: fingerprint `0x4327_63E1`, the newer guards green under
+`self-host`, the citation and count guards, and the boundary pin at 169 seconds actually executed.
+Ancestry anchor moved to `fad3fe11`.
+
+---
+
 ## 2026-09-11 (forty-first) — ENUM_VARIANTS routed, and two figures the stage growth moved
 
 The cursor design landed as commands 184 and 185. **`no_region_the_driver_routes_disagrees_with_the_reference`

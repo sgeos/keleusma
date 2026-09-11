@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-11 (session 65, forty-first increment) — `ENUM_VARIANTS` routed to 99%, and two stale figures the stage growth moved, one found by enumerating; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
+**Date**: 2026-09-11 (session 65, forty-second increment) — the handoff refreshed after sixteen increments, leading with the corrected premise and what followed from it; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,32 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## FORTY-SECOND INCREMENT: THE HANDOFF REFRESHED AFTER SIXTEEN INCREMENTS
+
+It was refreshed at the twenty-fourth increment and the session is at the forty-first. In between,
+the premise it carried -- that the large work is blocked -- was corrected, and two region kinds were
+routed. **A resuming agent would have read that Order 1 was blocked and that no name-carrying region
+kind was reachable**, both of which are now false.
+
+The banner leads with what changed and what it cost:
+
+- **81% to 99%**, two kinds routed, `highest_command` 181 to 185, and the two kinds that remain need
+  an emitter WRITTEN rather than routed.
+- **The five increments of reading that preceded one line of behaviour**, four of which corrected
+  something that would otherwise have been built on, none of which reached code.
+- **The feature-set trap**: `cargo test -p keleusma --test X` does not enable `self-host` and CI's
+  `--workspace` unifies it on, so a gated test can be absent locally and run in continuous
+  integration.
+
+**Three validity items added**, for the host-contract observation, the node budget, and the pair of
+tests that pin `wire.kel`'s chunk count from two independent derivations. The list reads 1 to 21
+with no inversion, **checked by rendering it** rather than by writing the next number -- the
+distinction this file has paid for three times.
+
+Every check was run rather than copied: fingerprint `0x4327_63E1`, the newer guards green under
+`self-host`, the citation and count guards, and the boundary pin at 169 seconds actually executed.
+Ancestry anchor moved to `fad3fe11`.
 
 ## FORTY-FIRST INCREMENT: `ENUM_VARIANTS` ROUTED, AND TWO FIGURES THE STAGE GROWTH MOVED
 

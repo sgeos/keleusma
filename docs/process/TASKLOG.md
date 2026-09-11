@@ -10,6 +10,19 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-11, session 65, forty-second increment). THE HANDOFF IS CURRENT
+> AGAIN.**
+>
+> Refreshed at increment twenty-four, now at forty-one. It would have told a resuming agent that
+> Order 1 is blocked and that no name-carrying region kind is reachable -- **both now false**.
+>
+> The banner leads with **81% to 99%**, two kinds routed, `highest_command` 181 to 185, the five
+> increments of reading that preceded one line of behaviour, and the feature-set trap where
+> `-p keleusma --test X` omits `self-host` while `--workspace` unifies it on.
+>
+> **Three validity items added**; the list reads 1 to 21 with no inversion, checked by rendering.
+> Every check run rather than copied, boundary pin included. Anchor moved to `fad3fe11`.
+
 > **Currency note (2026-09-11, session 65, forty-first increment). `ENUM_VARIANTS` IS ROUTED, AND
 > A GUARD CAUGHT WHAT THE LOCAL RUN COULD NOT.**
 >
