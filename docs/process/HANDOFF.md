@@ -5,7 +5,7 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-09-10 (session 65, after the twenty-fourth increment).** Validate by the
+> **REFRESHED 2026-09-11 (session 65, after the forty-first increment).** Validate by the
 > ANCESTRY and CONTENT block below,
 > not by a hash: a refresh takes more than one commit, so any hash written here is stale by one the
 > moment it is written.
@@ -61,7 +61,57 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > a codec conversion each report a fault as `InvalidBytecode` when the artefact was fine. Changing
 > which variant a public API returns is a breaking change.
 >
-> ## WHAT HAPPENED AFTER THE LAST REFRESH: NINE MORE INCREMENTS, AND ONE REAL DEFECT
+> ## THE BIGGEST CHANGE SINCE THE LAST REFRESH: ORDER 1 WAS NEVER BLOCKED
+>
+> The correction below this banner explains it, and this is what followed from acting on it.
+>
+> **TWO REGION KINDS ARE ROUTED AND THE SELF-HOSTED SHARE WENT 81% TO 99%.** `DATA_SLOTS` and
+> `ENUM_VARIANTS` are the first kinds whose records carry a NAME -- every kind routed before them
+> carried none, which is what let the host supply every field. A host-supplied name index can
+> disagree with the interner that produced `NAMES`, and the host cannot check it, so both take
+> their name from the stage's own interner.
+>
+> **THEY NEEDED DIFFERENT SHAPES, AND FINDING THAT OUT BEFORE WRITING EITHER WAS THE POINT.** The
+> slot section is a flat run of names and indexes; the enum section INTERLEAVES a type name with
+> each enum's variants, so it walks with a cursor and the host supplies only a boundary flag. The
+> plan said they were the same shape. They are not, and it was corrected before it produced an
+> emitter.
+>
+> | | before | after |
+> |---|---|---|
+> | self-hosted share of corpus region bytes | 81% | **99%** |
+> | skipped region kinds | four | **two** -- `ENUM_LAYOUTS`, `PARAM_TYPES`, both needing an emitter WRITTEN rather than routed |
+> | computed share | -- | **unchanged, and that was stated in advance** |
+>
+> **`highest_command` moved 181 to 185.** `wire.kel` grew four functions, which moved its chunk
+> count 486 to 490 and its constant-forest node count 1,194 to 1,209, margin 156.
+>
+> ## THE FIVE INCREMENTS OF READING THAT PRECEDED ONE LINE OF BEHAVIOUR
+>
+> Four of them corrected something that would otherwise have been built on, and **none reached
+> code**:
+>
+> 1. A dispatch table read as a capability list -- "two of the four are integration" was wrong;
+>    dispatchable is not routable, and the criterion is whether the record carries a NAME.
+> 2. A field list read as sufficient state -- `vcnt` is the CURRENT enum's variant count and is
+>    overwritten, so no base can be derived from the counters.
+> 3. An assumption whose consequence was guessed -- `nmap` DOES survive between the interner call
+>    and the steps, and the slice needed a begin anyway, for a different reason.
+> 4. A margin quoted from prose -- measured, 171 rather than the 217 assumed, already stale by 46
+>    nodes before the edit.
+>
+> **The transferable rule**: ask which existing green test would have to fail if the property were
+> false, before sizing a measurement. Three times in one day the tree already held what was about
+> to be fetched.
+>
+> ## A FEATURE-SET TRAP WORTH KNOWING
+>
+> **`cargo test -p keleusma --test X` does NOT enable `self-host`; CI's `--workspace` unifies it
+> on.** A gated test reports "0 passed; 0 filtered out" in the first and runs in the second, so a
+> local check can miss entirely what continuous integration then fails on. That is the rule *a run
+> that executed no tests is not a pass* arriving through a channel nobody was watching.
+>
+> ## WHAT HAPPENED AFTER THE LAST REFRESH: INCREMENTS SIXTEEN TO TWENTY-FOUR, AND ONE REAL DEFECT
 >
 > The section below this one describes increments one to fifteen and is still accurate. This
 > section covers sixteen to twenty-four, which the previous refresh predates entirely.
@@ -268,7 +318,7 @@ always-current, so it must be able to report itself stale rather than mislead a 
 **Validate by ANCESTRY and by CONTENT, never by a hash match.** A stamp requiring `HEAD~1` to equal a
 recorded parent is a claim that nothing else ever lands, and it has failed three times.
 
-**Ancestry**: `origin/v0.2.3` should contain `38af472f` (`Merge pull request #409`), the last merge
+**Ancestry**: `origin/v0.2.3` should contain `fad3fe11` (`Merge pull request #415`), the last merge
 before this refresh. If it does not, this file predates a reset and is stale.
 
 **It said `5fbad3a0` was "session 65's last code merge"**, which five later merges made false. The
@@ -348,6 +398,20 @@ next number. Both are corrected.
     added or modified; the second pins the `InvalidBytecode` paths a variant grep cannot see at six
     and four; the third holds group G's two host-facing routes, one closed at compile time and one
     producing a `TypeError` rather than an `InvalidBytecode`.
+19. `tests/host_contract_faults.rs` passes. It holds the observation that a HOST's mistake -- a
+    mis-sized hot-swap vector, an unregistered native -- is reported as `InvalidBytecode`, which
+    says the artefact is at fault when it is not. Its third case is the CONTROL: an argument-count
+    mistake gets a different variant, so the runtime does distinguish and the choice is the
+    operator's.
+20. `tests/module_input_node_budget.rs` passes. It parses `wire.kel`'s constant-forest node count
+    out of the blob the stage itself reads and fails if the margin under `mi_max_nodes` falls
+    below sixty-four. **`wire.kel` is itself one of the eleven measured stages**, so anything that
+    grows it spends this margin; measuring before an edit caught a figure already stale by 46.
+21. `tests/selfhost_chunk_names.rs` and `tests/selfhost_parse.rs` both pass, and both pin
+    `wire.kel` at **490** chunks -- one from the compiled module, one from the parsed source. Two
+    derivations of one figure; if only one moves, something is wrong with the derivation rather
+    than the stage. **Neither runs under `cargo test -p keleusma --test X`**, which does not
+    enable `self-host`.
 
 **Do not trust the counts in this file without re-deriving them.** The construct-support boundary
 last read **96 SOk / 1 Refuses / 3 Diverges / 1 RefRejects** over 101 cases. It is ratcheted at
@@ -1158,8 +1222,18 @@ sometime after Order 1.**
 **4. Derived operands in type rejection. PARTLY CLOSED, and this entry was stale.** It claimed an
 ARITHMETIC result is still unknown and cited a pin that **no longer exists**. Commit `63574d1f`
 reached arithmetic operands with a bounded fixpoint; `a_derived_operand_is_now_reached_and_the_chain_has_no_depth_limit`
-holds that. What remains unknown is a **field read or an index**, pinned by
-`a_derived_operand_from_a_field_read_is_still_unreached`.
+holds that. **CURRENCY, 2026-09-11: this entry went stale a second time.** A field read bound by a
+`let` over a base the source types is now reached as well, and so are a field read standing as a
+DIRECT OPERAND and one whose base is a MATCH BINDING. What remains unknown is an INDEX, and a field
+read whose base is an array element. Pinned by
+`the_field_read_channel_records_what_it_does_not_reach`. **An earlier revision of this entry said the
+match case needed a type the source states nowhere; that was false, and the enum declaration states
+it.**
+
+**A SEPARATE AND LARGER FINDING, 2026-09-11.** Any claim that the type-rejection rules are complete
+must say that the inventory counts rule SHAPES, not the syntactic FORMS each shape reaches.
+`the_rule_shapes_are_censused_against_the_forms_they_should_govern` crosses the two and found EIGHT
+gaps on its first run, five of which are now closed. Two were rules that existed and could not fire.
 
 **The stale citation had survived in the debt register**, which is why nothing failed: three live
 comments named the dead test and the register excused all three. Corrected 2026-08-27 and the

@@ -2458,6 +2458,829 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-11 (fifty-fourth) — which input channels any verdict actually depends on
+
+### THE CLAIM THIS MEASURES
+
+This file says throughout that the host supplies SYNTAX and the STAGE performs the join, and that
+the difference between a migration and a relocation is which side holds it. **Two channels had a
+withholding proof. The other nine were credited with work nothing checked.**
+
+So: withhold each channel in turn and see whether any verdict changes. Eleven channels, a corpus
+the stage rejects, and a second corpus it accepts.
+
+### THE RESULT
+
+**All eleven channels are depended on.** Each has at least one named program whose verdict changes
+when that channel alone is withheld, and the test prints the attribution per channel rather than a
+tally — a tally cannot be checked, an attribution can.
+
+### THE FIRST RUN WAS ONE-DIRECTIONAL AND GOT ONE CHANNEL WRONG
+
+Measuring only "does an ill-typed program flip to ACCEPT" reported the declared-parameter-counts
+channel as depended on by nothing. **It is not unused.** Withholding it makes every call-site index
+fall out of range, and the stage REFUSES an out-of-range index rather than skipping it — so the
+program is rejected with the channel and rejected without it, for different reasons, and a census
+watching only for acceptance cannot see the difference.
+
+**A channel whose absence trips a fail-closed guard is invisible to a one-directional instrument.**
+Adding a well-typed corpus and measuring change in EITHER direction made its contribution
+observable, and it now shows up on exactly the program predicted.
+
+**My prediction of which channels would be inert was wrong** — I guessed the operand pairs and the
+call sites; the answer was neither. That is the case for measuring rather than reasoning, made once
+more.
+
+### WHAT THE RESULT ESTABLISHES, AND WHAT IT DOES NOT
+
+**Establishes**: the stage reads all eleven channels; for each there is a program that needs it.
+
+**Does not establish**: that the stage DERIVES its conclusion from each. A channel could be read and
+still be redundant with a conclusion arriving elsewhere. Dependence is NECESSARY evidence for the
+claim about where the join lives, not sufficient evidence.
+
+**And a channel that flips nothing is not thereby shown inert** — it may be a corpus gap. The
+instrument cannot separate "the stage ignores this" from "nothing asked", which is the same
+distinction already on record as: a passing check is evidence about the checker's reach before it is
+evidence about the tree.
+
+### THE ASSERTION THAT REPLACED ITSELF
+
+The test first pinned the set of channels nothing depended on, expecting it to be non-empty, with a
+failure message saying an empty set is the good outcome and the assertion should be replaced. It
+became empty on the second run, and the message was followed. **A non-vacuity assertion that says
+what to do when it stops holding is worth more than one that merely fails.**
+
+The property now asserted is the stronger one: a channel JOINING the empty set is a corpus
+regression, and every other test in this file would still pass while that happened.
+
+No rule was widened and no node kind added in this increment — an instrument and a change landing
+together would make a flip attributable to neither.
+
+---
+
+## 2026-09-11 (fifty-third) — a kind that was already general, under a name that hid it
+
+The census left five gaps, each recorded with the mechanism closing it would need. **Three of the
+five said the same thing**: "an agreement between a DECLARED type and an ACTUAL one". That is the
+only thing node kind 8 does.
+
+The constant was called `TAIL_VS_RETURN`, after the function tail, its first and for a long time
+only caller. **I wrote that mechanism down three times without seeing the kind was already there.**
+
+**A constant named after its first caller reads as a special case even when it is a general rule.**
+That is the previous increment's finding one level up: there, a rule was present and unreachable;
+here, a kind was present and unrecognised. Renamed to `DECLARED_VS_ACTUAL`.
+
+### FOUR CELLS CLOSED, NO NEW KIND
+
+| cell | declared side | actual side |
+|---|---|---|
+| array index must be a word | the `Word` tag | the index operand |
+| let annotation against initialiser | the annotation's tag | the initialiser operand |
+| assignment target against value | the data field's declared tag | the value operand |
+| tuple index on a scalar | — | the existing projection kind, a third expression variant |
+
+**Census: 15 covered, 1 gap**, from 8 and 8 at its first run.
+
+### MEASURED BEFORE WRITING, NOT AFTER
+
+- A **BYTE** index is rejected by the reference, so the requirement is `Word` exactly rather than
+  "some integer". A rule requiring the wrong width would reject every valid index.
+- `let q: P = p` with a named type is **ACCEPTED**, so a named annotation must require NOTHING.
+  `type_tag` returns 0 for any `Named`, which is what makes this safe -- but it is safe by
+  measurement, not by luck.
+
+### THE CONSEQUENCE OF THE REUSE, WHICH A TEST FOUND
+
+`the_tail_versus_return_rows_agree_between_the_pipeline_and_the_reference` failed. Once three more
+constructs use kind 8, **"kind 8" no longer means "a function tail"**, and a differential selecting
+rows by kind compares a producer emitting four uses against one emitting a subset.
+
+**Narrowing that test's filter would have been the wrong repair**: it would still have compared two
+different populations while reading as if it did not. The new rows are instead OPT-IN, the same
+pattern the field-read operand index established two increments ago, so the tables the pipeline is
+compared against contain exactly what the pipeline can produce.
+
+### THE ONE GAP LEFT, AND WHY IT STAYS
+
+"Must NOT be bool", for the negation operand. Every kind this stage has states a POSITIVE
+requirement -- agree with this, or be bool. A negative one needs a kind of its own, and one operator
+does not justify it. Left open as a decision, recorded in the census.
+
+No new fold phase, no new node kind, no new opcode, no `BYTECODE_VERSION` change.
+
+---
+
+## 2026-09-11 (fifty-second) — a census of rule shapes against syntactic forms, and it found five gaps
+
+The previous increment's finding was that **a rule inventory counts SHAPES, not the syntactic FORMS
+each shape reaches**: the match-arms rule was absent for two increments while the list recorded the
+fifteen shapes as complete, and it was found by accident. One accidental hit in a class is a reason
+to enumerate the class.
+
+### THE CENSUS
+
+Sixteen cells, each a rule shape crossed with a syntactic form, each a program the REFERENCE
+rejects, asserted per row so a cell the stage accepts is a missed rejection rather than a difference
+of opinion.
+
+**First run: 8 covered, 8 gaps.** After closing what could be closed without touching the stage:
+**11 covered, 5 gaps.**
+
+The test fails if every cell falls the same way, and it pins the gap list by equality, so a cell that
+closes must be moved rather than quietly disappearing.
+
+### THE TWO SURPRISES, WHICH ARE THE CENSUS'S WHOLE JUSTIFICATION
+
+**"A scalar cannot be projected" was a gap for BOTH its forms.** The rule exists. Its node kinds
+exist. But the set of names it could fire on held only `let`s carrying a primitive ANNOTATION — not
+a declared PARAMETER, not a `let` bound to a literal. So `fn main(n: Word) -> Word { n.x }` reached
+no rule at all.
+
+**A rule that is present and unreachable looks identical, from any inventory, to a rule that is
+present and working.** That is a sharper statement than the previous increment's, and it is the one
+worth keeping.
+
+**"Logical operator operands must be bool" was absent**, and the agreement rule cannot substitute:
+`n andalso m` with two `Word`s AGREES, so the binop row accepts it. **Two operands can agree and
+still both be wrong.**
+
+### WHAT WAS CLOSED, AND WITH WHAT
+
+Three rules newly applied, all with the EXISTING condition kind and no stage change: the match arm's
+`when` guard, the `not` operand, and each operand of a logical operator. Two rules widened by
+enlarging the scalar set: declared primitive parameters, and `let`s bound to a scalar literal.
+
+**The literal source is restricted to four literal kinds.** `Literal::Fixed` yields a `Multiword`,
+which is a flat array of words and IS indexable, so calling it a scalar would reject a valid `m[0]`.
+I could not construct that program with the syntax I tried — which is a reason to avoid the hazard
+rather than to assume it away.
+
+### THE FIVE REMAINING GAPS, EACH WITH ITS MECHANISM
+
+| gap | what closing it needs |
+|---|---|
+| let annotation against initialiser | an agreement between a DECLARED and an ACTUAL type; the existing claims channel carries that pair but carries TAGS, so it reaches a literal initialiser and not a name |
+| assignment target against value | the same, plus the declared type of a data field |
+| tuple index on a scalar | the composite kinds cover two expression variants; `TupleIndex` is a third with the same rule |
+| array index must be a word | "must be T" for T other than bool has no node kind; the claims channel expresses it as actual-against-required |
+| negation operand must not be bool | a NEGATIVE requirement no kind expresses, and inventing one for a single operator is the weakest case in the table |
+
+**The census is not exhaustive and says so.** These are the forms I thought of, which is the same
+kind of list that missed match arms. A cell absent from the table is a cell nobody looked at.
+
+### A PROCESS FAILURE, THE SAME ONE AS LAST INCREMENT
+
+An edit script aborted on an assertion — `cargo fmt` had reformatted the arm it was matching — so
+**nothing was written**, and the test run that followed reported the unchanged result. I read that as
+"the fixes did nothing" and nearly went looking for a cause in the stage.
+
+**This is the second occurrence in two increments**, and the first was already recorded here. The
+repeat is the finding: recording a failure mode does not prevent it. The scripts now exit with the
+label of the replacement that failed, and the diff is checked before any test run is believed.
+
+A related miss in the same edit: the compiler emitted `unreachable pattern` for a guarded match arm
+placed after an unguarded one, and the grep I used to check the build filtered warnings out. **The
+census reported the cell as a gap while the code to close it sat in the file.**
+
+---
+
+## 2026-09-11 (fifty-first) — a claim of mine was false, and checking it closed two gaps
+
+### THE CORRECTION, WHICH IS THE POINT OF THE INCREMENT
+
+For two increments I wrote, in the unreached list and in four documents, that the remaining
+field-read cases **"need a type the source states nowhere"**. That was FALSE for both, and reading
+the abstract syntax tree settled it in one step:
+
+- `VariantDecl.fields: Vec<TypeExpr>` — an enum declaration lists each variant's payload types in
+  order, and `Pattern::Enum` gives the variant and the position a name binds at. Pure declaration
+  lookup, the same class already reached three ways.
+- `TypeExpr::Array(Box<TypeExpr>, ..)` — an array annotation carries the element type directly, and
+  an array literal of struct literals names it as well.
+
+**The claim had been reasoned about rather than checked**, and it was the premise that would have
+justified stopping. It was copied into the roadmap, the tasklog, the reverse prompt, the design
+journal and a test doc comment before anyone looked at the data types it was about. Corrected in
+each, visibly as a correction.
+
+### WHAT THAT BOUGHT: THE MATCH-BINDING CASE, FOR TWO TABLES AND ONE SCAN
+
+The base of `match e { E::W(p) => p.x }` is a plain NAME, so the field-read row and the operand form
+both already handle it. What was missing was a THIRD source for resolving a name to a struct type:
+
+- `pbname`/`pbenum`/`pbvar`/`pbpos` — where a pattern binds a name, read at the USE site.
+- `epenum`/`epvar`/`eppos`/`epty` — what the enum DECLARATION says is there.
+
+The stage matches the three coordinates. Neither row knows about the other; one comes from a
+function body and the other from a type declaration.
+`the_payload_declarations_are_what_the_stage_joins_against` withholds the declaration side and shows
+the same program is then accepted.
+
+**The enum index space is not the struct index space**, and the note saying so is in the data block:
+a row crossing them would address a real declaration and the wrong one.
+
+### A SECOND GAP, FOUND BY A TEST WRITTEN FOR SOMETHING ELSE
+
+A case was added to prove the stage discriminates between two VARIANTS of one enum —
+`match e { E::U(a) => a.n, E::V(b) => b.m }` with `a.n` a `Word` and `b.m` a `bool`. It failed.
+
+**The expression walk emitted no node for a match at all**, so match arms were never compared and
+every such program was accepted. The reference says "match arms have differing types"; the stage
+said nothing.
+
+This was invisible from the rule list, which records the fifteen enumerated shapes as complete. The
+match-arms rule is the SAME SHAPE as the `if`-branches rule, and the shape had been implemented
+while one of its two syntactic forms had not. **A rule inventory counts shapes; it does not count
+the syntactic forms each shape reaches.**
+
+Closed with the existing BRANCH_PAIR kind and no stage change: the gap was in what the host
+reported, not in what the stage could decide. First arm against each later one, the shape the array
+literal already uses.
+
+### A PROCESS NOTE ON THE EDIT ITSELF
+
+One scripted edit aborted on a sanity assertion I had added for a snippet I did not intend to
+change, and the write never happened — while the test run that followed reported the OLD failure. I
+read that as the fix not working before noticing the traceback above it. **An edit script that can
+abort silently before its write, followed immediately by a test run, produces a result attributable
+to neither tree.** The same class as the run-edited-while-in-flight finding already on record.
+
+### WHAT IS LEFT
+
+One case: a field of an ARRAY ELEMENT. Its base is an index expression rather than a name, so no
+field-read row can address it. The element type IS written down; what is missing is a base FORM on
+the field-read row — the same kind of gap the direct-operand case turned out to be.
+
+No new fold phase, no new opcode, no `BYTECODE_VERSION` change.
+
+---
+
+## 2026-09-11 (fiftieth) — the direct-operand form, and a test name that encoded a tally
+
+The forty-ninth increment named a limit no prior sizing had modelled: a field read standing as a
+DIRECT OPERAND types nothing, because an operand row carries a tag or a name id and has no form for
+a field read. This closes it.
+
+### WHAT CHANGED
+
+One arm in the host's operand reporter, one arm in the stage's resolver, and a widened collection
+pass. `operand_form` gains **form 2**, whose value is a field-read ROW INDEX. The stage resolves it
+with `ty_field_operand`, which is the binding case's `tyb_field_tag` behind a range check — **the
+same join, deliberately not a second resolver**, because `let a = p.x; a + true` and `p.x + true`
+differ only in whether a name stands between the read and the comparison.
+
+The field-read table now collects **every** read with a plain-name base, wherever it appears,
+deduplicated by the `(base, field)` pair. A read that is both bound by a `let` and used directly is
+one row addressed from both sides.
+
+### THE SHORTCUT THAT WAS REFUSED, RECORDED WHERE THE FORM IS DEFINED
+
+Form 2 was avoidable. Registering each direct-operand read under an **invented name**, emitting the
+form-3 binding row the `let` case already emits, and reporting form 1 would have worked with **no
+stage change at all**, and every test would have passed.
+
+It is refused because the invented name IS the join. Nothing in any source file spells it, so the
+host would be asserting that this operand and that binding are the same thing — the decision this
+channel exists to leave with the stage — hidden behind an identifier no reader can look up.
+
+### OPT-IN, BECAUSE TEN CALLERS COMPARE AGAINST THE PIPELINE
+
+Ten call sites build node tables that are compared against the pipeline's own extraction, which
+produces no field-read operand and cannot. The field-read index is therefore a parameter of a
+separate entry point, supplied only by the driver that also supplies the tables the form points
+into. With an empty index every operand behaves exactly as before.
+
+### THE FORM REACHES FIVE NODE KINDS, AND EACH APPLIES A DIFFERENT RULE
+
+Binary operator, condition, array element, branch pair, and function tail against its declared
+return. Both halves are pinned per kind: a wrong tag shows as a missed rejection on the ill-typed
+side, and a tag where none belongs shows as a REJECTED valid program on the well-typed side — the
+error a rejection corpus cannot detect, which the previous increment demonstrated the hard way.
+
+A second control pins that a field read whose declared type is another STRUCT still types NOTHING.
+Two struct-typed reads of different types in one body must not be made to disagree; were struct
+identity to reach the scalar tag space, the predicate every operand goes through would start
+refusing valid programs.
+
+### A PROCESS FINDING: A TEST NAME THAT ENCODED A TALLY
+
+`the_field_read_channel_reaches_three_base_forms_and_not_two` was one increment old and already
+wrong, and correcting it meant a rename rippling through five documents plus the citation guard's
+own commentary. **A name that encodes a count needs renaming every time the count moves, and every
+citation of it goes stale at that moment.** Renamed to
+`the_field_read_channel_records_what_it_does_not_reach`; the tallies live in the body, where moving
+one costs a diff rather than a sweep.
+
+### WHAT IS LEFT
+
+Two cases, and they are a different kind of gap from the one just closed. A field of an ARRAY
+ELEMENT and a field of a MATCH BINDING both need a type **the source states nowhere** — an element
+type projected out of an array, and a variant payload's type. The direct-operand case was a missing
+CHANNEL, which is why it cost one arm on each side.
+
+No new fold phase, no new opcode, no `BYTECODE_VERSION` change.
+
+---
+
+## 2026-09-11 (forty-ninth) — the field-read channel lands, and a well-typed control finds a false rejection
+
+The forty-eighth increment sized the field-read edge at **three of five** and said the cheap
+majority could land while the two projection cases stayed recorded. This lands it, and the more
+important result is not the channel.
+
+### THE CHANNEL
+
+`verify_types.kel` gains a form-3 binding row. `let a = p.x` now proves a tag, through **two joins
+the stage performs**:
+
+1. the base name to a STRUCT TYPE, over a new `sbname`/`sbval`/`sbform` table, and
+2. that type together with the field name to the field's DECLARED TAG, over a new `sftag` table held
+   parallel to the existing `sfield` names.
+
+The host reports three syntactic facts and none of the conclusions: `p` is written `P`, `a` is
+written `= p.x`, and `P` declares `x` as `Word`.
+
+**STRUCT IDENTITY IS DELIBERATELY NOT A TAG.** Folding struct indices into the scalar tag space
+1..4 would put struct-typed operands into every channel `ty_pair_disagrees` feeds, the
+argument-claim rows among them, where a mismatch this slice never reasoned about would REJECT a
+valid program. The identity travels in a channel nothing else reads.
+
+**No new fold phase and no change to the declared step bound.** The field bindings resolve inside
+the existing bounded fixpoint, which already runs once before the first row.
+
+**The join is checkable rather than asserted.** `withholding_the_field_sets_accepts_the_same_field_read_program`
+withholds the declared field sets and shows the same program is then ACCEPTED. A host that had
+already decided `a` is a `Word` would go on rejecting it.
+
+### THE FINDING, WHICH IS WORTH MORE THAN THE CHANNEL
+
+**The stage rejected well-typed programs that bind a name in a `match` arm.** The occurrence channel
+collected locals from parameters and `let` statements and from nowhere else, so an arm's `p`
+resolved to neither a local nor a top-level declaration and the classification rule refused it.
+
+- **This is the unsound direction.** The sibling `verify_*` stages may over-approximate because an
+  over-approximation defers to a runtime guard. A type checker may not: rejecting a valid program
+  is a LANGUAGE CHANGE.
+- **It predates this increment**, confirmed by running the probe against `HEAD` with the working
+  tree stashed, on a program with no struct and no field read, so none of the new code could fire.
+- **It is the second binder this channel has missed**, after the `for` loop variable already pinned
+  in the same file.
+- **A rejection corpus could never have found it.** A checker that rejects everything scores
+  perfectly against one. It was found by a WELL-TYPED CONTROL added for the field-read work, which
+  is the argument this file's header has made since slice 0 and this is the instance that tested it.
+
+Fixed by collecting pattern binders recursively, shorthand struct fields included, and pinned by
+`a_match_arm_binding_is_not_reported_as_an_unresolved_name` with a must-fire control: a name no arm
+binds and no declaration carries is still refused, so the fix cannot have been "call everything a
+local".
+
+### WHAT REMAINS UNREACHED, AND ONE OF IT IS A DIFFERENT LIMIT THAN EXPECTED
+
+`the_field_read_channel_records_what_it_does_not_reach` pins three reached base forms and
+three unreached cases. Writing it surfaced that the sizing spike's five cases conflated two axes:
+
+| unreached | why |
+|---|---|
+| base is an array element | the base is not a plain name, and the `let` states an ARRAY from which the element type would have to be projected |
+| **the field read is a DIRECT OPERAND** | the channel binds a NAME to a field read; an operand row carries a tag or a name id and has no form for a field read, so `p.x + true` types nothing even where `p` is a declared parameter |
+| base is a match binding | BOTH of the above: the payload type is stated nowhere, and the subset has no block-bodied match arm to bind the read through |
+
+**The direct-operand limit was not in the sizing spike's model.** Its five cases all placed the
+field read directly as an operand, and it measured a host-side lookup rather than the channel, so
+the distinction could not appear. Recorded here because "three of five" and "three base forms of
+five cases" are not the same statement, and the second is the true one.
+
+### COST
+
+No new opcode. No `BYTECODE_VERSION` change. The stage gains eight tables and three scratch slots
+in its shared block and three functions; the fold, its phases and its step bound are untouched.
+
+---
+
+## 2026-09-11 (forty-eighth) — the field-read step is partially cheap, and now measured
+
+The previous increment found that the existing sizing spike measures a step already taken, leaving
+the field-read edge **unsized**. This sizes it, with its own cases.
+
+**Result: declaration lookup types 3 of 5.** The two it does not reach are a field of an ARRAY
+ELEMENT and a field of a MATCH BINDING.
+
+| case | reached by lookup |
+|---|---|
+| field of a struct literal | yes |
+| field of a field | yes |
+| field of a call result | yes |
+| field of an array element | **no** -- the `let` states an ARRAY; the element type must be projected out of it |
+| field of a match binding | **no** -- the binding's type comes from the VARIANT PAYLOAD, which no `let` states |
+
+**The mechanism is two lookups and no unification**: a `let` whose initialiser is a struct literal
+or a call states its type outright, and a struct declaration states each field's. Nested access
+repeats the pair. Nothing is inferred.
+
+**So the next increment can be scoped rather than feared.** The cheap majority can land as a tagger
+extension over declarations the pipeline already has, with the two projection cases recorded as
+still unreached -- instead of the whole edge waiting on inference it may not need.
+
+**Non-vacuity runs both ways, deliberately.** The spike fails if it types NONE, which would mean the
+lookups are broken, and it fails if it types EVERY case, which would mean the corpus no longer
+contains the edge. Each case also asserts the REFERENCE rejects the program, so a case that stopped
+being a missed rejection cannot sit in the corpus unnoticed.
+
+**The two unreached cases were predicted and then measured, not asserted.** Writing the prediction
+into the corpus labels and letting the run decide is the difference between a sizing and a guess --
+and this session has already recorded what happens when a plausible prediction goes in unchecked.
+
+---
+
+## 2026-09-11 (forty-seventh) — the citation guard caught me naming a retired test
+
+A documentation-only pull request failed two continuous-integration jobs.
+`the_current_claim_documents_cite_nothing_that_does_not_exist` fired on this very file, which
+named the RETIRED test while explaining that it is retired.
+
+**The guard is right and the fix is the claim, not the allowlist.** A current-claim document that
+names an identifier existing nowhere asserts something no reader can check, and the guard cannot
+distinguish a deliberate negative from a stale citation. This is the second time this session -- the
+first was a begin command the slot stream did not have -- and both times the temptation was to
+widen an exemption rather than reword.
+
+**IT FAILED IN TWO CONFIGURATIONS I DID NOT RUN.** I ran the guards under default features and
+under `self-host`; it failed under `--no-default-features` and `--features signatures`. That is the
+feature-set lesson **that I had already written down in the handoff**, arriving in a new place: not
+a gated test absent from a run, but a guard whose verdict differs by configuration.
+
+**So I ran both document guards in every configuration continuous integration uses**, rather than
+fixing the one that failed and assuming. All four pass for `comment_citations`; `claimed_counts`
+reports ZERO tests under `--no-default-features`, which is itself worth knowing -- that guard does
+not exist in that configuration, so a claim it protects is unprotected there.
+
+**AND I DID IT A THIRD TIME WHILE WRITING THIS ENTRY.** The first draft named the phantom begin
+command as an example of naming a phantom, and the guard failed again on the very paragraph
+describing the rule. **Knowing the failure does not prevent it; running the check does** -- which is
+the same sentence `HANDOFF.md` already carries about numbering its own validity list, arrived at
+independently in a different file.
+
+**The transferable rule is now four items long and this is the fourth**: before believing a green
+guard, know which CONFIGURATIONS it ran in, not only which binaries and not only whether it stopped
+early.
+
+---
+
+## 2026-09-11 (forty-sixth) — the sizing spike sizes work that is done
+
+Having found that type rejection's edge has moved to a FIELD READ, the obvious next step was to read
+the sizing spike that measures what reaching further costs. It reports **"local propagation reaches
+5 of 5"**, which invites the reading that the remaining step is small.
+
+**It is a measurement of work already completed.** Every one of its five cases is a let-bound
+literal, a call return, or a composition of the two -- and the stage now reaches all of them. The
+spike was written when the edge WAS the literal operand; local resolution and the bounded arithmetic
+fixpoint moved that edge afterwards.
+
+**Its corpus contains no field read**, which is where the edge actually sits. So "5 of 5" sizes the
+step behind us, not the one in front, and **the field-read step is unsized**.
+
+**Kept rather than deleted**, with the limitation recorded in the spike itself. Its result is still
+the reason the literal-to-local step was known to be cheap before it was taken, which is why it was
+taken at all. What it cannot do is size what comes next.
+
+**This is the third artifact in two increments whose answer was true when written and is now about a
+different question** -- after the retired literal-only test and the Order 1 cell that cited it. The
+pattern is not staleness of FACTS but staleness of SUBJECT: the instrument still works, and the
+question moved out from under it.
+
+---
+
+## 2026-09-11 (forty-fifth) — the other half of Order 1 was stale too
+
+With every region kind routed, the remaining Order 1 obligation was "source types before type
+rejection reaches beyond literals". **Reading before acting, that is stale as well.**
+
+`the_rules_reach_only_literal_direct_occurrences` -- the test the roadmap cites as pinning the
+limitation -- is **RETIRED**, and the file says why: local resolution reaches a `let` bound to a
+literal and a call taking a declared return type, so those programs are ordinary members of the
+rejection corpus now. **A bounded fixpoint reaches an ARITHMETIC result too**, with no depth limit
+on the chain -- the hop bound is a decision rather than a limit of the approach.
+
+**The limit MOVED rather than vanished.** Its new edge is a FIELD READ, pinned by
+`a_derived_operand_from_a_field_read_is_still_unreached`. Both named tests exist and pass. A
+host-side sizing spike already measures what reaching further would cost and is explicitly not
+wired into the stage.
+
+**Both halves of that sentence are now corrected in the roadmap cell itself**, not only in the
+channels, because that cell is where the stale figure would be copied FROM -- which is exactly how
+a stale capacity limit reached the handoff four increments ago. **This is the second time the Order
+1 cell has been stale on these same two subjects**, so the correction says to derive the state from
+the tests rather than from the cell.
+
+**Worth noting about the coverage figure**: the cell now states that 100% of the region BYTES pass
+through the stage while the share it DERIVES is unchanged. A reader taking "100%" as self-hosting
+would be badly wrong, and the four provenance standings are what prevent it.
+
+## A SMALL REPORTING ERROR OF MY OWN
+
+I reported the trunk run green on the strength of a `--limit 1` row whose commit I did not compare
+against the branch tip. It named a different commit; the run for the actual tip was still in
+progress. **Checking what a result is ABOUT is the same discipline as checking what a command
+covered**, and this session has now met that failure on both sides.
+
+---
+
+## 2026-09-11 (forty-fourth) — the last region kind, and it was the weakest
+
+**Every region kind the corpus emits is now routed and byte-identical. The skipped set is EMPTY.**
+
+`PARAM_TYPES` turned out to be the weakest rather than the hardest. It is a byte POOL, not a record
+table -- `wire_schema` says why: a type tag is one byte, so a whole-word record per tag would waste
+seven eighths of the region. The stage already had a pool path, and what it does there is COPY
+bytes the host supplies, deciding nothing, because a pool has no offsets, widths or endianness to
+decide.
+
+**So it is routed and recorded at that standing rather than allowed to inflate a figure.** The
+provenance table gains a fourth row, **copied, not encoded** -- weaker even than `HEADER`, which at
+least decides a record's layout. Closing the set must not launder a memcpy into coverage.
+
+**Two tests changed SHAPE rather than value.** The skipped-kinds guard asserted the set was
+non-empty and bounded its size, with a message asking whoever emptied it to *"replace this test with
+one asserting completeness"*. That day came. It now asserts EMPTY, so a kind reappearing reads as a
+regression in the driver rather than an unrecorded gap, and the sequence stays in the comment
+because it is the evidence: eight on 2026-08-22, six on 08-31, five on 09-04, zero on 09-11. The
+share test's upper bound existed to catch an unrecorded advance; **there is no advance past
+completeness**, so it becomes an equality between covered and total bytes.
+
+**The distinction the coverage tests exist to protect is now at its widest, and is stated that
+way**: 100% of the BYTES pass through the stage, and the share the stage DERIVES is unchanged.
+Three of the four kinds that closed the gap supply only their name from the interner -- the
+`CHUNKS` standing, not the `NAMES` one -- and the fourth supplies nothing at all.
+
+**Four kinds, four shapes**: index, walk, step-and-accumulate, copy. None was a copy of the one
+before it, and the plan that said two of them were the same shape was corrected before it produced
+an emitter.
+
+---
+
+## 2026-09-11 (forty-third) — ENUM_LAYOUTS routed, and a third derivation I missed
+
+The third and last ROUTABLE region kind. `PARAM_TYPES` alone remains, and it needs an emitter
+WRITTEN rather than routed.
+
+**This one computes TWO of its four fields.** The type name comes from the interner, as the other
+two kinds' do, and `variants_first` is ACCUMULATED in the stage rather than relayed -- the same
+accumulate-then-advance `ck_stream_step` performs for its three ranges. The host supplies only the
+variant count and the minimum payload, and the count does double duty: a record field AND the
+distance the cursor travels to the next enum's type name.
+
+**Three kinds, three shapes, none a copy.** The slot section indexes; the variant section
+interleaves and walks with a boundary flag; the layout section steps a whole enum at a time while
+accumulating a range.
+
+**Verified it actually routed rather than emitting an empty region** -- the `STRUCT_AUX` trap, where
+a byte identity on an empty region passes while emitting nothing. Skipped set now `[1e]`.
+Mutation-checked ONCE PER STAGE-COMPUTED FIELD: advancing the cursor by one fails it, freezing the
+accumulator fails it.
+
+## THREE WAYS A LOCAL RUN CAN SAY LESS THAN IT APPEARS TO, AND I MET ALL THREE TODAY
+
+`wire.kel`'s chunk count has **THREE** independent derivations. My enumeration found two and missed
+`tests/wire_self_compile_status.rs`; continuous integration failed on it. All three now read 492,
+and the third says so in its own message.
+
+**The run that was supposed to confirm the enumeration could not have.**
+
+| how the run under-reported | which one |
+|---|---|
+| guards executed BEFORE the last edit | recorded earlier this session |
+| `-p keleusma --test X` never enables `self-host`; `--workspace` unifies it on | found by continuous integration |
+| **`cargo test` stops at the FIRST failing binary**; nextest runs them all | found by continuous integration |
+
+**A fourth was self-inflicted in the same hour.** A workspace run was still in flight while its
+subject was edited, and it then reported NO failures -- which cannot be true, since the third site
+was still stale when it began. Its result belongs to no tree. **Discarded rather than read as a
+pass**, which is the same rule this session already recorded when two gates shared one log file.
+
+**The shape common to all four is that the run did less than I believed it did**, and only the
+first and the last were written down beforehand. Believing a green result requires knowing what the
+command actually covered.
+
+---
+
+## 2026-09-11 (forty-second) — the handoff refreshed after sixteen increments
+
+It was refreshed at the twenty-fourth increment and the session is at the forty-first. In between,
+the premise it carried -- that the large work is blocked -- was corrected, and two region kinds were
+routed. **A resuming agent would have read that Order 1 was blocked and that no name-carrying region
+kind was reachable**, both of which are now false.
+
+The banner leads with what changed and what it cost:
+
+- **81% to 99%**, two kinds routed, `highest_command` 181 to 185, and the two kinds that remain need
+  an emitter WRITTEN rather than routed.
+- **The five increments of reading that preceded one line of behaviour**, four of which corrected
+  something that would otherwise have been built on, none of which reached code.
+- **The feature-set trap**: `cargo test -p keleusma --test X` does not enable `self-host` and CI's
+  `--workspace` unifies it on, so a gated test can be absent locally and run in continuous
+  integration.
+
+**Three validity items added**, for the host-contract observation, the node budget, and the pair of
+tests that pin `wire.kel`'s chunk count from two independent derivations. The list reads 1 to 21
+with no inversion, **checked by rendering it** rather than by writing the next number -- the
+distinction this file has paid for three times.
+
+Every check was run rather than copied: fingerprint `0x4327_63E1`, the newer guards green under
+`self-host`, the citation and count guards, and the boundary pin at 169 seconds actually executed.
+Ancestry anchor moved to `fad3fe11`.
+
+---
+
+## 2026-09-11 (forty-first) — ENUM_VARIANTS routed, and two figures the stage growth moved
+
+The cursor design landed as commands 184 and 185. **`no_region_the_driver_routes_disagrees_with_the_reference`
+passed on the first run again** -- the region is byte-identical for every corpus stage, and the only
+failure was the share figure asking to be told the new number.
+
+| | before | after |
+|---|---|---|
+| self-hosted share of corpus region bytes | 98% | **99%** |
+| skipped region kinds | three | **two** -- `ENUM_LAYOUTS`, `PARAM_TYPES`, both needing an emitter WRITTEN |
+| computed share | -- | **unchanged** |
+
+**Driven and mutation-checked**: three records across an enum boundary match the reference byte for
+byte, removing the type-name skip fails it, and a cursor walked past its section is refused.
+
+## THE PART WORTH KEEPING: A GUARD CAUGHT WHAT MY LOCAL RUN COULD NOT
+
+Continuous integration failed on `selfhost_chunk_names.rs`, which pins `wire.kel`'s chunk count.
+Four new functions moved it from **486 to 490** -- a function is a chunk, so the figure moved by
+exactly four.
+
+**My local check could not have caught it.** `cargo test -p keleusma --test selfhost_chunk_names`
+reported *"0 passed; 0 filtered out"*: the test is `self-host`-gated and that invocation does not
+enable the feature. CI runs `--workspace`, where cargo's feature UNIFICATION turns `self-host` on
+because another member requires it. **`-p keleusma --test X` and `--workspace` are different feature
+sets**, and a test can be silently absent from the first while running in the second.
+
+That is the rule *a run that executed no tests is not a pass* arriving through a channel I had not
+considered: not a filter, but a feature set that omits the test entirely.
+
+**I predicted this class and under-enumerated it.** The plan said `wire.kel` is itself a measured
+stage and growing it perturbs the corpus's figures. I guarded the NODE count with a new test and
+never thought of the CHUNK count.
+
+**So I enumerated instead of fixing the instance, and found a second live site**:
+`tests/selfhost_parse.rs` pins the same 486, derived from the PARSED source rather than the compiled
+module. Two independent derivations of one figure, which moved together as such a pair should. The
+workspace run then confirmed those two were the only failures.
+
+**Had I fixed only the failing one, CI would have caught the other and I would have called it a
+surprise.** It is the one-of-two-sites shape this session has now met eight times.
+
+---
+
+## 2026-09-11 (fortieth) — ENUM_VARIANTS is not the same shape, and my plan said it was
+
+With `DATA_SLOTS` routed, the plan's own "not in scope" section named `ENUM_VARIANTS` as "the same
+shape with the enum base". **Checking before copying, it is not.**
+
+`mi_enum_names` INTERLEAVES: for each enum it interns the type name, then that enum's variants,
+then the next type name. So a flat variant index `k` does not sit at `ebase + k` -- the type names
+are in the way, one per enum, at no fixed stride because enums have different variant counts. The
+counters cannot supply the offset either: `vcnt` is the CURRENT enum's variant count and is
+overwritten each iteration. **That is the same fact that defeated the slot base, biting a second
+time in a different place.**
+
+**The sound shape is a CURSOR, not an offset.** A begin sets the cursor to `ebase`; each step emits
+one variant and advances by one, except that the host tells it when a record is the FIRST variant
+of its enum and the stage then advances one extra to step over the type name. The host supplies
+structure it legitimately knows -- the boundary -- and never a name index it cannot check.
+
+**The sentence was written three increments before the walk was read closely**, which is how it came
+to describe a shape the code does not have. It cost nothing because it was checked before being
+acted on, and it would have cost a wrong emitter had it not been.
+
+**The slot slice's transferable value is the METHOD, not the shape**: read the walk, capture state
+from the walk rather than deriving it, let the host supply only what it decides, and say in advance
+which coverage figure should move.
+
+---
+
+## 2026-09-11 (thirty-ninth) — DATA_SLOTS is routed, and the share went 81% to 98%
+
+The driver half landed. `slot_run_fields` groups consecutive slots sharing a name and visibility
+into runs -- mirroring the encoder including its `u16::MAX` chunking, so a chunked run emits several
+records all carrying the same run index -- and `window_emit_slots` drives commands 182 and 183 on
+one virtual machine and ONE shared buffer.
+
+**`no_region_the_driver_routes_disagrees_with_the_reference` passed on the first run.** The region
+is byte-identical for every corpus stage. The only failure was the share figure, which is the test
+asking to be told the new number rather than a defect.
+
+| | before | after |
+|---|---|---|
+| self-hosted share of corpus region bytes | 81% | **98%** |
+| skipped region kinds | four | **three** |
+| computed share | -- | **unchanged** |
+
+**The computed share not moving is the part worth checking, and it was predicted in advance.** The
+stage supplies this region's NAME from its own interner and the host decides every other field --
+the `CHUNKS` standing, not the `NAMES` one. `DATA_SLOTS` joins `CHUNKS` as **mixed** in the
+provenance table, and the test that exists to stop the headline figure being over-read still holds.
+Saying beforehand which number should move, and which should not, is what makes the one that did
+mean something.
+
+**`DATA_SLOTS` is the first routed kind whose record carries a NAME.** Every kind routed before it
+carried none, which is precisely what let the host supply every field. That is why the interner
+route had to exist before the routing, and why five increments went into reading before one line
+changed.
+
+**Verified**: 180 wire tests, 147 codegen tests including the boundary pin and the byte-identical
+scaffold, all five region-coverage tests with updated figures, the node budget at 1,202 of 1,365,
+`fmt`, and clippy with `-D warnings` across the full feature set.
+
+---
+
+## 2026-09-11 (thirty-eighth) — the margin the slice is sized against was stale by a quarter
+
+The plan's first step is to measure `wire.kel`'s node budget before editing it, so a later cap
+failure is attributed to stage growth rather than to routing.
+`tests/module_input_node_budget.rs` does that, parsing the count out of the blob the stage itself
+reads.
+
+**Measured: 1,194 nodes against a 1,365 cap, a margin of 171.** The figure quoted around the tree
+is **1,148**, stale by 46 nodes, and the margin the plan assumed was 217. **A quarter of the assumed
+headroom was already gone**, in the one number the slice is sized against.
+
+**This is the fourth stale figure in this arc**, after the two capacity limits and the retained
+state, and it is the one that would have mattered most: a slice sized against 217 that actually has
+171 is a slice planned with a margin it does not have.
+
+**The plan now cites the test rather than a number**, which is this project's own convention for a
+figure that moves. The test asserts its walk has not drifted from the writer -- every length bounded
+by the remaining blob, every section count cross-checked against the module -- because a parse that
+drifted would report a wrong figure rather than failing, and a wrong budget is worse than no budget.
+
+**The measure-first instruction paid on its first use.** It was written two increments ago as
+process caution; it caught a real error the first time it was followed.
+
+---
+
+## 2026-09-11 (thirty-seventh) — the slice is budgeted, not casual
+
+Going to implement, two constraints surfaced that change the shape of the work rather than its
+conclusion.
+
+**Command 178 is already driven.** `the_four_record_formatters_lay_out_a_record_the_reference_agrees_with`
+feeds `ds_stream_step` a name index from the reference's own record, which is legitimate for the
+claim it makes -- whether the stage lays a record out as the format specifies. Changing 178 to read
+the interner would break that for no gain, so **the name-aware step must be ADDITIVE**. The slice
+adds TWO commands, a begin and a name-aware step, and `highest_command` moves 181 to 183.
+
+**`wire.kel` is itself one of the eleven measured stages.** It carries **1,148 constant-forest nodes
+against a node table holding 1,365** -- a margin of 217 -- and 475 chunks. Two new functions add
+chunks and constants to the very stage the corpus measures, and that stage must still emit its own
+regions afterwards.
+
+**That is why this has not been done casually, and it belongs in the sizing rather than being
+discovered mid-change.** The plan now says to re-measure the node count after the stage edit and
+before the driver edit, so a cap failure is attributed to stage growth rather than to routing.
+
+**This arc has now corrected itself four times**, each time by reading one level deeper: a dispatch
+table, then a field list, then an assumption's consequence, now a contract and a budget. **Every
+correction made the slice larger and better specified, and none of them reached code.** The plan is
+executable now in a way it was not three increments ago, and the cost of getting there was entirely
+in reading.
+
+---
+
+## 2026-09-11 (thirty-sixth) — the assumption holds, and the slice still needs a begin
+
+The plan named one assumption to check before anything else: that `wire.nmap` survives between the
+interner call and the step calls under the driver's buffer handling.
+
+**It holds.** `window_emit_chunks` creates ONE `shared` buffer and passes `&mut shared` to every
+`enter_wire` call, begin and steps alike. The driver re-seeds only the slots it writes, and
+`wire.nmap` is never among them, so the interner's result survives for as long as the same buffer
+comes back -- which that function guarantees by construction. A `DATA_SLOTS` driver written the same
+way inherits it.
+
+**The question it leaves is sharper and smaller, and it changes the answer.** The slot stream had
+no begin of its own, and the two commands that DO call `mi_window_prepare()` each do something else
+as well: 174 zeroes the chunk range cursors, and 170 emits the `NAMES` records into the window. Either
+would run the interner; both are misuses, one chunk-specific and the other writing bytes the driver
+would discard.
+
+**So the slice needs a begin after all -- for a different reason than the plan guessed.** Not
+because the interner's result fails to survive, but because nothing currently runs the interner
+WITHOUT also doing something a slot pass does not want. A begin whose whole body is
+`mi_window_prepare()` is the smallest honest answer, and it moves `highest_command`.
+
+**The plan was right to name the assumption and wrong about what would follow from it.** Checking it
+still paid: the conclusion "needs a begin" is the same, the REASON is different, and a reason that
+is wrong is how a design gets built against the wrong constraint.
+
+---
+
 ## 2026-09-10 (thirty-fifth) — the field list made the state look sufficient
 
 Going to route `DATA_SLOTS`, I checked the one thing the previous increment asserted without

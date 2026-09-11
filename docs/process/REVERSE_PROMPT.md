@@ -6,6 +6,11 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
+> **Absorption 57 resolved a conflict here by KEEPING THIS LINE'S MESSAGE.** The `v0.2.3` line
+> writes its own reverse prompt in the same path, and absorbing is one-directional, so a merge
+> would have to discard one of the two. This branch's copy carries this branch's message; the
+> `v0.2.3` line's is on `origin/v0.2.3` at the same path, and nothing here overwrites it there.
+
 ## TWO SILENT DEFECTS FOUND, ONE FIXED, ONE FIXED PROPERLY AFTER BEING REFUSED
 
 Both agreed with your runtime on every subject that existed before. Neither was found by the thing

@@ -1,4 +1,4 @@
-//! **`wire.kel` SELF-COMPILES BYTE-IDENTICALLY.** The largest stage in the corpus, at 486
+//! **`wire.kel` SELF-COMPILES BYTE-IDENTICALLY.** The largest stage in the corpus, at 492
 //! chunks, and the last one that was outside the byte-identity oracle.
 //!
 //! # This file used to say the opposite, and that is the point of keeping it
@@ -120,9 +120,19 @@ fn the_bare_for_counter_is_reset_beside_its_analogue() {
 #[test]
 fn wire_kel_has_the_chunk_count_the_documents_quote() {
     let module = keleusma::selfhost::self_host_compile(WIRE);
+    // **492 SINCE 2026-09-11, UP FROM 486.** Three begin/step pairs -- the name-aware slot,
+    // variant and enum-layout streams -- added six functions, and a function is a chunk.
+    //
+    // **THIS IS THE THIRD INDEPENDENT DERIVATION OF ONE FIGURE**, after
+    // `tests/selfhost_chunk_names.rs` (also from the compiled module) and
+    // `tests/selfhost_parse.rs` (from the parsed source). An enumeration on 2026-09-11 found
+    // the first two and missed this one, and the local run that was supposed to confirm the
+    // enumeration stopped at the first failing binary. See the header of
+    // `tests/module_input_node_budget.rs` for the other figure `wire.kel`'s growth moves.
     assert_eq!(
         module.chunks.len(),
-        486,
-        "`wire.kel`'s chunk count moved; the figure quoted across the channels is stale"
+        492,
+        "`wire.kel`'s chunk count moved. THREE tests pin this figure; if only some of them \
+         fail, the derivations have parted rather than the stage having changed"
     );
 }

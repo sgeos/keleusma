@@ -13642,3 +13642,349 @@ fn the_formatter_probe_records_are_not_all_zero() {
          wrote nothing would pass the layout test for the rest"
     );
 }
+
+// --- THE NAME-AWARE SLOT STREAM, DRIVEN -------------------------------------
+
+/// Commands 182 and 183 on ONE shared buffer, which `run_call` cannot do.
+///
+/// `run_call` allocates a fresh `shared` per call, so a begin and a step driven
+/// through it would not share `wire.nmap` and the second would read zeros. The
+/// chunk stream has the same requirement and is driven only by the DRIVER for
+/// exactly this reason. This is the smallest harness that keeps one buffer.
+#[cfg(feature = "self-host")]
+fn run_pair(
+    vm: &mut Vm<'static, 'static>,
+    blob: &[u8],
+    fields: &[i64],
+    read_len: usize,
+) -> Result<(i64, i64, Vec<u8>), VmError> {
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    for (i, b) in blob.iter().enumerate() {
+        vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(*b))?;
+    }
+    let began = match enter(vm, &mut shared, 182)? {
+        VmState::Yielded(Value::Int(n)) => n,
+        other => panic!("unexpected state from the begin: {other:?}"),
+    };
+    for (i, v) in fields.iter().enumerate() {
+        vm.set_shared(&mut shared, FIN_SLOT + i, Value::Int(*v))?;
+    }
+    let wrote = match enter(vm, &mut shared, 183)? {
+        VmState::Yielded(Value::Int(n)) => n,
+        other => panic!("unexpected state from the step: {other:?}"),
+    };
+    let n = read_len.min(CAPACITY);
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        match vm.get_shared(&shared, 1 + i)? {
+            Value::Byte(b) => out.push(b),
+            other => panic!("slot {i} is not a Byte: {other:?}"),
+        }
+    }
+    Ok((began, wrote, out))
+}
+
+/// **THE NAME COMES FROM THE INTERNER, AND THIS IS WHAT PROVES IT.**
+///
+/// Command 178 formats a data-slot record from four host-supplied fields, the
+/// name index included. A host-supplied index can disagree with the interner
+/// that produced `NAMES`, and the host cannot check it. Commands 182 and 183
+/// close that: the begin runs the interner, and the step takes the RUN INDEX
+/// where 178 takes a name and reads `wire.nmap[sbase + k]` itself.
+///
+/// **The three non-name fields still come from the reference**, exactly as the
+/// formatter test takes them, because those are host-decided and this test is
+/// not claiming otherwise. What is under test is the NAME, and the record
+/// matching the reference byte for byte is the statement that the stage's own
+/// interner agreed with the encoder about it.
+///
+/// # Why the section base is the interesting part
+///
+/// `sbase` is captured as `mi_slot_names()` begins, from the walk's own running
+/// count. It cannot be derived from `ecnt`, `vcnt` and `scnt`, because `vcnt`
+/// holds the CURRENT enum's variant count and is overwritten each iteration --
+/// there is no running variant total. A base computed from those counters would
+/// index a real name, just not the right one, and this test is where that shows.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_name_aware_slot_stream_takes_its_name_from_the_interner() {
+    use keleusma::wire_schema::kind;
+
+    // An enum BEFORE the data block, so the slot section's base is past a
+    // non-empty enum section. Without the enum the base would be the chunk
+    // count alone and a wrong base could still land on the right name.
+    let src = "enum E { A, B }\n\
+               shared data d { n: Word }\n\
+               private data p { xs: [Word; 3] }\n\
+               fn main() -> Word { d.n = 1; p.xs[0] = d.n; E::A as Word }";
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let artifact = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+    let view = keleusma_wire::WireView::parse(&artifact).expect("reference parses");
+
+    let region = view
+        .find_region(kind::DATA_SLOTS)
+        .expect("the reference emitted a DATA_SLOTS region");
+    let bytes = view.region_bytes(&region).expect("payload");
+    const STRIDE: usize = 8;
+    assert!(
+        bytes.len() >= STRIDE,
+        "the region is {} bytes, shorter than one record",
+        bytes.len()
+    );
+    let want = &bytes[..STRIDE];
+
+    // The three host-decided fields, read from the reference's own record. The
+    // name slot carries the RUN INDEX instead, which is the whole difference.
+    let visibility = i64::from(want[4]);
+    let reserved = i64::from(want[5]);
+    let run = i64::from(u16::from_le_bytes([want[6], want[7]]));
+    let fields = [0i64, visibility, reserved, run];
+
+    let (blob, _names) = keleusma::selfhost::module_input(&module);
+    let mut vm = vm_for(WIRE_KEL);
+    let (began, wrote, got) =
+        run_pair(&mut vm, &blob, &fields, STRIDE).expect("the pair drove without faulting");
+
+    assert!(
+        began > 0,
+        "the begin returned {began}; a non-positive result is a refusal, and the step below \
+         would then be reading an interner that never ran"
+    );
+    assert_eq!(
+        wrote, STRIDE as i64,
+        "the step returned {wrote} rather than the {STRIDE}-byte stride"
+    );
+    assert_eq!(
+        got, want,
+        "the streamed record differs from the reference's first DATA_SLOTS record. The three \
+         non-name fields came from that record, so a difference is in the NAME -- the stage's \
+         interner and the encoder disagree about which name this run carries"
+    );
+}
+
+/// The bound on the run index is real, and an out-of-range one is REFUSED.
+///
+/// Without this, a host passing a run index past the slot section would read a
+/// name belonging to some other section: a wrong answer rather than a fault,
+/// which is the failure the whole name route exists to prevent.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_name_aware_slot_step_refuses_a_run_index_past_the_section() {
+    let src = "shared data d { n: Word }\nfn main() -> Word { d.n = 1; d.n }";
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let (blob, _names) = keleusma::selfhost::module_input(&module);
+    let mut vm = vm_for(WIRE_KEL);
+    // A run index far past any section.
+    let fields = [4096i64, 0, 0, 1];
+    let (began, wrote, _got) =
+        run_pair(&mut vm, &blob, &fields, 8).expect("the pair drove without faulting");
+    assert!(began > 0, "the begin refused with {began}");
+    assert!(
+        wrote < 0,
+        "an out-of-range run index returned {wrote} rather than a refusal, so the guard is \
+         decoration and a bad index would silently read another section's name"
+    );
+}
+
+/// **THE VARIANT STREAM WALKS, AND THIS DRIVES IT ACROSS AN ENUM BOUNDARY.**
+///
+/// The slot stream indexes a flat section. This one cannot: `mi_enum_names`
+/// interleaves a type name with each enum's variants, so the stage carries a
+/// cursor and the host says only where an enum BEGINS.
+///
+/// Two enums, so the second enum's first record exercises the type-name skip.
+/// Three records are emitted and compared against the reference's first three,
+/// which covers a boundary step, a non-boundary step, and a boundary again.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_name_aware_variant_stream_walks_across_an_enum_boundary() {
+    use keleusma::wire_schema::kind;
+
+    let src = "enum E { A, B }\n\
+               enum F { C, D }\n\
+               fn main() -> Word { (E::A as Word) + (F::C as Word) }";
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let artifact = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+    let view = keleusma_wire::WireView::parse(&artifact).expect("reference parses");
+    let region = view
+        .find_region(kind::ENUM_VARIANTS)
+        .expect("the reference emitted an ENUM_VARIANTS region");
+    let bytes = view.region_bytes(&region).expect("payload");
+    const STRIDE: usize = 16;
+    assert!(
+        bytes.len() >= 3 * STRIDE,
+        "the region is {} bytes, fewer than the three records this drives",
+        bytes.len()
+    );
+
+    // (first-of-enum, reserved, discriminant) per record, in declaration order.
+    let rows: [[i64; 3]; 3] = [[1, 0, 0], [0, 0, 1], [1, 0, 0]];
+
+    let (blob, _names) = keleusma::selfhost::module_input(&module);
+    let mut vm = vm_for(WIRE_KEL);
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    for (i, b) in blob.iter().enumerate() {
+        vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(*b))
+            .expect("blob");
+    }
+    let began = match enter(&mut vm, &mut shared, 184).expect("begin") {
+        VmState::Yielded(Value::Int(n)) => n,
+        other => panic!("unexpected state from the begin: {other:?}"),
+    };
+    assert!(began > 0, "the begin refused with {began}");
+
+    for (j, row) in rows.iter().enumerate() {
+        for (f, v) in row.iter().enumerate() {
+            vm.set_shared(&mut shared, FIN_SLOT + f, Value::Int(*v))
+                .expect("variant field");
+        }
+        let wrote = match enter(&mut vm, &mut shared, 185).expect("step") {
+            VmState::Yielded(Value::Int(n)) => n,
+            other => panic!("unexpected state from the step: {other:?}"),
+        };
+        assert_eq!(
+            wrote, STRIDE as i64,
+            "record {j} returned {wrote} rather than the {STRIDE}-byte stride"
+        );
+        let mut got = Vec::with_capacity(STRIDE);
+        for i in 0..STRIDE {
+            match vm.get_shared(&shared, 1 + i).expect("read") {
+                Value::Byte(b) => got.push(b),
+                other => panic!("slot {i} is not a Byte: {other:?}"),
+            }
+        }
+        let want = &bytes[j * STRIDE..(j + 1) * STRIDE];
+        assert_eq!(
+            got, want,
+            "variant record {j} differs from the reference's. The reserved and discriminant \
+             fields came from the declaration, so a difference is in the NAME -- the cursor and \
+             the encoder disagree about which name this variant carries"
+        );
+    }
+}
+
+/// The cursor's bound is real: a step past the section is REFUSED.
+///
+/// Without it a boundary flag on every record would walk the cursor off the end
+/// and read another section's name -- a wrong answer rather than a fault.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_name_aware_variant_step_refuses_a_cursor_past_the_section() {
+    let src = "enum E { A, B }\nfn main() -> Word { E::A as Word }";
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let (blob, _names) = keleusma::selfhost::module_input(&module);
+    let mut vm = vm_for(WIRE_KEL);
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    for (i, b) in blob.iter().enumerate() {
+        vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(*b))
+            .expect("blob");
+    }
+    match enter(&mut vm, &mut shared, 184).expect("begin") {
+        VmState::Yielded(Value::Int(n)) => assert!(n > 0, "the begin refused with {n}"),
+        other => panic!("unexpected state: {other:?}"),
+    }
+    // Every record claims to open a new enum, so the cursor advances twice per
+    // step and runs off the section it belongs to.
+    let mut last = 0i64;
+    for _ in 0..64 {
+        for (f, v) in [1i64, 0, 0].iter().enumerate() {
+            vm.set_shared(&mut shared, FIN_SLOT + f, Value::Int(*v))
+                .expect("field");
+        }
+        last = match enter(&mut vm, &mut shared, 185).expect("step") {
+            VmState::Yielded(Value::Int(n)) => n,
+            other => panic!("unexpected state: {other:?}"),
+        };
+        if last < 0 {
+            break;
+        }
+    }
+    assert!(
+        last < 0,
+        "the cursor never refused after sixty-four boundary steps, so it is not bounded and a \
+         bad boundary flag would read another section's name"
+    );
+}
+
+/// **THE LAYOUT STREAM COMPUTES TWO OF ITS FOUR FIELDS.**
+///
+/// The slot and variant streams take only their NAME from the stage. This one
+/// also accumulates `variants_first`, the running total of variants emitted,
+/// exactly as `ck_stream_step` accumulates its three ranges. The host supplies
+/// the variant count and the minimum payload, both of which it decides -- and
+/// the count does double duty, being the distance the cursor travels to the next
+/// enum's type name.
+///
+/// Two enums, so the second record's `variants_first` is non-zero and the cursor
+/// has to have stepped over the first enum's variants to find the second type
+/// name. A stream that advanced by one per record would land on a VARIANT name
+/// and this test would say so.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_enum_layout_stream_accumulates_its_variant_range() {
+    use keleusma::wire_schema::kind;
+
+    let src = "enum E { A, B, C }\n\
+               enum F { D, G }\n\
+               fn main() -> Word { (E::A as Word) + (F::D as Word) }";
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let artifact = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+    let view = keleusma_wire::WireView::parse(&artifact).expect("reference parses");
+    let region = view
+        .find_region(kind::ENUM_LAYOUTS)
+        .expect("the reference emitted an ENUM_LAYOUTS region");
+    let bytes = view.region_bytes(&region).expect("payload");
+    const STRIDE: usize = 16;
+    assert!(
+        bytes.len() >= 2 * STRIDE,
+        "the region is {} bytes, fewer than the two records this drives",
+        bytes.len()
+    );
+
+    // (variant count, minimum payload) per enum, in declaration order.
+    let rows: Vec<[i64; 2]> = module
+        .enum_layouts
+        .iter()
+        .map(|l| [l.variants.len() as i64, i64::from(l.min_payload)])
+        .collect();
+    assert_eq!(rows.len(), 2, "the source declares two enums");
+
+    let (blob, _names) = keleusma::selfhost::module_input(&module);
+    let mut vm = vm_for(WIRE_KEL);
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    for (i, b) in blob.iter().enumerate() {
+        vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(*b))
+            .expect("blob");
+    }
+    let began = match enter(&mut vm, &mut shared, 186).expect("begin") {
+        VmState::Yielded(Value::Int(n)) => n,
+        other => panic!("unexpected state from the begin: {other:?}"),
+    };
+    assert!(began > 0, "the begin refused with {began}");
+
+    for (j, row) in rows.iter().enumerate() {
+        for (f, v) in row.iter().enumerate() {
+            vm.set_shared(&mut shared, FIN_SLOT + f, Value::Int(*v))
+                .expect("layout field");
+        }
+        let wrote = match enter(&mut vm, &mut shared, 187).expect("step") {
+            VmState::Yielded(Value::Int(n)) => n,
+            other => panic!("unexpected state from the step: {other:?}"),
+        };
+        assert_eq!(wrote, STRIDE as i64, "record {j} returned {wrote}");
+        let mut got = Vec::with_capacity(STRIDE);
+        for i in 0..STRIDE {
+            match vm.get_shared(&shared, 1 + i).expect("read") {
+                Value::Byte(b) => got.push(b),
+                other => panic!("slot {i} is not a Byte: {other:?}"),
+            }
+        }
+        let want = &bytes[j * STRIDE..(j + 1) * STRIDE];
+        assert_eq!(
+            got, want,
+            "enum-layout record {j} differs from the reference's. The count and payload came \
+             from the declaration, so a difference is in the NAME or the accumulated \
+             `variants_first` -- both of which this stage computes"
+        );
+    }
+}

@@ -6,36 +6,335 @@ Current sprint source of truth.
 
 ---
 
+> **Currency note (2026-09-11, V0.3.X line). THREE DEFECTS CLOSED, AND NONE WAS WHAT THE INCREMENT
+> WAS CHECKING.**
+>
+> The increment set out to make one prose premise checkable — `Op::Reset` emits no arena reset. The
+> premise holds and the comment justifying it over-claimed. What the work produced instead: a local
+> live across a `yield` was wiped by the entry preamble on every resume (FIXED); a composite written
+> to a private data slot was stored as the body's ADDRESS rather than copied (REFUSED, then
+> IMPLEMENTED as a copy into the persistent pool); and the corpus harness sized its private buffer by
+> slot count rather than by the contract this backend publishes (FIXED).
+>
+> **All three agreed with the reference on every subject that existed before.** Two were found by
+> machinery added to make a check non-vacuous — a control subject, and a subject separating a copy
+> from an alias — and one by the gate, where the piecewise runs could not see it.
+>
+> A dramatic hypothesis about the third (weeks of heap corruption across eleven self-hosted stages)
+> was CHECKED AND IS FALSE: every corpus stream with private data lowers degenerately and has no
+> resume-state word.
+>
+> 519 tests, 0 failed (509 + 10), BOTH float configurations, every half frozen. No opcode added, no
+> `BYTECODE_VERSION` change, no edit to the repository-root `src/` or `tests/`.
+>
+> See `docs/process/handoffs/v0.3.0.md`.
+
+
 ## Current Phase
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
-> **Currency note (2026-09-11, V0.3.X line). `Op::Stream` AND `Op::Reset` LOWERING IS COMPLETE
-> EXCEPT FOR SHAPES THAT SHOULD BE REFUSED, AND THREE DEFECT CLASSES WERE CLOSED GETTING THERE.**
+> **Currency note (2026-09-11, session 65, forty-eighth increment). THE FIELD-READ EDGE IS SIZED:
+> THREE OF FIVE.**
 >
-> Five standing stream refusals became two. **The three needed three different things** — a
-> truncation matching what the runtime does at `Op::Reset`, an ephemeral spill slice for operands
-> beneath a yield, and a dedicated block for a resume edge — which is what the framing document got
-> wrong when it called them one question. The two that remain SHOULD remain: a multi-parameter
-> stream faults on the REFERENCE after its first rewind, and a suspending callee mixes two
-> suspension mechanisms that do not compose.
+> `sizing_how_far_declaration_lookup_reaches_a_field_read` measures it. Two declaration lookups and
+> no unification reach a field of a struct literal, a field of a field, and a field of a call
+> result. **They do NOT reach** a field of an ARRAY ELEMENT or of a MATCH BINDING -- both need a
+> type projected out of an array or a variant payload rather than looked up.
 >
-> **Three defects fixed, each found by an instrument aimed elsewhere.** A soundness hole general
-> `Stream` lowering introduced; an unguarded array index that returned the caller's own buffer bytes
-> where the reference faults; and 58 panics reachable through a public entry point.
+> **So the next increment can be scoped**: the cheap majority lands as a tagger extension over
+> declarations the pipeline already has, with the two projection cases recorded as unreached.
 >
-> **Twice a refusal described the LOWERING and read as a fact about the program** — *"native code
-> cannot truncate"*, *"the two edges disagree"*. Both were settled by dumping the ops and reading
-> `src/vm.rs` at the same opcode, not by reasoning about the design.
->
-> 503 tests, 0 failed, BOTH float configurations, every half frozen. No opcode added, no
-> `BYTECODE_VERSION` change. Publication remains held.
->
-> **Two questions are with the `v0.2.3` line**, both with reproductions in `REVERSE_PROMPT.md`: a
-> `confine.rs` index panic on a truncated op stream, and whether a multi-parameter stream should
-> compile at all when it cannot reach its second iteration.
+> Non-vacuity runs both ways -- the spike fails if it types none, and fails if it types all, which
+> would mean the corpus no longer contains the edge. Each case also asserts the REFERENCE rejects it.
 
----
+> **Currency note (2026-09-11, session 65, forty-seventh increment). A DOCS-ONLY CHANGE FAILED
+> TWO CONFIGURATIONS I DID NOT RUN.**
+>
+> `the_current_claim_documents_cite_nothing_that_does_not_exist` fired on `REVERSE_PROMPT.md` for
+> naming the retired literal-only test while explaining that it is retired. **The fix is the claim,
+> not the allowlist** -- second time this session, after a begin command the slot stream did not
+> have.
+>
+> It failed under `--no-default-features` and `--features signatures`; I had run default and
+> `self-host`. **Both document guards are now run in every configuration CI uses.** Note that
+> `claimed_counts` reports ZERO tests under `--no-default-features`, so what it protects is
+> unprotected there.
+>
+> Fourth item in the rule: before believing a green guard, know which CONFIGURATIONS it ran in.
+
+> **Currency note (2026-09-11, session 65, forty-sixth increment). THE SIZING SPIKE MEASURES THE
+> STEP BEHIND US.**
+>
+> It reports "local propagation reaches 5 of 5", and every one of its five cases is a let-bound
+> literal, a call return, or a composition -- **all now reached**. Its corpus contains **no field
+> read**, which is where the edge sits.
+>
+> So **the field-read step is UNSIZED**, and "5 of 5" must not be read as "the remaining step is
+> small". The limitation is recorded in the spike itself; it is kept because its result is why the
+> literal-to-local step was known to be cheap before it was taken.
+>
+> Third artifact in two increments whose answer was true when written and is now about a DIFFERENT
+> QUESTION. The pattern is staleness of SUBJECT, not of fact.
+
+> **Currency note (2026-09-11, session 65, fifty-fourth increment). EVERY STAGE INPUT CHANNEL NOW
+> HAS A PROGRAM WHOSE VERDICT DEPENDS ON IT.**
+>
+> The file's central claim is that the host supplies syntax and the STAGE joins. Two channels had a
+> withholding proof; nine did not. Withholding each in turn across a rejected corpus and an accepted
+> one, **all eleven are depended on**, each with a named program rather than a tally.
+>
+> **The first run was one-directional and got one channel wrong.** Watching only for a flip to
+> ACCEPT reported the declared-parameter-counts channel as depended on by nothing — but withholding
+> it puts every call-site index out of range and the stage REFUSES that, so the verdict is rejection
+> either way. **A channel whose absence trips a fail-closed guard is invisible to a one-directional
+> instrument.**
+>
+> **What this does NOT establish**: that the stage DERIVES its conclusion from each channel.
+> Dependence is necessary evidence for the join claim, not sufficient. A channel that flips nothing
+> may equally be a corpus gap.
+
+> **Currency note (2026-09-11, session 65, fifty-third increment). THREE CENSUS GAPS WERE WAITING ON
+> A NODE KIND THAT ALREADY EXISTED.**
+>
+> All three were recorded as needing "an agreement between a DECLARED type and an ACTUAL one", which
+> is the only thing node kind 8 does. It was named after the function tail, its first and for a long
+> time only caller. **A constant named after its first caller reads as a special case even when it
+> is a general rule.**
+>
+> **Four cells closed with no new kind. Census now 15 covered, 1 gap**, from 8 and 8 at its first run.
+>
+> **The reuse had a consequence a test found**: "kind 8" no longer means "a function tail", so the
+> pipeline differential that selects rows by kind was comparing four uses against a subset.
+> Narrowing its filter would have been the wrong repair; the new rows are opt-in instead.
+>
+> The remaining gap is the negation operand's "must NOT be bool" — a NEGATIVE requirement no kind
+> expresses, left open as a decision rather than an oversight.
+
+> **Currency note (2026-09-11, session 65, fifty-second increment). THE RULE-SHAPE CENSUS FOUND
+> EIGHT GAPS WHERE THE INVENTORY SAID THE RULES WERE COMPLETE.**
+>
+> Sixteen cells, each a rule SHAPE crossed with a syntactic FORM, each a program the reference
+> rejects. **First run 8 covered and 8 gaps; after closing what needed no stage change, 11 and 5.**
+>
+> **Two surprises.** "A scalar cannot be projected" was a gap for BOTH its forms — the rule and its
+> node kinds existed, but the set of names it could fire on held only `let`s with a primitive
+> ANNOTATION, so a declared parameter reached no rule at all. **A rule that is present and
+> unreachable looks identical, from any inventory, to one that is present and working.** And
+> "logical operands must be bool" was absent, which agreement cannot substitute for: `n andalso m`
+> with two words AGREES.
+>
+> **Any claim that the rules are complete must now say that the inventory counts shapes rather than
+> the forms each shape reaches.** The census is itself not exhaustive and says so.
+>
+> Five gaps remain, each named in the test with the mechanism closing it would need.
+
+> **Currency note (2026-09-11, session 65, fifty-first increment). A CLAIM IN THE TWO NOTES BELOW
+> WAS FALSE, AND CHECKING IT CLOSED TWO GAPS.**
+>
+> Those notes said the remaining field-read cases need "a type the source states nowhere". **They
+> do not.** An enum declaration lists each variant's payload types in order and a pattern says which
+> variant and position a name binds at; an array type expression carries its element type directly.
+> The claim had been reasoned about rather than checked, and it had already been copied into five
+> places.
+>
+> **The match-binding case is now reached**, for two coordinate tables and one scan: the host reports
+> where a pattern binds and what the declaration says is there, and the stage matches the triples.
+> Withholding the declaration side makes the same program accepted.
+>
+> **A second gap surfaced from a test written for something else**: the expression walk emitted NO
+> node for a match, so match arms were never compared and every program whose arms disagree was
+> accepted. Invisible from the rule list, which records the fifteen shapes as complete — the
+> match-arms rule is the same SHAPE as the `if`-branches rule, implemented for one of its two
+> syntactic forms. **A rule inventory counts shapes, not the forms each shape reaches.**
+>
+> **What is left is one case**: a field of an array element, whose base is an index expression rather
+> than a name. The element type is written down; a base FORM on the field-read row is what is missing.
+
+> **Currency note (2026-09-11, session 65, fiftieth increment). THE DIRECT-OPERAND FIELD READ IS
+> REACHED, AND A TEST NAME THAT ENCODED A TALLY IS GONE.**
+>
+> An operand row gains a FORM for a field read, resolved through the binding case's own join. No new
+> source of type information was needed; the tables already existed and the stage already searched
+> them. A synthetic name would have worked with no stage change and is refused where the form is
+> defined, because the invented name IS the join.
+>
+> **Pinned per node kind, both halves.** The form reaches five kinds applying five different rules,
+> and a wrong tag fails differently from a tag where none belongs.
+>
+> **`the_field_read_channel_reaches_three_base_forms_and_not_two` was one increment old and already
+> wrong.** Renaming it rippled through five documents and the citation guard's own commentary. A name
+> encoding a tally goes stale every time the tally moves; the pin is now
+> `the_field_read_channel_records_what_it_does_not_reach` and the tallies live in its body.
+>
+> **What is left is a different kind of gap**: a field of an array element and a field of a match
+> binding both need a type the source states NOWHERE.
+
+> **Currency note (2026-09-11, session 65, forty-ninth increment). THE FIELD-READ CHANNEL IS IN,
+> AND A WELL-TYPED CONTROL FOUND A FALSE REJECTION THAT PREDATES IT.**
+>
+> `a_derived_operand_from_a_field_read_is_still_unreached` is **RETIRED**. A form-3 binding row
+> proves the tag of `let a = p.x` through two joins the STAGE performs, over a struct-binding table
+> and a field-tag table parallel to the declared field names. Withholding the field sets makes the
+> same program ACCEPTED, which is what distinguishes a join from a marshalled answer.
+>
+> **The finding matters more than the feature.** Every program using a `match` arm binding was
+> REJECTED, well typed or not, because the occurrence channel collected locals from parameters and
+> `let` statements and from nowhere else. That is the unsound direction: rejecting a valid program
+> is a language change. It predates the increment (confirmed at `HEAD` with the tree stashed) and it
+> is the SECOND binder that channel has missed. **A rejection corpus could not have found it** — a
+> checker that rejects everything scores perfectly against one.
+>
+> **What remains unreached is pinned by
+> `the_field_read_channel_records_what_it_does_not_reach`**, and one of its three cases is a
+> limit the sizing spike could not model: a field read standing as a DIRECT OPERAND rather than a
+> `let` initialiser. "Three of five" and "three base forms of five cases" are different statements.
+
+> **Currency note (2026-09-11, session 65, forty-fifth increment). TYPE REJECTION PASSED LITERALS
+> SOME TIME AGO; THE ROADMAP DID NOT KNOW.**
+>
+> `the_rules_reach_only_literal_direct_occurrences` is **RETIRED**. Local resolution reaches a
+> `let` bound to a literal and a call taking a declared return type, and a bounded fixpoint reaches
+> an ARITHMETIC result with no depth limit on the chain.
+>
+> **The limit MOVED, not vanished**: its edge is now a FIELD READ, pinned by
+> `a_derived_operand_from_a_field_read_is_still_unreached`. A host-side sizing spike measures what
+> going further costs and is not wired in.
+>
+> **Both halves of the Order 1 cell are corrected in the ROADMAP**, not only here, because that is
+> where a stale figure gets copied from. Second time that cell has been stale on these subjects, so
+> it now says to derive the state from the tests.
+
+> **Currency note (2026-09-11, session 65, forty-fourth increment). EVERY REGION KIND IS ROUTED;
+> THE SKIPPED SET IS EMPTY.**
+>
+> `PARAM_TYPES` was the weakest, not the hardest: a byte POOL the stage COPIES, deciding nothing,
+> because a pool has no layout to decide. Recorded as a fourth standing, **copied, not encoded**,
+> weaker even than `HEADER`.
+>
+> **Two tests changed shape**: the skipped guard now asserts COMPLETENESS (its own message had
+> asked for that), and the share test's upper bound became an equality, since there is no advance
+> past completeness.
+>
+> **100% of the BYTES pass through the stage; the share it DERIVES is unchanged.** Three of the
+> four kinds supply only their name, the fourth nothing at all. Four kinds, four shapes: index,
+> walk, step-and-accumulate, copy.
+
+> **Currency note (2026-09-11, session 65, forty-third increment). `ENUM_LAYOUTS` IS ROUTED; ONE
+> KIND LEFT.**
+>
+> `PARAM_TYPES` alone remains, needing an emitter WRITTEN rather than routed. This kind computes
+> **two of its four fields**: the type name from the interner and `variants_first` accumulated in
+> the stage. Three kinds, three shapes, none a copy.
+>
+> **`wire.kel`'s chunk count has THREE derivations, not two.** My enumeration found two and missed
+> `tests/wire_self_compile_status.rs`; CI failed on it. All three now read **492**.
+>
+> **Four ways a local run under-reported, all met today**: guards run before the last edit;
+> `-p keleusma --test X` omitting `self-host`; **`cargo test` stopping at the first failing
+> binary**; and a run edited while in flight, whose clean result belonged to no tree and was
+> discarded. The common shape is that the run did less than I believed it did.
+
+> **Currency note (2026-09-11, session 65, forty-second increment). THE HANDOFF IS CURRENT
+> AGAIN.**
+>
+> Refreshed at increment twenty-four, now at forty-one. It would have told a resuming agent that
+> Order 1 is blocked and that no name-carrying region kind is reachable -- **both now false**.
+>
+> The banner leads with **81% to 99%**, two kinds routed, `highest_command` 181 to 185, the five
+> increments of reading that preceded one line of behaviour, and the feature-set trap where
+> `-p keleusma --test X` omits `self-host` while `--workspace` unifies it on.
+>
+> **Three validity items added**; the list reads 1 to 21 with no inversion, checked by rendering.
+> Every check run rather than copied, boundary pin included. Anchor moved to `fad3fe11`.
+
+> **Currency note (2026-09-11, session 65, forty-first increment). `ENUM_VARIANTS` IS ROUTED, AND
+> A GUARD CAUGHT WHAT THE LOCAL RUN COULD NOT.**
+>
+> Share **98% to 99%**; skipped kinds **three to two** (`ENUM_LAYOUTS`, `PARAM_TYPES`, both needing
+> an emitter written); computed share unchanged. Driven across an enum boundary and
+> mutation-checked.
+>
+> **CI failed on `wire.kel`'s chunk count, 486 to 490.** `cargo test -p keleusma --test X` does NOT
+> enable `self-host`; CI's `--workspace` unifies it on. **Different feature sets**, and a test can
+> be silently absent from one.
+>
+> **Enumerated rather than fixed**: a SECOND live site pins the same figure in
+> `tests/selfhost_parse.rs`, from the parsed source rather than the compiled module. The workspace
+> run confirmed those two were the only failures. Node count 1,194 to 1,209, margin 156.
+
+> **Currency note (2026-09-11, session 65, fortieth increment). `ENUM_VARIANTS` IS NOT THE SAME
+> SHAPE AS THE SLOT SLICE.**
+>
+> `mi_enum_names` INTERLEAVES type name then variants per enum, so a flat variant index does not
+> sit at `ebase + k`, and the counters cannot supply the offset because `vcnt` is overwritten each
+> iteration -- the same fact that defeated the slot base, biting again elsewhere.
+>
+> **The sound shape is a CURSOR**: a begin sets it to `ebase`, each step advances by one, and the
+> host signals the FIRST variant of each enum so the stage steps over the type name. The host
+> supplies a boundary it knows and never a name index it cannot check.
+>
+> The plan's "same shape" sentence predated reading the walk. **Checked before being acted on**;
+> it would have produced a wrong emitter otherwise.
+
+> **Currency note (2026-09-11, session 65, thirty-ninth increment). `DATA_SLOTS` IS ROUTED, AND
+> THE SELF-HOSTED SHARE IS 98%.**
+>
+> Both halves of the slice landed. **The region is byte-identical for every corpus stage**, and
+> `no_region_the_driver_routes_disagrees_with_the_reference` passed on the first run; the only
+> failure was the share figure asking to be told the new number.
+>
+> Share **81% to 98%**; skipped kinds **four to three** (`ENUM_VARIANTS`, `ENUM_LAYOUTS`,
+> `PARAM_TYPES`); **computed share unchanged, as predicted** -- the stage supplies the name and the
+> host decides the rest, which is the `CHUNKS` standing. `DATA_SLOTS` joins `CHUNKS` as MIXED.
+>
+> **It is the first routed kind whose record carries a name**, which is why the interner route had
+> to exist first. See `docs/decisions/DATA_SLOTS_ROUTING_PLAN.md`, now complete.
+
+> **Currency note (2026-09-11, session 65, thirty-eighth increment). THE NODE MARGIN IS 171, NOT
+> 217.**
+>
+> `tests/module_input_node_budget.rs` measures `wire.kel` at **1,194 nodes against a 1,365 cap**.
+> The figure quoted around the tree is 1,148 -- stale by 46 -- and the plan assumed a margin of
+> 217. **A quarter of the assumed headroom was already gone**, in the one number the slice is sized
+> against.
+>
+> Fourth stale figure in this arc, and the one that would have mattered most. The plan now cites
+> the test rather than a number, and the test asserts its walk has not drifted from the writer.
+>
+> **The measure-first instruction caught a real error on its first use.**
+
+> **Currency note (2026-09-11, session 65, thirty-seventh increment). THE SLICE IS BUDGETED.**
+>
+> **Command 178 is already driven** by a test feeding it a name from the reference's record, so the
+> name-aware step must be ADDITIVE. The slice adds TWO commands -- a begin and a name-aware step --
+> and `highest_command` moves 181 to 183.
+>
+> **`wire.kel` is itself a measured stage**: 1,148 constant-forest nodes against a 1,365 table, a
+> margin of 217, and 475 chunks. Two new functions grow the very stage the corpus measures, and it
+> must still emit its own regions.
+>
+> The plan says to re-measure the node count after the stage edit and before the driver edit, so a
+> cap failure is attributed to stage growth rather than routing. See
+> `docs/decisions/DATA_SLOTS_ROUTING_PLAN.md`.
+>
+> **Four self-corrections in this arc, each from reading one level deeper, none reaching code.**
+
+> **Currency note (2026-09-11, session 65, thirty-sixth increment). THE `nmap` ASSUMPTION HOLDS;
+> THE SLICE NEEDS A BEGIN FOR A DIFFERENT REASON.**
+>
+> `window_emit_chunks` creates ONE `shared` buffer and passes it to the begin and every step. The
+> driver re-seeds only the slots it writes and `wire.nmap` is never among them, so the interner's
+> result survives by construction.
+>
+> **The remaining question is which command runs the interner for a slot pass.** Command 174 also
+> zeroes the chunk cursors; command 170 also emits `NAMES` into the window. Both are misuses, so a
+> begin whose whole body is `mi_window_prepare()` is the smallest honest answer -- and it moves
+> `highest_command`.
+>
+> **The plan was right to name the assumption and wrong about what followed from it.** Same
+> conclusion, different reason; a wrong reason is how a design gets built against the wrong
+> constraint.
 
 > **Currency note (2026-09-10, session 65, thirty-fifth increment). THE SECTION BASE IS NOT
 > RECOVERABLE FROM RETAINED STATE, AND THE PREVIOUS NOTE SAID IT WAS.**
@@ -576,36 +875,6 @@ Current sprint source of truth.
 > identity already and discards it. That is a record-stream change and the operator's call; not
 > begun. **The four operator decisions are unchanged and none was touched.**
 
----
-
-> **Currency note (2026-09-08, V0.3.X line). THE TEN RED TESTS WERE THREE STORIES, AND FOUR OF THEM
-> WERE A DEFECT.**
->
-> General `Op::Stream` lowering reddened ten backend tests, and the handoff recording that — mine —
-> said to invert all ten. **Four were reporting a defect the lowering had just introduced.**
-> `degenerate_stream_yield` returned `None` for two incompatible reasons, *not degenerate* and
-> *unsafe*, and the general path was defined as exactly that `None`, inheriting every soundness
-> rejection as a feature request. A stream calling a suspending callee went to `Refusals: []`.
-> **The backend was repaired; those four tests were not touched.**
->
-> Three were correct widenings, each now carrying a whole-sequence comparison. Three were
-> simulations whose premise came true and now measure the shipping backend.
->
-> **The frontier was re-derived rather than edited**: the discriminator is a composite that escapes
-> the iteration that built it, needing three shapes because a pair leaves two explanations standing.
-> That exposed a refusal class nothing had named — a composite built from a RESUMED VALUE, refused
-> for unknown width — and **the width was declared all along**, in `param_types[0]`. With it, a
-> composite-yielding stream is driven and agrees BODY FOR BODY across five suspensions, closing a
-> gap the frontier map had carried since it was written.
->
-> **A guard of this line caught what reading would not have**: `comment_citations` rejected the push
-> because a renamed test was still cited in `REVERSE_PROMPT.md`. Four more stale citations followed.
->
-> 485 tests, 0 failed, BOTH float configurations, every half frozen. No opcode added, no
-> `BYTECODE_VERSION` change. Publication remains held.
-
----
-
 > **Currency note (2026-09-08, session 64). A WRONG ANSWER FOUND AND REPAIRED, AND A CAPABILITY
 > THAT WAS ALWAYS THERE.**
 >
@@ -636,31 +905,6 @@ Current sprint source of truth.
 > because its result was implausible.
 >
 > **The four operator decisions are unchanged and none was touched.**
-
----
-
-> **Currency note (2026-09-06, V0.3.X line). `Op::Len` HAS NO PRODUCER THAT COULD BE FOUND, AND
-> TWELVE GUARDS WERE DISPOSED OF RATHER THAN REPAIRED.**
->
-> Absorption 51 brought the `Op::Len` root repair and **twelve backend tests fired at once**, all on
-> the V0.3.X line. **None was patched green.** Four inverted, four retired as superseded, one verdict
-> restated, two census figures re-measured with their causes named, one corpus claim amended.
->
-> **No producer found**, by four legs each carrying a must-fire control: 14 constructs probed with 10
-> reaching codegen and none emitting; all 69 compiling corpus modules across four roots swept, none carrying it; the
-> compiler scanned, 11 occurrences all comments or absence assertions. **NOT written as unreachable** —
-> this tree carries a retraction on that word from `Op::IsStruct`.
->
-> **A MECHANISM WAS RECORDED WRONGLY BY THE V0.3.X LINE AND IS CORRECTED.** Its handoff said
-> `static_for_in_length` gained an `Expr::If` arm. It did not, and still has none; the fold comes from
-> that function's fallback to `infer_expr_type`. `OP_LEN_ROOT_REPAIR.md` stated this correctly on the
-> day it landed and was restated without being read.
->
-> **A figure moved and its reading is constrained**: corpus refusals 2 → 1, because the opcode's INPUT
-> vanished, not because the backend learned to lower it. That refusal stands. `65 of 66` unchanged.
->
-> `docs/decisions/OP_LEN_PRODUCER_CENSUS.md`. No opcode added, no `BYTECODE_VERSION` change.
-> Publication remains held.
 
 > **Currency note (2026-09-05, session 63 close). THE SWEEPS, AND THREE CORRECTED INSTRUMENTS.**
 >
@@ -1245,908 +1489,6 @@ Current sprint source of truth.
 >
 > **THREE CHECKS WRITTEN THIS SESSION COULD NOT FAIL**, each satisfied by a different part of a
 > document from the one it was about. Mutation caught all three; reading caught none.
-
-> **Currency note (2026-08-28, V0.3.X line, twentieth entry). THREE MODULE COUNTS RECONCILED, AND A
-> GUARD CAUGHT ITS OWN AUTHOR.**
->
-> `bound_transfer.rs` reported **74 modules examined** and **71 compared** where every other census
-> says **69**. Measured: it **prepends the RTOS prelude before compiling**, so five scripts that fail
-> standalone succeed there. **74** is every corpus file, all of which compile under that treatment;
-> **71** is those with an entry point; **69** is compiling standalone. **All three are correct and
-> none says which population it means** — the third instance of this shape after 239-against-256 and
-> 91-against-67. The consequence is that `bound_transfer` measures a strictly larger corpus than every
-> other census here.
->
-> **The probe written to reconcile them had two defects of its own**: it keyed by file name, and two
-> files are named `prelude.kel`, so it reported 73 against the fingerprint's 74; and a substitution
-> silently did nothing because `cargo fmt` had split its target line and **the assertion was
-> omitted** — the second occurrence of that slip this session, after the lesson was recorded.
-> Separately, the skippable-test pin added last entry **flagged this entry's new test**, because a
-> closure-local `return` is indistinguishable from an early exit to the scanner; repaired by rewriting
-> the closure rather than widening the pin, with the false-positive class documented. Absorption 29
-> complete, both predictions hit. `native_codegen` **355/0/72**, workspace **2486/0/92**; censuses
-> unchanged at **61 of 66**, **1070 of 1074**, **89841 of 89940**.
-
-> **Currency note (2026-08-28, V0.3.X line, nineteenth entry). A PASS COUNT IS WORTH THE FRACTION OF
-> IT THAT RAN: 10 OF 325 CAN SKIP, NONE ARE.**
->
-> The closed name audit asked whether a test proves its claim; this asks whether it **ran**. A test
-> returning early when a toolchain is absent reports as passed and joins the total quoted as evidence.
-> **10 of 325 can return before asserting anything, and none are skipping here** — verified rather
-> than assumed, after a timing-based suspicion about `retcon_m2` proved wrong and its output turned
-> out to carry real subprocess results.
->
-> **The scanner written to measure this was wrong first**, reporting 33 by matching the word "return"
-> inside comments; **two instruments disagreeing is the only reason it surfaced**, and 33 would
-> otherwise have been published as a finding about a third of the suite. The population is now pinned
-> so an eleventh announces itself, while **whether a skip occurs is deliberately not asserted**,
-> because a machine without a C compiler should not see a failure and the defect is invisibility
-> rather than the skip. Absorption 28 complete; both its predictions hit exactly, including that the
-> corpus fingerprint would not move for a README change since it scans `.kel` only. `native_codegen`
-> **354/0/71**, workspace **2484/0/91**; censuses unchanged at **61 of 66**, **1070 of 1074**,
-> **89841 of 89940**.
-> See [`../decisions/SILENT_SKIP_BRIEF.md`](../decisions/SILENT_SKIP_BRIEF.md).
-
-> **Currency note (2026-08-28, V0.3.X line, eighteenth entry). THE NAME AUDIT CLOSES AT ZERO, AND
-> STOPPING IS THE RESULT.**
->
-> The third and largest class — a quantifier somewhere other than the front — is **36 of 325**, too
-> many to read at the care the first two received, so **the method scaled instead of the effort**: a
-> universal claim resting on a body that never iterates is mechanically detectable, and **29 iterate,
-> 7 do not**. The seven were read and **all are sound**, the strongest candidate genuinely building,
-> linking and running a binary, the rest asserting over a fully enumerated population or carrying a
-> quantifier scoped inside a single subject.
->
-> **Hit rates across the three classes are 2, 1, 0**, totalling **3 of 29 read across 58 names**.
-> **Auditing names stops here.** The brief written before this pass said that a null result would be
-> the signal to stop and that continuing would be momentum rather than judgement, which is what makes
-> this a decision rather than fatigue. Two limits are stated: the triage is a filter with known false
-> positives so its 29 were not read, and names with no syntactic marker remain unbounded — the canary
-> defect was caught by reading, not by a pattern. Noted and not fixed: the `retcon_m2` test skips
-> silently without a C compiler. Absorption 27 complete, prediction hit exactly. `native_codegen`
-> **353/0/70**, workspace **2482/0/90**; censuses unchanged at **61 of 66**, **1070 of 1074**,
-> **89841 of 89940**.
-
-> **Currency note (2026-08-28, V0.3.X line, seventeenth entry). THE BLIND SPOT AUDITED TOO;
-> CUMULATIVE 3 OF 22.**
->
-> The sixteenth entry's audit recorded what it could not see — leading quantifiers only — which is the
-> only reason this one had a target. The **capability class** (*can*, *cannot*, *must*, *able*) is
-> **11 of 325 names**, of which **1 overclaimed**: a_tail_that_can_trap_is_still_refused (the superseded name, given without backticks because it no longer resolves). Its helper
-> `assert_refused` checks only that lowering **errs, not why**, and the backend refuses that shape for
-> **the yield not being in tail position**, measured independently in `stream_frontier.rs` — a yield
-> followed by code is refused whatever follows it. Renamed to
-> `a_yield_with_a_trailing_expression_is_refused`.
->
-> **RENAMED AGAIN 2026-09-08, and the shape it named now LOWERS.** General `Op::Stream` lowering
-> admits `yield a; a * a`, so the case became an agreement test. The trap question this entry
-> describes is STILL not isolated by any test, and now for a third reason: a native trap aborts the
-> process rather than returning a comparable value, so the harness cannot witness the correspondence
-> even though the shape lowers. It is recorded as reasoned, not measured.
->
-> **The doc comment's reasoning stands and the name did not**: a trap observable would be taken by the
-> virtual machine after suspension where native code, having returned, would not, but **no test can
-> isolate that while every non-tail yield is refused**. That is the second time in two increments that
-> a strong claim proved **unreachable rather than unproven**. A limitation is named rather than fixed:
-> `assert_refused` has six call sites and cannot distinguish reasons, though its message states the
-> true reason for all six. **Cumulative 3 of 22**, with **36 mid-name quantifiers and all unmarked
-> names unaudited**, so this is a floor on a habit rather than a rate for the suite. `native_codegen`
-> **353/0/70** clean; censuses unchanged at **61 of 66**, **1070 of 1074**, **89841 of 89940**.
-> See [`../decisions/CAPABILITY_CLAIMS_BRIEF.md`](../decisions/CAPABILITY_CLAIMS_BRIEF.md).
-
-> **Currency note (2026-08-28, V0.3.X line, sixteenth entry). NAMES AUDITED AGAINST BODIES: 2 OF 11
-> OVERCLAIMED, AND THE RATE IS A LOWER BOUND.**
->
-> The same defect had appeared three increments running — a name asserting more than its body checks.
-> The audited set was **defined by rule before being audited**, so it could not be the tests that came
-> to mind: `#[test]` functions whose name opens with a universal or negative quantifier, **11 of 325**.
-> **Two overclaimed, nine were sound**, the nine iterating their full population or a complete operator
-> set with several carrying non-vacuity guards.
->
-> Both repairs chose a direction rather than defaulting to the cheap one, since weakening a name
-> silently reduces what the suite proves. *"Every coroutine intrinsic is declarable"* became **the
-> intrinsics this backend would need**, the narrower claim being the useful one. *"Each float
-> conversion is refused by name"* became **the pair is refused at the first of the two**, and the body
-> was deliberately not strengthened: a program emitting `FloatToInt` alone needs a float arriving
-> without a signature or a constant, and both routes are guarded, so **the strong claim is unreachable
-> rather than unproven**. **The rate is a lower bound** — the rule sees leading quantifiers only, and
-> the canary defect fixed earlier today would not have been caught by it. `native_codegen`
-> **353/0/70** clean; censuses unchanged at **61 of 66**, **1070 of 1074**, **89841 of 89940**.
-> See [`../decisions/NAME_VERSUS_BODY_BRIEF.md`](../decisions/NAME_VERSUS_BODY_BRIEF.md).
-
-> **Currency note (2026-08-28, V0.3.X line, fifteenth entry). THE INSTRUMENT THAT REPLACED A BELIEF
-> HAD A PROXY THAT OVERCLAIMED, AND THERE IS NO UNIQUE OUTLIER.**
->
-> The fourteenth entry's distribution named `14_frame_log.kel` as a unique outlier at four of six
-> properties. **Reading that module refutes it**: its entry is `loop main(tick: Word) -> Word` and it
-> yields a **Word**. The property called *"yields a composite"* was implemented as co-occurrence of a
-> `Yield` and a `NewComposite`. Corrected by reading the chunk's declared return shape, which for a
-> `loop` chunk is what it yields: the count falls **5 → 4 of 69**, that module holds **three**, and it
-> **ties with `13_telemetry_stream.kel`** — so there is no unique outlier. A second property was
-> renamed *"constructs in a break scope"*, because `Op::Loop` is a break-scope marker the compiler
-> also emits for `match`; the body was right and only the label wrong.
->
-> **An instrument is not exempt from the scrutiny applied to the claims it measures.** What survives
-> was re-derived rather than carried: 42 of 69 modules hold none, *returns a composite* is held by 17
-> of 69 and marks nothing, and pairing `12_sensor_window` with `14_frame_log` was selection by
-> attention. Separately, **one edit this increment silently did nothing** because its assertion was
-> omitted; a no-op edit and a successful one are indistinguishable afterwards. `native_codegen`
-> **353/0/70** clean; censuses unchanged at **61 of 66**, **1070 of 1074**, **89841 of 89940**.
-
-> **Currency note (2026-08-28, V0.3.X line, fourteenth entry). THE CLUSTERING CLAIM WAS HALF RIGHT,
-> AND THE HALF THAT WAS WRONG CAME FROM SELECTION BY ATTENTION.**
->
-> The thirteenth entry ended by observing that three investigations converged on one instruction,
-> "which suggests the corpus's awkward cases cluster" — a hypothesis stated as a finding, in two
-> documents, before anyone counted. Measured over the four-root corpus's **69 modules** and six
-> properties the backend cares about for independent reasons: **42 hold none**, 19 hold one, 6 hold
-> two, one holds three, and one holds four.
->
-> **`14_frame_log.kel` is a genuine outlier**, four of six, more than any other module, and that is
-> measured rather than an artefact of how often it was examined. **`12_sensor_window.kel` is not** —
-> it holds two, tied with five others, and pairing the two was selection by attention. **One property
-> is not a marker at all**: *returns a composite* is held by 17 of 69, so weighting it would have
-> pointed work at a seventh of the corpus while feeling selective. The reusable lesson is that "these
-> keep showing up in my notes" is evidence about the notes, and only counting over everything —
-> including what was never looked at — separates attention from structure. `native_codegen`
-> **353/0/70** clean; censuses unchanged at **61 of 66**, **1070 of 1074**, **89841 of 89940**.
-> See [`../decisions/AWKWARD_CLUSTERING_BRIEF.md`](../decisions/AWKWARD_CLUSTERING_BRIEF.md).
-
-> **Currency note (2026-08-28, V0.3.X line, thirteenth entry). THE HALF LEFT UNVERIFIED WAS FALSE,
-> AND THE MODEL IT SUPPORTED SURVIVES ANYWAY.**
->
-> The twelfth entry corrected a stale denominator and deliberately left the numerator — the claim that
-> no corpus composite is slot-homed. **Measured, it is false.** `14_frame_log.kel::main` constructs at
-> op 24 and stores into a private data slot at op 25, and **two independent methods agree**: a
-> producer walk over the instruction stream, and the module's own `private_composite_layout` and
-> `persistent_composite_bytes`. A must-fire control proves neither method is blind. **The prediction
-> written before measuring was zero.**
->
-> **`region.rs`'s placement model survives for a specific reason**: the planner does place op 24, so
-> the construction is a temporary whose value is subsequently copied into the slot. No body lives only
-> in a slot. "Constructed as a temporary" and "copied into persistent storage" are compatible, and the
-> old sentence conflated them — a false sentence and a sound model in one paragraph. Leaving the half
-> would have been worse than leaving the whole sentence stale, because a freshly verified half reads
-> as verifying the rest. `native_codegen` **352/0/69** clean; censuses unchanged at **61 of 66**,
-> **1070 of 1074**, **89841 of 89940**.
-> See [`../decisions/SLOT_HOMED_BRIEF.md`](../decisions/SLOT_HOMED_BRIEF.md).
-
-> **Currency note (2026-08-28, V0.3.X line, twelfth entry). 239 WAS A CARRIED NUMBER, AND WHAT MAKES
-> A CROSS-CHECK VALID IS NOW STATED.**
->
-> The tree gave composite construction sites as **239** in `region.rs` and **256 in 35 chunks** in the
-> handoff; a count over 35 chunks cannot exceed a corpus-wide one. **239 has no producer** — the spike
-> its comment cited no longer reports it. Current, with the population attached: **256 sites across 35
-> chunks of the four-root corpus's 69 compiling modules**, agreed by two independent walks, the
-> planner's placements and a raw scan of the instruction stream.
->
-> **That is what a cross-check is: different METHODS over the SAME population.** The corroboration
-> claimed two entries ago was the same method over different populations, which is not evidence, and
-> it was corrected. The equality also matters on its own, since every `Flat` construction must receive
-> exactly one placement and neither a dropped nor a duplicated site is visible to a differential. The
-> stale sentence's other half, "0 of them slot-homed", is **not re-derived and not restated** —
-> correcting a denominator does not license the numerator. Incidentally **69 modules** confirms the
-> previous entry's arithmetic by a third route. `native_codegen` **349/0/68** clean; censuses
-> unchanged at **61 of 66**, **1070 of 1074**, **89841 of 89940**.
-
-> **Currency note (2026-08-28, V0.3.X line, eleventh entry). THE SAME DEFECT A THIRD TIME, AND A
-> CORROBORATION THAT WAS NOT ONE.**
->
-> The corpus guard shipped last entry covered **three roots where its consumers read four**, leaving
-> seven files unwatched. That is one defect at three granularities in three consecutive increments: a
-> pin whose input was a directory scan; a scan of three named directories where the loaders recurse;
-> and a guard whose roots were narrower than its consumers'. **Each time the watched population was
-> narrower than the one that mattered, and each time the narrow scan returned a well-formed answer.**
->
-> The tenth entry's claim that the fix "produced a cross-check" is **corrected**: the two censuses
-> read different root sets, so their agreement was not corroboration. The first explanation offered
-> here — that the extra files do not compile — was **also wrong**, and its test failed: two of the
-> seven do compile, both preludes, and they compile to **zero chunks**. So a four-root census sees two
-> more modules and the same chunk total. **Quote the population with the number**: three-root loaders
-> see 67 modules, four-root censuses 69, and both see 1074 chunks. The guard now pins **74 files
-> across four roots**, covering what the loaders read rather than what compiles. `native_codegen`
-> **347/0/67** clean; censuses unchanged at **61 of 66**, **1070 of 1074**, **89841 of 89940**.
-
-> **Currency note (2026-08-28, V0.3.X line, tenth entry). THE CORPUS POPULATION WAS NEVER 91; IT IS
-> 67, AND A CORPUS CHANGE NOW ANNOUNCES ITSELF.**
->
-> Building a guard for the widest-input exposure found a defect in three test files written this
-> session: they listed `examples/scripts/rogue` explicitly **and** recursed from its parent, so every
-> file in `rogue` was visited twice — **67 unique files, 24 of them in `rogue`, counted as 91**.
-> Corrected to **67 modules and 1074 chunks examined**. **The published coverage figures were never
-> affected** and were re-derived to confirm it: `spike_corpus_coverage`, `isa_lowering_census` and
-> `bound_transfer` do not list `rogue` explicitly. **61 of 66**, **1070 of 1074**, **89841 of 89940**
-> all stand, and the findings stand too, since the three refusals and the one escaping-shape chunk lie
-> outside `rogue`. What was wrong was the population they were measured against.
->
-> **The fix produced a cross-check that had not existed**: two independent censuses now agree at
-> 1074, where before they said 1074 and 1117 and nobody had set the numbers side by side.
-> `corpus_fingerprint.rs` now pins 67 files by path and content digest, failing with what moved and a
-> ready-to-paste manifest. Its own first scan under-covered at 57 files by not recursing, and was
-> caught before anything was pinned. `native_codegen` **346/0/67** clean.
-> See [`../decisions/CORPUS_FINGERPRINT_BRIEF.md`](../decisions/CORPUS_FINGERPRINT_BRIEF.md).
-
-> **Currency note (2026-08-28, V0.3.X line, ninth entry). THE WIDEST-INPUT RULE, AND AN ABSORPTION
-> WHERE THREE PREDICTIONS AGREED.**
->
-> From the `v0.2.3` line, after their branch-dependent pin failed here: **before pinning a value, ask
-> what the widest input to it is and whether that input is pinned too.** An invariant protects a
-> region and was never going to protect an expectation whose widest input lay outside one. Applied to
-> this line it names a real exposure — many pinned figures here read a directory scan of
-> `src/selfhost/kel/` and `examples/scripts/`, **which are shared with `v0.2.3`** — and explains why
-> it has never bitten: every absorption asks "corpus inputs touched?" before predicting, and **that is
-> the widest-input question**. The check was already habit; the rule supplies the argument, and a
-> habit does not tell you when it stops applying.
->
-> Absorption 26 carried PR #315. The other line forecast the delta; this line measured it
-> independently rather than adopting the forecast, and both matched the outcome: **workspace
-> 2480/0/89, exit 0**. `native_codegen` **344/0/66** clean under fmt, clippy and doc. Censuses
-> re-derived and unchanged at **61 of 66**, **1070 of 1074**, **89841 of 89940**.
-
-> **Currency note (2026-08-28, V0.3.X line, eighth entry). THE RED IS CLEARED AND THE BRANCH IS
-> PUBLISHED AGAIN; A RUN CLOSED IT, NOT THE UPSTREAM MERGE.**
->
-> PR #314 landed and absorption 25 carried it in. The workspace suite was then **run**: **2479
-> passed, 0 failed, 89 binaries, exit 0**, zero `FAILED` lines. The prediction's arithmetic was
-> written before merging — 2475 passing, plus the one failing test, plus three new — and held. Nine
-> commits had waited four iterations rather than go through `--no-verify`; the gate was correct that
-> the suite was red, and bypassing it would have published a branch its own gate rejected. `src/` and
-> `tests/` remain byte-identical to `v0.2.3` and the ownership check is empty and non-vacuous.
-> `native_codegen` **344/0/66** clean under fmt, clippy and doc. Censuses re-derived and unchanged:
-> **61 of 66**, **1070 of 1074**, **89841 of 89940**.
-> See [`../decisions/UNBLOCK_AND_VERIFY_BRIEF.md`](../decisions/UNBLOCK_AND_VERIFY_BRIEF.md).
-
-> **Currency note (2026-08-28, V0.3.X line, seventh entry). A TAIL YIELD IS LOWERED AS A RETURN,
-> SO THE GAP NAMED LAST ENTRY DID NOT EXIST AS DESCRIBED.**
->
-> The sixth entry recorded that a tail-yielded composite lowers with nothing executing it, and called
-> the untested code "a composite crossing the yield boundary". **There is no yield boundary in that
-> lowering.** Measured: the lowered module declares **no host yield hook**, containing only the entry
-> chunk and `llvm.trap`, and the entry **returns a pointer into the caller-provided region** — checked
-> against the base and length of the buffer the host passed rather than assumed. So the marshalling is
-> the composite-RETURN ABI, already covered by `composite_return_aliasing.rs`.
->
-> The shape is now witnessed **byte-for-byte**: the native body and the reference's resolved arena
-> body are identical. A first attempt compared the reference's `Debug` text, which shows the handle
-> and not the body, and failed for the right reason. **Comparing an address to an address would have
-> proved nothing about marshalling.** Worth carrying: **the reference SUSPENDS where the native side
-> RETURNS**, agreeing on the value, which is what the degenerate-yield path means. What remains
-> uncovered is **sequence semantics** for a composite-yielding stream, which is blocked rather than
-> unwritten — it needs a non-tail yield, which is refused. `native_codegen` **344/0/66** clean.
-> The workspace remains red on the `v0.2.3` line's pin, fixed upstream as PR #314 and not yet merged,
-> so this branch still cannot push.
-
-> **Currency note (2026-08-28, V0.3.X line, sixth entry). THE STREAM FRONTIER IS TAIL POSITION, AND
-> THE WORKSPACE SUITE IS RED FOR A REASON THAT IS NOT A DEFECT.**
->
-> Measured over eight suspending shapes, none of them reference-rejected: **a single `yield` in tail
-> position lowers, including a yielded COMPOSITE**, and everything else is refused for `Stream` — a
-> yield followed by code, two yields, a yield in an `if`, a yield in a `for`. **A composite in tail
-> position lowers while a `Word` with code after it does not**, which refutes the obvious guess that
-> composites are what blocks `13_telemetry_stream.kel`. The **yield-escape refusal remains shadowed**,
-> now asserted rather than inferred. Named and not fixed: **a tail-yielded composite lowers and
-> nothing executes it**, the suspension differential's subjects all yielding `Word`.
->
-> **KNOWN RED, OWNED BY THE `v0.2.3` LINE.** Absorption 24 brought
-> `tests/op_tag_tables.rs::the_shipped_examples_narrow_the_unexercised_tags_and_the_residue_is_named`,
-> whose pinned set is branch-dependent: on `v0.3.0` the residue is `{checkedneg}` where the pin says
-> four, which is *fewer* and which its own message calls a coverage gain. The cause is this line's
-> `opcode_witness.kel`, whose `byte_mix` does Byte arithmetic and so exercises the unchecked
-> Add/Sub/Mul. **This line will not edit it**, because `src/` and `tests/` are kept byte-identical to
-> `v0.2.3` and the ownership check asserts that. Reported to `keleusma-02`. `native_codegen`
-> **341/0/65** clean; workspace **2475 passed, 1 failed, 89 binaries**.
-> See [`../decisions/STREAM_FRONTIER_BRIEF.md`](../decisions/STREAM_FRONTIER_BRIEF.md).
-
-> **Currency note (2026-08-28, V0.3.X line, fifth entry). THE FOUR UNEXERCISED OPCODE ARMS ARE
-> RESOLVED, AND `Stream` IS NOT AS UNSUPPORTED AS THIS LINE HAD SAID.**
->
-> An arm that has never run is where a miscompile hides, so each of the four opcodes the census
-> records as lowered-but-unexercised was asked what stands between it and a witness. `IntToFloat` is
-> **refused by name**; `FloatToInt` is unreached behind that refusal; **`Reset` is reachable, its
-> module lowers, and it already has an execution witness** in the suspension differential's fifteen
-> `loop main` subjects; `IsStruct` has no producer found by a further search and the reference's arm
-> accepts only a `Boxed` body, of which B28 left none. **The brief guessed `Reset` was unreachable and
-> was wrong** — a minimal `loop main` is refused nothing, so **`Stream` is lowered for that shape**
-> and an earlier note on this line calling it unsupported was true of one module, not of the opcode.
-> **No census figure moved and none should have**: the census surveys the corpus, and this asked a
-> broader question. Nothing was widened to make a test possible; the float guard blocking the
-> conversion witness is the finding. Absorption 23 complete, prediction hit exactly. `native_codegen`
-> **337/0/64**, workspace **2475/0/89**.
-> See [`../decisions/UNPROVEN_OPCODES.md`](../decisions/UNPROVEN_OPCODES.md).
-
-> **Currency note (2026-08-28, V0.3.X line, fourth entry). THE COVERAGE CENSUS WAS OVERSTATING BY
-> TWO CHUNKS, AND THIS LINE PUBLISHED THE OVERSTATED FIGURE.**
->
-> Naming the remaining refusals exposed a defect in the instrument that counts them. There are
-> **three**: `13_telemetry_stream.kel::main` (`Stream`), `float_witness.kel::<module>` (a float
-> constant), `refused_witness.kel::len_witness` (`Len`) — where the coverage figure implied two.
-> `module_refusals` reports a whole-module refusal against a symbol that is no chunk's name, and the
-> census marked chunks unlowerable by matching that symbol to a chunk name, so **a module the backend
-> cannot lower at all contributed every chunk to the lowerable count**. `float_witness.kel`'s two
-> chunks were counted as lowerable while nothing was emitted for them. Corrected: **1072 → 1070 of
-> 1074**, instances **89854 → 89841 of 89940**. The previous entry's *delta* stands — the width
-> certification lifted exactly two chunks — but the level was wrong, so the true movement was
-> **1068 → 1070**. The execution evidence never depended on the census. Found by asking two
-> instruments the same question and comparing; neither number looked wrong alone. Absorption 22
-> complete, prediction hit exactly. `native_codegen` **332/0/63**, workspace **2471/0/88**.
-> See [`../decisions/LAST_TWO_CHUNKS_BRIEF.md`](../decisions/LAST_TWO_CHUNKS_BRIEF.md).
-
-> **Currency note (2026-08-28, V0.3.X line, third entry). THE LAST TWO COMPOSITE REFUSALS ARE
-> CLOSED, AND A METHOD ERROR THIS REPOSITORY HAD ALREADY RECORDED WAS REPEATED AND CAUGHT.**
->
-> A local written more than once is now trusted when **every** write's producer fixes its width by the
-> instruction alone. **No fixpoint was needed**: the arithmetic result slot carries a literal width
-> regardless of operands, so the induction variable's two writes depend on nothing. Coverage
-> **1070 → 1072 of 1074 (99.8%)**, opcode instances **89741 → 89854 (99.9%)**, and the corpus
-> differential goes **59 → 61 executed and agreeing** with exempt 14 → 12 — execution is the evidence,
-> since a wrong width would have raised coverage just the same.
->
-> **`Op::stack_growth`/`stack_shrink` are the operand-stack PEAK model, not pop and push counts**, and
-> their own documentation says so and names `verify::op_depth_effect` as the correct source. A walk
-> built on them mis-attributed the loop increment's stored value, which is exactly the classification
-> the certification rests on. The same doc records that `text_size` made this mistake before. The
-> earlier published conclusion was re-derived rather than assumed to survive, and it did.
-> Absorption 21 complete, prediction hit exactly. `native_codegen` **330/0/62**, workspace
-> **2469/0/88**. See [`../decisions/OPERAND_WIDTH_RECOVERY.md`](../decisions/OPERAND_WIDTH_RECOVERY.md).
-
-> **Currency note (2026-08-28, V0.3.X line, second entry). A MULTI-FUNCTION PROGRAM CAN NOW BE
-> DIFFERENTIALLY TESTED FROM A SOURCE STRING, AND THE REVERTED WIDTH FIX IS BACK WITH EVIDENCE.**
->
-> `native_codegen/tests/module_source_differential.rs` runs an inline multi-function program through
-> both the native lowering and the reference. It fills a real gap: `lower_chunk` refuses `Op::Call`,
-> so no inline test could contain a call, which is why a sound width fix had been reverted
-> unverified. **Its ABI assertion fired immediately** — the entry's trailing pointers are
-> all-or-nothing, so a pure-`Word` program emits a one-parameter entry and the four-pointer call
-> would have been undefined behaviour presenting as a SIGSEGV inside JIT code. With the harness in
-> place, chunk-call result widths are again seeded from `Module::signatures`: the target case **was
-> refused for an unknown packed width and now lowers and agrees**, and the test fails without the
-> change. **Coverage is unchanged at 1070 of 1074** — the seeding does not lift the two composite
-> refusals, whose cause is the multi-write local rule. `native_codegen` **324/0/62** clean under fmt,
-> clippy and doc; workspace **2467/0/88**.
-
-> **Currency note (2026-08-28, V0.3.X line). THE LAST TWO COMPOSITE REFUSALS ARE EXPLAINED TO THE
-> CAUSE, AND A SOUND FIX WAS REVERTED FOR WANT OF EVIDENCE.**
->
-> The unknown operand at `12_sensor_window.kel` op 23 and `14_frame_log.kel` op 24 is **operand 1 of
-> 3**, produced by a `GetLocal` of the `for` loop's induction variable, which each chunk writes
-> **twice**. A local's width is trusted only when written at most once, because a linear scan cannot
-> see a back edge. Derived by simulating the stack from the instruction set's published effects; a
-> heuristic walk gave a confident wrong answer first. **Two hypotheses refuted**, the `Boxed` form and
-> the adjacent `Call` — seeding chunk-call widths from `Module::signatures` was implemented and the
-> refusal did not move. That seeding was then **reverted**: it changed no corpus chunk and no harness
-> can execute a source-string program containing a call, and widening a compiler's accepted set
-> without execution-backed evidence is how a silent mispack ships. **The named prerequisite is a
-> source-string whole-module differential harness.** Lifting the refusal itself needs a fixpoint over
-> local widths. Absorption 20 complete, prediction hit exactly. `native_codegen` **319/0/61**,
-> workspace **2467/0/88**, coverage re-derived and unchanged at 1070 of 1074.
-> See [`../decisions/OPERAND_WIDTH_RECOVERY.md`](../decisions/OPERAND_WIDTH_RECOVERY.md).
-
-> **Currency note (2026-08-30, V0.3.X line, seventh entry). THE ENTRY ABI IS BUILT AND CALLED
-> THROUGH THE REAL CONVENTION.**
->
-> The operator's Option A float ruling is implemented as recorded: a float parameter or return takes
-> a real floating-point position in the declared function type, converted at the four boundary
-> points — declaration, prologue, `Op::Return`, `Op::Call`. A `lower_module` feature; `lower_chunk`
-> keeps refusing, since a chunk carries no return type. **The evidence is a JIT call through
-> `unsafe extern "C" fn(f64) -> f64` with runtime arguments, bit-compared against the virtual
-> machine** — NaN, signed zero, infinities, a cross-call round trip, a mixed signature — because a
-> wrong convention lowers, verifies, links, and returns a plausible number from the wrong register.
-> **Two requirements the plan did not name**: the parameter's local must be tagged `Float` after the
-> prologue bitcast, and `Op::Call` converts each argument to the callee's DECLARED parameter type,
-> refusing a kind-versus-declaration disagreement in either direction. **Four tests rotated their
-> subjects** because the signature route opened, each per its own standing instruction; the width
-> refusal and the module-level-refusal pin are now must-fire via post-compilation width overwrites.
-> **Still absent**: float shared slots (ruled, unbuilt), `f32` (refused, not lowered), floats in
-> composites. `native_codegen` **391/0/0 ignored/77 binaries**, cargo exit 0 — the predicted
-> 385 + 6 and 76 + 1; censuses unmoved, as `ABI_RULINGS.md` predicted. See
-> [`../decisions/ENTRY_ABI_BRIEF.md`](../decisions/ENTRY_ABI_BRIEF.md).
-
-> **Currency note (2026-08-30, V0.3.X line, sixth entry). THE FLOAT SCALAR SURFACE IS COMPLETE, AND
-> THE ENTRY ABI IS DEFERRED WITH A MEASURED REASON.**
->
-> `Neg` and `Mod` land, completing scalar float arithmetic: constants, both conversions,
-> `Add`/`Sub`/`Mul`/`Div`/`Mod`/`Neg`, and all six comparisons, each verified by running the same
-> program on both sides. **Two semantics that would have been wrong if assumed.** `Mod` is the
-> **TRUNCATED** remainder carrying the sign of the dividend — Rust's `%` on `f64`, hence `frem`, not a
-> floored remainder: `-7.0 % 2.0` is `-1.0`. A probe with only positive operands cannot distinguish the
-> conventions, so the differential uses negative dividends with a **must-fire control requiring the
-> positive and negative probes to have opposite signs**. And **`Neg` needed its own branch**: the
-> existing arm dispatches on WIDTH, and a float is eight bytes like a `Fixed`, so without a kind check
-> it would have negated the **bit pattern as an integer**, flipping a mantissa bit rather than the sign.
-> **The entry ABI is NOT built, and the reason is measured**: `lower_chunk` receives
-> `chunk.param_types`, but **the chunk carries no RETURN type** — that lives in module-level
-> `ChunkSignature`, which a single-chunk lowering never sees. So parameter types, return type, the
-> prologue's bitcasts, `Op::Return` and `Op::Call` must land **together**, across both entry points;
-> that is a scoped plan rather than a slice. The signature route stays closed and is now the
-> unsupported-opcode subject, **the fourth in that succession** after composites, division and
-> remainder. **Still absent**: entry ABI, float shared slots, `f32`, floats in composites. Absorption 38
-> (`59129add`) is docs-only, every count predicted unchanged. `native_codegen` **385/0/0 ignored/76**,
-> censuses unmoved. See [`../decisions/FLOAT_SCALAR_SURFACE.md`](../decisions/FLOAT_SCALAR_SURFACE.md).
-
-> **Currency note (2026-08-30, V0.3.X line, fifth entry). FLOAT DIVISION LANDS, AND THE FIRST NaN TEST
-> CATCHES A COMPARISON DEFECT WRITTEN BLIND LAST INCREMENT.**
->
-> **Two corrections to this line's own recorded design.** First, the previous increment declined
-> division on the grounds that it "flows through `Op::CheckedDiv`'s three-value push" — **wrong for the
-> `/` operator**: the compiler emits plain `Op::Div`, whose reference arm is a bare `x / y` with no zero
-> check, matching `fdiv` exactly. That claim was read from the VM's arm rather than from what the
-> compiler emits, and **compiling one line of source would have settled it**. Second, and more
-> seriously: **the reference has TWO comparison paths with DIFFERENT NaN semantics** — `CmpEq`/`CmpNe`
-> go through **`PartialEq`** (IEEE: NaN equals nothing, so `!=` is TRUE), while `CmpLt`/`Gt`/`Le`/`Ge`
-> go through `compare_op` = `partial_cmp(...).unwrap_or(Equal)` (**NaN as Equal**). The previous
-> increment read only `compare_op` and applied NaN-as-Equal to `Eq`, `Le`, `Ge`, making `NaN == x`
-> **true natively and false on the reference**; `Ne` also needed the **unordered** predicate. **That
-> defect was written blind and declared as such**, because nothing could produce a NaN until division
-> landed — and **the very first NaN test caught it**. Two things made that work: saying the path was
-> unexercised rather than letting a green suite imply coverage, and writing the test the moment the
-> feature unblocking it landed. **Now verified**: division over eight probes; division by zero giving
-> `+inf`/`-inf`/NaN through the saturating cast to `MAX`/`MIN`/`0`, with a non-vacuity check that the
-> three differ; and all six predicates against a NaN. `Op::Mod` on floats is still refused and is now
-> the unsupported-opcode subject, division having retired. Absorption 37 (`e45a2ff9`) merged, ownership
-> clean. `native_codegen` **383/0/0 ignored/76**, censuses unmoved at 63 of 66 and 1072 of 1074. See
-> [`../decisions/FLOAT_DIVISION.md`](../decisions/FLOAT_DIVISION.md).
-
-> **Currency note (2026-08-30, V0.3.X line, fourth entry). `FloatToInt` WAS POISON AND AGREED ONLY BY
-> HARDWARE ACCIDENT — FOUND WHILE SCOPING A DIFFERENT SLICE.**
->
-> The reference converts a float to a word with Rust's `as`, which **saturates**: NaN → 0, out of range
-> → `i64::MIN`/`MAX`. **LLVM's plain `fptosi` is POISON for exactly those inputs**, and float slice one
-> used it. **Measured: they DO agree on this machine**, because aarch64's `fcvtzs` saturates — which is
-> the problem rather than the reassurance. **On x86-64 `cvttsd2si` returns the integer-indefinite value
-> for every out-of-range input**, so `+inf` would give `MIN` where the reference gives `MAX`, and NaN
-> would give `MIN` where the reference gives 0. **Reachable today**, not merely latent: a RUNTIME
-> out-of-range multiply produces one, and float multiplication landed last increment. Fixed with
-> `llvm.fptosi.sat`, which is DEFINED to saturate on every target and is what Rust lowers `as` to, so
-> the match is by construction rather than by accident. The pinned test passes both before and after on
-> this machine, and says so — what it guards is the agreement surviving when the accident does not.
-> **Found by SCOPING float division rather than by auditing**: division produces inf and NaN, so asking
-> what the reference does with them exposed a one-increment-old defect. **Third time in this backend
-> that implementing a feature removed an accidental protection.** Division stays unimplemented for a
-> now-stated reason: `Op::CheckedDiv` pushes THREE values and `push_triple` **traps when the flag is
-> non-zero**, but for floats flags 1/2/4 mean `+inf`/`-inf`/NaN — legitimate results, since float
-> division is total. Absorption 36 (`802f6b39`) complete, prediction exact. Censuses unmoved. Workspace
-> **2505/0/92**, `native_codegen` **380/0/0 ignored/76**. See
-> [`../decisions/FLOAT_TO_INT_SATURATION.md`](../decisions/FLOAT_TO_INT_SATURATION.md).
-
-> **Currency note (2026-08-30, V0.3.X line, third entry). FLOAT COMPARISONS: THE REFERENCE SAYS NaN
-> EQUALS EVERYTHING, AND LLVM DOES NOT.**
->
-> The virtual machine compares floats with `x.partial_cmp(y).unwrap_or(Ordering::Equal)`, so **a NaN
-> collapses to Equal** — equal to everything rather than unordered. That is neither IEEE-754 nor LLVM's
-> default, and emitting the obvious `fcmp oeq` would make `NaN == x` **true on the reference and false
-> natively**: a silent divergence. **Found by reading the reference BEFORE implementing**, which is why
-> matching it is small: `olt`/`ogt`/`one` are already false for NaN, so **only `Eq`, `Le` and `Ge` need
-> forcing true**. Three of six predicates would otherwise have been wrong and silent. **Verified**: all
-> six predicates against the reference over seven probes each, operands chosen so a comparison done on
-> the integer bit pattern would disagree, with a must-fire control that the probes discriminate.
-> **NOT verified, and stated rather than implied**: the NaN adjustment itself — **no source construct
-> produces a NaN**, since the route is division and `Op::CheckedDiv` pushes three values and is a
-> larger slice. It was written to MATCH rather than left to diverge, because relying on NaN being
-> unreachable is the accidental protection this backend already lost once. Comparisons joined the
-> operand whitelist; **division still refuses**. **Censuses were not expected to move and did not** — no
-> corpus module compares floats. Absorption 35 (`defa9151`) complete, prediction exact. Workspace
-> **2502/0/92**, `native_codegen` **379/0/0 ignored/76**. See
-> [`../decisions/FLOAT_COMPARISONS.md`](../decisions/FLOAT_COMPARISONS.md).
-
-> **Currency note (2026-08-30, V0.3.X line, second entry). FLOAT SLICE TWO: ONE GUARD ROUTE OPENED,
-> VERIFIED BY EXECUTION, AND THE CENSUSES MOVED FOR THE FIRST TIME IN MANY INCREMENTS.**
->
-> The module float guard closes four routes and **only the CONSTANT route had a lowering behind it**,
-> so only it was opened. Its own message said it was closed because *"the integer arithmetic lowering
-> would silently miscompile it"* — no longer the lowering. The coarse route guard is replaced by the
-> finer **operand whitelist**, not removed. **Verified by EXECUTION**: `float_witness.kel` now runs in
-> the corpus differential against the virtual machine and **agrees**. Census movement, all from the one
-> cause: **opcodes lowered 61 → 63 of 66**, **UNPROVEN 3 → 1** (only `Reset`), **modules lowering
-> 66 → 67**, **chunks 1070 → 1072 of 1074**, **instances 89841 → 89854**, **differential agreeing
-> 61 → 62**, backend refusals 3 → 2. **Five pins went red, all correctly and all updated rather than
-> deleted**: the scope pin whose premise its own message anticipated spending; the guard-route pin
-> (renamed, since `..._refuses_...` asserting the opposite is a stale label); the refusal-set count;
-> and two assertions **inverted to assert zero**, because **the corpus now contains no module-level
-> refusal at all** — the float guard was the only one, and an unattributable refusal must announce
-> itself if it returns. `differential`'s unsupported-opcode subject **retired as its sixth
-> predecessor**, successor being a float in a SIGNATURE, still closed. **Still unbuilt**: the entry ABI
-> (no corpus witness), float slots, division, comparisons, `f32`. Absorption 34 (`f8232021`) complete,
-> prediction exact. Workspace **2497/0/92**, `native_codegen` **377/0/0 ignored/76**. See
-> [`../decisions/FLOAT_SLICE_TWO.md`](../decisions/FLOAT_SLICE_TWO.md).
-
-> **Currency note (2026-08-30, V0.3.X line). FLOAT SLICE ONE: THE KIND CHANNEL, A VERIFIED ROUND
-> TRIP, AND A HAZARD THE IMPLEMENTATION CREATED AND CLOSED.**
->
-> The operator's Option A ruling unblocked capability work. **One measurement decided its shape**:
-> `width_of_declared_shape` **discards the scalar kind**, so a `Float` and a `Word` are both eight
-> bytes and no float arithmetic could be lowered until an operand's kind survived. Built: an
-> `OperandKind` channel beside the width channel, tracked per stack entry and per local and seeded by
-> the PRODUCING opcode, with the stack staying homogeneous `i64`; then a float constant, `IntToFloat`,
-> `FloatToInt`, and float `Add`/`Sub`/`Mul`. **Verified by DIFFERENTIAL, not by acceptance** — the
-> witness's shape agrees with the reference over ten probes including negatives, with a must-fire
-> control. **The implementation created a hazard and it is the part worth remembering**: float
-> operations **removed an accidental protection**, since a module whose float arises from `as Float`
-> with no constant or signature was refused only because no float operation existed —
-> `float_guard_routes.rs` calls that *"a property of what is unimplemented, not a guard"*. `Op::Div`
-> was the sharp case: an integer division of a double's bit pattern. Closed with a **whitelist** (an
-> opcode consuming a float that was not written for one refuses), whose **first formulation was wrong
-> and a control caught it** — it checked the top two stack entries rather than the operands the opcode
-> POPS, so the count now comes from `op_depth_effect`. **Three of my own errors were caught by my own
-> guards inside the increment**: the kind lost across the local round trip, the kind read AFTER popping
-> (against a rule written at `SetLocal`), and the too-tight whitelist. **A pin went red three times,
-> correctly**, and was renamed because `..._is_refused_...` asserting the opposite is a stale label.
-> **Censuses unmoved, which is the correct result**: the guard still refuses the corpus witness, so
-> nothing float-carrying reaches `lower_module`; relaxing it is the next decision. **Not done**: the
-> entry ABI (no corpus witness), float slots, division, comparisons, `f32`. No absorption needed.
-> Workspace **2496/0/92**, `native_codegen` **377/0/0 ignored/76**. See
-> [`../decisions/FLOAT_SLICE_ONE.md`](../decisions/FLOAT_SLICE_ONE.md).
-
-> **Currency note (2026-08-29, V0.3.X line, thirteenth entry). ABI RULINGS RECEIVED AND RECORDED;
-> MEASURING THE FLOAT RULING CHANGED WHICH PIECE IS BUILT FIRST.**
->
-> The operator ruled on the ABI questions — **the first substantive input in roughly twelve
-> increments**. **Settled**: float = Option A (a real floating-point ABI, which also settles the `Float`
-> shared slot), and string = Option B (make the embeddings agree, revisit later) — **the latter is NOT
-> implementable by this line**, since it changes marshalling in `src/`. **Open**: `Fixed` (three
-> readings, one contradicting the ruling's own *"without needing to store"*; the interop goal is still
-> unstated and governs), `Text` (**the ruling's supposition that it was covered is incorrect** — the
-> string ruling settles static literals, while the `Text` slot is a two-word handle), `Opaque` (stated
-> intent is **already met** by the `Arc<dyn HostOpaque>` handle; a literal raw pointer would not fit
-> under `narrow-word-8`/`-16`), and `Unit` (the operator asked what it is, which is a question and not a
-> ruling). **Measured before building**, and it changed the plan: the ruling names the **entry ABI**,
-> but the corpus's only float module is blocked by a **CONSTANT** and **no corpus module has a float in
-> a signature at all**, so the entry-ABI change has **zero corpus witnesses** and could not be verified
-> against the corpus if built alone. Gain when built: 66→67 modules and the two UNPROVEN conversion
-> opcodes. **Two things are labelled as MY inference, not the operator's**: that the FP type matches the
-> runtime's float width (`Float` is `f32` or `f64` under `narrow-float-32`, so "double" is incoherent
-> in some builds), and that `Unit` should be permanently refused. **Nothing was implemented on an
-> ambiguous ruling.** No absorption needed. Workspace **2491/0/92**, `native_codegen` **373/0/0
-> ignored/75**, censuses unmoved. See [`../decisions/ABI_RULINGS.md`](../decisions/ABI_RULINGS.md).
-
-> **Currency note (2026-08-29, V0.3.X line, twelfth entry). THE OPERATOR-FACING DECISION PAGE WAS BUILT
-> FROM A COVERAGE MEASUREMENT AND INHERITED ITS BLIND SPOT.**
->
-> Asked whether the ABI issues were resolved, checking found that
-> `OPERATOR_DECISIONS_OPEN.md` **did not mention the `Fixed` shared-slot ABI at all** — an open item
-> with its own decision document, on which the operator had already ruled it be settled alongside the
-> float ABI. **The mechanism is the finding**: the page said *"There is no fourth thing to fix"*, a
-> sentence taken from the module-lowering census and written as exhaustive over DECISIONS. **A coverage
-> census can only surface a decision that blocks a corpus module**, and **no corpus source declares a
-> `Fixed`, `Float` or `Text` shared slot**, so those refusals block nothing, appear in no figure, and
-> were invisible to a list built from figures. **Sixth instance of this session's recurring defect**, and
-> the first where the claim was the operator-facing summary rather than a test; the page now says so
-> about itself. The page carries **six items** in two parts — corpus-blocking (1–3) and open regardless
-> (4–6: `Fixed` scale, string ABI, the unsettled slot kinds) — each with options and defaults, with
-> `Fixed`'s recorded preference stated **conditionally**, since the operator asked the interop question
-> but has not stated the goal, and that single input settles items 2 and 4 together. **I also had the
-> disposition backwards**, saying I would hold the amendment pending that answer; the page exists to
-> prompt it. **A code ACTION had sat unclaimed**: the `Fixed` slot refusal now names the missing
-> host-visible scale rather than implying the representation is undecided — wording only, refusal
-> unchanged — with three stale present-tense quotations corrected. Native gate **942s at load 45**, a
-> contention figure. No absorption needed. Workspace **2491/0/92**, `native_codegen` **372/0/0
-> ignored/74**, censuses unmoved. See
-> [`../decisions/OPERATOR_DECISIONS_OPEN.md`](../decisions/OPERATOR_DECISIONS_OPEN.md).
-
-> **Currency note (2026-08-29, V0.3.X line, eleventh entry). BOTH MUTATION SWEEPS ARE BACK IN THE
-> GATE; THE DEPTH SWEEP HAD BEEN PAYING FOR THE CENSUS'S AXIS.**
->
-> The two sweeps were split by role but not by cost. The census is breadth — every module, one site,
-> **every variant**; the deep sweep is depth — up to eight sites — **and was also sweeping every
-> variant**, which is the census's axis. **The experiment could have refuted the idea**: killability
-> needs a variant on which the reference differs, so one variant might have shrunk the findings. **The
-> table came back identical to the recorded baseline**, same YES set of `piano_roll_3`, `piano_roll_4`,
-> `verify_depth`, `verify_types`. Cost with load recorded: **712s** both at all variants, **401s** deep
-> alone at one variant, **400s** for the whole binary with both — the last at load 8.2, so conservative,
-> and under the **600s** threshold fixed the previous increment. **Both sweeps now run every gate: 372
-> passed, 0 ignored**, so breadth AND depth of mutation sensitivity are protected again. **Site depth
-> was not reduced, the widened family was not narrowed, and the census keeps its variants** — the saving
-> came from removing a duplicated axis rather than trading coverage, unlike the three earlier
-> reductions. Two recurring defects of mine recurred and were caught within the increment: the header
-> fix **silently matched nothing** on the first attempt and was revealed by an assertion checking both
-> the stale text's absence and the new text's presence, and the un-ignore was done by **matching
-> attribute lines rather than grepping**, after the previous increment's assertion counted
-> `` `#[ignore]` `` inside a doc comment. Native gate **678s** at load ~8. No absorption needed.
-> Workspace **2491/0/92**, `native_codegen` **372/0/0 ignored/74**, censuses unmoved. See
-> [`../decisions/DEEP_SWEEP_AXES.md`](../decisions/DEEP_SWEEP_AXES.md).
-
-> **Currency note (2026-08-29, V0.3.X line, tenth entry). THE CENSUS IS RESTORED TO THE GATE; A GUARD
-> HAD BEEN REMOVED ON A NUMBER ITS OWN COMMIT DISCLAIMED.**
->
-> The ninth entry marked **both** mutation sweeps `#[ignore]` on grounds of cost. **That cost was never
-> cleanly measured**: three optimisations had been applied without measuring their combined effect, and
-> the one full figure obtained, **4132s, was disclaimed in the same commit** as contaminated by a load
-> average near 13 — then slowness was used as the reason to disable the guards anyway. With a threshold
-> **fixed at 600s before measuring**: both sweeps together **712s**, census alone **206s**, deep sweep
-> alone **710s**, all at load ~5–6. **The pair failed the threshold and it was not re-litigated by
-> appeal to load.** Measuring them separately settled the matter — the deep sweep is essentially the
-> entire cost — so **the census now runs in the gate** (detection floor and non-vacuity checks restored
-> over every module) and **the deep sweep stays opt-in**. What remains unprotected day to day is
-> regression in the DEPTH of mutation sensitivity. **The whole native gate is now 496s at load 6**,
-> against the disclaimed 4132s: the gate was never the problem. **Two intermediate readings were
-> opposite** — the deep sweep dominates (right), then the census does (wrong, from libtest printing its
-> over-60s notice for every parallel long test) — and only separate measurement settled it. **An
-> assertion of mine counted a word in a doc comment**, claiming two `#[ignore]` where one attribute
-> existed: the same defect as the scanner that counted 33 skippable tests against a true 10. No
-> absorption needed. Workspace **2491/0/92**, `native_codegen` **371 passed, 0 failed, 1 ignored, 74
-> binaries**, censuses unmoved. See [`../decisions/SWEEP_COST.md`](../decisions/SWEEP_COST.md).
-
-> **Currency note (2026-08-29, V0.3.X line, ninth entry). ALL REMAINING CAPABILITY WORK IS BEHIND AN
-> OPERATOR DECISION; THE MUTATION FAMILY IS WIDER AND THE TWO SWEEPS ARE NOW OPT-IN.**
->
-> **Measured, not recalled**: the 4 unlowerable chunks sit in exactly the 3 refused modules, so there is
-> no capability work this line can take without a decision. `OPERATOR_DECISIONS_OPEN.md` states the
-> three, their costs, and **what happens by default if nothing is said**, and notes that `Len` is not a
-> decision. **The mutation family was widened** to include the six comparison swaps and `Not`->`Neg`,
-> because its recorded reason for excluding control flow — process-killing traps — is handled by the
-> admissibility and fault filters built since. **Detected 39 to 48, undetected still 0, subjects with no
-> applicable site 10 to 3**; `verify_datalayout` went from 9 sites to 41 with a killable mutant that is
-> caught. **The cost forced a trade recorded as a loss**: comparison mutants are admissible AND
-> non-faulting so they run across every variant, and both sweeps are now `#[ignore]`, run with
-> `-- --ignored`. **Their assertions, including the detection floor, no longer protect anything day to
-> day**, and the figures are a dated measurement rather than a standing guarantee; the widening was kept
-> because 39→48 is worth more than a fast gate, matching how `tools/mutation_sweep.py` already drives
-> mutation work externally. **A 4132s gate figure from this run is CONTAMINATED** by a load average near
-> 13 and is not evidence about the change. Three wrong guesses about which test was slow are recorded in
-> the journal. No absorption needed. Workspace **2491/0/92**, `native_codegen` **370 passed, 0 failed,
-> 2 ignored, 74 binaries**, censuses unmoved. See
-> [`../decisions/OPERATOR_DECISIONS_OPEN.md`](../decisions/OPERATOR_DECISIONS_OPEN.md).
-
-> **Currency note (2026-08-29, V0.3.X line, eighth entry). ONE CANONICAL CORPUS WALK, CLOSING THE
-> DEFECT CLASS BEHIND FIVE PRIOR ERRORS — FOR ITS CALLERS, NOT REPOSITORY-WIDE.**
->
-> Five defects on this line shared one shape: **a measurement enumerated a narrower population than the
-> thing it described**, then reported the difference as a property of the subjects — a non-recursive
-> walk seeing 35 modules where consumers saw 74, a fingerprint covering three roots of four, a probe
-> merging two files named `prelude.kel`, a directory counted twice, and a census driving subjects
-> unseeded. **The argument for the fix was already written down** in `corpus_fingerprint.rs`, which
-> guards corpus CONTENT and says *"A habit is not a check"*; the same sentence is true of the
-> population and had not been applied to it. One `corpus_sources()` now lives in
-> `native_codegen/tests/common/mod.rs`, so a migrated sweep **cannot** read a different set — agreement
-> by construction, the move that already worked for the mutation probe. **All four figures this line
-> reports each increment now rest on it**: `corpus_differential`, `spike_corpus_coverage`,
-> `isa_lowering_census` and `refusal_classes`. **Every migration was licensed by a comparison, not by
-> inspection** — a test asserts the shared walk returns exactly what the private one did, and those
-> tests remain standing; migrating on assumption would have been the defect being closed, committed
-> while closing it. Censuses **unmoved**, which is the confirmation that the populations were identical.
-> `isa_lowering_census` keeps `CORPUS_DIRS` because it PRINTS it, compared against the canonical walk
-> rather than trusted. **Twenty-five files still carry their own walk and remain exposed**; the class is
-> closed for callers, not repository-wide. **No grep lint was added** — this line already shipped a
-> scanner that counted 33 where the truth was 10. No absorption needed. Workspace **2491/0/92**,
-> `native_codegen` **372/0/74**. See
-> [`../decisions/CANONICAL_CORPUS.md`](../decisions/CANONICAL_CORPUS.md).
-
-> **Currency note (2026-08-29, V0.3.X line, seventh entry). THE UNDETECTED COLUMN WAS MADE OF
-> EQUIVALENT MUTANTS. 39/11 BECOMES 39/0, AND TWO PUBLISHED CLAIMS ARE WITHDRAWN.**
->
-> The census compared `VM(original)` against `NATIVE(mutant)` and **never asked whether the mutation
-> changed anything**. If `VM(mutant) == VM(original)` the site is not executed under these seeds, the
-> mutant is **semantically inert**, and a *correct* backend must agree too — **no differential could
-> ever detect it**. Standard mutation testing excludes such an equivalent mutant; this census counted
-> it as a subject failing to notice a wrong backend. **The fix was nearly free**: the probe already ran
-> `VM(mutant)` for the fault filter and discarded the result. **All eleven undetected subjects were
-> inert**, so the column is now empty. **Withdrawn**: "eight of the ten self-hosted stages do not notice
-> a mutated backend", and — the one that matters — "`verify_datalayout` and `rogue_gear`, swept
-> exhaustively, point at the observable". **They point at the SEEDS**; exhaustion over inert sites
-> establishes nothing, and `verify_datalayout` had nine of nine sites mutated with **not one killable**,
-> consistent with the harness's independently-reached `KNOWN_VACUOUS` record. **Now asserted and
-> stronger than before**: every killable mutant is detected. **Not established**: that the differential
-> is sound — sites are capped, one family is used, and **3198 applicable sites were never exercised**.
-> The large inert counts are a **seed-coverage** measurement that fell out of a differential-strength
-> one. **Fourth correction in a row, all one direction** — unseeded driver, too-few sites, two
-> disagreeing copies of the selection, equivalent mutants — every one a measurement that could only
-> understate. No absorption needed. Workspace **2491/0/92**, `native_codegen` **369/0/74**, censuses
-> unmoved. See [`../decisions/KILLABLE_MUTANTS.md`](../decisions/KILLABLE_MUTANTS.md).
-
-> **Currency note (2026-08-29, V0.3.X line, sixth entry). 38/12 BECOMES 39/11, SIX MORE MOVE OUT AT
-> SIXTEEN SITES, AND ONLY THREE OF TEN STAGES REMAIN UNDETECTED.**
->
-> Two explanations fitted the undetected set equally well — **the site** (the sampled ops are not on a
-> path the seeds execute) or **the subject** (the compared observable does not reflect the
-> computation). Sweeping sixteen sites instead of three in exactly those subjects: **six of eleven are
-> detected deeper** (`piano_roll_3`, `piano_roll_4`, `reconstruct`, `verify_depth`,
-> `verify_structural`, `verify_types`), so **for those it was the site**. Only `codegen`, `parse` and
-> `verify_datalayout` remain of the ten stages, down from eight. **Two subjects now exclude the
-> sampling explanation by EXHAUSTION**: `verify_datalayout` had nine applicable sites, all nine were
-> mutated, five real comparisons, no difference; `rogue_gear` has exactly one. Those point at the
-> observable. **`codegen` and `parse` point nowhere** — 16 of 845 and 16 of 1015 distinguishes nothing,
-> and 3198 sites beyond the cap went unexercised, which the test prints because an unprinted cap reads
-> as exhaustive. **Six subjects produced ZERO comparisons**, so their `no` means nothing ran; `wire.kel`
-> has 929 sites and not one usable mutant. **The instrument defect was the same shape twice**: the deep
-> sweep had its OWN copy of the probe, handling a faulting mutant differently, and then its own copy of
-> the site SELECTION (`len / 2` versus `(total - 1) / 2`). Both disagreed about `verify_typed.kel`,
-> which is what took 38/12 to **39/11**. Both are now single functions, so they agree by construction.
-> Clippy separately caught the shared probe collapsing "inadmissible mutant" and "faulting mutant" into
-> one case; the probe now returns the distinction rather than the counters being deleted. No absorption
-> needed. Workspace **2491/0/92**, `native_codegen` **369/0/74**, censuses unmoved. See
-> [`../decisions/UNDETECTED_DEPTH.md`](../decisions/UNDETECTED_DEPTH.md).
-
-> **Currency note (2026-08-29, V0.3.X line, fifth entry). THE PREVIOUS ENTRY'S 32/16 IS CORRECTED TO
-> 38/12, AND EIGHT OF THE TEN SELF-HOSTED STAGES DO NOT NOTICE A MUTATED BACKEND.**
->
-> The fourth entry reported **32 detected, 16 undetected**. That census **drove every subject at seed 0
-> with no stage seed** while the main sweep seeds ten stages, so a stage read an unseeded segment, saw
-> zeros, and computed nothing. **A measurement that drives a subject more weakly than the harness it
-> describes reports a weaker result and blames the subject** — the **fifth** narrower-population error
-> on this line and the first published before being caught. Driving it the sweep's way gives 33/15;
-> sampling **three** mutation sites per module instead of one gives **38 detected, 12 undetected**.
-> That strengthening was chosen after seeing the undetected list, which is stated plainly because more
-> sites can only move subjects OUT of that column — it makes the finding harder to sustain, not easier.
-> **A false qualification was nearly published**: that the remaining stages are unseeded here and
-> covered elsewhere. `STAGE_SEEDED` carries **ten** stages including `lexer`, `parse`, `reconstruct`,
-> `verify_typed`, `verify_structural` and `verify_types`, all of which are in the undetected list — they
-> are seeded, run on real input, and still agree. **Eight of the ten stages, the modules the V0.3.0
-> goal depends on most, do not notice any of three arithmetic mutations.** Scoped to one pre-registered
-> family, three sites, and **`corpus_differential` only**: `stage_differential.rs` seeds BOTH sides and
-> whether it detects these mutants **has not been asked**, so "undetected here" is not "uncovered".
-> The figure now carries a **60% ratio floor**. Clippy caught that the rewrite left `mutant_declined`
-> never pushed, having folded a declined native side into a faulting mutant; the two were separated
-> rather than the counter deleted. No absorption needed. Workspace **2491/0/92**, `native_codegen`
-> **368/0/74**, censuses unmoved. See
-> [`../decisions/SUBJECT_DETECTION.md`](../decisions/SUBJECT_DETECTION.md).
-
-> **Currency note (2026-08-29, V0.3.X line, fourth entry). THE BACKEND LOWERS MODULES THE VIRTUAL
-> MACHINE WOULD REFUSE TO LOAD — A PRECONDITION GAP, MEASURED AT ZERO LIVE INSTANCES.**
->
-> Found sideways. A sweep asking which differential subjects would notice a wrong backend built mutated
-> modules and ran them; **the sweep died with SIGBUS and the crash was the larger finding.** Mutating
-> `04_for_in.kel` by a single `CheckedAdd` -> `CheckedSub` yields well-formed bytecode that `verify()`
-> **accepts**, that `auto_arena_capacity_for`, `module_wcmu` and `Vm::new` **all reject** for having no
-> statically extractable iteration bound, that this backend **accepts**, and whose lowered code is not
-> memory-safe. **`lower_module` documented no admissibility precondition and checked none**, so an
-> ahead-of-time path could run what the bound analysis refuses — the guarantee the project sells.
-> **Blast radius measured before deciding: 66 modules lower, 0 unbounded**, so this is a precondition
-> gap rather than a live defect; the precondition is now documented and pinned by
-> `no_lowerable_corpus_module_is_unbounded`, with **enforcement left as a named option** whose cost is
-> coupling a pure lowering function to the resource analysis on every call. The census then completed
-> once two filters were added, each a correctness point rather than a convenience: an **inadmissible**
-> mutant is a program the runtime would refuse, and a mutant that **faults** is one both sides trap on.
-> Result **32 detected, 16 undetected, 10 with no mutation site**, unmeasured classes reported
-> separately and **nothing deleted or exempted** — undetected against one pre-registered family is not
-> "detects nothing". The family itself had to be amended after **my own non-vacuity assertion caught**
-> it matching 4 modules of 65, Keleusma being total and the corpus emitting `CheckedAdd`; the amendment
-> preceded any subject being classified. No absorption needed (zero unabsorbed). Workspace
-> **2491/0/92**, `native_codegen` **368/0/74**, censuses unmoved. See
-> [`../decisions/BACKEND_ADMISSIBILITY.md`](../decisions/BACKEND_ADMISSIBILITY.md).
-
-> **Currency note (2026-08-29, V0.3.X line, third entry). THE FOUR FIGURES THIS LINE REPORTS EVERY
-> INCREMENT HAD NO REGRESSION FLOOR UNDER THEM.**
->
-> Opcodes lowered (61 of 66), chunks lowerable (1070 of 1074), opcode instances (89841 of 89940) and
-> differential modules executing and agreeing (61) all go into the handoff every increment, and **a
-> large regression in any of them turned no test red**. The existing assertions are real but check
-> something else: `isa_lowering_census` asserts partition totality, non-vacuity and extraction
-> completeness, **all of which hold at 30 of 66 as well as at 61**; `spike_corpus_coverage` asserts
-> `compiled > 10 && total_ops > 1000`, which catches wrong corpus paths rather than a worse backend.
-> **The differential's was the one that mattered**: `module_refusals` reports per CHUNK while the
-> harness exempts per MODULE, so one newly-refusing chunk removes a whole file from the correctness
-> comparison **without any refusal being wrong** — and its floor stood at `>= 20` against an actual 61,
-> tolerating the loss of two thirds. Floors added at `>= 59` opcodes, `>= 99%` of chunks, `>= 99%` of
-> instances and `>= 56` modules; **ratios where the denominator moves with the corpus**, absolute where
-> it does not, and **floors rather than equality pins** because `corpus_differential.rs` already records
-> that a check breaking on ordinary progress "teaches the next reader to delete the check". **All four
-> were proven to fire** by raising each above its measured value, observing the failure, and restoring.
-> The `spike_*`/`probe_*` genre was deliberately left alone: those files are meant to report, and
-> flooring them on a print/assert ratio would manufacture a finding. No absorption was needed (already
-> zero unabsorbed). Workspace **2491/0/92**, `native_codegen` **366/0/74**, censuses unmoved. See
-> [`../decisions/REGRESSION_FLOORS.md`](../decisions/REGRESSION_FLOORS.md).
-
-> **Currency note (2026-08-29, V0.3.X line, second entry). A CONSERVATIVE REJECTION, NOT `verify()`,
-> IS WHAT HOLDS A RUNTIME TRAP SHUT — REPORTED, NOT REPAIRED.**
->
-> Chasing the last named opcode refusal, `Len`, found no coverage opportunity: the corpus already
-> settled that the property making the opcode reachable **is** the property making the loop unbounded.
-> What it found instead is that `src/vm.rs` returns `InvalidBytecode` for `Op::Len` on a flat array,
-> justified by *"it never emits `Op::Len` on an array"* — a premise **the reference compiler
-> contradicts**, emitting exactly that from `for x in if c { a } else { b }`. Four legs are measured
-> and pinned in `native_codegen/tests/len_flat_array_hazard.rs`: `verify()` **accepts** the module;
-> executing it yields `InvalidBytecode`; **`Vm::new` itself refuses it at every arena size**, so it is
-> **NOT reachable through the supported path today**; and that refusal is **second category**,
-> surviving even when both arms have equal length and the trip count is provable by inspection. **The
-> hypothesis that a host could bypass the bound check by sizing its own arena was WRONG, and executing
-> it is what caught that** — reporting from the reasoning would have raised a false alarm. The finding
-> is that an unambiguous improvement to the bound extractor converts a rejected program into one that
-> loads and traps, so **the improvement is silently gated on an unrelated repair**; leg 4 fails the day
-> it happens. **Reported, not repaired**: both fixes lie in files this line may read and must not edit,
-> and three dispositions are laid out with no recommendation. No absorption was needed (already zero
-> unabsorbed). Workspace **2491/0/92**, `native_codegen` **366/0/74**, censuses unmoved at 61 of 66,
-> NAMED REFUSED `["Len"]`, 1070 of 1074 and 89841 of 89940. See
-> [`../decisions/LEN_FLAT_ARRAY_HAZARD.md`](../decisions/LEN_FLAT_ARRAY_HAZARD.md).
-
-> **Currency note (2026-08-29, V0.3.X line). A CENSUS THIS LINE PUBLISHES EVERY INCREMENT WAS
-> READING ENGLISH, AND ITS CLEAN COLUMN WAS AN ACCIDENT OF THE CORPUS.**
->
-> `LowerError::UnsupportedOp(String)` was documented as *"an opcode outside the currently supported
-> subset"* and constructed at **31 sites** carrying four unrelated conditions: an opcode with no
-> lowering, a type the backend lacks, an input whose own integrity failed, and a defect in the crate.
-> `isa_lowering_census` built its **NAMED REFUSED** column by taking the leading alphanumeric run of
-> the message, so **a refusal's class was decided by English word order**. Demonstrated rather than
-> hypothesised: an injected out-of-range constant index yields `Named: {"Const"}, lowered: {}` from
-> the census's own query, crediting the `Const` opcode with having no lowering for a module whose only
-> fault was a malformed operand. **Every published figure was nonetheless correct**, because the
-> corpus never fires a misattributing site — the column was clean because of what the corpus contains,
-> not because the query could not go wrong, which is why the answer had to come from firing the site
-> rather than reading the source. Four typed variants now carry the opcode as **data**; changing the
-> variant's shape made the compiler enumerate every consumer, of which there was exactly one, and the
-> census's silent filter is now a loud assertion. `Internal` is distinct so a consumer can tell *"your
-> program uses a feature I lack"* from *"I am broken"*. **`Internal` was never fired, and the test
-> records that search rather than concluding unreachability.** Absorption 31 (`e3e7bf02`) is complete
-> with both predictions exact; workspace **2491/0/92**, `native_codegen` **362/0/73**, censuses
-> unmoved at 61 of 66, NAMED REFUSED `["Len"]`, 1070 of 1074 and 89841 of 89940. See
-> [`../decisions/REFUSAL_CLASSES.md`](../decisions/REFUSAL_CLASSES.md).
-
-> **Currency note (2026-08-28, V0.3.X line). THE OBLIGATION IS NOW COSTED, AND ITS PRICE IS ZERO
-> TODAY AND ONE ALREADY-REFUSED MODULE LATER.**
->
-> The yield-escape refusal was already shown present and fireable; what was missing was its **price**.
-> Measured by mutating compiled bytecode to strip `Op::Stream` from a clone, rather than by weakening
-> the backend to accept `Stream`: the refusal takes over **exactly one** corpus module,
-> `13_telemetry_stream.kel`, which is refused today for `Stream` anyway, so **coverage does not fall,
-> now or then** — only the reason changes, from unimplemented-feature to soundness. The obligation is
-> consolidated at
-> [`../decisions/COMPOSITE_SLOT_REUSE_OBLIGATION.md`](../decisions/COMPOSITE_SLOT_REUSE_OBLIGATION.md)
-> with a four-option cost table and **no recommendation**: the option that would convert the silent
-> wrong value into a `Stale` error edits files this line may read and must not edit, so the
-> disposition is the operator's. The standing tension is that discharging this requires the planner to
-> consume a confinement verdict, and consuming none is exactly why a wrong verdict cannot miscompile
-> today. Absorption 30 (`18cdb5d8`) is complete with both predictions exact; workspace **2488/0/92**,
-> `native_codegen` **356/0/72**, censuses unmoved at 1070 of 1074 and 61 of 66.
-
-> **Currency note (2026-08-27, V0.3.X line, third entry). THE RELEASE GATE COVERS
-> `native_codegen` AND WAS NEVER RUN; THE INTERPROCEDURAL RESIDUAL IS MEASURED AND EMPTY.**
->
-> The second entry's claim that the gate does not cover this subproject is **false**.
-> `scripts/release-gate.sh` runs format, lint with warnings denied, tests and `cargo doc -D warnings`
-> over `native_codegen/`, conditional on an LLVM install that is present here. **The gate was simply
-> never run**, and running it found a real `cargo doc` failure invisible to both test and clippy.
-> Separately, the interprocedural residual of the composite slot-reuse obligation is now measured
-> rather than merely named: over 14 loop-constructing chunks the crude figures are 0 by call and 2 by
-> return, and both return candidates are ruled out by a scalar boundary, giving a **refined residual
-> of zero**. It is deliberately not refused, because the refusal would rest on three stacked
-> over-approximations with no instance to justify it and the class sits behind the `Stream` refusal;
-> the census asserts zero so an instance fails loudly. Absorptions 18 and 19 are complete.
-> See [`../decisions/YIELD_ESCAPE_REFUSAL.md`](../decisions/YIELD_ESCAPE_REFUSAL.md).
-
-> **Currency note (2026-08-27, V0.3.X line, second entry). THE REASON THE SLOT-REUSE DEFECT STAYED
-> QUIET WAS NOT THE RECORDED ONE, AND THE SHAPE IS NOW REFUSED.**
->
-> The premise "no corpus module has the escaping shape", restated in two documents, is **false**.
-> `examples/scripts/13_telemetry_stream.kel` carries it deliberately and says so in its header.
-> Latency came from the backend refusing that module for a **missing opcode** (`Stream`), so the
-> safety was accidental and expires when `Stream` lowers. The backend now refuses the shape at the
-> placement (`LowerError::YieldEscapingLoopComposite`), at a measured cost of **zero newly-refused
-> chunks**, with `61 of 66` and `1070 of 1074` both holding. **The obligation is narrowed, not
-> discharged**: slot reuse is unchanged and the interprocedural case is still invisible. The refusal
-> is shadowed by the `Stream` refusal today; fireability was proven by bytecode mutation and a
-> tripwire test fails when `Stream` lands. Absorption 18 is complete, both pre-recorded predictions
-> hit exactly, and `native_codegen` is **314/0/59** and clean under `clippy -D warnings` for the
-> first time. See [`../decisions/YIELD_ESCAPE_REFUSAL.md`](../decisions/YIELD_ESCAPE_REFUSAL.md).
-
-> **Currency note (2026-08-27, V0.3.X line). NATIVE CODE GENERATION REACHES 61 OF 66 OPCODES, AND
-> ONE SOUNDNESS OBLIGATION IS OPEN.**
->
-> The `native_codegen/` backend lowers **61 of 66 opcodes**, covering **1070 of 1074 corpus chunks
-> (99.6%)**. Every remaining opcode is accounted for by name: 1 refused (`Len`, whose blocker was
-> re-checked against `for .. limit` and **holds**), 2 float-refused pending the operator's float
-> entry ABI, 1 never visited (`Reset`), 1 without a corpus witness. The Order-1 differential gate
-> seeds **12 of 12 stage sources, 0 unseeded**, at 2460 comparisons. `native_codegen` is a detached
-> workspace **not built by CI**; its local suite (306 passed, 0 failed, 58 binaries, alongside the
-> workspace's 2459/0/87) is its only gate, and the two suites must be run **sequentially** or the
-> workspace perf canary reports a 57x false red.
->
-> **OPEN AND NOT DISCHARGED: cross-iteration slot reuse is unsound for composites that escape by
-> `yield`.** The backend reuses a loop site's slot every iteration unconditionally, with no reference
-> to escape. An in-place overwrite advances no epoch, so `resolve` succeeds and the host silently
-> receives the wrong iteration's bytes -- a wrong value, not a `Stale` error. It is latent only
-> because no corpus module has the shape, which is a fact about the corpus rather than the backend;
-> `docs/proofs/COMPOSITE_REGION_REUSE.md` §4.1 holds a triggering program in full. **This line
-> earlier reported the obligation discharged, having conflated static-site disjointness (true, and
-> now enforced by a test on ranges) with cross-iteration reuse (false). Retracted.**
->
-> **The tension, which is the real decision**: discharging it requires the region planner to consume
-> a confinement verdict, and consuming none is precisely why a wrong verdict cannot miscompile
-> anything today.
->
-> **Blocked on the operator, all three unactionable here**: the `Fixed` shared-slot ABI, where the
-> recorded preference B > A > C now splits on whether cross-language interop should be
-> convention-based or self-describing -- measured, the scale `N` is absent from every host-visible
-> surface (`Fixed<16>` and `Fixed<8>` are byte-identical) and the width is build-dependent; the float
-> entry ABI, ruled to settle alongside it; and the git-topology mechanism, formally unruled but no
-> longer contested. Full detail in [`handoffs/v0.3.0.md`](./handoffs/v0.3.0.md).
 
 > **Currency note (2026-08-24). A LANGUAGE DECISION IS ON THE RECORD FOR V0.3.0.**
 >
