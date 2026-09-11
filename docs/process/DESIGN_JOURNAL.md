@@ -13,6 +13,59 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-11 (fifty-third) — a kind that was already general, under a name that hid it
+
+The census left five gaps, each recorded with the mechanism closing it would need. **Three of the
+five said the same thing**: "an agreement between a DECLARED type and an ACTUAL one". That is the
+only thing node kind 8 does.
+
+The constant was called `TAIL_VS_RETURN`, after the function tail, its first and for a long time
+only caller. **I wrote that mechanism down three times without seeing the kind was already there.**
+
+**A constant named after its first caller reads as a special case even when it is a general rule.**
+That is the previous increment's finding one level up: there, a rule was present and unreachable;
+here, a kind was present and unrecognised. Renamed to `DECLARED_VS_ACTUAL`.
+
+### FOUR CELLS CLOSED, NO NEW KIND
+
+| cell | declared side | actual side |
+|---|---|---|
+| array index must be a word | the `Word` tag | the index operand |
+| let annotation against initialiser | the annotation's tag | the initialiser operand |
+| assignment target against value | the data field's declared tag | the value operand |
+| tuple index on a scalar | — | the existing projection kind, a third expression variant |
+
+**Census: 15 covered, 1 gap**, from 8 and 8 at its first run.
+
+### MEASURED BEFORE WRITING, NOT AFTER
+
+- A **BYTE** index is rejected by the reference, so the requirement is `Word` exactly rather than
+  "some integer". A rule requiring the wrong width would reject every valid index.
+- `let q: P = p` with a named type is **ACCEPTED**, so a named annotation must require NOTHING.
+  `type_tag` returns 0 for any `Named`, which is what makes this safe -- but it is safe by
+  measurement, not by luck.
+
+### THE CONSEQUENCE OF THE REUSE, WHICH A TEST FOUND
+
+`the_tail_versus_return_rows_agree_between_the_pipeline_and_the_reference` failed. Once three more
+constructs use kind 8, **"kind 8" no longer means "a function tail"**, and a differential selecting
+rows by kind compares a producer emitting four uses against one emitting a subset.
+
+**Narrowing that test's filter would have been the wrong repair**: it would still have compared two
+different populations while reading as if it did not. The new rows are instead OPT-IN, the same
+pattern the field-read operand index established two increments ago, so the tables the pipeline is
+compared against contain exactly what the pipeline can produce.
+
+### THE ONE GAP LEFT, AND WHY IT STAYS
+
+"Must NOT be bool", for the negation operand. Every kind this stage has states a POSITIVE
+requirement -- agree with this, or be bool. A negative one needs a kind of its own, and one operator
+does not justify it. Left open as a decision, recorded in the census.
+
+No new fold phase, no new node kind, no new opcode, no `BYTECODE_VERSION` change.
+
+---
+
 ## 2026-09-11 (fifty-second) — a census of rule shapes against syntactic forms, and it found five gaps
 
 The previous increment's finding was that **a rule inventory counts SHAPES, not the syntactic FORMS

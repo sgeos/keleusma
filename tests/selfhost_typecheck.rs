@@ -845,7 +845,7 @@ fn expression_nodes_and_derived(
     ast: &keleusma::ast::Program,
     names: &std::collections::BTreeMap<String, i64>,
 ) -> (Vec<ResolvableNode>, Vec<(String, i64)>) {
-    expression_nodes_over(ast, names, &FieldReadIndex::new())
+    expression_nodes_over(ast, names, &FieldReadIndex::new(), false)
 }
 
 /// [`expression_nodes_and_derived`] with a FIELD-READ INDEX, so an operand that is
@@ -857,10 +857,25 @@ fn expression_nodes_and_derived(
 /// those agreements without reaching anything, so the index is supplied only by
 /// the driver that also supplies the tables the form points into. With an empty
 /// index every operand behaves exactly as it did before the form existed.
+///
+/// `wide` additionally emits the rows the RULE-SHAPE CENSUS added on a kind the
+/// stage already had -- an array index against `Word`, a `let` against its
+/// annotation, an assignment against its declared field. **Opt-in for the same
+/// reason the field-read index is, and the consequence was measured rather than
+/// predicted**: node kind 8 is the DECLARED-AGAINST-ACTUAL relation, so once three
+/// more constructs use it, "kind 8" no longer means "a function tail" and a
+/// differential that selects rows by kind compares a producer emitting four uses
+/// against one emitting a subset. `the_tail_versus_return_rows_agree_between_the_pipeline_and_the_reference`
+/// failed on exactly that and is the reason this parameter exists.
+///
+/// **Narrowing that test's filter instead would have been the wrong repair.** It
+/// would still have been comparing two different populations, while reading as if
+/// it were not.
 fn expression_nodes_over(
     ast: &keleusma::ast::Program,
     names: &std::collections::BTreeMap<String, i64>,
     freads: &FieldReadIndex,
+    wide: bool,
 ) -> (Vec<ResolvableNode>, Vec<(String, i64)>) {
     use keleusma::ast::{Expr, Pattern, Stmt, TypeDef, TypeExpr};
     use keleusma::visitor::Visitor;
@@ -873,7 +888,14 @@ fn expression_nodes_over(
     const FIELD_ON_VALUE: i64 = 5;
     const INDEX_ON_VALUE: i64 = 6;
     const STRUCT_LIT: i64 = 7;
-    const TAIL_VS_RETURN: i64 = 8;
+    // **RENAMED 2026-09-11, AND THE OLD NAME COST THREE CENSUS CELLS.** The stage
+    // does one thing with kind 8: compare a DECLARED type against an ACTUAL one.
+    // The constant was named after the function tail, which was the first and for
+    // a long time the only caller, and three separate gaps were then recorded as
+    // needing "an agreement between a declared and an actual type" -- the exact
+    // relation sitting here unused. **A constant named after its first caller
+    // reads as a special case even when it is a general rule.**
+    const DECLARED_VS_ACTUAL: i64 = 8;
 
     let mut struct_fields: BTreeMap<String, i64> = BTreeMap::new();
     for t in &ast.types {
@@ -886,6 +908,11 @@ fn expression_nodes_over(
         structs: &'a BTreeMap<String, i64>,
         names: &'a BTreeMap<String, i64>,
         freads: &'a FieldReadIndex,
+        /// `(data block, field) -> declared tag`, for an assignment's declared side.
+        data_fields: &'a BTreeMap<(String, String), i64>,
+        /// Whether to emit the census's declared-against-actual rows. See the
+        /// entry point's note on why this is opt-in.
+        wide: bool,
         scalars: BTreeSet<String>,
         out: Vec<ResolvableNode>,
         // Each `let` whose initialiser is an operator expression, with the index
@@ -930,6 +957,22 @@ fn expression_nodes_over(
                 if scalar {
                     self.scalars.insert(n.clone());
                 }
+                // AN ANNOTATION IS A DECLARED TYPE AND THE INITIALISER IS AN ACTUAL
+                // ONE, which is the relation kind 8 computes. This was a census gap
+                // recorded as needing exactly that -- while the kind sat unused
+                // under a name that described only the function tail.
+                //
+                // **A NAMED TYPE MUST TAG ZERO HERE.** `let q: P = p` is valid and
+                // `type_tag` returns 0 for any `Named`, which requires nothing and
+                // accepts. Giving a named annotation a tag would reject it, and the
+                // reference was asked before this was written rather than after.
+                if let Some(ty) = &l.type_expr {
+                    let required = type_tag(ty);
+                    if self.wide && required != 0 {
+                        let (v, f) = operand_form(&l.value, self.names, self.freads);
+                        self.out.push((DECLARED_VS_ACTUAL, v, f, required, 0));
+                    }
+                }
             }
             // The index the initialiser's own node WILL take. Read before
             // `walk_stmt` descends, and correct because `visit_expr` pushes an
@@ -940,6 +983,22 @@ fn expression_nodes_over(
                 && matches!(&l.value, Expr::BinOp { .. })
             {
                 self.derived.push((n.clone(), self.out.len() as i64));
+            }
+            // AN ASSIGNMENT'S DECLARED FIELD TYPE AGAINST THE VALUE, the third
+            // gap the renamed kind closes. The declared side comes from the data
+            // block, which is why this one needs a table the other two did not.
+            if let Stmt::DataFieldAssign {
+                data_name,
+                field,
+                value,
+                ..
+            } = stmt
+                && self.wide
+                && let Some(required) = self.data_fields.get(&(data_name.clone(), field.clone()))
+                && *required != 0
+            {
+                let (v, f) = operand_form(value, self.names, self.freads);
+                self.out.push((DECLARED_VS_ACTUAL, v, f, *required, 0));
             }
             self.walk_stmt(stmt);
         }
@@ -1023,11 +1082,29 @@ fn expression_nodes_over(
                         self.out.push((FIELD_ON_VALUE, 1, 0, 0, 0));
                     }
                 }
-                Expr::ArrayIndex { object, .. } => {
+                Expr::ArrayIndex { object, index, .. } => {
                     if let Expr::Ident { name, .. } = object.as_ref()
                         && self.scalars.contains(name)
                     {
                         self.out.push((INDEX_ON_VALUE, 1, 0, 0, 0));
+                    }
+                    // AN INDEX MUST BE A WORD, measured rather than assumed: the
+                    // reference refuses a BYTE index too, so the requirement is
+                    // `Word` exactly and not "some integer".
+                    if self.wide {
+                        let (v, f) = operand_form(index, self.names, self.freads);
+                        self.out.push((DECLARED_VS_ACTUAL, v, f, 1, 0));
+                    }
+                }
+                // A TUPLE INDEX ON A SCALAR is the same rule as a field access on
+                // one, and it reaches the stage through the same kind. It was a
+                // census gap only because `TupleIndex` is a third expression
+                // variant and the walk handled two.
+                Expr::TupleIndex { object, .. } => {
+                    if let Expr::Ident { name, .. } = object.as_ref()
+                        && self.scalars.contains(name)
+                    {
+                        self.out.push((FIELD_ON_VALUE, 1, 0, 0, 0));
                     }
                 }
                 Expr::StructInit { name, fields, .. } => {
@@ -1074,6 +1151,15 @@ fn expression_nodes_over(
         }
     }
 
+    // The declared type of every data-block field, by block and field name. A
+    // `Named` or otherwise non-primitive type tags 0, which requires nothing.
+    let mut data_fields: BTreeMap<(String, String), i64> = BTreeMap::new();
+    for d in &ast.data_decls {
+        for fd in &d.fields {
+            data_fields.insert((d.name.clone(), fd.name.clone()), type_tag(&fd.type_expr));
+        }
+    }
+
     let mut out = Vec::new();
     let mut derived: Vec<(String, i64)> = Vec::new();
     for f in &ast.functions {
@@ -1092,6 +1178,8 @@ fn expression_nodes_over(
             structs: &struct_fields,
             names,
             freads,
+            data_fields: &data_fields,
+            wide,
             scalars: params,
             out: Vec::new(),
             derived: Vec::new(),
@@ -1107,7 +1195,7 @@ fn expression_nodes_over(
         out.extend(n.out);
         if let Some(tail) = f.body.tail_expr.as_ref() {
             let (t, tf) = operand_form(tail, names, freads);
-            out.push((TAIL_VS_RETURN, t, tf, type_tag(&f.return_type), 0));
+            out.push((DECLARED_VS_ACTUAL, t, tf, type_tag(&f.return_type), 0));
         }
     }
     (out, derived)
@@ -2934,7 +3022,7 @@ fn stage_verdict_resolving_parts(src: &str, with_sets: bool, with_payloads: bool
     // collapse to form 0 and type nothing.
     let frc = field_read_channel(&ast, &mut names);
     bindings.extend(frc.bindings.iter().copied());
-    let (nodes, derived) = expression_nodes_over(&ast, &names, &frc.index);
+    let (nodes, derived) = expression_nodes_over(&ast, &names, &frc.index, true);
     // FORM 2: the binding takes whatever expression node `idx` yields. The host
     // says only WHICH node the initialiser is -- a syntactic fact, like a literal
     // tag or an alias name. Resolving that node's operands and requiring them to
@@ -3532,6 +3620,75 @@ fn a_field_read_on_a_match_binding_is_reached() {
     }
 }
 
+/// **THE WELL-TYPED HALF OF THE RULES THE RENAMED KIND MADE POSSIBLE.**
+///
+/// Four cells closed on one node kind that was already in the stage, so the risk
+/// is concentrated in one place: **the REQUIRED tag each rule supplies**. Get it
+/// wrong and every valid use of that construct becomes an error, which no
+/// rejection corpus would show.
+///
+/// The array index is the sharpest case. The reference refuses a `Byte` index as
+/// well as a `bool` one, so the requirement is `Word` exactly -- measured before
+/// the rule was written, not after. A rule requiring "some integer" would accept
+/// what the reference rejects; one requiring the wrong width would reject every
+/// valid index.
+///
+/// The named-type annotation is the second. `let q: P = p` is valid, and a named
+/// type must therefore require NOTHING. Tagging it would make every annotated
+/// struct binding a rejection.
+#[test]
+fn the_declared_against_actual_rules_do_not_reject_valid_programs() {
+    const CASES: &[(&str, &str)] = &[
+        (
+            "an array indexed by a word parameter",
+            "fn main(i: Word) -> Word { let a = [1, 2]; a[i] }",
+        ),
+        (
+            "an array indexed by a literal",
+            "fn main() -> Word { let a = [1, 2]; a[0] }",
+        ),
+        (
+            "a let whose annotation agrees with its initialiser",
+            "fn main() -> Word { let a: Word = 1; a }",
+        ),
+        (
+            "a let whose annotation agrees with a bool initialiser",
+            "fn main() -> bool { let b: bool = true; b }",
+        ),
+        (
+            // A NAMED TYPE REQUIRES NOTHING. Were it to tag, this would be refused.
+            "a let annotated with a named struct type",
+            "struct P { x: Word }\nfn main(p: P) -> Word { let q: P = p; q.x }",
+        ),
+        (
+            "an assignment whose value matches the declared field",
+            "shared data d { v: Word }\nfn main() -> Word { d.v = 1; 0 }",
+        ),
+        (
+            "a tuple index on an actual tuple",
+            "fn main(t: (Word, Word)) -> Word { t.0 }",
+        ),
+        (
+            // THE ORIGINAL USER OF THE RENAMED KIND, kept as a control so the
+            // rename cannot have broken what the kind already did.
+            "a function tail agreeing with its declared return",
+            "fn g() -> Word { 1 }\nfn main() -> Word { g() }",
+        ),
+    ];
+    for (label, src) in CASES {
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+        assert!(
+            compile(&program).is_ok(),
+            "{label}: the REFERENCE rejects this, so it is not a well-typed control"
+        );
+        assert!(
+            stage_verdict_resolving(src),
+            "{label}: the stage REJECTS a well-typed program, which is a language \
+             change rather than a conservative choice"
+        );
+    }
+}
+
 /// **THE WELL-TYPED HALF OF EVERY RULE THE CENSUS CAUSED TO BE APPLIED.**
 ///
 /// Five cells changed from gap to covered in one increment, three by a rule that
@@ -3772,10 +3929,11 @@ fn the_rule_shapes_are_censused_against_the_forms_they_should_govern() {
     //     requirement no kind expresses, and inventing one for a single operator is
     //     the weakest case in this table.
     let mut named: Vec<(&str, &str)> = vec![
-        ("two must agree", "let annotation against initialiser"),
-        ("two must agree", "assignment target against value"),
-        ("a scalar cannot be projected", "tuple index"),
-        ("must be a word", "array index expression"),
+        // THE ONE THAT REMAINS. "Must NOT be bool" is a NEGATIVE requirement, and
+        // every kind this stage has states a positive one: agree with this, or be
+        // bool. Inventing a kind for a single operator is the weakest case the
+        // census produced, and leaving it open is a decision rather than an
+        // oversight.
         ("must not be bool", "negation operand"),
     ];
     // **TWO CELLS EXPECTED TO BE COVERED AND FOUND NOT TO BE**, both closed in the
@@ -3793,6 +3951,15 @@ fn the_rule_shapes_are_censused_against_the_forms_they_should_govern() {
     //     close it was an unreachable match arm, so the cell stayed a gap while the
     //     code to close it sat in the file. The compiler warned; the census is what
     //     made the warning matter.
+    //
+    // **THREE MORE CELLS CLOSED WITH A KIND THAT WAS ALREADY THERE.** The let
+    // annotation, the assignment target and the array index were each recorded
+    // above as needing "an agreement between a DECLARED and an ACTUAL type" -- which
+    // is the only thing node kind 8 does. It was named `TAIL_VS_RETURN`, after its
+    // first and for a long time only caller, and I wrote that mechanism down three
+    // times without seeing the kind was already general. **A constant named after
+    // its first caller reads as a special case even when it is a general rule**, and
+    // the rename is the correction.
     named.sort_unstable();
     let mut found = gaps.clone();
     found.sort_unstable();

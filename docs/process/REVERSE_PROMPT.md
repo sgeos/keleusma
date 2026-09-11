@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-11 (session 65, fifty-second increment) — a census of rule shapes against the syntactic forms they should govern found EIGHT gaps where the inventory said the rules were complete; five closed, five remain, and two of the surprises were rules that existed but could not fire
+**Date**: 2026-09-11 (session 65, fifty-third increment) — three census gaps were waiting on a node kind that already existed, under a name that described only its first caller; the census now stands at 15 covered and 1 gap, from 8 and 8
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,39 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## FIFTY-THIRD INCREMENT: A KIND THAT WAS ALREADY GENERAL, UNDER A NAME THAT HID IT
+
+The census left five gaps. **Three of them said the same thing**: "an agreement between a DECLARED
+type and an ACTUAL one" — which is the only thing node kind 8 does. The constant was called
+`TAIL_VS_RETURN`, after the function tail, its first and for a long time only caller, and **I wrote
+that mechanism down three times without seeing the kind was already there.**
+
+**A constant named after its first caller reads as a special case even when it is a general rule.**
+That is the previous finding one level up: there a rule was present and unreachable; here a kind was
+present and unrecognised.
+
+**Four cells closed with no new kind** — array index against `Word`, a `let` against its annotation,
+an assignment against its declared field, and a tuple index through the existing projection kind.
+**Census: 15 covered, 1 gap**, from 8 and 8.
+
+### Measured before writing, not after
+
+A **Byte** index is rejected by the reference, so the requirement is `Word` exactly rather than "some
+integer". And `let q: P = p` with a named type is ACCEPTED, so a named annotation must require
+NOTHING — safe by measurement rather than by luck.
+
+### The consequence of the reuse, which a test found
+
+Once three more constructs use kind 8, **"kind 8" no longer means "a function tail"**, and the
+pipeline differential that selects rows by kind compared four uses against a subset. **Narrowing that
+test's filter would have been the wrong repair** — it would still have compared two populations while
+reading as if it did not. The new rows are OPT-IN instead, the pattern the field-read index set.
+
+### The one gap left, and why it stays
+
+"Must not be bool", for the negation operand. Every kind here states a POSITIVE requirement. A
+negative one needs its own kind, and one operator does not justify it. Left open as a decision.
 
 ## FIFTY-SECOND INCREMENT: THE RULE-SHAPE CENSUS
 

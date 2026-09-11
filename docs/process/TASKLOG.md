@@ -53,6 +53,23 @@ Current sprint source of truth.
 > Third artifact in two increments whose answer was true when written and is now about a DIFFERENT
 > QUESTION. The pattern is staleness of SUBJECT, not of fact.
 
+> **Currency note (2026-09-11, session 65, fifty-third increment). THREE CENSUS GAPS WERE WAITING ON
+> A NODE KIND THAT ALREADY EXISTED.**
+>
+> All three were recorded as needing "an agreement between a DECLARED type and an ACTUAL one", which
+> is the only thing node kind 8 does. It was named after the function tail, its first and for a long
+> time only caller. **A constant named after its first caller reads as a special case even when it
+> is a general rule.**
+>
+> **Four cells closed with no new kind. Census now 15 covered, 1 gap**, from 8 and 8 at its first run.
+>
+> **The reuse had a consequence a test found**: "kind 8" no longer means "a function tail", so the
+> pipeline differential that selects rows by kind was comparing four uses against a subset.
+> Narrowing its filter would have been the wrong repair; the new rows are opt-in instead.
+>
+> The remaining gap is the negation operand's "must NOT be bool" — a NEGATIVE requirement no kind
+> expresses, left open as a decision rather than an oversight.
+
 > **Currency note (2026-09-11, session 65, fifty-second increment). THE RULE-SHAPE CENSUS FOUND
 > EIGHT GAPS WHERE THE INVENTORY SAID THE RULES WERE COMPLETE.**
 >
