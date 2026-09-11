@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-10 (session 65, twenty-fourth increment) — group G's remaining two sites probed and neither reaches InvalidBytecode, with the census's examined total re-derived in both places; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
+**Date**: 2026-09-10 (session 65, twenty-fifth increment) — the handoff refreshed after nine increments, with every validity check run rather than copied; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,34 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## TWENTY-FIFTH INCREMENT: THE HANDOFF REFRESHED AFTER NINE INCREMENTS
+
+`docs/process/HANDOFF.md` was last refreshed at the fifteenth increment and the session is at the
+twenty-fourth. Its banner described three lines of work that predate the width floor, both sweeps,
+the runtime grid, the float differential, the census closure, the indirect-site enumeration and
+group G. **A resuming agent would have got a picture nine increments out of date**, and that file
+is the designated resume anchor.
+
+**Every validity check was RUN, not copied forward.** Fingerprint `0x4327_63E1`, SEVEN crates,
+fifteen named guards green under `self-host`, the floats-absent test green under
+`--no-default-features`, the boundary triple pinned, and the two long ones -- region coverage at 66
+seconds and the boundary pin at 169 -- actually executed rather than assumed.
+
+**One check nearly reported a false pass.** Running item 12's test by name gave *"0 passed; 38
+filtered out"*, because it lives in `claimed_counts.rs` rather than the binary I guessed. **A run
+that executed no tests is not a pass**, and the only reason that did not enter the record is the
+rule already being written down.
+
+**The list reads 1 to 18 with no inversion, checked by RENDERING it** rather than by writing the
+next number -- the distinction this file has paid for three times. Items 16 to 18 cover the width
+floor, the descriptor and runtime sweep, and the guard census with its two companion pins.
+
+**The banner carries what is NOT established, not only what is.** Fourteen shapes is not every
+construct; reach is proven at `narrow-word-16` and no other narrow selector; the census's
+population remains a lower bound; groups F and J and one member each of E and I remain, none
+individually named. The four corrections are kept at the same prominence as the findings, because
+three of the nine increments produced a corrected claim rather than a new result.
 
 ## TWENTY-FOURTH INCREMENT: GROUP G'S OTHER TWO SITES, AND A GUARD THAT REFUSED MY ARITHMETIC
 

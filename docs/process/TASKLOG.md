@@ -10,6 +10,18 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-10, session 65, twenty-fifth increment). THE HANDOFF IS CURRENT
+> AGAIN.**
+>
+> It was refreshed at the fifteenth increment and the session is at the twenty-fourth. The banner
+> now covers the width floor, both sweeps, the runtime grid, the float differential, the census
+> closure, the indirect sites and group G, and carries what is NOT established alongside each
+> result. Ancestry anchor moved to `38af472f`.
+>
+> **Every validity check was run rather than copied**, and the list reads 1 to 18 with no
+> inversion, checked by rendering it. **One check nearly reported a false pass**: running item 12's
+> test by name gave "0 passed; 38 filtered out" because it lives in a different binary.
+
 > **Currency note (2026-09-10, session 65, twenty-fourth increment). GROUP G'S OTHER TWO SITES
 > ARE PROBED, AND NEITHER REACHES `InvalidBytecode`.**
 >
