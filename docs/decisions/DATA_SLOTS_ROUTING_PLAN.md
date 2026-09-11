@@ -115,10 +115,19 @@ flags on a proven path.
 So the slice adds TWO commands, not one: a begin whose body is `mi_window_prepare()`, and a
 name-aware step. `highest_command` moves from 181 to 183.
 
-**`wire.kel` is itself one of the eleven measured stages, and its margin is not large.** It carries
-**1,148 constant-forest nodes against a node table holding 1,365** -- a margin of 217 -- and 475
-chunks. Two new functions add chunks and constants to the very stage the corpus measures, and the
-stage must still emit its own regions afterwards.
+**`wire.kel` is itself one of the eleven measured stages, and its margin is not large.** Two new
+functions add chunks and constants to the very stage the corpus measures, and the stage must still
+emit its own regions afterwards.
+
+**MEASURED 2026-09-11: 1,194 nodes against a 1,365 cap, a margin of 171.** The figure quoted
+around the tree is **1,148**, which is stale by 46 nodes, and the margin this plan first assumed was
+217 rather than 171. That is a quarter of the assumed headroom gone, in the one number the slice is
+sized against -- which is precisely why the plan said to measure before editing.
+
+**Derive it from `tests/module_input_node_budget.rs` rather than reading a number here.** That test
+parses the count out of the blob the stage itself reads, asserts the walk has not drifted from the
+writer, and fails if the margin falls below sixty-four. A number in prose is the thing this tree has
+watched go stale four times in this arc alone.
 
 **That is the reason this has not been done casually, and it belongs in the sizing rather than being
 discovered during the change.** The slice must be budgeted against that margin, and the node count

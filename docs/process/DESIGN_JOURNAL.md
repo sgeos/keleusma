@@ -13,6 +13,31 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-11 (thirty-eighth) — the margin the slice is sized against was stale by a quarter
+
+The plan's first step is to measure `wire.kel`'s node budget before editing it, so a later cap
+failure is attributed to stage growth rather than to routing.
+`tests/module_input_node_budget.rs` does that, parsing the count out of the blob the stage itself
+reads.
+
+**Measured: 1,194 nodes against a 1,365 cap, a margin of 171.** The figure quoted around the tree
+is **1,148**, stale by 46 nodes, and the margin the plan assumed was 217. **A quarter of the assumed
+headroom was already gone**, in the one number the slice is sized against.
+
+**This is the fourth stale figure in this arc**, after the two capacity limits and the retained
+state, and it is the one that would have mattered most: a slice sized against 217 that actually has
+171 is a slice planned with a margin it does not have.
+
+**The plan now cites the test rather than a number**, which is this project's own convention for a
+figure that moves. The test asserts its walk has not drifted from the writer -- every length bounded
+by the remaining blob, every section count cross-checked against the module -- because a parse that
+drifted would report a wrong figure rather than failing, and a wrong budget is worse than no budget.
+
+**The measure-first instruction paid on its first use.** It was written two increments ago as
+process caution; it caught a real error the first time it was followed.
+
+---
+
 ## 2026-09-11 (thirty-seventh) — the slice is budgeted, not casual
 
 Going to implement, two constraints surfaced that change the shape of the work rather than its

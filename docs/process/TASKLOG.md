@@ -10,6 +10,19 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-11, session 65, thirty-eighth increment). THE NODE MARGIN IS 171, NOT
+> 217.**
+>
+> `tests/module_input_node_budget.rs` measures `wire.kel` at **1,194 nodes against a 1,365 cap**.
+> The figure quoted around the tree is 1,148 -- stale by 46 -- and the plan assumed a margin of
+> 217. **A quarter of the assumed headroom was already gone**, in the one number the slice is sized
+> against.
+>
+> Fourth stale figure in this arc, and the one that would have mattered most. The plan now cites
+> the test rather than a number, and the test asserts its walk has not drifted from the writer.
+>
+> **The measure-first instruction caught a real error on its first use.**
+
 > **Currency note (2026-09-11, session 65, thirty-seventh increment). THE SLICE IS BUDGETED.**
 >
 > **Command 178 is already driven** by a test feeding it a name from the reference's record, so the

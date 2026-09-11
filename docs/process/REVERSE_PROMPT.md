@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-11 (session 65, thirty-seventh increment) — the slice is two additive commands budgeted against wire.kel's own node margin; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
+**Date**: 2026-09-11 (session 65, thirty-eighth increment) — the node margin is 171, not the 217 the plan assumed, and a guard now derives it; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,29 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## THIRTY-EIGHTH INCREMENT: THE MARGIN THE SLICE IS SIZED AGAINST WAS STALE BY A QUARTER
+
+The plan's first step is to measure `wire.kel`'s node budget before editing it, so a later cap
+failure is attributed to stage growth rather than to routing.
+`tests/module_input_node_budget.rs` does that, parsing the count out of the blob the stage itself
+reads.
+
+**Measured: 1,194 nodes against a 1,365 cap, a margin of 171.** The figure quoted around the tree
+is **1,148**, stale by 46 nodes, and the margin the plan assumed was 217. **A quarter of the assumed
+headroom was already gone**, in the one number the slice is sized against.
+
+**This is the fourth stale figure in this arc**, after the two capacity limits and the retained
+state, and it is the one that would have mattered most: a slice sized against 217 that actually has
+171 is a slice planned with a margin it does not have.
+
+**The plan now cites the test rather than a number**, which is this project's own convention for a
+figure that moves. The test asserts its walk has not drifted from the writer -- every length bounded
+by the remaining blob, every section count cross-checked against the module -- because a parse that
+drifted would report a wrong figure rather than failing, and a wrong budget is worse than no budget.
+
+**The measure-first instruction paid on its first use.** It was written two increments ago as
+process caution; it caught a real error the first time it was followed.
 
 ## THIRTY-SEVENTH INCREMENT: THE SLICE IS BUDGETED, NOT CASUAL, AND TWO CONSTRAINTS SAY WHY
 
