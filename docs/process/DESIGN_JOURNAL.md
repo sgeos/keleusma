@@ -1,5 +1,39 @@
 # Design Journal
 
+## 2026-09-11 — [v0.3.0] Absorption 56, and a risk cleared on evidence rather than by a green aggregate
+
+**84 commits, the largest backlog this line has carried.** All three predicted clauses hit exactly,
+and they were committed to the tree in `6e18b86a` BEFORE the merge ran.
+
+| clause | predicted | measured |
+|---|---|---|
+| conflicting files | one, `docs/process/TASKLOG.md` | **exactly that one** |
+| conflicts in `src/` or `tests/` | zero | **zero**, and both byte-identical to `origin/v0.2.3` after |
+| backend suite | 503 passed, 0 failed | **503** (494 + 9), both halves FROZEN |
+
+### The part that is not just a green suite
+
+**The named risk was closer to home than absorption 55's.** Only two of the 84 commits touch `src/`,
+and one is `d9eeba69 fix(target): refuse a width below the narrowest implemented one`. This backend
+is width-sensitive in ways the runtime is not — `check_word_width`, floats admitted only at 4 and 8
+bytes, composite fields sized from the module's declared widths — so a change to what the TARGET
+admits can move which modules reach the backend at all.
+
+**46 width-sensitive tests ran and passed**, named in the log: `declared_float_width`,
+`entry_abi_float`, `float_composite`, the mixed-width differentials, and the narrow-float refusals.
+
+> **A GREEN AGGREGATE WOULD HAVE CLEARED THE RISK ONLY BY COINCIDENCE OF COVERAGE.** Naming the tests
+> that exercised it is what makes the clearance checkable — the difference between "the suite passed"
+> and "the specific way this could have broken was exercised and did not".
+
+### A non-result, stated rather than assumed
+
+**Neither report to the `v0.2.3` line has been acted on.** No commit among the 84 mentions
+`confine.rs` or the multi-parameter stream. That is not a complaint — both reports are recent — but
+it means the `confine.rs` allowance in `lowering_robustness.rs` is still live and still asserting
+that the defect FIRES, which is how it was built: their fix will fail my test and delete the
+carve-out rather than let it outlive the defect.
+
 ## 2026-09-08 — [v0.3.0] An unguarded array index, found by a census that was about something else
 
 **The backend returned `0xabababababababab` for `xs[5]` on a three-element array.** That
