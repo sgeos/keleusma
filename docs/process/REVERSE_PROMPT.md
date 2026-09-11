@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-10 (session 65, thirty-fourth increment) — the ordering I flagged as unmeasured is settled by an existing passing test; what remains is arithmetic; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
+**Date**: 2026-09-10 (session 65, thirty-fifth increment) — the section base is NOT recoverable from retained state; the design is recorded before any code; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,37 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## THIRTY-FIFTH INCREMENT: THE FIELD LIST MADE THE STATE LOOK SUFFICIENT, AND IT IS NOT
+
+Going to route `DATA_SLOTS`, I checked the one thing the previous increment asserted without
+reading: that the section bases are "recoverable from state that already exists", naming `ecnt`,
+`vcnt`, `scnt` and the running `cnt`.
+
+**`nm.vcnt` is assigned INSIDE the enum loop.** It holds the variant count of the *current* enum
+and is overwritten on each iteration. `ecnt` and `scnt` are totals; there is no running total of
+variant names anywhere. **The slot section's base cannot be computed from what the walk retains**,
+and the previous increment said it could.
+
+**Caught by reading the assignment site rather than the field list** -- the third surface-reading
+failure in this arc, and the first of the three caught BEFORE it reached a line of code. That is
+the whole value of writing the design down before executing it.
+
+**The design is now recorded** in `docs/decisions/DATA_SLOTS_ROUTING_PLAN.md`: capture each
+section's base at the moment that section starts, from the walk itself, rather than computing it
+from counts. Two fields, two assignments, and the base cannot drift from the sequence it indexes.
+`ds_stream_step` then takes the run index and reads `wire.nmap[slot_base + k]`, so no host
+arithmetic touches a name.
+
+**The assumption most worth checking first is named in the plan**: that `wire.nmap` survives
+between the interner call and the step calls under the driver's buffer handling. `ck_stream_begin`
+documents and relies on that property, but relying on someone else's documented reliance is not the
+same as checking it. If it does not hold, `DATA_SLOTS` needs a begin after all and the shape
+changes.
+
+**Deliberately not implemented.** A half-finished change in the self-hosted emitter, against an
+hour of continuous integration and a byte-identical oracle, would be worth less than a design the
+next session can execute without re-deriving three increments of reading.
 
 ## THIRTY-FOURTH INCREMENT: THE MEASUREMENT I ASKED FOR WAS ALREADY IN THE TREE
 

@@ -13,6 +13,39 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-10 (thirty-fifth) — the field list made the state look sufficient
+
+Going to route `DATA_SLOTS`, I checked the one thing the previous increment asserted without
+reading: that the section bases are "recoverable from state that already exists", naming `ecnt`,
+`vcnt`, `scnt` and the running `cnt`.
+
+**`nm.vcnt` is assigned INSIDE the enum loop.** It holds the variant count of the *current* enum
+and is overwritten on each iteration. `ecnt` and `scnt` are totals; there is no running total of
+variant names anywhere. **The slot section's base cannot be computed from what the walk retains**,
+and the previous increment said it could.
+
+**Caught by reading the assignment site rather than the field list** -- the third surface-reading
+failure in this arc, and the first of the three caught BEFORE it reached a line of code. That is
+the whole value of writing the design down before executing it.
+
+**The design is now recorded** in `docs/decisions/DATA_SLOTS_ROUTING_PLAN.md`: capture each
+section's base at the moment that section starts, from the walk itself, rather than computing it
+from counts. Two fields, two assignments, and the base cannot drift from the sequence it indexes.
+`ds_stream_step` then takes the run index and reads `wire.nmap[slot_base + k]`, so no host
+arithmetic touches a name.
+
+**The assumption most worth checking first is named in the plan**: that `wire.nmap` survives
+between the interner call and the step calls under the driver's buffer handling. `ck_stream_begin`
+documents and relies on that property, but relying on someone else's documented reliance is not the
+same as checking it. If it does not hold, `DATA_SLOTS` needs a begin after all and the shape
+changes.
+
+**Deliberately not implemented.** A half-finished change in the self-hosted emitter, against an
+hour of continuous integration and a byte-identical oracle, would be worth less than a design the
+next session can execute without re-deriving three increments of reading.
+
+---
+
 ## 2026-09-10 (thirty-fourth) — the measurement I asked for was already in the tree
 
 The previous increment flagged two things as unmeasured before any driver change: whether the

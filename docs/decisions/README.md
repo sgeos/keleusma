@@ -42,6 +42,7 @@ increment, and a table that drifts is worse than no table.
 | [NARROW_WIDTH_FAILURE_CLASSIFICATION.md](./NARROW_WIDTH_FAILURE_CLASSIFICATION.md) | A verdict for every `narrow-word-16` failure, separating the suite's wide-host assumptions from the one runtime defect among them |
 | [FLAT_FIELD_WIDTH_AUDIT.md](./FLAT_FIELD_WIDTH_AUDIT.md) | Whether the repaired opaque-width sites were the only ones, by a stated method validated against the pre-repair tree |
 | [COMMENT_MATCHING_GUARD_SWEEP.md](./COMMENT_MATCHING_GUARD_SWEEP.md) | Every guard that searches source for a code pattern, with a verdict per file and the rule for which comment-strip each one needs |
+| [DATA_SLOTS_ROUTING_PLAN.md](./DATA_SLOTS_ROUTING_PLAN.md) | The design for routing the first name-carrying region kind, and the section base the interning walk does not retain |
 | [TARGET_WIDTH_FLOOR.md](./TARGET_WIDTH_FLOOR.md) | Why a target width below the narrowest implemented one is refused, the zero-byte opaque it produced, and the floor argument that had been applied to one width of three |
 | [GUARD_REACH_CENSUS.md](./GUARD_REACH_CENSUS.md) | Which of this line's source-reading guards were SHOWN able to fail, derived from git rather than recall, with the two that were not named |
 | [DISCARD_ARM_REACHABILITY_BRIEF.md](./DISCARD_ARM_REACHABILITY_BRIEF.md) | Which self-hosted-stage discard arms are reached by a driven program, and what each unreached one is waiting on |
