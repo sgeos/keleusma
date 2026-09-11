@@ -10,6 +10,92 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-10, session 65, thirty-third increment). THE NAME-INTERNING ROUTE IS
+> NOT MISSING; THE SECTION BASE IS.**
+>
+> `mi_window_prepare` calls `mi_chunk_names()`, which TAILS into `mi_enum_names()` and then
+> `mi_slot_names()`. The blob carries chunk, enum type, enum variant and data-slot RUN names, and
+> the walk covers all of them with `nm_mode_fresh()` for variants. **So `wire.nmap` already holds
+> an interned index for every one.**
+>
+> A router needs the SECTION BASE -- `wire.nmap[slot_base + k]` where the formatter now reads
+> `wire.fin[0]` -- and `nm` retains `ecnt`, `vcnt`, `scnt` and `ccnt` beside the running `cnt`.
+>
+> **NOT established**: that the interning ORDER for those sections matches the reference's
+> `SchemaBuilder`, or that `nmap` is indexed by walk position as a base offset would assume. Both
+> are measurements against the byte-identical oracle, and the next increment should measure before
+> the driver changes.
+>
+> `mi_chunk_names` is a misnomer for a three-section walk; sizing from its name would have repeated
+> the previous increment's error.
+
+> **Currency note (2026-09-10, session 65, thirty-second increment). THE PREVIOUS NOTE
+> OVER-CORRECTED A CLAIM THAT WAS ALREADY RIGHT.**
+>
+> `DATA_SLOTS` and `ENUM_VARIANTS` are dispatchable at 178 and 181, but **dispatchable is not
+> routable**. Their formatters read a NAME INDEX (`dslot_off_name`, `evar_off_name`); the routed
+> `SHAPES` and `SIGNATURES` read none, and `SHARED_LAYOUT` and `DATA_INIT` were routed earlier on
+> exactly that ground.
+>
+> **The criterion is whether the record carries a name index**, and it explains the whole set. A
+> host-supplied index could disagree with the interner that produced `NAMES`, so the name route is
+> a SOUNDNESS requirement. All four do wait on it, as the original comment said.
+>
+> **The failure was reading a dispatch table instead of the function bodies** -- the same shape as
+> the message-based census classification two increments earlier.
+
+> **Currency note (2026-09-10, session 65, thirty-first increment). THE NEXT ORDER 1 SLICE IS
+> NAMED AND SIZED.**
+>
+> `DATA_SLOTS` and `ENUM_VARIANTS` have emitters in `wire.kel` that are **dispatchable at commands
+> 178 and 181**; the driver routes their immediate neighbours 179 and 180 (`SHAPES`,
+> `SIGNATURES`) and drops these into its `_ => continue`. `ENUM_LAYOUTS` and `PARAM_TYPES` have
+> readers only and need an emitter written.
+>
+> So two are INTEGRATION and two are INVENTION. The coverage test said "all four waiting on the
+> name-interning route", collapsing the two states; corrected in place.
+>
+> **Third capability in one day that already existed and was not wired**, after the streaming chunk
+> emitter and the removed walk cap. On this line a stated blocker is as likely to be an unrouted
+> capability as a missing one; check for the dispatch entry before sizing the work.
+>
+> Routing them raises the PRODUCED share and not the COMPUTED one.
+
+> **Currency note (2026-09-10, session 65, thirtieth increment). BOTH CAPACITY LIMITS ARE GONE,
+> AND I HAD JUST COPIED THEM FORWARD.**
+>
+> The windowed path reaches **all eleven stages**. `parse`'s 94-chunk exclusion went when the chunk
+> region became a STREAM (cap removed, not raised); `wire`'s 1,148-node exclusion went when the
+> guard was found comparing against `nm_max_names()` instead of the node table's 1,365.
+>
+> **The tree already said so in the body of the test that proves it**, while that test's own doc
+> comment listed both as live. The roadmap cell carried the stale figures and I copied them into
+> `HANDOFF.md` one increment ago. **All three corrected**, the roadmap included, because it is
+> where the copy came from.
+>
+> **A cross-language call site is invisible to a single-language grep**: the driver addresses the
+> stage by command number (174, 175), so searching for `ck_stream` in Rust found nothing and my
+> first conclusion was wrong.
+>
+> Order 1 still needs four region kinds of twenty and SOURCE TYPES.
+
+> **Currency note (2026-09-10, session 65, twenty-ninth increment). THE LARGE WORK IS NOT
+> BLOCKED, AND THE CLAIM THAT IT WAS SHAPED THIS WHOLE SESSION.**
+>
+> The four decisions block the LANGUAGE-SURFACE work they name. **They do not block Order 1**,
+> whose roadmap cell says what stands in the way is "integration, not invention": the remaining
+> region kinds (four of twenty covered, `HEADER` encoded but not derived, `CHUNKS` mixed per
+> field), and SOURCE TYPES, without which type rejection reaches only literal direct occurrences.
+>
+> Capacity limits are named with numbers: `parse` 94 chunks against a 90-record batch; `wire.kel`
+> 1,148 constant-forest nodes against a 1,024-node walk cap.
+>
+> **The roadmap has four open decisions of its own** -- crypto locus, meta-circular bounds, version
+> granularity, reference retirement -- a DIFFERENT four, and none blocks Order 1 either.
+>
+> The twenty-eight increments of verification work stand. The inference that nothing larger was
+> available does not. **No guard catches this**: it is a judgement, not a figure.
+
 > **Currency note (2026-09-10, session 65, twenty-eighth increment). A HOST'S MISTAKE IS
 > REPORTED AS THE ARTEFACT'S, IN BOTH HOST-CONTRACT GROUPS.**
 >

@@ -366,12 +366,38 @@ fn the_skipped_region_kinds_are_the_ones_on_record() {
     // **A kind is listed here if it is skipped for ANY stage**, so this figure moves only when a
     // kind is routed for EVERY stage. That is the conservative reading and the right one: a kind
     // routed for most inputs is not a kind the driver covers.
+    //
+    // **WHAT SEPARATES A ROUTED KIND FROM A SKIPPED ONE IS WHETHER ITS RECORD CARRIES A NAME
+    // INDEX.** Measured 2026-09-10 by reading what each formatter READS, not which command
+    // dispatches it:
+    //
+    // | formatter | first fields | routed |
+    // |---|---|---|
+    // | `sh_stream_step` (SHAPES) | tag, kind, reserved, size | yes |
+    // | `sg_stream_step` (SIGNATURES) | params_first, params_count, ret, resume | yes |
+    // | `ds_stream_step` (DATA_SLOTS) | **`dslot_off_name`** | no |
+    // | `ev_stream_step` (ENUM_VARIANTS) | **`evar_off_name`** | no |
+    //
+    // `SHARED_LAYOUT` and `DATA_INIT` were routed earlier on the same ground, and the driver says
+    // so: neither carries a name index. `ENUM_LAYOUTS` has `elay_off_type_name`, so it is on the
+    // same side as the two above even though it has no emitter yet.
+    //
+    // A host-supplied name index could disagree with the interner that produced `NAMES`, which is
+    // the hazard the chunk path avoids by taking its index from its own interner. So the name
+    // route is a soundness requirement, not a convenience.
+    //
+    // **AN EARLIER VERSION OF THIS COMMENT, WRITTEN THE SAME DAY, CLAIMED THE OPPOSITE.** It said
+    // `DATA_SLOTS` and `ENUM_VARIANTS` were "INTEGRATION" rather than "INVENTION" because both are
+    // dispatchable -- at commands 178 and 181, beside the routed 179 and 180. **Dispatchable is
+    // not routable.** The sentence it replaced, that all four wait on the name-interning route,
+    // was correct, and the over-correction came from reading a dispatch table instead of the
+    // formatter bodies.
     assert!(
         skipped.len() <= 4,
         "{} kinds are skipped: {skipped:02x?}. FOUR are on record after `DATA_INIT` was \
-         routed -- `ENUM_VARIANTS`, `ENUM_LAYOUTS`, `DATA_SLOTS` and `PARAM_TYPES`, all four \
-         waiting on the name-interning route. More means the driver has stopped routing \
-         something it used to",
+         routed -- `ENUM_VARIANTS`, `ENUM_LAYOUTS`, `DATA_SLOTS` and `PARAM_TYPES`. More means \
+         the driver has stopped routing something it used to. All four wait on the name-interning \
+         route",
         skipped.len()
     );
 }

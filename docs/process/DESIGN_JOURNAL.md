@@ -13,6 +13,176 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-10 (thirty-third) — the interning route already runs; the gap is the section base
+
+Having established that all four skipped region kinds wait on the name-interning route, I read what
+that route actually does rather than sizing it from its name.
+
+**The walk covers all three name sections, in one call.** `mi_window_prepare` calls
+`mi_chunk_names()`, which TAILS into `mi_enum_names()` (line 3017), which tails into
+`mi_slot_names()` (line 3051). The module-input blob carries chunk names, enum type and variant
+names, and data-slot RUN names -- one per run, because interning per slot is what once produced the
+395,804-name figure -- and `nm.cnt` advances through all of them, with `nm_mode_fresh()` used for
+variant names exactly as `SchemaBuilder::intern_fresh` does.
+
+**So `wire.nmap` already holds an interned index for every data-slot run name and every enum
+name.** The route is not missing. What a router needs is the SECTION BASE: `ds_stream_step` would
+take `wire.nmap[slot_base + k]` where it currently takes `wire.fin[0]`, and the interner retains
+`ecnt`, `vcnt`, `scnt` and `ccnt` alongside the running `cnt`, so the bases are recoverable from
+state that already exists.
+
+**WHAT THIS DOES NOT ESTABLISH, and I am stating it because the previous increment over-claimed
+from a surface.** That the interning ORDER for those sections matches the reference's
+`SchemaBuilder` is NOT verified here -- the roadmap records slices 14b and 14c producing the enum
+sequence with both modes, which makes it likely and not certain. Nor is it established that
+`nmap` is indexed by walk position in the way a base offset would assume. **Both are measurements,
+and the byte-identical oracle is what would settle them.** This increment is a reading, and the
+next one should be a measurement before a line of the driver changes.
+
+**The method that produced this is the one that failed last time, applied correctly**: read the
+function bodies and follow the tail calls, rather than reading a name, a dispatch table, or a
+count. `mi_chunk_names` is a misnomer for a walk that covers three sections, and sizing the work
+from its name would have repeated the error exactly.
+
+---
+
+## 2026-09-10 (thirty-second) — I over-corrected a claim that was already right
+
+The previous increment "sharpened" `selfhost_region_coverage.rs` from *"all four wait on the
+name-interning route"* to *"two are INTEGRATION and two are INVENTION"*, on the evidence that
+`DATA_SLOTS` and `ENUM_VARIANTS` are dispatchable at commands 178 and 181, beside the routed 179
+and 180.
+
+**That was wrong, and the original sentence was right.** Dispatchable is not routable. Reading what
+each formatter READS rather than which command dispatches it:
+
+| formatter | first fields | routed |
+|---|---|---|
+| `sh_stream_step` (SHAPES) | tag, kind, reserved, size | yes |
+| `sg_stream_step` (SIGNATURES) | params_first, params_count, ret, resume | yes |
+| `ds_stream_step` (DATA_SLOTS) | **`dslot_off_name`** | no |
+| `ev_stream_step` (ENUM_VARIANTS) | **`evar_off_name`** | no |
+
+**The criterion is whether the record carries a NAME INDEX**, and it explains the whole set at
+once. `SHARED_LAYOUT` and `DATA_INIT` were routed earlier on exactly that ground, and the driver
+says so in its own comment. `ENUM_LAYOUTS` has `elay_off_type_name`, so it sits with the unrouted
+two even though it has no emitter yet. A host-supplied name index could disagree with the interner
+that produced `NAMES` -- the hazard the chunk path avoids by taking its index from its own
+interner -- so the name route is a SOUNDNESS requirement, not a convenience.
+
+**That criterion is the genuine sharpening, and it is the opposite of what I wrote.** Restored,
+with the over-correction recorded in place rather than quietly replaced.
+
+**The failure has a name: I read a dispatch table instead of the function bodies.** It is the same
+shape as the message-based census classification two increments ago, which also read a surface
+that looked like a taxonomy and was not. Twice in one session, the cheap signal was the wrong
+signal, and the expensive one -- reading the code -- was the only one that settled it.
+
+---
+
+## 2026-09-10 (thirty-first) — "all four waiting on one thing" was two different things
+
+With Order 1 established as available, the next slice is one of the four region kinds the driver
+still skips. `tests/selfhost_region_coverage.rs` said all four were "waiting on the name-interning
+route" -- one sentence over two different states. Measured:
+
+| kind | state |
+|---|---|
+| `DATA_SLOTS` | emitter `ds_stream_step` exists and is **DISPATCHABLE at command 178** |
+| `ENUM_VARIANTS` | emitter `ev_stream_step` exists and is **DISPATCHABLE at command 181** |
+| `ENUM_LAYOUTS` | READERS only (`elay_*`); no emitter written |
+| `PARAM_TYPES` | no emitter written |
+
+**The driver routes commands 179 and 180 -- `SHAPES` and `SIGNATURES`, the immediate NEIGHBOURS of
+the two unrouted ones -- and everything else falls into its `_ => continue`.** So two of the four
+are INTEGRATION and two are still INVENTION, which is exactly the distinction the roadmap's Order 1
+cell draws and this comment collapsed.
+
+**This is the third capability in one day that already existed and was not wired**, after the
+streaming chunk emitter and the removed walk cap. The pattern is worth naming: on this line, a
+stated blocker is as likely to be an unrouted capability as a missing one, and the cheap check is
+to look for the dispatch entry before sizing the work.
+
+**Deliberately not implemented in this increment.** Routing them is a driver change against a
+byte-identical oracle, and the honest deliverable here is the sizing: a named, dispatchable slice
+rather than a vague blocker. What it would buy is also stated in advance -- the PRODUCED share
+rises and the COMPUTED share does not, because these records format fields the host decides, and
+`the_computed_share_is_smaller_than_the_produced_share` exists so that cannot be misread.
+
+---
+
+## 2026-09-10 (thirtieth) — I copied a stale figure while correcting a staleness
+
+The previous increment corrected the handoff's "the large work is blocked" premise and listed what
+Order 1 actually needs, taking the detail from the roadmap cell. **Two of those details were
+already false**, and I had not checked them.
+
+**Both capacity limits are REMOVED, and the windowed path reaches all eleven stages.**
+
+| limit as I restated it | actual state |
+|---|---|
+| `parse`, 94 chunks against a 90-record batch | **gone** -- the chunk region became a STREAM, one record per call, the coroutine carrying the three range cursors in private data across the loop's RESET |
+| `wire.kel`, 1,148 nodes against a 1,024-node walk cap | **gone** -- the guard was comparing against `nm_max_names()`, a bound on the NAME arrays, where it should have checked the node table's 1,365; every constant in that stage is `Int`, so the walk interned nothing |
+
+**The tree already said so, in the body of the test that proves it.**
+`the_windowed_path_reaches_every_stage_it_can_walk` explains both removals and says its `Expect`
+enum is gone because neither exclusion survives -- while its OWN DOC COMMENT listed both as live.
+A doc comment contradicting the code beneath it is worse than an absent one, because the comment is
+what a reader quotes: the roadmap cell carried both figures, and I copied them into the handoff
+from there.
+
+Three places corrected: the test's doc comment, the roadmap cell, and the handoff bullet. **The
+roadmap is corrected as well as the handoff because it is where the figure was copied FROM** --
+fixing only the copy is the one-of-two-sites failure this session has now met seven times.
+
+**A search lesson worth keeping.** I concluded the streaming emitter was unreferenced outside the
+stage, because `grep ck_stream` found nothing in Rust. The driver addresses the stage by COMMAND
+NUMBER -- `CMD_BEGIN = 174`, `CMD_STEP = 175` -- so a name search across the language boundary
+could not have found it. **A cross-language call site is invisible to a single-language grep**, and
+the conclusion was wrong until reading corrected it.
+
+**What remains true for Order 1** is what the previous increment said it was, minus the capacity
+claims: four region kinds of twenty, with `HEADER` encoded but not derived and `CHUNKS` mixed per
+field, and source types before type rejection reaches past literal, direct occurrences.
+
+---
+
+## 2026-09-10 (twenty-ninth) — the premise this session ran on was too strong
+
+**I re-derived what the roadmap says is outstanding instead of continuing on momentum, and the
+framing that kept this session in one lane for twenty-eight increments does not hold.**
+
+`HANDOFF.md` has said, since before this session, that *"the large remaining work is blocked on
+[the four decisions] and the small remaining work is not worth choosing over them."* The four
+decisions block the LANGUAGE-SURFACE work they name -- `Text<N>` programs, the width API, the
+float-verify semantics, a build's continuous-integration cost. **They do not block Order 1**, which
+`docs/roadmap/V0_2_X_ROADMAP.md` identifies as the largest remaining workstream and whose own cell
+says what stands in the way is *"integration, not invention"*:
+
+- **The remaining region kinds.** The module-driven emit path covers FOUR of twenty, and unequally:
+  `NAMES` and `STRING_POOL` are COMPUTED, `HEADER` is encoded but NOT derived, `CHUNKS` is mixed
+  per field with ten fields per record host-supplied. Two capacity limits are named with numbers --
+  `parse` at 94 chunks against a 90-record batch, `wire.kel` at 1,148 constant-forest nodes against
+  a 1,024-node walk cap.
+- **Source types.** Type rejection reaches only literal, direct occurrences, because no stage
+  computes source types and `parse.kel` says so in its own comment. A missing pipeline capability,
+  not a missing rule.
+
+**The roadmap carries four open decisions of its OWN** -- cryptography locus, meta-circular bound
+composition, version granularity, reference retirement -- and they are a different four. None
+blocks Order 1 either. **Two sets of four decisions, neither of which blocks the largest
+workstream**, and the resemblance is probably why the conflation went unnoticed.
+
+**The verification work stands**: it found a real runtime defect, corrected several claims, and
+strengthened the instruments. What does not stand is the inference that nothing larger was
+available.
+
+**No guard catches this.** It is a judgement rather than a figure, so it survived a refresh of the
+very file that carries it -- four increments ago, by me, while I was checking eighteen other things
+against the tree.
+
+---
+
 ## 2026-09-10 (twenty-eighth) — a host's mistake reported as the artefact's
 
 Census groups F and J are the host-contract surfaces, judged lower value on the grounds that a host

@@ -12,9 +12,39 @@ always-current, so it must be able to report itself stale rather than mislead a 
 >
 > ## THE FOUR DECISIONS ARE THE OPERATOR'S, NONE HAS MOVED, AND THEY LEAD FOR A REASON
 >
-> **The large remaining work is blocked on these and the small remaining work is not worth choosing
-> over them.** Session 65 ran four increments without touching any of them; that is the pattern to
-> continue, not a sign they can be decided locally.
+> **CORRECTED 2026-09-10: THIS SENTENCE WAS TOO STRONG AND IT SHAPED A WHOLE SESSION.** It read
+> *"the large remaining work is blocked on these and the small remaining work is not worth choosing
+> over them."* The four decisions block the LANGUAGE-SURFACE work they name -- programs using
+> `Text<N>`, the width API, the float-verify semantics, a build's continuous-integration cost.
+> **They do not block Order 1**, which `../roadmap/V0_2_X_ROADMAP.md` identifies as the largest
+> remaining workstream and whose own cell says what stands in the way is *"integration, not
+> invention"*:
+>
+> - **The remaining region kinds.** The module-driven emit path covers FOUR of twenty, and not
+>   equally: `NAMES` and `STRING_POOL` are COMPUTED, `HEADER` is encoded but NOT derived, and
+>   `CHUNKS` is mixed per field with ten fields per record host-supplied.
+>
+>   **The first version of this bullet also listed two capacity limits -- `parse` at 94 chunks
+>   against a 90-record batch, and `wire.kel` at 1,148 nodes against a 1,024-node walk cap -- and
+>   BOTH ARE REMOVED.** I copied them from the roadmap cell without checking, in the same increment
+>   that corrected a different staleness. The windowed path reaches all eleven stages: the chunk
+>   region became a STREAM so the batch cap is gone rather than larger, and the `wire` refusal was a
+>   guard comparing against the wrong bound. Corrected in the roadmap too, since that is where the
+>   figure was copied from.
+> - **Source types.** Type rejection reaches only literal, direct occurrences, because no stage
+>   computes source types and `parse.kel` says so in its own comment. That is a missing pipeline
+>   capability rather than a missing rule.
+>
+> The roadmap also carries FOUR OPEN DECISIONS OF ITS OWN -- cryptography locus, meta-circular
+> bound composition, version granularity, reference retirement -- and they are a different four.
+> None of them blocks Order 1 either.
+>
+> **Session 65 ran twenty-eight increments of verification work under the mistaken framing**, and
+> that work stands: it found a real runtime defect and corrected several claims. But a resuming
+> agent should not infer from it that the roadmap is blocked. **No guard catches this**, because it
+> is a judgement rather than a figure, which is why it survived a refresh of this very file.
+>
+> The decisions below remain the operator's and none has moved.
 >
 > 1. **How does a value ENTER a `Text<N>`?** It appears in every program anyone writes with the
 >    type. Open question 2 in `../decisions/TEXT_CAPACITY_TYPE.md`.
