@@ -642,6 +642,17 @@ type BindingRows = (std::collections::BTreeMap<String, i64>, Vec<BindingRow>);
 /// An expression node with each operand tagged by form: `(kind, a, af, b, bf)`.
 type ResolvableNode = (i64, i64, i64, i64, i64);
 
+/// Whether a binary operator requires BOOL operands rather than merely agreeing
+/// ones.
+///
+/// The eager three and the short-circuit two. `Band`/`Bor`/`Bxor` are the BITWISE
+/// family and are deliberately absent: they are defined on words and bytes, so a
+/// bool requirement there would reject valid programs.
+fn is_logical(op: &keleusma::ast::BinOp) -> bool {
+    use keleusma::ast::BinOp as B;
+    matches!(op, B::And | B::Or | B::Xor | B::Andalso | B::Orelse)
+}
+
 /// A field read's row index, by the pair of spellings that names it.
 type FieldReadIndex = std::collections::BTreeMap<(String, String), i64>;
 
@@ -887,9 +898,38 @@ fn expression_nodes_over(
         fn visit_stmt(&mut self, stmt: &Stmt) {
             if let Stmt::Let(l) = stmt
                 && let Pattern::Variable(n, _) = &l.pattern
-                && let Some(TypeExpr::Prim(_, _)) = &l.type_expr
             {
-                self.scalars.insert(n.clone());
+                // A LITERAL INITIALISER MAKES A SCALAR AS SURELY AS AN ANNOTATION
+                // DOES, and until 2026-09-11 only the annotation counted. The
+                // census reported "a scalar cannot be projected" as a GAP for both
+                // of its forms, which was a surprise: the rule exists and its node
+                // kinds exist, but the set of names it could fire on was one narrow
+                // spelling.
+                //
+                // Both sources are SOUND -- a `Prim` annotation and a literal are
+                // each conclusive -- and soundness is the requirement, because a
+                // name wrongly believed scalar would REJECT a valid projection.
+                // **NOT EVERY LITERAL.** `Literal::Fixed` yields a `Multiword`,
+                // which is a flat array of words and IS indexable, so calling it a
+                // scalar would REJECT a valid `m[0]`. I could not construct that
+                // program with the syntax I tried, which is a reason to avoid the
+                // hazard rather than to assume it away: the four listed here are
+                // unambiguous, and a literal form I cannot write a control for is a
+                // literal form this rule should not act on.
+                let scalar_literal = matches!(
+                    &l.value,
+                    Expr::Literal {
+                        value: keleusma::ast::Literal::Int(_)
+                            | keleusma::ast::Literal::Bool(_)
+                            | keleusma::ast::Literal::Byte(_)
+                            | keleusma::ast::Literal::Float(_),
+                        ..
+                    }
+                );
+                let scalar = matches!(&l.type_expr, Some(TypeExpr::Prim(_, _))) || scalar_literal;
+                if scalar {
+                    self.scalars.insert(n.clone());
+                }
             }
             // The index the initialiser's own node WILL take. Read before
             // `walk_stmt` descends, and correct because `visit_expr` pushes an
@@ -905,6 +945,31 @@ fn expression_nodes_over(
         }
         fn visit_expr(&mut self, expr: &Expr) {
             match expr {
+                // A LOGICAL OPERATOR REQUIRES BOOL OPERANDS, WHICH THE AGREEMENT
+                // RULE DOES NOT SAY. `n andalso m` with both `Word` AGREES, so the
+                // binop row alone accepts it while the reference rejects it. **Two
+                // operands can agree and still both be wrong**, which is the hole a
+                // pure agreement rule leaves.
+                //
+                // **BEFORE THE GENERAL ARM, and the first attempt put it after.** A
+                // guarded arm following an unguarded one for the same variant is
+                // unreachable; the compiler said so and the census went on
+                // reporting the cell as a gap while the code to close it sat in the
+                // file. Read the warnings.
+                //
+                // The binop row is emitted here too rather than falling through:
+                // the two rules are independent and a program can fail either.
+                Expr::BinOp {
+                    op, left, right, ..
+                } if is_logical(op) => {
+                    for side in [left.as_ref(), right.as_ref()] {
+                        let (v, f) = operand_form(side, self.names, self.freads);
+                        self.out.push((CONDITION, v, f, 0, 0));
+                    }
+                    let (a, af) = operand_form(left, self.names, self.freads);
+                    let (b, bf) = operand_form(right, self.names, self.freads);
+                    self.out.push((BINOP, a, af, b, bf));
+                }
                 Expr::BinOp { left, right, .. } => {
                     let (a, af) = operand_form(left, self.names, self.freads);
                     let (b, bf) = operand_form(right, self.names, self.freads);
@@ -918,6 +983,18 @@ fn expression_nodes_over(
                             self.out.push((ARRAY_ELEM, ft, ff, t, f));
                         }
                     }
+                }
+                // `not` REQUIRES BOOL, the same rule as a condition and the same
+                // node kind. `-` requires the operand NOT be bool, which no kind
+                // expresses, so it contributes nothing here and is recorded as an
+                // open gap by the census.
+                Expr::UnaryOp {
+                    op: keleusma::ast::UnaryOp::Not,
+                    operand,
+                    ..
+                } => {
+                    let (v, f) = operand_form(operand, self.names, self.freads);
+                    self.out.push((CONDITION, v, f, 0, 0));
                 }
                 Expr::If {
                     condition,
@@ -974,6 +1051,15 @@ fn expression_nodes_over(
                 // transitive, so comparing adjacent pairs instead would report the
                 // same verdict at the same cost.
                 Expr::Match { arms, .. } => {
+                    // A `when` GUARD MUST BE BOOL. The same rule as an `if`
+                    // condition and the same node kind; only the syntax differs,
+                    // which is the whole class of gap this census was built for.
+                    for a in arms {
+                        if let Some(g) = &a.guard {
+                            let (v, f) = operand_form(g, self.names, self.freads);
+                            self.out.push((CONDITION, v, f, 0, 0));
+                        }
+                    }
                     if let Some(first) = arms.first() {
                         let (ft, ff) = operand_form(&first.expr, self.names, self.freads);
                         for a in arms.iter().skip(1) {
@@ -991,11 +1077,22 @@ fn expression_nodes_over(
     let mut out = Vec::new();
     let mut derived: Vec<(String, i64)> = Vec::new();
     for f in &ast.functions {
+        // DECLARED PARAMETERS ARE SCALARS TOO. The walk started with an empty set
+        // and only a `let` could add to it, so `fn main(n: Word) -> Word { n.x }`
+        // -- a projection of a declared primitive -- reached no rule at all.
+        let mut params: BTreeSet<String> = BTreeSet::new();
+        for prm in &f.params {
+            if let (Pattern::Variable(n, _), Some(TypeExpr::Prim(_, _))) =
+                (&prm.pattern, &prm.type_expr)
+            {
+                params.insert(n.clone());
+            }
+        }
         let mut n = Nodes {
             structs: &struct_fields,
             names,
             freads,
-            scalars: BTreeSet::new(),
+            scalars: params,
             out: Vec::new(),
             derived: Vec::new(),
         };
@@ -3433,6 +3530,278 @@ fn a_field_read_on_a_match_binding_is_reached() {
              change rather than a conservative choice"
         );
     }
+}
+
+/// **THE WELL-TYPED HALF OF EVERY RULE THE CENSUS CAUSED TO BE APPLIED.**
+///
+/// Five cells changed from gap to covered in one increment, three by a rule that
+/// did not exist and two by widening the set of names an existing rule could fire
+/// on. **Widening is the more dangerous of the two**: a name wrongly believed
+/// scalar makes a valid projection a rejection, and nothing in the rejection
+/// corpus would show it.
+#[test]
+fn the_rules_the_census_added_do_not_reject_valid_programs() {
+    const CASES: &[(&str, &str)] = &[
+        (
+            "a match guard that is bool",
+            "enum E { A, B }\n\
+             fn main(e: E, c: bool) -> Word { match e { E::A when c => 1, _ => 0 } }",
+        ),
+        (
+            "`not` on a bool",
+            "fn main(c: bool) -> Word { if not c { 1 } else { 0 } }",
+        ),
+        (
+            "logical operators on bools",
+            "fn main(a: bool, b: bool) -> bool { a andalso b }",
+        ),
+        (
+            // BITWISE, NOT LOGICAL. `band` on two words is valid, and a bool
+            // requirement applied to the wrong operator family would refuse it.
+            "a bitwise operator on words",
+            "fn main(a: Word, b: Word) -> Word { a band b }",
+        ),
+        (
+            // THE WIDENED SCALAR SET, both new sources. Neither name is projected,
+            // so both programs are valid and must stay accepted.
+            "a declared primitive parameter used as a value",
+            "fn main(n: Word) -> Word { n + 1 }",
+        ),
+        (
+            "a let bound to a literal used as a value",
+            "fn main() -> Word { let n = 1; n + 1 }",
+        ),
+        (
+            // A COMPOSITE PARAMETER IS NOT IN THE WIDENED SET, which is what keeps
+            // the projection rule from firing on a legitimate field read.
+            "a struct parameter projected",
+            "struct P { x: Word }\nfn main(p: P) -> Word { p.x }",
+        ),
+        (
+            "an array let indexed",
+            "fn main() -> Word { let a = [1, 2]; a[0] }",
+        ),
+    ];
+    for (label, src) in CASES {
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+        assert!(
+            compile(&program).is_ok(),
+            "{label}: the REFERENCE rejects this, so it is not a well-typed control"
+        );
+        assert!(
+            stage_verdict_resolving(src),
+            "{label}: the stage REJECTS a well-typed program, which is a language \
+             change rather than a conservative choice"
+        );
+    }
+}
+
+/// **A CENSUS OF ONE RULE SHAPE AGAINST THE SYNTACTIC FORMS IT SHOULD GOVERN.**
+///
+/// # Why this exists
+///
+/// The match-arms rule was absent for two increments while the rule list recorded
+/// the fifteen enumerated shapes as COMPLETE. It was absent because the shape --
+/// "these two must agree" -- had been implemented for `if` branches and nobody
+/// asked which other syntax it governs. **It was found by accident**, by a test
+/// written to measure something else.
+///
+/// **A rule inventory counts SHAPES. It does not count the syntactic FORMS each
+/// shape reaches.** One accidental hit in a class is a reason to enumerate the
+/// class, so this crosses the shapes against the forms and measures each cell.
+///
+/// # What this is NOT
+///
+/// **Not exhaustive, and saying so is the point.** These are the forms I thought
+/// of, which is the same kind of list that missed match arms. A cell absent from
+/// this table is a cell nobody looked at, not a cell that was checked and found
+/// covered.
+///
+/// # Reading a row
+///
+/// Every case is a program the REFERENCE REJECTS, asserted per row, so a cell the
+/// stage accepts is a missed rejection rather than a difference of opinion. Where
+/// the stage rejects, the row is constructed so that nothing else in the program
+/// can be the reason -- with the match-binding lesson in mind, where an unrelated
+/// occurrence rule fired and made a gap look closed.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_rule_shapes_are_censused_against_the_forms_they_should_govern() {
+    // `(shape, form, source)`.
+    const CELLS: &[(&str, &str, &str)] = &[
+        (
+            "must be bool",
+            "if condition",
+            "fn main(n: Word) -> Word { if n { 1 } else { 0 } }",
+        ),
+        (
+            "must be bool",
+            "match arm guard",
+            "enum E { A, B }\n\
+             fn main(e: E, n: Word) -> Word { match e { E::A when n => 1, _ => 0 } }",
+        ),
+        (
+            "must be bool",
+            "`not` operand",
+            "fn main() -> Word { let b = not 1; 0 }",
+        ),
+        (
+            // AGREEING AND BOTH WRONG. The binop agreement rule accepts this,
+            // because two `Word` operands agree; only a bool REQUIREMENT rejects it.
+            "must be bool",
+            "logical operator operands",
+            "fn main(n: Word, m: Word) -> bool { n andalso m }",
+        ),
+        (
+            "two must agree",
+            "binary operator",
+            "fn main() -> Word { 1 + true }",
+        ),
+        (
+            "two must agree",
+            "array literal elements",
+            "fn main() -> Word { let a = [1, true]; 0 }",
+        ),
+        (
+            "two must agree",
+            "if branches",
+            "fn main(c: bool) -> Word { if c { 1 } else { true } }",
+        ),
+        (
+            "two must agree",
+            "match arms",
+            "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A => 1, E::B => true } }",
+        ),
+        (
+            "two must agree",
+            "function tail against declared return",
+            "fn g() -> Word { true }\nfn main() -> Word { 0 }",
+        ),
+        (
+            "two must agree",
+            "let annotation against initialiser",
+            "fn main() -> Word { let a: Word = true; 0 }",
+        ),
+        (
+            "two must agree",
+            "assignment target against value",
+            "shared data d { v: Word }\nfn main() -> Word { d.v = true; 0 }",
+        ),
+        (
+            "a scalar cannot be projected",
+            "field access",
+            "fn main(n: Word) -> Word { n.x }",
+        ),
+        (
+            "a scalar cannot be projected",
+            "array index",
+            "fn main(n: Word) -> Word { n[0] }",
+        ),
+        (
+            "a scalar cannot be projected",
+            "tuple index",
+            "fn main(n: Word) -> Word { n.0 }",
+        ),
+        (
+            "must be a word",
+            "array index expression",
+            "fn main() -> Word { let a = [1, 2]; a[true] }",
+        ),
+        (
+            "must not be bool",
+            "negation operand",
+            "fn main() -> Word { let b = -true; 0 }",
+        ),
+    ];
+
+    let mut covered: Vec<(&str, &str)> = Vec::new();
+    let mut gaps: Vec<(&str, &str)> = Vec::new();
+
+    for (shape, form, src) in CELLS {
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+        assert!(
+            compile(&program).is_err(),
+            "{shape} / {form}: the REFERENCE accepts this, so the cell measures \
+             nothing and the program is wrong rather than the stage"
+        );
+        if stage_verdict_resolving(src) {
+            gaps.push((shape, form));
+        } else {
+            covered.push((shape, form));
+        }
+    }
+
+    std::eprintln!(
+        "RULE-SHAPE CENSUS: {} covered, {} gaps",
+        covered.len(),
+        gaps.len()
+    );
+    for (shape, form) in &gaps {
+        std::eprintln!("  GAP  {shape} / {form}");
+    }
+
+    // NON-VACUITY IN BOTH DIRECTIONS. A census where every cell falls the same way
+    // is measuring the harness rather than the stage: all-covered would mean the
+    // cases do not reach the rules, and all-gaps would mean the driver is not
+    // running.
+    assert!(
+        !covered.is_empty(),
+        "the census found NO covered cell, so it is not exercising the stage"
+    );
+    assert!(
+        !gaps.is_empty(),
+        "the census found NO gap. Either the remaining cells were closed -- in \
+         which case say so and add harder cells -- or the cases stopped reaching \
+         the rules they name"
+    );
+
+    // THE GAPS, NAMED. Each is recorded with what closing it would need, so a cell
+    // that closes fails here and is moved rather than quietly disappearing.
+    //
+    //   let annotation / assignment  -- an agreement between a DECLARED type and an
+    //     ACTUAL one. The existing `claims` channel already carries exactly that
+    //     pair, but it carries TAGS, so it reaches a literal initialiser and not a
+    //     name. Partial closure, deliberately not taken in the increment that
+    //     found it.
+    //   tuple index on a scalar      -- the composite kinds cover `FieldAccess` and
+    //     `ArrayIndex`; `TupleIndex` is a third expression variant with the same
+    //     rule.
+    //   array index must be a word   -- "must be T" for T other than bool has no
+    //     node kind. The claims channel expresses it as actual-against-required.
+    //   negation operand             -- "must NOT be bool" is a negative
+    //     requirement no kind expresses, and inventing one for a single operator is
+    //     the weakest case in this table.
+    let mut named: Vec<(&str, &str)> = vec![
+        ("two must agree", "let annotation against initialiser"),
+        ("two must agree", "assignment target against value"),
+        ("a scalar cannot be projected", "tuple index"),
+        ("must be a word", "array index expression"),
+        ("must not be bool", "negation operand"),
+    ];
+    // **TWO CELLS EXPECTED TO BE COVERED AND FOUND NOT TO BE**, both closed in the
+    // increment that first ran this census. Recorded because the surprise is the
+    // census's whole justification:
+    //
+    //   a scalar cannot be projected / field access, and / array index -- the RULE
+    //     existed and its node kinds existed, but the set of names it could fire on
+    //     held only `let`s carrying a primitive ANNOTATION. A declared PARAMETER and
+    //     a `let` bound to a literal are just as conclusively scalar, and neither
+    //     was in it. **A rule that is present and unreachable looks identical to a
+    //     rule that is present and working**, from any inventory.
+    //
+    //   must be bool / logical operator operands -- absent, and the first attempt to
+    //     close it was an unreachable match arm, so the cell stayed a gap while the
+    //     code to close it sat in the file. The compiler warned; the census is what
+    //     made the warning matter.
+    named.sort_unstable();
+    let mut found = gaps.clone();
+    found.sort_unstable();
+    assert_eq!(
+        found, named,
+        "the census result changed. Every gap must be named here with what closing \
+         it would need, and a cell that has CLOSED must be removed from this list \
+         rather than left asserting a gap that is gone"
+    );
 }
 
 /// **MATCH ARMS MUST AGREE, AND THE STAGE HAD NO SUCH RULE UNTIL 2026-09-11.**

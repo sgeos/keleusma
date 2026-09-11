@@ -53,6 +53,24 @@ Current sprint source of truth.
 > Third artifact in two increments whose answer was true when written and is now about a DIFFERENT
 > QUESTION. The pattern is staleness of SUBJECT, not of fact.
 
+> **Currency note (2026-09-11, session 65, fifty-second increment). THE RULE-SHAPE CENSUS FOUND
+> EIGHT GAPS WHERE THE INVENTORY SAID THE RULES WERE COMPLETE.**
+>
+> Sixteen cells, each a rule SHAPE crossed with a syntactic FORM, each a program the reference
+> rejects. **First run 8 covered and 8 gaps; after closing what needed no stage change, 11 and 5.**
+>
+> **Two surprises.** "A scalar cannot be projected" was a gap for BOTH its forms — the rule and its
+> node kinds existed, but the set of names it could fire on held only `let`s with a primitive
+> ANNOTATION, so a declared parameter reached no rule at all. **A rule that is present and
+> unreachable looks identical, from any inventory, to one that is present and working.** And
+> "logical operands must be bool" was absent, which agreement cannot substitute for: `n andalso m`
+> with two words AGREES.
+>
+> **Any claim that the rules are complete must now say that the inventory counts shapes rather than
+> the forms each shape reaches.** The census is itself not exhaustive and says so.
+>
+> Five gaps remain, each named in the test with the mechanism closing it would need.
+
 > **Currency note (2026-09-11, session 65, fifty-first increment). A CLAIM IN THE TWO NOTES BELOW
 > WAS FALSE, AND CHECKING IT CLOSED TWO GAPS.**
 >

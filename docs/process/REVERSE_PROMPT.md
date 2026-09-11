@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-11 (session 65, fifty-first increment) — a claim of mine was FALSE and checking it closed two gaps: the match-binding field read is reached, and match arms were never compared at all because the walk emitted no node for a match
+**Date**: 2026-09-11 (session 65, fifty-second increment) — a census of rule shapes against the syntactic forms they should govern found EIGHT gaps where the inventory said the rules were complete; five closed, five remain, and two of the surprises were rules that existed but could not fire
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,52 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## FIFTY-SECOND INCREMENT: THE RULE-SHAPE CENSUS
+
+The previous finding was that **a rule inventory counts SHAPES, not the syntactic FORMS each shape
+reaches**. One accidental hit is a reason to enumerate the class, so this crosses the shapes against
+the forms and measures every cell.
+
+**First run: 8 covered, 8 gaps. After closing what needed no stage change: 11 covered, 5 gaps.**
+
+### The two surprises, which justify the census by themselves
+
+**"A scalar cannot be projected" was a gap for BOTH its forms.** The rule exists and its node kinds
+exist — but the set of names it could fire on held only `let`s carrying a primitive ANNOTATION. Not a
+declared PARAMETER, not a `let` bound to a literal. **A rule that is present and unreachable looks
+identical, from any inventory, to a rule that is present and working.**
+
+**"Logical operator operands must be bool" was absent**, and agreement cannot substitute for it:
+`n andalso m` with two `Word`s AGREES. **Two operands can agree and still both be wrong.**
+
+### Closed, and with what
+
+Three rules newly applied with the EXISTING condition kind and no stage change — the `when` guard,
+the `not` operand, each logical operand. Two widened by enlarging the scalar set. The literal source
+is restricted to four literal kinds, because `Literal::Fixed` yields an indexable `Multiword` and
+calling it scalar would reject a valid `m[0]`; I could not write that program with the syntax I
+tried, which is a reason to avoid the hazard rather than assume it away.
+
+### The five that remain, each with its mechanism
+
+Let annotation against initialiser, and assignment target against value — both want an agreement
+between a DECLARED and an ACTUAL type, which the existing claims channel carries, except that it
+carries TAGS and so reaches a literal but not a name. Tuple index on a scalar — a third expression
+variant with the same rule. Array index must be a word — "must be T" for T other than bool has no
+kind. Negation operand must not be bool — a NEGATIVE requirement, the weakest case in the table.
+
+**The census is not exhaustive and says so.** These are the forms I thought of, which is the same
+kind of list that missed match arms.
+
+### A process failure, repeated
+
+An edit script aborted on an assertion after `cargo fmt` reformatted what it was matching, so nothing
+was written, and the test run that followed reported the unchanged result. I read that as the fixes
+having no effect. **Second occurrence in two increments, and the first was already recorded** —
+recording a failure mode did not prevent it. Scripts now exit naming the replacement that failed, and
+the diff is checked before a test run is believed. A related miss: the compiler emitted `unreachable
+pattern` for a guarded arm placed after an unguarded one, and my build grep filtered warnings out.
 
 ## FIFTY-FIRST INCREMENT: A FALSE CLAIM OF MINE, AND THE TWO GAPS CHECKING IT CLOSED
 

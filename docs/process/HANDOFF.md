@@ -1230,6 +1230,11 @@ read whose base is an array element. Pinned by
 match case needed a type the source states nowhere; that was false, and the enum declaration states
 it.**
 
+**A SEPARATE AND LARGER FINDING, 2026-09-11.** Any claim that the type-rejection rules are complete
+must say that the inventory counts rule SHAPES, not the syntactic FORMS each shape reaches.
+`the_rule_shapes_are_censused_against_the_forms_they_should_govern` crosses the two and found EIGHT
+gaps on its first run, five of which are now closed. Two were rules that existed and could not fire.
+
 **The stale citation had survived in the debt register**, which is why nothing failed: three live
 comments named the dead test and the register excused all three. Corrected 2026-08-27 and the
 register shrank from 13 entries to 12. **A citation in the register is not a citation that is

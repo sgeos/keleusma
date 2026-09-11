@@ -13,6 +13,80 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-11 (fifty-second) — a census of rule shapes against syntactic forms, and it found five gaps
+
+The previous increment's finding was that **a rule inventory counts SHAPES, not the syntactic FORMS
+each shape reaches**: the match-arms rule was absent for two increments while the list recorded the
+fifteen shapes as complete, and it was found by accident. One accidental hit in a class is a reason
+to enumerate the class.
+
+### THE CENSUS
+
+Sixteen cells, each a rule shape crossed with a syntactic form, each a program the REFERENCE
+rejects, asserted per row so a cell the stage accepts is a missed rejection rather than a difference
+of opinion.
+
+**First run: 8 covered, 8 gaps.** After closing what could be closed without touching the stage:
+**11 covered, 5 gaps.**
+
+The test fails if every cell falls the same way, and it pins the gap list by equality, so a cell that
+closes must be moved rather than quietly disappearing.
+
+### THE TWO SURPRISES, WHICH ARE THE CENSUS'S WHOLE JUSTIFICATION
+
+**"A scalar cannot be projected" was a gap for BOTH its forms.** The rule exists. Its node kinds
+exist. But the set of names it could fire on held only `let`s carrying a primitive ANNOTATION — not
+a declared PARAMETER, not a `let` bound to a literal. So `fn main(n: Word) -> Word { n.x }` reached
+no rule at all.
+
+**A rule that is present and unreachable looks identical, from any inventory, to a rule that is
+present and working.** That is a sharper statement than the previous increment's, and it is the one
+worth keeping.
+
+**"Logical operator operands must be bool" was absent**, and the agreement rule cannot substitute:
+`n andalso m` with two `Word`s AGREES, so the binop row accepts it. **Two operands can agree and
+still both be wrong.**
+
+### WHAT WAS CLOSED, AND WITH WHAT
+
+Three rules newly applied, all with the EXISTING condition kind and no stage change: the match arm's
+`when` guard, the `not` operand, and each operand of a logical operator. Two rules widened by
+enlarging the scalar set: declared primitive parameters, and `let`s bound to a scalar literal.
+
+**The literal source is restricted to four literal kinds.** `Literal::Fixed` yields a `Multiword`,
+which is a flat array of words and IS indexable, so calling it a scalar would reject a valid `m[0]`.
+I could not construct that program with the syntax I tried — which is a reason to avoid the hazard
+rather than to assume it away.
+
+### THE FIVE REMAINING GAPS, EACH WITH ITS MECHANISM
+
+| gap | what closing it needs |
+|---|---|
+| let annotation against initialiser | an agreement between a DECLARED and an ACTUAL type; the existing claims channel carries that pair but carries TAGS, so it reaches a literal initialiser and not a name |
+| assignment target against value | the same, plus the declared type of a data field |
+| tuple index on a scalar | the composite kinds cover two expression variants; `TupleIndex` is a third with the same rule |
+| array index must be a word | "must be T" for T other than bool has no node kind; the claims channel expresses it as actual-against-required |
+| negation operand must not be bool | a NEGATIVE requirement no kind expresses, and inventing one for a single operator is the weakest case in the table |
+
+**The census is not exhaustive and says so.** These are the forms I thought of, which is the same
+kind of list that missed match arms. A cell absent from the table is a cell nobody looked at.
+
+### A PROCESS FAILURE, THE SAME ONE AS LAST INCREMENT
+
+An edit script aborted on an assertion — `cargo fmt` had reformatted the arm it was matching — so
+**nothing was written**, and the test run that followed reported the unchanged result. I read that as
+"the fixes did nothing" and nearly went looking for a cause in the stage.
+
+**This is the second occurrence in two increments**, and the first was already recorded here. The
+repeat is the finding: recording a failure mode does not prevent it. The scripts now exit with the
+label of the replacement that failed, and the diff is checked before any test run is believed.
+
+A related miss in the same edit: the compiler emitted `unreachable pattern` for a guarded match arm
+placed after an unguarded one, and the grep I used to check the build filtered warnings out. **The
+census reported the cell as a gap while the code to close it sat in the file.**
+
+---
+
 ## 2026-09-11 (fifty-first) — a claim of mine was false, and checking it closed two gaps
 
 ### THE CORRECTION, WHICH IS THE POINT OF THE INCREMENT
