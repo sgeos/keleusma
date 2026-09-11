@@ -13,6 +13,41 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-11 (forty-fifth) — the other half of Order 1 was stale too
+
+With every region kind routed, the remaining Order 1 obligation was "source types before type
+rejection reaches beyond literals". **Reading before acting, that is stale as well.**
+
+`the_rules_reach_only_literal_direct_occurrences` -- the test the roadmap cites as pinning the
+limitation -- is **RETIRED**, and the file says why: local resolution reaches a `let` bound to a
+literal and a call taking a declared return type, so those programs are ordinary members of the
+rejection corpus now. **A bounded fixpoint reaches an ARITHMETIC result too**, with no depth limit
+on the chain -- the hop bound is a decision rather than a limit of the approach.
+
+**The limit MOVED rather than vanished.** Its new edge is a FIELD READ, pinned by
+`a_derived_operand_from_a_field_read_is_still_unreached`. Both named tests exist and pass. A
+host-side sizing spike already measures what reaching further would cost and is explicitly not
+wired into the stage.
+
+**Both halves of that sentence are now corrected in the roadmap cell itself**, not only in the
+channels, because that cell is where the stale figure would be copied FROM -- which is exactly how
+a stale capacity limit reached the handoff four increments ago. **This is the second time the Order
+1 cell has been stale on these same two subjects**, so the correction says to derive the state from
+the tests rather than from the cell.
+
+**Worth noting about the coverage figure**: the cell now states that 100% of the region BYTES pass
+through the stage while the share it DERIVES is unchanged. A reader taking "100%" as self-hosting
+would be badly wrong, and the four provenance standings are what prevent it.
+
+## A SMALL REPORTING ERROR OF MY OWN
+
+I reported the trunk run green on the strength of a `--limit 1` row whose commit I did not compare
+against the branch tip. It named a different commit; the run for the actual tip was still in
+progress. **Checking what a result is ABOUT is the same discipline as checking what a command
+covered**, and this session has now met that failure on both sides.
+
+---
+
 ## 2026-09-11 (forty-fourth) — the last region kind, and it was the weakest
 
 **Every region kind the corpus emits is now routed and byte-identical. The skipped set is EMPTY.**

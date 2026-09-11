@@ -10,6 +10,21 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-11, session 65, forty-fifth increment). TYPE REJECTION PASSED LITERALS
+> SOME TIME AGO; THE ROADMAP DID NOT KNOW.**
+>
+> `the_rules_reach_only_literal_direct_occurrences` is **RETIRED**. Local resolution reaches a
+> `let` bound to a literal and a call taking a declared return type, and a bounded fixpoint reaches
+> an ARITHMETIC result with no depth limit on the chain.
+>
+> **The limit MOVED, not vanished**: its edge is now a FIELD READ, pinned by
+> `a_derived_operand_from_a_field_read_is_still_unreached`. A host-side sizing spike measures what
+> going further costs and is not wired in.
+>
+> **Both halves of the Order 1 cell are corrected in the ROADMAP**, not only here, because that is
+> where a stale figure gets copied from. Second time that cell has been stale on these subjects, so
+> it now says to derive the state from the tests.
+
 > **Currency note (2026-09-11, session 65, forty-fourth increment). EVERY REGION KIND IS ROUTED;
 > THE SKIPPED SET IS EMPTY.**
 >
