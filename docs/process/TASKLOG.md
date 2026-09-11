@@ -10,6 +10,24 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-10, session 65, thirtieth increment). BOTH CAPACITY LIMITS ARE GONE,
+> AND I HAD JUST COPIED THEM FORWARD.**
+>
+> The windowed path reaches **all eleven stages**. `parse`'s 94-chunk exclusion went when the chunk
+> region became a STREAM (cap removed, not raised); `wire`'s 1,148-node exclusion went when the
+> guard was found comparing against `nm_max_names()` instead of the node table's 1,365.
+>
+> **The tree already said so in the body of the test that proves it**, while that test's own doc
+> comment listed both as live. The roadmap cell carried the stale figures and I copied them into
+> `HANDOFF.md` one increment ago. **All three corrected**, the roadmap included, because it is
+> where the copy came from.
+>
+> **A cross-language call site is invisible to a single-language grep**: the driver addresses the
+> stage by command number (174, 175), so searching for `ck_stream` in Rust found nothing and my
+> first conclusion was wrong.
+>
+> Order 1 still needs four region kinds of twenty and SOURCE TYPES.
+
 > **Currency note (2026-09-10, session 65, twenty-ninth increment). THE LARGE WORK IS NOT
 > BLOCKED, AND THE CLAIM THAT IT WAS SHAPED THIS WHOLE SESSION.**
 >

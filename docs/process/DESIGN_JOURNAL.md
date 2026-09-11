@@ -13,6 +13,42 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-10 (thirtieth) — I copied a stale figure while correcting a staleness
+
+The previous increment corrected the handoff's "the large work is blocked" premise and listed what
+Order 1 actually needs, taking the detail from the roadmap cell. **Two of those details were
+already false**, and I had not checked them.
+
+**Both capacity limits are REMOVED, and the windowed path reaches all eleven stages.**
+
+| limit as I restated it | actual state |
+|---|---|
+| `parse`, 94 chunks against a 90-record batch | **gone** -- the chunk region became a STREAM, one record per call, the coroutine carrying the three range cursors in private data across the loop's RESET |
+| `wire.kel`, 1,148 nodes against a 1,024-node walk cap | **gone** -- the guard was comparing against `nm_max_names()`, a bound on the NAME arrays, where it should have checked the node table's 1,365; every constant in that stage is `Int`, so the walk interned nothing |
+
+**The tree already said so, in the body of the test that proves it.**
+`the_windowed_path_reaches_every_stage_it_can_walk` explains both removals and says its `Expect`
+enum is gone because neither exclusion survives -- while its OWN DOC COMMENT listed both as live.
+A doc comment contradicting the code beneath it is worse than an absent one, because the comment is
+what a reader quotes: the roadmap cell carried both figures, and I copied them into the handoff
+from there.
+
+Three places corrected: the test's doc comment, the roadmap cell, and the handoff bullet. **The
+roadmap is corrected as well as the handoff because it is where the figure was copied FROM** --
+fixing only the copy is the one-of-two-sites failure this session has now met seven times.
+
+**A search lesson worth keeping.** I concluded the streaming emitter was unreferenced outside the
+stage, because `grep ck_stream` found nothing in Rust. The driver addresses the stage by COMMAND
+NUMBER -- `CMD_BEGIN = 174`, `CMD_STEP = 175` -- so a name search across the language boundary
+could not have found it. **A cross-language call site is invisible to a single-language grep**, and
+the conclusion was wrong until reading corrected it.
+
+**What remains true for Order 1** is what the previous increment said it was, minus the capacity
+claims: four region kinds of twenty, with `HEADER` encoded but not derived and `CHUNKS` mixed per
+field, and source types before type rejection reaches past literal, direct occurrences.
+
+---
+
 ## 2026-09-10 (twenty-ninth) — the premise this session ran on was too strong
 
 **I re-derived what the roadmap says is outstanding instead of continuing on momentum, and the

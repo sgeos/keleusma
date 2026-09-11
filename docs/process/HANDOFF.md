@@ -22,9 +22,15 @@ always-current, so it must be able to report itself stale rather than mislead a 
 >
 > - **The remaining region kinds.** The module-driven emit path covers FOUR of twenty, and not
 >   equally: `NAMES` and `STRING_POOL` are COMPUTED, `HEADER` is encoded but NOT derived, and
->   `CHUNKS` is mixed per field with ten fields per record host-supplied. Two capacity limits are
->   named with numbers: `parse` has 94 chunks against a 90-record batch, and `wire.kel` has 1,148
->   constant-forest nodes against a 1,024-node walk cap.
+>   `CHUNKS` is mixed per field with ten fields per record host-supplied.
+>
+>   **The first version of this bullet also listed two capacity limits -- `parse` at 94 chunks
+>   against a 90-record batch, and `wire.kel` at 1,148 nodes against a 1,024-node walk cap -- and
+>   BOTH ARE REMOVED.** I copied them from the roadmap cell without checking, in the same increment
+>   that corrected a different staleness. The windowed path reaches all eleven stages: the chunk
+>   region became a STREAM so the batch cap is gone rather than larger, and the `wire` refusal was a
+>   guard comparing against the wrong bound. Corrected in the roadmap too, since that is where the
+>   figure was copied from.
 > - **Source types.** Type rejection reaches only literal, direct occurrences, because no stage
 >   computes source types and `parse.kel` says so in its own comment. That is a missing pipeline
 >   capability rather than a missing rule.

@@ -11741,13 +11741,18 @@ fn the_produced_sequence_emits_names_and_pool_byte_identically() {
 ///
 /// 1. **Artifact offset past the buffer** — LIFTED by windowing. It excluded
 ///    `parse`, `codegen` and `verify_structural`, and excludes none of them now.
-/// 2. **Chunk records past one batch of 90** — `parse` has 94. Its other regions
-///    are emitted; `chunks_emitted` reports false and this test asserts it.
-/// 3. **Constant-forest nodes past the walk's 1024 cap** — `wire.kel` has
-///    **1,148**, so the walk refuses with `-240` before any region is emitted and
-///    the stage cannot be reached at all. `parse` is next at 815, comfortably
-///    under. This is a cap on the WALK, not on the window, and lifting it is
-///    unrelated to either limit above.
+/// 2. **Chunk records past one batch of 90** — REMOVED, not raised. `parse` has
+///    94 and emits its chunk region by streaming one record per call.
+/// 3. **Constant-forest nodes past the walk's 1024 cap** — REMOVED. `wire.kel`'s
+///    1,148 nodes were measured against `nm_max_names()`, a bound on the NAME
+///    arrays, by a guard that should have been checking the node table's 1,365.
+///
+/// **This list said items 2 and 3 were live until 2026-09-10, while the body of
+/// this very test explained that both were removed and why.** A doc comment
+/// contradicting the code beneath it is worse than an absent one, because the
+/// comment is what a reader quotes: the V0.2.X roadmap's Order 1 cell carried
+/// both figures as live limits, and `docs/process/HANDOFF.md` copied them from
+/// there on 2026-09-10 while correcting a different staleness.
 ///
 /// # What each region owes to whom, unchanged by windowing
 ///
