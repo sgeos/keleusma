@@ -13,6 +13,67 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-11 (fifty-fifth) — the loop's own cadence was cancelling every continuous-integration run
+
+### THE FINDING, WHICH IS ABOUT THE PROCESS AND NOT THE CODE
+
+Six increments were stacked on one branch. **Continuous integration had never completed against any
+of them.** Five runs in a row, all `cancelled`, each killed by the next push.
+
+`.github/workflows/ci.yml` sets `cancel-in-progress: true` on a concurrency group keyed by the pull
+request's ref. A run takes roughly forty minutes; the self-paced loop was waking at twenty. **Every
+wake therefore found the run incomplete, produced another increment, pushed, and cancelled it.** The
+cadence structurally guaranteed that the merge gate could never be satisfied.
+
+The project's rule is that a merge proceeds once continuous integration is green. So the work was
+not slow to deliver, it was **undeliverable at that cadence**, and no further increment would have
+changed that. Recognising the bottleneck is the increment.
+
+### WHAT WAS DONE INSTEAD OF A SEVENTH PUSH
+
+The local gate is a SUBSET of continuous integration. The superset's extra job classes had zero
+coverage of this stack, so they were run here, against the tip:
+
+| check | result |
+|---|---|
+| `no_std` build, thumbv7em-none-eabihf | pass |
+| Minimum supported Rust, arena, 1.85 | pass |
+| Minimum supported Rust, runtime, 1.88 | pass |
+| Clippy, workspace, all targets, warnings denied | pass |
+| Miri, stacked borrows | pass |
+| Miri, tree borrows | pass |
+| Language server, detached crate | pass |
+| Playground crate, native half | pass |
+| Editor extension, manifest and syntax | pass |
+
+**Four are UNKNOWN here and are not claimed as passing**: the SDL3 examples build SDL3 from source;
+the RTOS cross-build needs a target not installed, and installing one is a change to the operator's
+toolchain rather than a check; the playground's compile-to-wasm32 half needs a target not installed;
+and the extension's dependency install needs the network. Continuous integration covers all four,
+and by the time this was written it had seventeen of twenty-two jobs green on the same commit with
+none failed.
+
+### A FOURTH WAY A LOCAL CHECK UNDER-REPORTS
+
+Three are already on record. Here is the fourth: **a cached clippy run prints nothing whether or not
+warnings exist.** A no-op rebuild emits no diagnostics, so "zero warnings" from a warm target
+directory is not evidence. The first count taken here was a cache hit; forcing a rebuild is what
+made it evidence.
+
+A related confusion resolved on the way, and it is the feature-unification effect already recorded
+in the repository guide rather than a new defect: `cargo check -p keleusma --tests` warns about
+several unused items that `cargo clippy --workspace --all-targets` does not, because the workspace
+run unifies the `self-host` feature on and the single-package run does not. The items are used
+behind that feature.
+
+### THE RULE THIS LEAVES
+
+**A self-paced loop whose period is shorter than the verification it depends on will cancel that
+verification forever.** Match the wake to what is actually being waited for, and when the thing
+being waited for is the gate itself, stop producing and let it finish.
+
+---
+
 ## 2026-09-11 (fifty-fourth) — which input channels any verdict actually depends on
 
 ### THE CLAIM THIS MEASURES
