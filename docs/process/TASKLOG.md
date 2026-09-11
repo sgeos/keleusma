@@ -10,6 +10,25 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-10, session 65, thirty-fourth increment). THE ORDERING IS SETTLED BY AN
+> EXISTING TEST.**
+>
+> `NAMES` is emitted as one record per WALK POSITION in walk order, is ROUTED at command 170, and
+> `no_region_the_driver_routes_disagrees_with_the_reference` asserts no routed region differs on
+> any corpus stage. **A byte-identical table of name records in walk order is the statement that
+> the walk matches the reference's interning order.**
+>
+> `mi_pair` indexes by walk position and dedup reuses a POOL OFFSET rather than collapsing a
+> record, so walk position is the name index -- which is why `ck_stream_step` reads
+> `wire.nmap[ck.j]` with a plain chunk index.
+>
+> **What remains is arithmetic**: the slot base is the chunk count plus the enum name count, and
+> the walk retains `ecnt`, `vcnt` and `scnt`.
+>
+> Stated as an INFERENCE, not a direct measurement. The definitive check is to route one kind and
+> compare bytes. **Third time today the tree already held what I was about to go and get**; the
+> cheap move is to ask which existing green test would fail if the property were false.
+
 > **Currency note (2026-09-10, session 65, thirty-third increment). THE NAME-INTERNING ROUTE IS
 > NOT MISSING; THE SECTION BASE IS.**
 >
