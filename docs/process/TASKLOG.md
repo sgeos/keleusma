@@ -10,6 +10,86 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-10, session 65, twenty-first increment). A NAMED GAP WAS MOSTLY NOT A
+> GAP.**
+>
+> The previous note named float arithmetic across a width-mismatched pair as unswept.
+> `tests/float_arith_width.rs` already covers it, mutation-tested over eight of ten narrowing
+> sites. **A limitation of the sweep is not a limitation of the tree**, and the census now says so
+> in place.
+>
+> **The genuinely absent part is closed**: that file ran every case on ONE runtime, establishing the
+> declared width governs there rather than that the answer is runtime-independent. The same
+> declared-`f32` module now runs on an `f32` and an `f64` runtime and must agree bit-for-bit, on the
+> witnesses already established as width-discriminating. Removing the `Op::Add` narrowing fails it.
+
+> **Currency note (2026-09-10, session 65, twentieth increment). ALL THREE WIDTHS, BOTH
+> AUTHORITIES.**
+>
+> `f32` runtimes join the grid and the corpus gains a shape that USES a float in a layout offset, so
+> the float width is no longer swept from the module side alone. **21504 cells: 6800 ran and were
+> correct, 14192 refused at load, 512 refused at compile.** Green at the default build, three narrow
+> selectors, and a build with `floats` ABSENT.
+>
+> **Three independently derived counts now agree with measurement** -- the cells that load, the
+> cells the compiler refuses, and the 200 findings the control produces. Each tests the harness
+> rather than the runtime.
+>
+> **The prediction had to get better**: it assumed every shape runs under every admissible
+> descriptor, which a float-using shape breaks. It now models each shape's own requirement. See
+> `docs/decisions/INVALID_BYTECODE_CENSUS.md`.
+
+> **Currency note (2026-09-10, session 65, nineteenth increment). THE SECOND AUTHORITY IS SWEPT
+> TOO.**
+>
+> Every width is carried by the module header AND by `GenericVm<W, A, F>`. Sixteen runtime pairs are
+> constructible in the default build, so the grid generalises `composite_width_skew.rs`'s two
+> hand-picked runtimes to all sixteen. **9984 cells: 3900 ran and were correct, 6084 refused at
+> load** -- every refusal a module wider than its runtime, which is the guarantee working. Green at
+> all four narrow selectors.
+>
+> **The harness is checked against an independent path**: the loader's documented rule, evaluated
+> per cell, predicts which cells load, and the measured count agrees exactly.
+>
+> **The first version of that check was wrong and the narrow builds caught it.** A closed form
+> assuming the runtime grid and descriptor set span the same widths; they do not, since the grid is
+> over concrete types and identical in every build.
+>
+> **The control gives 120 findings against twelve**, still on one shape, on every runtime that
+> admits the module -- so the defect is a property of the module's declared width, and the second
+> authority neither masks nor creates it. See `docs/decisions/INVALID_BYTECODE_CENSUS.md`.
+
+> **Currency note (2026-09-10, session 65, eighteenth increment). A WIDER CORPUS FOUND NOTHING,
+> AND CORRECTED A CLAIM ANYWAY.**
+>
+> Seven shapes added to `tests/target_descriptor_axis.rs`, each for a width-derived layout property
+> the first six do not stress. **624 cells, all ran, all correct**, at the default build and all
+> four narrow selectors. The sweep now NAMES any cell that does not run.
+>
+> **The control produces exactly the same twelve findings on exactly the same one shape.** Two of
+> the seven additions also stride and neither reaches the defect, so the same-day characterisation
+> -- that striding is what exposes it -- **was incomplete**. The element must itself CONTAIN the
+> address-sized scalar.
+>
+> **An instrument defect cost an hour**: two concurrent gates appending to one status file, so no
+> line was attributable. `scripts/gate-in-worktree.sh` already solves this and was not used. Its
+> warning that killing the driver leaves cargo children reparented was also correct in detail.
+
+> **Currency note (2026-09-10, session 65, seventeenth increment). THE TARGET-DESCRIPTOR AXIS IS
+> SWEPT, AND IT IS CLEAN.**
+>
+> `tests/target_descriptor_axis.rs` sweeps every descriptor the compiler ACCEPTS against six shapes
+> whose layout is width-derived. **288 cells, all ran, all correct**, and green under all four
+> narrow selectors. **The control reproduces the sixteenth increment's defect through the same
+> harness**: with the address floor removed, twelve findings, each named by descriptor and shape,
+> alongside ninety correctly classified compile refusals.
+>
+> **Only one shape of six reaches that defect.** A small corpus could have missed it entirely.
+>
+> The census records what this does NOT establish: the population is still a lower bound, six shapes
+> is not every construct, and no group carrying a probe count is closed by it. See
+> `docs/decisions/INVALID_BYTECODE_CENSUS.md`.
+
 > **Currency note (2026-09-10, session 65, sixteenth increment). A MISSING WIDTH FLOOR, FOUND
 > UNDER THE REACH THAT WAS UNPROVEN.**
 >

@@ -483,3 +483,238 @@ census's REACH rather than a live hole. Three things follow, and only the first 
 
 **The next pass should ask each group's question again with the target descriptor as a variable**,
 not only the program.
+
+## Addendum, 2026-09-10 (second): the target-descriptor axis, swept
+
+The addendum above says the next pass should ask each group's question with the target descriptor as
+a variable rather than only the program. That sweep now exists as
+`tests/target_descriptor_axis.rs`.
+
+### What it varies, and how the bounds are obtained
+
+Every descriptor the compiler ACCEPTS: the word and address widths from the narrowest implemented
+one up to the runtime's maximum, each paired with no floats and with every float format the runtime
+implements. The bounds come from `RUNTIME_*_BITS_LOG2` and from the `Word` and `Address` trait
+impls, never from literals, so the sweep follows a build rather than describing one.
+
+Against a corpus of six shapes chosen for the constructs whose layout is width-derived: scalar
+arithmetic, a word field after an opaque, a nested composite child, an array striding over
+opaque-bearing elements, an enum payload after a discriminant, and a tuple with fields after an
+opaque. **Every expected value fits in an eight-bit word**, so a legitimate overflow at the narrow
+end cannot be mistaken for an artefact defect.
+
+### Result at the default build, 2026-09-10
+
+**48 descriptors by 6 shapes, 288 cells. Every cell RAN and returned the expected value.** Nothing
+was refused at compile time or at load, nothing faulted, and no cell returned a wrong answer.
+
+The sweep is also green under `narrow-word-8`, `narrow-word-16`, `narrow-address-8` and
+`narrow-address-16`, where the descriptor space shrinks with the runtime's maxima.
+
+### The sweep is shown able to report, which is the part that makes the result mean anything
+
+Removing the address floor and admitting sub-floor widths produces **twelve findings**, each named
+by descriptor and shape:
+
+```text
+w3/a2/nofloat / array stride over opaque-bearing elements: NewComposite flat operand on non-flat values
+```
+
+That is the defect of the first addendum, reproduced through this harness. The same run classified
+ninety compile-time refusals correctly, so the refusal path is exercised too.
+
+**Only one shape of the six reaches it.** The array stride is the shape that multiplies an element
+size, so a zero-byte scalar shows up there and is absorbed elsewhere. A corpus of five ordinary
+programs could easily have missed the defect entirely, which is an argument about how thin the
+evidence from any small corpus is, not a claim that this one is sufficient.
+
+**That characterisation was refined on the same day by widening the corpus, and it was incomplete.**
+See the third addendum below: striding is NOT the discriminating property.
+
+### What the first draft of the sweep got wrong
+
+It required at least one cell to be REFUSED, on the assumption that some admissible descriptor would
+be rejected for these programs. **The sweep failed on its first run and said so.** Every descriptor
+the compiler accepts compiles and loads every shape in this corpus. The check asserted a property
+that had not been measured, inside a test written to measure properties, and it now constrains the
+descriptor set's SPREAD instead, which is what non-vacuity actually requires.
+
+### What this does NOT establish
+
+- **The census's population is still a lower bound.** This adds one axis. It does not make the
+  source-derived enumeration complete, and nothing here should be read as closing group A, F, G, I
+  or J, whose verdicts carry probe counts for the reason those counts exist.
+- The corpus is six shapes. A clean sweep over it is evidence about those shapes across the whole
+  descriptor space, not about every construct the language admits.
+- The sweep runs one runtime, the default `Vm` for the build. A module declaring narrower widths is
+  admitted by the load check, which is the skew this exercises; a runtime narrower than the module
+  is refused and is not part of this axis.
+
+
+## Addendum, 2026-09-10 (third): the corpus widened, and what it sharpened
+
+The addendum above says a clean sweep over six shapes is evidence about those shapes and not about
+every construct. Seven shapes were added, each for a width-derived layout property the first six do
+not stress rather than for variety:
+
+| added shape | the property it stresses |
+|---|---|
+| a word field after an opaque and a `Fixed<4>` | a scalar sized by the WORD whose default fraction count is DERIVED from that width, so its semantics move with the descriptor |
+| a word field after an opaque and a `Byte` | the only field whose offset contribution is descriptor-INVARIANT while its neighbours' are not |
+| an array inside a struct after an opaque | stride COMPOSED with a field offset |
+| a composite payload inside an enum | a body whose own offsets are computed behind a discriminant the descriptor sizes |
+| a const-generic array length | a const parameter ERASED to a literal that then feeds a size |
+| a `Multiword<2>` limb index | the only representation that is a COUNT of words rather than one |
+| an array of arrays | stride NESTED, the outer index multiplying a size that is itself an array's |
+
+### Result
+
+**48 descriptors by 13 shapes, 624 cells, every one RAN and returned the expected value**, at the
+default build and at all four narrow selectors including both eight-bit ones. The sweep names any
+cell that does not run, so a shape refused everywhere could not be mistaken for coverage.
+
+### What widening SHARPENED, which is the real result
+
+The control was re-run against the larger corpus and produces **exactly the same twelve findings, on
+exactly the same one shape.** Two of the seven additions also stride -- an array inside a struct, and
+an array of arrays -- and **neither reaches the defect.**
+
+So the earlier characterisation was incomplete. Striding is not the discriminating property. The
+element must itself CONTAIN the address-sized scalar: the reachable shape is an array whose ELEMENT
+is a composite bearing an opaque, and an array of words or of arrays strides just as much while
+reaching nothing. **A widened corpus that finds no new defect can still correct a claim**, and here
+it corrected one written the same day.
+
+### What this does NOT establish
+
+Thirteen shapes is more than six and is still not every construct. The negative result is evidence
+about these shapes across the whole descriptor space. No group in the table above that carries a
+probe count is closed by it, and the population derived from source remains a lower bound.
+
+
+## Addendum, 2026-09-10 (fourth): the SECOND authority, swept
+
+The sweep above varies the module's declared widths against ONE runtime, the build's default `Vm`.
+That is only half the axis.
+
+**Every width is carried twice**: by the module header `compile_with_target` writes, and by the
+runtime type parameters of `GenericVm<W, A, F>`. The load check refuses a module WIDER than the
+runtime and admits one NARROWER, and that asymmetry is where the second authority becomes visible.
+It is where the original opaque-width defect lived.
+
+`Word` is implemented for `i8`, `i16`, `i32` and `i64` and `Address` for `u8`, `u16`, `u32` and
+`u64`, all unconditionally, so **sixteen runtime pairs are constructible in the default build** with
+no `narrow-*` feature. `tests/composite_width_skew.rs` already relies on that for two hand-picked
+runtimes; the grid generalises it from two points to all sixteen.
+
+### Result
+
+| | |
+|---|---|
+| cells | **9984** (16 runtimes by 48 descriptors by 13 shapes) |
+| ran and returned the expected value | **3900** |
+| refused at load | **6084** |
+| refused at compile, faulted, or wrong | **0** |
+
+Every load refusal is a module declaring a width wider than its runtime, which is **the guarantee
+working**. Green at the default build and at all four narrow selectors.
+
+### The harness is checked against an independent path
+
+The loader's documented rule is that a module is admitted when no declared width exceeds the
+runtime's. Evaluating that rule per cell, from the descriptor and the runtime's own trait constants,
+yields a prediction the loader never sees. The measured 3900 agrees with it exactly. **A sweep that
+silently skipped a runtime, or a refusal arriving from some check other than the width one, would
+break the agreement**, so this tests the harness rather than the runtime.
+
+**The first version of that check was wrong, and the narrow builds caught it.** It used a closed
+form, the product of two triangular numbers, which assumes the runtime grid and the descriptor set
+span the same widths. They do not: the grid is over concrete Rust types and is identical in every
+build, while the descriptor set shrinks with the build's maxima. The form was right at the default
+build and wrong at all four narrow selectors, reporting 2730 ran against 1170 predicted under
+`narrow-word-16`. The per-cell rule makes no assumption about how the two sets relate.
+
+### The control, and what it says about the defect
+
+Reintroducing the sub-floor address produces **120 findings**, against twelve on the single-runtime
+sweep, still on exactly one shape. They appear on **every runtime that admits the module**. That is
+a statement about the defect's nature: it is a property of the MODULE's declared width, and the
+second authority neither masks it nor creates it.
+
+### What this does NOT establish
+
+- The grid varies the word and address of the runtime and holds its float at `f64`. The float
+  authority is exercised only from the module side. **Closed the same day; see the fifth addendum.**
+- Thirteen shapes is still not every construct, and the source-derived population of this census is
+  still a lower bound.
+- No group in the table above that carries a probe count is closed by this.
+
+
+## Addendum, 2026-09-10 (fifth): the third width, from both sides
+
+The fourth addendum left the runtime's float fixed at `f64`, so the float authority was swept from
+the module side only. Two changes close it.
+
+**`f32` runtimes.** Each of the sixteen word-address pairs now runs on both float runtimes, so a
+module declaring a sixty-four-bit float meets a runtime that cannot host it and must be refused at
+load, the same asymmetry already swept on the other two widths.
+
+**A shape that uses a float.** Without one the float width affected only admissibility and never a
+computed offset. A `Float` field between the opaque and the word that follows it puts the float
+width into an offset exactly as the address width enters through the opaque. **The value read back
+is the integer field, never the float** -- a shape whose expected value were a computed float would
+report an `f32`-versus-`f64` rounding difference as a wrong answer, which is a width difference the
+sweep is not entitled to call a defect.
+
+### Result
+
+| | |
+|---|---|
+| cells | **21504** (32 runtimes by 48 descriptors by 14 shapes) |
+| ran and returned the expected value | **6800** |
+| refused at load | **14192** |
+| refused at compile | **512** |
+| faulted or wrong | **0** |
+
+Green at the default build, at `narrow-word-8`, `narrow-word-16` and `narrow-address-8`, and in a
+build with the `floats` feature absent, where the float shape is compiled out and the rest of the
+sweep is unaffected.
+
+### Both refusal counts land on their closed forms
+
+The 512 compile refusals are the float shape against every descriptor declaring no floats: sixteen
+such descriptors on each of thirty-two runtimes. The 6800 that ran match the per-cell prediction
+exactly.
+
+**The prediction had to get better to accommodate the float shape**, and that is an improvement
+rather than an accommodation. It previously assumed every shape runs under every admissible
+descriptor, so it could be a product. A shape that needs floats cannot run where the descriptor
+declares none, and its refusal comes from the COMPILER rather than the loader. The prediction now
+models each shape's own requirement, which is a truer statement of what the sweep claims.
+
+### The control
+
+Reintroducing the sub-floor address produces **200 findings**, against 120 on the sixteen-runtime
+grid and twelve on the single-runtime sweep, still on exactly one shape. The count matches its own
+closed form: eighty on no-float descriptors, eighty at `f5`, and forty at `f6`, the last halved
+because only the `f64` runtimes admit a sixty-four-bit float.
+
+### What this does NOT establish
+
+- Fourteen shapes is still not every construct, and the source-derived population of this census is
+  still a lower bound.
+- No group in the table above that carries a probe count is closed by this.
+- The float shape exercises the float width in a LAYOUT offset. Float arithmetic across a
+  width-mismatched pair is not swept here -- **and stating it that way was nearly a mis-reading of
+  the tree.** It is not an open gap. `tests/float_arith_width.rs` covers exactly that property,
+  that arithmetic honours the module's DECLARED float width and not the runtime's, with every test
+  declaring a 32-bit float on a 64-bit runtime and eight of ten narrowing sites established by
+  mutation, the other two argued witness-free for a reason rather than merely unwitnessed. A
+  limitation of this sweep is not a limitation of the tree, and the two must not be conflated.
+
+  What WAS genuinely absent there, and is now present, is the two-authority differential: that file
+  ran every case on ONE runtime, so it established the declared width governs *there* rather than
+  that the answer is independent of the runtime. The same declared-`f32` module now runs on an
+  `f32` runtime and an `f64` one and must agree bit-for-bit, on the same witnesses that file
+  already established as width-discriminating. Mutation-checked: removing the `Op::Add` narrowing
+  fails it.

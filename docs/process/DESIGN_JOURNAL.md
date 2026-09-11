@@ -13,6 +13,189 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-10 (twenty-first) — a gap I named was mostly not a gap
+
+The twentieth increment ended by naming "float arithmetic across a width-mismatched pair" as
+unswept. **That sentence was nearly a mis-reading of the tree.**
+`tests/float_arith_width.rs` covers exactly that property -- arithmetic honours the module's
+DECLARED float width, not the runtime's -- with every test declaring a 32-bit float on a 64-bit
+runtime, eight of ten narrowing sites established by MUTATION, and the other two argued
+witness-free for a reason rather than merely unwitnessed.
+
+**A limitation of the sweep is not a limitation of the tree**, and writing the first as though it
+were the second is the quiet way a document overstates what is missing. Corrected in place.
+
+**The part that WAS genuinely absent is now present.** That file runs every case on ONE runtime, so
+it establishes the declared width governs THERE -- not that the answer is independent of the
+runtime, which is what the phrase "honours the declared width" actually claims. The two authorities
+are the point. The same declared-`f32` module now runs on an `f32` runtime and an `f64` one and
+must agree BIT-FOR-BIT, on the same four witnesses that file already established as
+width-discriminating, with the vacuity check re-asserted rather than inherited so a witness that
+stopped discriminating fails loudly instead of agreeing trivially.
+
+**Mutation-checked**: removing the `Op::Add` narrowing fails the new differential as well as the
+existing test.
+
+---
+
+## 2026-09-10 (twentieth) — the third width, from both sides
+
+The nineteenth increment left the runtime's float at `f64`, so the float authority was swept from
+the module side only. It is now swept from both, and the corpus USES a float rather than only
+declaring one.
+
+**`f32` runtimes.** All sixteen word-address pairs now run on both float runtimes, so a module
+declaring a sixty-four-bit float meets a runtime that cannot host it and is refused at load -- the
+same asymmetry already swept on the other two widths.
+
+**A float in a body.** A `Float` field between the opaque and the word after it puts the float
+width into a computed OFFSET, exactly as the address width enters through the opaque. **The value
+read back is the integer field, never the float**, because a shape whose expected value were a
+computed float would report an `f32`-versus-`f64` rounding difference as a wrong answer, and that
+is a width difference the sweep is not entitled to call a defect.
+
+**21504 cells: 6800 ran and were correct, 14192 refused at load, 512 refused at compile, nothing
+else.** Green at the default build, three narrow selectors, and a build with `floats` ABSENT, where
+the float shape compiles out and the rest is unaffected.
+
+**Both refusal counts land on their own closed forms.** The 512 are the float shape against the
+sixteen no-float descriptors on each of thirty-two runtimes. The 6800 match the per-cell prediction
+exactly.
+
+**The prediction had to get BETTER to accommodate the float shape, which is the useful part.** It
+previously assumed every shape runs under every admissible descriptor, so it could be a product. A
+shape needing floats cannot run where the descriptor declares none, and that refusal comes from the
+COMPILER rather than the loader. It now models each shape's own requirement, which is a truer
+statement of what the sweep claims than the version it replaced.
+
+**The control gives 200 findings**, against 120 on the sixteen-runtime grid and twelve on the
+single-runtime sweep, still on exactly one shape -- and the count matches its own closed form:
+eighty on no-float descriptors, eighty at `f5`, forty at `f6`, the last halved because only `f64`
+runtimes admit a sixty-four-bit float.
+
+**Three analytic agreements now stand** between a measured count and an independently derived one:
+the cells that load, the cells the compiler refuses, and the findings the control produces. Each
+tests the HARNESS rather than the runtime, and a sweep that skipped a runtime or refused for the
+wrong reason would break them.
+
+---
+
+## 2026-09-10 (nineteenth) — the second authority, and a check the narrow builds caught
+
+**Every width is carried TWICE** -- by the module header and by the runtime type parameters of
+`GenericVm<W, A, F>`. The load check refuses a module WIDER than the runtime and admits one
+NARROWER, and that asymmetry is where the second authority becomes visible. It is where the
+original opaque-width defect lived. The descriptor sweep varied only the module.
+
+`Word` and `Address` are implemented for four types each, unconditionally, so **sixteen runtime
+pairs are constructible in the DEFAULT build**. The grid generalises `composite_width_skew.rs`'s
+two hand-picked runtimes to all sixteen.
+
+**9984 cells: 3900 ran and returned the expected value, 6084 were refused at load, nothing else.**
+Every refusal is a module wider than its runtime, which is the guarantee working. Green at the
+default build and all four narrow selectors.
+
+**The harness is checked against an independent path.** The loader's documented rule, evaluated per
+cell from the descriptor and the runtime's own trait constants, predicts which cells load without
+the loader's involvement. The measured 3900 agrees exactly. A sweep that skipped a runtime, or a
+refusal from some check other than the width one, would break the agreement.
+
+**The first version of that check was WRONG and the narrow builds caught it.** It used a closed
+form -- the product of two triangular numbers -- which assumes the runtime grid and the descriptor
+set span the same widths. They do not: the grid is over concrete Rust types and is identical in
+every build, while the descriptor set shrinks with the build's maxima. Right at the default build,
+wrong at all four narrow selectors: 2730 ran against 1170 predicted under `narrow-word-16`.
+
+**The control says something about the defect, not only about the harness.** Reintroducing the
+sub-floor address produces **120 findings** against twelve on the single-runtime sweep, still on
+exactly one shape, and they appear on EVERY runtime that admits the module. The defect is a
+property of the module's declared width; the second authority neither masks it nor creates it.
+
+**A tooling note worth keeping.** Writing Rust source through a non-raw Python triple-quoted string
+silently reinterprets backslash sequences: a Rust line continuation is consumed as a PYTHON
+continuation and `\n` becomes a real newline. Three assertion messages reached the tree mangled but
+still compiling, so nothing failed. Use a raw string.
+
+---
+
+## 2026-09-10 (eighteenth) — a wider corpus found nothing, and corrected a claim anyway
+
+The seventeenth increment wrote down that six shapes is not every construct. **Seven were added,
+each for a width-derived layout property the first six do not stress** -- a `Fixed<4>` whose default
+fraction count is derived from the word width, a `Byte` whose offset contribution is
+descriptor-invariant while its neighbours' are not, stride COMPOSED with a field offset, stride
+NESTED inside another array, a composite behind an enum discriminant, a const parameter erased to a
+literal that feeds a size, and a `Multiword<2>` limb index.
+
+**624 cells, every one ran and returned the expected value**, at the default build and at all four
+narrow selectors including both eight-bit ones. The sweep now NAMES any cell that does not run, so a
+shape refused everywhere cannot be mistaken for coverage.
+
+**The value is not the negative result.** Re-running the control against the larger corpus produces
+**exactly the same twelve findings on exactly the same one shape**. Two of the seven additions also
+stride, and NEITHER reaches the defect. So the characterisation written the same day -- *"the array
+stride multiplies an element size, so a zero-byte scalar surfaces there"* -- **was incomplete**.
+Striding is not the discriminating property. The element must itself CONTAIN the address-sized
+scalar. An array of words, or of arrays, strides just as much and reaches nothing.
+
+**A widened corpus that finds no new defect can still correct a claim.** That is the transferable
+part, and it is the second time this session a measurement's chief value was overturning a sentence
+rather than finding a fault.
+
+## THE INSTRUMENT DEFECT THAT COST THIS SESSION AN HOUR
+
+I started a second verification gate while the first was still running, having deleted the status
+file they both append to. The record interleaved two runs -- `CLIPPY=0` from one, the `ALLDONE` from
+the other, which had FAILED clippy -- and **no line could be attributed to a run**. Then I edited
+the gate script while it was executing.
+
+That is the shape `NARROW_WIDTH_FAILURE_CLASSIFICATION.md` already records, *"a measurement taken
+while its subject is being edited measures neither state"*, applied to my own log two increments
+after writing it down.
+
+**The repository already solves this and I did not use it.** `scripts/gate-in-worktree.sh` names its
+log per gate and per commit and pins the run to an immutable commit in a detached worktree, and its
+header states the reasoning verbatim: the rule that a gate result is valid only for the tip it ran
+against "stops being a discipline anyone has to remember and becomes a property of the mechanism."
+
+Its warning about STOPPING a gate was also correct in detail: a path-scoped kill of the driver left
+`cargo test --features self-host` reparented and still running, exactly as its header says, and the
+second target-scoped kill is not optional. The ad-hoc gate now writes one status file per run.
+
+---
+
+## 2026-09-10 (seventeenth) — the axis the census never varied
+
+The lead the sixteenth increment opened is now measured. `tests/target_descriptor_axis.rs` sweeps
+**every target descriptor the compiler accepts** -- word and address from the narrowest implemented
+width to the runtime's maximum, each with no floats and with every float format the runtime
+implements -- against six shapes chosen for the constructs whose layout is WIDTH-DERIVED.
+
+**48 descriptors by 6 shapes, 288 cells, and every cell RAN and returned the expected value.**
+Nothing refused, nothing faulted, no wrong answers. Green as well under all four narrow selectors,
+including the two eight-bit ones, where the descriptor space shrinks with the runtime's maxima.
+
+**The control is what makes that mean anything.** Removing the address floor and admitting sub-floor
+widths produces TWELVE findings, each named by descriptor and shape, reproducing the sixteenth
+increment's defect through this harness -- and the same run classifies ninety compile-time refusals
+correctly, so the refusal path is exercised too.
+
+**Only ONE shape of six reaches it.** The array stride multiplies an element size, so a zero-byte
+scalar surfaces there and is absorbed everywhere else. A corpus of five ordinary programs could have
+missed the defect entirely. That is an argument about how thin any small corpus's evidence is, not a
+claim that this one suffices.
+
+**The first draft of the sweep was wrong, and the sweep said so on its first run.** It required at
+least one cell to be REFUSED, assuming some admissible descriptor would be rejected. None is. The
+check asserted a property that had not been measured, inside a test written to measure properties.
+It now constrains the descriptor set's SPREAD, which is what non-vacuity actually needs.
+
+**What this does not establish** is written into the census beside the result: the population is
+still a lower bound, six shapes is not every construct, and no group carrying a probe count is
+closed by this.
+
+---
+
 ## 2026-09-10 (sixteenth) — a missing width floor, found under the reach that was unproven
 
 **Subject: this session's own residue.** Two guard-reach claims the tree said it had NOT
