@@ -2,8 +2,30 @@
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
 
-**Status**: design, not implementation. Written 2026-09-10 after three increments of reading, one
-of which over-claimed and one of which is corrected below.
+**Status**: **the STAGE half is implemented and driven** as of 2026-09-11; the DRIVER half is not.
+Written 2026-09-10 after three increments of reading, one of which over-claimed and one of which is
+corrected below.
+
+## What landed on 2026-09-11
+
+Two `nm` fields, `ebase` and `sbase`, captured as each name section begins. Two additive commands:
+**182 `ds_name_begin`**, whose whole body runs the interner, and **183 `ds_name_step`**, which takes
+the RUN INDEX where the formatter at 178 takes a name and reads `wire.nmap[sbase + k]` itself.
+`highest_command` moves 181 to 183. Command 178 is untouched.
+
+**Cost against the budget: 8 nodes.** `wire.kel` goes from 1,194 to 1,202 against the 1,365 cap,
+margin 171 to 163 — measured before and after, so the growth is attributed to this edit and not to
+whatever follows.
+
+**Driven, not merely dispatched.** `the_name_aware_slot_stream_takes_its_name_from_the_interner`
+runs the pair on ONE shared buffer — `run_call` allocates a fresh buffer per call and cannot — and
+the emitted record matches the reference's first `DATA_SLOTS` record byte for byte, with the three
+host-decided fields taken from that record and the name coming from the stage. **Mutation-checked**:
+setting `sbase` to zero fails it. A sibling test confirms an out-of-range run index is refused
+rather than reading another section's name.
+
+**What remains is the driver**: routing `kind::DATA_SLOTS` to the pair, one record per call, in the
+shape `window_emit_chunks` already uses.
 
 ## Where this sits
 

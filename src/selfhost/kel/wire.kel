@@ -2641,6 +2641,19 @@ private data nm {
     vcnt: Word,
     scnt: Word,
     ccnt: Word,
+    // WHERE EACH NAME SECTION STARTS IN THE WALK, captured as the section
+    // begins rather than computed from the counters above.
+    //
+    // `ecnt` and `scnt` are section totals, but `vcnt` is the CURRENT enum's
+    // variant count and is overwritten on every iteration, so there is no
+    // running total of variant names to add up. A base derived from the
+    // counters would therefore be wrong for the slot section, and wrong
+    // silently: it would index a real name, just not the right one.
+    //
+    // Capturing `cnt` at the section boundary takes the base from the walk
+    // itself, so it cannot part from the sequence it indexes.
+    ebase: Word,
+    sbase: Word,
     ctag: Word,
     cpay: Word,
     cfirst: Word,
@@ -3024,6 +3037,7 @@ fn mi_chunk_names() -> Word {
 // truncated blob, which is the same class of defect as reading a length one byte
 // wide.
 fn mi_enum_names() -> Word {
+    nm.ebase = nm.cnt;
     nm.ecnt = mi_u16(nm.icur);
     nm.icur = nm.icur + 2;
     nm.err = if nm.ecnt > nm_max_names() { 0 - 237 } else { nm.err };
@@ -3079,6 +3093,7 @@ fn mi_enum_names() -> Word {
 // producer interning per slot would emit one name per array ELEMENT, which is
 // how the pre-run-length-encoding artifact reached tens of thousands.
 fn mi_slot_names() -> Word {
+    nm.sbase = nm.cnt;
     nm.scnt = mi_u16(nm.icur);
     nm.icur = nm.icur + 2;
     nm.err = if nm.scnt > nm_max_names() { 0 - 242 } else { nm.err };
@@ -4631,7 +4646,9 @@ fn dispatch_window(cmd: Word) -> Word {
     if cmd == 179 { sh_stream_step() } else {
     if cmd == 180 { sg_stream_step() } else {
     if cmd == 181 { ev_stream_step() } else {
-    0 - 97 }}}}}}}}}}}}
+    if cmd == 182 { ds_name_begin() } else {
+    if cmd == 183 { ds_name_step() } else {
+    0 - 97 }}}}}}}}}}}}}}
 }
 
 fn dispatch_driver2(cmd: Word) -> Word {
@@ -4688,7 +4705,54 @@ fn dispatch_driver(cmd: Word) -> Word {
 // did for four consecutive slices — and got wrong once.
 // RAISED FROM 167 for `mi_join_header`. This is a REAL GUARD: a new command
 // returns `0 - 99` until the ceiling moves, so the two must change together.
-fn highest_command() -> Word { 181 }
+// **PLACED HERE, NOT BESIDE `ds_stream_step`, BECAUSE OF DECLARATION ORDER.** These read
+// the `nm` private block and `wire.nmap`, both declared well below the formatter they sit
+// beside in purpose. `tests/forward_data_reference.rs` records what a function reading a
+// data block declared AFTER it costs: `verify_types.kel` is the one stage the byte-identity
+// corpus cannot take, for exactly that reason.
+// --- THE NAME-AWARE SLOT STREAM (commands 182 and 183) ----------------------
+//
+// **ADDITIVE, BESIDE `ds_stream_step` RATHER THAN REPLACING IT.** Command 178 is
+// a FORMATTER: it lays out a record whose every field, name included, the host
+// decides, and a test drives it with a name taken from the reference's own
+// record. That is a legitimate claim about record layout and this pair does not
+// disturb it.
+//
+// What this pair adds is the NAME's provenance. A host-supplied name index can
+// disagree with the interner that produced `NAMES`, and the host has no way to
+// check it; `ck_stream_step` avoids that by taking its index from the interner,
+// and these do the same for data-slot runs.
+//
+// `ds_name_begin` runs the interner and nothing else. The two existing commands
+// that run it each do something a slot pass does not want -- 174 zeroes the
+// chunk range cursors, 170 emits the `NAMES` records into the window -- so
+// neither can be borrowed without a side effect the caller must then undo or
+// discard.
+fn ds_name_begin() -> Word {
+    nm.jj = mi_window_prepare();
+    if nm.jj < 0 { nm.jj } else { nm.cnt }
+}
+
+// One data-slot record, with the RUN INDEX in `fin[0]` where the formatter takes
+// a name index, and the remaining three fields unchanged.
+//
+// The bound is checked rather than trusted. `fin[0]` comes from the host, and an
+// out-of-range run index would read a name belonging to some other section --
+// a wrong answer rather than a fault, which is the failure this whole route
+// exists to prevent.
+fn ds_name_step() -> Word {
+    if nm.sbase + wire.fin[0] >= nm.cnt { 0 - 243 } else {
+    if wire.fin[0] < 0 { 0 - 243 } else {
+        put_u32(dslot_off_name(), wire.nmap[nm.sbase + wire.fin[0]]);
+        put_u8(dslot_off_visibility(), wire.fin[1]);
+        put_u8(dslot_off_reserved(), wire.fin[2]);
+        put_u16(dslot_off_run(), wire.fin[3]);
+        dslot_stride()
+    } }
+}
+
+
+fn highest_command() -> Word { 183 }
 
 // --- THE ENTRY, AS A COROUTINE ----------------------------------------------
 //
