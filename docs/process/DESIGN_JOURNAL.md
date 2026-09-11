@@ -13,6 +13,35 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-10 (twenty-eighth) — a host's mistake reported as the artefact's
+
+Census groups F and J are the host-contract surfaces, judged lower value on the grounds that a host
+supplying a mis-sized buffer or an unregistered native has broken a stated contract. True, and not
+the whole question.
+
+**`InvalidBytecode` means *this artefact should never have been produced*.** When a HOST's mistake
+carries it, the message directs the reader to distrust the bytecode -- the one thing that is not
+wrong. This file already records that for ONE hot-swap site, as an open API observation.
+
+**Measured: it is not one site.**
+
+| host mistake | variant |
+|---|---|
+| hot swap whose data vector length mismatches the new module's private slot count | `InvalidBytecode`, naming the mismatch |
+| calling a native the host never registered | `InvalidBytecode`, naming the native |
+| calling an entry point with an argument it does not take | **NOT `InvalidBytecode`** |
+
+**The third row is the control, and it is what makes the first two mean anything.** A runtime with
+one error variant could not be said to choose it wrongly. This one distinguishes -- an
+argument-count mistake gets a different variant, as does a late read under read-before-resume,
+measured two increments ago as a `TypeError`.
+
+So the observation generalises from a single site to **both host-contract groups**. Every refusal
+is CORRECT, each names the actual mismatch, and none of this is a defect report. **Which variant
+carries them is the operator's call**, and it is a breaking change either way.
+
+---
+
 ## 2026-09-10 (twenty-seventh) — the classification method failed, and that is the result
 
 Naming the unprobed members of census groups E and I needs a per-line classification of the

@@ -10,6 +10,19 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-10, session 65, twenty-eighth increment). A HOST'S MISTAKE IS
+> REPORTED AS THE ARTEFACT'S, IN BOTH HOST-CONTRACT GROUPS.**
+>
+> A hot swap with a wrong-length data vector, and a call to an unregistered native, both raise
+> `InvalidBytecode` -- which means *this artefact should never have been produced*, when the
+> artefact is fine and the HOST is wrong. The handoff recorded this for one site; it is both
+> groups.
+>
+> **The control is what makes it mean anything**: an argument-count mistake gets a DIFFERENT
+> variant, so the runtime does distinguish and the choice is not forced. Every refusal is correct
+> and names the actual mismatch. **Which variant carries them is the operator's call**, and a
+> breaking change either way. See `docs/decisions/INVALID_BYTECODE_CENSUS.md`.
+
 > **Currency note (2026-09-10, session 65, twenty-seventh increment). THE PER-LINE
 > CLASSIFICATION WAS ATTEMPTED AND THE METHOD FAILED.**
 >

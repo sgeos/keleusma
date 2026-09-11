@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-10 (session 65, twenty-seventh increment) — a per-line census classification was attempted, failed, and is recorded as a failed method rather than shipped as a guess; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
+**Date**: 2026-09-10 (session 65, twenty-eighth increment) — a host's own mistake is reported as the artefact's across BOTH host-contract groups, with a control showing the runtime does distinguish; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,33 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## TWENTY-EIGHTH INCREMENT: A HOST'S MISTAKE REPORTED AS THE ARTEFACT'S
+
+Census groups F and J are the host-contract surfaces, judged lower value on the grounds that a host
+supplying a mis-sized buffer or an unregistered native has broken a stated contract. True, and not
+the whole question.
+
+**`InvalidBytecode` means *this artefact should never have been produced*.** When a HOST's mistake
+carries it, the message directs the reader to distrust the bytecode -- the one thing that is not
+wrong. This file already records that for ONE hot-swap site, as an open API observation.
+
+**Measured: it is not one site.**
+
+| host mistake | variant |
+|---|---|
+| hot swap whose data vector length mismatches the new module's private slot count | `InvalidBytecode`, naming the mismatch |
+| calling a native the host never registered | `InvalidBytecode`, naming the native |
+| calling an entry point with an argument it does not take | **NOT `InvalidBytecode`** |
+
+**The third row is the control, and it is what makes the first two mean anything.** A runtime with
+one error variant could not be said to choose it wrongly. This one distinguishes -- an
+argument-count mistake gets a different variant, as does a late read under read-before-resume,
+measured two increments ago as a `TypeError`.
+
+So the observation generalises from a single site to **both host-contract groups**. Every refusal
+is CORRECT, each names the actual mismatch, and none of this is a defect report. **Which variant
+carries them is the operator's call**, and it is a breaking change either way.
 
 ## TWENTY-SEVENTH INCREMENT: THE CLASSIFICATION METHOD FAILED, AND THAT IS THE RESULT
 

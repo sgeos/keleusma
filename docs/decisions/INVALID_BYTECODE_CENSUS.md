@@ -881,3 +881,34 @@ several are equally plausible under two group definitions.
 Until that is done, the unprobed members of groups E and I cannot be NAMED, only counted — which
 is the state this document has been in since it was written, now with the reason recorded rather
 than assumed.
+
+
+## Addendum, 2026-09-10 (ninth): what a host SEES when it breaks a contract
+
+Groups F and J are judged lower value above, on the grounds that "a host that supplies a mis-sized
+buffer or an unregistered native has broken a stated contract". That is true, and it is not the
+whole question.
+
+**`InvalidBytecode` means *this artefact should never have been produced*.** When a HOST's mistake
+is reported with it, the message directs the reader to distrust the bytecode, which is the one
+thing that is not wrong. `docs/process/HANDOFF.md` records this for a single hot-swap site and
+notes that changing which variant a public API returns is a breaking change.
+
+**Measured in `tests/host_contract_faults.rs`, it is not a single site.**
+
+| host mistake | variant |
+|---|---|
+| a hot swap whose data vector length does not match the new module's private slot count | `InvalidBytecode`, naming the mismatch |
+| calling a native the host never registered | `InvalidBytecode`, naming the native |
+| calling an entry point with an argument it does not take | **NOT `InvalidBytecode`** |
+
+**The third row is the control and it is what makes the first two mean anything.** A runtime with
+one error variant could not be said to choose it wrongly. This one distinguishes: an
+argument-count mistake by the host gets a different variant, as does a late read under the
+read-before-resume contract, which the seventh addendum measured as a `TypeError`.
+
+So the observation generalises from one site to **both host-contract groups**: their members refuse
+correctly, with messages that name the actual mismatch, under a variant that tells the host to
+suspect its artefact instead of its own call. Every refusal above is CORRECT and none of this is a
+defect report; **which variant carries them is the operator's call**, and it is a breaking change
+either way.
