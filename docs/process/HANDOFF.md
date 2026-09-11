@@ -5,7 +5,8 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-09-09 (session 65 CLOSE).** Validate by the ANCESTRY and CONTENT block below,
+> **REFRESHED 2026-09-10 (session 65, after the twenty-fourth increment).** Validate by the
+> ANCESTRY and CONTENT block below,
 > not by a hash: a refresh takes more than one commit, so any hash written here is stale by one the
 > moment it is written.
 >
@@ -30,7 +31,69 @@ always-current, so it must be able to report itself stale rather than mislead a 
 > a codec conversion each report a fault as `InvalidBytecode` when the artefact was fine. Changing
 > which variant a public API returns is a breaking change.
 >
-> ## WHAT SESSION 65 DID, IN THREE LINES OF WORK
+> ## WHAT HAPPENED AFTER THE LAST REFRESH: NINE MORE INCREMENTS, AND ONE REAL DEFECT
+>
+> The section below this one describes increments one to fifteen and is still accurate. This
+> section covers sixteen to twenty-four, which the previous refresh predates entirely.
+>
+> **A RUNTIME DEFECT, FOUND UNDER A REACH THAT WAS RECORDED AS UNPROVEN.**
+> `Target::validate_against_runtime` checked that the word, address and float widths did not EXCEED
+> the runtime's and never checked the other end. A target with `addr_bits_log2 = 2` compiled; the
+> layout sizes an opaque by the ADDRESS width, four bits is zero bytes, and the fault surfaced at
+> run time as `InvalidBytecode("NewComposite flat operand on non-flat values")`, naming neither the
+> width nor the target. **The floor argument was already in the tree, twice, applied to the FLOAT
+> width only.** Both floors now come from the trait impls rather than literals. See
+> `../decisions/TARGET_WIDTH_FLOOR.md`.
+>
+> **It was found by a derivation that produced one, and the derivation was this line's own** — a
+> clamp with a floor of 2, written in the narrow-width work, in the file whose subject is width
+> disagreement. **Sixth instance in the session of the class under repair appearing inside the
+> repair.**
+>
+> | increment | result |
+> |---|---|
+> | the unproven narrow-width REACH | **proven for `narrow-word-16`**, two site mutations each with a control at the default build |
+> | the parity guard's SILENT direction | measured; with the strip disabled the same mutation reports `ok`, so the strip is load-bearing |
+> | `GUARD_REACH_CENSUS.md` | population derived from git; **every entry now rests on a demonstrated check or a measured argument that none is possible** |
+> | the target-DESCRIPTOR axis | **21504 cells**, all ran and correct, three independently derived counts agreeing |
+> | the RUNTIME authority | swept too; a module wider than its runtime is refused, and the loads match a per-cell prediction exactly |
+> | the float width | swept from both sides, and a declared-`f32` module must agree bit-for-bit on an `f32` and an `f64` runtime |
+> | the census's indirect sites | **enumerated**: six in `src/vm.rs`, four in `src/marshall.rs` |
+> | census group G | both remaining sites probed; **neither reaches `InvalidBytecode`** |
+>
+> **WHAT IS NOT ESTABLISHED, CARRIED FORWARD RATHER THAN SUMMARISED AWAY.** The descriptor sweep's
+> corpus is fourteen shapes, which is not every construct. Reach is proven at `narrow-word-16` and
+> at no other narrow selector. The census's source-derived population remains a LOWER BOUND, and no
+> group carrying a probe count is closed by any of this. Groups F and J remain, and one member each
+> of E and I, none of them individually named in the document.
+>
+> ## THE FOUR CORRECTIONS THAT COST MORE THAN THE FINDINGS
+>
+> 1. **A widened corpus found nothing and corrected a claim anyway.** Adding seven shapes produced
+>    the same twelve findings on the same one shape — and two of the additions also STRIDE, so the
+>    same-day characterisation that striding is what exposes the defect was wrong. The element must
+>    itself contain the address-sized scalar.
+> 2. **A gap I named was mostly not a gap.** "Float arithmetic across a width-mismatched pair is
+>    unswept" described the SWEEP, not the tree: `tests/float_arith_width.rs` covers it, mutation-
+>    tested over eight of ten narrowing sites. **A limitation of an instrument is not a limitation
+>    of the tree.**
+> 3. **A vacuous guard was reverted rather than shipped.** Two attempts at a guard for
+>    `composite_escape_routes.rs` could not be made to fail; that file is safe by construction, by
+>    measurement. **A test that cannot fail is worse than no test, because it reads as coverage.**
+> 4. **An instrument defect cost an hour.** Two concurrent gates appended to one status file, so no
+>    line was attributable, and then a script was edited while executing.
+>    `scripts/gate-in-worktree.sh` already solves this and was not used; its warning that killing
+>    the driver leaves cargo children reparented was also correct in detail.
+>
+> ## TWO CURRENCY GUARDS FIRED, AND BOTH WERE RIGHT
+>
+> `tests/claimed_counts.rs` reported `CLAUDE.md` stating 101 test files against a tree of 112, and
+> later refused the census edit because removing group G's probe count moved the examined total
+> from thirty-five to thirty-seven. **Re-derived in both places rather than adjusted in one** — the
+> exact failure the second guard's message names. Current figures, measured: **1282 lib tests under
+> `self-host`, 1275 default, 1327 integration `#[test]` functions across 112 files.**
+>
+> ## WHAT SESSION 65'S FIRST FIFTEEN INCREMENTS DID, IN THREE LINES OF WORK
 >
 > | line | result |
 > |---|---|
@@ -175,7 +238,7 @@ always-current, so it must be able to report itself stale rather than mislead a 
 **Validate by ANCESTRY and by CONTENT, never by a hash match.** A stamp requiring `HEAD~1` to equal a
 recorded parent is a claim that nothing else ever lands, and it has failed three times.
 
-**Ancestry**: `origin/v0.2.3` should contain `b74380a2` (`Merge pull request #406`), the last merge
+**Ancestry**: `origin/v0.2.3` should contain `38af472f` (`Merge pull request #409`), the last merge
 before this refresh. If it does not, this file predates a reset and is stale.
 
 **It said `5fbad3a0` was "session 65's last code merge"**, which five later merges made false. The
@@ -242,6 +305,19 @@ next number. Both are corrected.
     repair. **Do not re-derive that figure by subtracting** — the document's own rule is to diff the
     failing SETS, and this session twice met a total that concealed what it was hiding: once a
     reduction masking three new failures, once a count coincidentally matching a stale one.
+16. `docs/decisions/TARGET_WIDTH_FLOOR.md` exists and `tests/target_width_floor.rs` passes. Together
+    they hold the runtime defect this session found: a width below the narrowest implemented one is
+    refused at COMPILE time, naming the field, rather than surfacing later as a composite fault. If
+    the document is missing, this file predates the sixteenth increment.
+17. `tests/target_descriptor_axis.rs` passes. It sweeps every target descriptor the compiler accepts
+    against fourteen shapes, on sixteen word-address runtime pairs and both float runtimes, and
+    checks the cells that LOAD against the loader's documented rule evaluated independently. A
+    failure is more likely a changed descriptor space than a defect, and its message says which.
+18. `docs/decisions/GUARD_REACH_CENSUS.md` exists, and `tests/invalid_bytecode_indirect_sites.rs`
+    and `tests/opaque_across_reset.rs` pass. The first records a verdict for every guard this line
+    added or modified; the second pins the `InvalidBytecode` paths a variant grep cannot see at six
+    and four; the third holds group G's two host-facing routes, one closed at compile time and one
+    producing a `TypeError` rather than an `InvalidBytecode`.
 
 **Do not trust the counts in this file without re-deriving them.** The construct-support boundary
 last read **96 SOk / 1 Refuses / 3 Diverges / 1 RefRejects** over 101 cases. It is ratcheted at

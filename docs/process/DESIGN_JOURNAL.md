@@ -13,6 +13,68 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-10 (twenty-fifth) — the handoff refreshed after nine increments
+
+`docs/process/HANDOFF.md` was last refreshed at the fifteenth increment and the session is at the
+twenty-fourth. Its banner described three lines of work that predate the width floor, both sweeps,
+the runtime grid, the float differential, the census closure, the indirect-site enumeration and
+group G. **A resuming agent would have got a picture nine increments out of date**, and that file
+is the designated resume anchor.
+
+**Every validity check was RUN, not copied forward.** Fingerprint `0x4327_63E1`, SEVEN crates,
+fifteen named guards green under `self-host`, the floats-absent test green under
+`--no-default-features`, the boundary triple pinned, and the two long ones -- region coverage at 66
+seconds and the boundary pin at 169 -- actually executed rather than assumed.
+
+**One check nearly reported a false pass.** Running item 12's test by name gave *"0 passed; 38
+filtered out"*, because it lives in `claimed_counts.rs` rather than the binary I guessed. **A run
+that executed no tests is not a pass**, and the only reason that did not enter the record is the
+rule already being written down.
+
+**The list reads 1 to 18 with no inversion, checked by RENDERING it** rather than by writing the
+next number -- the distinction this file has paid for three times. Items 16 to 18 cover the width
+floor, the descriptor and runtime sweep, and the guard census with its two companion pins.
+
+**The banner carries what is NOT established, not only what is.** Fourteen shapes is not every
+construct; reach is proven at `narrow-word-16` and no other narrow selector; the census's
+population remains a lower bound; groups F and J and one member each of E and I remain, none
+individually named. The four corrections are kept at the same prominence as the findings, because
+three of the nine increments produced a corrected claim rather than a new result.
+
+---
+
+## 2026-09-10 (twenty-fourth) — group G's other two sites
+
+Group G's entry read "no witness found (1 of 3 probed)", with the other two described as
+"host-supplied opaque handles going stale, which is a different question and untested here". Both
+routes are now probed in `tests/opaque_across_reset.rs`, and **neither reaches an
+`InvalidBytecode`.**
+
+**Route one is closed at COMPILE time.** A persistent `data` slot's body survives RESET, so a
+composite bearing an opaque stored there would carry a registry index across a reset. It cannot be
+stored there at all: *"opaque types are not yet admissible in data segment fields"*. The probe
+admitted three outcomes -- resolve, fault, or refusal -- and the answer was the third; **it was not
+guessed, and the first draft of the test said so by failing with the refusal message rather than
+asserting a resolve.** The guard now asserts that MESSAGE, because a refusal for an unrelated
+reason would leave the route open for every shape that reason does not cover.
+
+**Route two produces a `TypeError`, not an `InvalidBytecode`.** `src/vm.rs` documents that a
+yielded value stays arena-resident and must be decoded before the next `resume()`, "a read
+afterward resolves to a clean stale error" -- a claim about a host-facing contract that nothing
+checked. Doing the forbidden thing gives a `TypeError` naming read-before-resume. **The VARIANT is
+the census-relevant part**, since group G is a group of `InvalidBytecode` sites, so the test
+asserts it is not that variant rather than merely that the read failed.
+
+**Then a guard I did not know existed refused the edit.** Removing group G's probe count moved the
+examined total from thirty-five to thirty-seven, because this census's own convention is that a
+verdict without a probe count extends to every member.
+`the_census_group_table_adds_up_to_its_stated_totals` compared the table against the prose and
+failed. **Re-derived in both places rather than adjusted in one**, which is precisely the failure
+its message names: *"adjusting the total instead is how group G went missing from every remainder
+list."* The remaining count falls from eleven to nine.
+
+---
+
 ## 2026-09-10 (twenty-third) — the sites the instrument cannot see
 
 `INVALID_BYTECODE_CENSUS.md` derives its population by grepping for the variant where it is
