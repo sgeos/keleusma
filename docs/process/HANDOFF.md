@@ -1223,9 +1223,12 @@ sometime after Order 1.**
 ARITHMETIC result is still unknown and cited a pin that **no longer exists**. Commit `63574d1f`
 reached arithmetic operands with a bounded fixpoint; `a_derived_operand_is_now_reached_and_the_chain_has_no_depth_limit`
 holds that. **CURRENCY, 2026-09-11: this entry went stale a second time.** A field read bound by a
-`let` over a base the source types is now reached as well, and so is a field read standing as a
-DIRECT OPERAND. What remains unknown is an INDEX, and a field read whose base is an array element or
-a match binding. All of it is pinned by `the_field_read_channel_records_what_it_does_not_reach`.
+`let` over a base the source types is now reached as well, and so are a field read standing as a
+DIRECT OPERAND and one whose base is a MATCH BINDING. What remains unknown is an INDEX, and a field
+read whose base is an array element. Pinned by
+`the_field_read_channel_records_what_it_does_not_reach`. **An earlier revision of this entry said the
+match case needed a type the source states nowhere; that was false, and the enum declaration states
+it.**
 
 **The stale citation had survived in the debt register**, which is why nothing failed: three live
 comments named the dead test and the register excused all three. Corrected 2026-08-27 and the

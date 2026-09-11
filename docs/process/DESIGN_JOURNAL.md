@@ -13,6 +13,77 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-11 (fifty-first) — a claim of mine was false, and checking it closed two gaps
+
+### THE CORRECTION, WHICH IS THE POINT OF THE INCREMENT
+
+For two increments I wrote, in the unreached list and in four documents, that the remaining
+field-read cases **"need a type the source states nowhere"**. That was FALSE for both, and reading
+the abstract syntax tree settled it in one step:
+
+- `VariantDecl.fields: Vec<TypeExpr>` — an enum declaration lists each variant's payload types in
+  order, and `Pattern::Enum` gives the variant and the position a name binds at. Pure declaration
+  lookup, the same class already reached three ways.
+- `TypeExpr::Array(Box<TypeExpr>, ..)` — an array annotation carries the element type directly, and
+  an array literal of struct literals names it as well.
+
+**The claim had been reasoned about rather than checked**, and it was the premise that would have
+justified stopping. It was copied into the roadmap, the tasklog, the reverse prompt, the design
+journal and a test doc comment before anyone looked at the data types it was about. Corrected in
+each, visibly as a correction.
+
+### WHAT THAT BOUGHT: THE MATCH-BINDING CASE, FOR TWO TABLES AND ONE SCAN
+
+The base of `match e { E::W(p) => p.x }` is a plain NAME, so the field-read row and the operand form
+both already handle it. What was missing was a THIRD source for resolving a name to a struct type:
+
+- `pbname`/`pbenum`/`pbvar`/`pbpos` — where a pattern binds a name, read at the USE site.
+- `epenum`/`epvar`/`eppos`/`epty` — what the enum DECLARATION says is there.
+
+The stage matches the three coordinates. Neither row knows about the other; one comes from a
+function body and the other from a type declaration.
+`the_payload_declarations_are_what_the_stage_joins_against` withholds the declaration side and shows
+the same program is then accepted.
+
+**The enum index space is not the struct index space**, and the note saying so is in the data block:
+a row crossing them would address a real declaration and the wrong one.
+
+### A SECOND GAP, FOUND BY A TEST WRITTEN FOR SOMETHING ELSE
+
+A case was added to prove the stage discriminates between two VARIANTS of one enum —
+`match e { E::U(a) => a.n, E::V(b) => b.m }` with `a.n` a `Word` and `b.m` a `bool`. It failed.
+
+**The expression walk emitted no node for a match at all**, so match arms were never compared and
+every such program was accepted. The reference says "match arms have differing types"; the stage
+said nothing.
+
+This was invisible from the rule list, which records the fifteen enumerated shapes as complete. The
+match-arms rule is the SAME SHAPE as the `if`-branches rule, and the shape had been implemented
+while one of its two syntactic forms had not. **A rule inventory counts shapes; it does not count
+the syntactic forms each shape reaches.**
+
+Closed with the existing BRANCH_PAIR kind and no stage change: the gap was in what the host
+reported, not in what the stage could decide. First arm against each later one, the shape the array
+literal already uses.
+
+### A PROCESS NOTE ON THE EDIT ITSELF
+
+One scripted edit aborted on a sanity assertion I had added for a snippet I did not intend to
+change, and the write never happened — while the test run that followed reported the OLD failure. I
+read that as the fix not working before noticing the traceback above it. **An edit script that can
+abort silently before its write, followed immediately by a test run, produces a result attributable
+to neither tree.** The same class as the run-edited-while-in-flight finding already on record.
+
+### WHAT IS LEFT
+
+One case: a field of an ARRAY ELEMENT. Its base is an index expression rather than a name, so no
+field-read row can address it. The element type IS written down; what is missing is a base FORM on
+the field-read row — the same kind of gap the direct-operand case turned out to be.
+
+No new fold phase, no new opcode, no `BYTECODE_VERSION` change.
+
+---
+
 ## 2026-09-11 (fiftieth) — the direct-operand form, and a test name that encoded a tally
 
 The forty-ninth increment named a limit no prior sizing had modelled: a field read standing as a

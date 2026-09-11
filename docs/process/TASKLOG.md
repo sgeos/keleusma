@@ -53,6 +53,28 @@ Current sprint source of truth.
 > Third artifact in two increments whose answer was true when written and is now about a DIFFERENT
 > QUESTION. The pattern is staleness of SUBJECT, not of fact.
 
+> **Currency note (2026-09-11, session 65, fifty-first increment). A CLAIM IN THE TWO NOTES BELOW
+> WAS FALSE, AND CHECKING IT CLOSED TWO GAPS.**
+>
+> Those notes said the remaining field-read cases need "a type the source states nowhere". **They
+> do not.** An enum declaration lists each variant's payload types in order and a pattern says which
+> variant and position a name binds at; an array type expression carries its element type directly.
+> The claim had been reasoned about rather than checked, and it had already been copied into five
+> places.
+>
+> **The match-binding case is now reached**, for two coordinate tables and one scan: the host reports
+> where a pattern binds and what the declaration says is there, and the stage matches the triples.
+> Withholding the declaration side makes the same program accepted.
+>
+> **A second gap surfaced from a test written for something else**: the expression walk emitted NO
+> node for a match, so match arms were never compared and every program whose arms disagree was
+> accepted. Invisible from the rule list, which records the fifteen shapes as complete — the
+> match-arms rule is the same SHAPE as the `if`-branches rule, implemented for one of its two
+> syntactic forms. **A rule inventory counts shapes, not the forms each shape reaches.**
+>
+> **What is left is one case**: a field of an array element, whose base is an index expression rather
+> than a name. The element type is written down; a base FORM on the field-read row is what is missing.
+
 > **Currency note (2026-09-11, session 65, fiftieth increment). THE DIRECT-OPERAND FIELD READ IS
 > REACHED, AND A TEST NAME THAT ENCODED A TALLY IS GONE.**
 >

@@ -272,6 +272,40 @@ shared data ty {
     sbhit: Word,
     sbali: Word,
     ftag: Word,
+    // SLICE 8: A MATCH ARM'S BINDING HAS A DECLARED TYPE, AND AN EARLIER NOTE OF
+    // MINE SAID OTHERWISE.
+    //
+    // That note claimed the payload type is "stated nowhere". It is stated in the
+    // ENUM DECLARATION, which lists each variant's payload types in order, and the
+    // PATTERN states which variant and which position a name binds. Both are
+    // syntax, and the join between them is this stage's -- the same shape as the
+    // field-access search above, where the host says "type 2, field name 7" and
+    // the stage looks.
+    //
+    //   pbname[b]                     a name a pattern binds, and
+    //   pbenum[b]/pbvar[b]/pbpos[b]   the three coordinates it binds AT
+    //   epenum[e]/epvar[e]/eppos[e]   the same three, from the DECLARATION, and
+    //   epty[e]                       the struct type declared there
+    //
+    // **THE ENUM INDEX SPACE IS NOT THE STRUCT INDEX SPACE.** `pbenum` and
+    // `epenum` address enums; `epty` and `sbval` address structs. A row that
+    // crossed them would look up a real declaration and the wrong one, which is
+    // worse than looking up nothing.
+    //
+    // Appended last.
+    pbn: Word,
+    pbname: [Word; 128],
+    pbenum: [Word; 128],
+    pbvar: [Word; 128],
+    pbpos: [Word; 128],
+    epn: Word,
+    epenum: [Word; 128],
+    epvar: [Word; 128],
+    eppos: [Word; 128],
+    epty: [Word; 128],
+    // Its own two accumulators, for the reason the pair above records.
+    pbhit: Word,
+    epfound: Word,
 }
 
 // The verdict constants, named rather than spelled as bare integers at the call sites, so a later
@@ -551,7 +585,38 @@ fn ty_struct_of(n: Word) -> Word {
         // A name id of 0 is no name, so an absent alias cannot match a row by
         // accident. The second scan runs regardless because the language is total
         // and a skipped loop would cost the same bound anyway.
-        if ty.sbali == 0 { 0 } else { ty.sbhit }
+        if ty.sbali == 0 { ty_payload_struct_of(n) } else {
+        if ty.sbhit == 0 { ty_payload_struct_of(n) } else { ty.sbhit } }
+    }
+}
+
+// The struct type a name takes from an enum VARIANT PAYLOAD, offset by one.
+//
+// TWO SCANS AND A TRIPLE MATCH. The first finds the row that says this name binds
+// at some `(enum, variant, position)`; the second finds the declaration row at the
+// same three coordinates and reads the type declared there. Neither side of that
+// pair knows about the other: one comes from a pattern in a function body, the
+// other from an enum declaration, and matching them is the whole of the work.
+//
+// **THE ROW INDEX IS A SENTINEL AND IS NEVER SUBSCRIPTED UNCHECKED.** A miss
+// leaves `pbhit` at -1, and the guard below keeps it out of `pbenum` and friends.
+// Using a not-found marker as an index is how a search that fails becomes a read
+// that succeeds at the wrong address.
+fn ty_payload_struct_of(n: Word) -> Word {
+    ty.pbhit = 0 - 1;
+    for b in 0..ty_bounded128(ty.pbn) limit 128 {
+        ty.pbhit = if ty.pbname[b] == n { b } else { ty.pbhit };
+    }
+    if ty.pbhit < 0 { 0 } else {
+        ty.epfound = 0;
+        for e in 0..ty_bounded128(ty.epn) limit 128 {
+            ty.epfound = if ty.epenum[e] == ty.pbenum[ty.pbhit] {
+                if ty.epvar[e] == ty.pbvar[ty.pbhit] {
+                if ty.eppos[e] == ty.pbpos[ty.pbhit] { ty.epty[e] + 1 } else { ty.epfound } }
+                else { ty.epfound } }
+            else { ty.epfound };
+        }
+        ty.epfound
     }
 }
 

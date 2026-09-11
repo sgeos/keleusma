@@ -958,6 +958,30 @@ fn expression_nodes_over(
                         self.out.push((STRUCT_LIT, *n, 0, fields.len() as i64, 0));
                     }
                 }
+                // MATCH ARMS MUST AGREE, and this walk emitted NOTHING for them
+                // until 2026-09-11. The reference says "match arms have differing
+                // types"; the stage said nothing, so every such program was
+                // accepted -- a missed rejection rather than an unsound one, but a
+                // whole RULE missing rather than a hard case.
+                //
+                // **Found by a test written for something else.** A payload case
+                // was added to prove the stage discriminates between two VARIANTS
+                // of one enum, and it failed because the only thing that would have
+                // rejected it was a rule that was not there.
+                //
+                // FIRST ARM AGAINST EACH LATER ONE, the shape the array literal
+                // above already uses: `n` arms give `n - 1` pairs, and agreement is
+                // transitive, so comparing adjacent pairs instead would report the
+                // same verdict at the same cost.
+                Expr::Match { arms, .. } => {
+                    if let Some(first) = arms.first() {
+                        let (ft, ff) = operand_form(&first.expr, self.names, self.freads);
+                        for a in arms.iter().skip(1) {
+                            let (t, f) = operand_form(&a.expr, self.names, self.freads);
+                            self.out.push((BRANCH_PAIR, ft, ff, t, f));
+                        }
+                    }
+                }
                 _ => {}
             }
             self.walk_expr(expr);
@@ -1051,14 +1075,29 @@ fn declared_field_index(
     (names, types)
 }
 
-/// `(struct-binding rows, field-read rows, the form-3 binding rows addressing
-/// them, and the index an OPERAND uses to address the same rows)`.
-type FieldReadChannel = (
-    Vec<(i64, i64, i64)>,
-    Vec<(i64, i64)>,
-    Vec<BindingRow>,
-    FieldReadIndex,
-);
+/// Everything the field-read channel produces.
+///
+/// **A STRUCT RATHER THAN A TUPLE, as of the sixth member.** Four `Vec`s of small
+/// integer tuples in positional order is the shape where swapping two compiles and
+/// is wrong, which this file already records against the stage's input surface.
+#[derive(Default)]
+struct FieldReadChannel {
+    /// `(name id, value, form)` giving a name's struct type.
+    sbinds: Vec<(i64, i64, i64)>,
+    /// `(base name id, field name index)`, one row per distinct field read.
+    reads: Vec<(i64, i64)>,
+    /// The form-3 binding rows addressing `reads`.
+    bindings: Vec<BindingRow>,
+    /// The index an OPERAND uses to address the same rows.
+    index: FieldReadIndex,
+    /// `(name id, enum type index, variant index, position)` -- where a pattern
+    /// binds a name. Read off the PATTERN, at the use site.
+    pattern_binds: Vec<(i64, i64, i64, i64)>,
+    /// `(enum type index, variant index, position, struct type index)` -- what the
+    /// enum DECLARATION says is there. A different place in the source from the
+    /// rows above, which is what makes matching them a join.
+    payload_decls: Vec<(i64, i64, i64, i64)>,
+}
 
 /// The two syntactic facts a field-read initialiser rests on, kept SEPARATE so
 /// the stage joins them.
@@ -1110,6 +1149,9 @@ fn field_read_channel(
         /// both, so a read that is bound and also used directly is one row and one
         /// index rather than two that could disagree.
         all: Vec<(String, String)>,
+        /// `(name, enum name, variant name, position)` -- where a pattern binds a
+        /// name. Spellings, interned later with everything else.
+        binds: Vec<(String, String, String, i64)>,
     }
     impl Visitor for Walk {
         fn visit_stmt(&mut self, stmt: &Stmt) {
@@ -1145,6 +1187,22 @@ fn field_read_channel(
             {
                 self.all.push((base.clone(), field.clone()));
             }
+            if let Expr::Match { arms, .. } = expr {
+                for a in arms {
+                    // ONE LEVEL, and stated rather than discovered later. A nested
+                    // pattern binds at a coordinate this triple cannot express --
+                    // `E::W(F::G(p))` would need the path, not one position -- so it
+                    // contributes no row and the stage types nothing, which accepts.
+                    if let Pattern::Enum(en, var, subs, _) = &a.pattern {
+                        for (pos, sp) in subs.iter().enumerate() {
+                            if let Pattern::Variable(n, _) = sp {
+                                self.binds
+                                    .push((n.clone(), en.clone(), var.clone(), pos as i64));
+                            }
+                        }
+                    }
+                }
+            }
             self.walk_expr(expr);
         }
     }
@@ -1154,6 +1212,7 @@ fn field_read_channel(
         aliased: Vec::new(),
         reads: Vec::new(),
         all: Vec::new(),
+        binds: Vec::new(),
     };
     for f in &ast.functions {
         // A declared PARAMETER whose type names a struct. The same fact as a
@@ -1224,7 +1283,58 @@ fn field_read_channel(
         extra.push((id, k, 3));
     }
 
-    (sbinds, reads, extra, index)
+    // THE TWO SIDES OF THE PAYLOAD JOIN, read from two different places in the
+    // source and deliberately not combined here.
+    //
+    // The enum index space is its own: an ordinal among the enum declarations,
+    // never mixed with the struct ordinals in `sbinds` and `payload_decls`'s last
+    // column. A row that crossed them would address a real declaration and the
+    // wrong one.
+    let mut enum_index: std::collections::BTreeMap<String, i64> = std::collections::BTreeMap::new();
+    let mut variant_index: std::collections::BTreeMap<(String, String), i64> =
+        std::collections::BTreeMap::new();
+    let mut payload_decls: Vec<(i64, i64, i64, i64)> = Vec::new();
+    for t in &ast.types {
+        if let keleusma::ast::TypeDef::Enum(d) = t {
+            let ei = enum_index.len() as i64;
+            enum_index.insert(d.name.clone(), ei);
+            for (vi, v) in d.variants.iter().enumerate() {
+                variant_index.insert((d.name.clone(), v.name.clone()), vi as i64);
+                for (pos, ty) in v.fields.iter().enumerate() {
+                    // ONLY A PAYLOAD THAT NAMES A DECLARED STRUCT. A primitive
+                    // payload needs no row -- the binding's tag would come from the
+                    // scalar side, which this channel does not serve -- and a name
+                    // that is not a struct has no index to report.
+                    if let TypeExpr::Named(n, ..) = ty
+                        && let Some(&si) = type_index.get(n)
+                    {
+                        payload_decls.push((ei, vi as i64, pos as i64, si));
+                    }
+                }
+            }
+        }
+    }
+
+    let mut pattern_binds: Vec<(i64, i64, i64, i64)> = Vec::new();
+    for (name, en, var, pos) in &walk.binds {
+        let (Some(&ei), Some(&vi)) = (
+            enum_index.get(en),
+            variant_index.get(&(en.clone(), var.clone())),
+        ) else {
+            continue;
+        };
+        let id = id_of(names, name);
+        pattern_binds.push((id, ei, vi, *pos));
+    }
+
+    FieldReadChannel {
+        sbinds,
+        reads,
+        bindings: extra,
+        index,
+        pattern_binds,
+        payload_decls,
+    }
 }
 
 fn field_sets(ast: &keleusma::ast::Program) -> FieldSets {
@@ -1363,6 +1473,11 @@ struct StageInput<'a> {
     sbinds: &'a [(i64, i64, i64)],
     /// `(base name id, field name index)` rows a form-3 binding row addresses.
     freads: &'a [(i64, i64)],
+    /// `(name id, enum type index, variant index, position)` from a PATTERN.
+    pbinds: &'a [(i64, i64, i64, i64)],
+    /// `(enum type index, variant index, position, struct type index)` from an
+    /// enum DECLARATION. Matched against `pbinds` by the stage.
+    payloads: &'a [(i64, i64, i64, i64)],
 }
 
 fn stage_verdict(input: &StageInput<'_>) -> bool {
@@ -1390,6 +1505,8 @@ fn stage_verdict_counting(input: &StageInput<'_>) -> (bool, usize) {
         bindings,
         sbinds,
         freads,
+        pbinds,
+        payloads,
     } = *input;
     static EMPTY_SETS: FieldSets = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let sets = sets.unwrap_or(&EMPTY_SETS);
@@ -1840,6 +1957,67 @@ fn stage_verdict_counting(input: &StageInput<'_>) -> (bool, usize) {
             keleusma::bytecode::Value::Int(*f),
         )
         .expect("fbfield");
+    }
+    // SLICE 8, appended after the field-read table and after the two scratch
+    // slots the stage declares between them, derived from the previous constant.
+    const SBHIT_SLOT: usize = FBFIELD_SLOT + 128;
+    const SBALI_SLOT: usize = SBHIT_SLOT + 1;
+    const FTAG_SLOT: usize = SBALI_SLOT + 1;
+    const PBN_SLOT: usize = FTAG_SLOT + 1;
+    const PBNAME_SLOT: usize = PBN_SLOT + 1;
+    const PBENUM_SLOT: usize = PBNAME_SLOT + 128;
+    const PBVAR_SLOT: usize = PBENUM_SLOT + 128;
+    const PBPOS_SLOT: usize = PBVAR_SLOT + 128;
+    const EPN_SLOT: usize = PBPOS_SLOT + 128;
+    const EPENUM_SLOT: usize = EPN_SLOT + 1;
+    const EPVAR_SLOT: usize = EPENUM_SLOT + 128;
+    const EPPOS_SLOT: usize = EPVAR_SLOT + 128;
+    const EPTY_SLOT: usize = EPPOS_SLOT + 128;
+    assert!(
+        pbinds.len() <= 128 && payloads.len() <= 128,
+        "the payload channel overflows"
+    );
+    vm.set_shared(
+        &mut shared,
+        PBN_SLOT,
+        keleusma::bytecode::Value::Int(pbinds.len() as i64),
+    )
+    .expect("pbn");
+    for (i, (n, e, v, q)) in pbinds.iter().enumerate() {
+        for (slot, value) in [
+            (PBNAME_SLOT, n),
+            (PBENUM_SLOT, e),
+            (PBVAR_SLOT, v),
+            (PBPOS_SLOT, q),
+        ] {
+            vm.set_shared(
+                &mut shared,
+                slot + i,
+                keleusma::bytecode::Value::Int(*value),
+            )
+            .expect("pattern bind row");
+        }
+    }
+    vm.set_shared(
+        &mut shared,
+        EPN_SLOT,
+        keleusma::bytecode::Value::Int(payloads.len() as i64),
+    )
+    .expect("epn");
+    for (i, (e, v, q, t)) in payloads.iter().enumerate() {
+        for (slot, value) in [
+            (EPENUM_SLOT, e),
+            (EPVAR_SLOT, v),
+            (EPPOS_SLOT, q),
+            (EPTY_SLOT, t),
+        ] {
+            vm.set_shared(
+                &mut shared,
+                slot + i,
+                keleusma::bytecode::Value::Int(*value),
+            )
+            .expect("payload decl row");
+        }
     }
     // THE STAGE IS A COROUTINE NOW, so drive it to a verdict rather than calling
     // it once. It yields `PENDING` (63) per folded row and the verdict when the
@@ -2626,6 +2804,16 @@ fn stage_verdict_resolving(src: &str) -> bool {
     stage_verdict_resolving_with(src, true)
 }
 
+/// [`stage_verdict_resolving`], with the enum PAYLOAD DECLARATIONS withheld.
+///
+/// The pattern rows still say that a name binds at `(enum, variant, position)`;
+/// what is gone is the other half of the coordinate match, which says what is
+/// declared there. If the host were supplying the binding's TYPE rather than its
+/// coordinates, removing the declarations would change nothing.
+fn stage_verdict_without_payload_decls(src: &str) -> bool {
+    stage_verdict_resolving_parts(src, true, false)
+}
+
 /// [`stage_verdict_resolving`], with the struct field sets optionally WITHHELD.
 ///
 /// **Withholding is the instrument, not a convenience.** A field read types only
@@ -2636,15 +2824,20 @@ fn stage_verdict_resolving(src: &str) -> bool {
 /// and it is the same test `the_stage_and_not_the_host_resolves_an_operand`
 /// applies to the binding table.
 fn stage_verdict_resolving_with(src: &str, with_sets: bool) -> bool {
+    stage_verdict_resolving_parts(src, with_sets, true)
+}
+
+/// The resolving driver, with each withheld-input switch spelled out.
+fn stage_verdict_resolving_parts(src: &str, with_sets: bool, with_payloads: bool) -> bool {
     let ast = parse(&tokenize(src).expect("lex")).expect("parse");
     let (mut names, mut bindings) = binding_rows(&ast);
     // BEFORE the expression walk, because a name bound by a FIELD READ is not
     // registered by the binding walk -- `let a = p.x` is neither a literal, a call
     // nor an operator expression -- and an operand spelling `a` would otherwise
     // collapse to form 0 and type nothing.
-    let (sbinds, freads, field_bindings, fread_index) = field_read_channel(&ast, &mut names);
-    bindings.extend(field_bindings);
-    let (nodes, derived) = expression_nodes_over(&ast, &names, &fread_index);
+    let frc = field_read_channel(&ast, &mut names);
+    bindings.extend(frc.bindings.iter().copied());
+    let (nodes, derived) = expression_nodes_over(&ast, &names, &frc.index);
     // FORM 2: the binding takes whatever expression node `idx` yields. The host
     // says only WHICH node the initialiser is -- a syntactic fact, like a literal
     // tag or an alias name. Resolving that node's operands and requiring them to
@@ -2665,8 +2858,14 @@ fn stage_verdict_resolving_with(src: &str, with_sets: bool) -> bool {
         sites: &sites,
         sets: if with_sets { Some(&sets) } else { None },
         occ: Some(&occurrence_rows(&ast)),
-        sbinds: &sbinds,
-        freads: &freads,
+        sbinds: &frc.sbinds,
+        freads: &frc.reads,
+        pbinds: &frc.pattern_binds,
+        payloads: if with_payloads {
+            &frc.payload_decls
+        } else {
+            &[]
+        },
         ..Default::default()
     })
 }
@@ -2908,20 +3107,28 @@ fn withholding_the_field_sets_accepts_the_same_field_read_program() {
 /// listed only the reached forms could not tell a widened channel from a broken
 /// one.
 ///
-/// # What remains unreached, and why none of it is an oversight
+/// # What remains unreached
 ///
-/// - **A field of an ARRAY ELEMENT.** `let a = q[0].x` has a base that is not a
-///   plain name, and `let q = [P { x: 1 }]` states an ARRAY type from which the
-///   element type would have to be projected. No `let` or parameter writes the
-///   element type down.
-/// - **A field of a MATCH BINDING.** `p` types from the VARIANT PAYLOAD, which no
-///   binding statement states.
+/// - **A field of an ARRAY ELEMENT.** `let q = [P { x: 1 }]; q[0].x` has a base
+///   that is not a plain NAME, so no field-read row can address it. **The element
+///   type IS written down** -- by the array literal's own element, and by the
+///   annotation in `let q: [P; 1]` -- so what is missing is a base FORM on the
+///   field-read row, the same kind of gap the direct-operand case turned out to be.
 ///
-/// **A third case stood here for one increment and is now reached**: a field read
-/// used as a DIRECT OPERAND rather than a `let` initialiser. It was a missing
-/// CHANNEL, not missing information -- the operand row had no form for a field
-/// read -- and adding the form closed it without any new source of types. The two
-/// above are the other kind of gap, where the type is written down nowhere.
+/// # A claim I made here was wrong, and is corrected rather than reworded
+///
+/// Two cases have left this list, and for the second I had written that it needed
+/// "a type the source states nowhere". **That was false.** A field of a MATCH
+/// BINDING types from the enum DECLARATION, which lists each variant's payload
+/// types in order, joined to the PATTERN, which says which variant and which
+/// position a name binds. Both are syntax. Reading `VariantDecl` and
+/// `Pattern::Enum` in the abstract syntax tree is what settled it; the claim had
+/// been reasoned about rather than checked, and it had already been copied into
+/// four documents.
+///
+/// **The same check condemns the remaining entry's original wording.** I had said
+/// the array element's type must be "projected out of" an array type with nothing
+/// writing it down. `TypeExpr::Array` carries the element type directly.
 ///
 /// All are ACCEPTED by the stage while the reference rejects them. That is a
 /// missed rejection, not an unsound one: this stage may not refuse a program it
@@ -2953,6 +3160,16 @@ fn the_field_read_channel_records_what_it_does_not_reach() {
             "the field read is a direct operand",
             "struct P { x: Word }\nfn main(p: P) -> Word { p.x + true }",
         ),
+        (
+            // THE BASE IS A MATCH BINDING, reached by a THIRD source for the base's
+            // struct type: the pattern says where the name binds and the enum
+            // declaration says what is declared there. It needed no change to the
+            // field-read row and no new operand form, because the base is a plain
+            // name either way.
+            "base is a match binding",
+            "struct P { x: Word }\nenum E { W(P), N }\n\
+             fn main(e: E) -> Word { match e { E::W(p) => p.x + true, E::N => 0 } }",
+        ),
     ];
     for (label, src) in REACHED {
         let program = parse(&tokenize(src).expect("lex")).expect("parse");
@@ -2970,27 +3187,18 @@ fn the_field_read_channel_records_what_it_does_not_reach() {
     // the reference rejects, so the day one becomes reachable this assertion fails
     // and says which.
     //
-    // **THE DIRECT-OPERAND LIMIT IS GONE**, and it was a real limit rather than a
-    // restatement: writing this test surfaced it, it stood as its own entry here
-    // for one increment, and an operand form closed it. What is left is the two
-    // cases that need a type the source states NOWHERE, which is a different kind
-    // of gap from a missing channel.
-    //
-    // The match case ran into both limits at once, and still fails on the
-    // remaining one: its base types from the VARIANT PAYLOAD.
-    const UNREACHED: &[(&str, &str)] = &[
-        (
-            "base is an array element",
-            "struct P { x: Word }\n\
+    // **TWO ENTRIES HAVE LEFT THIS LIST, AND THE REASON I GAVE FOR KEEPING THE
+    // SECOND WAS WRONG.** The direct-operand case went first, to an operand form.
+    // The match-binding case was then described here and in four documents as
+    // needing "a type the source states nowhere" -- and that was false. An enum
+    // declaration lists each variant's payload types in order and a pattern says
+    // which variant and which position a name binds. Both are syntax, and reading
+    // the AST is what settled it rather than reasoning about it.
+    const UNREACHED: &[(&str, &str)] = &[(
+        "base is an array element",
+        "struct P { x: Word }\n\
              fn main() -> Word { let q = [P { x: 1 }]; let a = q[0].x; a + true }",
-        ),
-        (
-            "base is a match binding, which is also a direct operand",
-            "struct P { x: Word }\nenum E { W(P), N }\n\
-             fn main() -> Word { let e = E::W(P { x: 1 }); \
-              match e { E::W(p) => p.x + true, E::N => 0 } }",
-        ),
-    ];
+    )];
     for (label, src) in UNREACHED {
         let program = parse(&tokenize(src).expect("lex")).expect("parse");
         assert!(
@@ -3137,6 +3345,188 @@ fn a_struct_typed_field_read_types_nothing_and_therefore_accepts() {
              struct-typed, so a struct identity has reached the scalar tag space"
         );
     }
+}
+
+/// **A MATCH BINDING'S TYPE COMES FROM TWO PLACES IN THE SOURCE, AND THE STAGE
+/// PUTS THEM TOGETHER.**
+///
+/// The PATTERN says that `p` binds enum `E`, variant `W`, position 0. The
+/// DECLARATION says that `E`'s variant `W` position 0 is a `P`. Neither row knows
+/// about the other: one is read from a function body, the other from a type
+/// declaration, and matching the three coordinates is the whole of the work.
+///
+/// **This case was on record as impossible, and that record was wrong.** For two
+/// increments the unreached list said the payload type is "stated nowhere". It is
+/// stated in the enum declaration. Reading the abstract syntax tree settled it in
+/// one step, after the claim had already been copied into four documents.
+///
+/// [`the_payload_declarations_are_what_the_stage_joins_against`] withholds the
+/// declaration side and shows the same program is then accepted, which is what
+/// separates a join from a type the host handed over.
+#[test]
+fn a_field_read_on_a_match_binding_is_reached() {
+    const REJECTED: &[(&str, &str)] = &[
+        (
+            "payload read as an operand",
+            "struct P { x: Word }\nenum E { W(P), N }\n\
+             fn main(e: E) -> Word { match e { E::W(p) => p.x + true, E::N => 0 } }",
+        ),
+        (
+            // POSITION ONE, not zero. A coordinate match that ignored the position
+            // would type `q` as `P` and accept, so this is the case that makes the
+            // third coordinate load-bearing.
+            "the second payload of a two-field variant",
+            "struct P { x: Word }\nstruct Q { y: bool }\nenum E { W(P, Q), N }\n\
+             fn main(e: E) -> Word { match e { E::W(p, q) => p.x + q.y, E::N => 0 } }",
+        ),
+        (
+            // TWO VARIANTS OF ONE ENUM carrying different structs. A match that
+            // ignored the variant would type `b` as `A` and accept.
+            "the same position in a different variant",
+            "struct A { n: Word }\nstruct B { m: bool }\nenum E { U(A), V(B) }\n\
+             fn main(e: E) -> Word { match e { E::U(a) => a.n, E::V(b) => b.m } }",
+        ),
+    ];
+    for (label, src) in REJECTED {
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+        assert!(
+            compile(&program).is_err(),
+            "{label}: the reference ACCEPTS this, so it is not a missed rejection"
+        );
+        assert!(
+            !stage_verdict_resolving(src),
+            "{label}: the stage accepts a payload-typed field read the reference rejects"
+        );
+    }
+
+    // WELL TYPED, the half that can fail. The previous increment's false rejection
+    // was in exactly this area and was found by exactly this kind of case.
+    const ACCEPTED: &[(&str, &str)] = &[
+        (
+            "payload field read at its own type",
+            "struct P { x: Word }\nenum E { W(P), N }\n\
+             fn main(e: E) -> Word { match e { E::W(p) => p.x + 1, E::N => 0 } }",
+        ),
+        (
+            "two payloads of different struct types, each used correctly",
+            "struct P { x: Word }\nstruct Q { y: bool }\nenum E { W(P, Q), N }\n\
+             fn main(e: E) -> Word { match e { E::W(p, q) => if q.y { p.x } else { 0 }, E::N => 0 } }",
+        ),
+        (
+            // A PRIMITIVE PAYLOAD has no struct row at all, so the binding types
+            // nothing through this channel. It must still be accepted, and it must
+            // not pick up a struct row belonging to some other variant.
+            "a primitive payload alongside a struct payload",
+            "struct P { x: Word }\nenum E { U(Word), V(P) }\n\
+             fn main(e: E) -> Word { match e { E::U(n) => n + 1, E::V(p) => p.x } }",
+        ),
+    ];
+    for (label, src) in ACCEPTED {
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+        assert!(
+            compile(&program).is_ok(),
+            "{label}: the REFERENCE rejects this, so it is not a well-typed control"
+        );
+        assert!(
+            stage_verdict_resolving(src),
+            "{label}: the stage REJECTS a well-typed program, which is a language \
+             change rather than a conservative choice"
+        );
+    }
+}
+
+/// **MATCH ARMS MUST AGREE, AND THE STAGE HAD NO SUCH RULE UNTIL 2026-09-11.**
+///
+/// The reference reports "match arms have differing types". The expression walk
+/// emitted no node for a match at all, so the stage said nothing and every such
+/// program was accepted. A missed rejection rather than an unsound one -- but a
+/// whole RULE absent, not a hard case deferred.
+///
+/// **Found by a test written for something else.** A payload case was added to
+/// prove the stage discriminates between two VARIANTS of one enum; it failed,
+/// because the only thing that would have rejected it was a rule that did not
+/// exist. The gap was invisible from the rule list, which said the fifteen
+/// enumerated shapes were complete: the match arms' rule is the SAME shape as the
+/// `if` branches' rule, and the shape was implemented while one of its two
+/// syntactic forms was not.
+///
+/// Closed with the BRANCH_PAIR kind that already existed, so the stage is
+/// unchanged: the gap was in what the host reported, not in what the stage could
+/// decide.
+///
+/// The must-accept half carries the case that matters: arms this stage cannot type
+/// resolve to UNKNOWN and must stay accepted, since a match whose arms are
+/// operator expressions is ordinary and rejecting it would be a language change.
+#[test]
+fn match_arms_that_disagree_are_rejected_and_unknown_arms_are_not() {
+    const REJECTED: &[(&str, &str)] = &[
+        (
+            "two arms, literal results",
+            "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A => 1, E::B => true } }",
+        ),
+        (
+            // THE LAST OF THREE, which is why the walk pairs the first arm with
+            // every later one rather than only with the second.
+            "three arms, the last disagreeing",
+            "enum E { A, B, C }\n\
+             fn main(e: E) -> Word { match e { E::A => 1, E::B => 2, E::C => true } }",
+        ),
+    ];
+    for (label, src) in REJECTED {
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+        assert!(
+            compile(&program).is_err(),
+            "{label}: the reference ACCEPTS this, so it is not a missed rejection"
+        );
+        assert!(
+            !stage_verdict_resolving(src),
+            "{label}: the stage accepts a match whose arms disagree"
+        );
+    }
+
+    const ACCEPTED: &[(&str, &str)] = &[
+        (
+            "arms that agree",
+            "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A => 1, E::B => 2 } }",
+        ),
+        (
+            "an arm this stage cannot type",
+            "enum E { A, B }\n\
+             fn main(e: E, n: Word) -> Word { match e { E::A => n + 1, E::B => 2 } }",
+        ),
+    ];
+    for (label, src) in ACCEPTED {
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+        assert!(
+            compile(&program).is_ok(),
+            "{label}: the REFERENCE rejects this, so it is not a well-typed control"
+        );
+        assert!(
+            stage_verdict_resolving(src),
+            "{label}: the stage REJECTS a well-typed match, which is a language \
+             change rather than a conservative choice"
+        );
+    }
+}
+
+/// **WITHHOLD THE DECLARATION SIDE AND THE SAME PROGRAM IS ACCEPTED.**
+///
+/// The pattern rows still say where each name binds. What is gone is the half that
+/// says what is declared there. Were the host supplying the binding's TYPE rather
+/// than its coordinates, removing the declarations would change nothing and the
+/// program would go on being rejected.
+///
+/// The converse direction is [`a_field_read_on_a_match_binding_is_reached`]:
+/// without it, a stage that accepted everything would satisfy this test.
+#[test]
+fn the_payload_declarations_are_what_the_stage_joins_against() {
+    let src = "struct P { x: Word }\nenum E { W(P), N }\n\
+               fn main(e: E) -> Word { match e { E::W(p) => p.x + true, E::N => 0 } }";
+    assert!(
+        stage_verdict_without_payload_decls(src),
+        "the stage still rejects with the payload declarations withheld, so the \
+         binding's type is not being looked up -- it is arriving already decided"
+    );
 }
 
 /// **A MATCH ARM BINDS NAMES, AND UNTIL 2026-09-11 THIS STAGE SAID OTHERWISE.**

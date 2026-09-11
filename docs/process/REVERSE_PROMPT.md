@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-11 (session 65, fiftieth increment) — the direct-operand field read is reached by an operand FORM rather than new type information, leaving two cases that need a type the source states nowhere; and a test name that encoded a tally was renamed after one increment made it wrong
+**Date**: 2026-09-11 (session 65, fifty-first increment) — a claim of mine was FALSE and checking it closed two gaps: the match-binding field read is reached, and match arms were never compared at all because the walk emitted no node for a match
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,54 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## FIFTY-FIRST INCREMENT: A FALSE CLAIM OF MINE, AND THE TWO GAPS CHECKING IT CLOSED
+
+### The correction comes first because it is the point
+
+For two increments I wrote that the remaining field-read cases **"need a type the source states
+nowhere"**. **That was false for both**, and reading the abstract syntax tree settled it in one step:
+an enum declaration lists each variant's payload types in order and a pattern says which variant and
+position a name binds at; an array type expression carries its element type directly.
+
+**It had been reasoned about rather than checked**, and it was the premise that would have justified
+stopping. It reached the roadmap, the tasklog, this file, the design journal and a test doc comment
+before anyone looked at the data types it was about.
+
+### What that bought
+
+**The match-binding case, for two tables and one scan.** Its base is a plain NAME, so the field-read
+row and the operand form already handled it; what was missing was a third source for resolving a
+name to a struct type. The host reports where a pattern binds (use site) and what the declaration
+says is there (definition); the stage matches three coordinates. Withholding the declaration side
+makes the same program accepted.
+
+### A second gap, found by a test written for something else
+
+A case was added to prove the stage discriminates between two VARIANTS of one enum. It failed,
+because **the expression walk emitted no node for a match at all** — match arms were never compared,
+and every program whose arms disagree was accepted.
+
+**This was invisible from the rule list**, which records the fifteen enumerated shapes as complete.
+The match-arms rule is the SAME SHAPE as the `if`-branches rule, and the shape had been implemented
+while one of its two syntactic forms had not. A rule inventory counts shapes; it does not count the
+syntactic forms each shape reaches. Worth carrying to any future "the rules are complete" claim.
+
+Closed with the existing branch-pair kind and no stage change.
+
+### A process note on the edit itself
+
+One scripted edit aborted on a sanity assertion for a snippet I did not intend to change, so the
+write never happened — and the test run that followed reported the OLD failure. I read that as the
+fix not working before noticing the traceback above it. **An edit script that can abort before its
+write, followed immediately by a test run, produces a result attributable to neither tree.** Same
+class as the run-edited-while-in-flight finding already on record.
+
+### What is left
+
+One case: a field of an ARRAY ELEMENT. Its base is an index expression rather than a name, so no
+field-read row can address it. The element type IS written down; what is missing is a base FORM on
+the field-read row.
 
 ## FIFTIETH INCREMENT: THE DIRECT-OPERAND FORM, AND A NAME THAT ENCODED A TALLY
 
