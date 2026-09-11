@@ -366,12 +366,31 @@ fn the_skipped_region_kinds_are_the_ones_on_record() {
     // **A kind is listed here if it is skipped for ANY stage**, so this figure moves only when a
     // kind is routed for EVERY stage. That is the conservative reading and the right one: a kind
     // routed for most inputs is not a kind the driver covers.
+    //
+    // **THE FOUR ARE NOT ONE OBLIGATION, AND THIS COMMENT SAID THEY WERE.** It read "all four
+    // waiting on the name-interning route", which is one sentence covering two different states,
+    // measured 2026-09-10:
+    //
+    // | kind | state |
+    // |---|---|
+    // | `DATA_SLOTS` | emitter `ds_stream_step` exists and is DISPATCHABLE at command 178 |
+    // | `ENUM_VARIANTS` | emitter `ev_stream_step` exists and is DISPATCHABLE at command 181 |
+    // | `ENUM_LAYOUTS` | READERS only (`elay_*`); no emitter written |
+    // | `PARAM_TYPES` | no emitter written |
+    //
+    // The driver routes `SHAPES` and `SIGNATURES` -- commands 179 and 180, the immediate
+    // neighbours of the two unrouted ones -- and everything else falls into its `_ => continue`.
+    // So the first two are INTEGRATION and the second two are still INVENTION, which is the
+    // distinction the roadmap's Order 1 cell draws and this comment collapsed.
+    //
+    // Routing the first two would raise the PRODUCED share and leave the COMPUTED share
+    // untouched, because these records format fields the host decides. The test below exists to
+    // make sure that cannot be read as the compiler deriving more of its own artifact.
     assert!(
         skipped.len() <= 4,
         "{} kinds are skipped: {skipped:02x?}. FOUR are on record after `DATA_INIT` was \
-         routed -- `ENUM_VARIANTS`, `ENUM_LAYOUTS`, `DATA_SLOTS` and `PARAM_TYPES`, all four \
-         waiting on the name-interning route. More means the driver has stopped routing \
-         something it used to",
+         routed -- `ENUM_VARIANTS`, `ENUM_LAYOUTS`, `DATA_SLOTS` and `PARAM_TYPES`. More means \
+         the driver has stopped routing something it used to",
         skipped.len()
     );
 }

@@ -13,6 +13,37 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-10 (thirty-first) — "all four waiting on one thing" was two different things
+
+With Order 1 established as available, the next slice is one of the four region kinds the driver
+still skips. `tests/selfhost_region_coverage.rs` said all four were "waiting on the name-interning
+route" -- one sentence over two different states. Measured:
+
+| kind | state |
+|---|---|
+| `DATA_SLOTS` | emitter `ds_stream_step` exists and is **DISPATCHABLE at command 178** |
+| `ENUM_VARIANTS` | emitter `ev_stream_step` exists and is **DISPATCHABLE at command 181** |
+| `ENUM_LAYOUTS` | READERS only (`elay_*`); no emitter written |
+| `PARAM_TYPES` | no emitter written |
+
+**The driver routes commands 179 and 180 -- `SHAPES` and `SIGNATURES`, the immediate NEIGHBOURS of
+the two unrouted ones -- and everything else falls into its `_ => continue`.** So two of the four
+are INTEGRATION and two are still INVENTION, which is exactly the distinction the roadmap's Order 1
+cell draws and this comment collapsed.
+
+**This is the third capability in one day that already existed and was not wired**, after the
+streaming chunk emitter and the removed walk cap. The pattern is worth naming: on this line, a
+stated blocker is as likely to be an unrouted capability as a missing one, and the cheap check is
+to look for the dispatch entry before sizing the work.
+
+**Deliberately not implemented in this increment.** Routing them is a driver change against a
+byte-identical oracle, and the honest deliverable here is the sizing: a named, dispatchable slice
+rather than a vague blocker. What it would buy is also stated in advance -- the PRODUCED share
+rises and the COMPUTED share does not, because these records format fields the host decides, and
+`the_computed_share_is_smaller_than_the_produced_share` exists so that cannot be misread.
+
+---
+
 ## 2026-09-10 (thirtieth) — I copied a stale figure while correcting a staleness
 
 The previous increment corrected the handoff's "the large work is blocked" premise and listed what

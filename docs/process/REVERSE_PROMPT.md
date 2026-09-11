@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-10 (session 65, thirtieth increment) — two capacity limits I restated from the roadmap were already removed, corrected in all three places; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
+**Date**: 2026-09-10 (session 65, thirty-first increment) — two of the four skipped region kinds are dispatchable and merely unrouted, a named slice rather than a vague blocker; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,35 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## THIRTY-FIRST INCREMENT: "ALL FOUR WAITING ON ONE THING" WAS TWO DIFFERENT THINGS
+
+With Order 1 established as available, the next slice is one of the four region kinds the driver
+still skips. `tests/selfhost_region_coverage.rs` said all four were "waiting on the name-interning
+route" -- one sentence over two different states. Measured:
+
+| kind | state |
+|---|---|
+| `DATA_SLOTS` | emitter `ds_stream_step` exists and is **DISPATCHABLE at command 178** |
+| `ENUM_VARIANTS` | emitter `ev_stream_step` exists and is **DISPATCHABLE at command 181** |
+| `ENUM_LAYOUTS` | READERS only (`elay_*`); no emitter written |
+| `PARAM_TYPES` | no emitter written |
+
+**The driver routes commands 179 and 180 -- `SHAPES` and `SIGNATURES`, the immediate NEIGHBOURS of
+the two unrouted ones -- and everything else falls into its `_ => continue`.** So two of the four
+are INTEGRATION and two are still INVENTION, which is exactly the distinction the roadmap's Order 1
+cell draws and this comment collapsed.
+
+**This is the third capability in one day that already existed and was not wired**, after the
+streaming chunk emitter and the removed walk cap. The pattern is worth naming: on this line, a
+stated blocker is as likely to be an unrouted capability as a missing one, and the cheap check is
+to look for the dispatch entry before sizing the work.
+
+**Deliberately not implemented in this increment.** Routing them is a driver change against a
+byte-identical oracle, and the honest deliverable here is the sizing: a named, dispatchable slice
+rather than a vague blocker. What it would buy is also stated in advance -- the PRODUCED share
+rises and the COMPUTED share does not, because these records format fields the host decides, and
+`the_computed_share_is_smaller_than_the_produced_share` exists so that cannot be misread.
 
 ## THIRTIETH INCREMENT: I COPIED A STALE FIGURE WHILE CORRECTING A STALENESS
 

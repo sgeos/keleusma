@@ -10,6 +10,23 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-10, session 65, thirty-first increment). THE NEXT ORDER 1 SLICE IS
+> NAMED AND SIZED.**
+>
+> `DATA_SLOTS` and `ENUM_VARIANTS` have emitters in `wire.kel` that are **dispatchable at commands
+> 178 and 181**; the driver routes their immediate neighbours 179 and 180 (`SHAPES`,
+> `SIGNATURES`) and drops these into its `_ => continue`. `ENUM_LAYOUTS` and `PARAM_TYPES` have
+> readers only and need an emitter written.
+>
+> So two are INTEGRATION and two are INVENTION. The coverage test said "all four waiting on the
+> name-interning route", collapsing the two states; corrected in place.
+>
+> **Third capability in one day that already existed and was not wired**, after the streaming chunk
+> emitter and the removed walk cap. On this line a stated blocker is as likely to be an unrouted
+> capability as a missing one; check for the dispatch entry before sizing the work.
+>
+> Routing them raises the PRODUCED share and not the COMPUTED one.
+
 > **Currency note (2026-09-10, session 65, thirtieth increment). BOTH CAPACITY LIMITS ARE GONE,
 > AND I HAD JUST COPIED THEM FORWARD.**
 >
