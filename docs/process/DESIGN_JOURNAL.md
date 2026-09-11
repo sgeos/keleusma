@@ -1,5 +1,74 @@
 # Design Journal
 
+## 2026-09-11 — [v0.3.0] The persistent composite copy, and a refusal count that came home
+
+**The defect found this morning is closed by implementation rather than by refusal.** A composite
+written into a private data slot is copied into the persistent composite pool; a read hands back the
+pool address. The value survives `Op::Reset` in place, which is what a data slot is for.
+
+| subject | before | after |
+|---|---|---|
+| the discriminator (write once, rebuild the site twice, read back) | runtime `[0, 0]`, native `[2, 2]` | **agree**, and the test asserts agreement rather than a refusal |
+| `14_frame_log.kel` | refused | lowers and agrees, `[81, 84, 87, 90]` across four cycles |
+| corpus refusals | 2 | **1** |
+
+### The three facts it rests on, each read from its producer
+
+- **The pool is packed with one running total and no padding.** Read from `src/compiler.rs`, not from
+  a doc comment: `total = total.saturating_add(body)` per entry in ascending slot order. **So a
+  body's size is the gap to the next offset**, and the last entry's is the gap to
+  `persistent_composite_bytes`.
+- **The two private regions are DIFFERENT MEMORY IMAGES.** The runtime sizes its persistent region as
+  `private_count * size_of::<Value>()` plus the pool, and its `Value` is 32 bytes where a private slot
+  here is 8. This backend therefore places its pool after its OWN slot array, and the placement is
+  refused outright if it would reach the resume-state word rather than assumed to clear it.
+- **A derived length feeding a `memcpy` is the one place here where being slightly wrong is an
+  overrun rather than a wrong answer.** So the table must partition the pool — offsets strictly
+  ascending, the last entry inside the declared total — and the operand's own width is cross-checked
+  against the derived size. Two independent statements of one number, and a disagreement refuses.
+
+### What was deliberately not lowered
+
+**An indexed composite slot.** Every element carries its own pool entry, so `base + index * size`
+needs the stride proven uniform across the range first. The shape compiles on the reference, so the
+refusal has a real subject, and the test asserts the refusal NAMES the indexing rather than merely
+existing.
+
+### The refusal count returned to 1, and that is the finding about the count
+
+It went `1 -> 2` when a silent miscompilation became a loud refusal, and `2 -> 1` when the refusal
+became a correct lowering. **The digit is exactly where it started and the tree is not.** No aggregate
+distinguishes those three states; only the reason written beside the digit does.
+
+### The gate found what the piecewise runs could not: a harness sized by the wrong figure
+
+**The corpus differential half failed, in both float configurations, and it was the instrument's
+fault rather than the lowering's.** The harness allocated one word per private slot with a canary
+immediately after; the contract this backend publishes is `required_persistent_capacity_for` plus
+`persistent_supplement_bytes` — slot array, composite pool, resume-state word. **The pool begins
+exactly where the canary was sitting.**
+
+**Why it stayed invisible for as long as it did, measured rather than supposed.** Nothing had ever
+used the space between the slot array and the contract's end. A first hypothesis — that the
+resume-state word had been writing hundreds of kilobytes past the allocation on every corpus run,
+with `parse.kel` short by 519 KB — was **checked and is FALSE**: every corpus stream with private
+data lowers DEGENERATELY, so no dispatch and no state word exists in any of them. Twelve modules were
+short of the contract and none of them wrote past it.
+
+> **A canary immediately after a too-small buffer only catches writes that land JUST past the end.**
+> The pool beginning at the canary word is the only reason this surfaced as a clean assertion instead
+> of a write into unrelated memory. Its position was doing work the sizing should have done.
+
+A test now pins the non-vacuity: if the contract never exceeded the slot array, the repair would be
+cosmetic. It does, for twelve modules.
+
+### The population guard caught a replacement a count cannot see
+
+`private_slot_composite.rs` went from four tests to six — but two were REMOVED, because their claim
+was inverted by the fix. A test asserting that the composite slot is refused would have been kept
+green by deleting the lowering. The guard reports `+2`; the accounting beside it says
+`-2 removed, +4 added` and why.
+
 ## 2026-09-11 — [v0.3.0] A local live across a suspension was wiped on the way back in
 
 **The increment was a measurement, and it found a defect the measurement was not looking for.**

@@ -135,9 +135,18 @@ fn every_remaining_refusal_is_named_to_the_chunk_and_the_reason() {
     // that distinction, which is why the reason is written here and not only the
     // digit. See `private_slot_composite.rs` and
     // `docs/decisions/RESET_REGION_RETENTION_BRIEF.md`.
+    //
+    // **2 -> 1 the same day, and the digit is back where it started while the
+    // tree is not.** The persistent composite copy landed:
+    // `14_frame_log.kel::main` lowers again, and it now agrees with the reference
+    // BY CONSTRUCTION rather than by the coincidence that it reads its slot in
+    // the iteration that wrote it. A count that returned to its old value across
+    // a defect and its fix is the clearest possible demonstration that this
+    // number measures population, not correctness.
+    // See `docs/decisions/PERSISTENT_COMPOSITE_COPY_BRIEF.md`.
     assert_eq!(
         refusals.len(),
-        2,
+        1,
         "the set of refusals changed: {refusals:?}. Re-derive the coverage \
          figures and say which chunks changed state before altering anything else."
     );

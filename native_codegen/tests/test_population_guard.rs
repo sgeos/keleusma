@@ -34,7 +34,30 @@
 ///
 /// **Derive this, do not transcribe it.** A count in this tree once read
 /// "nineteen" while the block it described held twenty-nine.
-const RECORDED_TEST_FUNCTIONS: usize = 488;
+const RECORDED_TEST_FUNCTIONS: usize = 492;
+// 491 -> 492 on 2026-09-11: one added,
+// `the_private_contract_exceeds_the_slot_array_for_real_corpus_modules`. It is
+// the non-vacuity check on a harness repair: the corpus differential sized its
+// private buffer by slot count rather than by the contract the backend
+// publishes, and the composite copy was the first lowering to reach the space
+// between the two.
+//
+// 490 -> 491 on 2026-09-11: one added,
+// `the_pool_persists_across_a_silent_cycle_and_changes_on_a_writing_one`. It
+// exists because auditing the increment's own completion condition found clause
+// 2 satisfiable by a pool that is merely never overwritten — a weaker property
+// than surviving a reset. The subject writes on some cycles and not others, so
+// survival and rewrite fail on different elements of one sequence.
+//
+// 488 -> 490 on 2026-09-11, net, and the net hides a REPLACEMENT that must be
+// stated: `private_slot_composite.rs` went from four names to six. Two were
+// REMOVED because their claim was inverted by the same-day fix — the composite
+// data slot no longer refuses, so a test asserting the refusal would have been
+// kept green by deleting the lowering. Four were added, asserting the copy, its
+// survival across a reset, the corpus subject running, and the indexed form
+// still refusing. **A count cannot tell a replacement from an addition**, which
+// is why it is written here.
+//
 // 476 -> 488 on 2026-09-11: TWELVE added, NONE removed, and each is accounted
 // for rather than absorbed. Six in `reset_region_retention.rs`, four in
 // `private_slot_composite.rs`, two in `general_stream_sequence.rs`. The two new
@@ -58,7 +81,8 @@ const RECORDED_TEST_FUNCTIONS: usize = 488;
 /// 104 -> 106 on 2026-09-11. Both additions are named above, and `git status`
 /// showed no deletion under `tests/` in the same increment — which is the check
 /// the failure message asks for, since a count cannot tell an add from a
-/// delete-plus-add.
+/// delete-plus-add. Unchanged by the persistent-composite-copy increment that
+/// followed: it rewrote a file's contents without adding or removing one.
 const RECORDED_TEST_FILES: usize = 106;
 
 fn test_files() -> Vec<std::path::PathBuf> {

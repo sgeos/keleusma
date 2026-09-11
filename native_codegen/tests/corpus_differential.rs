@@ -1854,7 +1854,22 @@ fn run_native(
 
     let entry = m.entry_point.expect("entry");
     let n_shared = shared_data_bytes_for(m);
-    let n_priv = m
+    // **THE PRIVATE REGION IS SIZED BY THE HOST CONTRACT, NOT BY THE SLOT
+    // COUNT.**
+    //
+    // It was one word per private slot, with the canary immediately after. That
+    // bound was TIGHTER THAN THE CONTRACT this backend publishes, which is
+    // `required_persistent_capacity_for` plus `persistent_supplement_bytes` — the
+    // slot array, the persistent composite pool, and the stream resume-state
+    // word. Nothing used the space beyond the slot array, so the mismatch was
+    // invisible until the composite copy landed and wrote into the pool, where
+    // the canary was sitting.
+    //
+    // **No real tightness is lost.** The old bound did not correspond to any
+    // contract; a host sizing a buffer follows the two functions below, and a
+    // canary belongs at the end of what a host actually allocates. What the
+    // check still catches is a write past everything the backend is entitled to.
+    let n_priv_slots = m
         .data_layout
         .as_ref()
         .map(|dl| {
@@ -1864,6 +1879,10 @@ fn run_native(
                 .count()
         })
         .unwrap_or(0);
+    let n_priv = (keleusma::vm::required_persistent_capacity_for(m)
+        + keleusma_native::region::persistent_supplement_bytes(m) as usize)
+        .div_ceil(8)
+        .max(n_priv_slots);
     // Transitive, not the per-chunk sum: each call site now receives a disjoint
     // block of the caller's region, so the entry needs everything it can reach.
     let n_region: usize = keleusma_native::region::region_total_bytes(m, entry, 0) as usize;
@@ -4735,4 +4754,67 @@ fn the_shared_corpus_enumeration_matches_this_harness() {
          Switching to the shared one would silently change the population every \
          figure in this file rests on"
     );
+}
+
+/// **THE HARNESS'S PRIVATE BUFFER WAS SIZED BY SLOT COUNT, NOT BY THE CONTRACT.**
+///
+/// It allocated one word per private slot with a canary immediately after. The
+/// backend's published contract is `required_persistent_capacity_for` plus
+/// `persistent_supplement_bytes` — the slot array, the persistent composite
+/// pool, and the stream resume-state word — and the buffer was short of it for
+/// every corpus module with private data.
+///
+/// # Why it stayed invisible, measured rather than supposed
+///
+/// **Nothing had ever used the space between the slot array and the contract's
+/// end.** Every corpus stream with private data lowers DEGENERATELY — no entry
+/// dispatch, so no resume-state word is written — and no composite had ever been
+/// copied into the pool, because a composite data slot was stored as a pointer
+/// in the slot array until the copy landed. The composite copy is the first
+/// lowering to reach that space, and the canary caught it on the first run.
+///
+/// # The part worth remembering
+///
+/// **A canary immediately after a too-small buffer only catches writes that land
+/// JUST past the end.** The pool began exactly at the canary word, which is the
+/// only reason this surfaced as a clean assertion rather than as a write into
+/// unrelated memory. Sizing the buffer to the contract is what makes the canary
+/// mean something; its position was doing work the sizing should have done.
+///
+/// This test is the non-vacuity check on that repair: if the contract never
+/// exceeded the slot array, the old sizing would have been correct all along and
+/// the change above would be cosmetic.
+#[test]
+fn the_private_contract_exceeds_the_slot_array_for_real_corpus_modules() {
+    let mut short = Vec::new();
+    for (name, m) in common::corpus() {
+        let slots = m
+            .data_layout
+            .as_ref()
+            .map(|dl| {
+                dl.slots
+                    .iter()
+                    .filter(|s| s.visibility == SlotVisibility::Private)
+                    .count()
+            })
+            .unwrap_or(0);
+        if slots == 0 {
+            continue;
+        }
+        let contract = keleusma::vm::required_persistent_capacity_for(&m)
+            + keleusma_native::region::persistent_supplement_bytes(&m) as usize;
+        if contract > slots * 8 {
+            short.push((name, slots * 8, contract));
+        }
+    }
+    assert!(
+        !short.is_empty(),
+        "no corpus module's persistent contract exceeds its slot array, so the \
+         harness's old sizing was never short and this repair measured nothing"
+    );
+    println!("\n================ PRIVATE REGION: SLOT ARRAY vs CONTRACT");
+    for (name, old, contract) in &short {
+        println!("  {name}: slot array {old} B, contract {contract} B");
+    }
+    println!("================\n");
 }

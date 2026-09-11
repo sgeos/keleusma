@@ -6,75 +6,96 @@
 
 V0.3.X, worktree `arena-composites`, branch `v0.3.0`.
 
-## TWO DEFECTS, BOTH SILENT, BOTH AGREEING WITH YOUR RUNTIME ON EVERY SUBJECT THAT EXISTED
+## TWO SILENT DEFECTS FOUND, ONE FIXED, ONE FIXED PROPERLY AFTER BEING REFUSED
 
-I set out to make one prose premise checkable. The premise held. **The increment found two defects
-that the check was not pointed at**, and each had agreed with your runtime everywhere it had been
-driven.
+Both agreed with your runtime on every subject that existed before. Neither was found by the thing
+being checked.
 
-### 1. A local live across a `yield` was wiped on the way back in
+### 1. A local live across a `yield` was wiped on the way back in — FIXED
 
 ```
 loop main(t: Word) -> Word { let keep = t + 100; let r = yield 1; yield r + keep }
    yours [1, 108]        mine [1, 3]
 ```
 
-The entry preamble zeroes every non-parameter local so an unwritten slot reads as your `Unit` rather
-than as `undef`. **Right for a function entered once; a resumable stream is entered once per
-suspension.** The initialisation now sits on the first-entry edge of the dispatch.
+The entry preamble zeroes non-parameter locals so an unwritten slot reads as your `Unit` rather than
+`undef`. **Right for a function entered once; a resumable stream is entered once per suspension.** The
+initialisation now sits on the first-entry edge of the dispatch. The parameter store stays
+unconditional — your resume writes slot 0, and a stream reading its parameter after a suspension sees
+the resume value on both sides.
 
 **No existing stream subject had a local live across a suspension**, which is why the suite was green
-over it. The parameter store stays unconditional, and that asymmetry is yours, not an inconsistency:
-your resume writes the incoming value into slot 0, and a stream reading its parameter after a
-suspension sees the resume value on both sides.
+over it. Found through a control subject added so a count could not pass by failing to move.
 
-### 2. A composite in a data slot was stored as a POINTER, not a copy
+### 2. A composite in a data slot was stored as a POINTER — REFUSED, then COPIED
 
 `14_frame_log.kel` opens by saying a slot holds *"a COPY of the composite's bytes ... not a reference
-to the ephemeral body"*. **My lowering stored the reference.** A data slot access is one word; for a
-flat composite the operand is the address of a body in the ephemeral region.
+to the ephemeral body"*. My lowering stored the reference: a slot access is one word, and for a flat
+composite the operand is an address into the ephemeral region.
 
-It agreed with you anyway — that script reads its slot in the iteration that wrote it, so the aliased
-bytes still hold the right values, and it yielded `[81, 84, 87, 90]` on both sides across four
-cycles. Separating a copy from an alias takes a subject that writes the slot on one loop iteration and
-then rebuilds the SAME site twice more before reading back:
+It agreed with you anyway, because that script reads its slot in the iteration that wrote it. A
+subject that writes the slot on one loop iteration and then rebuilds the SAME site twice more yields
+`0` on your side and gave `2` on mine.
 
-```
-   yours [0, 0]        mine [2, 2]
-```
+**Now implemented.** The write copies the body into the persistent composite pool and the read hands
+back the pool address. `14_frame_log.kel` lowers again and agrees — `[81, 84, 87, 90]` across four
+cycles — and it agrees BY CONSTRUCTION rather than by that coincidence.
 
-`2` is the last body built at that site.
+## THREE THINGS I TOOK FROM YOUR TREE RATHER THAN ASSUMED
 
-**Refused rather than fixed, and I want the cost visible: `14_frame_log.kel` no longer lowers.** The
-correct lowering copies the body to the offset `private_composite_layout` names, but that pool's base
-is not pinned against your runtime in my ABI, and guessing it puts a wrong answer where a refusal
-belongs. Your answer for the discriminating subject is pinned in `private_slot_composite.rs`
-independently of my backend, so the eventual copy has a target that does not depend on me.
+- **The pool is packed with one running total and no padding.** Read from `src/compiler.rs`, so a
+  body's size is the gap to the next entry's offset. **Derived, therefore validated**: the table must
+  partition the pool or the lowering refuses, because a derived length feeding a copy is the one place
+  here where being slightly wrong is an overrun rather than a wrong answer.
+- **Our private regions are different memory images.** You size yours as `private_count *
+  size_of::<Value>()` plus the pool, with a 32-byte `Value`; my private slot is 8 bytes. I place my
+  pool after my own slot array and REFUSE if that would reach the resume-state word, rather than
+  assuming it clears.
+- **An indexed composite slot is refused**, with a subject: the shape compiles on your compiler, so
+  the refusal is driven rather than hypothetical. Every element carries its own pool entry and the
+  stride is not proven uniform.
 
-## THE `Op::Reset` PREMISE ITSELF: CHECKED, AND THE COMMENT WAS OVER-CLAIMING
+## THE `Op::Reset` PREMISE, CHECKED AT LAST
 
-The comment said every site is overwritten by the next iteration. **It is not** — an iteration that
-skips a site's constructor leaves the previous body sitting in your buffer, and the test reads those
-bytes back out and tells them apart from a poison and from a rebuilt body. What makes the retention
-unobservable is provenance plus no pointer outliving its iteration; the five escape routes are
-tabulated with their mechanisms, including the two closed only indirectly.
+The comment said every site is overwritten by the next iteration. **It is not** — an iteration
+skipping a site's constructor leaves the previous body in your buffer, and the test reads those bytes
+back and tells them apart from a poison and from a rebuilt body. What makes the retention
+unobservable is provenance plus no pointer outliving its iteration; the escape routes are tabulated
+with their mechanisms, including the two closed only indirectly.
 
-## HOW BOTH DEFECTS ARE THE SAME SHAPE
+## A THIRD THING, AND IT WAS MY INSTRUMENT RATHER THAN MY LOWERING
 
-Neither was a wrong calculation. **Each was a correct operation applied across a boundary it does not
-hold across**: zeroing locals is right on entry and wrong on re-entry; a word-sized store is right for
-a scalar slot and wrong for a composite one. Both coincide with the correct behaviour in the easy
-case, which is why every existing subject agreed.
+**My corpus harness sized its private buffer by slot count, not by the contract my backend
+publishes.** One word per private slot, canary immediately after; the contract is
+`required_persistent_capacity_for` plus my supplement — slot array, composite pool, resume-state
+word. The pool begins exactly where the canary was.
+
+**It stayed invisible because nothing had ever used that space.** I hypothesised that the
+resume-state word had been writing hundreds of kilobytes past the allocation on every corpus run —
+`parse.kel` short by 519 KB — and **checked it: FALSE.** Every corpus stream with private data lowers
+degenerately, so none of them has a dispatch or a state word. Twelve modules were short of the
+contract and none wrote past it.
+
+**The part I want on the record**: a canary immediately after a too-small buffer only catches writes
+that land JUST past the end. The pool starting at the canary word is the only reason this surfaced as
+an assertion rather than as a write into unrelated memory.
 
 ## WHAT I GOT WRONG
 
-- **I was about to file a mechanism I had not verified.** The escape-route table's persistent-storage
-  row cited a test that measures the population of slot-homed composites, not copy semantics. Reading
-  the citation before filing it is the only reason the second defect surfaced.
-- **My own completion condition would have passed a lowering carrying both defects.** Eight clauses,
-  seven met, and neither defect is described by any of them.
-- **I ran a gate while still editing** and it correctly reported NOT FROZEN. Self-inflicted, and the
-  instrument caught it.
+- **I was about to file a mechanism I had not verified**, citing a test that measures a population,
+  not copy semantics. Reading the citation is the only reason the second defect surfaced.
+- **My first completion condition would have passed a lowering carrying both defects.** Eight
+  clauses, seven met, neither defect described by any.
+- **The second condition's clause 2 was satisfiable by a weaker property** than the one it names. A
+  subject that tells survival from never-being-rewritten now exists.
+- **I ran a gate while still editing** and it reported NOT FROZEN. Self-inflicted; the instrument
+  caught it.
+
+## THE COUNT THAT WENT OUT AND CAME HOME
+
+Corpus refusals went `1 -> 2` when a silent miscompilation became a loud refusal, then `2 -> 1` when
+the refusal became a correct lowering. **The digit is where it started and the tree is not.** No
+aggregate distinguishes those three states.
 
 ## STILL WITH YOU, NEITHER ACTED ON
 
@@ -83,9 +104,3 @@ case, which is why every existing subject agreed.
    fail my test and delete the carve-out rather than let it outlive the defect.
 2. **A multi-parameter stream faults after its first rewind.** Defect, intended consequence, or a
    shape the verifier should reject? Only the third needs no runtime change.
-
-## THE NEXT INCREMENT, UNLESS YOU REDIRECT
-
-Implement the persistent composite copy: pin the pool's base against your runtime, copy
-`byte_size` bytes at the offset `private_composite_layout` names, and drive the discriminator through
-the differential. That removes the corpus refusal this increment added.

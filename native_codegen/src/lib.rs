@@ -1806,6 +1806,7 @@ fn lower_module_with<'ctx>(
             .as_ref()
             .map(|dl| dl.private_composite_layout.as_slice())
             .unwrap_or(&[]),
+        persistent_composite_bytes: program.persistent_composite_bytes,
         shared_count,
         shared_layout,
         has_data: program
@@ -2168,6 +2169,13 @@ struct DataCtx<'a> {
     ///
     /// Empty for [`lower_chunk`], like every other module-level fact.
     private_composite_slots: &'a [keleusma::bytecode::PrivateCompositeSlot],
+    /// The module's declared persistent composite pool size, in bytes.
+    ///
+    /// Carried because it CLOSES the derivation of body sizes: the pool is
+    /// packed with one running total, so the last entry's size is the gap from
+    /// its offset to this figure. Without it the final entry has no upper bound
+    /// and every size would be an assumption.
+    persistent_composite_bytes: u32,
     /// Whether ANY chunk in the module constructs a flat composite, and so
     /// whether the trailing region pointer is present.
     ///
@@ -2176,6 +2184,97 @@ struct DataCtx<'a> {
     /// which is the same two-dimensional arity the shared/private pair already
     /// refuses. All three pointers or none.
     needs_region: bool,
+}
+
+/// Where a private composite slot's body lives in THIS backend's persistent
+/// region, and how many bytes it is.
+///
+/// # The pool's base is this backend's choice, not the runtime's
+///
+/// `required_persistent_capacity_for` sizes the persistent region as
+/// `private_count * size_of::<Value>()` plus the pool, and the runtime's `Value`
+/// is 32 bytes where a private slot here is [`PRIVATE_SLOT_BYTES`]. **The two
+/// private regions are different memory images**, so the pool is placed after
+/// this backend's own slot array rather than after the runtime's. The check
+/// below is what keeps that from colliding with the resume-state word, which
+/// sits at the runtime's figure.
+///
+/// # The size is DERIVED, so the derivation is validated
+///
+/// `src/compiler.rs` packs the pool with one running total and no padding, in
+/// ascending slot order, so a body's size is the gap to the next entry's offset
+/// and the last entry's is the gap to the declared pool size. That arithmetic is
+/// exact over a packed table — **and a derived length feeding a copy is the one
+/// place here where being slightly wrong is an overrun rather than a wrong
+/// answer**, so the table is required to partition the pool: offsets strictly
+/// ascending, and the final entry ending exactly at the declared size. A table
+/// that fails refuses.
+fn private_composite_extent(data: &DataCtx<'_>, slot: u32) -> Result<(u32, u32), LowerError> {
+    let table = data.private_composite_slots;
+    let mut offsets: Vec<u32> = table.iter().map(|e| e.offset).collect();
+    offsets.sort_unstable();
+    for w in offsets.windows(2) {
+        if w[0] >= w[1] {
+            return Err(LowerError::UnsupportedDataSlot {
+                slot,
+                why: String::from(
+                    "the module's private composite table does not partition the pool: two                      entries share or invert an offset, so no body size can be derived from it",
+                ),
+            });
+        }
+    }
+    let last = *offsets
+        .last()
+        .ok_or_else(|| LowerError::UnsupportedDataSlot {
+            slot,
+            why: String::from("the slot is composite but the module declares no composite pool"),
+        })?;
+    if last >= data.persistent_composite_bytes {
+        return Err(LowerError::UnsupportedDataSlot {
+            slot,
+            why: String::from(
+                "the last private composite offset is not inside the declared pool, so the                  table and the pool size disagree and neither can be trusted",
+            ),
+        });
+    }
+
+    let offset = table
+        .iter()
+        .find(|e| u32::from(e.slot) == slot)
+        .map(|e| e.offset)
+        .ok_or_else(|| LowerError::UnsupportedDataSlot {
+            slot,
+            why: String::from("no pool entry for this slot"),
+        })?;
+    let next = offsets
+        .iter()
+        .copied()
+        .find(|o| *o > offset)
+        .unwrap_or(data.persistent_composite_bytes);
+    let size = next - offset;
+    if size == 0 {
+        return Err(LowerError::UnsupportedDataSlot {
+            slot,
+            why: String::from("the derived body size is zero"),
+        });
+    }
+
+    // The pool sits after this backend's private slot array. The resume-state
+    // word sits at the runtime's persistent figure, which is strictly larger
+    // because the runtime's per-slot storage is wider — asserted rather than
+    // assumed, so the relation is rechecked if either width moves.
+    let private_slots = data.slot_count.saturating_sub(data.shared_count);
+    let base = private_slots.saturating_mul(PRIVATE_SLOT_BYTES);
+    if base.saturating_add(data.persistent_composite_bytes) > data.stream_state_off {
+        return Err(LowerError::UnsupportedDataSlot {
+            slot,
+            why: format!(
+                "the composite pool at {base} + {} bytes would reach the stream resume state at                  {}; the persistent layout no longer has room for both",
+                data.persistent_composite_bytes, data.stream_state_off
+            ),
+        });
+    }
+    Ok((base + offset, size))
 }
 
 /// How many trailing pointer parameters a function in this module carries.
@@ -5091,27 +5190,116 @@ fn lower_chunk_body<'ctx>(
                 // pool's base in this ABI is not pinned against the runtime yet,
                 // and guessing it would put a wrong answer where a refusal
                 // belongs. That is the next increment, not this one.
-                if !is_read && st.width_at(0).is_body() {
-                    return Err(LowerError::UnsupportedDataSlot {
-                        slot,
-                        why: String::from(
-                            "the operand is a flat composite body: the store here is one word \
-                             wide and would write the body's ADDRESS where the runtime copies \
-                             its bytes into the persistent composite pool",
-                        ),
-                    });
-                }
+                // **THE PERSISTENT COMPOSITE POOL.** A slot the module declares
+                // as a flat composite is a BODY, not a word: the write copies
+                // `size` bytes into the pool and the read hands back the pool
+                // address, so the value survives `Op::Reset` in place exactly as
+                // the runtime's copy does.
+                //
+                // The extent is derived from the module's own table and the
+                // derivation is validated — see `private_composite_extent`.
                 if data
                     .private_composite_slots
                     .iter()
                     .any(|p| u32::from(p.slot) == slot)
                 {
+                    // **INDEXED IS REFUSED, NOT EXTRAPOLATED.** An array of
+                    // composites gives every element slot its own entry, so
+                    // `base + index * size` needs the stride proven uniform
+                    // across the range first. No corpus module declares one, so
+                    // there is no subject to prove it against, and lowering it on
+                    // the strength of the direct case is how a differential
+                    // returns a wrong answer instead of a refusal.
+                    if indexed {
+                        return Err(LowerError::UnsupportedDataSlot {
+                            slot,
+                            why: String::from(
+                                "an INDEXED composite data slot: every element carries its own \
+                                 pool entry, and the stride is not proven uniform across the \
+                                 range here",
+                            ),
+                        });
+                    }
+                    let (pool_off, size) = private_composite_extent(&data, slot)?;
+                    let base = private_base.expect("has_data implies the private pointer");
+                    let addr = unsafe {
+                        st.b.build_in_bounds_gep(
+                            i8t,
+                            base,
+                            &[i64t.const_int(u64::from(pool_off), false)],
+                            "poolptr",
+                        )
+                        .unwrap()
+                    };
+                    if is_read {
+                        // The pool address IS the body, so it is pushed as a
+                        // `Body` at the derived size: every downstream field and
+                        // element offset is then bounded by the same figure the
+                        // write was.
+                        let as_int = st.b.build_ptr_to_int(addr, i64t, "poolint").unwrap();
+                        st.push_w(as_int, Width::Body(size));
+                    } else {
+                        // **The operand's width is cross-checked against the
+                        // derived size.** They come from different places — the
+                        // operand's from the producing op, the size from the
+                        // module's table — so a disagreement means one of them is
+                        // wrong and neither may be used to size a copy.
+                        let w = st.width_at(0);
+                        match w {
+                            Width::Body(n) if n == size => {}
+                            Width::Body(n) => {
+                                return Err(LowerError::UnsupportedDataSlot {
+                                    slot,
+                                    why: format!(
+                                        "the operand is a {n}-byte body and the module's pool \
+                                         entry is {size} bytes; the two statements of this \
+                                         slot's size disagree"
+                                    ),
+                                });
+                            }
+                            _ => {
+                                return Err(LowerError::UnsupportedDataSlot {
+                                    slot,
+                                    why: format!(
+                                        "a composite slot needs a body operand of known width to \
+                                         size the copy, and this one is {w:?}"
+                                    ),
+                                });
+                            }
+                        }
+                        let v = st.pop();
+                        let src = st
+                            .b
+                            .build_int_to_ptr(v, ctx.ptr_type(AddressSpace::default()), "poolsrc")
+                            .unwrap();
+                        // Alignment one on both sides: the pool packs bodies
+                        // cumulatively with no padding, so neither end is
+                        // guaranteed anything better, and declaring an alignment
+                        // the pointer lacks is undefined behaviour.
+                        st.b.build_memcpy(addr, 1, src, 1, i64t.const_int(u64::from(size), false))
+                            .map_err(|e| LowerError::UnsupportedDataSlot {
+                                slot,
+                                why: format!(
+                                    "could not copy a {size}-byte body into the pool: {e}"
+                                ),
+                            })?;
+                    }
+                    continue;
+                }
+                // **THE SLOTS WITH NO POOL ENTRY**: everything above has
+                // returned or continued, so a body operand reaching here is
+                // headed for a slot the module does not declare as a persistent
+                // composite — a shared slot, or a private one the pool table
+                // does not name. The one-word store would write its ADDRESS, so
+                // it is refused. No corpus module declares a shared composite,
+                // so this arm has no subject and is deliberately not lowered.
+                if !is_read && st.width_at(0).is_body() {
                     return Err(LowerError::UnsupportedDataSlot {
                         slot,
                         why: String::from(
-                            "the module declares this private slot as a flat composite, and a \
-                             one-word access cannot carry a body to or from the persistent \
-                             composite pool",
+                            "the operand is a flat composite body and this slot has no \
+                             persistent pool entry: a one-word store would write the body's \
+                             ADDRESS rather than copy its bytes",
                         ),
                     });
                 }

@@ -40,7 +40,8 @@
 //! | **flat array element** | **runtime, guarded by `guard_array_index`** |
 //! | operand spill store and reload | constant — `spill_off` plus a compile-time slot index |
 //! | **nested array element** | **runtime, guarded by `guard_array_index`** — formed by integer ADD, not a gep |
-//! | four int-to-pointer conversions | each takes an address already formed above; they add no offset of their own |
+//! | **persistent composite pool** | constant — this backend's private-slot count times its slot width, plus the module table's pool offset. Neither term is a program value, and the placement is refused outright if it would reach the resume-state word |
+//! | five int-to-pointer conversions | each takes an address already formed above; they add no offset of their own |
 //!
 //! # What this test can and cannot do
 //!
@@ -54,7 +55,15 @@
 ///
 /// **Re-derive rather than trust.** It moves whenever a site is added or
 /// removed.
-const RECORDED_GEP_SITES: usize = 19;
+const RECORDED_GEP_SITES: usize = 21;
+// 19 -> 21 on 2026-09-11, when the persistent composite copy landed. **Both are
+// compile-time constant.** The pool address is a gep at `private slots x slot
+// width + table offset`, every term fixed at lowering; the second site is the
+// int-to-pointer of the copy's SOURCE, which is the operand's own address and
+// adds no offset. The copy LENGTH is not pointer arithmetic and is not counted
+// here — it is a derived size, validated against the module's declared pool
+// total in `private_composite_extent`, which is the check that matters for it.
+//
 // 12 -> 14 on 2026-09-09, when the operand spill slice landed. Both new sites
 // take a COMPILE-TIME constant offset: the slice base plus a slot index the
 // emitter counts out at lowering time, never a value the program supplies.
