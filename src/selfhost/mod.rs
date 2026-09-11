@@ -6647,6 +6647,82 @@ fn window_emit_enum_layouts(
     Ok(out)
 }
 
+/// The `PARAM_TYPES` byte pool, one tag byte per parameter.
+///
+/// **This region is a POOL, not a record table**, and `wire_schema` says why: a
+/// type tag is one byte, so a whole-word record per tag would waste seven
+/// eighths of the region.
+fn param_type_bytes(module: &Module) -> Vec<u8> {
+    let mut out = Vec::new();
+    // Per CHUNK, in chunk order, exactly as the encoder walks them: the pool is
+    // one contiguous run and each chunk's `param_types_first` indexes into it.
+    for c in &module.chunks {
+        for t in &c.param_types {
+            out.push(crate::wire_schema::type_tag_byte(*t));
+        }
+    }
+    out
+}
+
+/// Emit a byte-POOL region through the window, seeding `bin` rather than `fin`.
+///
+/// **The stage COPIES here; it does not encode.** `emit_pool_bytes` moves `n`
+/// bytes from the host's input buffer into the artifact and decides nothing
+/// about them -- no offset, no width, no endianness, because a byte pool has
+/// none. That is a WEAKER standing than `HEADER`, which at least decides the
+/// record's layout, and it is recorded as its own row in the provenance table so
+/// the coverage figure cannot absorb it silently.
+///
+/// `STRING_POOL` goes through a different path for exactly this reason: the
+/// stage DERIVES those bytes from the module blob rather than copying them.
+fn window_emit_pool(
+    stage: &Module,
+    kind: u16,
+    bytes: &[u8],
+    want: usize,
+    label: &str,
+) -> Result<Vec<u8>, SelfHostError> {
+    let m = stage.clone();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify wire.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+
+    vm.set_shared(&mut shared, WARG_SLOT, Value::Int(i64::from(kind)))
+        .expect("kind");
+    vm.set_shared(&mut shared, WARG_SLOT + 1, Value::Int(bytes.len() as i64))
+        .expect("count");
+    vm.set_shared(&mut shared, WARG_SLOT + 2, Value::Int(0))
+        .expect("offset");
+    for (i, &b) in bytes.iter().enumerate() {
+        vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(b))
+            .expect("pool byte");
+    }
+
+    let wrote = enter_wire(&mut vm, &mut shared, 164)?;
+    if wrote < 0 {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!(
+                "wire.kel refused {label} ({} byte(s)) with {wrote}",
+                bytes.len()
+            ),
+        });
+    }
+    let mut out = vec![0u8; want];
+    let n = (wrote as usize).min(want);
+    // Iterate the SLICE rather than the range: clippy's `needless_range_loop`
+    // asks for it, and the ask is right here because the index does double duty
+    // as the shared-slot offset, which reads better named than repeated.
+    for (k, slot) in out.iter_mut().enumerate().take(n) {
+        *slot = match vm.get_shared(&shared, 1 + k).expect("read") {
+            Value::Byte(b) => b,
+            other => panic!("shared byte slot held {other:?}"),
+        };
+    }
+    Ok(out)
+}
+
 /// Emit a module's `CONSTS` region by STREAMING, one constant record per call.
 ///
 /// # Why this path exists at all, when `fl_walk` already emits a byte-identical region
@@ -7320,6 +7396,18 @@ pub fn wire_windowed_via_kel(
                         ),
                     });
                 }
+                out[base..base + len].copy_from_slice(&win);
+                continue;
+            }
+        }
+        // PARAM_TYPES IS A BYTE POOL AND THE STAGE ONLY COPIES IT. Routed so the
+        // skipped set reaches zero, and recorded at its true standing: the stage
+        // decides nothing about these bytes, because a pool has no layout to
+        // decide. See `window_emit_pool`.
+        if kind == crate::wire_schema::kind::PARAM_TYPES {
+            let bytes = param_type_bytes(module);
+            if !bytes.is_empty() {
+                let win = window_emit_pool(&stage, kind, &bytes, len, "PARAM_TYPES")?;
                 out[base..base + len].copy_from_slice(&win);
                 continue;
             }

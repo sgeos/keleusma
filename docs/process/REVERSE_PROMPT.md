@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-11 (session 65, forty-third increment) — `ENUM_LAYOUTS` routed, one kind left, and four ways a local run can say less than it appears to; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
+**Date**: 2026-09-11 (session 65, forty-fourth increment) — every region kind routed, the skipped set empty, and the produced-versus-derived distinction at its widest; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,37 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## FORTY-FOURTH INCREMENT: THE LAST REGION KIND, AND IT WAS THE WEAKEST
+
+**Every region kind the corpus emits is now routed and byte-identical. The skipped set is EMPTY.**
+
+`PARAM_TYPES` turned out to be the weakest rather than the hardest. It is a byte POOL, not a record
+table -- `wire_schema` says why: a type tag is one byte, so a whole-word record per tag would waste
+seven eighths of the region. The stage already had a pool path, and what it does there is COPY
+bytes the host supplies, deciding nothing, because a pool has no offsets, widths or endianness to
+decide.
+
+**So it is routed and recorded at that standing rather than allowed to inflate a figure.** The
+provenance table gains a fourth row, **copied, not encoded** -- weaker even than `HEADER`, which at
+least decides a record's layout. Closing the set must not launder a memcpy into coverage.
+
+**Two tests changed SHAPE rather than value.** The skipped-kinds guard asserted the set was
+non-empty and bounded its size, with a message asking whoever emptied it to *"replace this test with
+one asserting completeness"*. That day came. It now asserts EMPTY, so a kind reappearing reads as a
+regression in the driver rather than an unrecorded gap, and the sequence stays in the comment
+because it is the evidence: eight on 2026-08-22, six on 08-31, five on 09-04, zero on 09-11. The
+share test's upper bound existed to catch an unrecorded advance; **there is no advance past
+completeness**, so it becomes an equality between covered and total bytes.
+
+**The distinction the coverage tests exist to protect is now at its widest, and is stated that
+way**: 100% of the BYTES pass through the stage, and the share the stage DERIVES is unchanged.
+Three of the four kinds that closed the gap supply only their name from the interner -- the
+`CHUNKS` standing, not the `NAMES` one -- and the fourth supplies nothing at all.
+
+**Four kinds, four shapes**: index, walk, step-and-accumulate, copy. None was a copy of the one
+before it, and the plan that said two of them were the same shape was corrected before it produced
+an emitter.
 
 ## FORTY-THIRD INCREMENT: `ENUM_LAYOUTS` ROUTED, AND A THIRD DERIVATION I MISSED
 

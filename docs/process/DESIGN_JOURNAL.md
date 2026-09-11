@@ -13,6 +13,39 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-11 (forty-fourth) — the last region kind, and it was the weakest
+
+**Every region kind the corpus emits is now routed and byte-identical. The skipped set is EMPTY.**
+
+`PARAM_TYPES` turned out to be the weakest rather than the hardest. It is a byte POOL, not a record
+table -- `wire_schema` says why: a type tag is one byte, so a whole-word record per tag would waste
+seven eighths of the region. The stage already had a pool path, and what it does there is COPY
+bytes the host supplies, deciding nothing, because a pool has no offsets, widths or endianness to
+decide.
+
+**So it is routed and recorded at that standing rather than allowed to inflate a figure.** The
+provenance table gains a fourth row, **copied, not encoded** -- weaker even than `HEADER`, which at
+least decides a record's layout. Closing the set must not launder a memcpy into coverage.
+
+**Two tests changed SHAPE rather than value.** The skipped-kinds guard asserted the set was
+non-empty and bounded its size, with a message asking whoever emptied it to *"replace this test with
+one asserting completeness"*. That day came. It now asserts EMPTY, so a kind reappearing reads as a
+regression in the driver rather than an unrecorded gap, and the sequence stays in the comment
+because it is the evidence: eight on 2026-08-22, six on 08-31, five on 09-04, zero on 09-11. The
+share test's upper bound existed to catch an unrecorded advance; **there is no advance past
+completeness**, so it becomes an equality between covered and total bytes.
+
+**The distinction the coverage tests exist to protect is now at its widest, and is stated that
+way**: 100% of the BYTES pass through the stage, and the share the stage DERIVES is unchanged.
+Three of the four kinds that closed the gap supply only their name from the interner -- the
+`CHUNKS` standing, not the `NAMES` one -- and the fourth supplies nothing at all.
+
+**Four kinds, four shapes**: index, walk, step-and-accumulate, copy. None was a copy of the one
+before it, and the plan that said two of them were the same shape was corrected before it produced
+an emitter.
+
+---
+
 ## 2026-09-11 (forty-third) — ENUM_LAYOUTS routed, and a third derivation I missed
 
 The third and last ROUTABLE region kind. `PARAM_TYPES` alone remains, and it needs an emitter
