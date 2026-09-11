@@ -231,3 +231,43 @@ fn a_resume_point_that_is_also_a_branch_target_agrees() {
         &[11, -3, 20, -5, 31, 40],
     );
 }
+
+/// **A LOCAL LIVE ACROSS A SUSPENSION — a defect the differential caught, and the
+/// narrowest shape that shows it.**
+///
+/// The entry preamble zeroes every non-parameter local so an unwritten slot reads
+/// as the runtime's `Unit` rather than as `undef`. That is right for a function
+/// entered once. **A resumable stream is entered once per suspension**, so the
+/// preamble ran again on every resume and wiped exactly the locals the ephemeral
+/// frame exists to preserve. This subject yielded `[1, 3]` where the runtime
+/// yields `[1, 108]`: `keep` read back as zero after the suspension.
+///
+/// The initialisation now sits on the first-entry edge of the dispatch. This is
+/// the shape that fails if it ever moves back.
+#[test]
+fn a_local_written_before_a_yield_survives_the_resume() {
+    common::assert_general_stream_agrees(
+        "loop main(t: Word) -> Word { let keep = t + 100; let r = yield 1; yield r + keep }",
+        5,
+        &[3, 0],
+    );
+}
+
+/// **The asymmetry that makes the fix above correct rather than merely greener.**
+///
+/// Slot 0 is written on EVERY entry and the other slots on the first one only,
+/// which looks inconsistent until the reference settles it: the runtime's resume
+/// writes the incoming value into slot 0. A stream reading its parameter after a
+/// suspension therefore sees the RESUME value, not the original argument, and
+/// both sides agree on that.
+///
+/// Without this, a lowering that deferred the parameter store along with the
+/// rest would pass every other stream test in this file.
+#[test]
+fn the_parameter_slot_carries_the_resume_value_after_a_suspension() {
+    common::assert_general_stream_agrees(
+        "loop main(t: Word) -> Word { let r = yield 1; yield r + t }",
+        5,
+        &[3, 0],
+    );
+}

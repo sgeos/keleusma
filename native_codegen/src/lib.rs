@@ -1801,6 +1801,11 @@ fn lower_module_with<'ctx>(
         stream_state_off: u32::try_from(keleusma::vm::required_persistent_capacity_for(program))
             .unwrap_or(u32::MAX),
         needs_region,
+        private_composite_slots: program
+            .data_layout
+            .as_ref()
+            .map(|dl| dl.private_composite_layout.as_slice())
+            .unwrap_or(&[]),
         shared_count,
         shared_layout,
         has_data: program
@@ -2150,6 +2155,19 @@ struct DataCtx<'a> {
     stream_state_off: u32,
     /// Total declared slots, shared plus private.
     slot_count: u32,
+    /// The private slots that hold a flat composite body, from the module's own
+    /// `private_composite_layout`.
+    ///
+    /// **Carried so a composite data slot can be REFUSED rather than silently
+    /// mis-lowered.** The slot access below is a single word-sized load or
+    /// store; applied to a composite that writes the BODY'S ADDRESS where the
+    /// runtime copies its bytes into the persistent pool. Measured, not
+    /// supposed: a subject storing a composite on one loop iteration and reading
+    /// it back after two more rebuilt the same site yielded `0` on the runtime
+    /// and `2` here.
+    ///
+    /// Empty for [`lower_chunk`], like every other module-level fact.
+    private_composite_slots: &'a [keleusma::bytecode::PrivateCompositeSlot],
     /// Whether ANY chunk in the module constructs a flat composite, and so
     /// whether the trailing region pointer is present.
     ///
@@ -2937,6 +2955,11 @@ fn lower_chunk_body<'ctx>(
     // `MAX_STACK` slots and why that bound cannot be exceeded.
     let spill_off = locals_off + u64::from(crate::region::stream_locals_bytes(chunk));
 
+    // A general (non-degenerate) stream re-enters this function once per
+    // suspension, so anything emitted unconditionally here runs again on every
+    // resume. See the deferral below.
+    let general_stream_frame = chunk.block_type == BlockType::Stream && degenerate_yield.is_none();
+
     let locals: Vec<_> = (0..chunk.local_count as usize)
         .map(|i| match stream_frame_base {
             Some(rb) => unsafe {
@@ -2977,8 +3000,29 @@ fn lower_chunk_body<'ctx>(
     //
     // `mem2reg` folds these stores away wherever the slot is later overwritten,
     // so the cost is nil on every chunk the compiler actually emits.
-    for local in locals.iter().skip(chunk.param_count as usize) {
-        b.build_store(*local, i64t.const_zero()).unwrap();
+    //
+    // ⚠ **A GENERAL STREAM DEFERS THIS TO ITS FIRST-ENTRY EDGE, AND THAT IS A
+    // DEFECT FIX, NOT A TIDY-UP.** This preamble runs on EVERY call, and a
+    // resumable stream is called once per suspension. Zeroing the non-parameter
+    // locals here therefore wiped every local that was live ACROSS a suspension:
+    //
+    //     loop main(t: Word) -> Word { let keep = t + 100;
+    //                                  let r = yield 1; yield r + keep }
+    //
+    // yielded `[1, 3]` natively against the runtime's `[1, 108]` -- `keep` read
+    // back as zero. The locals live in the ephemeral region precisely so they
+    // survive the return at a `yield`, and this loop was undoing that on the way
+    // back in.
+    //
+    // **The parameter stores above are NOT deferred, and that asymmetry is the
+    // reference's, not an inconsistency.** The runtime's resume writes the
+    // incoming value into slot 0, which the same differential confirms: a stream
+    // reading its parameter after a suspension sees the RESUME value on both
+    // sides. So slot 0 must be written on every entry and the rest must not.
+    if !general_stream_frame {
+        for local in locals.iter().skip(chunk.param_count as usize) {
+            b.build_store(*local, i64t.const_zero()).unwrap();
+        }
     }
     // Operand slots are allocated LAZILY by `Lower::ensure_slot`, so a chunk
     // that uses three of them pays for three. The previous unconditional
@@ -3317,8 +3361,30 @@ fn lower_chunk_body<'ctx>(
                 cases.push((i64t.const_int((k + 1) as u64, false), resume_blocks[&y]));
             }
         }
+        // **THE FIRST-ENTRY BLOCK: WHERE THE LOCAL INITIALISATION BELONGS.**
+        //
+        // The switch's DEFAULT edge is the only one that is not a resume, so it
+        // is the only one on which the non-parameter locals should be set to
+        // this backend's `Unit`. Routing the default through a block of its own
+        // costs one unconditional branch and is what keeps a local live across a
+        // suspension from being cleared on the way back in.
+        //
+        // `Op::Reset` branches to `top` DIRECTLY and not through here, which is
+        // correct on both counts: it has already cleared every local itself, and
+        // it must not re-run an initialisation the runtime performs only once.
+        let init_bb = ctx.append_basic_block(func, "streaminit");
         note!(top, 0);
-        st.b.build_switch(state, blocks[&top], &cases).unwrap();
+        st.b.build_switch(state, init_bb, &cases).unwrap();
+        st.b.position_at_end(init_bb);
+        for local in st.locals.iter().skip(chunk.param_count as usize) {
+            st.b.build_store(*local, i64t.const_zero()).unwrap();
+        }
+        note!(top, 0);
+        st.b.build_unconditional_branch(blocks[&top]).unwrap();
+        // Back to the terminated entry block, which is where the walk below
+        // expects the builder to be: the first op emits only if the current
+        // block has no terminator, and entry has the switch.
+        st.b.position_at_end(entry);
     }
 
     for (i, op) in chunk.ops.iter().enumerate() {
@@ -4996,6 +5062,60 @@ fn lower_chunk_body<'ctx>(
                 // it on the stack.
                 let index = if indexed { Some(st.pop()) } else { None };
 
+                // ⚠ **A COMPOSITE DATA SLOT IS REFUSED, AND THIS CLOSES A
+                // SILENT MISCOMPILATION RATHER THAN A GAP.**
+                //
+                // Every route below is ONE WORD: a load or a store of `i64`.
+                // For a flat composite the operand is the ADDRESS of a body in
+                // the ephemeral region, so the write stored a pointer where the
+                // runtime copies bytes into the persistent composite pool — and
+                // the read handed back a pointer into a region later iterations
+                // overwrite.
+                //
+                // **It agreed with the runtime by luck wherever it was tested.**
+                // `14_frame_log.kel` reads its slot in the same iteration that
+                // wrote it, and the aliased bytes still hold the right values
+                // there. The shape that separates a copy from an alias --
+                // storing on one loop iteration, then rebuilding the SAME site
+                // twice more, then reading back -- yields `0` on the runtime and
+                // `2` here. See `private_slot_composite.rs`.
+                //
+                // **Two checks, because they see different things.** The
+                // operand's width catches a composite going IN, including
+                // through a shared slot; the module's own
+                // `private_composite_layout` catches a composite coming OUT,
+                // where no operand exists yet to have a width.
+                //
+                // **Refusing, not copying.** The correct lowering copies
+                // `byte_size` bytes to the pool offset the table names, but the
+                // pool's base in this ABI is not pinned against the runtime yet,
+                // and guessing it would put a wrong answer where a refusal
+                // belongs. That is the next increment, not this one.
+                if !is_read && st.width_at(0).is_body() {
+                    return Err(LowerError::UnsupportedDataSlot {
+                        slot,
+                        why: String::from(
+                            "the operand is a flat composite body: the store here is one word \
+                             wide and would write the body's ADDRESS where the runtime copies \
+                             its bytes into the persistent composite pool",
+                        ),
+                    });
+                }
+                if data
+                    .private_composite_slots
+                    .iter()
+                    .any(|p| u32::from(p.slot) == slot)
+                {
+                    return Err(LowerError::UnsupportedDataSlot {
+                        slot,
+                        why: String::from(
+                            "the module declares this private slot as a flat composite, and a \
+                             one-word access cannot carry a body to or from the persistent \
+                             composite pool",
+                        ),
+                    });
+                }
+
                 if let Some(ix) = index {
                     // Bounds check against the declared element count, with one
                     // unsigned compare covering the negative case, exactly as
@@ -5935,11 +6055,33 @@ fn lower_chunk_body<'ctx>(
             // `step(r1)`, `step(r2)` reproduces the yielded sequence — so the back
             // edge is taken inside the same call.
             //
-            // **The composite region needs no explicit reset**: every site has a
-            // fixed offset, so the next iteration overwrites exactly the bytes a
-            // reset would have reclaimed. That is the fixed-offset lowering of a
-            // stack-disciplined bump arena popped at each iteration, which is the
-            // model to reason in.
+            // **THE COMPOSITE REGION NEEDS NO EXPLICIT RESET — but not for the
+            // reason this comment used to give.**
+            //
+            // It read: *"every site has a fixed offset, so the next iteration
+            // overwrites exactly the bytes a reset would have reclaimed"*. **That
+            // over-claims, and the tree now contradicts it.** An iteration that
+            // takes a branch skipping a construction site does not overwrite it,
+            // and the previous iteration's body is still sitting in the host's
+            // buffer when the stream suspends. `reset_region_retention.rs` reads
+            // those retained bytes back out and discriminates them from the
+            // poison and from a rebuilt body.
+            //
+            // What actually makes the retention unobservable is two premises:
+            //
+            // - **provenance** — a site's bytes are reachable only through a
+            //   pointer produced by that site's own `NewComposite`, and no two
+            //   sites share storage (`region_nonreuse.rs`);
+            // - **no pointer outlives its iteration** — locals are cleared just
+            //   above, the depth goes to zero so the operand slots and the spill
+            //   slice are abandoned, a composite that escapes through a `yield` is
+            //   REFUSED, and a slot-homed composite is copied into persistent
+            //   bytes rather than aliased.
+            //
+            // The escape routes are tabulated in `reset_region_retention.rs`,
+            // including the two it closes only indirectly. **Emitting a clear here
+            // would buy nothing**: it would pay per iteration to hide bytes
+            // nothing can name.
             Op::Reset if general_stream => {
                 // **TRUNCATE, DO NOT REFUSE — AND THIS CORRECTS A REFUSAL ADDED
                 // EARLIER THE SAME DAY.**

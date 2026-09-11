@@ -1,5 +1,115 @@
 # Design Journal
 
+## 2026-09-11 — [v0.3.0] A local live across a suspension was wiped on the way back in
+
+**The increment was a measurement, and it found a defect the measurement was not looking for.**
+
+### What was being checked
+
+The `Op::Reset` arm emits no arena reset. The entire argument that this is safe lived in one
+sentence of a comment: *"every site has a fixed offset, so the next iteration overwrites exactly the
+bytes a reset would have reclaimed."* Nothing in the tree checked it.
+
+**The sentence over-claims.** An iteration that takes a branch skipping a construction site does not
+overwrite it. `reset_region_retention.rs` reads the retained bytes back out of the host's buffer and
+discriminates three states — a `0xCD` poison, iteration one's body `(12, 14)`, and iteration two's
+`(8, 10)` on a run where the constructor does fire. **The retention is real.** What makes it
+unobservable is provenance plus the fact that no region pointer outlives its iteration, and those are
+now tabulated with their mechanisms, including the two rows closed only indirectly.
+
+### The defect, which arrived through the control and not the subject
+
+The local-clearing check needed a second subject differing by exactly one local, so that a count
+which does not move with the population could not pass. **That control subject diverged.**
+
+```
+loop main(t: Word) -> Word { let keep = t + 100; let r = yield 1; yield r + keep }
+   runtime [1, 108]        native [1, 3]
+```
+
+The entry preamble zeroes every non-parameter local, so an unwritten slot reads as the runtime's
+`Unit` rather than as `undef`. **That is right for a function entered once, and a resumable stream is
+entered once per suspension.** The preamble was undoing, on every resume, exactly what the ephemeral
+frame exists to do.
+
+The initialisation now sits on the first-entry edge of the dispatch — the switch's default is the
+only edge that is not a resume. `Op::Reset` still branches to the loop top directly, which is correct
+on both counts: it has already cleared the locals itself, and it must not re-run an initialisation
+the runtime performs once.
+
+**The parameter store stays unconditional, and the asymmetry is the reference's.** The runtime's
+resume writes the incoming value into slot 0; a stream reading its parameter after a suspension sees
+the resume value on both sides. A fix that deferred the parameter store along with the rest would
+have passed every other stream test in the file.
+
+### Why nothing caught it before
+
+**No existing stream subject had a local live across a suspension.** Every one of them either writes
+its locals after the resume or reads only the parameter. The suite was green over a lowering that
+lost any local crossing a `yield`.
+
+### The guard is cast against the class, not the instance
+
+Counting zero-stores would have been shaped by the defect that prompted it — the recorded blindness
+of every instrument on this line. The class is **anything written unconditionally in the entry
+block**, because all of it re-executes on each resume. The guard asserts a resumable stream's entry
+block writes the parameter slots and nothing else, with a non-stream control proving it discriminates
+between the two entry disciplines rather than passing because no lowering ever writes at entry.
+
+### What this does not establish
+
+- The retention is shown to persist after the run, not to be unreachable during it. Unreachability
+  rests on provenance and on the five escape routes; two of those are closed only by the sequence
+  differentials agreeing, and the file says so rather than implying five direct checks.
+- Every subject is single-chunk. Interprocedural retention is untouched.
+
+### And then a second defect, found by verifying a citation I was about to file
+
+The escape-route table needed a row for persistent storage. The mechanism I wrote was *"a slot-homed
+composite is COPIED into persistent bytes, not aliased"*, cited to `slot_homed_composites.rs`.
+**That test establishes the POPULATION of slot-homed composites and says nothing about copy
+semantics.** Reading the citation before filing it is what turned a plausible row into a measurement.
+
+**A data slot access lowers to one word.** For a flat composite the operand is the address of a body
+in the ephemeral region, so the write stored a pointer where the runtime copies bytes into the
+persistent composite pool, and the read handed back a pointer into a region that later iterations
+overwrite. The slot survives `Reset`; the body does not. `14_frame_log.kel` opens by saying a slot
+holds *"a COPY of the composite's bytes ... not a reference to the ephemeral body"* — the script
+states the contract the backend was breaking.
+
+**It agreed with the runtime everywhere it was tested.** That module reads its slot in the same
+iteration that wrote it, so a pointer and a copy give the same answer, and it yielded `[81, 84, 87,
+90]` on both sides across four cycles. The shape that separates them writes the slot on one loop
+iteration and then rebuilds the SAME site twice more:
+
+```
+runtime [0, 0]        native [2, 2]
+```
+
+`2` is the last body built at that site.
+
+**Refused rather than fixed, and the cost is stated.** The correct lowering copies the body to the
+offset `private_composite_layout` names, but that pool's base is not pinned against the runtime in
+this ABI, and guessing it would put a wrong answer where a refusal belongs. `14_frame_log.kel` moves
+from lowering to refused, so the corpus carries one more refusal than it did this morning.
+
+**Two checks, because they see different things.** The operand's width catches a composite going in,
+including through a shared slot; the module's own `private_composite_layout` catches one coming out,
+where there is no operand yet to have a width. The residuals are written down: an unknown-width
+operand, an empty composite slot absent from the table by design, and shared composite slots, for
+which no corpus subject exists.
+
+### Both defects have the same shape, and it is not the shape of either fix
+
+Neither was a wrong calculation. **Each was a correct operation applied at a boundary it does not
+hold across**: zeroing locals is right on entry and wrong on re-entry; a word-sized store is right
+for a scalar slot and wrong for a composite one. Both agreed with the runtime on every subject that
+existed, and both needed a subject built to separate two mechanisms that coincide in the easy case.
+
+**Neither was found by the thing that was being checked.** The first arrived through a control
+subject; the second through verifying a citation. The increment that was planned — making the
+retention premise checkable — is the smallest part of what it produced.
+
 ## 2026-09-11 — [v0.3.0] Absorption 56, and a risk cleared on evidence rather than by a green aggregate
 
 **84 commits, the largest backlog this line has carried.** All three predicted clauses hit exactly,

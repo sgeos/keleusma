@@ -120,9 +120,24 @@ fn every_remaining_refusal_is_named_to_the_chunk_and_the_reason() {
     // a different fact from a refusal leaving because the backend improved, and
     // conflating the two would overstate backend coverage.
     // See `docs/decisions/OP_LEN_PRODUCER_CENSUS.md`.
+    //
+    // **1 -> 2 on 2026-09-11, and this one goes the WRONG WAY on purpose.**
+    // `14_frame_log.kel::main` joins the list because a composite written into a
+    // private data slot was being lowered as a ONE-WORD STORE OF THE BODY'S
+    // ADDRESS, where the runtime copies the bytes into the persistent composite
+    // pool. It agreed with the reference in the corpus differential -- that
+    // script reads its slot in the same iteration that wrote it, so an alias and
+    // a copy give the same answer -- and a subject built to separate the two
+    // yields `0` on the reference and `2` here.
+    //
+    // **A refusal replacing a silent miscompilation is an improvement that this
+    // number reports as a regression.** The count is the wrong instrument for
+    // that distinction, which is why the reason is written here and not only the
+    // digit. See `private_slot_composite.rs` and
+    // `docs/decisions/RESET_REGION_RETENTION_BRIEF.md`.
     assert_eq!(
         refusals.len(),
-        1,
+        2,
         "the set of refusals changed: {refusals:?}. Re-derive the coverage \
          figures and say which chunks changed state before altering anything else."
     );

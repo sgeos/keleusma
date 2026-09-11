@@ -34,7 +34,14 @@
 ///
 /// **Derive this, do not transcribe it.** A count in this tree once read
 /// "nineteen" while the block it described held twenty-nine.
-const RECORDED_TEST_FUNCTIONS: usize = 476;
+const RECORDED_TEST_FUNCTIONS: usize = 488;
+// 476 -> 488 on 2026-09-11: TWELVE added, NONE removed, and each is accounted
+// for rather than absorbed. Six in `reset_region_retention.rs`, four in
+// `private_slot_composite.rs`, two in `general_stream_sequence.rs`. The two new
+// files exist because the increment found two defects: a local live across a
+// suspension was cleared by the entry preamble on every resume, and a composite
+// written to a private data slot was stored as the body's ADDRESS.
+//
 // 475 -> 476 on 2026-09-10: one added,
 // `the_corpus_contains_no_general_stream_and_the_control_proves_the_probe_works`.
 // Two scaffolding probes written in the same increment were REMOVED, both
@@ -47,7 +54,12 @@ const RECORDED_TEST_FUNCTIONS: usize = 476;
 // failure message demands: the one added name is named here.
 
 /// Backend test binaries at the stamp.
-const RECORDED_TEST_FILES: usize = 104;
+///
+/// 104 -> 106 on 2026-09-11. Both additions are named above, and `git status`
+/// showed no deletion under `tests/` in the same increment — which is the check
+/// the failure message asks for, since a count cannot tell an add from a
+/// delete-plus-add.
+const RECORDED_TEST_FILES: usize = 106;
 
 fn test_files() -> Vec<std::path::PathBuf> {
     let mut out: Vec<_> = std::fs::read_dir("tests")
