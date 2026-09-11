@@ -67,9 +67,22 @@ cursors that must persist across records. A data-slot record carries no cursor. 
 is that the interner has RUN, and `wire.nmap` is shared data that survives for as long as the host
 hands back the same buffer — the property `ck_stream_begin` already documents and relies on.
 
-**This is the assumption most worth checking first.** If `nmap` does not in fact survive between
-the interner call and the step calls under the driver's buffer handling, the design needs a begin
-after all, and that is a different shape.
+**CHECKED 2026-09-11, AND IT HOLDS.** `window_emit_chunks` creates ONE `shared` buffer and passes
+`&mut shared` to every `enter_wire` call -- the begin and every step alike. Shared data is re-seeded
+per call only for the slots the driver writes; `wire.nmap` is never among them, so the interner's
+result survives for as long as the driver hands back the same buffer, which that function does by
+construction. A `DATA_SLOTS` driver written the same way inherits the property.
+
+**The question it leaves behind is sharper and smaller: WHICH command runs the interner for a slot
+pass.** There is no `ds_stream_begin`, and the two existing commands that call `mi_window_prepare()`
+both do something else as well -- command 174 zeroes the chunk range cursors, and command 170 emits
+the `NAMES` records into the window. Either would work and both are misuses: one is chunk-specific,
+the other writes bytes the driver would discard.
+
+So the slice needs a begin after all, but for a different reason than the one this section
+originally guessed. It is not that the interner's result fails to survive; it is that nothing
+currently runs the interner WITHOUT also doing something a slot pass does not want. A begin whose
+whole body is `mi_window_prepare()` is the smallest honest answer, and it moves `highest_command`.
 
 ## Verification, in the order that makes a failure legible
 

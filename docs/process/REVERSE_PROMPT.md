@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-10 (session 65, thirty-fifth increment) — the section base is NOT recoverable from retained state; the design is recorded before any code; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
+**Date**: 2026-09-11 (session 65, thirty-sixth increment) — the nmap-survival assumption holds, and the slice needs a begin for a different reason than the plan guessed; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,32 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## THIRTY-SIXTH INCREMENT: THE ASSUMPTION HOLDS, AND THE SLICE STILL NEEDS A BEGIN
+
+The plan named one assumption to check before anything else: that `wire.nmap` survives between the
+interner call and the step calls under the driver's buffer handling.
+
+**It holds.** `window_emit_chunks` creates ONE `shared` buffer and passes `&mut shared` to every
+`enter_wire` call, begin and steps alike. The driver re-seeds only the slots it writes, and
+`wire.nmap` is never among them, so the interner's result survives for as long as the same buffer
+comes back -- which that function guarantees by construction. A `DATA_SLOTS` driver written the same
+way inherits it.
+
+**The question it leaves is sharper and smaller, and it changes the answer.** There is no
+`ds_stream_begin`, and the two commands that DO call `mi_window_prepare()` each do something else as
+well: 174 zeroes the chunk range cursors, and 170 emits the `NAMES` records into the window. Either
+would run the interner; both are misuses, one chunk-specific and the other writing bytes the driver
+would discard.
+
+**So the slice needs a begin after all -- for a different reason than the plan guessed.** Not
+because the interner's result fails to survive, but because nothing currently runs the interner
+WITHOUT also doing something a slot pass does not want. A begin whose whole body is
+`mi_window_prepare()` is the smallest honest answer, and it moves `highest_command`.
+
+**The plan was right to name the assumption and wrong about what would follow from it.** Checking it
+still paid: the conclusion "needs a begin" is the same, the REASON is different, and a reason that
+is wrong is how a design gets built against the wrong constraint.
 
 ## THIRTY-FIFTH INCREMENT: THE FIELD LIST MADE THE STATE LOOK SUFFICIENT, AND IT IS NOT
 

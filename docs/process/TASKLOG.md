@@ -10,6 +10,22 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-11, session 65, thirty-sixth increment). THE `nmap` ASSUMPTION HOLDS;
+> THE SLICE NEEDS A BEGIN FOR A DIFFERENT REASON.**
+>
+> `window_emit_chunks` creates ONE `shared` buffer and passes it to the begin and every step. The
+> driver re-seeds only the slots it writes and `wire.nmap` is never among them, so the interner's
+> result survives by construction.
+>
+> **The remaining question is which command runs the interner for a slot pass.** Command 174 also
+> zeroes the chunk cursors; command 170 also emits `NAMES` into the window. Both are misuses, so a
+> begin whose whole body is `mi_window_prepare()` is the smallest honest answer -- and it moves
+> `highest_command`.
+>
+> **The plan was right to name the assumption and wrong about what followed from it.** Same
+> conclusion, different reason; a wrong reason is how a design gets built against the wrong
+> constraint.
+
 > **Currency note (2026-09-10, session 65, thirty-fifth increment). THE SECTION BASE IS NOT
 > RECOVERABLE FROM RETAINED STATE, AND THE PREVIOUS NOTE SAID IT WAS.**
 >
