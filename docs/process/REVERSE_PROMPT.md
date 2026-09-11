@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-11 (session 65, thirty-ninth increment) — `DATA_SLOTS` is routed byte-identically and the self-hosted share is 98%, with the computed share unchanged as predicted; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
+**Date**: 2026-09-11 (session 65, fortieth increment) — `ENUM_VARIANTS` is not the same shape as the slot slice, and the corrected design is recorded; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,31 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## FORTIETH INCREMENT: `ENUM_VARIANTS` IS NOT THE SAME SHAPE, AND MY PLAN SAID IT WAS
+
+With `DATA_SLOTS` routed, the plan's own "not in scope" section named `ENUM_VARIANTS` as "the same
+shape with the enum base". **Checking before copying, it is not.**
+
+`mi_enum_names` INTERLEAVES: for each enum it interns the type name, then that enum's variants,
+then the next type name. So a flat variant index `k` does not sit at `ebase + k` -- the type names
+are in the way, one per enum, at no fixed stride because enums have different variant counts. The
+counters cannot supply the offset either: `vcnt` is the CURRENT enum's variant count and is
+overwritten each iteration. **That is the same fact that defeated the slot base, biting a second
+time in a different place.**
+
+**The sound shape is a CURSOR, not an offset.** A begin sets the cursor to `ebase`; each step emits
+one variant and advances by one, except that the host tells it when a record is the FIRST variant
+of its enum and the stage then advances one extra to step over the type name. The host supplies
+structure it legitimately knows -- the boundary -- and never a name index it cannot check.
+
+**The sentence was written three increments before the walk was read closely**, which is how it came
+to describe a shape the code does not have. It cost nothing because it was checked before being
+acted on, and it would have cost a wrong emitter had it not been.
+
+**The slot slice's transferable value is the METHOD, not the shape**: read the walk, capture state
+from the walk rather than deriving it, let the host supply only what it decides, and say in advance
+which coverage figure should move.
 
 ## THIRTY-NINTH INCREMENT: `DATA_SLOTS` IS ROUTED, AND THE SHARE WENT 81% TO 98%
 

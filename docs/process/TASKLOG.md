@@ -10,6 +10,20 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-11, session 65, fortieth increment). `ENUM_VARIANTS` IS NOT THE SAME
+> SHAPE AS THE SLOT SLICE.**
+>
+> `mi_enum_names` INTERLEAVES type name then variants per enum, so a flat variant index does not
+> sit at `ebase + k`, and the counters cannot supply the offset because `vcnt` is overwritten each
+> iteration -- the same fact that defeated the slot base, biting again elsewhere.
+>
+> **The sound shape is a CURSOR**: a begin sets it to `ebase`, each step advances by one, and the
+> host signals the FIRST variant of each enum so the stage steps over the type name. The host
+> supplies a boundary it knows and never a name index it cannot check.
+>
+> The plan's "same shape" sentence predated reading the walk. **Checked before being acted on**;
+> it would have produced a wrong emitter otherwise.
+
 > **Currency note (2026-09-11, session 65, thirty-ninth increment). `DATA_SLOTS` IS ROUTED, AND
 > THE SELF-HOSTED SHARE IS 98%.**
 >

@@ -181,6 +181,21 @@ attributed to the stage growth rather than to the routing.
 
 ## Not in scope
 
-`ENUM_VARIANTS` is the same shape with the enum base, and should follow only after `DATA_SLOTS` is
-byte-identical. `ENUM_LAYOUTS` and `PARAM_TYPES` have no emitter at all and are a different
-obligation.
+`ENUM_LAYOUTS` and `PARAM_TYPES` have no emitter at all and are a different obligation.
+
+**`ENUM_VARIANTS` IS NOT THE SAME SHAPE, AND THIS SECTION SAID IT WAS.** The sentence here read
+"the same shape with the enum base", which was written before the enum walk was read closely.
+
+`mi_enum_names` INTERLEAVES: for each enum it interns the type name, then that enum's variants,
+then the next type name. So a flat variant index `k` does NOT sit at `ebase + k` -- the type names
+are in the way, one per enum, and they are not at a fixed stride because enums have different
+variant counts. The counters cannot supply it either: `vcnt` is the CURRENT enum's variant count
+and is overwritten each iteration, which is the same fact that defeated the slot base.
+
+**The sound shape is a CURSOR, not an offset.** A begin sets the cursor to `ebase`, and each step
+emits one variant and advances by one -- except that the host tells it when a record is the FIRST
+variant of its enum, and the stage then advances one extra to step over the type name. The host
+supplies structure it legitimately knows, the boundary, and never a name index it cannot check.
+
+That is a different design from the slot stream rather than a copy of it, and it needs its own
+plan before its own code. The slot slice's value here is the method, not the shape.

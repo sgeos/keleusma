@@ -13,6 +13,33 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-11 (fortieth) — ENUM_VARIANTS is not the same shape, and my plan said it was
+
+With `DATA_SLOTS` routed, the plan's own "not in scope" section named `ENUM_VARIANTS` as "the same
+shape with the enum base". **Checking before copying, it is not.**
+
+`mi_enum_names` INTERLEAVES: for each enum it interns the type name, then that enum's variants,
+then the next type name. So a flat variant index `k` does not sit at `ebase + k` -- the type names
+are in the way, one per enum, at no fixed stride because enums have different variant counts. The
+counters cannot supply the offset either: `vcnt` is the CURRENT enum's variant count and is
+overwritten each iteration. **That is the same fact that defeated the slot base, biting a second
+time in a different place.**
+
+**The sound shape is a CURSOR, not an offset.** A begin sets the cursor to `ebase`; each step emits
+one variant and advances by one, except that the host tells it when a record is the FIRST variant
+of its enum and the stage then advances one extra to step over the type name. The host supplies
+structure it legitimately knows -- the boundary -- and never a name index it cannot check.
+
+**The sentence was written three increments before the walk was read closely**, which is how it came
+to describe a shape the code does not have. It cost nothing because it was checked before being
+acted on, and it would have cost a wrong emitter had it not been.
+
+**The slot slice's transferable value is the METHOD, not the shape**: read the walk, capture state
+from the walk rather than deriving it, let the host supply only what it decides, and say in advance
+which coverage figure should move.
+
+---
+
 ## 2026-09-11 (thirty-ninth) — DATA_SLOTS is routed, and the share went 81% to 98%
 
 The driver half landed. `slot_run_fields` groups consecutive slots sharing a name and visibility
