@@ -61,7 +61,7 @@ honest; probing every member individually is not a better use of the same effort
 | D | composite operand form mismatch | 7 | **defended**, by boundary canonicalization |
 | E | structural indices out of range | 9 | **defended at load** (8 of 9 probed) |
 | F | shared and private data-segment layout | 7 | **host-contract, confirmed** (2 of 7 probed) — but see below |
-| G | arena staleness after reset | 3 | **no witness found** (1 of 3 probed) — see below |
+| G | arena staleness after reset | 3 | **no witness found**, all three now addressed — see below and the seventh addendum |
 | H | the three "should never have been emitted" | 3 | **closed 2026-09-04** |
 | I | operand-range and constant-kind checks | 6 | **mixed** — see below (5 of 6 probed) |
 | J | unregistered or invalid native index | 3 | **mixed** — the index is admitted at load (1 of 3 probed) |
@@ -93,11 +93,16 @@ written and the row was not updated. The totals were re-derived from the prose a
 **A count in a table and the same count in a sentence are two places to go stale**, and this
 document has now been the tell for its own miscount twice.
 
-**Thirty-five of forty-six sites carry an examined verdict**, group by group: A's one, both
-of B, all five of C, all seven of D, eight of E's nine, two of F's seven, one of G's three, all three
+**Thirty-seven of forty-six sites carry an examined verdict**, group by group: A's one, both
+of B, all five of C, all seven of D, eight of E's nine, two of F's seven, all three of G, all three
 of H, five of I's six, and one of J's three.
 
-**The remaining eleven** are one in E, five in F, two in G, one in I, and two in J.
+**The remaining nine** are one in E, five in F, one in I, and two in J.
+
+**Group G moved from one of three to all three on 2026-09-10**, when its other two sites were
+probed. See the seventh addendum. By this document's own convention a verdict carrying no probe
+count extends to every member, so removing G's parenthetical moved the examined total by two, and
+the guard in `tests/claimed_counts.rs` refused the document until this sentence moved with it.
 
 **Two corrections are folded into that tally, and both are the same defect.** Earlier revisions of
 this line said fifteen remaining and then eleven, and **both omitted group G entirely** — the
@@ -762,3 +767,54 @@ today**. Raw and stripped counts are both 6 and 4, because every prose mention o
 parenthesis the pattern requires. The strip is defensive, not load-bearing, and the file says so;
 its decoy carries the offending shape deliberately so the guard still fails if the strip is
 removed.
+
+
+## Addendum, 2026-09-10 (seventh): group G's other two sites, probed
+
+Group G's entry says one of its three sites was probed and that "the other two concern
+host-supplied opaque handles going stale, which is a different question and untested here". The
+closing section names group G among what remains. Both routes by which a host-supplied opaque could
+go stale are now probed, in `tests/opaque_across_reset.rs`, and **neither reaches an
+`InvalidBytecode`.**
+
+### Route one: an opaque in a persistent slot is refused at compile time
+
+A private `data` slot's body survives RESET in the persistent region, so a composite bearing an
+opaque and stored there would carry a registry index across a reset. **It cannot be stored there
+at all**:
+
+```text
+data field type Handle is not a struct or enum: opaque types are not yet admissible in data
+segment fields
+```
+
+The route is closed by construction, not by a runtime check. The probe admitted three outcomes --
+resolve, fault, or compile refusal -- and the answer was the third; it was not guessed. The guard
+asserts the MESSAGE, because a refusal for some unrelated reason would leave the route open for
+every shape that reason does not cover.
+
+### Route two: a host decoding a yielded opaque too late produces a `TypeError`
+
+`src/vm.rs` documents that a yielded value stays arena-resident and the host must decode it before
+the next `resume()`, which resets the arena, because "a read afterward resolves to a clean stale
+error". **That was a claim about a host-facing contract with nothing checking it.** Doing exactly
+the forbidden thing gives:
+
+```text
+TypeError("flat composite body read after the arena was reset; decode a yielded or returned
+composite before the next resume (read-before-resume)")
+```
+
+**The variant is the census-relevant part.** Group G is a group of `InvalidBytecode` sites, and a
+clean `TypeError` naming the contract is evidence that this route does not reach them. The test
+asserts the variant is NOT `InvalidBytecode` and that the message names the contract, so a bare
+"it failed" cannot be mistaken for the same result.
+
+### What this changes, and what it does not
+
+Group G's verdict stays **no witness found**. What changes is its parenthetical: all three sites
+are now addressed rather than one, and the two host-facing ones are closed by a compile-time
+refusal and a distinct error variant respectively, each recorded with the text that establishes it.
+
+It does not make the group unreachable by a hand-built artefact, which the wire format admits and
+which this census has never claimed to cover for any group.

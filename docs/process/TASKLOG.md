@@ -10,6 +10,19 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-10, session 65, twenty-fourth increment). GROUP G'S OTHER TWO SITES
+> ARE PROBED, AND NEITHER REACHES `InvalidBytecode`.**
+>
+> **Route one is closed at compile time**: an opaque cannot be a `data` segment field at all, so no
+> registry index reaches the persistent region to cross a RESET. **Route two gives a `TypeError`**
+> naming the read-before-resume contract, not an `InvalidBytecode` -- and the variant is the
+> census-relevant part, so the test asserts it.
+>
+> **A guard refused my arithmetic.** Removing G's probe count moved the examined total from
+> thirty-five to thirty-seven, and `the_census_group_table_adds_up_to_its_stated_totals` compared
+> table against prose and failed. Re-derived in both places rather than adjusted in one. The
+> remainder falls from eleven to nine. See `docs/decisions/INVALID_BYTECODE_CENSUS.md`.
+
 > **Currency note (2026-09-10, session 65, twenty-third increment). THE POPULATION'S LOWER BOUND
 > NOW HAS A NUMBER, AND A CURRENCY GUARD FIRED.**
 >

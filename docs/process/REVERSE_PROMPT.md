@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-10 (session 65, twenty-third increment) — the InvalidBytecode sites a variant grep cannot see are enumerated, and a currency guard caught CLAUDE.md's test figures going stale; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
+**Date**: 2026-09-10 (session 65, twenty-fourth increment) — group G's remaining two sites probed and neither reaches InvalidBytecode, with the census's examined total re-derived in both places; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,36 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## TWENTY-FOURTH INCREMENT: GROUP G'S OTHER TWO SITES, AND A GUARD THAT REFUSED MY ARITHMETIC
+
+Group G's entry read "no witness found (1 of 3 probed)", with the other two described as
+"host-supplied opaque handles going stale, which is a different question and untested here". Both
+routes are now probed in `tests/opaque_across_reset.rs`, and **neither reaches an
+`InvalidBytecode`.**
+
+**Route one is closed at COMPILE time.** A persistent `data` slot's body survives RESET, so a
+composite bearing an opaque stored there would carry a registry index across a reset. It cannot be
+stored there at all: *"opaque types are not yet admissible in data segment fields"*. The probe
+admitted three outcomes -- resolve, fault, or refusal -- and the answer was the third; **it was not
+guessed, and the first draft of the test said so by failing with the refusal message rather than
+asserting a resolve.** The guard now asserts that MESSAGE, because a refusal for an unrelated
+reason would leave the route open for every shape that reason does not cover.
+
+**Route two produces a `TypeError`, not an `InvalidBytecode`.** `src/vm.rs` documents that a
+yielded value stays arena-resident and must be decoded before the next `resume()`, "a read
+afterward resolves to a clean stale error" -- a claim about a host-facing contract that nothing
+checked. Doing the forbidden thing gives a `TypeError` naming read-before-resume. **The VARIANT is
+the census-relevant part**, since group G is a group of `InvalidBytecode` sites, so the test
+asserts it is not that variant rather than merely that the read failed.
+
+**Then a guard I did not know existed refused the edit.** Removing group G's probe count moved the
+examined total from thirty-five to thirty-seven, because this census's own convention is that a
+verdict without a probe count extends to every member.
+`the_census_group_table_adds_up_to_its_stated_totals` compared the table against the prose and
+failed. **Re-derived in both places rather than adjusted in one**, which is precisely the failure
+its message names: *"adjusting the total instead is how group G went missing from every remainder
+list."* The remaining count falls from eleven to nine.
 
 ## TWENTY-THIRD INCREMENT: THE SITES THE INSTRUMENT CANNOT SEE, COUNTED
 
