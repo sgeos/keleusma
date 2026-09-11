@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-10 (session 65, twenty-fifth increment) — the handoff refreshed after nine increments, with every validity check run rather than copied; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
+**Date**: 2026-09-10 (session 65, twenty-sixth increment) — this line of work had added a census site without telling the census, and the guard that should have caught it was blind by design; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,41 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## TWENTY-SIXTH INCREMENT: THIS LINE OF WORK ADDED A CENSUS SITE AND DID NOT TELL THE CENSUS
+
+Deriving the `InvalidBytecode` population from source to name the unprobed members of groups E and
+I turned up something else first: **the source has 47 construction sites and the census says 46.**
+
+**The site is ours.** The opaque-width repair of 2026-09-08, part of this same line of work, added
+`"flat opaque field read out of bounds"` to `src/vm.rs`. Confirmed by counting at the census's own
+commit -- 50 raw matches then, 51 now -- and by diffing the message multisets, which names exactly
+that string as the addition and nothing as removed.
+
+**A source-derived guard existed and did not fire, BY DESIGN.**
+`the_invalid_bytecode_census_still_describes_the_tree` scans the runtime sources and compares
+against the stated figure with a tolerance of plus or minus four. Its own message explains why:
+*"the comparison carries a small tolerance rather than pretending to exactness the scan cannot
+deliver."* A drift of one sits well inside it. **The tolerance that makes the guard robust also
+makes it blind to exactly the movement that happened** -- a property of the instrument, not a
+mistake in it.
+
+**My first account of this said "nothing noticed and every guard was green", and that was wrong.**
+I found the tolerant guard only when my edit broke its extraction. Corrected before it entered the
+tree, and both versions are visible in this increment's history.
+
+**An exact counter now sits beside the tolerant one.** It can be exact because it reproduces the
+document's exclusions mechanically -- comments by a strip, the match arm by its `(_)` pattern
+position, the unit tests by truncating at the test module -- which is the distinction the tolerant
+guard declines to make. Both are kept deliberately: a tolerant alarm that survives refactoring, and
+an exact one that notices a single site. Mutation-checked: dropping the pattern-position exclusion
+fails it.
+
+**The new site got a ROW, not a reclassification.** Its sibling -- the identical bounds guard on a
+flat `Text` field -- was already in the population, so the two plausibly belong together. But this
+census publishes no per-line classification, and **guessing which group the sibling occupies would
+be worse than leaving the new site in a row of its own.** Group K holds it, verdict "not examined",
+and folds in if a future pass derives the classification. Population 47, examined 37, remainder ten.
 
 ## TWENTY-FIFTH INCREMENT: THE HANDOFF REFRESHED AFTER NINE INCREMENTS
 

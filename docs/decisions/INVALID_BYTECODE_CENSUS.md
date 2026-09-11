@@ -32,10 +32,29 @@ Derived from source, not chosen by hand:
 grep -rn "VmError::InvalidBytecode" src/ --include=*.rs
 ```
 
-**50 matches, of which 46 are construction sites in production code.** The four excluded are named
+**51 matches, of which 47 are construction sites in production code.** The four excluded are named
 rather than silently dropped: one doc comment referring to the variant, one match arm listing it
-among unrecoverable errors, and two inside unit tests. They live in `src/vm.rs` (44) and
+among unrecoverable errors, and two inside unit tests. They live in `src/vm.rs` (45) and
 `src/marshall.rs` (2).
+
+**The figure was 50 and 46 until 2026-09-10.** The opaque-width repair of 2026-09-08 -- part of
+the same line of work that wrote this census -- added `"flat opaque field read out of bounds"` to
+`src/vm.rs`, taking the population to 47.
+
+**A source-derived guard already existed and did not fire, by design.**
+`the_invalid_bytecode_census_still_describes_the_tree` compares a scan of the runtime sources
+against the figure stated here with a tolerance of plus or minus four, chosen deliberately because
+its scan cannot distinguish a unit-test occurrence by line shape and its own message says so:
+*"the comparison carries a small tolerance rather than pretending to exactness the scan cannot
+deliver."* A drift of one sits well inside that. **The tolerance that makes the guard robust also
+makes it blind to exactly the movement that happened**, and that is a property of the instrument
+rather than a mistake in it.
+
+`tests/invalid_bytecode_indirect_sites.rs` now carries an EXACT count beside it. It can be exact
+because it reproduces this document's exclusions mechanically -- comments by a strip, the match arm
+by its `(_)` pattern position, and the unit tests by truncating at the test module -- which is the
+distinction the tolerant guard declines to make. The two are kept separately on purpose: a tolerant
+alarm that survives refactoring, and an exact one that notices a single site.
 
 **A first draft of this table said 48, and mis-sized three groups.** The grep counts TEXT, and a doc
 comment and a match arm read exactly like a construction site to it. Re-derived by classifying every
@@ -65,9 +84,18 @@ honest; probing every member individually is not a better use of the same effort
 | H | the three "should never have been emitted" | 3 | **closed 2026-09-04** |
 | I | operand-range and constant-kind checks | 6 | **mixed** — see below (5 of 6 probed) |
 | J | unregistered or invalid native index | 3 | **mixed** — the index is admitted at load (1 of 3 probed) |
+| K | the retained runtime bounds guard on a flat opaque field | 1 | **not examined** — added 2026-09-08, see below |
 
-The group sizes sum to 46, which is the population above; a table whose parts do not add to its
+The group sizes sum to 47, which is the population above; a table whose parts do not add to its
 stated whole has been the tell for a miscount here before.
+
+**Group K is a row rather than a reclassification, deliberately.** The site it holds is a bounds
+guard on a flat opaque field read, and its sibling -- the identical guard on a flat `Text` field --
+was already in the population when this census was written. They plausibly belong to the same
+group, but **this document does not publish a per-line classification, and guessing which group
+the sibling occupies would be worse than leaving the new site in a row of its own.** If a future
+pass derives the classification and the two belong together, K folds in and the arithmetic moves
+with it.
 
 **What "examined" counts, stated because it was not.** The parenthetical in a verdict is the signal:
 
@@ -93,11 +121,11 @@ written and the row was not updated. The totals were re-derived from the prose a
 **A count in a table and the same count in a sentence are two places to go stale**, and this
 document has now been the tell for its own miscount twice.
 
-**Thirty-seven of forty-six sites carry an examined verdict**, group by group: A's one, both
+**Thirty-seven of forty-seven sites carry an examined verdict**, group by group: A's one, both
 of B, all five of C, all seven of D, eight of E's nine, two of F's seven, all three of G, all three
 of H, five of I's six, and one of J's three.
 
-**The remaining nine** are one in E, five in F, one in I, and two in J.
+**The remaining ten** are one in E, five in F, one in I, two in J, and the one in K.
 
 **Group G moved from one of three to all three on 2026-09-10**, when its other two sites were
 probed. See the seventh addendum. By this document's own convention a verdict carrying no probe

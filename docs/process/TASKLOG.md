@@ -10,6 +10,23 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-10, session 65, twenty-sixth increment). THE CENSUS POPULATION WAS
+> STALE, AND THE STALE SITE WAS OURS.**
+>
+> The source has **47** construction sites; the census said 46. The opaque-width repair of
+> 2026-09-08 -- this same line of work -- added `"flat opaque field read out of bounds"`. Confirmed
+> by counting at the census's own commit and diffing the message multisets.
+>
+> **A source-derived guard existed and did not fire, by design**: its tolerance is plus or minus
+> four, and a drift of one sits inside it. An EXACT counter now sits beside it, able to be exact
+> because it reproduces the document's exclusions mechanically.
+>
+> **My first account said "every guard was green", which was wrong**; I found the tolerant guard
+> only when my edit broke its extraction. Corrected before it entered the tree.
+>
+> The new site gets a ROW (group K, not examined) rather than a guessed reclassification.
+> Population 47, examined 37, remainder ten.
+
 > **Currency note (2026-09-10, session 65, twenty-fifth increment). THE HANDOFF IS CURRENT
 > AGAIN.**
 >
