@@ -39,6 +39,96 @@ Every figure here is re-derivable by summing the per-binary result lines, which 
 produced; the earlier document records a count taken from a progress line and corrected, and that is
 the mistake being avoided.
 
+## 2026-09-09 (LATER): THE RESIDUE IS THIRTEEN, AND ALL OF IT IS A REAL WIDE-WORD DEPENDENCY
+
+**Twenty-nine repaired in total, none excluded, nothing newly broken at any step.** Measured by
+diffing the failing SETS at each stage, never by subtraction:
+
+| stage | distinct failures | binaries green |
+|---|---|---|
+| after the first repair | 36 | 98 |
+| after the second | 33 | 100 |
+| **after the third** | **13** | **102** |
+
+**The remaining thirteen are not test hygiene.** Every one was checked rather than assumed:
+
+| cause | count | verdict |
+|---|---|---|
+| a program declares `require word >= 32` | 7 | **the directive working.** These are the SELF-HOSTED STAGE SOURCES, fourteen of which declare it. The stages genuinely need 32 bits |
+| a program declares `require word >= 64` | 1 | same |
+| a test pins 64-bit semantics with a 64-bit constant | 1 | asserts `-9223372036854775808`, a value that does not exist at a sixteen-bit word. Already documented in `CLAUDE.md` |
+| a Q-format fraction is not narrower than the word | 2 | the fixed-point declaration is inadmissible at the width, by construction |
+| remainder | 2 | not individually classified here |
+
+**Making any of these pass would mean weakening a program's stated requirement, or asserting a
+64-bit value at a width that has none.** That is coverage hiding rather than repair, and it is the
+route this work refused throughout.
+
+### WHAT THIS CHANGES ABOUT THE LINE'S STANDING CLAIM
+
+The claim was *"the whole suite at a narrow width is unverified -- not shown broken, not shown
+working."* It is now sharper: **the narrow width runs everything that can run there, and what cannot
+is enumerated with a reason.** That is not the same as "the narrow widths are verified" -- see the
+limits below -- but it is no longer an open question of hygiene.
+
+### WHAT IS STILL NOT ESTABLISHED
+
+**A repaired test that passes at a narrow width may have stopped CHECKING there.** For
+`tests/composite_width_skew.rs` that was probed and the probe was INVALID: the mutation chosen fails
+at neither width, so it is not a defect that corpus detects and it established nothing. **Its
+narrow-width reach remains unverified**, and the attempt is recorded because it was nearly reported
+as evidence the corpus had gone vacuous.
+
+**What IS established for every derived target**: at the default build the derived widths are
+IDENTICAL to the hard-coded ones they replaced, so default behaviour is unchanged by construction
+rather than by observation.
+
+## 2026-09-09: NINE REPAIRED, NONE EXCLUDED — AND THE TOTAL IS A COINCIDENCE
+
+**Groups A and B are no longer wholly "test assumes a wide host".** Nine of their members are
+repaired so they RUN at a narrow width, rather than being excluded from it.
+
+| what was wrong | repair |
+|---|---|
+| three tests asserted a rejection names `word_bits_log2` | that is which check caught it, not that it was caught. At a narrow build the word already matches and the ADDRESS check fires. They now assert a width mismatch on any declared width — and not "any error", which would let an unrelated rejection pass |
+| six tests hard-coded a 64-bit word in a target whose subject is the FLOAT | the compiler refuses `word_bits_log2 = 6` against a runtime maximum of 4, so they failed on a dimension they are not about. They now take `RUNTIME_WORD_BITS_LOG2` and its siblings |
+
+**Excluding `tests/narrow_vm.rs` would have been ONE LINE** — it already excludes `narrow-word-8` —
+and would have turned six failures into silence. Exclusions compound; that route was refused.
+
+**Three of the nine were introduced by the session that repaired them.**
+`tests/flat_float_field_width.rs` and `tests/module_runtime_width_skew.rs` were added on 2026-09-09
+and hard-code a 64-bit target, failing with the identical error. **The class appeared inside its own
+audit**, which is the same shape recorded three times that day.
+
+### THE MEASUREMENT, AND WHY THE TOTAL MUST NOT BE READ AS "UNCHANGED"
+
+Diffed, not subtracted, as this document requires:
+
+| | |
+|---|---|
+| distinct failures before the last repair | 36 |
+| distinct failures after | **33** |
+| fixed | 3 |
+| **newly broken** | **0** |
+| binaries green | 98 → 100 |
+
+**The 33 above is NOT the 33 recorded elsewhere in this document.** That figure was measured on a
+tree without this session's new test files; today's is a different population that happens to total
+the same. **Reading them as "unchanged" would be a coincidence mistaken for continuity** — the error
+this document exists to prevent, which is why the earlier 41-to-33 move was established by diffing
+the failing SETS.
+
+The `narrow_vm.rs` six were measured on that file directly, six failing to none, before the
+whole-suite runs.
+
+### REACH WAS DEMONSTRATED AT THE NARROW BUILD, NOT ASSUMED
+
+A repaired test that passes at a new width may have stopped checking there. Two mutations say
+otherwise: making a target no longer wider on the float fails at BOTH widths, and the width mutation
+that takes the virtual machine's word from the runtime type still fails both axes of the skew corpus
+under `narrow-word-16`.
+
 ## Verdicts
 
 Nine groups. **Members are enumerated so the total can be re-derived by addition** rather than taken
@@ -360,3 +450,34 @@ earlier. That run had compiled against a source file being mutated for an unrela
 same moment. The figures above come from a serial re-run on a quiescent tree. **A measurement taken
 while its subject is being edited measures neither state**, and the only reason it was caught is that
 the result was implausible enough to re-examine.
+
+## Addendum, 2026-09-10: the eight-bit selectors, and the reach that was unproven
+
+The residue of thirteen and everything above it is a `narrow-word-16` measurement. Two things were
+established on 2026-09-10 that this document could not previously say.
+
+**The unproven reach is now proven, for one build.** The claim left standing was that
+`tests/composite_width_skew.rs` might run at a narrow width while exercising nothing, and that the
+probe attempted at the time was INVALID because it failed at neither width. A valid probe now
+exists. Two of the four runtime sites that ask the layout for the opaque width were reverted in turn
+to asking for a word. Each failed at the DEFAULT build, which is the control that makes the probe
+mean something, and each also failed under `narrow-word-16`. One of the two failed strictly more
+tests at the narrow width than at the default. **That build is not a degraded copy of the default
+configuration.** No reach claim is made for any other narrow selector.
+
+**The eight-bit selectors were run over this file and they are not clean.** Under `narrow-word-8`
+it loses two tests and under `narrow-address-8` it loses eight. Both losses are inadmissible by
+construction, in the same category as the seven stage sources that declare `require word >= 32`:
+
+- one corpus entry expects the value 135, which does not exist in an eight-bit word;
+- both targets the file drives declare a SIXTEEN-BIT address, which a `narrow-address-8` build
+  cannot host, so their modules are refused at compile time;
+- with the word already at the narrowest implemented width there is no narrower address, so the
+  file's own skew premise cannot be met under `narrow-word-8`. The file now says so in a test
+  rather than passing while exercising nothing.
+
+**A defect was found underneath.** The derivation that produced the skewed target clamped the
+address to a floor of 2, a four-bit address, which is not a width any runtime implements and which
+the layout sizes at zero bytes. It compiled. See
+[`TARGET_WIDTH_FLOOR.md`](./TARGET_WIDTH_FLOOR.md). The residue count above is unaffected, since
+that build was never in the swept configuration.

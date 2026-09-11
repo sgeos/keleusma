@@ -124,10 +124,15 @@ fn verify_types_kel_is_refused_at_the_chunk_that_reads_a_later_block() {
 
     // The structural claim the diagnosis rests on, checked against the source rather than
     // remembered: `ty_direct` reads `tyb`, and `tyb` is declared after it.
-    let at_fn = VERIFY_TYPES
+    // **THE ORDERING CLAIM BELOW IS THE REASON THIS STRIPS FIRST.** These positions feed an
+    // `at_fn < at_blk` assertion, so a comment naming either anchor does not merely break an
+    // extraction -- it moves a position and can change which declaration appears to come first.
+    // That would make this test assert the wrong thing about the stage rather than fail loudly.
+    let verify_types = code_only(VERIFY_TYPES);
+    let at_fn = verify_types
         .find("fn ty_direct(")
         .expect("verify_types.kel declares ty_direct");
-    let at_blk = VERIFY_TYPES
+    let at_blk = verify_types
         .find("private data tyb {")
         .expect("verify_types.kel declares the tyb block");
     assert!(
@@ -135,11 +140,11 @@ fn verify_types_kel_is_refused_at_the_chunk_that_reads_a_later_block() {
         "`tyb` is no longer declared after `ty_direct`, so the mechanism recorded here cannot \
          be what refuses this file"
     );
-    let body_end = VERIFY_TYPES[at_fn..]
+    let body_end = verify_types[at_fn..]
         .find("\n}")
         .expect("ty_direct has a body");
     assert!(
-        VERIFY_TYPES[at_fn..at_fn + body_end].contains("tyb."),
+        verify_types[at_fn..at_fn + body_end].contains("tyb."),
         "`ty_direct` no longer reads the `tyb` block"
     );
 }
@@ -177,4 +182,64 @@ fn the_corpus_covers_every_stage_except_the_one_this_file_explains() {
          JOINED it, this whole file is retired; if another stage has LEFT it, that is a \
          regression and needs its own explanation"
     );
+}
+
+/// Source with `//` line comments removed, so an anchor search matches CODE.
+///
+/// **Locating on RAW source is the defect this removes.** A comment naming the anchor sends the
+/// extraction to the comment; measured elsewhere in this repository, one such line failed four
+/// tests in a file with nothing wrong in the code it read.
+///
+/// Truncating at the first `//` rather than tracking string literals is correct for an anchor
+/// search: an early truncation can only make the anchor go missing, which fails loudly through the
+/// `expect` below. `tests/call_chunk_index_limit.rs` needs a string-aware strip instead, because its
+/// assertion is an ABSENCE one where the same truncation lets a real offender pass silently.
+/// **THE ORDERING HAZARD ABOVE, MADE CHECKABLE INSTEAD OF DESCRIBED.**
+///
+/// The comment beside the ordering assertion states that a comment naming either anchor can move a
+/// position and make the test assert the WRONG THING about the stage rather than fail loudly. That
+/// was a claim about the strip, and nothing checked it. A guard census on 2026-09-10 found this
+/// file among those documenting a hazard while recording no demonstration that its own assertion
+/// still discriminates.
+///
+/// Both directions are pinned. The first input is the one that matters: a historical note naming
+/// the LATER declaration placed BEFORE the earlier one, which on raw source inverts the order the
+/// assertion reads. The second confirms the strip has not been tightened into finding nothing,
+/// which is the way an extraction can be made comment-proof by being made useless.
+#[test]
+fn a_comment_naming_an_anchor_cannot_invert_the_declaration_order() {
+    const DECOY: &str = "// historical: `private data tyb {` used to be declared first\n\
+                         fn ty_direct( a ) {\n  tyb.x\n}\n\
+                         private data tyb {\n  x: Word\n}\n";
+    let stripped = code_only(DECOY);
+    let at_fn = stripped
+        .find("fn ty_direct(")
+        .expect("the strip removed the function declaration itself");
+    let at_blk = stripped
+        .find("private data tyb {")
+        .expect("the strip removed the data block itself");
+    assert!(
+        at_fn < at_blk,
+        "a COMMENT naming the later declaration was located as if it were the declaration, \
+         inverting the order; the ordering assertion in this file would then report a structure \
+         the stage does not have, and would report it as a pass"
+    );
+
+    const PLAIN: &str = "fn ty_direct( a ) {\n  tyb.x\n}\nprivate data tyb {\n  x: Word\n}\n";
+    let plain = code_only(PLAIN);
+    assert!(
+        plain.contains("fn ty_direct(") && plain.contains("private data tyb {"),
+        "the strip removed real code, which would make every locate in this file fail to find \
+         its anchor and the file comment-proof by finding nothing at all"
+    );
+}
+
+fn code_only(src: &str) -> String {
+    src.lines()
+        .map(|l| match l.find("//") {
+            Some(i) => &l[..i],
+            None => l,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }

@@ -100,6 +100,72 @@ A cheaper alternative that covers far more: a **build-only** matrix step running
 the five before it, at a fraction of a test job's cost, because all of them were compile failures.
 It would NOT have caught the two lex-time test failures, which need the tests to run.
 
+## A test that never runs is a guard that guards nothing
+
+The sections above ask which BUILD configurations nothing exercises. The same question applies one
+level down: **which TESTS are gated into a configuration continuous integration never builds?** A
+test file whose `#![cfg(...)]` excludes it from every job is compiled by nobody and run by nobody, and
+its presence in the tree reads as coverage.
+
+**Measured 2026-09-08, by evaluating every test file's top-level gate against the five feature sets
+continuous integration actually runs** — default; bare `--no-default-features`; `--features
+signatures`; `--features signatures,shell`; `--features self-host`, the last three additive to
+default.
+
+| | |
+|---|---|
+| test files | 105 |
+| carrying a top-level `#![cfg]` | 99 |
+| running in **no** continuous-integration configuration | **1** |
+
+**The one is `tests/float_opcode_without_floats.rs`**, gated
+`all(feature = "verify", not(feature = "floats"))`. `floats` is a default feature, so every job that
+enables `verify` also enables `floats`, and the bare job enables neither. It is **by design and
+already documented**: it pins the load-time hole that is operator decision 3, and the hole is only
+reachable on a build without floats.
+
+**Only a gate negating a DEFAULT feature can escape every job.** The `not(feature = "narrow-word-*")`
+gates that appear across the suite negate features nothing enables, so they are satisfied everywhere
+and cost nothing.
+
+### The first version of this check called a doc job coverage
+
+The guard derives the feature sets from the workflow, and its first extraction matched **any**
+`keleusma` command carrying `--features`. That swept in `cargo doc --features
+signatures,encryption,shell`, so a test gated on `encryption` was reported as covered when the doc
+job only COMPILES it and never runs it.
+
+**The mutation is what found this, by NOT failing.** A deliberately unreachable test was added and
+the guard passed. `cargo test --doc` runs doctests, not the files in `tests/`, so only `nextest run`
+lines decide which integration tests execute, and the extraction now says so.
+
+**The hand-written model was the wrong one.** A control run beforehand had asserted that `encryption`
+is never enabled in continuous integration; the derived version disagreed, and the derived version
+was closer to the truth — `encryption` IS compiled by a doc job. Both were then wrong about what
+matters, which is not compilation but execution.
+
+### The instrument, its controls, and the direction it can be wrong
+
+The gate evaluator is a small parser, so it was checked against known answers before its clean result
+was believed. Six controls: `feature = "encryption"` must be never (nothing enables it); a
+`compile`+`verify` gate must run in four jobs; the float pin must be never; a negated narrow selector
+must run everywhere; a `self-host` gate must run in exactly one job; a `shell` gate in exactly one.
+**All six matched the model they were written against** — but see above: that model omitted a doc
+job, so agreement with it was not the reassurance it looked like. The two gates carrying inline
+comments were confirmed to parse.
+
+**Its bias is toward under-reporting.** An expression it cannot interpret is treated as satisfied, so
+a gate it failed to parse would be recorded as running rather than flagged. The count is therefore a
+lower bound on files that never run, which is the wrong direction for a check of this kind — hence
+the controls, and hence the guard.
+
+### Guarded, because a new test with an unbuilt gate would be silent
+
+`the_only_test_gated_out_of_every_ci_configuration_is_the_known_one` re-runs this evaluation and
+fails if any file other than the documented exception is excluded from every job. **It derives the
+feature sets from the workflow file rather than restating them**, so adding or removing a job moves
+the check with it.
+
 ## What must not be concluded
 
 **A configuration marked ok is not a supported configuration.** It compiles. Whether its behaviour

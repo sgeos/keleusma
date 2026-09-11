@@ -169,7 +169,7 @@ branches: [main, 'v*']` triggers the full matrix, so the branch is verified on h
 
 | | local `release-gate.sh` | CI |
 |---|---|---|
-| wall clock | ~2h30m | **~48 min** (23 parallel jobs) |
+| wall clock | ~2h30m | **~61 min** (22 jobs, one of them the critical path) |
 | contends for the shared machine | **yes, exclusively** | no |
 | two sessions at once | impossible | **yes** |
 | coverage | 12 steps | **all 12, plus 10 more** |
@@ -180,6 +180,21 @@ lines. CI additionally runs Miri, two MSRV checks, `no_std`, the RTOS `thumbv8m`
 `keleusma-bench`, the SDL3 examples, the LSP, the VS Code extension and the WASM playground, none of
 which the local gate touches. The local gate was always the weaker instrument; it was merely the
 nearer one.
+
+**The wall-clock figure was measured on 2026-09-08 and had been understated.** This row read
+"~48 min (23 parallel jobs)". Five completed runs on `v0.2.3` that day took **57, 60, 61, 66 and 71
+minutes** end to end, including queue time, which is the interval that matters because it is how long
+until you know. Median 61.
+
+**The run is not bounded by its parallelism; it is bounded by ONE job.** In a representative run
+`Test (self-host feature)` took **59 minutes** and the next longest 44, across 22 jobs. Adding runners
+cannot help. **The only way to shorten CI materially is to split that job**, which is a project-level
+call and is recorded here rather than adopted.
+
+**The conclusion is unchanged and the correction is small.** Sixty-one minutes against two and a half
+hours is still roughly two and a half times faster, and CI still costs no time on the contended
+machine, so the 2026-08-11 decision stands on the same reasoning with an honest number. Five samples
+from one day, under whatever load the runners had.
 
 **The obvious objection inverts.** `perf_canary` on a shared runner is noisier than on a quiet
 desktop — but a CI false trip costs a 48-minute re-run that consumes **no local time at all**, while

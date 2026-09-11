@@ -4504,3 +4504,203 @@ fn the_moved_expression_kinds_are_exactly_four() {
          LOST, a check the type channel used to make is gone."
     );
 }
+
+/// **KIND 7, THE STRUCT LITERAL: WITHHELD, AND THIS IS THE PROOF RATHER THAN THE REASON.**
+///
+/// The reference emits `(STRUCT_LIT, declared_field_count, given_field_count)` and the stage
+/// rejects when the two differ. The pipeline's struct-literal record carries the constructed
+/// composite's **flat size in bytes** and the **given** field count. It does not carry the
+/// struct's identity, so the DECLARED count is not available, and the size is not a substitute
+/// for it.
+///
+/// # Why this is a proof and not a survey
+///
+/// Two programs below produce a **byte-identical struct-literal record** while the reference
+/// **accepts one and rejects the other**, and it rejects it for exactly the field-count reason
+/// kind 7 exists to carry. No function of that record can therefore reproduce the reference's
+/// verdict: emitting a row would either reject `A`, which is a correct program, or accept `B`,
+/// which loses the check. **Both directions are unsound**, which is the same shape that withheld
+/// the branch pair.
+///
+/// The collision is arranged rather than stumbled on. `A` has one `Word` field and `B` has eight
+/// `Byte` fields, so both composites are eight bytes wide while their declared field counts are
+/// one and eight. A size-to-count rule — the obvious way to use the datum that IS carried — is
+/// wrong on exactly this pair.
+///
+/// # What would unblock it
+///
+/// A record naming the literal's struct. `parse.kel` already resolves it, because the field
+/// records that precede the literal carry field INDICES rather than names, and only a resolved
+/// declaration can produce an index. The identity is discarded after resolution rather than
+/// unavailable. That is a record-stream change and the operator's call, not a defect.
+#[cfg(feature = "self-host")]
+#[test]
+fn a_struct_literal_record_cannot_separate_a_correct_program_from_a_field_count_error() {
+    // One `Word` field: eight bytes wide, one field declared, one field given. Well typed.
+    const ACCEPTED: &str = "struct A { a: Word }\nfn f() -> Word { let p = A { a: 1 }; 0 }\n";
+    // Eight `Byte` fields: also eight bytes wide, EIGHT declared, one given. Ill typed, and
+    // ill typed for the field-count reason specifically.
+    const REJECTED: &str = "struct B { a: Byte, b: Byte, c: Byte, d: Byte, e: Byte, f: Byte, \
+                            g: Byte, h: Byte }\nfn f() -> Word { let p = B { a: 1 }; 0 }\n";
+
+    // The reference separates them, and the corpus is not vacuous: one really is accepted.
+    assert!(
+        reference_accepts(ACCEPTED),
+        "the accepted half of the witness stopped compiling, so the pair no longer separates \
+         anything and the proof below is empty"
+    );
+    assert!(
+        !reference_accepts(REJECTED),
+        "the rejected half of the witness started compiling, so the pair no longer separates \
+         anything"
+    );
+
+    // **THE REJECTION MUST BE THE FIELD-COUNT ONE.** A witness pair that differs for some other
+    // reason proves nothing about kind 7, and the first pair drafted for this test failed exactly
+    // there: an eight-field literal of `B` is ALSO rejected, but for a Byte-versus-Word literal
+    // type error, which kind 7 has nothing to do with.
+    let message = match tokenize(REJECTED) {
+        Err(_) => panic!("the witness no longer lexes"),
+        Ok(t) => match parse(&t) {
+            Err(_) => panic!("the witness no longer parses"),
+            Ok(a) => match compile(&a) {
+                Ok(_) => panic!("the witness no longer fails to compile"),
+                Err(e) => e.message,
+            },
+        },
+    };
+    assert!(
+        message.contains("expects 8 fields") && message.contains("got 1"),
+        "the witness is now rejected for a different reason, so it no longer witnesses the \
+         field-count claim: {message}"
+    );
+
+    // The pipeline's struct-literal records. Read through `parse_record_trace`, the public
+    // instrument, rather than by reasoning about `parse.kel`'s internals -- which is how three
+    // earlier sizings of this slice went wrong.
+    let literal_records = |src: &str| -> Vec<(i64, i64)> {
+        let (_, records) = keleusma::selfhost::parse_record_trace(src);
+        records
+            .iter()
+            .filter(|(code, _, _)| *code == 27)
+            .map(|(code, value, _)| (*code, *value))
+            .collect()
+    };
+
+    let accepted_records = literal_records(ACCEPTED);
+    let rejected_records = literal_records(REJECTED);
+
+    // Non-vacuity: there IS a struct-literal record on both sides. Without this the equality
+    // below would hold trivially for two empty vectors, which is the exact shape of the two
+    // vacuous coverage assertions this file's history records.
+    assert_eq!(
+        accepted_records.len(),
+        1,
+        "the accepted witness no longer emits exactly one struct-literal record"
+    );
+    assert_eq!(
+        rejected_records.len(),
+        1,
+        "the rejected witness no longer emits exactly one struct-literal record"
+    );
+
+    assert_eq!(
+        accepted_records, rejected_records,
+        "the struct-literal record now DISTINGUISHES a correct program from a field-count error. \
+         That is the thing kind 7 was withheld for lacking, so this is good news and not a \
+         regression: re-read the blocker above, and if the record now carries the struct's \
+         identity or its declared field count, kind 7 can move."
+    );
+}
+
+/// **KINDS 5 AND 6, FIELD AND INDEX ON A VALUE: WITHHELD, AND FOR A BLUNTER REASON THAN KIND 7.**
+///
+/// These two kinds exist to reject a field access or an index applied to something scalar. The
+/// reference emits the row **only** on programs it already rejects, and hardcodes a known scalar
+/// tag so that `ty_node_bad` refuses: the extractor decides and the stage obeys.
+///
+/// **The pipeline never reaches the point of deciding.** On every program these kinds exist to
+/// catch, reconstruction refuses outright — the record stream does not reduce to one node — so
+/// there is no forest to extract a row from. The obstacle is not a missing field in a record, as
+/// it is for kind 7; it is that the input never becomes a tree.
+///
+/// # Proportionality, stated because a panic in a public function reads worse than it is
+///
+/// `expression_rows_from_pipeline` **panics** on these inputs rather than returning. That is
+/// reachable by a direct caller of the extraction API. It is **not** reachable through the
+/// shipping compiler: `self_hosted_compile` compiles with the reference FIRST and surfaces the
+/// reference's own error when the reference rejects, so none of these programs reaches the
+/// pipeline at all, and it wraps the pipeline in `catch_unwind` besides. Two independent
+/// defences, neither of which this test relies on.
+///
+/// # What this test would catch
+///
+/// If reconstruction later admits these programs, the assertion below fails. That is the signal
+/// to re-read the blocker, because a forest existing is the precondition for kinds 5 and 6 —
+/// though not on its own a licence to emit them, since the row must still be shown incapable of
+/// rejecting a correct program.
+#[cfg(feature = "self-host")]
+#[test]
+fn a_field_or_index_on_a_scalar_is_refused_before_any_row_could_be_extracted() {
+    // Each is rejected by the reference, and each is the shape of a kind-5 or kind-6 row.
+    const WITNESSES: &[(&str, &str)] = &[
+        (
+            "field access on a scalar, naming a field that exists on some struct",
+            "struct P { a: Word, b: Word }\nfn f() -> Word { let d: Word = 7; d.a }\n",
+        ),
+        (
+            "field access on a scalar, naming a field no struct declares",
+            "fn f() -> Word { let d: Word = 7; d.q }\n",
+        ),
+        (
+            "index applied to a scalar",
+            "fn f() -> Word { let d: Word = 7; d[0] }\n",
+        ),
+    ];
+
+    // A control, so this test cannot pass by the extraction being broken for everything. The
+    // absence of one is how a guard comes to assert nothing.
+    const CONTROL: &str = "fn f() -> Word { let d = [1, 2, 3]; d[0] }\n";
+    assert!(
+        reference_accepts(CONTROL),
+        "the control stopped compiling, so the extraction check below separates nothing"
+    );
+    let (control_rows, _) = keleusma::selfhost::expression_rows_from_pipeline(CONTROL);
+    assert!(
+        !control_rows.is_empty(),
+        "the extraction returned no rows for a program it handles, so its failing on the \
+         witnesses below says nothing about those witnesses"
+    );
+
+    // Suppress the default panic output for the duration: three deliberate panics would otherwise
+    // print three backtraces into a passing test's log and read as failures.
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let outcomes: Vec<(&str, bool, bool)> = WITNESSES
+        .iter()
+        .map(|(label, src)| {
+            let accepted = reference_accepts(src);
+            let owned = (*src).to_string();
+            let extracted = std::panic::catch_unwind(move || {
+                keleusma::selfhost::expression_rows_from_pipeline(&owned)
+            })
+            .is_ok();
+            (*label, accepted, extracted)
+        })
+        .collect();
+    std::panic::set_hook(previous);
+
+    for (label, accepted, extracted) in outcomes {
+        assert!(
+            !accepted,
+            "`{label}` is now accepted by the reference, so it no longer witnesses a kind-5 or \
+             kind-6 rejection"
+        );
+        assert!(
+            !extracted,
+            "`{label}` now reconstructs, so the recorded blocker for kinds 5 and 6 is stale. \
+             Re-read it: a forest existing is the precondition for these kinds, but emitting the \
+             row still requires showing it cannot reject a correct program."
+        );
+    }
+}

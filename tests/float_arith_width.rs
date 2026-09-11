@@ -1,5 +1,16 @@
 //! Arithmetic honours the module's DECLARED float width, not the runtime's.
 //!
+//! # THE WORD AND ADDRESS ARE A NEUTRAL BACKDROP, AND ARE DERIVED
+//!
+//! Every target here varies ONE dimension, the float; the word and address are only there to make
+//! a valid descriptor. Hard-coded at 64 bits they made the compiler refuse the whole target under
+//! `narrow-word-16` — runtime maximum 4 — so all fourteen tests failed on a dimension none of them
+//! is about, and the file could not run at a narrow width at all.
+//!
+//! **The declared-versus-runtime float skew survives the change**, which is the property: a narrow
+//! WORD build does not narrow the FLOAT runtime, so declaring a 32-bit float against an `f64`
+//! runtime still separates declared from actual at every width.
+//!
 //! # Why a test at the default width would prove nothing
 //!
 //! When the declared and runtime widths are equal, the narrowing is the
@@ -82,8 +93,8 @@ use keleusma::vm::{DEFAULT_ARENA_CAPACITY, GenericVm, GenericVmState};
 /// narrowing with float narrowing. This isolates the variable.
 fn f32_declaring_target() -> Target {
     Target {
-        word_bits_log2: 6,
-        addr_bits_log2: 6,
+        word_bits_log2: keleusma::bytecode::RUNTIME_WORD_BITS_LOG2,
+        addr_bits_log2: keleusma::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
         float_bits_log2: 5,
         has_floats: true,
         has_strings: false,
@@ -101,6 +112,87 @@ fn run_f64_runtime_narrow_module(src: &str) -> f64 {
     match vm.call(&[]).expect("call") {
         GenericVmState::Finished(GenericValue::Float(f)) => f,
         other => panic!("unexpected result: {other:?}"),
+    }
+}
+
+/// The same module on a runtime whose float IS the declared width.
+///
+/// # Why this exists, added 2026-09-10
+///
+/// Every test in this file runs the narrow module on ONE runtime, the 64-bit
+/// one, because that is the configuration the narrowing defect lived in. That
+/// establishes the declared width governs THERE. It does not establish that the
+/// answer is independent of the runtime, which is the actual claim the phrase
+/// "honours the module's declared width" makes.
+///
+/// **The two authorities are the point.** A width is carried by the module
+/// header and by the runtime type parameter, and if the declared one governs
+/// then a declared-`f32` module must produce a BIT-IDENTICAL answer on an `f32`
+/// runtime and on an `f64` one. If the runtime's width leaked into the result,
+/// these witnesses are exactly where it would show, because each was chosen so
+/// the two widths disagree.
+fn run_f32_runtime_narrow_module(src: &str) -> f64 {
+    let tokens = tokenize(src).expect("lex");
+    let program = parse(&tokens).expect("parse");
+    let module = compile_with_target(&program, &f32_declaring_target()).expect("compile");
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    type NarrowFloatVm<'a, 'arena> = GenericVm<'a, 'arena, i64, u64, f32>;
+    let mut vm: NarrowFloatVm<'_, '_> = NarrowFloatVm::new(module, &arena).expect("new");
+    match vm.call(&[]).expect("call") {
+        GenericVmState::Finished(GenericValue::Float(f)) => keleusma::float::Float::to_f64(f),
+        other => panic!("unexpected result: {other:?}"),
+    }
+}
+
+/// **THE DECLARED WIDTH GOVERNS, AND THE RUNTIME'S DOES NOT LEAK IN.**
+///
+/// Each source below is a witness this file already established as
+/// width-discriminating: its `f64` result differs from its `f32` result, so a
+/// runtime-dependent answer cannot hide. Both runtimes must give the `f32`
+/// answer, and the vacuity check is re-asserted here rather than inherited, so
+/// a witness that stopped discriminating would fail loudly instead of making
+/// this test agree trivially.
+#[test]
+fn the_two_runtimes_agree_because_the_declared_width_governs() {
+    let cases: &[(&str, f64, &str)] = &[
+        (
+            "fn main() -> Float { 3.3936846256256104 + 1.9961878061294556 }",
+            3.3936846256256104_f64 + 1.9961878061294556_f64,
+            "Add",
+        ),
+        (
+            "fn main() -> Float { 0.06273018568754196 - 2.452693223953247 }",
+            0.06273018568754196_f64 - 2.452693223953247_f64,
+            "Sub",
+        ),
+        (
+            "fn main() -> Float { 0.0 - 2.522717237472534 * 2.1696574687957764 }",
+            0.0_f64 - 2.522717237472534_f64 * 2.1696574687957764_f64,
+            "Mul",
+        ),
+        (
+            "fn main() -> Float { 1.0390617847442627 / 3.223663330078125 }",
+            1.0390617847442627_f64 / 3.223663330078125_f64,
+            "Div",
+        ),
+    ];
+    for (src, wide, op) in cases {
+        assert_ne!(
+            *wide, *wide as f32 as f64,
+            "{op}: the witness no longer discriminates the two widths, so this test would agree \
+             for the wrong reason"
+        );
+        let on_wide = run_f64_runtime_narrow_module(src);
+        let on_narrow = run_f32_runtime_narrow_module(src);
+        assert_eq!(
+            on_wide, on_narrow,
+            "{op}: the same module gave different answers on an f64 and an f32 runtime, so the \
+             RUNTIME's float width is reaching the result and the declared width does not govern"
+        );
+        assert_eq!(
+            on_narrow, *wide as f32 as f64,
+            "{op}: both runtimes agreed, but on the WIDE answer, so neither narrowed"
+        );
     }
 }
 
@@ -338,8 +430,8 @@ fn every_encodable_float_width_is_classified_and_none_is_skipped() {
 
     for bits in 0u8..=6 {
         let target = Target {
-            word_bits_log2: 6,
-            addr_bits_log2: 6,
+            word_bits_log2: keleusma::bytecode::RUNTIME_WORD_BITS_LOG2,
+            addr_bits_log2: keleusma::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
             float_bits_log2: bits,
             has_floats: true,
             has_strings: false,
@@ -420,8 +512,8 @@ fn every_encodable_float_width_is_classified_and_none_is_skipped() {
 fn a_target_claiming_floats_at_a_non_format_width_is_refused() {
     for bits in [0u8, 1, 2, 3, 4] {
         let target = Target {
-            word_bits_log2: 6,
-            addr_bits_log2: 6,
+            word_bits_log2: keleusma::bytecode::RUNTIME_WORD_BITS_LOG2,
+            addr_bits_log2: keleusma::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
             float_bits_log2: bits,
             has_floats: true,
             has_strings: false,
@@ -443,8 +535,8 @@ fn a_target_claiming_floats_at_a_non_format_width_is_refused() {
 fn a_target_claiming_floats_at_a_real_width_still_compiles() {
     for bits in [5u8, 6] {
         let target = Target {
-            word_bits_log2: 6,
-            addr_bits_log2: 6,
+            word_bits_log2: keleusma::bytecode::RUNTIME_WORD_BITS_LOG2,
+            addr_bits_log2: keleusma::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
             float_bits_log2: bits,
             has_floats: true,
             has_strings: false,
@@ -466,8 +558,8 @@ fn a_target_claiming_floats_at_a_real_width_still_compiles() {
 #[test]
 fn the_no_floats_sentinel_still_compiles_a_float_free_program() {
     let target = Target {
-        word_bits_log2: 6,
-        addr_bits_log2: 6,
+        word_bits_log2: keleusma::bytecode::RUNTIME_WORD_BITS_LOG2,
+        addr_bits_log2: keleusma::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
         float_bits_log2: 0,
         has_floats: false,
         has_strings: false,

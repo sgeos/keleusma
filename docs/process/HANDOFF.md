@@ -5,224 +5,260 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-09-08 (session 63 CLOSE).** Validate by the ANCESTRY and CONTENT block below,
+> **REFRESHED 2026-09-10 (session 65, after the twenty-fourth increment).** Validate by the
+> ANCESTRY and CONTENT block below,
 > not by a hash: a refresh takes more than one commit, so any hash written here is stale by one the
 > moment it is written.
 >
-> ## HOW TO READ WHAT SESSION 63 LEFT YOU
+> ## THE FOUR DECISIONS ARE THE OPERATOR'S, NONE HAS MOVED, AND THEY LEAD FOR A REASON
 >
-> **Distrust any conclusion in these documents whose instrument was never made to misbehave.** Six
-> of session 63's own instruments and figures were wrong, and **every one failed the same way: it
-> reported a clean or confident result about something it never touched.** A sweep column listed
-> WARNING locations under a PASSING verdict. A mutation test was aimed at the wrong call site and
-> PASSED, which would have recorded a mechanism doing none of the work credited to it. A probe
-> mutated an opcode its program did not contain and called the untouched module "admitted". A count
-> was read off a progress line. A remainder list omitted an entire group. A mechanism was nearly
-> credited from a filename.
+> **CORRECTED 2026-09-10: THIS SENTENCE WAS TOO STRONG AND IT SHAPED A WHOLE SESSION.** It read
+> *"the large remaining work is blocked on these and the small remaining work is not worth choosing
+> over them."* The four decisions block the LANGUAGE-SURFACE work they name -- programs using
+> `Text<N>`, the width API, the float-verify semantics, a build's continuous-integration cost.
+> **They do not block Order 1**, which `../roadmap/V0_2_X_ROADMAP.md` identifies as the largest
+> remaining workstream and whose own cell says what stands in the way is *"integration, not
+> invention"*:
 >
-> **Not one was caught by re-reading.** All six were caught by making the instrument fail on purpose,
-> or by re-deriving a number from its parts. So the rule this file already carried -- *a guard that
-> has not been made to fail is a guess* -- reaches further than it was being applied: **an
-> explanation is a guess too, and so is a measurement.**
+> - **The remaining region kinds.** The module-driven emit path covers FOUR of twenty, and not
+>   equally: `NAMES` and `STRING_POOL` are COMPUTED, `HEADER` is encoded but NOT derived, and
+>   `CHUNKS` is mixed per field with ten fields per record host-supplied.
 >
-> **Four operator decisions are queued and none is mine.** They are listed below. Nothing large
-> should start before they are answered, because each one changes what the work is.
+>   **The first version of this bullet also listed two capacity limits -- `parse` at 94 chunks
+>   against a 90-record batch, and `wire.kel` at 1,148 nodes against a 1,024-node walk cap -- and
+>   BOTH ARE REMOVED.** I copied them from the roadmap cell without checking, in the same increment
+>   that corrected a different staleness. The windowed path reaches all eleven stages: the chunk
+>   region became a STREAM so the batch cap is gone rather than larger, and the `wire` refusal was a
+>   guard comparing against the wrong bound. Corrected in the roadmap too, since that is where the
+>   figure was copied from.
+> - **Source types.** Type rejection reaches only literal, direct occurrences, because no stage
+>   computes source types and `parse.kel` says so in its own comment. That is a missing pipeline
+>   capability rather than a missing rule.
 >
-> ## THE FOUR DECISIONS, ALL THE OPERATOR'S, IN ONE PLACE
+> The roadmap also carries FOUR OPEN DECISIONS OF ITS OWN -- cryptography locus, meta-circular
+> bound composition, version granularity, reference retirement -- and they are a different four.
+> None of them blocks Order 1 either.
 >
-> Each was reached by trying, not by planning, so none is a guess about what would be hard.
+> **Session 65 ran twenty-eight increments of verification work under the mistaken framing**, and
+> that work stands: it found a real runtime defect and corrected several claims. But a resuming
+> agent should not infer from it that the roadmap is blocked. **No guard catches this**, because it
+> is a judgement rather than a figure, which is why it survived a refresh of this very file.
 >
-> **1. How does a value ENTER a `Text<N>`?** The type is built to its front door -- refusals below
-> it, flat layout, distinct nominal type, zero value cross-checked. A spike removed the refusals and
-> the compiler said `let binding declared as Text<8> but value has type Text`: the distinct-type
-> increment WORKING. `GRAMMAR.md` forbids implicit coercion, so emission needs a surface form, and
-> which one is open question 2 in `../decisions/TEXT_CAPACITY_TYPE.md`. **Do not pick it
-> unilaterally** -- it appears in every program anyone writes with the type.
+> The decisions below remain the operator's and none has moved.
 >
-> **2. Is the width bundle worth a breaking change?** `addr_bytes` is taken by 33 signatures across
-> five files, **14 of them public**, in a crate published at 0.2.2.
+> 1. **How does a value ENTER a `Text<N>`?** It appears in every program anyone writes with the
+>    type. Open question 2 in `../decisions/TEXT_CAPACITY_TYPE.md`.
+> 2. **Is the width bundle worth a breaking change?** 33 signatures, 14 public, published crate.
+> 3. **Should `verify()` refuse float opcodes when the `floats` feature is absent?** Evidence
+>    COMPLETE: ten lines, prototyped, **zero new failures**, and the semantic worry is moot because
+>    the lexer refuses float literals in that build. Unlanded only because a merged document said it
+>    was the operator's call, and a deferral is worth something only if honoured. **This is the cheap
+>    one.**
+> 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
+>    the WIDTH axis, unchanged on the FEATURE axis.
 >
-> **3. Should `verify()` refuse float opcodes when the feature is absent?** Evidence is COMPLETE:
-> the repair is about ten lines, was prototyped, introduces **zero new failures** across the full
-> `--no-default-features --features compile,verify` suite, and the one semantic worry is moot --
-> the LEXER refuses float literals there, so only imported bytecode is affected, which is exactly
-> where load-time refusal is right. **It is not landed because I said it was your call in a merged
-> document**, and a deferral is worth something only if it is honoured.
+> Two smaller API-shaped observations sit beside them, recorded and not repaired: a hot-swap site and
+> a codec conversion each report a fault as `InvalidBytecode` when the artefact was fine. Changing
+> which variant a public API returns is a breaking change.
 >
-> **4. Does any build configuration earn a continuous-integration job?** Three of eleven feature
-> configurations and **zero of ten narrow selectors** are built by anything. Two options are costed
-> in `../decisions/FEATURE_COMBINATION_SWEEP.md` and **neither is adopted**: a per-push cost is a
-> project-level call.
+> ## WHAT HAPPENED AFTER THE LAST REFRESH: NINE MORE INCREMENTS, AND ONE REAL DEFECT
 >
-> ## READ FIRST: A HOLE IN THE LOAD-TIME GUARANTEE IS PINNED OPEN, DELIBERATELY
+> The section below this one describes increments one to fifteen and is still accurate. This
+> section covers sixteen to twenty-four, which the previous refresh predates entirely.
 >
-> **A float-using module verifies, loads, and then traps `InvalidBytecode` on a runtime built
-> without the `floats` feature.** That error asserts the artefact should never have been produced,
-> which is the class `verify()` exists to exclude, so it is a hole in the guarantee rather than a bad
-> program. Nothing is corrupt: an embedded target omitting floats is the POINT of the feature.
+> **A RUNTIME DEFECT, FOUND UNDER A REACH THAT WAS RECORDED AS UNPROVEN.**
+> `Target::validate_against_runtime` checked that the word, address and float widths did not EXCEED
+> the runtime's and never checked the other end. A target with `addr_bits_log2 = 2` compiled; the
+> layout sizes an opaque by the ADDRESS width, four bits is zero bytes, and the fault surfaced at
+> run time as `InvalidBytecode("NewComposite flat operand on non-flat values")`, naming neither the
+> width nor the target. **The floor argument was already in the tree, twice, applied to the FLOAT
+> width only.** Both floors now come from the trait impls rather than literals. See
+> `../decisions/TARGET_WIDTH_FLOOR.md`.
 >
-> Two independent reasons nothing catches it earlier. `verify.rs` has **no `floats` gating at all**,
-> and `RUNTIME_FLOAT_BITS_LOG2` is not gated either, so a no-floats build advertises the full width
-> and the header comparison passes.
+> **It was found by a derivation that produced one, and the derivation was this line's own** — a
+> clamp with a floor of 2, written in the narrow-width work, in the file whose subject is width
+> disagreement. **Sixth instance in the session of the class under repair appearing inside the
+> repair.**
 >
-> **Do not "just fix it" without reading why it was left.** The repair is about ten lines in
-> `verify()`, was prototyped, validated the pin, and was reverted. **Continuous integration does not
-> run this feature set** — all three it runs include floats — so it would be exercised only by the
-> release gate's `--no-default-features` step. It is queued for the operator in `REVERSE_PROMPT.md`.
+> | increment | result |
+> |---|---|
+> | the unproven narrow-width REACH | **proven for `narrow-word-16`**, two site mutations each with a control at the default build |
+> | the parity guard's SILENT direction | measured; with the strip disabled the same mutation reports `ok`, so the strip is load-bearing |
+> | `GUARD_REACH_CENSUS.md` | population derived from git; **every entry now rests on a demonstrated check or a measured argument that none is possible** |
+> | the target-DESCRIPTOR axis | **21504 cells**, all ran and correct, three independently derived counts agreeing |
+> | the RUNTIME authority | swept too; a module wider than its runtime is refused, and the loads match a per-cell prediction exactly |
+> | the float width | swept from both sides, and a declared-`f32` module must agree bit-for-bit on an `f32` and an `f64` runtime |
+> | the census's indirect sites | **enumerated**: six in `src/vm.rs`, four in `src/marshall.rs` |
+> | census group G | both remaining sites probed; **neither reaches `InvalidBytecode`** |
 >
-> Pinned by `tests/float_opcode_without_floats.rs`. The class is enumerated in
-> `../decisions/INVALID_BYTECODE_CENSUS.md`: **46 sites**, of which 34 carry an examined verdict
-> (this line said 17 and 29 until 2026-09-08, an early figure the same file then contradicted five
-> lines later; the census's per-group column is the authority).
-> **No site is claimed unreachable**, and a guard keeps the document from drifting from the tree.
+> **WHAT IS NOT ESTABLISHED, CARRIED FORWARD RATHER THAN SUMMARISED AWAY.** The descriptor sweep's
+> corpus is fourteen shapes, which is not every construct. Reach is proven at `narrow-word-16` and
+> at no other narrow selector. The census's source-derived population remains a LOWER BOUND, and no
+> group carrying a probe count is closed by any of this. Groups F and J remain, and one member each
+> of E and I, none of them individually named in the document.
 >
-> ## THE TWO CENSUSES, AND THE PROCEDURAL RULE ONE OF THEM PAID FOR THREE TIMES
+> ## THE FOUR CORRECTIONS THAT COST MORE THAN THE FINDINGS
 >
-> **`InvalidBytecode` sites: 34 of 46 examined**, twelve named group by group. Four are ADMITTED at
-> load and trap at the call -- a reserved immediate, an unrecognised trap kind, the module-level
-> `entry_point` past the chunk count, and a native index past its table. **All four need a corrupt
-> artefact, so all are defence in depth.** The float case above is the ONLY one where a module the
-> compiler itself produced verifies, loads, and traps, and keeping that distinction visible is why
-> the others are reported quietly.
+> 1. **A widened corpus found nothing and corrected a claim anyway.** Adding seven shapes produced
+>    the same twelve findings on the same one shape — and two of the additions also STRIDE, so the
+>    same-day characterisation that striding is what exposes the defect was wrong. The element must
+>    itself contain the address-sized scalar.
+> 2. **A gap I named was mostly not a gap.** "Float arithmetic across a width-mismatched pair is
+>    unswept" described the SWEEP, not the tree: `tests/float_arith_width.rs` covers it, mutation-
+>    tested over eight of ten narrowing sites. **A limitation of an instrument is not a limitation
+>    of the tree.**
+> 3. **A vacuous guard was reverted rather than shipped.** Two attempts at a guard for
+>    `composite_escape_routes.rs` could not be made to fail; that file is safe by construction, by
+>    measurement. **A test that cannot fail is worse than no test, because it reads as coverage.**
+> 4. **An instrument defect cost an hour.** Two concurrent gates appended to one status file, so no
+>    line was attributable, and then a script was edited while executing.
+>    `scripts/gate-in-worktree.sh` already solves this and was not used; its warning that killing
+>    the driver leaves cargo children reparented was also correct in detail.
 >
-> **Discard arms: 17 of 19**, up from 14. Two remain, both a `rd_diag` closure reading a diagnostic
-> slot written as an integer by construction; **no fixture hypothesis exists and none should be
-> invented.**
+> ## TWO CURRENCY GUARDS FIRED, AND BOTH WERE RIGHT
 >
-> **THE RULE THAT CENSUS PAID FOR THREE TIMES**, and which is worth more than either count:
+> `tests/claimed_counts.rs` reported `CLAUDE.md` stating 101 test files against a tree of 112, and
+> later refused the census edit because removing group G's probe count moved the examined total
+> from thirty-five to thirty-seven. **Re-derived in both places rather than adjusted in one** — the
+> exact failure the second guard's message names. Current figures, measured: **1282 lib tests under
+> `self-host`, 1275 default, 1327 integration `#[test]` functions across 112 files.**
 >
-> > **Trace an arm's callers up to a PUBLIC ENTRY POINT before reporting it unreached.**
+> ## WHAT SESSION 65'S FIRST FIFTEEN INCREMENTS DID, IN THREE LINES OF WORK
 >
-> Three false zeros came from the same cause -- arm 18, the `*_from_pipeline` family, and arm 9 --
-> each an arm reported unreached because the census never called its DRIVER. The lesson was written
-> down after the first and repeated twice anyway, which is the argument for making it procedural
-> rather than remembered. Pass five's published conclusion that "the entry-point gap is closed" was
-> **refuted** by arm 9 firing sixty times; the claim is left in place with a marker because the
-> reasoning that produced it is the transferable part.
+> | line | result |
+> |---|---|
+> | four MEASUREMENT classes | every one **clean**, each with a guard shown able to fail |
+> | the COMMENT-MATCHING guard class | **NINE guards repaired**, swept mechanically, closed in `../decisions/COMMENT_MATCHING_GUARD_SWEEP.md` |
+> | the NARROW-WIDTH suite | **twenty-nine failures repaired, NONE excluded**; 36 to 13 |
 >
-> **And closing an arm needs BOTH halves.** Arm 11 needed the right entry point (four levels up) AND
-> the right fixture (a float constant). Either alone measures nothing.
+> | measurement increment | result |
+> |---|---|
+> | the three COMPOSITE expression kinds | all three **WITHHELD**, each with an executable witness |
+> | the FLOAT flat-field class | **clean**, and the audit's scope argument that excluded it was FALSE |
+> | the module-versus-runtime width skew, WORD and ADDRESS | **clean**, including the axis the opaque defect lived on |
+> | the counter class the `forin_count` defect belonged to | **clean**, and now guarded |
 >
-> ## AND NINE OF ELEVEN BUILD CONFIGURATIONS ARE BUILT BY NOTHING
+> ## THE THIRD LINE: THE NARROW WIDTH RUNS WHAT CAN RUN THERE
 >
-> The float hole above lived in a configuration nothing built, so eleven plausible configurations
-> were swept. **Three are covered** — default, bare no-default, the broad docs.rs surface — and the
-> rest are verified by nothing. `--features compile` did not compile at all; repaired.
+> The standing claim was *"the whole suite at a narrow width is unverified -- not shown broken, not
+> shown working."* **36 -> 33 -> 13**, binaries green 98 to 102, **nothing newly broken at any
+> step**, every figure from **diffing the failing SETS** rather than subtracting.
 >
-> **A job named for a feature need not cover it**: continuous integration's `--features signatures`
-> is ADDITIVE to the defaults, so signatures-alone is unbuilt. A standing property, not an incident.
+> **NOT ONE TEST WAS EXCLUDED, AND THE EASY ROUTE WAS AVAILABLE THROUGHOUT.** `tests/narrow_vm.rs`
+> already excludes `narrow-word-8`; one line would have extended that and turned six failures into
+> silence. Exclusions compound.
 >
-> An addition to continuous integration is **recommended with its cost and deliberately not
-> adopted** — that is the operator's call. See `../decisions/FEATURE_COMBINATION_SWEEP.md`, which
-> also states the sweep's limit: `cargo check --tests` shows a configuration COMPILES and no more.
+> **The thirteen that remain are REAL wide-word dependency, checked rather than assumed.** Seven are
+> programs declaring `require word >= 32` -- and those programs are the SELF-HOSTED STAGE SOURCES,
+> fourteen of which declare it. One asserts a 64-bit constant that does not exist at sixteen bits.
+> **Making any of them pass would weaken a program's stated requirement.**
 >
-> **The narrow selectors are the same story and were swept too**: ten compile, none is verified by
-> anything. Running the suite at a 16-bit word gives 89 passing and 15 failing binaries, but the
-> failures share a PREMISE — the suite assumes a 64-bit host, down to a canary whose own constant
-> `1234567` cannot exist at that width. So the WHOLE SUITE AT a narrow width is **unverified:
-> neither shown broken
-> nor shown working.** Making the suite run there is a project, not an increment, and is not
-> recommended without deciding it is worth the cost.
+> **The claim is sharper, not closed**: the narrow width runs everything that can run there, and what
+> cannot is enumerated with a reason. That is NOT "the narrow widths are verified" -- one corpus's
+> narrow-width REACH is unproven, and the probe that would have shown it was INVALID, failing at
+> neither width. Recorded because it was nearly reported as evidence the corpus had gone vacuous.
 >
-> ## THE QUEUE IS OTHERWISE EMPTY
+> **What IS established for every derived target**: at the default build the derived widths are
+> IDENTICAL to the hard-coded ones they replaced, so default behaviour is unchanged by construction
+> rather than by observation.
 >
-> **No open pull request, clean tree, nothing unpushed**, and every post-merge run on the version
-> branch green. The four decisions above are the whole of what blocks large work; this section used
-> to state two of them at length and is folded into that list so a reader meets them once.
+> ## THE SECOND HALF: GUARDS THAT MATCHED PROSE
 >
+> The tree had recorded FOUR instances of a guard matching text it was never meant to read. Two more
+> were found by reading, which raised the real question: **how many are there?** Deriving the
+> population mechanically — test files that read source and search it for a code-shaped literal —
+> found THIRTEEN. **Nine were exposed.**
+>
+> **THE DIRECTION RULE IS THE TRANSFERABLE PART.** The right comment-strip is not the same for every
+> guard, and choosing by appearance is wrong in both directions:
+>
+> | assertion | what an early truncation costs |
+> |---|---|
+> | **ABSENCE** | a missed offender **passes silently** — needs a string-aware strip |
+> | PRESENCE, anchor, count | **fails loudly** — the naive strip is correct |
+>
+> Only ONE of the nine needs the complex form. **They are deliberately not unified**; sharing a
+> helper would add cost to eight and remove a needed guard from one.
+>
+> **THREE FILES DOCUMENTED THE HAZARD IN THEIR OWN PROSE AND GUARDED ONE OF TWO READERS ANYWAY.**
+> The failure is not ignorance of the hazard.
+>
+> **AND THE DEFECT WAS COMMITTED INSIDE ITS OWN FIX**: an edit removing this shape mixed stripped
+> and raw offsets and had to be caught by running the tests. **That is the evidence the class is
+> mechanical rather than a lapse of attention**, and it is why a mechanical sweep found what four
+> documented prior incidents had not.
+>
+> ## WHAT I GOT WRONG, RECORDED BECAUSE THE CORRECTIONS COST SOMETHING
+>
+> | claim | outcome |
+> |---|---|
+> | a red CI job was the FEATURE-SET trap | **wrong** — the same test fails under default features; the real cause was running the guards BEFORE the last edit |
+> | "every guard I wrote had a first-draft defect" | **overstated** — four of seven |
+> | two jobs looked STUCK at 90 minutes | **wrong baseline** — those two take 60 minutes each; ~52 had elapsed |
+>
+> **AND I FIXED WHAT THE GUARD CAUGHT, NOT THE CLASS.** The citation guard scans two documents,
+> flagged two bare file names in one, and I corrected exactly those — leaving the identical names in
+> the task log's newest note because nothing pointed at them. Same one-of-two-sites shape, committed
+> while cataloguing it.
+>
+> **A negative with demonstrated reach is a result; a negative without one is silence dressed as a
+> result.** Every corpus here was made to fail before its passing was believed, and the first float
+> probe written was exactly that silence until it was mutated.
+>
+> ## THE THREE THINGS WORTH MORE THAN THE FINDINGS
+>
+> **ONE. AN AUDIT'S SCOPE ARGUMENT WAS AN INSTANCE OF THE ERROR IT WAS AUDITING.**
+> `FLAT_FIELD_WIDTH_AUDIT.md` justified examining only the opaque field by saying every other kind
+> is a function of the word or float width, *"so a site assuming a word is correct for them."* False
+> for `Float`, whose width is selected independently — **the exact coincidence that hid the opaque
+> defect**. The scope was right and the argument for it repeated the mistake. Corrected in place.
+>
+> **TWO. A COHERENT MUTATION IS AN EQUIVALENT MUTATION, AND IT LOOKS LIKE A PASSING TEST.**
+> Mis-sizing the LAYOUT changes nothing observable, because the compiler's baked offsets and the
+> runtime's strides both derive from it and move together. **That coherence is precisely what the
+> opaque field lacked.** A width defect needs TWO AUTHORITIES, and the module header versus the
+> runtime type parameter is where they come from. The load check refuses a module WIDER than the
+> runtime and admits one NARROWER, so a module compiled small and run on a large host is the
+> configuration that exposes them. **Every configuration in `composite_width_skew.rs` is MATCHED and
+> therefore cannot.**
+>
+> **THREE. A GUARD MUTATION-TESTED AGAINST A HISTORICAL DEFECT IS A DIFFERENT OBJECT.** The invented
+> mutation asks whether a guard *can* fail. The historical one asks whether it would have earned its
+> cost. `tests/selfhost_counter_reset.rs` was tested by **deleting the 2026-08-27 repair**, which
+> reproduces the `forin_count` defect and makes the guard name the field.
+>
+> ## WHAT WAS PREDICTED WRONG, AND WHAT WAS HYPOTHESISED WRONG
+>
+> Recorded because they were written down BEFORE measuring and are not revised to match.
+>
+> | claim | outcome |
+> |---|---|
+> | kind 7 (struct literal) **moves** — the declared count is on the wire | **wrong**, it is not on the wire at all |
+> | kinds 5 and 6 blocked on a missing ANNOTATION record | verdict right, **mechanism wrong** — the pipeline refuses the whole program |
+> | the width survivors are BOXED, so both widths agree | **wrong**, all shapes are flat |
+> | the survivors read zero neighbours and are right by luck | **wrong**, a non-zero neighbour changes nothing |
+>
+> **The boxing hypothesis was the likely one and the explanation was already written down in a
+> sibling test**, which records that a boxed composite agrees on both runtimes. Checking it stopped a
+> plausible wrong cause entering the tree — the way two of the four `wire.kel` causes were first
+> diagnosed.
+>
+> ## ONE OPEN QUESTION LEFT DELIBERATELY OPEN
+>
+> Two word cases — an array element and a byte-leading struct — do not separate a word-width
+> divergence. **Three hypotheses excluded, mechanism unestablished.** What IS established is a
+> characterization covering every case measured: all-`Word` composites read past their first field
+> separate; first fields, byte-leading structs and array elements do not. **That is a stated LIMIT,
+> not a defect** — every shape answers correctly on the unmutated tree.
+>
+> ## THE PROCESS FACT THIS SESSION ADDED
+>
+> **A CANCELLED RUN LEAVES `gh pr checks` REPORTING NOTHING, AND A WAITER KEYED ON "NOTHING PENDING"
+> CALLS THAT GREEN.** Written into a waiter in this session despite the rule being in this very file.
+> Requiring a POSITIVE pass count is the fix. Also met again: `gh run list --branch` returned zero
+> runs for a branch that had one, and a stale trunk list, in the same call — **check the instrument
+> before doubting the result.**
 
-> ## `Text<N>` IS BUILT UP TO ITS FRONT DOOR
->
-> Four increments merged: the type surface refused everywhere below it; the flat layout, a
-> word-sized length followed by exactly `N` content bytes, reusing existing descriptors with no new
-> variant and no opcode; a distinct nominal type in the checker; and a zero value cross-checked
-> against the layout so the two cannot drift silently.
->
-> **Three refusals remain and all three are CORRECT** — nothing generates code for it yet. Do not
-> read a refusal as a defect. **The `ScalarKind::Text` collapse must land WITH emission and before
-> publication**: it is a wire change, free while nothing has shipped at `BYTECODE_VERSION` 2 and
-> costing a version afterwards.
->
-> ## WHAT IS NEWLY GUARDED, SO IT IS NOT RE-DERIVED
->
-> - **The publish list.** `the_release_process_names_exactly_the_crates_that_publish` derives the
->   publishable set from the manifests and checks the document against it, including the stated
->   count word. The census that found the SEVEN-versus-FIVE blocker closed an instance; this closes
->   the class.
-> - **The versioning policy.** `every_publishable_crate_has_a_versioning_policy_and_the_tracking_ones_track`
->   asserts every publishable crate falls under exactly one policy. A crate added without one is
->   otherwise invisible until release day.
-> - **`DATA_INIT` is routed for all twelve stages** and the skipped-region set is FOUR kinds, down
->   from five. The ratchet is tightened to four, which mattered: it asserts an upper bound, so it was
->   green at five and four alike and a passing suite said nothing about whether the change worked.
->
-> ## THAT TRAP IS NOW DISARMED, AND ITS SIBLING WAS WORSE
->
-> **The compiler has no `Op::Len` emission site.** Both — the for-in bound and the checked-index
-> bounds check — fold the length or fail with a compile error. The recorded trap was LATENT, held
-> shut by a liftable loop-bound refusal.
->
-> **The second site was not latent.** Checked indexing over a `Multiword` compiled, verified, took a
-> bound, LOADED, and trapped, with nothing holding it shut. Found by enumerating every emission
-> rather than following the known witness. Repaired by folding the multi-word width, so it works now.
->
-> `OP_LEN_ROOT_REPAIR.md` predicted a type-inference fallback would close ONE of seven forms; it
-> closes SIX, because `infer_expr_type` consults the authoritative per-span type table before its
-> structural half. The document is corrected in place, and its being wrong is recorded there.
->
-> Its sibling refusals are classified there too, and the distinction matters — `Op::Len` is a real
-> compiler/machine disagreement, `Reset` is a corrupt-module defence. Reporting both as "opcodes the
-> machine refuses" would imply two hazards where there is one.
->
-> ## THREE PROCESS FACTS FROM SESSION 63, EACH LEARNED EXPENSIVELY
->
-> **ASK WHAT WILL WAKE YOU BEFORE ENDING A TURN.** Raised by the operator THREE times in one
-> session. Each occurrence had the identical shape: a wake signal existed, went away, and work
-> continued as though it were still there. **Prose is not a wake signal**, and a background job
-> started with `nohup` sends no notification -- poll a done-marker you wrote, or use a harness-tracked
-> background task. If something is in flight and nothing is armed, that is a bug in the turn.
->
-> **THE PRE-PUSH GATE CANNOT BE RUN INSIDE THE TOOL'S TEN-MINUTE CEILING UNDER LOAD.** It took
-> 3067s against a normal 233s on a contended machine, and two foreground attempts were killed
-> mid-run. The working pattern: **run the gate manually with each step's status captured
-> separately, then push with `--no-verify` and say so.** That is avoiding a redundant hour, not
-> skipping verification -- and continuous integration on the pull request is the binding check
-> either way. A backgrounded push dies of SIGPIPE after a green gate, so **verify by
-> `git ls-remote`, never by the push's exit code.**
->
-> **DERIVE A NUMBER FROM ITS PARTS; NEVER CARRY IT FORWARD.** A census count was published wrong
-> three times, each figure produced by adjusting the previous one. Re-summing the per-group column
-> is what finally exposed that an entire group had been missing from every list of what remained.
->
-> ## THE PROCESS FACT THAT COST THIS SESSION THE MOST
->
-> **CI triggers only on `main`, `v*` and pull requests.** A push to a feature branch with the hook
-> bypassed is verified by NOTHING. Three branches sat in that state for hours here.
->
-> The local gate was abandoned deliberately, not failed: it ran twice and finished neither time,
-> reaching step 3 of 12 in 110 minutes under unrelated machine load. **A pull request gives the same
-> checks on dedicated runners and still keeps a red off the version branch.**
->
-> **A local gate does NOT precede a merge**, as this paragraph said until 2026-09-08. CI has
-> authorized merges since 2026-08-11; the local gate is for a pre-publication run and for working
-> offline. See [GIT_STRATEGY.md](./GIT_STRATEGY.md#definition-of-green).
->
-> ## THE LESSON THIS SESSION KEPT PAYING FOR
->
-> **Every wrong figure was a chosen sample presented as a population.** 113 counted mentions, not
-> breakage — the compiler said five. 43 signatures were really 33. A windowed scan reported two
-> refusing opcode arms where brace-matching found four. A reachability census drove nine entry
-> points where fifty-two exist.
->
-> **And every broken instrument failed QUIETLY.** A `tail`-terminated pipeline reported success on a
-> red gate; a trailing `echo` masked a failing status; an `awk` on the wrong delimiter read green
-> checks as pending; a waiter read the gap between two CI matrices as completion. Seven such
-> failures, and not one erred toward false alarm — because a broken measurement stops reporting, and
-> silence is shaped exactly like nothing-wrong.
->
-> **The practice that follows**: derive a population, never pick one; and when a run is detached,
-> capture its exit status IN THE LOG, because a detached run sends no notification either.
->
 ## Validity
 
 - **Branch**: `v0.2.3`, or a branch cut from it. If you are on `v0.3.0`, read
@@ -232,17 +268,35 @@ always-current, so it must be able to report itself stale rather than mislead a 
 **Validate by ANCESTRY and by CONTENT, never by a hash match.** A stamp requiring `HEAD~1` to equal a
 recorded parent is a claim that nothing else ever lands, and it has failed three times.
 
-**Ancestry**: `origin/v0.2.3` should contain `892cf14a`
-(`Merge pull request #373`). If it does not, this file predates a reset and is stale.
+**Ancestry**: `origin/v0.2.3` should contain `38af472f` (`Merge pull request #409`), the last merge
+before this refresh. If it does not, this file predates a reset and is stale.
 
-**Content**, four checks that are cheap and independent:
+**It said `5fbad3a0` was "session 65's last code merge"**, which five later merges made false. The
+CHECK was still sound — an anchor only has to be an ancestor — but the description was not, so the
+wording now says what it is: the last merge before the refresh, which cannot go stale the same way.
+
+**Content**, cheap and independent checks. **They were numbered 1, 2, 3, 7, 8, 9, 10, 4, 5, 6 until
+2026-09-08** — each insertion took the next unused number instead of renumbering, so the list read as
+though four checks were missing. The content was always correct; only the ordering lied.
+
+**AND IT HAPPENED TWICE MORE, ON 2026-09-09, IN THIS FILE.** Item 14 was inserted above item 13, and
+item 15 above item 14, by the same agent that had just read the paragraph above. The second was
+noticed while adding it; the first had gone unnoticed for a whole refresh. **Knowing the failure
+does not prevent it** — checking the rendered ORDER does, which is a different act from writing the
+next number. Both are corrected.
 
 1. `scripts/fingerprint.sh` reports `0x4327_63E1`. If it differs, a release was rolled since this was
    written and every version-adjacent statement here needs re-reading.
 2. `docs/process/RELEASE_PROCESS.md` says **SEVEN** crates publish. If it says five, this file
    predates the release-blocker fix and the blocker is live.
-3. `tests/len_flat_array_hazard.rs` exists and passes. It now pins the trap as CLOSED — no emission
+3. `tests/len_flat_array_hazard.rs` exists and passes. It pins the trap as CLOSED — no emission
    site, every iterable form folding — so a failure means an emission site returned.
+4. `tests/text_capacity_type.rs` exists. If it does not, `Text<N>` increment 1 is not on this branch.
+5. `tests/release_process_crate_list.rs` exists and passes. It holds BOTH release guards — the
+   publish list and the versioning policy. If either fails, the release process and the workspace
+   have diverged and a publication would break.
+6. `tests/selfhost_region_coverage.rs` passes with its skipped-kind bound at FOUR. If it fails
+   because five kinds are skipped, `DATA_INIT` has stopped being routed.
 7. `tests/float_opcode_without_floats.rs` exists. It is compiled only WITHOUT the `floats` feature,
    so a default-feature run silently skips it; check it with
    `cargo test --no-default-features --features compile,verify`. If it is absent, this file predates
@@ -255,13 +309,45 @@ recorded parent is a claim that nothing else ever lands, and it has failed three
    runtime refusals at once on legitimate programs; it is invisible from either side, because the
    compiler's baking and the runtime's dispatch each look locally correct.
 10. `docs/decisions/FEATURE_COMBINATION_SWEEP.md` exists. If it does not, this file predates the
-    build-coverage measurement and its claim that nine of eleven configurations are unbuilt.
-4. `tests/text_capacity_type.rs` exists. If it does not, `Text<N>` increment 1 is not on this branch.
-5. `tests/release_process_crate_list.rs` exists and passes. It holds BOTH release guards now — the
-   publish list and the versioning policy. If either fails, the release process and the workspace
-   have diverged and a publication would break.
-6. `tests/selfhost_region_coverage.rs` passes with its skipped-kind bound at FOUR. If it fails
-   because five kinds are skipped, `DATA_INIT` has stopped being routed.
+    build-coverage measurement and its claim that nine of eleven feature configurations are unbuilt.
+11. `tests/composite_width_skew.rs` exists and passes. It drives narrow and skewed runtimes in the
+    DEFAULT build; if it is absent, this file predates the width repair and the capability that made
+    guarding it free.
+12. `the_narrow_runtime_coverage_claim_still_describes_the_tree` and
+    `the_census_group_table_adds_up_to_its_stated_totals` pass. They guard two figures quoted in the
+    banner above, so a red result means a number here has drifted from the tree. The second checks
+    the census document against ITSELF, which is a different and weaker claim than the sibling guard
+    that checks it against the source; both are needed, because a self-consistent document can still
+    describe a tree that has moved.
+13. **Session 65's four artefacts exist and pass.** `tests/flat_float_field_width.rs` and
+    `tests/module_runtime_width_skew.rs` need `floats`; `tests/selfhost_counter_reset.rs` needs
+    `self-host`; the two composite-kind witnesses live in `tests/selfhost_typecheck.rs` and need
+    `self-host` too. **A default-feature run silently skips the last three**, which is the same trap
+    item 7 records.
+
+14. `docs/decisions/COMMENT_MATCHING_GUARD_SWEEP.md` exists, `tests/block_comment_tripwire.rs`
+    passes, and `every_file_the_comment_matching_sweep_names_still_exists` passes. The last checks
+    that every guard the sweep names is still there; the tripwire fails if a BLOCK comment appears
+    in a source one of those guards reads, since none of the nine strips handles one. **Exposure was
+    measured at zero when written**, and the tripwire is what keeps that true rather than assumed.
+15. `docs/decisions/NARROW_WIDTH_FAILURE_CLASSIFICATION.md` records a residue of **THIRTEEN** and
+    names the cause of each. If it still says thirty-three, this file predates the narrow-width
+    repair. **Do not re-derive that figure by subtracting** — the document's own rule is to diff the
+    failing SETS, and this session twice met a total that concealed what it was hiding: once a
+    reduction masking three new failures, once a count coincidentally matching a stale one.
+16. `docs/decisions/TARGET_WIDTH_FLOOR.md` exists and `tests/target_width_floor.rs` passes. Together
+    they hold the runtime defect this session found: a width below the narrowest implemented one is
+    refused at COMPILE time, naming the field, rather than surfacing later as a composite fault. If
+    the document is missing, this file predates the sixteenth increment.
+17. `tests/target_descriptor_axis.rs` passes. It sweeps every target descriptor the compiler accepts
+    against fourteen shapes, on sixteen word-address runtime pairs and both float runtimes, and
+    checks the cells that LOAD against the loader's documented rule evaluated independently. A
+    failure is more likely a changed descriptor space than a defect, and its message says which.
+18. `docs/decisions/GUARD_REACH_CENSUS.md` exists, and `tests/invalid_bytecode_indirect_sites.rs`
+    and `tests/opaque_across_reset.rs` pass. The first records a verdict for every guard this line
+    added or modified; the second pins the `InvalidBytecode` paths a variant grep cannot see at six
+    and four; the third holds group G's two host-facing routes, one closed at compile time and one
+    producing a `TypeError` rather than an `InvalidBytecode`.
 
 **Do not trust the counts in this file without re-deriving them.** The construct-support boundary
 last read **96 SOk / 1 Refuses / 3 Diverges / 1 RefRejects** over 101 cases. It is ratcheted at
@@ -275,6 +361,38 @@ calling `boundary_cases` and then demands at least two occurrences of it in this
 adding a case silently turns the document red instead of leaving it quietly wrong. **The refresh of
 2026-09-03 deleted one of the two and broke that test**, which the pre-push hook cannot see, because
 its routine tier excludes the `selfhost_*` binaries. If you rewrite this block, keep two.
+
+## WHAT A RESUMING SESSION SHOULD DO FIRST
+
+**READ THE FOUR DECISIONS AT THE TOP AND WAIT FOR AN ANSWER.** They are the only things blocking
+work larger than an increment.
+
+**Session 65 demonstrated that unblocked work remains and is worth doing**, so "blocked" is not
+"idle": four increments landed without touching a decision. What it also demonstrated is the shape
+that pays — **take a defect the tree has ALREADY SUFFERED and ask whether its shape is mechanical**,
+rather than auditing where a defect might be. That produced the one artefact of the session that
+would have caught something.
+
+```sh
+pgrep -f mutation_sweep              # the v0.3.0 line's sweep; contention INVERTS its result
+git log --oneline -1 origin/v0.2.3   # derive; do not expect a hash written here
+gh pr list --state open              # by BASE branch; the other line's appear here too
+gh run list --branch v0.2.3 --limit 3   # NOTHING ELSE WATCHES THE TRUNK
+```
+
+**Do not invent urgency** from whatever those report. A pull request mid-CI is the normal state of
+this workflow.
+
+**A caution about this file.** It is long and largely historical. **The BANNER at the top is the
+resume prompt**; sections below are accumulated findings, several describing states that have since
+moved. Where a section disagrees with the banner, the banner is newer.
+
+**There is a SUPERSEDED duplicate of this very heading further down, and of this very paragraph.**
+The 2026-09-09 refresh added a second copy of both rather than removing the first — noticed while
+checking this file's structure, which is the check that caught a severed intro and a dropped section
+on the previous refresh. The lower copy is kept because its numbered items carry findings the banner
+does not repeat: read this one for what to DO and that one for what is KNOWN.
+
 
 ## RUN THE SUITE WITH `--no-fail-fast`, AND THE REASON IS NOT TIDINESS
 
@@ -561,7 +679,7 @@ signals over the wrong feature sets are still the wrong feature sets.**
 ## THE WORKFLOW: CI GATES FEATURE BRANCHES
 
 **Do not run `scripts/release-gate.sh` to gate a merge.** Operator decision, 2026-08-11. CI is a
-verified strict superset and runs in ~48 minutes against ~2h30m.
+verified strict superset and runs in ~61 minutes against ~2h30m (measured 2026-09-08; it said 48).
 
 1. Cut the feature branch **as the first action**, and `git status` before committing.
 2. **Cut sequential branches ONE AT A TIME.** `DESIGN_JOURNAL.md`, `REVERSE_PROMPT.md` and

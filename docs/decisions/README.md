@@ -6,6 +6,24 @@ Architectural and design decisions for Keleusma.
 
 Decisions follow a three-file lifecycle. New questions start in PRIORITY or BACKLOG. When resolved, they move to RESOLVED with rationale. Decisions are numbered sequentially within each file.
 
+## What a `*_BRIEF.md` is, and what its absence of a marker does NOT mean
+
+This directory also holds many `*_BRIEF.md` files, most paired with a
+`*_COMPLETION_CONDITION.txt`. They are **dated working documents written for a single
+increment**, not live plans. A brief captures the rationale, the prior failures, and the
+specific wrong turns to avoid for the work it was written for; its companion states the
+observable end state that increment was judged against.
+
+**Do not resume a brief's goals without checking the tree first.** Several briefs describe
+work that is now complete, and **most carry no marker saying so**, because marking them was
+never the convention — only a handful say `landed` or similar. **The absence of a status
+marker therefore says nothing about whether the work is done.** The tree is the authority;
+the brief records how a past increment was reasoned about.
+
+Only the substantive decision and evidence documents are indexed below. The briefs are not,
+deliberately: an index of every increment's working notes would need maintaining on every
+increment, and a table that drifts is worse than no table.
+
 ## Contents
 
 | Document | Description |
@@ -35,4 +53,8 @@ Decisions follow a three-file lifecycle. New questions start in PRIORITY or BACK
 | [FEATURE_COMBINATION_SWEEP.md](./FEATURE_COMBINATION_SWEEP.md) | Which feature and width configurations actually build, and which are built by nothing |
 | [NARROW_WIDTH_FAILURE_CLASSIFICATION.md](./NARROW_WIDTH_FAILURE_CLASSIFICATION.md) | A verdict for every `narrow-word-16` failure, separating the suite's wide-host assumptions from the one runtime defect among them |
 | [FLAT_FIELD_WIDTH_AUDIT.md](./FLAT_FIELD_WIDTH_AUDIT.md) | Whether the repaired opaque-width sites were the only ones, by a stated method validated against the pre-repair tree |
+| [COMMENT_MATCHING_GUARD_SWEEP.md](./COMMENT_MATCHING_GUARD_SWEEP.md) | Every guard that searches source for a code pattern, with a verdict per file and the rule for which comment-strip each one needs |
+| [DATA_SLOTS_ROUTING_PLAN.md](./DATA_SLOTS_ROUTING_PLAN.md) | The design for routing the first name-carrying region kind, and the section base the interning walk does not retain |
+| [TARGET_WIDTH_FLOOR.md](./TARGET_WIDTH_FLOOR.md) | Why a target width below the narrowest implemented one is refused, the zero-byte opaque it produced, and the floor argument that had been applied to one width of three |
+| [GUARD_REACH_CENSUS.md](./GUARD_REACH_CENSUS.md) | Which of this line's source-reading guards were SHOWN able to fail, derived from git rather than recall, with the two that were not named |
 | [DISCARD_ARM_REACHABILITY_BRIEF.md](./DISCARD_ARM_REACHABILITY_BRIEF.md) | Which self-hosted-stage discard arms are reached by a driven program, and what each unreached one is waiting on |

@@ -424,7 +424,7 @@ fn the_invalid_bytecode_census_still_describes_the_tree() {
 
     // The document states the total in words as well as digits; the digits are what is checked.
     let stated = doc
-        .split("**50 matches, of which ")
+        .split("**51 matches, of which ")
         .nth(1)
         .and_then(|rest| rest.split_whitespace().next())
         .and_then(|n| n.parse::<usize>().ok())
@@ -669,7 +669,7 @@ fn the_census_group_table_adds_up_to_its_stated_totals() {
          checking almost nothing rather than checking the table"
     );
 
-    let stated_sites = 46usize;
+    let stated_sites = 47usize;
     assert_eq!(
         sites, stated_sites,
         "the group rows sum to {sites} sites, not the {stated_sites} the document states. \
@@ -679,13 +679,265 @@ fn the_census_group_table_adds_up_to_its_stated_totals() {
 
     // The prose states the examined total in words and then enumerates it.
     assert!(
-        doc.contains("Thirty-five of forty-six sites carry an examined verdict"),
+        doc.contains("Thirty-seven of forty-seven sites carry an examined verdict"),
         "the census no longer states its examined total in the expected form; update this \
          extraction rather than deleting the check"
     );
     assert_eq!(
-        examined, 35,
-        "the group rows sum to {examined} examined sites and the prose says thirty-five. One of \
+        examined, 37,
+        "the group rows sum to {examined} examined sites and the prose says thirty-seven. One of \
          them moved without the other. The per-group column is the authority."
+    );
+}
+
+/// Every test file must run in at least one continuous-integration
+/// configuration, except the one documented exception.
+///
+/// # Why a test can be invisible
+///
+/// A test file's `#![cfg(...)]` decides which builds compile it. If that gate is
+/// satisfied by no configuration continuous integration runs, the file is
+/// compiled by nobody and run by nobody — and it still sits in the tree looking
+/// like coverage. This is the same defect
+/// `docs/decisions/FEATURE_COMBINATION_SWEEP.md` records for builds, one level
+/// down.
+///
+/// **Only a gate negating a DEFAULT feature can escape every job**, because the
+/// non-default jobs are additive to default. The `not(feature = "narrow-word-*")`
+/// gates across the suite negate features nothing enables, so they are satisfied
+/// everywhere.
+///
+/// # The one exception, and why it is deliberate
+///
+/// `float_opcode_without_floats.rs` is gated
+/// `all(feature = "verify", not(feature = "floats"))`. It pins a hole reachable
+/// only on a build without floats, so no job that enables `verify` can also run
+/// it. That is queued as an operator decision, not an oversight.
+///
+/// # The feature sets are DERIVED, not restated
+///
+/// They are read out of the workflow file. Restating them here would be a second
+/// copy of a fact continuous integration already owns, and would go stale the
+/// day a job is added — the failure this session found in five process documents
+/// at once.
+#[test]
+fn the_only_test_gated_out_of_every_ci_configuration_is_the_known_one() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workflow = std::fs::read_to_string(root.join(".github/workflows/ci.yml"))
+        .expect("read ci.yml; if the workflow moved, update this guard");
+
+    // Derive the keleusma feature sets CI runs, from the workflow's own commands.
+    let default_features = ["compile", "verify", "floats"];
+    let mut sets: Vec<Vec<String>> = vec![
+        default_features.iter().map(|s| s.to_string()).collect(),
+        Vec::new(), // the bare --no-default-features job
+    ];
+    for line in workflow.lines() {
+        // ONLY lines that RUN the integration tests count. `cargo doc --features
+        // signatures,encryption,shell` COMPILES a gated test's crate for
+        // documentation but never executes it, and treating a doc job as
+        // coverage is how this guard first reported a test gated on
+        // `encryption` as covered. `cargo test --doc` runs doctests, not the
+        // files in `tests/`.
+        if !line.contains("nextest run") {
+            continue;
+        }
+        if !line.contains("-p keleusma ") || !line.contains("--features ") {
+            continue;
+        }
+        let Some(rest) = line.split("--features ").nth(1) else {
+            continue;
+        };
+        let list = rest.split_whitespace().next().unwrap_or("");
+        if list.is_empty() {
+            continue;
+        }
+        let mut set: Vec<String> = default_features.iter().map(|s| s.to_string()).collect();
+        for f in list.split(',') {
+            set.push(f.to_string());
+        }
+        sets.push(set);
+    }
+    assert!(
+        sets.len() >= 4,
+        "only {} feature sets were derived from the workflow, so the extraction stopped matching \
+         and this guard is checking almost nothing",
+        sets.len()
+    );
+
+    /// Evaluate a `cfg` gate against a feature set. An expression this cannot
+    /// interpret is treated as SATISFIED, which biases toward reporting a file
+    /// as running — the direction that under-reports, which is why the
+    /// non-vacuity assertions above and below matter.
+    fn satisfied(gate: &str, feats: &[String]) -> bool {
+        let g: String = gate.split_whitespace().collect::<Vec<_>>().join(" ");
+        fn ev(e: &str, feats: &[String]) -> bool {
+            let e = e.trim();
+            for kind in ["all(", "any(", "not("] {
+                if let Some(inner) = e.strip_prefix(kind) {
+                    let mut depth = 0usize;
+                    let mut parts: Vec<String> = Vec::new();
+                    let mut cur = String::new();
+                    for ch in inner.chars() {
+                        match ch {
+                            '(' => depth += 1,
+                            ')' if depth == 0 => break,
+                            ')' => depth -= 1,
+                            ',' if depth == 0 => {
+                                parts.push(std::mem::take(&mut cur));
+                                continue;
+                            }
+                            _ => {}
+                        }
+                        cur.push(ch);
+                    }
+                    if !cur.trim().is_empty() {
+                        parts.push(cur);
+                    }
+                    let vals: Vec<bool> = parts
+                        .iter()
+                        .filter(|p| !p.trim().is_empty())
+                        .map(|p| ev(p, feats))
+                        .collect();
+                    return match kind {
+                        "all(" => vals.iter().all(|v| *v),
+                        "any(" => vals.iter().any(|v| *v),
+                        _ => !vals.first().copied().unwrap_or(false),
+                    };
+                }
+            }
+            if let Some(rest) = e.split("feature = \"").nth(1)
+                && let Some(name) = rest.split('"').next()
+            {
+                return feats.iter().any(|f| f == name);
+            }
+            true
+        }
+        ev(&g, feats)
+    }
+
+    const KNOWN: &str = "float_opcode_without_floats.rs";
+    let mut orphans: Vec<String> = Vec::new();
+    let mut gated = 0usize;
+    let mut total = 0usize;
+    for entry in std::fs::read_dir(root.join("tests")).expect("read tests/") {
+        let path = entry.expect("dir entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        total += 1;
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+        let src = std::fs::read_to_string(&path).expect("read test file");
+        // Strip line comments so a commented gate fragment does not confuse the parse.
+        let stripped: String = src
+            .lines()
+            .map(|l| l.split("//").next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let Some(open) = stripped.find("#![cfg(") else {
+            continue; // ungated: runs wherever the crate builds
+        };
+        let after = &stripped[open + "#![cfg(".len()..];
+        let mut depth = 0usize;
+        let mut gate = String::new();
+        for ch in after.chars() {
+            match ch {
+                '(' => depth += 1,
+                ')' if depth == 0 => break,
+                ')' => depth -= 1,
+                _ => {}
+            }
+            gate.push(ch);
+        }
+        gated += 1;
+        if !sets.iter().any(|s| satisfied(&gate, s)) {
+            orphans.push(name);
+        }
+    }
+
+    assert!(
+        total > 50 && gated > 50,
+        "only {total} test files and {gated} gates were seen, so the scan is not reaching the suite"
+    );
+    assert!(
+        orphans.iter().any(|o| o == KNOWN),
+        "the known exception {KNOWN} was NOT detected as gated out of every configuration. Either \
+         its gate changed — in which case the load-time float hole may now be covered, which is \
+         news — or this evaluator has stopped working. A guard that cannot find the one case it \
+         knows about is checking nothing."
+    );
+    orphans.retain(|o| o != KNOWN);
+    assert!(
+        orphans.is_empty(),
+        "these test files are gated out of EVERY continuous-integration configuration, so they are \
+         compiled by nobody and run by nobody while still reading as coverage: {orphans:?}. Either \
+         widen the gate, add a job, or document the exception as deliberate the way \
+         {KNOWN} is."
+    );
+}
+
+/// Every file the comment-matching sweep names must exist.
+///
+/// # Why a path check rather than an identifier one
+///
+/// `tests/comment_citations.rs` resolves backtick-quoted IDENTIFIERS in the two resume channels. It
+/// cannot help here: the sweep document cites **files**, and a path contains characters that its
+/// shape filter deliberately skips. Written as bare names instead, all twelve citations resolved to
+/// nothing — measured — and nothing anywhere would have said so.
+///
+/// **A document whose claims nothing verifies is the thing this session spent nine increments
+/// removing.** Writing one is a poor way to end that, so the claims are checked here: if a guard in
+/// the table is renamed or deleted, the row naming it fails rather than quietly describing a tree
+/// that has moved.
+///
+/// The check is deliberately weak — existence, not content. It cannot tell whether the file still
+/// strips comments, and it does not pretend to; the per-file guards do that, and each was
+/// mutation-tested when it was repaired.
+#[test]
+fn every_file_the_comment_matching_sweep_names_still_exists() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let doc_path = root.join("docs/decisions/COMMENT_MATCHING_GUARD_SWEEP.md");
+    let Ok(doc) = std::fs::read_to_string(&doc_path) else {
+        // The sweep document is optional in the sense that a branch may predate it; a missing
+        // file is not a failing claim. A PRESENT file with a broken claim is.
+        return;
+    };
+
+    let mut named = std::collections::BTreeSet::new();
+    for piece in doc.split('`') {
+        let t = piece.trim();
+        // **A GLOB IS NOT A PATH CLAIM.** The document says "every occurrence under `src/*.rs`",
+        // which is prose about a set of files rather than a citation of one. The first draft of
+        // this guard reported it as a missing file -- a guard manufacturing its own finding, which
+        // this file's own comment records learning twice before, once from a wrapped identifier and
+        // once from a filename. This is the third, from a glob.
+        if (t.starts_with("tests/") || t.starts_with("src/") || t.starts_with("docs/"))
+            && (t.ends_with(".rs") || t.ends_with(".kel") || t.ends_with(".md"))
+            && !t.contains('*')
+        {
+            named.insert(t.to_string());
+        }
+    }
+
+    // **NON-VACUITY.** A parse that matched nothing would pass while checking nothing, which is
+    // the exact failure the document catalogues. Thirteen files are tabulated plus this document
+    // and the tripwire; requiring ten leaves room for the table to change shape.
+    assert!(
+        named.len() >= 10,
+        "only {} paths were parsed out of the sweep document, so this guard is reading its \
+         formatting rather than its claims",
+        named.len()
+    );
+
+    let missing: Vec<&String> = named.iter().filter(|p| !root.join(p).exists()).collect();
+    assert!(
+        missing.is_empty(),
+        "the comment-matching sweep names files that no longer exist: {missing:?}. Either the \
+         guard was renamed, in which case the table needs the new name, or it was deleted, in \
+         which case the row should say so rather than vanish"
     );
 }

@@ -228,7 +228,7 @@ fn classification() -> BTreeMap<&'static str, Route> {
 /// property of the list, and this repository has paid for that distinction
 /// repeatedly.
 fn opcode_names() -> Vec<String> {
-    let src = include_str!("../src/bytecode.rs");
+    let src = code_only(include_str!("../src/bytecode.rs"));
     let start = src
         .find("pub enum Op {")
         .expect("src/bytecode.rs declares `pub enum Op`");
@@ -922,4 +922,24 @@ loop main(t: Word) -> Word {
         "the indexed slot read back differently after a reset: {reads:?}. A slot \
          holding a handle rather than a copy would fail here, which is the point."
     );
+}
+
+/// Source with `//` line comments removed, so an anchor search matches CODE.
+///
+/// **Locating on RAW source is the defect this removes.** A comment naming the anchor sends the
+/// extraction to the comment; measured here, one such line failed three tests in this file with
+/// nothing wrong in `src/bytecode.rs`.
+///
+/// Truncating at the first `//` rather than tracking string literals is correct for an anchor
+/// search: an early truncation can only make the anchor go missing, which fails loudly through the
+/// `expect` above. `tests/call_chunk_index_limit.rs` needs a string-aware strip instead, because its
+/// assertion is an ABSENCE one where the same truncation lets a real offender pass silently.
+fn code_only(src: &str) -> String {
+    src.lines()
+        .map(|l| match l.find("//") {
+            Some(i) => &l[..i],
+            None => l,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }

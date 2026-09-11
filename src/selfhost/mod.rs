@@ -2480,10 +2480,44 @@ pub type ExprRow = (i64, ExprOperand, ExprOperand);
 /// directions are unsound, so the row is not emitted at all**, and
 /// `a_one_armed_conditional_is_why_the_branch_pair_does_not_move` pins the witness.
 ///
-/// **Four do not move**: the branch pair above, and field access, index access and struct
-/// literals — **all three of the remainder are composite**, where the occurrences slice already
-/// showed the two representations disagree about what a node IS. Kind 2 was the last
-/// non-composite one.
+/// **Four do not move**: the branch pair above, and the three composite kinds — field access,
+/// index access and struct literals. Kind 2 was the last non-composite one.
+///
+/// # THE THREE COMPOSITE KINDS, EACH WITH A MEASURED VERDICT
+///
+/// This block previously said only that "the two representations disagree about what a node IS",
+/// carried over from the occurrences slice. That was a reason to look, not a finding. Both
+/// blockers below were measured, and one of them is not what reading the two sides predicted.
+///
+/// **KINDS 5 AND 6 — FIELD AND INDEX ON A VALUE — have no forest to extract from.** On every
+/// program these kinds exist to reject, reconstruction refuses outright: the record range does
+/// not reduce to one node. The obstacle is not a missing datum, it is that the input never
+/// becomes a tree. `a_field_or_index_on_a_scalar_is_refused_before_any_row_could_be_extracted`
+/// pins it, together with a control proving the extraction works on a program it does handle.
+///
+/// **THIS FUNCTION THEREFORE PANICS ON THOSE INPUTS**, and that is worth stating plainly next to
+/// the signature rather than leaving to be discovered. It is **not** reachable through the
+/// shipping compiler: `self_hosted_compile` compiles with the reference first and surfaces the
+/// reference's own error, so a program the reference rejects never reaches the pipeline, and it
+/// wraps the pipeline in `catch_unwind` besides. Exposure is to direct callers of this API.
+///
+/// **KIND 7 — THE STRUCT LITERAL — has the datum it needs discarded, and the one that survives
+/// is not a substitute.** The record carries the composite's flat SIZE and the GIVEN field count;
+/// the reference's row needs the DECLARED count, which requires knowing which struct is being
+/// built. Two programs produce a **byte-identical** struct-literal record while the reference
+/// accepts one and rejects the other for exactly the field-count reason: a struct of one `Word`
+/// and a struct of eight `Byte`s are both eight bytes wide.
+///
+/// So a size-to-count rule — the obvious use of the datum that IS carried — is wrong on that
+/// pair, and no other function of the record can do better, because the record is the same.
+/// Emitting a row would reject a correct program or lose the check; **both directions are
+/// unsound**, the same shape that withheld the branch pair.
+/// `a_struct_literal_record_cannot_separate_a_correct_program_from_a_field_count_error` pins it.
+///
+/// **What would unblock kind 7 is a record naming the literal's struct.** `parse.kel` resolves
+/// the identity already — the field records preceding a literal carry INDICES, and only a
+/// resolved declaration yields an index — and then drops it. That is a record-stream change and
+/// the operator's call, not a defect.
 ///
 /// **THIS FUNCTION CARRIED A NARROWER NAME FOR ONE INCREMENT**, naming only the binary operator.
 /// Covering conditions made that name false, and a name that lies is precisely what several

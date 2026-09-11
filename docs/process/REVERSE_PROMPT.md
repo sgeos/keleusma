@@ -261,147 +261,1056 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-08 (session 64) — a wrong answer found in the flat-composite core, repaired, and guarded in a build continuous integration already runs
+**Date**: 2026-09-10 (session 65, thirty-fifth increment) — the section base is NOT recoverable from retained state; the design is recorded before any code; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
 
-## READ FIRST: THE RUNTIME RETURNED A WRONG ANSWER, AND IT IS REPAIRED
+## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
-A composite bearing an **opaque** field was built and read at two different widths. The worst
-outcome was not a fault:
+They are the reason the large work is blocked, and nothing below decides any of them.
 
-```
-P { h: h, n: 1 } == P { h: h, n: 2 }   evaluated to true
-```
+1. **How does a value ENTER a `Text<N>`?** It appears in every program anyone writes with the
+   type. Open question 2 in [`TEXT_CAPACITY_TYPE.md`](../decisions/TEXT_CAPACITY_TYPE.md).
+2. **Is the width bundle worth a breaking change?** 33 signatures, 14 public, published crate.
+3. **Should `verify()` refuse float opcodes when the `floats` feature is absent?** **Evidence
+   COMPLETE**: ten lines, prototyped, **zero new failures**, and the semantic worry is moot because
+   the lexer refuses float literals in that build. Unlanded only because I said it was your call in
+   a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
+4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
+   the WIDTH axis, unchanged on the FEATURE axis.
 
-Two structures differing in a `Word` field compared **equal**. Nothing in that program is
-unrepresentable at the width it ran at. **A silent wrong answer is worse than any refusal this tree
-has catalogued**, and it is why this outranks everything else here.
+## THIRTY-FIFTH INCREMENT: THE FIELD LIST MADE THE STATE LOOK SUFFICIENT, AND IT IS NOT
 
-**The mechanism was one field with two authorities.** `ScalarKind::Opaque` is sized by the ADDRESS
-width, and the compiler bakes every field offset from that layout, the typed verifier sizes operands
-from it, and the marshalling layer reports field sizes from it. The runtime disagreed in four places,
-each assuming a WORD: the construction path rewrote the registry index to a one-word `Int`, the arena
-packer advanced by that width, the flat scalar read read it back as a word, and the host decode asked
-for a word's worth of bytes from a field the layout had already sized.
+Going to route `DATA_SLOTS`, I checked the one thing the previous increment asserted without
+reading: that the section bases are "recoverable from state that already exists", naming `ecnt`,
+`vcnt`, `scnt` and the running `cnt`.
 
-**The default target makes the two widths equal**, so all four agreed with the layout by coincidence.
+**`nm.vcnt` is assigned INSIDE the enum loop.** It holds the variant count of the *current* enum
+and is overwritten on each iteration. `ecnt` and `scnt` are totals; there is no running total of
+variant names anywhere. **The slot section's base cannot be computed from what the walk retains**,
+and the previous increment said it could.
 
-**The repair did not have to choose a side, and deliberately did not.** Whether the field is a
-registry INDEX (arguing for a word) or a host HANDLE (arguing for an address) is a real question. It
-is left open. Three of the four subsystems already treat the layout as the authority, so each runtime
-site now asks the layout for the width. If that question is ever settled differently, the runtime
-follows without further change. **Do not promote it into a decision on my account.**
+**Caught by reading the assignment site rather than the field list** -- the third surface-reading
+failure in this arc, and the first of the three caught BEFORE it reached a line of code. That is
+the whole value of writing the design down before executing it.
 
-Repaired in #376, guarded in #378, recorded in
-[`NARROW_WIDTH_FAILURE_CLASSIFICATION.md`](../decisions/NARROW_WIDTH_FAILURE_CLASSIFICATION.md).
+**The design is now recorded** in `docs/decisions/DATA_SLOTS_ROUTING_PLAN.md`: capture each
+section's base at the moment that section starts, from the walk itself, rather than computing it
+from counts. Two fields, two assignments, and the base cannot drift from the sequence it indexes.
+`ds_stream_step` then takes the run index and reads `wire.nmap[slot_base + k]`, so no host
+arithmetic touches a name.
 
-## THE FINDING WITH THE LONGEST REACH: A WIDTH SKEW NEEDS NO FEATURE
+**The assumption most worth checking first is named in the plan**: that `wire.nmap` survives
+between the interner call and the step calls under the driver's buffer handling. `ck_stream_begin`
+documents and relies on that property, but relying on someone else's documented reliance is not the
+same as checking it. If it does not hold, `DATA_SLOTS` needs a begin after all and the shape
+changes.
 
-I wrote in a merged document that the construction path **could not** be guarded without a
-continuous-integration job in a configuration nothing builds. **That was wrong**, and finding out why
-is worth more than the repair.
+**Deliberately not implemented.** A half-finished change in the self-hosted emitter, against an
+hour of continuous integration and a byte-identical oracle, would be worth less than a design the
+next session can execute without re-deriving three increments of reading.
 
-`GenericVm<W, A, F>` is generic over the word and address types independently, and every `Word`
-(`i8`, `i16`, `i32`, `i64`) and every `Address` (`u8`, `u16`, `u32`, `u64`) is implemented
-unconditionally. **A host-defined alias reaches any pair of widths in the default build.** The
-`narrow-*` features only choose which pair the bundled `Vm` alias uses. A skewed pair also already
-ships as a named target: `Target::embedded_8` is an eight-bit word with a sixteen-bit address, and
-the `addr_bits_log2` field's own documentation names the 6502.
+## THIRTY-FOURTH INCREMENT: THE MEASUREMENT I ASKED FOR WAS ALREADY IN THE TREE
 
-**So a width-dependent defect can be guarded at no standing per-push cost.** That is cheaper than the
-job [`FEATURE_COMBINATION_SWEEP.md`](../decisions/FEATURE_COMBINATION_SWEEP.md) recommends and does
-not adopt, and it was available the whole time.
+The previous increment flagged two things as unmeasured before any driver change: whether the
+interning ORDER for the enum and data-slot sections matches the reference's `SchemaBuilder`, and
+whether `nmap` is indexed by walk position. **Both are settled by a test that already exists and
+passes**, one inference away.
 
-**It does not extend to the feature axis.** A build omitting `floats` cannot be reached by an alias;
-that is why the float hole below stayed unexercised. The sweep's central finding stands for features
-and is qualified for widths.
+**The chain.** `NAMES` is emitted by `emit_name_records_from_nout(0, nm.cnt)` -- one record per
+walk position, in walk order, straight out of the walk's own output. `NAMES` is ROUTED by the
+driver at command 170. `no_region_the_driver_routes_disagrees_with_the_reference` asserts that no
+routed region DIFFERS, across every corpus stage, with a non-vacuity floor of four identical
+regions per stage.
 
-## WHAT THE CLASSIFICATION SETTLED, AND WHAT IT DID NOT
+**So `NAMES` is byte-identical for every stage, and it is the walk's output.** A byte-identical
+table of name records in walk order is precisely the statement that the walk produced the same
+names in the same order as the reference. The order is proven; it was not an open question.
 
-Every failure of a finished `narrow-word-16` run now carries a verdict taken from the failing
-assertion's own text rather than from the test's name. The previous grouping was by name and left
-eighteen in an unexamined remainder; **its "opaque and flat-composite layout" row had guessed close
-to the real mechanism and still filed it as a test premise.**
+**`mi_pair(k, len, mode)` writes `nin[k*2]` and returns `k + 1`**, so `k` is the walk position and
+the pair sequence is indexed by it. Dedup reuses a POOL OFFSET rather than collapsing a record, so
+walk position is the name index -- which is why `ck_stream_step` can read `wire.nmap[ck.j]` with
+`ck.j` a plain chunk index.
 
-| | |
+**What remains is arithmetic.** Walk positions run sequentially across the three sections, so the
+base for slot runs is the chunk count plus the enum name count, and the walk retains `ecnt`, `vcnt`
+and `scnt`.
+
+**Stated as an inference, because this session has over-claimed twice from a surface.** The chain
+above is a reading plus an existing byte identity, not a direct measurement of the routed result.
+**The definitive check is to route one kind and compare bytes**, and that is the next increment
+rather than this one. What this increment establishes is that the check is now expected to pass for
+a stated reason, instead of being attempted blind.
+
+**The lesson is about where I looked.** I wrote down "this needs measuring" and the measurement was
+sitting in a passing test the whole time -- the third time today that the tree already contained
+what I was about to go and get. The cheap move, before sizing any measurement, is to ask which
+existing green test would have to fail if the property were false.
+
+## THIRTY-THIRD INCREMENT: THE NAME-INTERNING ROUTE ALREADY RUNS, AND THE GAP IS THE SECTION BASE
+
+Having established that all four skipped region kinds wait on the name-interning route, I read what
+that route actually does rather than sizing it from its name.
+
+**The walk covers all three name sections, in one call.** `mi_window_prepare` calls
+`mi_chunk_names()`, which TAILS into `mi_enum_names()` (line 3017), which tails into
+`mi_slot_names()` (line 3051). The module-input blob carries chunk names, enum type and variant
+names, and data-slot RUN names -- one per run, because interning per slot is what once produced the
+395,804-name figure -- and `nm.cnt` advances through all of them, with `nm_mode_fresh()` used for
+variant names exactly as `SchemaBuilder::intern_fresh` does.
+
+**So `wire.nmap` already holds an interned index for every data-slot run name and every enum
+name.** The route is not missing. What a router needs is the SECTION BASE: `ds_stream_step` would
+take `wire.nmap[slot_base + k]` where it currently takes `wire.fin[0]`, and the interner retains
+`ecnt`, `vcnt`, `scnt` and `ccnt` alongside the running `cnt`, so the bases are recoverable from
+state that already exists.
+
+**WHAT THIS DOES NOT ESTABLISH, and I am stating it because the previous increment over-claimed
+from a surface.** That the interning ORDER for those sections matches the reference's
+`SchemaBuilder` is NOT verified here -- the roadmap records slices 14b and 14c producing the enum
+sequence with both modes, which makes it likely and not certain. Nor is it established that
+`nmap` is indexed by walk position in the way a base offset would assume. **Both are measurements,
+and the byte-identical oracle is what would settle them.** This increment is a reading, and the
+next one should be a measurement before a line of the driver changes.
+
+**The method that produced this is the one that failed last time, applied correctly**: read the
+function bodies and follow the tail calls, rather than reading a name, a dispatch table, or a
+count. `mi_chunk_names` is a misnomer for a walk that covers three sections, and sizing the work
+from its name would have repeated the error exactly.
+
+## THIRTY-SECOND INCREMENT: I OVER-CORRECTED A CLAIM THAT WAS ALREADY RIGHT
+
+The previous increment "sharpened" `selfhost_region_coverage.rs` from *"all four wait on the
+name-interning route"* to *"two are INTEGRATION and two are INVENTION"*, on the evidence that
+`DATA_SLOTS` and `ENUM_VARIANTS` are dispatchable at commands 178 and 181, beside the routed 179
+and 180.
+
+**That was wrong, and the original sentence was right.** Dispatchable is not routable. Reading what
+each formatter READS rather than which command dispatches it:
+
+| formatter | first fields | routed |
+|---|---|---|
+| `sh_stream_step` (SHAPES) | tag, kind, reserved, size | yes |
+| `sg_stream_step` (SIGNATURES) | params_first, params_count, ret, resume | yes |
+| `ds_stream_step` (DATA_SLOTS) | **`dslot_off_name`** | no |
+| `ev_stream_step` (ENUM_VARIANTS) | **`evar_off_name`** | no |
+
+**The criterion is whether the record carries a NAME INDEX**, and it explains the whole set at
+once. `SHARED_LAYOUT` and `DATA_INIT` were routed earlier on exactly that ground, and the driver
+says so in its own comment. `ENUM_LAYOUTS` has `elay_off_type_name`, so it sits with the unrouted
+two even though it has no emitter yet. A host-supplied name index could disagree with the interner
+that produced `NAMES` -- the hazard the chunk path avoids by taking its index from its own
+interner -- so the name route is a SOUNDNESS requirement, not a convenience.
+
+**That criterion is the genuine sharpening, and it is the opposite of what I wrote.** Restored,
+with the over-correction recorded in place rather than quietly replaced.
+
+**The failure has a name: I read a dispatch table instead of the function bodies.** It is the same
+shape as the message-based census classification two increments ago, which also read a surface
+that looked like a taxonomy and was not. Twice in one session, the cheap signal was the wrong
+signal, and the expensive one -- reading the code -- was the only one that settled it.
+
+## THIRTY-FIRST INCREMENT: "ALL FOUR WAITING ON ONE THING" WAS TWO DIFFERENT THINGS
+
+With Order 1 established as available, the next slice is one of the four region kinds the driver
+still skips. `tests/selfhost_region_coverage.rs` said all four were "waiting on the name-interning
+route" -- one sentence over two different states. Measured:
+
+| kind | state |
 |---|---|
-| distinct failures, before | 41 across 16 binaries |
-| distinct failures, now | **33 across 11 binaries**, of 106 |
-| repaired | 5 opaque-width, 3 hard-coded eight-byte harness reads |
-| newly failing | **none** |
+| `DATA_SLOTS` | emitter `ds_stream_step` exists and is **DISPATCHABLE at command 178** |
+| `ENUM_VARIANTS` | emitter `ev_stream_step` exists and is **DISPATCHABLE at command 181** |
+| `ENUM_LAYOUTS` | READERS only (`elay_*`); no emitter written |
+| `PARAM_TYPES` | no emitter written |
 
-**The last figure was established by DIFFING the failing sets, not by comparing totals.** A total
-falling by eight is equally consistent with fixing nine and breaking one.
+**The driver routes commands 179 and 180 -- `SHAPES` and `SIGNATURES`, the immediate NEIGHBOURS of
+the two unrouted ones -- and everything else falls into its `_ => continue`.** So two of the four
+are INTEGRATION and two are still INVENTION, which is exactly the distinction the roadmap's Order 1
+cell draws and this comment collapsed.
 
-The remaining 33 are seven groups whose tests declare a premise a sixteen-bit word voids: 14 + 6 + 8
-+ 2 + 1 + 1 + 1. **The narrow widths are still not verified.** A suite that cannot run at a width
-cannot vouch for it, and making it run there remains a project nobody has adopted.
+**This is the third capability in one day that already existed and was not wired**, after the
+streaming chunk emitter and the removed walk cap. The pattern is worth naming: on this line, a
+stated blocker is as likely to be an unrouted capability as a missing one, and the cheap check is
+to look for the dispatch entry before sizing the work.
 
-## THE NEGATIVES, WHICH ARE PART OF THE RESULT
+**Deliberately not implemented in this increment.** Routing them is a driver change against a
+byte-identical oracle, and the honest deliverable here is the sizing: a named, dispatchable slice
+rather than a vague blocker. What it would buy is also stated in advance -- the PRODUCED share
+rises and the COMPUTED share does not, because these records format fields the host decides, and
+`the_computed_share_is_smaller_than_the_produced_share` exists so that cannot be misread.
 
-**No mutation is caught by the shape corpus alone.** I extended the skew guard to four composite
-shapes, then shortened a nested child's stride by one byte specifically to demonstrate unique value.
-**Seventeen tests across the suite caught it** — a broken nested stride is wrong at every width. The
-corpus's case is that it drives the repaired sites through four construction paths, which is a
-hypothesis about defects not yet found, not coverage of anything today.
+## THIRTIETH INCREMENT: I COPIED A STALE FIGURE WHILE CORRECTING A STALENESS
 
-**Two of the four repaired sites hang on a single test each**, and one test in that file is caught by
-no mutation at all. All three facts are written beside the tests rather than left for a reader to
-discover.
+The previous increment corrected the handoff's "the large work is blocked" premise and listed what
+Order 1 actually needs, taking the detail from the roadmap cell. **Two of those details were
+already false**, and I had not checked them.
 
-**My first attempt to measure the corpus used cargo's default fail-fast**, stopped after the first
-failing binary, and showed only the corpus failing — which would have supported the opposite
-conclusion. It was a lower bound, not a result. The tree already records this trap for the build
-phase; it applies to the test phase too.
+**Both capacity limits are REMOVED, and the windowed path reaches all eleven stages.**
 
-## TWO PROCESS FINDINGS FROM THE SESSION'S SECOND HALF
+| limit as I restated it | actual state |
+|---|---|
+| `parse`, 94 chunks against a 90-record batch | **gone** -- the chunk region became a STREAM, one record per call, the coroutine carrying the three range cursors in private data across the loop's RESET |
+| `wire.kel`, 1,148 nodes against a 1,024-node walk cap | **gone** -- the guard was comparing against `nm_max_names()`, a bound on the NAME arrays, where it should have checked the node table's 1,365; every constant in that stage is `Int`, so the walk interned nothing |
 
-**A policy change reached one document and stopped.** `GIT_STRATEGY.md` has said since 2026-08-11
-that continuous integration gates feature branches and the local gate does not. Five other documents
-still said the opposite, including the one that directs an autonomous session. **That is why I spent
-2h30m of the contended machine on a gate CI had already superseded in 48 minutes**, and then reported
-the retired rule to you as policy. All are corrected; `DESIGN_JOURNAL.md` keeps the old wording
-because it is an append-only record of what was believed then.
+**The tree already said so, in the body of the test that proves it.**
+`the_windowed_path_reaches_every_stage_it_can_walk` explains both removals and says its `Expect`
+enum is gone because neither exclusion survives -- while its OWN DOC COMMENT listed both as live.
+A doc comment contradicting the code beneath it is worse than an absent one, because the comment is
+what a reader quotes: the roadmap cell carried both figures, and I copied them into the handoff
+from there.
 
-**The census's last unexamined group was fired by this session's own defect.** Group A is the
-conversion every `?` over the flat scalar codec passes through. It fired twice in the pre-repair
-`narrow-word-16` run, from ordinary programs, as `InvalidBytecode("flat scalar codec: OutOfBounds")`.
-The repair closes that route; the class stays live, because the site's reach is every such `?` and the
-census's instrument cannot enumerate them. **Its message says the bytecode is malformed when the
-artefact was fine** — the same misattribution group F records for the hot-swap site, and equally not
-repaired, because changing which variant a public API returns is a breaking change.
+Three places corrected: the test's doc comment, the roadmap cell, and the handoff bullet. **The
+roadmap is corrected as well as the handoff because it is where the figure was copied FROM** --
+fixing only the copy is the one-of-two-sites failure this session has now met seven times.
 
-## THE FOUR DECISIONS ARE STILL YOURS, AND NONE MOVED
+**A search lesson worth keeping.** I concluded the streaming emitter was unreferenced outside the
+stage, because `grep ck_stream` found nothing in Rust. The driver addresses the stage by COMMAND
+NUMBER -- `CMD_BEGIN = 174`, `CMD_STEP = 175` -- so a name search across the language boundary
+could not have found it. **A cross-language call site is invisible to a single-language grep**, and
+the conclusion was wrong until reading corrected it.
 
-Stated in full at the top of [`HANDOFF.md`](./HANDOFF.md). Nothing in this session implements any of
-them.
+**What remains true for Order 1** is what the previous increment said it was, minus the capacity
+claims: four region kinds of twenty, with `HEADER` encoded but not derived and `CHUNKS` mixed per
+field, and source types before type rejection reaches past literal, direct occurrences.
 
-1. **How does a value enter a `Text<N>`?** It appears in every program anyone writes with the type.
-2. **Is the width bundle worth a breaking change?** 33 signatures, 14 public, in a published crate.
-3. **Should `verify()` refuse float opcodes when the feature is absent?** Evidence complete: about
-   ten lines, prototyped, **zero new failures**, and the one semantic worry is moot. Unlanded only
-   because I said it was your call in a merged document.
-4. **Does any build configuration earn a continuous-integration job?** Note that finding 2 above
-   makes this cheaper than it looked for the width axis, and unchanged for the feature axis.
+## TWENTY-NINTH INCREMENT: THE PREMISE THIS SESSION RAN ON WAS TOO STRONG
 
-## THE HOLE THAT IS STILL PINNED OPEN
+**I re-derived what the roadmap says is outstanding instead of continuing on momentum, and the
+framing that kept this session in one lane for twenty-eight increments does not hold.**
 
-A float-using module verifies, loads, and traps `InvalidBytecode` on a runtime built without the
-`floats` feature — the class `verify()` exists to exclude. Pinned by
-`tests/float_opcode_without_floats.rs`. **Unchanged this session**, and it is decision 3 above.
+`HANDOFF.md` has said, since before this session, that *"the large remaining work is blocked on
+[the four decisions] and the small remaining work is not worth choosing over them."* The four
+decisions block the LANGUAGE-SURFACE work they name -- `Text<N>` programs, the width API, the
+float-verify semantics, a build's continuous-integration cost. **They do not block Order 1**, which
+`docs/roadmap/V0_2_X_ROADMAP.md` identifies as the largest remaining workstream and whose own cell
+says what stands in the way is *"integration, not invention"*:
 
-## THE INTENDED NEXT STEP
+- **The remaining region kinds.** The module-driven emit path covers FOUR of twenty, and unequally:
+  `NAMES` and `STRING_POOL` are COMPUTED, `HEADER` is encoded but NOT derived, `CHUNKS` is mixed
+  per field with ten fields per record host-supplied. Two capacity limits are named with numbers --
+  `parse` at 94 chunks against a 90-record batch, `wire.kel` at 1,148 constant-forest nodes against
+  a 1,024-node walk cap.
+- **Source types.** Type rejection reaches only literal, direct occurrences, because no stage
+  computes source types and `parse.kel` says so in its own comment. A missing pipeline capability,
+  not a missing rule.
 
-Nothing large without an answer to the four. The self-directed work with the clearest value left is
-the remaining narrow-width groups, which are premise repairs and therefore a decision about whether
-the suite should run at a narrow width at all — **that decision is not mine and I have not taken
+**The roadmap carries four open decisions of its OWN** -- cryptography locus, meta-circular bound
+composition, version granularity, reference retirement -- and they are a different four. None
+blocks Order 1 either. **Two sets of four decisions, neither of which blocks the largest
+workstream**, and the resemblance is probably why the conflation went unnoticed.
+
+**The verification work stands**: it found a real runtime defect, corrected several claims, and
+strengthened the instruments. What does not stand is the inference that nothing larger was
+available.
+
+**No guard catches this.** It is a judgement rather than a figure, so it survived a refresh of the
+very file that carries it -- four increments ago, by me, while I was checking eighteen other things
+against the tree.
+
+## TWENTY-EIGHTH INCREMENT: A HOST'S MISTAKE REPORTED AS THE ARTEFACT'S
+
+Census groups F and J are the host-contract surfaces, judged lower value on the grounds that a host
+supplying a mis-sized buffer or an unregistered native has broken a stated contract. True, and not
+the whole question.
+
+**`InvalidBytecode` means *this artefact should never have been produced*.** When a HOST's mistake
+carries it, the message directs the reader to distrust the bytecode -- the one thing that is not
+wrong. This file already records that for ONE hot-swap site, as an open API observation.
+
+**Measured: it is not one site.**
+
+| host mistake | variant |
+|---|---|
+| hot swap whose data vector length mismatches the new module's private slot count | `InvalidBytecode`, naming the mismatch |
+| calling a native the host never registered | `InvalidBytecode`, naming the native |
+| calling an entry point with an argument it does not take | **NOT `InvalidBytecode`** |
+
+**The third row is the control, and it is what makes the first two mean anything.** A runtime with
+one error variant could not be said to choose it wrongly. This one distinguishes -- an
+argument-count mistake gets a different variant, as does a late read under read-before-resume,
+measured two increments ago as a `TypeError`.
+
+So the observation generalises from a single site to **both host-contract groups**. Every refusal
+is CORRECT, each names the actual mismatch, and none of this is a defect report. **Which variant
+carries them is the operator's call**, and it is a breaking change either way.
+
+## TWENTY-SEVENTH INCREMENT: THE CLASSIFICATION METHOD FAILED, AND THAT IS THE RESULT
+
+Naming the unprobed members of census groups E and I needs a per-line classification of the
+forty-seven sites, which the document has never published. **It was attempted and the method
+failed**, and the failure is recorded rather than the guess.
+
+**Assigning each site by what its MESSAGE says** produced group sizes disagreeing with the table in
+four places, with two assignments demonstrably wrong on inspection:
+
+- `"no entry point"` and `"empty call stack"` would not place. Neither is an index out of range, a
+  composite operand form, a data-segment layout, or any other group's stated subject -- yet both
+  are in the population and the table's parts sum to its whole.
+- Group H tallied at four; its own section names exactly three. The fourth was a message that
+  READS like a should-never-have-been-emitted case and is not one.
+
+**A classification with two known errors is worse than none**, because this document's value is
+that every site carries a verdict, and a wrong row silently moves a verdict onto a site it was
+never made about. The messages were written to help a reader diagnose a fault, not to encode a
+taxonomy, and several are equally plausible under two group definitions.
+
+**What a sound derivation needs is recorded**: reading each site's surrounding code against the
+group's stated subject. Until then the unprobed members can be counted and not named -- the state
+the document has been in since it was written, now with the reason written down instead of assumed.
+
+**This is the third time this session a measurement's output was a corrected or refused claim
+rather than a new fact**, and the second time the honest result was to ship nothing but the
+reasoning.
+
+## TWENTY-SIXTH INCREMENT: THIS LINE OF WORK ADDED A CENSUS SITE AND DID NOT TELL THE CENSUS
+
+Deriving the `InvalidBytecode` population from source to name the unprobed members of groups E and
+I turned up something else first: **the source has 47 construction sites and the census says 46.**
+
+**The site is ours.** The opaque-width repair of 2026-09-08, part of this same line of work, added
+`"flat opaque field read out of bounds"` to `src/vm.rs`. Confirmed by counting at the census's own
+commit -- 50 raw matches then, 51 now -- and by diffing the message multisets, which names exactly
+that string as the addition and nothing as removed.
+
+**A source-derived guard existed and did not fire, BY DESIGN.**
+`the_invalid_bytecode_census_still_describes_the_tree` scans the runtime sources and compares
+against the stated figure with a tolerance of plus or minus four. Its own message explains why:
+*"the comparison carries a small tolerance rather than pretending to exactness the scan cannot
+deliver."* A drift of one sits well inside it. **The tolerance that makes the guard robust also
+makes it blind to exactly the movement that happened** -- a property of the instrument, not a
+mistake in it.
+
+**My first account of this said "nothing noticed and every guard was green", and that was wrong.**
+I found the tolerant guard only when my edit broke its extraction. Corrected before it entered the
+tree, and both versions are visible in this increment's history.
+
+**An exact counter now sits beside the tolerant one.** It can be exact because it reproduces the
+document's exclusions mechanically -- comments by a strip, the match arm by its `(_)` pattern
+position, the unit tests by truncating at the test module -- which is the distinction the tolerant
+guard declines to make. Both are kept deliberately: a tolerant alarm that survives refactoring, and
+an exact one that notices a single site. Mutation-checked: dropping the pattern-position exclusion
+fails it.
+
+**The new site got a ROW, not a reclassification.** Its sibling -- the identical bounds guard on a
+flat `Text` field -- was already in the population, so the two plausibly belong together. But this
+census publishes no per-line classification, and **guessing which group the sibling occupies would
+be worse than leaving the new site in a row of its own.** Group K holds it, verdict "not examined",
+and folds in if a future pass derives the classification. Population 47, examined 37, remainder ten.
+
+## TWENTY-FIFTH INCREMENT: THE HANDOFF REFRESHED AFTER NINE INCREMENTS
+
+`docs/process/HANDOFF.md` was last refreshed at the fifteenth increment and the session is at the
+twenty-fourth. Its banner described three lines of work that predate the width floor, both sweeps,
+the runtime grid, the float differential, the census closure, the indirect-site enumeration and
+group G. **A resuming agent would have got a picture nine increments out of date**, and that file
+is the designated resume anchor.
+
+**Every validity check was RUN, not copied forward.** Fingerprint `0x4327_63E1`, SEVEN crates,
+fifteen named guards green under `self-host`, the floats-absent test green under
+`--no-default-features`, the boundary triple pinned, and the two long ones -- region coverage at 66
+seconds and the boundary pin at 169 -- actually executed rather than assumed.
+
+**One check nearly reported a false pass.** Running item 12's test by name gave *"0 passed; 38
+filtered out"*, because it lives in `claimed_counts.rs` rather than the binary I guessed. **A run
+that executed no tests is not a pass**, and the only reason that did not enter the record is the
+rule already being written down.
+
+**The list reads 1 to 18 with no inversion, checked by RENDERING it** rather than by writing the
+next number -- the distinction this file has paid for three times. Items 16 to 18 cover the width
+floor, the descriptor and runtime sweep, and the guard census with its two companion pins.
+
+**The banner carries what is NOT established, not only what is.** Fourteen shapes is not every
+construct; reach is proven at `narrow-word-16` and no other narrow selector; the census's
+population remains a lower bound; groups F and J and one member each of E and I remain, none
+individually named. The four corrections are kept at the same prominence as the findings, because
+three of the nine increments produced a corrected claim rather than a new result.
+
+## TWENTY-FOURTH INCREMENT: GROUP G'S OTHER TWO SITES, AND A GUARD THAT REFUSED MY ARITHMETIC
+
+Group G's entry read "no witness found (1 of 3 probed)", with the other two described as
+"host-supplied opaque handles going stale, which is a different question and untested here". Both
+routes are now probed in `tests/opaque_across_reset.rs`, and **neither reaches an
+`InvalidBytecode`.**
+
+**Route one is closed at COMPILE time.** A persistent `data` slot's body survives RESET, so a
+composite bearing an opaque stored there would carry a registry index across a reset. It cannot be
+stored there at all: *"opaque types are not yet admissible in data segment fields"*. The probe
+admitted three outcomes -- resolve, fault, or refusal -- and the answer was the third; **it was not
+guessed, and the first draft of the test said so by failing with the refusal message rather than
+asserting a resolve.** The guard now asserts that MESSAGE, because a refusal for an unrelated
+reason would leave the route open for every shape that reason does not cover.
+
+**Route two produces a `TypeError`, not an `InvalidBytecode`.** `src/vm.rs` documents that a
+yielded value stays arena-resident and must be decoded before the next `resume()`, "a read
+afterward resolves to a clean stale error" -- a claim about a host-facing contract that nothing
+checked. Doing the forbidden thing gives a `TypeError` naming read-before-resume. **The VARIANT is
+the census-relevant part**, since group G is a group of `InvalidBytecode` sites, so the test
+asserts it is not that variant rather than merely that the read failed.
+
+**Then a guard I did not know existed refused the edit.** Removing group G's probe count moved the
+examined total from thirty-five to thirty-seven, because this census's own convention is that a
+verdict without a probe count extends to every member.
+`the_census_group_table_adds_up_to_its_stated_totals` compared the table against the prose and
+failed. **Re-derived in both places rather than adjusted in one**, which is precisely the failure
+its message names: *"adjusting the total instead is how group G went missing from every remainder
+list."* The remaining count falls from eleven to nine.
+
+## TWENTY-THIRD INCREMENT: THE SITES THE INSTRUMENT CANNOT SEE, COUNTED
+
+`INVALID_BYTECODE_CENSUS.md` derives its population by grepping for the variant where it is
+CONSTRUCTED, and says plainly what that misses: a site propagating the error from a helper, or
+mapping another kind into it, does not appear. It also notes that one such conversion exists and is
+included only because the grep happened to see it.
+
+**That conversion is `impl From<ScalarError> for VmError`, and the grep counts it as ONE site.** It
+is one construction and many reaching paths: a malformed artefact arrives through every call that
+can raise a `ScalarError`, and the table attributes all of them to a single group-A row.
+
+**Enumerated: six call sites in `src/vm.rs` and four in `src/marshall.rs`**, each converting
+through `?` in a `VmError`-returning function or an explicit `map_err(VmError::from)`. All ten were
+read individually rather than assumed from the pattern. So "the population is a lower bound" now
+has a number against it -- 46 constructed sites plus ten paths collapsed into one of them --
+and `tests/invalid_bytecode_indirect_sites.rs` keeps it current. **A failure there is not a defect;
+it means the census's figure has gone stale**, which is exactly what a lower bound cannot tell you
+on its own.
+
+**An overclaim caught by measuring it.** The guard strips comments, and the natural justification --
+both files' documentation names these functions, so an unstripped count would include prose -- is
+FALSE today. Raw and stripped counts are both 6 and 4, because every prose mention omits the
+opening parenthesis the pattern requires. The strip is defensive, not load-bearing; the file says
+so, and its decoy carries the offending shape deliberately so the guard still fails without it.
+
+## THE CURRENCY GUARD FIRED, WHICH IS THE FIRST TIME THIS SESSION
+
+Adding that file pushed the integration-test count past the tolerance in `tests/claimed_counts.rs`,
+which reported that `CLAUDE.md` states 101 files against a tree holding 112.
+
+**Re-derived rather than adjusted**: 1282 lib tests under `self-host`, 1275 under default features,
+1327 integration `#[test]` functions across 112 files. Both occurrences in `CLAUDE.md` updated.
+
+**The attribution was made truthful rather than convenient.** The line has always read "Measured
+<date> at <hash>", and the obvious move was to write the current HEAD. That hash names a tree with
+111 files, not 112, because the measurement includes the file the same commit adds. **No hash can
+be written there truthfully**, and the line now says that instead of naming one that is wrong by
+one.
+
+## TWENTY-SECOND INCREMENT: THE LAST TWO CENSUS ENTRIES RESOLVED, AND THEY RESOLVED OPPOSITELY
+
+`GUARD_REACH_CENSUS.md` had two entries reading "cited, not demonstrated". Both are now settled,
+and **the useful part is that asking the same question of each produced OPPOSITE answers.**
+
+**`forest_child_channels.rs`: repaired, strip shown load-bearing.** Its extraction splits on
+`": "`, which a COMMENT satisfies as readily as a field. A line reading `// channel: Vec<u32>`
+becomes the pair `("// channel", "Vec<u32>")` and enters the field list as a seventh channel that
+does not exist -- and if a real field were removed in the same edit, a phantom would stand in for
+it and the count would still pass. Measured: with the strip removed the new guard fails, naming
+the phantom.
+
+**`composite_escape_routes.rs`: safe by construction, established by MEASUREMENT.** Removing
+`code_only` entirely leaves all ten tests in that file passing. A comment cannot contribute an
+opcode name, because a line beginning `//` is skipped and the anchor line itself fails the
+uppercase-identifier test -- two independent filters, either of which suffices.
+
+**My first guard for that file was VACUOUS, and I reverted it rather than shipping it.** The decoy
+produced the identical opcode list with the strip removed, so it demonstrated nothing. Retargeting
+it at the per-line filters did no better: removing either filter still leaves the phantom rejected
+by the other. **A test that cannot fail is worse than no test, because it reads as coverage.** The
+brief for this increment listed that exact trap, and the measurement still had to tell me.
+
+**A reversed judgement, with its reason recorded.** The census had argued that a fourth
+near-identical test might be worth less than stating the gap. That was reversed on new
+information -- the guard added to `forward_data_reference.rs` under the same argument was
+mutation-checked and fails with its strip removed -- and the census says so rather than presenting
+the new verdict as though it had always held.
+
+## TWENTY-FIRST INCREMENT: A GAP I NAMED WAS MOSTLY NOT A GAP, AND THE PART THAT WAS IS CLOSED
+
+The twentieth increment ended by naming "float arithmetic across a width-mismatched pair" as
+unswept. **That sentence was nearly a mis-reading of the tree.**
+`tests/float_arith_width.rs` covers exactly that property -- arithmetic honours the module's
+DECLARED float width, not the runtime's -- with every test declaring a 32-bit float on a 64-bit
+runtime, eight of ten narrowing sites established by MUTATION, and the other two argued
+witness-free for a reason rather than merely unwitnessed.
+
+**A limitation of the sweep is not a limitation of the tree**, and writing the first as though it
+were the second is the quiet way a document overstates what is missing. Corrected in place.
+
+**The part that WAS genuinely absent is now present.** That file runs every case on ONE runtime, so
+it establishes the declared width governs THERE -- not that the answer is independent of the
+runtime, which is what the phrase "honours the declared width" actually claims. The two authorities
+are the point. The same declared-`f32` module now runs on an `f32` runtime and an `f64` one and
+must agree BIT-FOR-BIT, on the same four witnesses that file already established as
+width-discriminating, with the vacuity check re-asserted rather than inherited so a witness that
+stopped discriminating fails loudly instead of agreeing trivially.
+
+**Mutation-checked**: removing the `Op::Add` narrowing fails the new differential as well as the
+existing test.
+
+## TWENTIETH INCREMENT: THE THIRD WIDTH, FROM BOTH SIDES
+
+The nineteenth increment left the runtime's float at `f64`, so the float authority was swept from
+the module side only. It is now swept from both, and the corpus USES a float rather than only
+declaring one.
+
+**`f32` runtimes.** All sixteen word-address pairs now run on both float runtimes, so a module
+declaring a sixty-four-bit float meets a runtime that cannot host it and is refused at load -- the
+same asymmetry already swept on the other two widths.
+
+**A float in a body.** A `Float` field between the opaque and the word after it puts the float
+width into a computed OFFSET, exactly as the address width enters through the opaque. **The value
+read back is the integer field, never the float**, because a shape whose expected value were a
+computed float would report an `f32`-versus-`f64` rounding difference as a wrong answer, and that
+is a width difference the sweep is not entitled to call a defect.
+
+**21504 cells: 6800 ran and were correct, 14192 refused at load, 512 refused at compile, nothing
+else.** Green at the default build, three narrow selectors, and a build with `floats` ABSENT, where
+the float shape compiles out and the rest is unaffected.
+
+**Both refusal counts land on their own closed forms.** The 512 are the float shape against the
+sixteen no-float descriptors on each of thirty-two runtimes. The 6800 match the per-cell prediction
+exactly.
+
+**The prediction had to get BETTER to accommodate the float shape, which is the useful part.** It
+previously assumed every shape runs under every admissible descriptor, so it could be a product. A
+shape needing floats cannot run where the descriptor declares none, and that refusal comes from the
+COMPILER rather than the loader. It now models each shape's own requirement, which is a truer
+statement of what the sweep claims than the version it replaced.
+
+**The control gives 200 findings**, against 120 on the sixteen-runtime grid and twelve on the
+single-runtime sweep, still on exactly one shape -- and the count matches its own closed form:
+eighty on no-float descriptors, eighty at `f5`, forty at `f6`, the last halved because only `f64`
+runtimes admit a sixty-four-bit float.
+
+**Three analytic agreements now stand** between a measured count and an independently derived one:
+the cells that load, the cells the compiler refuses, and the findings the control produces. Each
+tests the HARNESS rather than the runtime, and a sweep that skipped a runtime or refused for the
+wrong reason would break them.
+
+## NINETEENTH INCREMENT: THE SECOND AUTHORITY, AND A CHECK THAT THE NARROW BUILDS CAUGHT
+
+**Every width is carried TWICE** -- by the module header and by the runtime type parameters of
+`GenericVm<W, A, F>`. The load check refuses a module WIDER than the runtime and admits one
+NARROWER, and that asymmetry is where the second authority becomes visible. It is where the
+original opaque-width defect lived. The descriptor sweep varied only the module.
+
+`Word` and `Address` are implemented for four types each, unconditionally, so **sixteen runtime
+pairs are constructible in the DEFAULT build**. The grid generalises `composite_width_skew.rs`'s
+two hand-picked runtimes to all sixteen.
+
+**9984 cells: 3900 ran and returned the expected value, 6084 were refused at load, nothing else.**
+Every refusal is a module wider than its runtime, which is the guarantee working. Green at the
+default build and all four narrow selectors.
+
+**The harness is checked against an independent path.** The loader's documented rule, evaluated per
+cell from the descriptor and the runtime's own trait constants, predicts which cells load without
+the loader's involvement. The measured 3900 agrees exactly. A sweep that skipped a runtime, or a
+refusal from some check other than the width one, would break the agreement.
+
+**The first version of that check was WRONG and the narrow builds caught it.** It used a closed
+form -- the product of two triangular numbers -- which assumes the runtime grid and the descriptor
+set span the same widths. They do not: the grid is over concrete Rust types and is identical in
+every build, while the descriptor set shrinks with the build's maxima. Right at the default build,
+wrong at all four narrow selectors: 2730 ran against 1170 predicted under `narrow-word-16`.
+
+**The control says something about the defect, not only about the harness.** Reintroducing the
+sub-floor address produces **120 findings** against twelve on the single-runtime sweep, still on
+exactly one shape, and they appear on EVERY runtime that admits the module. The defect is a
+property of the module's declared width; the second authority neither masks it nor creates it.
+
+**A tooling note worth keeping.** Writing Rust source through a non-raw Python triple-quoted string
+silently reinterprets backslash sequences: a Rust line continuation is consumed as a PYTHON
+continuation and `\n` becomes a real newline. Three assertion messages reached the tree mangled but
+still compiling, so nothing failed. Use a raw string.
+
+## EIGHTEENTH INCREMENT: A WIDER CORPUS FOUND NOTHING, AND CORRECTED A CLAIM ANYWAY
+
+The seventeenth increment wrote down that six shapes is not every construct. **Seven were added,
+each for a width-derived layout property the first six do not stress** -- a `Fixed<4>` whose default
+fraction count is derived from the word width, a `Byte` whose offset contribution is
+descriptor-invariant while its neighbours' are not, stride COMPOSED with a field offset, stride
+NESTED inside another array, a composite behind an enum discriminant, a const parameter erased to a
+literal that feeds a size, and a `Multiword<2>` limb index.
+
+**624 cells, every one ran and returned the expected value**, at the default build and at all four
+narrow selectors including both eight-bit ones. The sweep now NAMES any cell that does not run, so a
+shape refused everywhere cannot be mistaken for coverage.
+
+**The value is not the negative result.** Re-running the control against the larger corpus produces
+**exactly the same twelve findings on exactly the same one shape**. Two of the seven additions also
+stride, and NEITHER reaches the defect. So the characterisation written the same day -- *"the array
+stride multiplies an element size, so a zero-byte scalar surfaces there"* -- **was incomplete**.
+Striding is not the discriminating property. The element must itself CONTAIN the address-sized
+scalar. An array of words, or of arrays, strides just as much and reaches nothing.
+
+**A widened corpus that finds no new defect can still correct a claim.** That is the transferable
+part, and it is the second time this session a measurement's chief value was overturning a sentence
+rather than finding a fault.
+
+## THE INSTRUMENT DEFECT THAT COST THIS SESSION AN HOUR
+
+I started a second verification gate while the first was still running, having deleted the status
+file they both append to. The record interleaved two runs -- `CLIPPY=0` from one, the `ALLDONE` from
+the other, which had FAILED clippy -- and **no line could be attributed to a run**. Then I edited
+the gate script while it was executing.
+
+That is the shape `NARROW_WIDTH_FAILURE_CLASSIFICATION.md` already records, *"a measurement taken
+while its subject is being edited measures neither state"*, applied to my own log two increments
+after writing it down.
+
+**The repository already solves this and I did not use it.** `scripts/gate-in-worktree.sh` names its
+log per gate and per commit and pins the run to an immutable commit in a detached worktree, and its
+header states the reasoning verbatim: the rule that a gate result is valid only for the tip it ran
+against "stops being a discipline anyone has to remember and becomes a property of the mechanism."
+
+Its warning about STOPPING a gate was also correct in detail: a path-scoped kill of the driver left
+`cargo test --features self-host` reparented and still running, exactly as its header says, and the
+second target-scoped kill is not optional. The ad-hoc gate now writes one status file per run.
+
+## SEVENTEENTH INCREMENT: THE AXIS THE CENSUS NEVER VARIED, SWEPT AND CLEAN
+
+The lead the sixteenth increment opened is now measured. `tests/target_descriptor_axis.rs` sweeps
+**every target descriptor the compiler accepts** -- word and address from the narrowest implemented
+width to the runtime's maximum, each with no floats and with every float format the runtime
+implements -- against six shapes chosen for the constructs whose layout is WIDTH-DERIVED.
+
+**48 descriptors by 6 shapes, 288 cells, and every cell RAN and returned the expected value.**
+Nothing refused, nothing faulted, no wrong answers. Green as well under all four narrow selectors,
+including the two eight-bit ones, where the descriptor space shrinks with the runtime's maxima.
+
+**The control is what makes that mean anything.** Removing the address floor and admitting sub-floor
+widths produces TWELVE findings, each named by descriptor and shape, reproducing the sixteenth
+increment's defect through this harness -- and the same run classifies ninety compile-time refusals
+correctly, so the refusal path is exercised too.
+
+**Only ONE shape of six reaches it.** The array stride multiplies an element size, so a zero-byte
+scalar surfaces there and is absorbed everywhere else. A corpus of five ordinary programs could have
+missed the defect entirely. That is an argument about how thin any small corpus's evidence is, not a
+claim that this one suffices.
+
+**The first draft of the sweep was wrong, and the sweep said so on its first run.** It required at
+least one cell to be REFUSED, assuming some admissible descriptor would be rejected. None is. The
+check asserted a property that had not been measured, inside a test written to measure properties.
+It now constrains the descriptor set's SPREAD, which is what non-vacuity actually needs.
+
+**What this does not establish** is written into the census beside the result: the population is
+still a lower bound, six shapes is not every construct, and no group carrying a probe count is
+closed by this.
+
+## SIXTEENTH INCREMENT: A DEFECT UNDER THE UNPROVEN REACH, AND THE ARGUMENT APPLIED TO ONE WIDTH OF THREE
+
+The session's own residue was the subject: two guard-reach claims it had NOT established, and the
+question of how many more there were. Closing the first found a defect in the runtime.
+
+**`Target::validate_against_runtime` had no floor.** It checked that the word, address and float
+widths did not EXCEED the runtime's and never checked the other end. A target declaring
+`addr_bits_log2 = 2` compiles. The layout sizes an opaque by the ADDRESS width, four bits is zero
+bytes, and the fault surfaces at run time as `InvalidBytecode("NewComposite flat operand on
+non-flat values")` -- a message naming neither the width nor the target, pointing its reader at
+composite construction, which is the one place there is nothing wrong.
+
+**The argument was already in the tree, twice, applied to the float width only.**
+`validate_program_for_target` refuses `float_bits_log2` below 5 because such widths "are not
+formats ... so a target declaring one produces bytecode nothing will run", and
+`tests/float_arith_width.rs` records where that came from: the V0.3.0 line observed that widths 0,
+1 and 2 collapse to ZERO BYTES. Neither sentence is about floats. `1 << bits_log2` over eight is
+zero below 3 whichever field it names.
+
+**It was found by a derivation that produced one, and the derivation was mine.**
+`composite_width_skew.rs` clamps an address one step below the build's word, with a floor of 2.
+Under `narrow-word-8` the word is 3 and the clamp handed back a four-bit address. **That is the
+sixth time this session the class under repair has appeared inside the repair**, and it is recorded
+because the frequency is now evidence about the work rather than about any one edit.
+
+**The premise guard is the transferable part.** Every test in that file is about widths that
+DIFFER, both targets are derived, and a derivation can collapse. If the address came out equal to
+the word, all ten tests would pass while exercising nothing. Nothing would have reported it. The
+file now asserts its own premise and fails loudly under `narrow-word-8`, where the word is already
+at the narrowest implemented width and no narrower address exists. **A build the file cannot cover
+is a different thing from a defect it has found**, and the message says which.
+
+## THE REACH THAT WAS UNPROVEN IS PROVEN, FOR ONE BUILD, WITH A VALID CONTROL
+
+Two of the four runtime sites that ask the layout for the opaque width were reverted to asking for
+a word. **Each failed at the DEFAULT build** -- the control that makes the probe mean anything --
+**and each also failed under `narrow-word-16`**. One failed STRICTLY MORE tests at the narrow width
+than at the default, so that build is not a degraded copy of the default. The earlier attempt
+failed at neither width and was nearly reported as evidence the corpus had gone vacuous.
+
+No reach claim is made for any other selector. The eight-bit ones were run over this file and are
+NOT clean: two losses at `narrow-word-8` and eight at `narrow-address-8`, every one inadmissible by
+construction, enumerated with its reason. The clamp repair removed a third that was the zero-byte
+opaque rather than a property of the corpus.
+
+## THE PARITY GUARD'S SILENT DIRECTION, AND THE CONTROL THAT MATTERS MORE THAN THE RESULT
+
+Only the false-FAILURE direction had been checked. Measured now: a real seeding call deleted from
+the shipping driver with the identical text left in a comment. The guard FAILED, naming the slot
+and both counts. **Then the control: with the comment strip disabled and the same mutation in
+place, the guard reported `ok`.** The strip is load-bearing, which is a stronger statement than the
+guard merely passing.
+
+## AND THE CENSUS THAT CLAIMS TO ENUMERATE THAT CLASS DOES NOT NAME THE SITE
+
+`docs/decisions/INVALID_BYTECODE_CENSUS.md` asks, at each site, whether a module a SUPPORTED
+PRODUCER emitted and `verify()` ACCEPTED can reach it. One did, and no group names that message.
+
+**The axis is the reason.** The census enumerated by the error constructed at each site and reasoned
+about what a PROGRAM can express. A degenerate TARGET DESCRIPTOR is a different axis: the program is
+ordinary and the module is malformed by the width it declares. The population derivation does not
+reach that axis, and the assumption that the target is well-formed was never stated.
+
+The route is closed, so this is a record of the census's REACH, not a live hole. **What is NOT
+established is whether other sites are reachable the same way**, and the addendum says the next pass
+should ask each group's question with the target descriptor as a variable rather than only the
+program.
+
+## THE CENSUS: SIXTEEN DEMONSTRATED, TWO CITED-BUT-NOT
+
+`docs/decisions/GUARD_REACH_CENSUS.md`. The population is DERIVED -- the test files added or
+modified between `639108fd` and `b74380a2` -- not recalled. Eighteen files. Sixteen record a
+demonstration of their own guard failing. **Two do not**: `composite_escape_routes.rs`, whose
+measured statements are about the tree rather than about the guard, and
+`forest_child_channels.rs`, which cites a measurement made on a DIFFERENT guard. Both are named
+with the cost of closing them, and neither is repaired. Inventing a fourth near-identical test is
+not obviously worth more than saying plainly that two files rest on a property nothing checks.
+
+**Three were repaired during the census.** `narrow_vm.rs`'s widened predicate said in prose that it
+"deliberately does NOT accept any error at all" -- a claim, with nothing checking it; a later edit
+relaxing it would have made three tests vacuous with all three still green. `forward_data_reference.rs`
+documents that a comment naming an anchor can make its ordering assertion report the WRONG STRUCTURE
+as a pass, and nothing checked that either. Both now have negative cases, and both were shown to
+fail when the mechanism they depend on is removed.
+
+## NINTH INCREMENT: THE CLASS CLOSED, AND A TRIPWIRE CHOSEN OVER NINE PARSERS
+
+**The class is closed with a population and a verdict per file**, not abandoned when the obvious
+cases ran out. `docs/decisions/COMMENT_MATCHING_GUARD_SWEEP.md` lists thirteen files: **nine
+repaired, three safe by construction, one not in the class.** A line-prefix search is safe because a
+comment line begins with `//` — a property of the search, not a judgement about the file.
+
+**The last three.** `tests/selfhost_bare_for.rs` asserts the **absence** of a removed refusal in raw
+`parse.kel`, and a historical note naming it makes the guard report that the stage *"still defines or
+raises"* it — **a false failure that names a cause which does not exist**, sending its reader after a
+definition that is a comment. `tests/selfhost_driver_parity.rs` counts seeding calls against a calibration, so
+a comment adds a phantom. The false-failure direction was verified then; **the silent-false-pass
+direction was measured on 2026-09-10 and the strip shown load-bearing** (see the sixteenth increment
+above).
+
+**The block-comment gap: measured, then tripwired rather than parsed.** All nine strips handle `//`
+and none handles `/* … */`. **Exposure today is zero** — the only `/*` in the stage sources is inside
+a line comment about the `+`, `-` and `*` operators, and every `src/*.rs` occurrence is in a doc
+comment or test string. But Keleusma supports block comments, so the risk is latent.
+
+Teaching nine helpers cross-line state is complexity bought for no current exposure, so
+`tests/block_comment_tripwire.rs` fails if one ever appears and names the document. **That trades
+certainty for proportionality, and is the judgement most worth reviewing**: the guards remain unable
+to handle a block comment; the check only ensures nobody introduces one unnoticed.
+
+Its detector deliberately does not fire on a `/*` inside a line comment or a string literal, both of
+which this tree contains, and a second test pins those shapes — without it, tightening the detector
+until it reported nothing would look like a fix.
+
+**The transferable rule**: only an **absence** assertion loses silently to an early truncation.
+Everything else fails loudly, so the naive strip is correct in eight of the nine.
+
+## EIGHTH INCREMENT: FOUR MORE, AND THE DEFECT COMMITTED INSIDE ITS OWN FIX
+
+**A third silent false pass.** `tests/stage_command_reach.rs` has a helper that strips comments and
+whose doc cites *"four recorded instances of a guard firing on the prose that explains it"*, while
+three **presence** assertions beside it searched the raw driver. Change `CMD_STEP`'s value, leave the
+original text in a comment, and the test reports **2 passed, 0 failed**.
+
+**Three files now**, each documenting the hazard in its own prose while guarding one of two readers.
+
+**Three anchor-locates repaired.** One historical note failed three tests in
+`composite_escape_routes.rs` with nothing wrong in the source it read.
+**`forward_data_reference.rs` is the subtle one**: its positions feed an `at_fn < at_blk` ordering
+assertion, so a comment can change which declaration appears first and make the test assert the wrong
+thing about the stage rather than fail loudly.
+
+**I committed the same defect inside its own fix** — computing one offset from the stripped copy
+while the slice beside it indexed the raw string. Caught by running the tests, not by reading the
+edit. **That is the most useful result of the increment**: it shows the class is not carelessness
+that attention prevents, which is why a mechanical sweep found instances that four documented prior
+incidents did not.
+
+**Two controls measured nothing** because they did not compile — renaming a constant used elsewhere,
+and adding an opcode to an exhaustively matched enum. Both replaced by controls that build; the
+second shows the extraction panics loudly rather than returning an empty list.
+
+**Seven guards examined.** Only the radix guard needs the string-aware strip, its assertion being an
+**absence** one; the other six fail loudly and the naive form is correct. Deliberately not unified —
+sharing a helper would add cost to six and remove a needed guard from one.
+
+## SEVENTH INCREMENT: THE SWEEP, AND A FALSE PASS ON THE HISTORICAL DEFECT
+
+Two instances of the comment-matching class were found by **reading**. Asking the class question
+**mechanically** — which test files search source for a code-shaped literal without stripping
+comments — found **twelve**. That is the difference between finding instances and finding a class.
+
+**The one that mattered runs the opposite direction from the first two.** Those are **absence**
+assertions, where a comment causes a noisy false *failure*. `wire_self_compile_status.rs` asserts the
+**presence** of `forst.forin_count = 0;` — the exact line whose absence *was* the historical `wire.kel`
+defect — and a comment satisfying a presence assertion is a **silent false pass**.
+
+**Measured by isolating the test**: with the real reset deleted and the identical text left in a
+comment, it reported **ok**.
+
+**The file was not fooled.** A sibling *behavioural* test failed, because deleting the reset really
+does break the stage. **But that backstop is incidental**: narrow the behavioural test, or change the
+stage so deletion no longer breaks byte identity, and this assertion is the only defence and does not
+hold. A guard named for the historical repair should not depend on a different test to be right.
+
+**I nearly reported this wrongly.** The first run showed the *file* failing, which reads as "not
+fooled". Only isolating the single test separated "the file fails" from "this assertion holds".
+
+**Three comment-strippers now exist with three risk profiles** — string-aware for the absence guard,
+naive for the two whose truncation fails loudly — and each says why it is not shared.
+
+## SIXTH INCREMENT: THE SAME CLASS AGAIN, IN THE FILE THAT DOCUMENTS THE CLASS
+
+Scoping the comment-matching defect **by class rather than by where I looked** found a second
+instance — in `tests/op_tag_tables.rs`, **whose own doc cites a divergence detector broken by a
+commented-out `for k in 0..3`.**
+
+It has two source extractions. `decoder_arms` strips comments and **then** locates its anchor.
+`stage_tag_table` did the reverse — `find` on the raw source, stripping only the block it found — so
+the anchor search itself was comment-blind. **Measured: one comment line mentioning the anchor
+failed four tests in that file**, with nothing wrong in the stage.
+
+**The shape is the one this tree keeps meeting**: a case handled for one construct and not for the
+one beside it, as with `rewrite_pattern_enum_name`, `check_pattern_against_type`, and `forin_count`.
+Here both siblings sit in one file, one of them already correct, under a doc warning about the exact
+hazard. **Knowing a hazard and guarding one of two sites is the recurring failure, not ignorance of
 it.**
 
-**Both censuses moved since the paragraph above was first written.** The discard-arm census is
-**CLOSED at 19 of 19**: its last two arms are a `_ => 0` fallback that cannot fire, because the only
-slots it reads are declared `Word` and a `Word` slot yields an `Int` and nothing else. They are now
-the assertion their sibling closure already was.
+**The two comment-strippers are deliberately not unified, and both now say why.** The radix guard's
+is string-aware because its assertion is an **absence** one, where an early truncation means a
+missed offender passes silently. Here an early truncation makes an anchor or a field go missing and
+fails loudly. The naive form is correct in one and wrong in the other, so tidying them together
+would either add unneeded complexity or remove a needed guard.
 
-The `InvalidBytecode` census stands at **35 of 46**, and **should not be driven to 46**: its own
-methodology says probing every member of a class is not a better use of the same effort, and the
-eleven that remain are siblings inside classes that already carry verdicts, plus host-contract
-surfaces.
+**Both directions mutation-tested**: the comment that broke four tests now passes, and a duplicate
+tag number still fails three. The second matters as much as the first — an extraction can be made
+comment-proof by making it find nothing at all.
+
+## FIFTH INCREMENT: A GUARD THAT COULD NOT COEXIST WITH A COMMENT ABOUT WHAT IT GUARDS
+
+This repository records **four** instances of a guard matching prose it was never meant to read. One
+guard is still exposed. `every_site_in_the_call_packing_family_agrees_on_the_radix` asserts that
+**no** site splits a `Call` record on the old eight-bit radix, and it searched raw source lines.
+
+**Measured**: adding a plain historical note — *"the Call record once split its chunk field as
+`count * 256`"* — to a source file **fails the test**, with nothing wrong in the tree.
+
+**The remedy already in the file is the part that worried me.** It records flagging itself once,
+"the third time a guard in this repository has done that", and the fix applied was to skip the whole
+file. That costs reach, and it is the fix a later reader copies.
+
+**The obvious fix introduces the opposite defect.** Truncating at the first `//` cuts inside a string
+literal like `"http://a"` and drops a **real** occurrence — and for an absence assertion that is the
+dangerous direction, since a missed offender passes silently where a matched comment merely fails
+loudly. The strip is therefore string-aware. **Block comments are not handled and the code says so.**
+
+Three mutations: the historical comment now passes, a real code site still fails, and a real site
+after a string containing `//` still fails. **The third is what justifies the complexity** — a naive
+strip would have missed it.
+
+**A run that executed no tests is not a pass.** The first demonstration reported
+`0 passed; 0 failed; 0 filtered out` because the binary is gated on `self-host`, and I nearly read
+that as the comment being harmless.
+
+## THE NARROW-WIDTH LINE REACHED ITS FLOOR: 36 -> 13, NONE EXCLUDED
+
+The standing claim was *"the whole suite at a narrow width is unverified — not shown broken, not
+shown working."* **Twenty-nine failures repaired, nothing newly broken, and no test excluded.**
+
+| stage | distinct failures | binaries green |
+|---|---|---|
+| start | 36 | 98 |
+| after deriving `tests/narrow_vm.rs` and my own two files | 33 | 100 |
+| after `tests/float_arith_width.rs` and `tests/composite_width_skew.rs` | **13** | **102** |
+
+Every figure came from **diffing the failing sets**, never subtraction — a rule that earned its keep
+twice here, once when a reduction concealed three new failures of my own, and once when a total
+coincidentally matched a stale recorded figure.
+
+**The thirteen that remain are real wide-word dependencies, checked rather than assumed.** Seven are
+programs declaring `require word >= 32` — the **self-hosted stage sources**, fourteen of which
+declare it, so the refusal is the directive working. One pins 64-bit semantics with a constant that
+does not exist at sixteen bits. Two are Q-format fractions inadmissible at the width by
+construction.
+
+**Making any of them pass would mean weakening a program's stated requirement**, which is coverage
+hiding rather than repair.
+
+**The claim is now sharper, not finished**: the narrow width runs everything that can run there, and
+what cannot is enumerated with a reason. That is not "the narrow widths are verified" — one
+corpus's narrow-width REACH is still unproven, and the probe that would have shown it was invalid.
+
+## WHAT I GOT WRONG THIS SESSION, KEPT BECAUSE THE CORRECTIONS COST SOMETHING
+
+| claim | outcome |
+|---|---|
+| a red CI job was the **feature-set** trap | **wrong** — the same test fails under default features. The real cause: I ran the guards BEFORE the last edit and only `cargo fmt --check` after it |
+| "every guard I wrote had a first-draft defect" | **overstated** — four of seven. Two were got right before shipping; one guard was fine and my characterisation of its output was wrong |
+| two CI jobs looked **stuck** at 90 minutes | **wrong baseline** — those two take 60 minutes each and ~52 had elapsed. I nearly escalated a non-problem |
+
+**And I fixed what the guard caught, not the class.** The citation guard scans two documents, flagged
+two bare file names in one, and I corrected exactly those — leaving the identical names in the task
+log's newest note because nothing pointed at them. **Same one-of-two-sites shape, committed while
+cataloguing it.**
+
+**A measured recommendation left as the operator's call.** Should the task log be scanned by the
+citation guard? Not whole: sixty of its citations name identifiers that no longer exist, and
+inspection shows most are legitimate — pins deleted as the work moved on. **A currency note is a
+dated record, so its names going stale is the file working correctly.** Scanning only the newest note
+would be bounded and meaningful, but it needs a rule for where a note begins and puts a recurring
+cost on whoever writes the next one. Recorded, not adopted.
+
+**A figure confirmed rather than trusted.** This file's CI timing — about 61 minutes with a
+~59-minute critical-path job, measured 2026-09-08 — was independently reproduced today: `Test` and
+`Test (self-host feature)` each take about 60 minutes and start together. **Three pushes to one
+branch therefore cost three full cycles**, which is the argument for batching fixes rather than
+pushing them as found.
+
+## FOURTH INCREMENT: A DEFECT SHAPE TURNED INTO A ONE-SECOND CHECK
+
+The first four increments produced measured negatives. This one took a defect that **actually
+happened** and asked whether its shape is mechanical.
+
+The `wire.kel` self-compilation failure's last cause was one line: `forin_count` was never added to
+the per-function reset that already cleared its own documented analogue `forlimit_count`, and it
+indexes an emitted record as `7 * forin_count`, so every function after the first emitted a record
+pointing past its own parts. **Finding it took prefix bisection, a rebuilt dependency chain, delta
+debugging and a five-line synthetic, with two of the four causes first diagnosed wrongly.**
+
+The shape is a grep, and `tests/selfhost_counter_reset.rs` now is one.
+
+**The class is clean** — three members, all in `parse.kel`. `aq_k` matched the dangerous shape on
+the first pass and reading its assignments cleared it: it is reset at both of its construct entry
+points, a **stricter** scope than per-function rather than a weaker one. Reporting it without
+reading those two lines would have been a false finding.
+
+**It deliberately does not check that a reset dominates its use.** That needs control-flow analysis
+it has no business doing, and the sound resets sit at two different scopes, so demanding either
+would flag the other.
+
+**Mutation-tested against the historical defect**: deleting the 2026-08-27 repair reproduces it and
+the guard names the field. A guard tested against a real past defect is a different object from one
+tested against an invented mutation — the invented one asks whether it *can* fail, the historical
+one whether it would have earned its cost.
+
+**Its own reach was checked**, because all three members sitting in one file reads like a broken
+scan. The accumulator half fires in all twelve stages; being multiplied into an index is what is
+rare, and `parse.kel` is the stage that emits records with packed arguments.
+
+## THIRD INCREMENT: ONE PROPERTY, THREE AXES, AND A REFUTED HYPOTHESIS
+
+The float result was not a finding about floats. **Three widths are carried independently — word,
+float, address — and each has two possible authorities**: the module header the compiler baked every
+offset from, and the runtime type parameter of `GenericVm`. The load check does not force agreement.
+It refuses a module whose width is **wider** than the runtime and admits one that is **narrower**, so
+a module compiled for a small target and run on a large host is supported — and is where a second
+authority becomes visible. **That is how the opaque defect presented.**
+
+**The existing skew tests cannot see it.** Every configuration in `composite_width_skew.rs` is
+matched; a matched pair cannot expose a second authority because both readings coincide.
+
+**Both remaining axes are clean**, including the address axis the original defect lived on, which had
+no coverage in this form. Word: 3 of 6 catch the mutation. Address: 2 of 3. **Each mutation fails
+only its own axis**, so the two tests are independent rather than one guard firing twice.
+
+**A probable hypothesis was tested and refuted.** Two word cases survive the mutation. Boxing was the
+likely explanation — a sibling test records that a boxed composite agrees on both runtimes — and it
+is **excluded**: all four shapes are flat at both module widths. Constant folding is excluded too.
+The cause is unestablished and the test says so, recording what was ruled out. Had I not checked, a
+plausible wrong cause would have entered the tree, which is how two of the four `wire.kel` causes
+were first diagnosed wrongly.
+
+## SECOND INCREMENT: AN AUDIT'S SCOPE ARGUMENT WAS AN INSTANCE OF THE ERROR IT AUDITED
+
+`FLAT_FIELD_WIDTH_AUDIT.md` justified auditing only the OPAQUE flat field with one sentence: every
+other kind is a function of the word or the float width, **"so a site assuming a word is correct for
+them."** That is **false for `Float`** — a float field is sized by the float width, selected
+independently of the word, and a word assumption is correct only where the two happen to be equal.
+**That is the exact coincidence that hid the opaque defect.** The scope was right; the argument for
+it repeated the mistake being audited. Corrected in place.
+
+**The excluded class was then measured, and it is clean** — six flat-composite shapes, in the
+configuration capable of exposing the defect: a module declaring a **narrower** float than the
+runtime provides, which the load check admits since it refuses only a wider one.
+
+**Two earlier attempts proved nothing, and the second is worth more than the result.** Mis-sizing
+the LAYOUT is an **equivalent mutation** — invisible in all six cases, because the compiler's
+offsets and the runtime's strides both derive from it and move together. That coherence is precisely
+what the opaque field lacked. The defect needs **two authorities**: taking the VM's float width from
+the runtime type rather than the module header supplies one, and three of six cases then catch it
+with a **silently wrong value** rather than a fault — the opaque defect's own signature.
+
+The three that catch it are the three that read a field **positioned after** a float; the others
+read the float itself and land in the same place either way. `tests/flat_float_field_width.rs`
+asserts that property by name rather than inventorying constructs.
+
+**"No defect found", never "no defect exists."** Six shapes are not the class.
+
+## WHAT THIS SESSION DID: THREE VERDICTS, NO KINDS MOVED, AND THAT IS THE OUTCOME
+
+The type channel's last extraction has four of eight kinds on the pipeline. Of the four that are
+not, the branch pair was already withheld with a recorded reason. The **three composite kinds** —
+field access, index access, struct literal — carried only a note saying the two representations
+"disagree about what a node IS", which is a reason to look rather than a finding.
+
+Each now has a **measured verdict and a witness test**. None moves.
+
+| kind | verdict | why, in one line |
+|---|---|---|
+| 5, field on a value | **WITHHELD** | reconstruction refuses the program; there is no forest to extract from |
+| 6, index on a value | **WITHHELD** | same |
+| 7, struct literal | **WITHHELD** | the record does not say which struct is built, and the size it does carry is not a substitute |
+
+**Kind 7's witness is a proof rather than a survey.** A struct of one `Word` and a struct of eight
+`Byte`s are both eight bytes wide. Supplying one field to each produces a **byte-identical**
+struct-literal record while the reference accepts the first and rejects the second with exactly the
+field-count error. No function of that record can reproduce the verdict, so emitting a row would
+either reject a correct program or lose the check. **Both directions unsound** — the branch pair's
+shape.
+
+## THE PREDICTION WAS WRITTEN FIRST AND WAS WRONG IN BOTH HALVES
+
+| predicted | measured |
+|---|---|
+| kind 7 **moves**, the declared count is already on the wire | **wrong**; the count is not on the wire at all |
+| kinds 5 and 6 do not move, blocked on a missing **annotation** record | verdict right, **mechanism wrong**: they are blocked on the pipeline refusing the whole program |
+
+Recorded as missed rather than revised. The kind-7 miss came from reasoning that a sibling
+extraction already returns declared field sets — true, for a struct you can NAME.
+
+## A FINDING BESIDE THE SLICE: A PUBLIC EXTRACTION PANICS, AND IT IS BOUNDED
+
+`expression_rows_from_pipeline` **panics** rather than returning on programs the reference merely
+rejects. Measured over eight ill-typed programs: four panic, four return rows.
+
+**Proportionality, bounded twice over.** `self_hosted_compile` compiles with the reference FIRST
+and surfaces the reference's own error, so such a program never reaches the pipeline; and it wraps
+the pipeline in `catch_unwind` besides. **The shipping compiler is not exposed.** Exposure is to
+direct callers of the extraction API, which today are tests. Recorded on the function, not repaired
+— making a public API total is a contract change and there is no caller needing it.
+
+## WHAT WOULD UNBLOCK KIND 7, AND WHY I DID NOT START IT
+
+A record naming the literal's struct. `parse.kel` **already resolves the identity** — the field
+records preceding a literal carry INDICES, and only a resolved declaration yields an index — and
+then discards it. That is a **record-stream change**, which is your call on this fork, and the same
+class of decision as the `let`-binding-name record you ruled on earlier. Not begun.
+
+## VERIFICATION, STATED AS RUN RATHER THAN AS INTENDED
+
+- `selfhost_typecheck` **41 passed, 0 failed** with `--features self-host`.
+- `comment_citations` and `claimed_counts` green.
+- `cargo fmt --check`, and `clippy --tests --features signatures,shell,self-host -D warnings` clean.
+- The three feature sets **without** `self-host` compile: `--features signatures`,
+  `--features signatures,shell`, and `--no-default-features --features compile,verify`. Default
+  features build clean.
+- `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` clean.
+- **Both new guards were mutation-tested** and each fails on the assertion it was written to make.
+
+**Not run**: the full workspace suite and Miri. CI is the gate for the merge.
