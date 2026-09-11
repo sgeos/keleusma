@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-10 (session 65, twenty-eighth increment) — a host's own mistake is reported as the artefact's across BOTH host-contract groups, with a control showing the runtime does distinguish; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
+**Date**: 2026-09-10 (session 65, twenty-ninth increment) — the premise that the large work is blocked was too strong, and Order 1 is available; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,40 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## TWENTY-NINTH INCREMENT: THE PREMISE THIS SESSION RAN ON WAS TOO STRONG
+
+**I re-derived what the roadmap says is outstanding instead of continuing on momentum, and the
+framing that kept this session in one lane for twenty-eight increments does not hold.**
+
+`HANDOFF.md` has said, since before this session, that *"the large remaining work is blocked on
+[the four decisions] and the small remaining work is not worth choosing over them."* The four
+decisions block the LANGUAGE-SURFACE work they name -- `Text<N>` programs, the width API, the
+float-verify semantics, a build's continuous-integration cost. **They do not block Order 1**, which
+`docs/roadmap/V0_2_X_ROADMAP.md` identifies as the largest remaining workstream and whose own cell
+says what stands in the way is *"integration, not invention"*:
+
+- **The remaining region kinds.** The module-driven emit path covers FOUR of twenty, and unequally:
+  `NAMES` and `STRING_POOL` are COMPUTED, `HEADER` is encoded but NOT derived, `CHUNKS` is mixed
+  per field with ten fields per record host-supplied. Two capacity limits are named with numbers --
+  `parse` at 94 chunks against a 90-record batch, `wire.kel` at 1,148 constant-forest nodes against
+  a 1,024-node walk cap.
+- **Source types.** Type rejection reaches only literal, direct occurrences, because no stage
+  computes source types and `parse.kel` says so in its own comment. A missing pipeline capability,
+  not a missing rule.
+
+**The roadmap carries four open decisions of its OWN** -- cryptography locus, meta-circular bound
+composition, version granularity, reference retirement -- and they are a different four. None
+blocks Order 1 either. **Two sets of four decisions, neither of which blocks the largest
+workstream**, and the resemblance is probably why the conflation went unnoticed.
+
+**The verification work stands**: it found a real runtime defect, corrected several claims, and
+strengthened the instruments. What does not stand is the inference that nothing larger was
+available.
+
+**No guard catches this.** It is a judgement rather than a figure, so it survived a refresh of the
+very file that carries it -- four increments ago, by me, while I was checking eighteen other things
+against the tree.
 
 ## TWENTY-EIGHTH INCREMENT: A HOST'S MISTAKE REPORTED AS THE ARTEFACT'S
 

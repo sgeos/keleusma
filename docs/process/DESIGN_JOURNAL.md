@@ -13,6 +13,42 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-10 (twenty-ninth) — the premise this session ran on was too strong
+
+**I re-derived what the roadmap says is outstanding instead of continuing on momentum, and the
+framing that kept this session in one lane for twenty-eight increments does not hold.**
+
+`HANDOFF.md` has said, since before this session, that *"the large remaining work is blocked on
+[the four decisions] and the small remaining work is not worth choosing over them."* The four
+decisions block the LANGUAGE-SURFACE work they name -- `Text<N>` programs, the width API, the
+float-verify semantics, a build's continuous-integration cost. **They do not block Order 1**, which
+`docs/roadmap/V0_2_X_ROADMAP.md` identifies as the largest remaining workstream and whose own cell
+says what stands in the way is *"integration, not invention"*:
+
+- **The remaining region kinds.** The module-driven emit path covers FOUR of twenty, and unequally:
+  `NAMES` and `STRING_POOL` are COMPUTED, `HEADER` is encoded but NOT derived, `CHUNKS` is mixed
+  per field with ten fields per record host-supplied. Two capacity limits are named with numbers --
+  `parse` at 94 chunks against a 90-record batch, `wire.kel` at 1,148 constant-forest nodes against
+  a 1,024-node walk cap.
+- **Source types.** Type rejection reaches only literal, direct occurrences, because no stage
+  computes source types and `parse.kel` says so in its own comment. A missing pipeline capability,
+  not a missing rule.
+
+**The roadmap carries four open decisions of its OWN** -- cryptography locus, meta-circular bound
+composition, version granularity, reference retirement -- and they are a different four. None
+blocks Order 1 either. **Two sets of four decisions, neither of which blocks the largest
+workstream**, and the resemblance is probably why the conflation went unnoticed.
+
+**The verification work stands**: it found a real runtime defect, corrected several claims, and
+strengthened the instruments. What does not stand is the inference that nothing larger was
+available.
+
+**No guard catches this.** It is a judgement rather than a figure, so it survived a refresh of the
+very file that carries it -- four increments ago, by me, while I was checking eighteen other things
+against the tree.
+
+---
+
 ## 2026-09-10 (twenty-eighth) — a host's mistake reported as the artefact's
 
 Census groups F and J are the host-contract surfaces, judged lower value on the grounds that a host

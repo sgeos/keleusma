@@ -10,6 +10,23 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-10, session 65, twenty-ninth increment). THE LARGE WORK IS NOT
+> BLOCKED, AND THE CLAIM THAT IT WAS SHAPED THIS WHOLE SESSION.**
+>
+> The four decisions block the LANGUAGE-SURFACE work they name. **They do not block Order 1**,
+> whose roadmap cell says what stands in the way is "integration, not invention": the remaining
+> region kinds (four of twenty covered, `HEADER` encoded but not derived, `CHUNKS` mixed per
+> field), and SOURCE TYPES, without which type rejection reaches only literal direct occurrences.
+>
+> Capacity limits are named with numbers: `parse` 94 chunks against a 90-record batch; `wire.kel`
+> 1,148 constant-forest nodes against a 1,024-node walk cap.
+>
+> **The roadmap has four open decisions of its own** -- crypto locus, meta-circular bounds, version
+> granularity, reference retirement -- a DIFFERENT four, and none blocks Order 1 either.
+>
+> The twenty-eight increments of verification work stand. The inference that nothing larger was
+> available does not. **No guard catches this**: it is a judgement, not a figure.
+
 > **Currency note (2026-09-10, session 65, twenty-eighth increment). A HOST'S MISTAKE IS
 > REPORTED AS THE ARTEFACT'S, IN BOTH HOST-CONTRACT GROUPS.**
 >
