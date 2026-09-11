@@ -10,6 +10,25 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-10, session 65, thirty-third increment). THE NAME-INTERNING ROUTE IS
+> NOT MISSING; THE SECTION BASE IS.**
+>
+> `mi_window_prepare` calls `mi_chunk_names()`, which TAILS into `mi_enum_names()` and then
+> `mi_slot_names()`. The blob carries chunk, enum type, enum variant and data-slot RUN names, and
+> the walk covers all of them with `nm_mode_fresh()` for variants. **So `wire.nmap` already holds
+> an interned index for every one.**
+>
+> A router needs the SECTION BASE -- `wire.nmap[slot_base + k]` where the formatter now reads
+> `wire.fin[0]` -- and `nm` retains `ecnt`, `vcnt`, `scnt` and `ccnt` beside the running `cnt`.
+>
+> **NOT established**: that the interning ORDER for those sections matches the reference's
+> `SchemaBuilder`, or that `nmap` is indexed by walk position as a base offset would assume. Both
+> are measurements against the byte-identical oracle, and the next increment should measure before
+> the driver changes.
+>
+> `mi_chunk_names` is a misnomer for a three-section walk; sizing from its name would have repeated
+> the previous increment's error.
+
 > **Currency note (2026-09-10, session 65, thirty-second increment). THE PREVIOUS NOTE
 > OVER-CORRECTED A CLAIM THAT WAS ALREADY RIGHT.**
 >

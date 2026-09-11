@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-10 (session 65, thirty-second increment) — the previous increment over-corrected a claim that was already right; the real criterion is whether a record carries a name index; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
+**Date**: 2026-09-10 (session 65, thirty-third increment) — the name-interning route already walks all three name sections; the gap is the section base, and the ordering is unmeasured; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,37 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## THIRTY-THIRD INCREMENT: THE NAME-INTERNING ROUTE ALREADY RUNS, AND THE GAP IS THE SECTION BASE
+
+Having established that all four skipped region kinds wait on the name-interning route, I read what
+that route actually does rather than sizing it from its name.
+
+**The walk covers all three name sections, in one call.** `mi_window_prepare` calls
+`mi_chunk_names()`, which TAILS into `mi_enum_names()` (line 3017), which tails into
+`mi_slot_names()` (line 3051). The module-input blob carries chunk names, enum type and variant
+names, and data-slot RUN names -- one per run, because interning per slot is what once produced the
+395,804-name figure -- and `nm.cnt` advances through all of them, with `nm_mode_fresh()` used for
+variant names exactly as `SchemaBuilder::intern_fresh` does.
+
+**So `wire.nmap` already holds an interned index for every data-slot run name and every enum
+name.** The route is not missing. What a router needs is the SECTION BASE: `ds_stream_step` would
+take `wire.nmap[slot_base + k]` where it currently takes `wire.fin[0]`, and the interner retains
+`ecnt`, `vcnt`, `scnt` and `ccnt` alongside the running `cnt`, so the bases are recoverable from
+state that already exists.
+
+**WHAT THIS DOES NOT ESTABLISH, and I am stating it because the previous increment over-claimed
+from a surface.** That the interning ORDER for those sections matches the reference's
+`SchemaBuilder` is NOT verified here -- the roadmap records slices 14b and 14c producing the enum
+sequence with both modes, which makes it likely and not certain. Nor is it established that
+`nmap` is indexed by walk position in the way a base offset would assume. **Both are measurements,
+and the byte-identical oracle is what would settle them.** This increment is a reading, and the
+next one should be a measurement before a line of the driver changes.
+
+**The method that produced this is the one that failed last time, applied correctly**: read the
+function bodies and follow the tail calls, rather than reading a name, a dispatch table, or a
+count. `mi_chunk_names` is a misnomer for a walk that covers three sections, and sizing the work
+from its name would have repeated the error exactly.
 
 ## THIRTY-SECOND INCREMENT: I OVER-CORRECTED A CLAIM THAT WAS ALREADY RIGHT
 
