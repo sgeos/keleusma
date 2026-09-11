@@ -53,6 +53,23 @@ Current sprint source of truth.
 > Third artifact in two increments whose answer was true when written and is now about a DIFFERENT
 > QUESTION. The pattern is staleness of SUBJECT, not of fact.
 
+> **Currency note (2026-09-11, session 65, fifty-fourth increment). EVERY STAGE INPUT CHANNEL NOW
+> HAS A PROGRAM WHOSE VERDICT DEPENDS ON IT.**
+>
+> The file's central claim is that the host supplies syntax and the STAGE joins. Two channels had a
+> withholding proof; nine did not. Withholding each in turn across a rejected corpus and an accepted
+> one, **all eleven are depended on**, each with a named program rather than a tally.
+>
+> **The first run was one-directional and got one channel wrong.** Watching only for a flip to
+> ACCEPT reported the declared-parameter-counts channel as depended on by nothing — but withholding
+> it puts every call-site index out of range and the stage REFUSES that, so the verdict is rejection
+> either way. **A channel whose absence trips a fail-closed guard is invisible to a one-directional
+> instrument.**
+>
+> **What this does NOT establish**: that the stage DERIVES its conclusion from each channel.
+> Dependence is necessary evidence for the join claim, not sufficient. A channel that flips nothing
+> may equally be a corpus gap.
+
 > **Currency note (2026-09-11, session 65, fifty-third increment). THREE CENSUS GAPS WERE WAITING ON
 > A NODE KIND THAT ALREADY EXISTED.**
 >

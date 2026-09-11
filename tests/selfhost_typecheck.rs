@@ -3013,7 +3013,62 @@ fn stage_verdict_resolving_with(src: &str, with_sets: bool) -> bool {
 }
 
 /// The resolving driver, with each withheld-input switch spelled out.
+/// One channel of the stage's input, for the withholding census.
+///
+/// **Named per FIELD rather than per table**, because that is the granularity at
+/// which the claim is made: each field is a separate thing the host reports, and
+/// the question is whether the stage uses each of them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Channel {
+    Pairs,
+    Bindings,
+    Dparams,
+    Sites,
+    Sets,
+    Occurrences,
+    Nodes,
+    StructBinds,
+    FieldReads,
+    PatternBinds,
+    Payloads,
+}
+
+impl Channel {
+    const ALL: &'static [Channel] = &[
+        Channel::Pairs,
+        Channel::Bindings,
+        Channel::Dparams,
+        Channel::Sites,
+        Channel::Sets,
+        Channel::Occurrences,
+        Channel::Nodes,
+        Channel::StructBinds,
+        Channel::FieldReads,
+        Channel::PatternBinds,
+        Channel::Payloads,
+    ];
+}
+
 fn stage_verdict_resolving_parts(src: &str, with_sets: bool, with_payloads: bool) -> bool {
+    let withhold = match (with_sets, with_payloads) {
+        (true, true) => None,
+        (false, true) => Some(Channel::Sets),
+        (true, false) => Some(Channel::Payloads),
+        // No caller wants two withheld at once, and allowing it would make a flip
+        // unattributable to either.
+        (false, false) => unreachable!("the census withholds exactly one channel"),
+    };
+    stage_verdict_withholding(src, withhold)
+}
+
+/// The resolving driver with at most ONE channel withheld.
+///
+/// **The input is built identically either way**, and only the field named by
+/// `withhold` is emptied at the point it is handed over. A driver that also
+/// skipped the walk producing that field would change two things at once, and a
+/// flip could then be attributed to the wrong cause.
+fn stage_verdict_withholding(src: &str, withhold: Option<Channel>) -> bool {
+    let held = |c: Channel| withhold != Some(c);
     let ast = parse(&tokenize(src).expect("lex")).expect("parse");
     let (mut names, mut bindings) = binding_rows(&ast);
     // BEFORE the expression walk, because a name bound by a FIELD READ is not
@@ -3034,19 +3089,58 @@ fn stage_verdict_resolving_parts(src: &str, with_sets: bool, with_payloads: bool
     }
     let (dparams, sites, arg_pairs) = decl_call_rows(&ast);
     let sets = field_sets(&ast);
+    let occ = occurrence_rows(&ast);
+    static EMPTY_OCC_ROWS: OccurrenceRows = (Vec::new(), Vec::new(), false);
+    static EMPTY_SET_ROWS: FieldSets = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
     stage_verdict(&StageInput {
-        pairs: &arg_pairs,
+        pairs: if held(Channel::Pairs) {
+            &arg_pairs
+        } else {
+            &[]
+        },
         nodes: &[],
-        nodes_resolvable: Some(&nodes),
-        bindings: &bindings,
-        dparams: &dparams,
-        sites: &sites,
-        sets: if with_sets { Some(&sets) } else { None },
-        occ: Some(&occurrence_rows(&ast)),
-        sbinds: &frc.sbinds,
-        freads: &frc.reads,
-        pbinds: &frc.pattern_binds,
-        payloads: if with_payloads {
+        nodes_resolvable: Some(if held(Channel::Nodes) { &nodes } else { &[] }),
+        bindings: if held(Channel::Bindings) {
+            &bindings
+        } else {
+            &[]
+        },
+        dparams: if held(Channel::Dparams) {
+            &dparams
+        } else {
+            &[]
+        },
+        sites: if held(Channel::Sites) { &sites } else { &[] },
+        // WITHHELD AS EMPTY TABLES, not as `None`. `None` and an all-empty value
+        // reach the stage identically -- the seeding code substitutes the empty
+        // one -- and going through the same path keeps the two runs differing in
+        // the data alone.
+        sets: Some(if held(Channel::Sets) {
+            &sets
+        } else {
+            &EMPTY_SET_ROWS
+        }),
+        occ: Some(if held(Channel::Occurrences) {
+            &occ
+        } else {
+            &EMPTY_OCC_ROWS
+        }),
+        sbinds: if held(Channel::StructBinds) {
+            &frc.sbinds
+        } else {
+            &[]
+        },
+        freads: if held(Channel::FieldReads) {
+            &frc.reads
+        } else {
+            &[]
+        },
+        pbinds: if held(Channel::PatternBinds) {
+            &frc.pattern_binds
+        } else {
+            &[]
+        },
+        payloads: if held(Channel::Payloads) {
             &frc.payload_decls
         } else {
             &[]
@@ -3751,6 +3845,205 @@ fn the_rules_the_census_added_do_not_reject_valid_programs() {
              change rather than a conservative choice"
         );
     }
+}
+
+/// **WHICH INPUT CHANNELS ANY VERDICT ACTUALLY DEPENDS ON.**
+///
+/// # The claim this measures
+///
+/// This file says throughout that the host supplies SYNTAX and the STAGE performs
+/// the join, and that the difference between a migration and a relocation is which
+/// side holds it. Two channels had a withholding proof --
+/// [`withholding_the_field_sets_accepts_the_same_field_read_program`] and
+/// [`the_payload_declarations_are_what_the_stage_joins_against`]. The rest were
+/// credited with work that nothing checked.
+///
+/// So: withhold each channel in turn, across a corpus the stage rejects, and see
+/// whether any verdict changes.
+///
+/// # What a result means, and what it does not
+///
+/// **A channel that flips a verdict is load-bearing FOR THIS CORPUS.** That is
+/// evidence the stage uses it. It is not proof the stage derives everything from
+/// it, and it is not proof the host supplies no conclusion elsewhere.
+///
+/// **A channel that flips nothing is NOT thereby shown inert.** It may be a gap in
+/// the CORPUS: no program here exercises it. This instrument cannot separate "the
+/// stage ignores this" from "nothing asked". **The project already records that a
+/// passing check is evidence about the checker's reach before it is evidence about
+/// the tree**, and reading the weaker result as the stronger one is the specific
+/// error this paragraph exists to prevent.
+///
+/// # Why the flip is attributable
+///
+/// The input is built identically in both runs and exactly one field is emptied at
+/// the point it is handed over. Withholding is done with an EMPTY table rather
+/// than by skipping the walk that produces it, so the two runs differ in the data
+/// and in nothing else.
+#[cfg(feature = "self-host")]
+#[test]
+fn every_input_channel_is_measured_for_whether_a_verdict_depends_on_it() {
+    // Each must be REJECTED with every channel present, or withholding has no
+    // direction to flip in.
+    const CORPUS: &[(&str, &str)] = &[
+        (
+            "operand disagreement through a let",
+            "fn main() -> Word { let b = true; 1 + b }",
+        ),
+        (
+            "argument type against a declared parameter",
+            "fn g(a: Word) -> Word { a }\nfn main() -> Word { g(true) }",
+        ),
+        (
+            "argument COUNT against a declared parameter list",
+            "fn g(a: Word, b: Word) -> Word { a }\nfn main() -> Word { g(1) }",
+        ),
+        (
+            "a name that resolves to nothing",
+            "fn main() -> Word { nowhere }",
+        ),
+        (
+            "a field the type does not declare",
+            "struct P { x: Word }\nfn main() -> Word { let p = P { x: 1 }; p.y }",
+        ),
+        (
+            "a field read bound by a let",
+            "struct P { x: Word }\n\
+             fn main(p: P) -> Word { let a = p.x; let b = true; a + b }",
+        ),
+        (
+            "a field read as a direct operand",
+            "struct P { x: Word }\nfn main(p: P) -> Word { p.x + true }",
+        ),
+        (
+            "a field read on a match binding",
+            "struct P { x: Word }\nenum E { W(P), N }\n\
+             fn main(e: E) -> Word { match e { E::W(p) => p.x + true, E::N => 0 } }",
+        ),
+        (
+            "a let bound to a call whose return type disagrees",
+            "fn g() -> bool { true }\nfn main() -> Word { let a = g(); a + 1 }",
+        ),
+    ];
+
+    // **A SECOND CORPUS, WELL TYPED, AND THE FIRST RUN IS WHY IT EXISTS.**
+    //
+    // Measuring only "does an ill-typed program flip to ACCEPT" reported one
+    // channel as depended on by nothing. It is not unused: withholding the declared
+    // parameter counts makes every call site index out of range, and the stage
+    // REFUSES an out-of-range index rather than skipping it. So the program is
+    // rejected with the channel and rejected without it, for different reasons, and
+    // a census watching only for acceptance cannot see the difference.
+    //
+    // **A channel whose absence trips a fail-closed guard is invisible to a
+    // one-directional instrument.** Measuring CHANGE in either direction, over
+    // programs that are accepted as well as programs that are rejected, is what
+    // makes that channel's contribution observable.
+    const WELL_TYPED: &[(&str, &str)] = &[
+        (
+            "a call matching its declaration",
+            "fn g(a: Word, b: Word) -> Word { a + b }\nfn main() -> Word { g(1, 2) }",
+        ),
+        (
+            "a field read used at its own type",
+            "struct P { x: Word }\nfn main(p: P) -> Word { p.x + 1 }",
+        ),
+        (
+            "a match binding read at its own type",
+            "struct P { x: Word }\nenum E { W(P), N }\n\
+             fn main(e: E) -> Word { match e { E::W(p) => p.x + 1, E::N => 0 } }",
+        ),
+    ];
+
+    for (label, src) in CORPUS {
+        assert!(
+            !stage_verdict_withholding(src, None),
+            "{label}: the stage ACCEPTS this with every channel present, so \
+             withholding anything has no direction and the case measures nothing"
+        );
+    }
+    for (label, src) in WELL_TYPED {
+        assert!(
+            stage_verdict_withholding(src, None),
+            "{label}: the stage REJECTS this with every channel present, so it is \
+             not a well-typed control and cannot show a fail-closed flip"
+        );
+    }
+
+    // For each channel, which programs CHANGE verdict without it -- in either
+    // direction, since both directions are evidence the stage reads it.
+    let mut depends: Vec<(Channel, Vec<&str>)> = Vec::new();
+    for channel in Channel::ALL {
+        let changed: Vec<&str> = CORPUS
+            .iter()
+            .map(|(l, s)| (*l, *s, false))
+            .chain(WELL_TYPED.iter().map(|(l, s)| (*l, *s, true)))
+            .filter(|(_, src, whole)| stage_verdict_withholding(src, Some(*channel)) != *whole)
+            .map(|(label, _, _)| label)
+            .collect();
+        depends.push((*channel, changed));
+    }
+
+    std::eprintln!("CHANNEL WITHHOLDING CENSUS");
+    for (channel, flipped) in &depends {
+        if flipped.is_empty() {
+            std::eprintln!("  {channel:?}: NO PROGRAM DEPENDS ON IT IN THIS CORPUS");
+        } else {
+            // NAMED, NOT COUNTED. A tally cannot be checked; an attribution can.
+            std::eprintln!("  {channel:?}: {flipped:?}");
+        }
+    }
+
+    let load_bearing: Vec<Channel> = depends
+        .iter()
+        .filter(|(_, f)| !f.is_empty())
+        .map(|(c, _)| *c)
+        .collect();
+    let unexercised: Vec<Channel> = depends
+        .iter()
+        .filter(|(_, f)| f.is_empty())
+        .map(|(c, _)| *c)
+        .collect();
+
+    // NON-VACUITY. A census where nothing changed would be measuring a harness that
+    // is not driving the stage at all.
+    assert!(
+        !load_bearing.is_empty(),
+        "withholding EVERY channel changed nothing, so the harness is not driving \
+         the stage"
+    );
+
+    // **EVERY CHANNEL IS DEPENDED ON, AND THAT ASSERTION REPLACED A WEAKER ONE.**
+    //
+    // This test first pinned the set of channels nothing depended on, expecting it
+    // to be non-empty, and its own failure message said that an empty set is the
+    // good outcome and the assertion should be replaced. It is. The property now
+    // asserted is the stronger one the measurement reached.
+    //
+    // **What this establishes**: for each of the eleven channels, at least one
+    // program's verdict changes when that channel alone is withheld. The stage
+    // reads all of them.
+    //
+    // **What it does NOT establish**: that the stage DERIVES its conclusion from
+    // each. A channel could be read and also be redundant with a conclusion
+    // arriving elsewhere. Dependence is necessary evidence for the file's claim
+    // about where the join lives, not sufficient evidence.
+    //
+    // A channel JOINING the empty set here is a CORPUS regression -- it has lost
+    // its only dependent program -- and every other test in this file would still
+    // pass while that happened.
+    assert!(
+        unexercised.is_empty(),
+        "no program depends on {unexercised:?}. Either the corpus lost the case \
+         that exercised each, or the stage stopped reading them. Name which, and \
+         record it here rather than shrinking the assertion"
+    );
+    assert_eq!(
+        load_bearing.len(),
+        Channel::ALL.len(),
+        "the channel list and the measured set disagree, which means a channel was \
+         added to the enumeration without a program that depends on it"
+    );
 }
 
 /// **A CENSUS OF ONE RULE SHAPE AGAINST THE SYNTACTIC FORMS IT SHOULD GOVERN.**

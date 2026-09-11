@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-11 (session 65, fifty-third increment) — three census gaps were waiting on a node kind that already existed, under a name that described only its first caller; the census now stands at 15 covered and 1 gap, from 8 and 8
+**Date**: 2026-09-11 (session 65, fifty-fourth increment) — every one of the stage's eleven input channels now has a named program whose verdict depends on it; the first, one-directional run of that census got one channel wrong, and my prediction of which would be inert was wrong too
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,42 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## FIFTY-FOURTH INCREMENT: WHICH INPUT CHANNELS ANY VERDICT DEPENDS ON
+
+**The claim being measured is the central one**: the host supplies SYNTAX and the STAGE performs the
+join. Two channels had a withholding proof; the other nine were credited with work nothing checked.
+
+**Result: all eleven channels are depended on.** Each has at least one NAMED program whose verdict
+changes when that channel alone is withheld — named rather than counted, because a tally cannot be
+checked and an attribution can.
+
+### The first run was one-directional and got a channel wrong
+
+Measuring only "does an ill-typed program flip to ACCEPT" reported the declared-parameter-counts
+channel as depended on by nothing. **It is not unused**: withholding it puts every call-site index
+out of range, and the stage REFUSES an out-of-range index rather than skipping it, so the program is
+rejected either way for different reasons. **A channel whose absence trips a fail-closed guard is
+invisible to a one-directional instrument.** A well-typed corpus and change-in-either-direction made
+it observable.
+
+**My prediction of which channels would be inert was wrong** — I guessed the operand pairs and the
+call sites; it was neither.
+
+### What it establishes, and what it does not
+
+**Establishes**: the stage reads all eleven. **Does not establish**: that it DERIVES its conclusion
+from each — a channel can be read and still be redundant with a conclusion arriving elsewhere.
+Dependence is necessary evidence for the claim about where the join lives, not sufficient. And a
+channel that flips nothing is not thereby inert; it may be a corpus gap, and this instrument cannot
+tell those apart.
+
+### An assertion that replaced itself
+
+The test first pinned the set of channels nothing depended on, expecting it non-empty, with a
+failure message saying an empty set is the good outcome and the assertion should be replaced. It
+became empty and the message was followed. **A non-vacuity assertion that says what to do when it
+stops holding is worth more than one that merely fails.**
 
 ## FIFTY-THIRD INCREMENT: A KIND THAT WAS ALREADY GENERAL, UNDER A NAME THAT HID IT
 

@@ -13,6 +13,67 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-11 (fifty-fourth) — which input channels any verdict actually depends on
+
+### THE CLAIM THIS MEASURES
+
+This file says throughout that the host supplies SYNTAX and the STAGE performs the join, and that
+the difference between a migration and a relocation is which side holds it. **Two channels had a
+withholding proof. The other nine were credited with work nothing checked.**
+
+So: withhold each channel in turn and see whether any verdict changes. Eleven channels, a corpus
+the stage rejects, and a second corpus it accepts.
+
+### THE RESULT
+
+**All eleven channels are depended on.** Each has at least one named program whose verdict changes
+when that channel alone is withheld, and the test prints the attribution per channel rather than a
+tally — a tally cannot be checked, an attribution can.
+
+### THE FIRST RUN WAS ONE-DIRECTIONAL AND GOT ONE CHANNEL WRONG
+
+Measuring only "does an ill-typed program flip to ACCEPT" reported the declared-parameter-counts
+channel as depended on by nothing. **It is not unused.** Withholding it makes every call-site index
+fall out of range, and the stage REFUSES an out-of-range index rather than skipping it — so the
+program is rejected with the channel and rejected without it, for different reasons, and a census
+watching only for acceptance cannot see the difference.
+
+**A channel whose absence trips a fail-closed guard is invisible to a one-directional instrument.**
+Adding a well-typed corpus and measuring change in EITHER direction made its contribution
+observable, and it now shows up on exactly the program predicted.
+
+**My prediction of which channels would be inert was wrong** — I guessed the operand pairs and the
+call sites; the answer was neither. That is the case for measuring rather than reasoning, made once
+more.
+
+### WHAT THE RESULT ESTABLISHES, AND WHAT IT DOES NOT
+
+**Establishes**: the stage reads all eleven channels; for each there is a program that needs it.
+
+**Does not establish**: that the stage DERIVES its conclusion from each. A channel could be read and
+still be redundant with a conclusion arriving elsewhere. Dependence is NECESSARY evidence for the
+claim about where the join lives, not sufficient evidence.
+
+**And a channel that flips nothing is not thereby shown inert** — it may be a corpus gap. The
+instrument cannot separate "the stage ignores this" from "nothing asked", which is the same
+distinction already on record as: a passing check is evidence about the checker's reach before it is
+evidence about the tree.
+
+### THE ASSERTION THAT REPLACED ITSELF
+
+The test first pinned the set of channels nothing depended on, expecting it to be non-empty, with a
+failure message saying an empty set is the good outcome and the assertion should be replaced. It
+became empty on the second run, and the message was followed. **A non-vacuity assertion that says
+what to do when it stops holding is worth more than one that merely fails.**
+
+The property now asserted is the stronger one: a channel JOINING the empty set is a corpus
+regression, and every other test in this file would still pass while that happened.
+
+No rule was widened and no node kind added in this increment — an instrument and a change landing
+together would make a flip attributable to neither.
+
+---
+
 ## 2026-09-11 (fifty-third) — a kind that was already general, under a name that hid it
 
 The census left five gaps, each recorded with the mechanism closing it would need. **Three of the
