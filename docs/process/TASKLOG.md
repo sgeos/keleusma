@@ -10,6 +10,21 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-11, session 65, forty-fourth increment). EVERY REGION KIND IS ROUTED;
+> THE SKIPPED SET IS EMPTY.**
+>
+> `PARAM_TYPES` was the weakest, not the hardest: a byte POOL the stage COPIES, deciding nothing,
+> because a pool has no layout to decide. Recorded as a fourth standing, **copied, not encoded**,
+> weaker even than `HEADER`.
+>
+> **Two tests changed shape**: the skipped guard now asserts COMPLETENESS (its own message had
+> asked for that), and the share test's upper bound became an equality, since there is no advance
+> past completeness.
+>
+> **100% of the BYTES pass through the stage; the share it DERIVES is unchanged.** Three of the
+> four kinds supply only their name, the fourth nothing at all. Four kinds, four shapes: index,
+> walk, step-and-accumulate, copy.
+
 > **Currency note (2026-09-11, session 65, forty-third increment). `ENUM_LAYOUTS` IS ROUTED; ONE
 > KIND LEFT.**
 >
