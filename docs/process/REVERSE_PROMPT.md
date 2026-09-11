@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-10 (session 65, thirty-fifth increment) — the section base is NOT recoverable from retained state; the design is recorded before any code; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
+**Date**: 2026-09-11 (session 65, forty-third increment) — `ENUM_LAYOUTS` routed, one kind left, and four ways a local run can say less than it appears to; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,250 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## FORTY-THIRD INCREMENT: `ENUM_LAYOUTS` ROUTED, AND A THIRD DERIVATION I MISSED
+
+The third and last ROUTABLE region kind. `PARAM_TYPES` alone remains, and it needs an emitter
+WRITTEN rather than routed.
+
+**This one computes TWO of its four fields.** The type name comes from the interner, as the other
+two kinds' do, and `variants_first` is ACCUMULATED in the stage rather than relayed -- the same
+accumulate-then-advance `ck_stream_step` performs for its three ranges. The host supplies only the
+variant count and the minimum payload, and the count does double duty: a record field AND the
+distance the cursor travels to the next enum's type name.
+
+**Three kinds, three shapes, none a copy.** The slot section indexes; the variant section
+interleaves and walks with a boundary flag; the layout section steps a whole enum at a time while
+accumulating a range.
+
+**Verified it actually routed rather than emitting an empty region** -- the `STRUCT_AUX` trap, where
+a byte identity on an empty region passes while emitting nothing. Skipped set now `[1e]`.
+Mutation-checked ONCE PER STAGE-COMPUTED FIELD: advancing the cursor by one fails it, freezing the
+accumulator fails it.
+
+## THREE WAYS A LOCAL RUN CAN SAY LESS THAN IT APPEARS TO, AND I MET ALL THREE TODAY
+
+`wire.kel`'s chunk count has **THREE** independent derivations. My enumeration found two and missed
+`tests/wire_self_compile_status.rs`; continuous integration failed on it. All three now read 492,
+and the third says so in its own message.
+
+**The run that was supposed to confirm the enumeration could not have.**
+
+| how the run under-reported | which one |
+|---|---|
+| guards executed BEFORE the last edit | recorded earlier this session |
+| `-p keleusma --test X` never enables `self-host`; `--workspace` unifies it on | found by continuous integration |
+| **`cargo test` stops at the FIRST failing binary**; nextest runs them all | found by continuous integration |
+
+**A fourth was self-inflicted in the same hour.** A workspace run was still in flight while its
+subject was edited, and it then reported NO failures -- which cannot be true, since the third site
+was still stale when it began. Its result belongs to no tree. **Discarded rather than read as a
+pass**, which is the same rule this session already recorded when two gates shared one log file.
+
+**The shape common to all four is that the run did less than I believed it did**, and only the
+first and the last were written down beforehand. Believing a green result requires knowing what the
+command actually covered.
+
+## FORTY-SECOND INCREMENT: THE HANDOFF REFRESHED AFTER SIXTEEN INCREMENTS
+
+It was refreshed at the twenty-fourth increment and the session is at the forty-first. In between,
+the premise it carried -- that the large work is blocked -- was corrected, and two region kinds were
+routed. **A resuming agent would have read that Order 1 was blocked and that no name-carrying region
+kind was reachable**, both of which are now false.
+
+The banner leads with what changed and what it cost:
+
+- **81% to 99%**, two kinds routed, `highest_command` 181 to 185, and the two kinds that remain need
+  an emitter WRITTEN rather than routed.
+- **The five increments of reading that preceded one line of behaviour**, four of which corrected
+  something that would otherwise have been built on, none of which reached code.
+- **The feature-set trap**: `cargo test -p keleusma --test X` does not enable `self-host` and CI's
+  `--workspace` unifies it on, so a gated test can be absent locally and run in continuous
+  integration.
+
+**Three validity items added**, for the host-contract observation, the node budget, and the pair of
+tests that pin `wire.kel`'s chunk count from two independent derivations. The list reads 1 to 21
+with no inversion, **checked by rendering it** rather than by writing the next number -- the
+distinction this file has paid for three times.
+
+Every check was run rather than copied: fingerprint `0x4327_63E1`, the newer guards green under
+`self-host`, the citation and count guards, and the boundary pin at 169 seconds actually executed.
+Ancestry anchor moved to `fad3fe11`.
+
+## FORTY-FIRST INCREMENT: `ENUM_VARIANTS` ROUTED, AND TWO FIGURES THE STAGE GROWTH MOVED
+
+The cursor design landed as commands 184 and 185. **`no_region_the_driver_routes_disagrees_with_the_reference`
+passed on the first run again** -- the region is byte-identical for every corpus stage, and the only
+failure was the share figure asking to be told the new number.
+
+| | before | after |
+|---|---|---|
+| self-hosted share of corpus region bytes | 98% | **99%** |
+| skipped region kinds | three | **two** -- `ENUM_LAYOUTS`, `PARAM_TYPES`, both needing an emitter WRITTEN |
+| computed share | -- | **unchanged** |
+
+**Driven and mutation-checked**: three records across an enum boundary match the reference byte for
+byte, removing the type-name skip fails it, and a cursor walked past its section is refused.
+
+## THE PART WORTH KEEPING: A GUARD CAUGHT WHAT MY LOCAL RUN COULD NOT
+
+Continuous integration failed on `selfhost_chunk_names.rs`, which pins `wire.kel`'s chunk count.
+Four new functions moved it from **486 to 490** -- a function is a chunk, so the figure moved by
+exactly four.
+
+**My local check could not have caught it.** `cargo test -p keleusma --test selfhost_chunk_names`
+reported *"0 passed; 0 filtered out"*: the test is `self-host`-gated and that invocation does not
+enable the feature. CI runs `--workspace`, where cargo's feature UNIFICATION turns `self-host` on
+because another member requires it. **`-p keleusma --test X` and `--workspace` are different feature
+sets**, and a test can be silently absent from the first while running in the second.
+
+That is the rule *a run that executed no tests is not a pass* arriving through a channel I had not
+considered: not a filter, but a feature set that omits the test entirely.
+
+**I predicted this class and under-enumerated it.** The plan said `wire.kel` is itself a measured
+stage and growing it perturbs the corpus's figures. I guarded the NODE count with a new test and
+never thought of the CHUNK count.
+
+**So I enumerated instead of fixing the instance, and found a second live site**:
+`tests/selfhost_parse.rs` pins the same 486, derived from the PARSED source rather than the compiled
+module. Two independent derivations of one figure, which moved together as such a pair should. The
+workspace run then confirmed those two were the only failures.
+
+**Had I fixed only the failing one, CI would have caught the other and I would have called it a
+surprise.** It is the one-of-two-sites shape this session has now met eight times.
+
+## FORTIETH INCREMENT: `ENUM_VARIANTS` IS NOT THE SAME SHAPE, AND MY PLAN SAID IT WAS
+
+With `DATA_SLOTS` routed, the plan's own "not in scope" section named `ENUM_VARIANTS` as "the same
+shape with the enum base". **Checking before copying, it is not.**
+
+`mi_enum_names` INTERLEAVES: for each enum it interns the type name, then that enum's variants,
+then the next type name. So a flat variant index `k` does not sit at `ebase + k` -- the type names
+are in the way, one per enum, at no fixed stride because enums have different variant counts. The
+counters cannot supply the offset either: `vcnt` is the CURRENT enum's variant count and is
+overwritten each iteration. **That is the same fact that defeated the slot base, biting a second
+time in a different place.**
+
+**The sound shape is a CURSOR, not an offset.** A begin sets the cursor to `ebase`; each step emits
+one variant and advances by one, except that the host tells it when a record is the FIRST variant
+of its enum and the stage then advances one extra to step over the type name. The host supplies
+structure it legitimately knows -- the boundary -- and never a name index it cannot check.
+
+**The sentence was written three increments before the walk was read closely**, which is how it came
+to describe a shape the code does not have. It cost nothing because it was checked before being
+acted on, and it would have cost a wrong emitter had it not been.
+
+**The slot slice's transferable value is the METHOD, not the shape**: read the walk, capture state
+from the walk rather than deriving it, let the host supply only what it decides, and say in advance
+which coverage figure should move.
+
+## THIRTY-NINTH INCREMENT: `DATA_SLOTS` IS ROUTED, AND THE SHARE WENT 81% TO 98%
+
+The driver half landed. `slot_run_fields` groups consecutive slots sharing a name and visibility
+into runs -- mirroring the encoder including its `u16::MAX` chunking, so a chunked run emits several
+records all carrying the same run index -- and `window_emit_slots` drives commands 182 and 183 on
+one virtual machine and ONE shared buffer.
+
+**`no_region_the_driver_routes_disagrees_with_the_reference` passed on the first run.** The region
+is byte-identical for every corpus stage. The only failure was the share figure, which is the test
+asking to be told the new number rather than a defect.
+
+| | before | after |
+|---|---|---|
+| self-hosted share of corpus region bytes | 81% | **98%** |
+| skipped region kinds | four | **three** |
+| computed share | -- | **unchanged** |
+
+**The computed share not moving is the part worth checking, and it was predicted in advance.** The
+stage supplies this region's NAME from its own interner and the host decides every other field --
+the `CHUNKS` standing, not the `NAMES` one. `DATA_SLOTS` joins `CHUNKS` as **mixed** in the
+provenance table, and the test that exists to stop the headline figure being over-read still holds.
+Saying beforehand which number should move, and which should not, is what makes the one that did
+mean something.
+
+**`DATA_SLOTS` is the first routed kind whose record carries a NAME.** Every kind routed before it
+carried none, which is precisely what let the host supply every field. That is why the interner
+route had to exist before the routing, and why five increments went into reading before one line
+changed.
+
+**Verified**: 180 wire tests, 147 codegen tests including the boundary pin and the byte-identical
+scaffold, all five region-coverage tests with updated figures, the node budget at 1,202 of 1,365,
+`fmt`, and clippy with `-D warnings` across the full feature set.
+
+## THIRTY-EIGHTH INCREMENT: THE MARGIN THE SLICE IS SIZED AGAINST WAS STALE BY A QUARTER
+
+The plan's first step is to measure `wire.kel`'s node budget before editing it, so a later cap
+failure is attributed to stage growth rather than to routing.
+`tests/module_input_node_budget.rs` does that, parsing the count out of the blob the stage itself
+reads.
+
+**Measured: 1,194 nodes against a 1,365 cap, a margin of 171.** The figure quoted around the tree
+is **1,148**, stale by 46 nodes, and the margin the plan assumed was 217. **A quarter of the assumed
+headroom was already gone**, in the one number the slice is sized against.
+
+**This is the fourth stale figure in this arc**, after the two capacity limits and the retained
+state, and it is the one that would have mattered most: a slice sized against 217 that actually has
+171 is a slice planned with a margin it does not have.
+
+**The plan now cites the test rather than a number**, which is this project's own convention for a
+figure that moves. The test asserts its walk has not drifted from the writer -- every length bounded
+by the remaining blob, every section count cross-checked against the module -- because a parse that
+drifted would report a wrong figure rather than failing, and a wrong budget is worse than no budget.
+
+**The measure-first instruction paid on its first use.** It was written two increments ago as
+process caution; it caught a real error the first time it was followed.
+
+## THIRTY-SEVENTH INCREMENT: THE SLICE IS BUDGETED, NOT CASUAL, AND TWO CONSTRAINTS SAY WHY
+
+Going to implement, two constraints surfaced that change the shape of the work rather than its
+conclusion.
+
+**Command 178 is already driven.** `the_four_record_formatters_lay_out_a_record_the_reference_agrees_with`
+feeds `ds_stream_step` a name index from the reference's own record, which is legitimate for the
+claim it makes -- whether the stage lays a record out as the format specifies. Changing 178 to read
+the interner would break that for no gain, so **the name-aware step must be ADDITIVE**. The slice
+adds TWO commands, a begin and a name-aware step, and `highest_command` moves 181 to 183.
+
+**`wire.kel` is itself one of the eleven measured stages.** It carries **1,148 constant-forest nodes
+against a node table holding 1,365** -- a margin of 217 -- and 475 chunks. Two new functions add
+chunks and constants to the very stage the corpus measures, and that stage must still emit its own
+regions afterwards.
+
+**That is why this has not been done casually, and it belongs in the sizing rather than being
+discovered mid-change.** The plan now says to re-measure the node count after the stage edit and
+before the driver edit, so a cap failure is attributed to stage growth rather than to routing.
+
+**This arc has now corrected itself four times**, each time by reading one level deeper: a dispatch
+table, then a field list, then an assumption's consequence, now a contract and a budget. **Every
+correction made the slice larger and better specified, and none of them reached code.** The plan is
+executable now in a way it was not three increments ago, and the cost of getting there was entirely
+in reading.
+
+## THIRTY-SIXTH INCREMENT: THE ASSUMPTION HOLDS, AND THE SLICE STILL NEEDS A BEGIN
+
+The plan named one assumption to check before anything else: that `wire.nmap` survives between the
+interner call and the step calls under the driver's buffer handling.
+
+**It holds.** `window_emit_chunks` creates ONE `shared` buffer and passes `&mut shared` to every
+`enter_wire` call, begin and steps alike. The driver re-seeds only the slots it writes, and
+`wire.nmap` is never among them, so the interner's result survives for as long as the same buffer
+comes back -- which that function guarantees by construction. A `DATA_SLOTS` driver written the same
+way inherits it.
+
+**The question it leaves is sharper and smaller, and it changes the answer.** The slot stream had
+no begin of its own, and the two commands that DO call `mi_window_prepare()` each do something else
+as well: 174 zeroes the chunk range cursors, and 170 emits the `NAMES` records into the window. Either
+would run the interner; both are misuses, one chunk-specific and the other writing bytes the driver
+would discard.
+
+**So the slice needs a begin after all -- for a different reason than the plan guessed.** Not
+because the interner's result fails to survive, but because nothing currently runs the interner
+WITHOUT also doing something a slot pass does not want. A begin whose whole body is
+`mi_window_prepare()` is the smallest honest answer, and it moves `highest_command`.
+
+**The plan was right to name the assumption and wrong about what would follow from it.** Checking it
+still paid: the conclusion "needs a begin" is the same, the REASON is different, and a reason that
+is wrong is how a design gets built against the wrong constraint.
 
 ## THIRTY-FIFTH INCREMENT: THE FIELD LIST MADE THE STATE LOOK SUFFICIENT, AND IT IS NOT
 

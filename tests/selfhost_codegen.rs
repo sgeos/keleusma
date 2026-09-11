@@ -4770,7 +4770,8 @@ fn self_host_compiles_verify_structural_kel_byte_identically() {
     );
 }
 
-/// **`wire.kel` JOINS THE CORPUS, 2026-08-27.** The largest stage at 486 chunks, and the
+/// **`wire.kel` JOINS THE CORPUS, 2026-08-27.** The largest stage at 492 chunks (486 when
+/// it joined), and the
 /// last one outside this oracle.
 ///
 /// # Why it took three sessions

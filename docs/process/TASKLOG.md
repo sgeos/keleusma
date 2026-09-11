@@ -10,6 +10,122 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-11, session 65, forty-third increment). `ENUM_LAYOUTS` IS ROUTED; ONE
+> KIND LEFT.**
+>
+> `PARAM_TYPES` alone remains, needing an emitter WRITTEN rather than routed. This kind computes
+> **two of its four fields**: the type name from the interner and `variants_first` accumulated in
+> the stage. Three kinds, three shapes, none a copy.
+>
+> **`wire.kel`'s chunk count has THREE derivations, not two.** My enumeration found two and missed
+> `tests/wire_self_compile_status.rs`; CI failed on it. All three now read **492**.
+>
+> **Four ways a local run under-reported, all met today**: guards run before the last edit;
+> `-p keleusma --test X` omitting `self-host`; **`cargo test` stopping at the first failing
+> binary**; and a run edited while in flight, whose clean result belonged to no tree and was
+> discarded. The common shape is that the run did less than I believed it did.
+
+> **Currency note (2026-09-11, session 65, forty-second increment). THE HANDOFF IS CURRENT
+> AGAIN.**
+>
+> Refreshed at increment twenty-four, now at forty-one. It would have told a resuming agent that
+> Order 1 is blocked and that no name-carrying region kind is reachable -- **both now false**.
+>
+> The banner leads with **81% to 99%**, two kinds routed, `highest_command` 181 to 185, the five
+> increments of reading that preceded one line of behaviour, and the feature-set trap where
+> `-p keleusma --test X` omits `self-host` while `--workspace` unifies it on.
+>
+> **Three validity items added**; the list reads 1 to 21 with no inversion, checked by rendering.
+> Every check run rather than copied, boundary pin included. Anchor moved to `fad3fe11`.
+
+> **Currency note (2026-09-11, session 65, forty-first increment). `ENUM_VARIANTS` IS ROUTED, AND
+> A GUARD CAUGHT WHAT THE LOCAL RUN COULD NOT.**
+>
+> Share **98% to 99%**; skipped kinds **three to two** (`ENUM_LAYOUTS`, `PARAM_TYPES`, both needing
+> an emitter written); computed share unchanged. Driven across an enum boundary and
+> mutation-checked.
+>
+> **CI failed on `wire.kel`'s chunk count, 486 to 490.** `cargo test -p keleusma --test X` does NOT
+> enable `self-host`; CI's `--workspace` unifies it on. **Different feature sets**, and a test can
+> be silently absent from one.
+>
+> **Enumerated rather than fixed**: a SECOND live site pins the same figure in
+> `tests/selfhost_parse.rs`, from the parsed source rather than the compiled module. The workspace
+> run confirmed those two were the only failures. Node count 1,194 to 1,209, margin 156.
+
+> **Currency note (2026-09-11, session 65, fortieth increment). `ENUM_VARIANTS` IS NOT THE SAME
+> SHAPE AS THE SLOT SLICE.**
+>
+> `mi_enum_names` INTERLEAVES type name then variants per enum, so a flat variant index does not
+> sit at `ebase + k`, and the counters cannot supply the offset because `vcnt` is overwritten each
+> iteration -- the same fact that defeated the slot base, biting again elsewhere.
+>
+> **The sound shape is a CURSOR**: a begin sets it to `ebase`, each step advances by one, and the
+> host signals the FIRST variant of each enum so the stage steps over the type name. The host
+> supplies a boundary it knows and never a name index it cannot check.
+>
+> The plan's "same shape" sentence predated reading the walk. **Checked before being acted on**;
+> it would have produced a wrong emitter otherwise.
+
+> **Currency note (2026-09-11, session 65, thirty-ninth increment). `DATA_SLOTS` IS ROUTED, AND
+> THE SELF-HOSTED SHARE IS 98%.**
+>
+> Both halves of the slice landed. **The region is byte-identical for every corpus stage**, and
+> `no_region_the_driver_routes_disagrees_with_the_reference` passed on the first run; the only
+> failure was the share figure asking to be told the new number.
+>
+> Share **81% to 98%**; skipped kinds **four to three** (`ENUM_VARIANTS`, `ENUM_LAYOUTS`,
+> `PARAM_TYPES`); **computed share unchanged, as predicted** -- the stage supplies the name and the
+> host decides the rest, which is the `CHUNKS` standing. `DATA_SLOTS` joins `CHUNKS` as MIXED.
+>
+> **It is the first routed kind whose record carries a name**, which is why the interner route had
+> to exist first. See `docs/decisions/DATA_SLOTS_ROUTING_PLAN.md`, now complete.
+
+> **Currency note (2026-09-11, session 65, thirty-eighth increment). THE NODE MARGIN IS 171, NOT
+> 217.**
+>
+> `tests/module_input_node_budget.rs` measures `wire.kel` at **1,194 nodes against a 1,365 cap**.
+> The figure quoted around the tree is 1,148 -- stale by 46 -- and the plan assumed a margin of
+> 217. **A quarter of the assumed headroom was already gone**, in the one number the slice is sized
+> against.
+>
+> Fourth stale figure in this arc, and the one that would have mattered most. The plan now cites
+> the test rather than a number, and the test asserts its walk has not drifted from the writer.
+>
+> **The measure-first instruction caught a real error on its first use.**
+
+> **Currency note (2026-09-11, session 65, thirty-seventh increment). THE SLICE IS BUDGETED.**
+>
+> **Command 178 is already driven** by a test feeding it a name from the reference's record, so the
+> name-aware step must be ADDITIVE. The slice adds TWO commands -- a begin and a name-aware step --
+> and `highest_command` moves 181 to 183.
+>
+> **`wire.kel` is itself a measured stage**: 1,148 constant-forest nodes against a 1,365 table, a
+> margin of 217, and 475 chunks. Two new functions grow the very stage the corpus measures, and it
+> must still emit its own regions.
+>
+> The plan says to re-measure the node count after the stage edit and before the driver edit, so a
+> cap failure is attributed to stage growth rather than routing. See
+> `docs/decisions/DATA_SLOTS_ROUTING_PLAN.md`.
+>
+> **Four self-corrections in this arc, each from reading one level deeper, none reaching code.**
+
+> **Currency note (2026-09-11, session 65, thirty-sixth increment). THE `nmap` ASSUMPTION HOLDS;
+> THE SLICE NEEDS A BEGIN FOR A DIFFERENT REASON.**
+>
+> `window_emit_chunks` creates ONE `shared` buffer and passes it to the begin and every step. The
+> driver re-seeds only the slots it writes and `wire.nmap` is never among them, so the interner's
+> result survives by construction.
+>
+> **The remaining question is which command runs the interner for a slot pass.** Command 174 also
+> zeroes the chunk cursors; command 170 also emits `NAMES` into the window. Both are misuses, so a
+> begin whose whole body is `mi_window_prepare()` is the smallest honest answer -- and it moves
+> `highest_command`.
+>
+> **The plan was right to name the assumption and wrong about what followed from it.** Same
+> conclusion, different reason; a wrong reason is how a design gets built against the wrong
+> constraint.
+
 > **Currency note (2026-09-10, session 65, thirty-fifth increment). THE SECTION BASE IS NOT
 > RECOVERABLE FROM RETAINED STATE, AND THE PREVIOUS NOTE SAID IT WAS.**
 >

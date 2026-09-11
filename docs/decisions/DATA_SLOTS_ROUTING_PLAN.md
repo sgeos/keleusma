@@ -2,8 +2,54 @@
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
 
-**Status**: design, not implementation. Written 2026-09-10 after three increments of reading, one
-of which over-claimed and one of which is corrected below.
+**Status**: **COMPLETE as of 2026-09-11, and `ENUM_VARIANTS` followed the same day** on a
+DIFFERENT shape. Both kinds are routed byte-identically across the corpus; the self-hosted share is
+99% and two kinds remain skipped, both needing an emitter written.
+Written 2026-09-10 after three increments of reading, one of which over-claimed and one of which is
+corrected below.
+
+## What landed on 2026-09-11
+
+Two `nm` fields, `ebase` and `sbase`, captured as each name section begins. Two additive commands:
+**182 `ds_name_begin`**, whose whole body runs the interner, and **183 `ds_name_step`**, which takes
+the RUN INDEX where the formatter at 178 takes a name and reads `wire.nmap[sbase + k]` itself.
+`highest_command` moves 181 to 183. Command 178 is untouched.
+
+**Cost against the budget: 8 nodes.** `wire.kel` goes from 1,194 to 1,202 against the 1,365 cap,
+margin 171 to 163 — measured before and after, so the growth is attributed to this edit and not to
+whatever follows.
+
+**Driven, not merely dispatched.** `the_name_aware_slot_stream_takes_its_name_from_the_interner`
+runs the pair on ONE shared buffer — `run_call` allocates a fresh buffer per call and cannot — and
+the emitted record matches the reference's first `DATA_SLOTS` record byte for byte, with the three
+host-decided fields taken from that record and the name coming from the stage. **Mutation-checked**:
+setting `sbase` to zero fails it. A sibling test confirms an out-of-range run index is refused
+rather than reading another section's name.
+
+**The driver landed the same day.** `slot_run_fields` groups consecutive slots sharing a name and
+visibility into runs, mirroring the encoder including its `u16::MAX` chunking, and supplies the RUN
+INDEX where the formatter takes a name. `window_emit_slots` drives the pair on one virtual machine
+and ONE shared buffer.
+
+### Result
+
+`no_region_the_driver_routes_disagrees_with_the_reference` passed on the first run: the region is
+**byte-identical for every corpus stage**. The only test that failed was the share figure, asking
+to be told the new number.
+
+| | before | after |
+|---|---|---|
+| self-hosted share of corpus region bytes | 81% | **98%** |
+| skipped region kinds | four | **three** -- `ENUM_VARIANTS`, `ENUM_LAYOUTS`, `PARAM_TYPES` |
+| computed share | unchanged | **unchanged** |
+
+**The computed share not moving is the part worth checking, and it was predicted.** The stage
+supplies this region's name from its own interner and the host decides every other field, which is
+the `CHUNKS` standing rather than the `NAMES` one. `DATA_SLOTS` joins `CHUNKS` as **mixed** in the
+provenance table, and `the_computed_share_is_smaller_than_the_produced_share` still holds.
+
+`DATA_SLOTS` is the **first routed kind whose record carries a name**. Every kind routed before it
+carried none, which is what let the host supply every field.
 
 ## Where this sits
 
@@ -67,9 +113,22 @@ cursors that must persist across records. A data-slot record carries no cursor. 
 is that the interner has RUN, and `wire.nmap` is shared data that survives for as long as the host
 hands back the same buffer — the property `ck_stream_begin` already documents and relies on.
 
-**This is the assumption most worth checking first.** If `nmap` does not in fact survive between
-the interner call and the step calls under the driver's buffer handling, the design needs a begin
-after all, and that is a different shape.
+**CHECKED 2026-09-11, AND IT HOLDS.** `window_emit_chunks` creates ONE `shared` buffer and passes
+`&mut shared` to every `enter_wire` call -- the begin and every step alike. Shared data is re-seeded
+per call only for the slots the driver writes; `wire.nmap` is never among them, so the interner's
+result survives for as long as the driver hands back the same buffer, which that function does by
+construction. A `DATA_SLOTS` driver written the same way inherits the property.
+
+**The question it leaves behind is sharper and smaller: WHICH command runs the interner for a slot
+pass.** The slot stream had no begin of its own, and the two existing commands that call `mi_window_prepare()`
+both do something else as well -- command 174 zeroes the chunk range cursors, and command 170 emits
+the `NAMES` records into the window. Either would work and both are misuses: one is chunk-specific,
+the other writes bytes the driver would discard.
+
+So the slice needs a begin after all, but for a different reason than the one this section
+originally guessed. It is not that the interner's result fails to survive; it is that nothing
+currently runs the interner WITHOUT also doing something a slot pass does not want. A begin whose
+whole body is `mi_window_prepare()` is the smallest honest answer, and it moves `highest_command`.
 
 ## Verification, in the order that makes a failure legible
 
@@ -89,8 +148,73 @@ decides; only the name index becomes the stage's own.
 cannot be read as the compiler deriving more of its own artifact, and it should still hold
 afterwards.
 
+## TWO CONSTRAINTS FOUND ON 2026-09-11 THAT MAKE THIS A BUDGETED SLICE, NOT A CASUAL ONE
+
+**Command 178's contract is already driven.**
+`the_four_record_formatters_lay_out_a_record_the_reference_agrees_with` feeds `ds_stream_step` a
+name index taken from the reference's own record, and that is legitimate for the claim it makes --
+whether the stage lays a record out the way the format specifies. Changing 178 to read the interner
+would break it for no gain. **The name-aware step must be an ADDITIVE command**, leaving 178 as the
+formatter it is, which matches the preference this file records elsewhere for additive commands over
+flags on a proven path.
+
+So the slice adds TWO commands, not one: a begin whose body is `mi_window_prepare()`, and a
+name-aware step. `highest_command` moves from 181 to 183.
+
+**`wire.kel` is itself one of the eleven measured stages, and its margin is not large.** Two new
+functions add chunks and constants to the very stage the corpus measures, and the stage must still
+emit its own regions afterwards.
+
+**MEASURED 2026-09-11: 1,194 nodes against a 1,365 cap, a margin of 171.** The figure quoted
+around the tree is **1,148**, which is stale by 46 nodes, and the margin this plan first assumed was
+217 rather than 171. That is a quarter of the assumed headroom gone, in the one number the slice is
+sized against -- which is precisely why the plan said to measure before editing.
+
+**Derive it from `tests/module_input_node_budget.rs` rather than reading a number here.** That test
+parses the count out of the blob the stage itself reads, asserts the walk has not drifted from the
+writer, and fails if the margin falls below sixty-four. A number in prose is the thing this tree has
+watched go stale four times in this arc alone.
+
+**That is the reason this has not been done casually, and it belongs in the sizing rather than being
+discovered during the change.** The slice must be budgeted against that margin, and the node count
+should be re-measured after the stage edit and before the driver edit, so a cap failure is
+attributed to the stage growth rather than to the routing.
+
 ## Not in scope
 
-`ENUM_VARIANTS` is the same shape with the enum base, and should follow only after `DATA_SLOTS` is
-byte-identical. `ENUM_LAYOUTS` and `PARAM_TYPES` have no emitter at all and are a different
-obligation.
+`ENUM_LAYOUTS` and `PARAM_TYPES` have no emitter at all and are a different obligation.
+
+**`ENUM_VARIANTS` IS NOT THE SAME SHAPE, AND THIS SECTION SAID IT WAS.** The sentence here read
+"the same shape with the enum base", which was written before the enum walk was read closely.
+
+`mi_enum_names` INTERLEAVES: for each enum it interns the type name, then that enum's variants,
+then the next type name. So a flat variant index `k` does NOT sit at `ebase + k` -- the type names
+are in the way, one per enum, and they are not at a fixed stride because enums have different
+variant counts. The counters cannot supply it either: `vcnt` is the CURRENT enum's variant count
+and is overwritten each iteration, which is the same fact that defeated the slot base.
+
+**The sound shape is a CURSOR, not an offset.** A begin sets the cursor to `ebase`, and each step
+emits one variant and advances by one -- except that the host tells it when a record is the FIRST
+variant of its enum, and the stage then advances one extra to step over the type name. The host
+supplies structure it legitimately knows, the boundary, and never a name index it cannot check.
+
+That is a different design from the slot stream rather than a copy of it. **It landed on
+2026-09-11** as commands 184 and 185, driven across an enum boundary and mutation-checked: removing
+the type-name skip fails the test, and a cursor walked past its section is refused. The slot slice's
+value here was the METHOD, not the shape.
+
+### What growing `wire.kel` cost, enumerated rather than discovered
+
+Four new functions moved TWO recorded figures, and the second was found by enumerating rather than
+by a failure:
+
+| figure | was | is | where |
+|---|---|---|---|
+| constant-forest nodes | 1,194 | **1,209**, margin 156 | guarded by `tests/module_input_node_budget.rs` |
+| chunk count, from the COMPILED module | 486 | 490 | `tests/selfhost_chunk_names.rs` |
+| chunk count, from the PARSED source | 486 | 490 | `tests/selfhost_parse.rs` |
+
+**The last two are the same figure with two independent derivations**, and they moved together,
+which is what such a pair should do. The plan warned that `wire.kel` is itself a measured stage; it
+named the node count and did not name the chunk count, so the prediction was right and the
+enumeration was short by one.

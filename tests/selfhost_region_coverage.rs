@@ -279,13 +279,14 @@ fn the_self_hosted_share_of_the_corpus_is_the_one_recorded() {
     let share = (covered * 100) / total;
 
     assert!(
-        share >= 88,
+        share >= 97,
         "the self-hosted path produces {share}% of the corpus's region bytes ({covered} of \
-         {total}). It was 93% when `SHAPES` and `SIGNATURES` landed, and 81% before them; a \
-         fall means a region stopped being routed"
+         {total}). It was 99% when `ENUM_VARIANTS` landed, 98% when `DATA_SLOTS` did, 93% at \
+         `SHAPES` and `SIGNATURES`, and 81% before them; a fall means a region stopped being \
+         routed"
     );
     assert!(
-        share < 97,
+        share < 100,
         "the self-hosted path now produces {share}% of the corpus's region bytes, past what \
          the record describes. That is good news and it needs recording: update the coverage \
          statement rather than widening this bound"
@@ -393,25 +394,31 @@ fn the_skipped_region_kinds_are_the_ones_on_record() {
     // was correct, and the over-correction came from reading a dispatch table instead of the
     // formatter bodies.
     assert!(
-        skipped.len() <= 4,
-        "{} kinds are skipped: {skipped:02x?}. FOUR are on record after `DATA_INIT` was \
-         routed -- `ENUM_VARIANTS`, `ENUM_LAYOUTS`, `DATA_SLOTS` and `PARAM_TYPES`. More means \
-         the driver has stopped routing something it used to. All four wait on the name-interning \
-         route",
+        skipped.len() <= 1,
+        "{} kinds are skipped: {skipped:02x?}. ONE is on record after `DATA_SLOTS`, \
+         `ENUM_VARIANTS` and `ENUM_LAYOUTS` were routed on 2026-09-11 -- `PARAM_TYPES`. More \
+         means the driver has stopped routing something it used to. Those three were the first \
+         kinds whose records carry a NAME, and each took a DIFFERENT shape: the slot section \
+         indexes, the variant section interleaves and needs a cursor, and the layout section \
+         steps a whole enum at a time while accumulating a variant range",
         skipped.len()
     );
 }
 
 /// **THE 81% IS NOT ALL ONE THING, AND SAYING SO IS THE POINT OF THIS TEST.**
 ///
-/// "The self-hosted path produces 81% of the corpus's region bytes" is true and
-/// invites a stronger reading than it supports. The handoff's provenance table
+/// "The self-hosted path produces 99% of the corpus's region bytes" is true and
+/// invites a stronger reading than it supports. **`DATA_SLOTS` and
+/// `ENUM_VARIANTS` took it from 81 to 99 on 2026-09-11 and raised the computed
+/// share not at all**: the stage supplies each region's NAME from its own
+/// interner and the host decides every other field, which is the `CHUNKS`
+/// standing, not the `NAMES` one. The handoff's provenance table
 /// distinguishes three standings and they are not comparable:
 ///
 /// | standing | regions | what Keleusma decides |
 /// |---|---|---|
 /// | **computed** | `NAMES`, `STRING_POOL`, `CONSTS` | the stage walks the module blob and derives every byte |
-/// | **mixed** | `CHUNKS` | the stage computes the name index and three range cursors; ten fields per record come from the host |
+/// | **mixed** | `CHUNKS`, `DATA_SLOTS`, `ENUM_VARIANTS`, `ENUM_LAYOUTS` | the stage computes the name index, plus three range cursors for `CHUNKS` and a variant range for `ENUM_LAYOUTS`; the remaining fields per record come from the host |
 /// | **encoded, not derived** | `HEADER` | the host reads the scalars off the `Module`; the stage decides offsets, widths and endianness |
 ///
 /// `wire.kel` makes the same distinction about the record formatters it carries
