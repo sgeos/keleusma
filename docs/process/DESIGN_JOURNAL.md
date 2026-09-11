@@ -13,6 +13,135 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-11 (forty-eighth) — the field-read step is partially cheap, and now measured
+
+The previous increment found that the existing sizing spike measures a step already taken, leaving
+the field-read edge **unsized**. This sizes it, with its own cases.
+
+**Result: declaration lookup types 3 of 5.** The two it does not reach are a field of an ARRAY
+ELEMENT and a field of a MATCH BINDING.
+
+| case | reached by lookup |
+|---|---|
+| field of a struct literal | yes |
+| field of a field | yes |
+| field of a call result | yes |
+| field of an array element | **no** -- the `let` states an ARRAY; the element type must be projected out of it |
+| field of a match binding | **no** -- the binding's type comes from the VARIANT PAYLOAD, which no `let` states |
+
+**The mechanism is two lookups and no unification**: a `let` whose initialiser is a struct literal
+or a call states its type outright, and a struct declaration states each field's. Nested access
+repeats the pair. Nothing is inferred.
+
+**So the next increment can be scoped rather than feared.** The cheap majority can land as a tagger
+extension over declarations the pipeline already has, with the two projection cases recorded as
+still unreached -- instead of the whole edge waiting on inference it may not need.
+
+**Non-vacuity runs both ways, deliberately.** The spike fails if it types NONE, which would mean the
+lookups are broken, and it fails if it types EVERY case, which would mean the corpus no longer
+contains the edge. Each case also asserts the REFERENCE rejects the program, so a case that stopped
+being a missed rejection cannot sit in the corpus unnoticed.
+
+**The two unreached cases were predicted and then measured, not asserted.** Writing the prediction
+into the corpus labels and letting the run decide is the difference between a sizing and a guess --
+and this session has already recorded what happens when a plausible prediction goes in unchecked.
+
+---
+
+## 2026-09-11 (forty-seventh) — the citation guard caught me naming a retired test
+
+A documentation-only pull request failed two continuous-integration jobs.
+`the_current_claim_documents_cite_nothing_that_does_not_exist` fired on this very file, which
+named the RETIRED test while explaining that it is retired.
+
+**The guard is right and the fix is the claim, not the allowlist.** A current-claim document that
+names an identifier existing nowhere asserts something no reader can check, and the guard cannot
+distinguish a deliberate negative from a stale citation. This is the second time this session -- the
+first was a begin command the slot stream did not have -- and both times the temptation was to
+widen an exemption rather than reword.
+
+**IT FAILED IN TWO CONFIGURATIONS I DID NOT RUN.** I ran the guards under default features and
+under `self-host`; it failed under `--no-default-features` and `--features signatures`. That is the
+feature-set lesson **that I had already written down in the handoff**, arriving in a new place: not
+a gated test absent from a run, but a guard whose verdict differs by configuration.
+
+**So I ran both document guards in every configuration continuous integration uses**, rather than
+fixing the one that failed and assuming. All four pass for `comment_citations`; `claimed_counts`
+reports ZERO tests under `--no-default-features`, which is itself worth knowing -- that guard does
+not exist in that configuration, so a claim it protects is unprotected there.
+
+**AND I DID IT A THIRD TIME WHILE WRITING THIS ENTRY.** The first draft named the phantom begin
+command as an example of naming a phantom, and the guard failed again on the very paragraph
+describing the rule. **Knowing the failure does not prevent it; running the check does** -- which is
+the same sentence `HANDOFF.md` already carries about numbering its own validity list, arrived at
+independently in a different file.
+
+**The transferable rule is now four items long and this is the fourth**: before believing a green
+guard, know which CONFIGURATIONS it ran in, not only which binaries and not only whether it stopped
+early.
+
+---
+
+## 2026-09-11 (forty-sixth) — the sizing spike sizes work that is done
+
+Having found that type rejection's edge has moved to a FIELD READ, the obvious next step was to read
+the sizing spike that measures what reaching further costs. It reports **"local propagation reaches
+5 of 5"**, which invites the reading that the remaining step is small.
+
+**It is a measurement of work already completed.** Every one of its five cases is a let-bound
+literal, a call return, or a composition of the two -- and the stage now reaches all of them. The
+spike was written when the edge WAS the literal operand; local resolution and the bounded arithmetic
+fixpoint moved that edge afterwards.
+
+**Its corpus contains no field read**, which is where the edge actually sits. So "5 of 5" sizes the
+step behind us, not the one in front, and **the field-read step is unsized**.
+
+**Kept rather than deleted**, with the limitation recorded in the spike itself. Its result is still
+the reason the literal-to-local step was known to be cheap before it was taken, which is why it was
+taken at all. What it cannot do is size what comes next.
+
+**This is the third artifact in two increments whose answer was true when written and is now about a
+different question** -- after the retired literal-only test and the Order 1 cell that cited it. The
+pattern is not staleness of FACTS but staleness of SUBJECT: the instrument still works, and the
+question moved out from under it.
+
+---
+
+## 2026-09-11 (forty-fifth) — the other half of Order 1 was stale too
+
+With every region kind routed, the remaining Order 1 obligation was "source types before type
+rejection reaches beyond literals". **Reading before acting, that is stale as well.**
+
+`the_rules_reach_only_literal_direct_occurrences` -- the test the roadmap cites as pinning the
+limitation -- is **RETIRED**, and the file says why: local resolution reaches a `let` bound to a
+literal and a call taking a declared return type, so those programs are ordinary members of the
+rejection corpus now. **A bounded fixpoint reaches an ARITHMETIC result too**, with no depth limit
+on the chain -- the hop bound is a decision rather than a limit of the approach.
+
+**The limit MOVED rather than vanished.** Its new edge is a FIELD READ, pinned by
+`a_derived_operand_from_a_field_read_is_still_unreached`. Both named tests exist and pass. A
+host-side sizing spike already measures what reaching further would cost and is explicitly not
+wired into the stage.
+
+**Both halves of that sentence are now corrected in the roadmap cell itself**, not only in the
+channels, because that cell is where the stale figure would be copied FROM -- which is exactly how
+a stale capacity limit reached the handoff four increments ago. **This is the second time the Order
+1 cell has been stale on these same two subjects**, so the correction says to derive the state from
+the tests rather than from the cell.
+
+**Worth noting about the coverage figure**: the cell now states that 100% of the region BYTES pass
+through the stage while the share it DERIVES is unchanged. A reader taking "100%" as self-hosting
+would be badly wrong, and the four provenance standings are what prevent it.
+
+## A SMALL REPORTING ERROR OF MY OWN
+
+I reported the trunk run green on the strength of a `--limit 1` row whose commit I did not compare
+against the branch tip. It named a different commit; the run for the actual tip was still in
+progress. **Checking what a result is ABOUT is the same discipline as checking what a command
+covered**, and this session has now met that failure on both sides.
+
+---
+
 ## 2026-09-11 (forty-fourth) — the last region kind, and it was the weakest
 
 **Every region kind the corpus emits is now routed and byte-identical. The skipped set is EMPTY.**
