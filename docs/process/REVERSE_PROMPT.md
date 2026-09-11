@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-10 (session 65, thirty-third increment) — the name-interning route already walks all three name sections; the gap is the section base, and the ordering is unmeasured; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
+**Date**: 2026-09-10 (session 65, thirty-fifth increment) — the section base is NOT recoverable from retained state; the design is recorded before any code; a missing width floor found under the reach that was unproven, the reach proven for one build with a valid control, and a derived census of which guards were shown able to fail
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,74 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## THIRTY-FIFTH INCREMENT: THE FIELD LIST MADE THE STATE LOOK SUFFICIENT, AND IT IS NOT
+
+Going to route `DATA_SLOTS`, I checked the one thing the previous increment asserted without
+reading: that the section bases are "recoverable from state that already exists", naming `ecnt`,
+`vcnt`, `scnt` and the running `cnt`.
+
+**`nm.vcnt` is assigned INSIDE the enum loop.** It holds the variant count of the *current* enum
+and is overwritten on each iteration. `ecnt` and `scnt` are totals; there is no running total of
+variant names anywhere. **The slot section's base cannot be computed from what the walk retains**,
+and the previous increment said it could.
+
+**Caught by reading the assignment site rather than the field list** -- the third surface-reading
+failure in this arc, and the first of the three caught BEFORE it reached a line of code. That is
+the whole value of writing the design down before executing it.
+
+**The design is now recorded** in `docs/decisions/DATA_SLOTS_ROUTING_PLAN.md`: capture each
+section's base at the moment that section starts, from the walk itself, rather than computing it
+from counts. Two fields, two assignments, and the base cannot drift from the sequence it indexes.
+`ds_stream_step` then takes the run index and reads `wire.nmap[slot_base + k]`, so no host
+arithmetic touches a name.
+
+**The assumption most worth checking first is named in the plan**: that `wire.nmap` survives
+between the interner call and the step calls under the driver's buffer handling. `ck_stream_begin`
+documents and relies on that property, but relying on someone else's documented reliance is not the
+same as checking it. If it does not hold, `DATA_SLOTS` needs a begin after all and the shape
+changes.
+
+**Deliberately not implemented.** A half-finished change in the self-hosted emitter, against an
+hour of continuous integration and a byte-identical oracle, would be worth less than a design the
+next session can execute without re-deriving three increments of reading.
+
+## THIRTY-FOURTH INCREMENT: THE MEASUREMENT I ASKED FOR WAS ALREADY IN THE TREE
+
+The previous increment flagged two things as unmeasured before any driver change: whether the
+interning ORDER for the enum and data-slot sections matches the reference's `SchemaBuilder`, and
+whether `nmap` is indexed by walk position. **Both are settled by a test that already exists and
+passes**, one inference away.
+
+**The chain.** `NAMES` is emitted by `emit_name_records_from_nout(0, nm.cnt)` -- one record per
+walk position, in walk order, straight out of the walk's own output. `NAMES` is ROUTED by the
+driver at command 170. `no_region_the_driver_routes_disagrees_with_the_reference` asserts that no
+routed region DIFFERS, across every corpus stage, with a non-vacuity floor of four identical
+regions per stage.
+
+**So `NAMES` is byte-identical for every stage, and it is the walk's output.** A byte-identical
+table of name records in walk order is precisely the statement that the walk produced the same
+names in the same order as the reference. The order is proven; it was not an open question.
+
+**`mi_pair(k, len, mode)` writes `nin[k*2]` and returns `k + 1`**, so `k` is the walk position and
+the pair sequence is indexed by it. Dedup reuses a POOL OFFSET rather than collapsing a record, so
+walk position is the name index -- which is why `ck_stream_step` can read `wire.nmap[ck.j]` with
+`ck.j` a plain chunk index.
+
+**What remains is arithmetic.** Walk positions run sequentially across the three sections, so the
+base for slot runs is the chunk count plus the enum name count, and the walk retains `ecnt`, `vcnt`
+and `scnt`.
+
+**Stated as an inference, because this session has over-claimed twice from a surface.** The chain
+above is a reading plus an existing byte identity, not a direct measurement of the routed result.
+**The definitive check is to route one kind and compare bytes**, and that is the next increment
+rather than this one. What this increment establishes is that the check is now expected to pass for
+a stated reason, instead of being attempted blind.
+
+**The lesson is about where I looked.** I wrote down "this needs measuring" and the measurement was
+sitting in a passing test the whole time -- the third time today that the tree already contained
+what I was about to go and get. The cheap move, before sizing any measurement, is to ask which
+existing green test would have to fail if the property were false.
 
 ## THIRTY-THIRD INCREMENT: THE NAME-INTERNING ROUTE ALREADY RUNS, AND THE GAP IS THE SECTION BASE
 

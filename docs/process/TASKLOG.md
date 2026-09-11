@@ -10,6 +10,43 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-10, session 65, thirty-fifth increment). THE SECTION BASE IS NOT
+> RECOVERABLE FROM RETAINED STATE, AND THE PREVIOUS NOTE SAID IT WAS.**
+>
+> **`nm.vcnt` is assigned INSIDE the enum loop** -- the current enum's variant count, overwritten
+> each iteration. `ecnt` and `scnt` are totals; no running variant total exists. So the slot
+> section's base cannot be computed from what the walk keeps.
+>
+> Caught by reading the assignment site rather than the field list: the **third** surface-reading
+> failure in this arc, and the first caught before it reached code.
+>
+> **The design is recorded** in `docs/decisions/DATA_SLOTS_ROUTING_PLAN.md` -- capture each
+> section's base at the moment the section starts, from the walk itself; `ds_stream_step` then
+> reads `wire.nmap[slot_base + k]` so no host arithmetic touches a name.
+>
+> **Check first**: that `wire.nmap` survives between the interner call and the step calls under the
+> driver's buffer handling. `ck_stream_begin` relies on it; relying on someone else's documented
+> reliance is not checking it.
+
+> **Currency note (2026-09-10, session 65, thirty-fourth increment). THE ORDERING IS SETTLED BY AN
+> EXISTING TEST.**
+>
+> `NAMES` is emitted as one record per WALK POSITION in walk order, is ROUTED at command 170, and
+> `no_region_the_driver_routes_disagrees_with_the_reference` asserts no routed region differs on
+> any corpus stage. **A byte-identical table of name records in walk order is the statement that
+> the walk matches the reference's interning order.**
+>
+> `mi_pair` indexes by walk position and dedup reuses a POOL OFFSET rather than collapsing a
+> record, so walk position is the name index -- which is why `ck_stream_step` reads
+> `wire.nmap[ck.j]` with a plain chunk index.
+>
+> **What remains is arithmetic**: the slot base is the chunk count plus the enum name count, and
+> the walk retains `ecnt`, `vcnt` and `scnt`.
+>
+> Stated as an INFERENCE, not a direct measurement. The definitive check is to route one kind and
+> compare bytes. **Third time today the tree already held what I was about to go and get**; the
+> cheap move is to ask which existing green test would fail if the property were false.
+
 > **Currency note (2026-09-10, session 65, thirty-third increment). THE NAME-INTERNING ROUTE IS
 > NOT MISSING; THE SECTION BASE IS.**
 >
