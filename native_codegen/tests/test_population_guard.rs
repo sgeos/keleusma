@@ -34,7 +34,13 @@
 ///
 /// **Derive this, do not transcribe it.** A count in this tree once read
 /// "nineteen" while the block it described held twenty-nine.
-const RECORDED_TEST_FUNCTIONS: usize = 511;
+const RECORDED_TEST_FUNCTIONS: usize = 514;
+// 511 -> 514 on 2026-09-11: three added in `outstanding_reports.rs`. They watch
+// the defects this line has reported to the `v0.2.3` line, so a repair upstream
+// turns this suite red and forces the report to be retracted. Written after
+// finding that a decision document had asserted an unsoundness for four weeks
+// after it was fixed.
+//
 // Unchanged by the bounds-transfer pin: `spike_bounds_transfer.rs` gained
 // assertions inside an existing test rather than a new test function. Worth
 // saying, because a reader reconciling that increment against this number would
@@ -162,7 +168,9 @@ const RECORDED_TEST_FUNCTIONS: usize = 511;
 /// 111 -> 112: `host_buffer_census.rs` added, none removed.
 ///
 /// 112 -> 113: `shared_composite_slot.rs` added, none removed.
-const RECORDED_TEST_FILES: usize = 113;
+///
+/// 113 -> 114: `outstanding_reports.rs` added, none removed.
+const RECORDED_TEST_FILES: usize = 114;
 
 fn test_files() -> Vec<std::path::PathBuf> {
     let mut out: Vec<_> = std::fs::read_dir("tests")

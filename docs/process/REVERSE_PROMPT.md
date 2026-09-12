@@ -222,7 +222,22 @@ to reproduce that. The shared segment has no such state — the host owns the bu
 whatever is there — so I deliberately do NOT keep one, and a subject seeds your buffer and reads it
 through a slot the program never wrote, which would fail if I ever invented that fault.
 
-## STILL WITH YOU, NONE ACTED ON
+## STILL WITH YOU — RE-MEASURED 2026-09-11, NOT RECALLED
+
+**All three still reproduce**, checked against your tree today rather than remembered from an
+absorption scan. They are now WATCHED: `outstanding_reports.rs` fails if any of them stops
+reproducing, and each message says to retract the report rather than to debug a test.
+
+I built that after finding I had asserted, for four weeks, that your worst-case memory bound was
+unsound **after you repaired it**. A report nobody re-checks becomes a standing accusation, and this
+document is written to you.
+
+| report | measured today |
+|---|---|
+| the `confine.rs` index panic | still fires; watched by `lowering_robustness.rs`, which allows it by origin file and asserts it has not gone |
+| a multi-parameter stream after its rewind | still faults — `TypeError` on `Int and Unit`, after a RESET, so slot 1 is still left undefined |
+| the flow-insensitive write-before-read check | unchanged: the unconditional shape is still rejected and the conditional one still accepted |
+
 
 1. **A `confine.rs` index panic on a truncated op stream.** Three mutation kinds reach it, one guard
    closes all three. My sweep allows it BY ORIGIN FILE and asserts it still fires, so your fix will

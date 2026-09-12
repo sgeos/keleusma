@@ -1,5 +1,47 @@
 # Design Journal
 
+## 2026-09-11 — [v0.3.0] The reports made self-verifying, before one of them rotted
+
+The previous increment found a defect report that outlived its defect by four weeks. **The same
+document type carries two more**, and `REVERSE_PROMPT.md` said *"STILL WITH YOU, NONE ACTED ON"* on
+the strength of an absorption scan made thirty-six absorbed commits earlier.
+
+**Measured today, all three still reproduce:**
+
+| report | evidence |
+|---|---|
+| the `confine.rs` index panic | still fires — and was ALREADY self-verifying |
+| a multi-parameter stream after its rewind | `TypeError` on `Int and Unit`, arriving after a RESET |
+| the flow-insensitive write-before-read check | unconditional still rejected, conditional still accepted |
+
+So the claim was true. **It was also unguarded**, which is the part that needed fixing: being right by
+recollection and being right by evidence look identical until the day they do not.
+
+### The pattern already existed and was written before the lesson
+
+`lowering_robustness.rs` allows the `confine.rs` panic BY ORIGIN FILE and asserts it **still fires**,
+with a message saying to delete the carve-out when the upstream fix lands. That is the shape; the
+other two had nothing.
+
+### A guard watches a behaviour, not a ruling
+
+Two of these are questions — should a multi-parameter stream compile at all; is the write-before-read
+check meant to be flow-insensitive — and a question has no answer this line can assert. What it can
+assert is **what the reference does today**, so a change reaches this line as a failure rather than as
+silence. Each message says to retract or update the report; **a failure there is not a defect in this
+backend.**
+
+### Two places the guards were made harder to satisfy
+
+- The multi-parameter check asserts it **reached a rewind** before the fault. A run that faulted
+  earlier would satisfy a naive "it still faults" and be testing something else.
+- The write-before-read check asserts the unconditional shape is **still rejected** as well as the
+  conditional one accepted. Acceptance alone is consistent with the check having been removed
+  entirely, which is a larger change than the report describes.
+
+One tightening on review: the first guard matched three OR'd fragments of wrapped prose. **A
+three-way OR passes on the weakest member**, so it now matches the distinctive instruction only.
+
 ## 2026-09-11 — [v0.3.0] A defect report that outlived its defect by four weeks
 
 The bounds-transfer drift was found by accident. The deliberate version asked which OTHER recorded
