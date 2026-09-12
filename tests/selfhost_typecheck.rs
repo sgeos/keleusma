@@ -504,6 +504,25 @@ fn occurrence_rows(ast: &keleusma::ast::Program) -> OccurrenceRows {
             ImportItem::Name(n) => {
                 let i = intern(n, &mut ids);
                 declared.push(i);
+                // **BOTH SPELLINGS, AND ONLY THE BARE ONE WAS DECLARED.** `use
+                // audio::midi_to_freq` imports the name `midi_to_freq`, and the call
+                // site writes `audio::midi_to_freq`. The occurrence walk records the
+                // QUALIFIED spelling, so the search missed and the name read as
+                // unresolved -- every program calling an imported native through its
+                // module path was REJECTED.
+                //
+                // **A different sub-class from the four missing binders.** Nothing
+                // here fails to bind a name; the two sides spell one name two ways,
+                // which is the defect the field-set channel already guards against
+                // by sharing one index space. Declaring both spellings is the
+                // conservative repair: it can only ACCEPT more, and the alternative
+                // -- stripping the qualifier from occurrences -- would make two
+                // modules' same-named functions collide.
+                if !u.path.is_empty() {
+                    let qualified = format!("{}::{}", u.path.join("::"), n);
+                    let q = intern(&qualified, &mut ids);
+                    declared.push(q);
+                }
             }
             ImportItem::Wildcard => wildcard = true,
         }
@@ -616,6 +635,24 @@ fn occurrence_rows(ast: &keleusma::ast::Program) -> OccurrenceRows {
             if let Pattern::Variable(n, _) = &p.pattern {
                 locals.insert(n.clone());
             }
+        }
+        // **A CONST PARAMETER IS A VALUE NAME.** `fn plus<const n: Word>() -> Word
+        // { n + 10 }` reads `n` as an ordinary identifier, so it arrives as an
+        // occurrence; nothing put the declaration into the local set, and the
+        // classification rule REFUSED it. Every const-generic program that used its
+        // parameter as a value was rejected.
+        //
+        // **The fourth binder this channel has missed, and the first PREDICTED
+        // rather than stumbled on.** After the `for` variable and the match arm, the
+        // question "what else binds a name?" was put to the syntax tree instead of
+        // waiting for another program to fail.
+        //
+        // A const parameter used as an ARRAY LENGTH was already accepted, because
+        // there it sits in a TYPE position and yields no occurrence at all. **Same
+        // binder, two syntactic forms, one of them broken** -- the rule-shape
+        // census's finding, showing up in a different channel.
+        for c in &f.const_params {
+            locals.insert(c.name.clone());
         }
         // Two passes: bindings first, because a `let` later in the body still
         // makes the name local to this approximation and a one-pass walk would
@@ -3862,6 +3899,97 @@ fn the_rules_the_census_added_do_not_reject_valid_programs() {
             stage_verdict_resolving(src),
             "{label}: the stage REJECTS a well-typed program, which is a language \
              change rather than a conservative choice"
+        );
+    }
+}
+
+/// **EVERY WAY THE LANGUAGE BINDS A NAME, CHECKED AT ONCE.**
+///
+/// # Why a census rather than another fix
+///
+/// The occurrence channel classifies a name as local, declared, or unresolved,
+/// and refuses the third. **Four binders have now been found missing from its
+/// local set**: the pipeline-side loop variable, the match arm's pattern, the
+/// reference-side loop variable, and the const parameter. Each was found
+/// separately, three of them by accident.
+///
+/// Four accidents in one function is a class, not a run of bad luck. So the
+/// question "what else binds a name?" is put to the syntax tree here, once, and
+/// every answer gets a well-typed program. **A fifth binder now fails this test
+/// rather than waiting to be tripped over.**
+///
+/// # Not exhaustive, and that is stated rather than hoped
+///
+/// These are the binding forms I could find and write a valid program for. A form
+/// absent from this list is one nobody looked at — the same caveat the rule-shape
+/// census carries, for the same reason.
+///
+/// # Two forms are here because they are NOT occurrences
+///
+/// A const parameter in an ARRAY-LENGTH position and a generic type parameter sit
+/// in type positions and yield no occurrence at all, so they were already
+/// accepted. They are kept because the difference between "handled" and "never
+/// arrives" is invisible from a passing test, and a change that started routing
+/// type positions through this channel would break them first.
+#[test]
+fn every_binding_form_keeps_its_name_out_of_the_unresolved_set() {
+    const FORMS: &[(&str, &str)] = &[
+        ("function parameter", "fn main(n: Word) -> Word { n + 1 }"),
+        ("let binding", "fn main() -> Word { let a = 1; a + 1 }"),
+        (
+            "for loop variable",
+            "fn main() -> Word { let t = 0; for i in 0..4 limit 4 { let u = i; } t }",
+        ),
+        (
+            "match arm payload binding",
+            "enum E { W(Word), N }\n\
+             fn main(e: E) -> Word { match e { E::W(p) => p + 1, E::N => 0 } }",
+        ),
+        (
+            "match arm struct pattern, shorthand",
+            "struct P { x: Word }\n\
+             fn main(p: P) -> Word { match p { P { x } => x + 1, _ => 0 } }",
+        ),
+        (
+            "const parameter used as a value",
+            "fn plus<const n: Word>() -> Word { n + 10 }\n\
+             fn main() -> Word { plus::<7>() }",
+        ),
+        (
+            // TYPE POSITION: no occurrence is produced at all.
+            "const parameter as an array length",
+            "fn first<const n: Word>(a: [Word; n]) -> Word { a[0] }\n\
+             fn main() -> Word { let x = [1, 2]; first::<2>(x) }",
+        ),
+        (
+            // TYPE POSITION likewise.
+            "generic type parameter",
+            "fn id<T>(v: T) -> T { v }\nfn main() -> Word { id(1) }",
+        ),
+        (
+            "data block field read",
+            "shared data d { v: Word }\nfn main() -> Word { d.v }",
+        ),
+        (
+            // NO SEMICOLON: Keleusma's `use` has none, and the first attempt at this
+            // case would not parse.
+            "an imported name",
+            "use audio::midi_to_freq\nfn main() -> Float { audio::midi_to_freq(69) }",
+        ),
+    ];
+
+    for (label, src) in FORMS {
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+        assert!(
+            compile(&program).is_ok(),
+            "{label}: the REFERENCE rejects this, so it is not a well-typed control \
+             and cannot show whether the binder is handled"
+        );
+        assert!(
+            stage_verdict_resolving(src),
+            "{label}: the stage REJECTS a well-typed program. This binding form's \
+             name is reaching the occurrence rule as unresolved, which is the same \
+             defect already found four times in this channel"
         );
     }
 }

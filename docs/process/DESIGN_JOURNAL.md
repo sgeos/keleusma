@@ -13,6 +13,62 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-11 (fifty-seventh) — a census of binders, and it found two more false rejections
+
+### WHY A CENSUS AND NOT ANOTHER FIX
+
+The occurrence channel classifies a name as local, declared, or unresolved, and refuses the third.
+By this point **four binders had been found missing from its local set**, each separately, three of
+them by accident. **Four accidents in one function is a class, not a run of bad luck.**
+
+So the question "what else binds a name?" was put to the syntax tree once, and every answer got a
+well-typed program.
+
+### TWO MORE FALSE REJECTIONS, AND THEY ARE DIFFERENT SUB-CLASSES
+
+**A CONST PARAMETER used as a value.** `fn plus<const n: Word>() -> Word { n + 10 }` reads `n` as an
+ordinary identifier, so it arrives as an occurrence, and nothing put the declaration into the local
+set. **Every const-generic program that used its parameter as a value was rejected.**
+
+This one was **PREDICTED before looking**, which is worth recording because the previous two
+predictions in this session were both wrong. Asking the syntax tree beat waiting for a program to
+fail.
+
+Note what was already working: the same parameter used as an **array length** was accepted, because
+there it sits in a TYPE position and yields no occurrence at all. **Same binder, two syntactic
+forms, one of them broken** — the rule-shape census's finding surfacing in a different channel.
+
+**AN IMPORTED NAME called through its module path.** `use audio::midi_to_freq` declares the name
+`midi_to_freq`; the call site writes `audio::midi_to_freq`. The occurrence walk records the
+QUALIFIED spelling, the declaration records the bare one, and the search missed. **Every program
+calling an imported native through its module path was rejected.**
+
+**This is not a missing binder at all.** Nothing fails to bind; the two sides spell ONE NAME TWO
+WAYS — the defect the field-set channel already guards against by sharing a single index space, and
+which no amount of binder-hunting would have found. Declaring both spellings is the conservative
+repair: it can only accept more. Stripping the qualifier from occurrences instead would make two
+modules' same-named functions collide.
+
+### THE CENSUS ITSELF
+
+Ten binding forms, each a program the reference accepts, each asserted to survive the stage.
+**Two of the ten are there because they are NOT occurrences** — a const parameter in an array-length
+position and a generic type parameter, both in type positions. They pass trivially today. They are
+kept because **the difference between "handled" and "never arrives" is invisible from a passing
+test**, and a change that started routing type positions through this channel would break them
+first.
+
+Not exhaustive, and stated as such: these are the forms I could find and write a valid program for.
+
+### A PROCESS FAILURE, THIRD OCCURRENCE
+
+An edit script aborted on an assertion again, so a scratch probe it was supposed to delete stayed in
+the file. **Checking `git diff --stat` after every script is what caught it**, for the second time.
+The lesson from two increments ago held only because the check held; the script discipline alone did
+not.
+
+---
+
 ## 2026-09-11 (fifty-sixth) — twelve real programs found a false rejection that a snippet corpus could not
 
 ### WHY REAL PROGRAMS
