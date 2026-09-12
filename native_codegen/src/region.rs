@@ -285,12 +285,52 @@ pub fn stream_spill_bytes(chunk: &Chunk) -> u32 {
 /// is under-provisioned for native streams, and publishing the figure does not
 /// change that.
 pub fn persistent_supplement_bytes(module: &keleusma::bytecode::Module) -> u32 {
+    stream_state_supplement_bytes(module) + composite_init_supplement_bytes(module)
+}
+
+/// The resume-state half of the supplement: one word per stream chunk.
+pub fn stream_state_supplement_bytes(module: &keleusma::bytecode::Module) -> u32 {
     let streams = module
         .chunks
         .iter()
         .filter(|c| c.block_type == keleusma::bytecode::BlockType::Stream)
         .count();
     align_up((streams as u32).saturating_mul(8))
+}
+
+/// **ONE INITIALISATION WORD PER PRIVATE COMPOSITE SLOT.**
+///
+/// # The defect this closes
+///
+/// A composite private slot's load-time value is `Unit`, deliberately: the
+/// compiler keeps a write-before-read contract for composite slots rather than
+/// baking a zero body. The reference FAULTS on a read of an unwritten one —
+/// `TypeError("cannot access field on Unit")`.
+///
+/// **The pool is bytes, and zeros are indistinguishable from a written body of
+/// zeros**, so this backend answered `0` where the reference faulted. Measured on
+/// a slot written on one branch and read on the other.
+///
+/// # Why a separate word rather than a sentinel body
+///
+/// A magic value compared against the body would fault on a legitimate body that
+/// happened to equal it. The flag has to be outside the data it describes.
+///
+/// # Why persistent rather than ephemeral
+///
+/// The slot survives `Op::Reset`, so its "has been written" fact must survive it
+/// too. A flag in the ephemeral region would make a slot written in one stream
+/// cycle look unwritten in the next.
+///
+/// Fixed size, fixed offset, and statically bounded, so the worst-case memory
+/// figure moves by a known constant and nothing dynamic is introduced.
+pub fn composite_init_supplement_bytes(module: &keleusma::bytecode::Module) -> u32 {
+    let slots = module
+        .data_layout
+        .as_ref()
+        .map(|dl| dl.private_composite_layout.len())
+        .unwrap_or(0);
+    align_up((slots as u32).saturating_mul(8))
 }
 
 pub fn plan_chunk_region(chunk: &Chunk) -> RegionLayout {

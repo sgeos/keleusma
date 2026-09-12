@@ -31,6 +31,7 @@
 //! | **private data slot** | **yes** — persistent across `Op::Reset` | a body operand is REFUSED, unless the slot is a declared composite, which is COPIED into the pool |
 //! | **persistent composite pool** | **yes** | reached only by a memcpy of the derived body size |
 //! | stream resume-state word | yes | never carries an operand — only a constant yield index |
+//! | composite-slot initialisation word | yes — persistent, and it must be | never carries an operand either: a constant one, written after the body copy so a trap inside the copy cannot leave the slot claiming a body it does not hold |
 //!
 //! # Two routes are NOT store sites, and are named rather than omitted
 //!
@@ -66,7 +67,14 @@ const MOVE_FORMS: &[&str] = &["build_store(", "build_memcpy("];
 /// Move sites in the emitter, at the stamp.
 ///
 /// **Re-derive rather than transcribe.**
-const RECORDED_MOVE_SITES: usize = 17;
+const RECORDED_MOVE_SITES: usize = 18;
+// 17 -> 18 on 2026-09-11, the increment AFTER this census was written, and it
+// fired on its author. The new site marks a composite slot as written. Its
+// destination outlives the region — it has to, since the slot does — but it
+// **carries a constant, not an operand**, so no address can reach it. Ordering is
+// the part worth recording: the mark is emitted AFTER the body copy, so a trap
+// inside the copy cannot leave a slot claiming to hold a body it does not.
+//
 // 17 at first derivation, 2026-09-11: fifteen word stores and two body copies.
 // Ten carry an operand; the rest write a constant — a zeroed local, a yield
 // index, a cleared state word — and are counted because a constant store today

@@ -138,7 +138,35 @@ as outside the count rather than silently skipped.
 **A shared composite slot compiles on your compiler and is refused here**, so that row is driven
 rather than hypothetical.
 
-## STILL WITH YOU, NEITHER ACTED ON
+## ⚠ A THIRD QUESTION FOR YOU: IS THE WRITE-BEFORE-READ CHECK MEANT TO BE FLOW-INSENSITIVE?
+
+**Measured, not inferred.** Your compiler REJECTS an unconditional read-before-write of a composite
+private slot. It ACCEPTS this:
+
+```
+private data log { latest: F, count: Word }
+fn main(t: Word) -> Word { if t < 0 { log.latest = F { a: 11, b: 22 }; } log.latest.a }
+```
+
+and at run time your virtual machine faults with `TypeError("cannot access field on Unit")` when the
+branch is not taken. So the contract is enforced, but at execution rather than at compile time for
+this shape.
+
+**My backend returned 0.** The pool is bytes and zeros are indistinguishable from a written body of
+zeros — the same shape as the array index that returned buffer filler. I now keep an initialisation
+word per composite slot, outside the body, and **fault where you fault**: the unwritten path dies with
+`SIGTRAP`, the written path agrees, and `14_frame_log.kel` still runs across four cycles.
+
+**I did not refuse the shape**, and the reason is one of your programs: `14_frame_log.kel` writes its
+slot inside `for i in 0..3` and reads after the loop. Nothing available to me proves that range
+non-empty, so a sound definite-assignment analysis would refuse a program you accept and run
+correctly.
+
+**The question is yours**: is the flow-insensitive check the intended design, with the runtime fault
+as the backstop, or should the compiler reject the conditional shape too? Either answer is
+implementable here; I have assumed the first.
+
+## STILL WITH YOU, NONE ACTED ON
 
 1. **A `confine.rs` index panic on a truncated op stream.** Three mutation kinds reach it, one guard
    closes all three. My sweep allows it BY ORIGIN FILE and asserts it still fires, so your fix will

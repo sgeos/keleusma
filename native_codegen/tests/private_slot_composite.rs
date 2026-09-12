@@ -55,6 +55,13 @@
 //! - **The validation legs have no corpus subject.** A table that fails to
 //!   partition the pool cannot be produced by the current compiler, so those
 //!   refusals are reasoned rather than driven.
+//! - **The initialisation flag is PER SLOT, not per field.** A partially written
+//!   body is not a shape the instruction set can produce — a composite slot is
+//!   written whole — so there is nothing finer to track, but the flag would not
+//!   notice if that changed.
+//! - **It does not make an unwritten slot READABLE.** It makes the read fault,
+//!   which is what the reference does. A program that wants a default must write
+//!   one.
 
 use keleusma_native::{LowerOptions, module_refusals};
 
@@ -258,4 +265,63 @@ loop main(t: Word) -> Word {\n\
          changing on the writing one, or this subject does not discriminate: {vm:?}"
     );
     common::assert_general_stream_agrees(ALTERNATING, 3, &[0, 7, 0]);
+}
+
+/// **THE HIGHEST PERSISTENT BYTE THE EMITTER CAN TOUCH IS INSIDE WHAT A HOST IS
+/// TOLD TO ALLOCATE.**
+///
+/// The backend writes three things into the persistent region: the private slot
+/// array, the composite pool, and — since the initialisation words landed — a
+/// flag per composite slot, which sits after the stream resume-state word. A host
+/// sizes its buffer as `required_persistent_capacity_for` plus this backend's
+/// published supplement.
+///
+/// **A figure the host must add is one the runtime's sizing does not include**,
+/// so an addition this backend makes without extending that figure is a buffer
+/// overrun in every embedder that believed it. The corpus harness was sized by
+/// the wrong figure for exactly this class of reason, and the canary caught it
+/// only because the pool happened to start at the canary word.
+#[test]
+fn the_published_supplement_covers_every_byte_the_backend_writes() {
+    use keleusma::vm::required_persistent_capacity_for;
+    use keleusma_native::region;
+
+    let m = common::build(DISCRIMINATOR);
+    let slots = m
+        .data_layout
+        .as_ref()
+        .map(|dl| dl.private_composite_layout.len())
+        .unwrap_or(0);
+    assert!(
+        slots > 0,
+        "the subject must declare a composite slot, or this check measures nothing"
+    );
+
+    let contract =
+        required_persistent_capacity_for(&m) + region::persistent_supplement_bytes(&m) as usize;
+    // The last flag's end: the flags begin after the resume-state words, which
+    // begin at the runtime's own figure.
+    let flags_end = required_persistent_capacity_for(&m)
+        + region::stream_state_supplement_bytes(&m) as usize
+        + slots * 8;
+    assert!(
+        flags_end <= contract,
+        "the initialisation flags end at {flags_end} B and a host is told to \
+         allocate {contract} B"
+    );
+
+    // **Non-vacuity**: the supplement must actually have grown for a module with
+    // a composite slot, or this check would pass against a backend that never
+    // added the flags.
+    assert!(
+        region::composite_init_supplement_bytes(&m) > 0,
+        "the composite half of the supplement is zero for a module that declares a \
+         composite slot"
+    );
+    assert_eq!(
+        region::persistent_supplement_bytes(&m),
+        region::stream_state_supplement_bytes(&m) + region::composite_init_supplement_bytes(&m),
+        "the published supplement is not the sum of its halves, so one of them is \
+         invisible to a host"
+    );
 }

@@ -2332,7 +2332,42 @@ const TRAP_SUBJECTS: &[(&str, &str, TrapKind)] = &[
     ("synthetic:no_matching_head", "NoMatchingHead", TrapKind::Op),
     ("faulty.kel", "DivisionByZero", TrapKind::Guard),
     ("rogue_dungen.kel", "IndexOutOfBounds", TrapKind::Guard),
+    // **A composite data slot read on a path that never wrote it.** Added
+    // 2026-09-11, after measuring that this backend RETURNED 0 where the
+    // reference faults. See `SYNTHETIC_UNINIT_COMPOSITE_SLOT`.
+    (
+        "synthetic:uninit_composite_slot",
+        "cannot access field on Unit",
+        TrapKind::Guard,
+    ),
 ];
+
+/// **A COMPOSITE DATA SLOT WRITTEN ON ONE PATH AND READ ON THE OTHER.**
+///
+/// A composite private slot's load-time value is `Unit`: the compiler keeps a
+/// write-before-read contract for composite slots rather than baking a zero body,
+/// and the reference REJECTS an unconditional read-before-write. **Its check is
+/// flow-insensitive**, so a write on one branch satisfies it, and the runtime then
+/// faults at execution with `TypeError("cannot access field on Unit")`.
+///
+/// **This backend returned `0`.** The pool is bytes, and zeros are
+/// indistinguishable from a written body of zeros — the same shape as the
+/// unguarded array index that returned the caller's buffer filler. An
+/// initialisation word per composite slot, outside the body, now faults where the
+/// reference faults.
+///
+/// **The branch condition is `t < 0` because of how this harness drives it.** It
+/// passes `args_for_seed(1, 0)`, which is 4, not 0 — a first version used `t > 0`
+/// and the write HAPPENED, so the virtual machine did not fault and the harness
+/// correctly refused the row as "no longer a trap subject". The premise check
+/// caught a subject that did not exercise what its name claimed.
+const SYNTHETIC_UNINIT_COMPOSITE_SLOT: &str = "\
+struct F { a: Word, b: Word }\n\
+private data log { latest: F, count: Word }\n\
+fn main(t: Word) -> Word {\n\
+    if t < 0 { log.latest = F { a: 11, b: 22 }; }\n\
+    log.latest.a\n\
+}\n";
 
 /// **A CORPUS FACT THIS FILE ASSERTS HAS EXPIRED, and one counterexample settles it.**
 ///
@@ -2453,6 +2488,7 @@ fn subject_source(name: &str) -> Option<String> {
     if let Some(key) = name.strip_prefix("synthetic:") {
         return match key {
             "no_matching_head" => Some(SYNTHETIC_NO_MATCHING_HEAD.to_string()),
+            "uninit_composite_slot" => Some(SYNTHETIC_UNINIT_COMPOSITE_SLOT.to_string()),
             _ => None,
         };
     }

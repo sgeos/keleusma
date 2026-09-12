@@ -1807,6 +1807,9 @@ fn lower_module_with<'ctx>(
             .map(|dl| dl.private_composite_layout.as_slice())
             .unwrap_or(&[]),
         persistent_composite_bytes: program.persistent_composite_bytes,
+        composite_init_off: u32::try_from(keleusma::vm::required_persistent_capacity_for(program))
+            .unwrap_or(u32::MAX)
+            .saturating_add(crate::region::stream_state_supplement_bytes(program)),
         shared_count,
         shared_layout,
         has_data: program
@@ -2169,6 +2172,14 @@ struct DataCtx<'a> {
     ///
     /// Empty for [`lower_chunk`], like every other module-level fact.
     private_composite_slots: &'a [keleusma::bytecode::PrivateCompositeSlot],
+    /// Byte offset, from the PRIVATE pointer, of the per-composite-slot
+    /// initialisation words.
+    ///
+    /// One word per entry of `private_composite_layout`, in table order, set to
+    /// one by a write and tested by a read. See
+    /// `region::composite_init_supplement_bytes` for why a separate word rather
+    /// than a sentinel body, and why persistent rather than ephemeral.
+    composite_init_off: u32,
     /// The module's declared persistent composite pool size, in bytes.
     ///
     /// Carried because it CLOSES the derivation of body sizes: the pool is
@@ -5231,6 +5242,53 @@ fn lower_chunk_body<'ctx>(
                         )
                         .unwrap()
                     };
+                    // **THE INITIALISATION WORD FOR THIS SLOT.**
+                    //
+                    // A composite slot's load-time value is `Unit`, and the
+                    // reference FAULTS on a read of an unwritten one. The pool is
+                    // bytes, so zeros are indistinguishable from a written body of
+                    // zeros, and this backend answered `0` where the reference
+                    // faulted — measured on a slot written on one branch and read
+                    // on the other. The flag is a word OUTSIDE the body, because a
+                    // sentinel compared against the body would fault on a
+                    // legitimate body that happened to equal it.
+                    let init_index = data
+                        .private_composite_slots
+                        .iter()
+                        .position(|p| u32::from(p.slot) == slot)
+                        .expect("the slot was just found in this table");
+                    let init_ptr = unsafe {
+                        st.b.build_in_bounds_gep(
+                            i8t,
+                            base,
+                            &[i64t.const_int(
+                                u64::from(data.composite_init_off) + (init_index as u64) * 8,
+                                false,
+                            )],
+                            "initp",
+                        )
+                        .unwrap()
+                    };
+                    if is_read {
+                        // **FAULT WHERE THE REFERENCE FAULTS.** One load and one
+                        // compare, both at fixed offsets, so the worst-case cost
+                        // moves by a constant and nothing dynamic is introduced.
+                        let flag =
+                            st.b.build_load(i64t, init_ptr, "initflag")
+                                .unwrap()
+                                .into_int_value();
+                        let cont = ctx.append_basic_block(func, "slotinit");
+                        let bad =
+                            st.b.build_int_compare(
+                                IntPredicate::EQ,
+                                flag,
+                                i64t.const_zero(),
+                                "uninitslot",
+                            )
+                            .unwrap();
+                        st.b.build_conditional_branch(bad, trap_bb, cont).unwrap();
+                        st.b.position_at_end(cont);
+                    }
                     if is_read {
                         // The pool address IS the body, so it is pushed as a
                         // `Body` at the derived size: every downstream field and
@@ -5283,6 +5341,10 @@ fn lower_chunk_body<'ctx>(
                                     "could not copy a {size}-byte body into the pool: {e}"
                                 ),
                             })?;
+                        // Marked AFTER the copy, so a trap inside it cannot leave
+                        // the slot claiming to hold a body it does not.
+                        st.b.build_store(init_ptr, i64t.const_int(1, false))
+                            .unwrap();
                     }
                     continue;
                 }

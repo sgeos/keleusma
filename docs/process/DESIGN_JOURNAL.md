@@ -1,5 +1,72 @@
 # Design Journal
 
+## 2026-09-11 — [v0.3.0] A composite slot read before it was written answered 0 where the reference faults
+
+**The fourth defect of the day, and the first one found by asking a question the previous increment
+implied.** The persistent composite copy made a data slot hold bytes. Bytes have no `Unit`.
+
+```
+private data log { latest: F, count: Word }
+fn main(t: Word) -> Word { if t < 0 { log.latest = F { a: 11, b: 22 }; } log.latest.a }
+```
+
+| path | reference | this backend, before |
+|---|---|---|
+| the write does not happen | **faults**, `TypeError("cannot access field on Unit")` | **returned 0** |
+| the write happens | `Int(11)` | `11` |
+
+**The same shape as the unguarded array index**: a silently wrong value where the reference faults.
+
+### Where the responsibility sits, stated rather than assigned
+
+The reference **rejects an unconditional read-before-write** — the write-before-read contract is
+checked. **Its check is flow-insensitive**, so a write on one branch satisfies it and the runtime
+then faults at execution. Whether that is intended is the other line's ruling; it is recorded as a
+question, not as a defect report.
+
+What is not in question is that this backend must not answer where the reference faults.
+
+### Trapping, not refusing, and the reason is a program that already works
+
+Refusing needs definite assignment. `14_frame_log.kel` writes its slot inside `for i in 0..3` and
+reads after the loop; nothing available here proves that range non-empty, so a sound analysis refuses
+it — **undoing an increment completed hours earlier and refusing a program the reference accepts and
+runs correctly.**
+
+A per-slot initialisation word, set on write and tested on read, reproduces what the reference does:
+it faults at run time on the same input. Fixed size, fixed offset, no opcode. **The flag is outside
+the body** because a sentinel compared against the bytes would fault on a legitimate body that
+happened to equal it.
+
+### The harness's premise check caught a subject that did not test what it claimed
+
+The first version of the trap subject branched on `t > 0`. The trap harness drives seed 0, which is
+**4, not 0** — so the write happened, the virtual machine did not fault, and the harness refused the
+row: *"no longer faults on the VM side, so it is not a trap subject any more."*
+
+> **A test subject can fail to exercise the thing its name asserts**, and the only thing standing
+> between that and a green run was a premise check written by someone who expected the row to rot the
+> other way.
+
+### What is now pinned
+
+The unwritten path dies with `SIGTRAP`; the written path agrees; the corpus subject still runs across
+four cycles; and the highest persistent byte the backend can touch is asserted to be inside the figure
+a host is told to allocate — the invariant the corpus harness violated this morning, now checked
+rather than hoped for.
+
+### BOTH CENSUSES FIRED ON THEIR OWN AUTHOR, ONE INCREMENT AFTER BEING WRITTEN
+
+The initialisation words added one address site and one move site, and the gate refused until each
+was classified. **The value-movement census was written this morning and caught its author's next
+increment the same afternoon** — the shortest possible demonstration that it does what its header
+claims rather than what its author remembered.
+
+Both classifications are the same shape and both matter: the flag's address is a compile-time
+constant, and the flag's store **carries a constant, not an operand**, so no address can reach a
+destination that outlives the region. The ordering is recorded too — the mark is emitted AFTER the
+body copy, so a trap inside the copy cannot leave a slot claiming to hold a body it does not.
+
 ## 2026-09-11 — [v0.3.0] Absorption 57, a prediction that contradicted its own risk, and the census for value movement
 
 ### The absorption, and the clause that could not have been right

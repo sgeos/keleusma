@@ -34,7 +34,15 @@
 ///
 /// **Derive this, do not transcribe it.** A count in this tree once read
 /// "nineteen" while the block it described held twenty-nine.
-const RECORDED_TEST_FUNCTIONS: usize = 494;
+const RECORDED_TEST_FUNCTIONS: usize = 495;
+// 494 -> 495 on 2026-09-11: one added,
+// `the_published_supplement_covers_every_byte_the_backend_writes`. The
+// initialisation words for composite slots are new persistent state, and a figure
+// a host must add is one the runtime's sizing does not include. The trap subject
+// added in the same increment is a DATA ROW in `corpus_differential.rs`, not a
+// test function, so it moves no count -- worth saying, because a reader
+// reconciling this number against the increment would otherwise look for it.
+//
 // 492 -> 494 on 2026-09-11: two added, both in the new
 // `value_movement_census.rs`. It is the deliberate instrument for VALUE movement,
 // the counterpart to `pointer_offset_census.rs` for addresses: the data-slot
