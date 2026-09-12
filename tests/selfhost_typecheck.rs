@@ -7839,10 +7839,22 @@ fn the_condition_rows_agree_between_the_pipeline_and_the_reference() {
 /// that has none in the source. The pipeline therefore cannot tell a synthesised arm from a
 /// written one, while the reference contributes a pair row **only** when `else_block` is present.
 ///
-/// # Why the safe-looking heuristic was rejected
+/// # No heuristic can work, and this is now established rather than suspected
 ///
-/// The synthesised arm yields the UNIT tag, and a real statement-only else yields UNKNOWN, so the
-/// tag appears to separate them. **It could not be shown safe**, and the stakes are asymmetric:
+/// This section used to argue that the synthesised arm yields the UNIT tag while a real
+/// statement-only else yields UNKNOWN, so the tag *appears* to separate them, and that the
+/// separation **could not be shown safe**. That was a hedge, and checking it replaced it with
+/// something stronger.
+///
+/// `an_empty_else_is_indistinguishable_from_an_implicit_one` in `tests/selfhost_parse.rs`
+/// establishes that a written `else { }` and an implicit arm produce **the same parse record
+/// stream**, while the reference separates them (its criterion, `else_block.is_some()`, counts
+/// the written empty else and not the implicit arm). **The distinguishing information never
+/// reaches this side.** A heuristic can only read what the stream carries, so the question of
+/// which tag a case yields is moot: the two sources are already identical before any tag exists.
+///
+/// The stakes remain asymmetric, which is why the withholding is the right response rather than
+/// a guess in either direction:
 ///
 /// - a SPURIOUS pair row feeds `ty_node_bad`'s equality branch and can make the stage **reject a
 ///   correct program**;

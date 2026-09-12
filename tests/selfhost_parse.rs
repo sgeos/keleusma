@@ -3646,3 +3646,106 @@ fn stage_source_token_counts() {
         println!("{f} tokens={}", keleusma::selfhost::lex_token_count(src));
     }
 }
+
+/// **A WRITTEN EMPTY ELSE AND AN IMPLICIT ONE ARE THE SAME RECORD STREAM.**
+///
+/// `a_one_armed_conditional_is_why_the_branch_pair_does_not_move` in
+/// `tests/selfhost_typecheck.rs` explains that the branch-pair row is withheld because
+/// `push_if` visits an else arm unconditionally, so the pipeline carries one even where
+/// the source wrote none. Its comment used to say a tag-based heuristic "could not be
+/// shown safe". **This test establishes the stronger fact: no heuristic can work,
+/// because the distinguishing information is not in the stream.**
+///
+/// The reference's criterion is `else_block.is_some()`. A written `else { }` satisfies it
+/// and an implicit arm does not, so the reference separates the two shapes. The parse
+/// stage emits the SAME records for both. A heuristic can only read what the stream
+/// carries, so the separation the reference makes is unavailable on this side at any
+/// level of cleverness.
+///
+/// **This is a statement about the records, not about the tag.** The earlier argument
+/// reasoned about whether UNIT and UNKNOWN happen to separate the cases. That question is
+/// moot: the two sources are already identical before any tag is computed.
+///
+/// The empty else is not a contrived shape. It is accepted by the reference compiler, as
+/// the first assertion below establishes rather than assumes.
+#[test]
+fn an_empty_else_is_indistinguishable_from_an_implicit_one() {
+    use keleusma::ast::{Expr, Stmt};
+    use keleusma::visitor::Visitor;
+
+    const IMPLICIT: &str = "private data d { q: Word }\n\
+                            fn f(c: bool) -> Word { if c { d.q = 1; } d.q }";
+    const EMPTY: &str = "private data d { q: Word }\n\
+                         fn f(c: bool) -> Word { if c { d.q = 1; } else { } d.q }";
+
+    // NON-VACUITY: an empty else must actually be a legal program, or the whole
+    // comparison is about a shape no source can contain.
+    for (label, src) in [("implicit", IMPLICIT), ("empty else", EMPTY)] {
+        let ast =
+            keleusma::parser::parse(&keleusma::lexer::tokenize(src).expect("lex")).expect("parse");
+        assert!(
+            keleusma::compiler::compile(&ast).is_ok(),
+            "the reference no longer compiles the {label} form, so this witness is about a \
+             shape that is not a program"
+        );
+    }
+
+    // The reference's own criterion, read from its syntax tree rather than assumed.
+    fn reference_pairs(src: &str) -> usize {
+        let ast =
+            keleusma::parser::parse(&keleusma::lexer::tokenize(src).expect("lex")).expect("parse");
+        struct V {
+            n: usize,
+        }
+        impl Visitor for V {
+            fn visit_expr(&mut self, e: &Expr) {
+                if let Expr::If { else_block, .. } = e
+                    && else_block.is_some()
+                {
+                    self.n += 1;
+                }
+                self.walk_expr(e);
+            }
+            fn visit_stmt(&mut self, s: &Stmt) {
+                self.walk_stmt(s);
+            }
+        }
+        let mut v = V { n: 0 };
+        for f in &ast.functions {
+            v.visit_block(&f.body);
+        }
+        v.n
+    }
+
+    // CONTROL: the reference really does separate the two shapes. Without this the claim
+    // below would be about a difference that does not exist.
+    assert_eq!(
+        reference_pairs(IMPLICIT),
+        0,
+        "the reference now pairs an implicit else arm"
+    );
+    assert_eq!(
+        reference_pairs(EMPTY),
+        1,
+        "the reference no longer pairs a written empty else, so the two shapes agree and \
+         the impossibility claimed here would not follow"
+    );
+
+    // THE WITNESS: the pipeline cannot make that separation, because it does not receive it.
+    let mut n1 = Vec::new();
+    let mut n2 = Vec::new();
+    let implicit = run_parse(IMPLICIT, &mut n1);
+    let empty = run_parse(EMPTY, &mut n2);
+    assert_eq!(
+        implicit, empty,
+        "the parse stage now distinguishes a written empty else from an implicit arm; if that \
+         is deliberate, the branch-pair row may be implementable after all and the withholding \
+         recorded in tests/selfhost_typecheck.rs should be revisited"
+    );
+
+    // NON-VACUITY: the streams must not be empty, or the comparison holds trivially.
+    assert!(
+        !implicit.funcs.is_empty(),
+        "the parse stage produced no functions, so the equality above is vacuous"
+    );
+}
