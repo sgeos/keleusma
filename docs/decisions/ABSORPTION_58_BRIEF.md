@@ -47,3 +47,24 @@ the `.kel` stage sources, which are unchanged here.
 
 The merge is in, every clause has an outcome recorded beside it, the ownership boundary is verified
 rather than asserted, and any clause that missed is named.
+
+---
+
+## OUTCOME — 2026-09-11
+
+| clause | predicted | measured |
+|---|---|---|
+| conflicting files | zero | **zero**, and `merge-tree` computed a clean tree in advance |
+| conflicts in `src/` or `tests/` | zero | **zero** |
+| `src/` and `tests/` after the merge | byte-identical to `origin/v0.2.3` | **identical**, and the check returns one file against the previous absorption's tree, so it is not vacuous |
+| corpus fingerprint | stays green | **green** |
+| backend suite | 538 passed, 0 failed | **538** (528 + 10), both float configurations, every half FROZEN |
+
+**Every clause hit, and the fourth one hit for a stated reason rather than by luck.** The corpus
+claim was established from the incoming file set — three files, none a `.kel` under any corpus root —
+before the suite ran. That is the difference this brief was written to make: absorption 57 predicted a
+green suite while naming a risk that made a green suite impossible, and the guard caught what the
+brief should have.
+
+> **A prediction is worth something only when its clauses are checked against each other.** Nothing
+> automated does that; it is a thing a reader has to do, and this brief is where it was done.
