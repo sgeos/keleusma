@@ -13,6 +13,55 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (seventy-second) — the pin caught what local verification did not, and a risk I had written down
+
+### WHAT BROKE
+
+The parser fix went red in continuous integration. `every_stage_fits_the_driver_caps_with_margin`
+pins the worst-case compiled blob size across the stage corpus: **35,746 against a pinned 35,716**
+— thirty bytes, because the `step_mpat` branch grew `parse.kel`.
+
+**The increment's own brief had named this risk.** Its list of what could go wrong, in order of
+likelihood, ended with *"counts pinned elsewhere: chunk and node figures are asserted in several
+files; a grown source can move them."* I wrote that, then ran the parse, codegen and typecheck
+suites and not the file that checks it.
+
+**A risk named in a brief is only useful if the brief's checks are then run.** Having the right list
+is not the same as using it.
+
+### THE MOVE IS RECORDED WITH ITS CAUSE
+
+That pin carries a history of such moves, each with its size and reason. This is the fourteenth, and
+the **first with zero new names**: the branch introduces no identifier, so the per-name arithmetic
+the comment tracks has nothing to say about it. Recorded as constraining that constant not at all,
+rather than as a data point for it — the file's own convention is to keep the measurement and leave
+the arithmetic open where it is open.
+
+### A SECOND, SMALLER ERROR OF THE SAME SHAPE
+
+After fixing the pin I reported the default-feature workspace run clean. **It was not established.**
+The command ended in `tail -20`, so the twenty-one result lines counted were the LAST twenty
+binaries — the earlier ones, including the integration tests where a `parse.kel` change would
+actually show, were truncated away.
+
+**A truncated log looks identical to a clean one.** That is the fifth way a local check has
+under-reported this session, after the cached clippy run, and it has the same remedy: capture the
+whole output and the exit status, then read both.
+
+Re-run properly: `EXIT=0`, **135 test binaries all passing**, no failures anywhere.
+
+### WHAT CHANGED IN PRACTICE
+
+Two things, neither of which is "run more tests":
+
+1. When a pinned figure moves, run the **whole** suite that contains it, not the one assertion.
+   Fixing an assertion and re-running only that assertion repeats the original error at smaller
+   scale.
+2. Capture full output and exit status for anything whose result will be quoted. A pipeline ending
+   in `tail` or `head` produces evidence that cannot support the claim made from it.
+
+---
+
 ## 2026-09-12 (seventy-first) — the last untraced gap, and the cheap wins are exhausted
 
 ### THE TRACE
