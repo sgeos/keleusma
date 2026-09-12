@@ -13,6 +13,53 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (seventy-first) — the last untraced gap, and the cheap wins are exhausted
+
+### THE TRACE
+
+`assert` was the one gap never looked at. It failed a third way — `reconstruct.kel` refusing with
+*"a record range did not reduce to exactly one node"* — and that message describes a symptom rather
+than a cause.
+
+**`assert` is not a keyword in the self-hosted lexer.** `kw6` recognises `shared`, `orelse` and
+`struct`; `assert` is not among them. So it lexes as an ordinary identifier, `assert a > 0` becomes
+two adjacent identifiers the expression parser cannot reduce, and the reconstruct guard catches the
+wreckage downstream.
+
+### ITS ABSENCE IS DEFENSIBLE; ITS FAILURE MODE IS NOT
+
+**No stage source uses `assert` as a statement.** The only occurrences across the twelve `.kel` files
+are in comments, checked rather than assumed. So excluding it from the self-hosted subset is a
+reasonable choice, not an oversight.
+
+What is not reasonable is that the exclusion surfaces as a malformed record stream instead of a
+refusal naming the construct. **That distinction — whether a construct is IN the subset versus
+whether its absence is well-behaved — is the one this file has now applied to all four gaps**, and
+it is the part that would be lost by reporting "the subset is narrow".
+
+### THE PLANNING RESULT: NO CHEAP WINS REMAIN
+
+| gap | kind |
+|---|---|
+| bare enum unit variant | **contained — fixed**; every piece existed in one function |
+| variable pattern | feature work; `step_match` reads a non-enum identifier as the end of the arms |
+| struct destructuring | feature work; same root |
+| `assert` | feature work; needs a token code, a lexer arm, statement parsing, and emission through two more stages |
+
+**One of four was a missing branch. The other three are each multi-stage features.** That is worth
+stating plainly, because the previous increment's success could otherwise suggest the rest are
+similarly cheap. They are not, and the next work in this area is scoped feature work or nothing.
+
+### THE METHOD, FOR THE FOURTH TIME
+
+Trace before writing. It has now changed the plan four times this session: the capacity price
+reshaped the reductions, the specified list tripled the pattern census, the expression census showed
+the pattern gaps were local rather than symptomatic, and this splits the remaining gaps by cost
+rather than by count. **Each trace cost a reading; each would have cost a rewrite if taken in the
+other order.**
+
+---
+
 ## 2026-09-12 (seventieth) — the contained fix, and a hesitation that was misplaced
 
 ### A CORRECTION TO THE PREVIOUS INCREMENT'S REASONING

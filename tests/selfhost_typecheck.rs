@@ -4181,6 +4181,24 @@ fn the_rules_the_census_added_do_not_reject_valid_programs() {
 /// **`assert`** — `reconstruct.kel` refuses with *"a record range did not reduce to
 /// exactly one node"*.
 ///
+/// **TRACED: `assert` IS NOT A KEYWORD IN THE SELF-HOSTED LEXER.** `kw6` recognises
+/// `shared`, `orelse` and `struct`; `assert` is not among them, so it lexes as an
+/// ordinary identifier and `assert a > 0` becomes two adjacent identifiers the
+/// expression parser cannot reduce. The reconstruct message is the downstream
+/// symptom, not the cause.
+///
+/// **Its absence is defensible; the failure mode is not.** No stage source uses
+/// `assert` as a statement — the only occurrences across the twelve are in
+/// comments — so excluding it from the subset is a reasonable choice. What is not
+/// reasonable is that the exclusion surfaces as a malformed record stream rather
+/// than a refusal naming the construct.
+///
+/// **This is FEATURE WORK, not a missing branch**, and that matters for planning:
+/// admitting it needs a token code, a lexer arm, statement parsing, and emission
+/// through reconstruct and codegen. Unlike the bare unit-variant pattern — where
+/// every piece already existed in one function — no existing path contains the
+/// pieces.
+///
 /// That brings the distinct failure kinds to three across the two censuses:
 ///
 /// | kind | where | forms |
