@@ -3145,6 +3145,273 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (sixty-sixth) — the census pointed at the twin, and the twin does not terminate
+
+### THE MOVE
+
+Eighteen increments had gone into one area: the type-rejection host extraction, where three false
+rejections were found. **That walk has a twin** — the PIPELINE extraction in `src/selfhost/mod.rs`,
+compared against the reference side by agreement tests.
+
+Those agreement corpora contain a `match` on a LITERAL, no loop, no const parameter and no qualified
+import. **A corpus that cannot distinguish two implementations cannot detect that they diverge.** So
+the binding-form census was pointed at the twin. One probe.
+
+### WHAT IT FOUND
+
+**`parse.kel` does not terminate on a match arm whose pattern is a BARE enum path.**
+
+| spelling | reference | `parse.kel` |
+|---|---|---|
+| `E::A => 1` | accepts | **spins until the budget is exhausted** |
+| `E::A() => 1` | accepts | parses |
+
+Payload or no payload makes no difference. The parentheses do.
+
+**Non-termination, not a budget shortfall**, and that was established rather than assumed: at
+sixteen steps per token it fails; at five hundred and twelve it still fails. A budget merely sized to
+the constructs someone tried would have passed at the larger figure.
+
+The existing parse-suite test that covers enum patterns uses `Op::Neg()` — the parenthesised form —
+which is why the gap survived a suite of eighty-seven tests. **One spelling of one construct.**
+
+### THE SECOND DEFECT, WHICH IS THE DIAGNOSTIC
+
+The budget guard's message said the failure's *"usual cause is an unterminated block, string, or
+bracket"*. For this input that is false, and it would send a reader hunting for a brace that does not
+exist.
+
+**"The usual cause" is a claim about a population nobody measured.** The message now names both
+recorded causes and calls neither usual, which costs nothing and stops it being confidently wrong.
+
+### WHAT IS FIXED AND WHAT IS NOT
+
+The diagnostic is fixed. **The parser is not**: teaching `parse.kel` the bare spelling is a change to
+the self-hosted pattern grammar, and an instrument and the change it argues for should not land
+together — the same rule applied when the capacity price was measured.
+
+The bare case is pinned as FAILING rather than omitted, so the day it parses, the test fails and says
+to widen the documented subset.
+
+### THE SHAPE, FOR THE FOURTH TIME
+
+A construct supported in one spelling and not another, invisible because every test used the
+supported one. The rule-shape census found it for rules; the binder census found it for binders;
+this finds it for the parser's own grammar. **The instrument transfers because the failure mode
+does.**
+
+---
+
+## 2026-09-12 (sixty-fifth) — the bounded channel had drifted ten increments
+
+### THE FINDING IS ABOUT THIS FILE'S SIBLINGS
+
+`REVERSE_PROMPT.md` stopped at the fifty-fourth increment while this journal reached the
+sixty-fourth. `HANDOFF.md` stopped at the forty-first, and still said *"type rejection reaches only
+literal, direct occurrences"* — true when written, false for weeks.
+
+**The append-only channel kept pace and the bounded one did not, and the asymmetry is structural.**
+Appending is cheap: it needs only what just happened. The bounded channel requires deciding what the
+CURRENT STATE IS, which is work, and which gets deferred exactly when increments are dense — that is,
+when it carries the most.
+
+A session ending here would have handed the next one a picture in which the input path is
+twenty-two times too small (it is 1.6), two real sources fit (ten do), and the field-read edge is
+the frontier (it is a capacity decision).
+
+### WHAT THE REFRESH SAYS
+
+One block covering increments 55 to 64 rather than ten sections, because the channel is BOUNDED and
+its job is the latest state and the next step, not the history — the history is here.
+
+The handoff's stale bullet is **struck through rather than deleted**, with the correction beside it,
+because a resuming agent who has read the old version needs to see that it moved rather than find it
+quietly gone. A handoff that silently changes its story is worse than one that admits it was wrong.
+
+### THE STATE IT NOW CARRIES
+
+- The input path carries **ten of twelve** real sources, up from two; the corpus-sized shared data is
+  **1.6x** what it uses today, down from 7.3x; the growth is **+33 KiB** against a 16 MB ceiling.
+- **Closing the last two is the operator's capacity decision**, not another reduction. `parse` needs
+  about 192 against caps of 128; `wire` about four times, dominated by declaration-indexed tables.
+- Three false rejections found and fixed, two of them only by running the stage against real code.
+- The refusal pin, so the one deliberately-declined saving is not taken by accident.
+- That a push cancels the running check, which cost five consecutive runs.
+
+### THE RULE
+
+**A channel that has to be rewritten rather than appended to will drift, and it drifts fastest when
+the work is going well.** The protocol says to update it after each task; I stopped when the tasks
+got dense. Noticing that it had happened took looking, not remembering.
+
+---
+
+## 2026-09-12 (sixty-fourth) — the deferred channel, and why it needs the other deduplication
+
+### THE REASONING THAT HAD BEEN DEFERRED
+
+The binding channel was skipped two increments ago: its lookup is not a simple per-row predicate,
+and a 34% saving did not justify the extra reasoning while two other channels were changing. It
+became the binding constraint as soon as the alternatives were taken. This does the reasoning.
+
+**The lookup OVERWRITES its accumulator as it scans, so the LAST matching row wins.**
+First-appearance deduplication would therefore change behaviour whenever a name carries two
+conflicting rows: `[(a,1), (a,2), (a,1)]` resolves to 1 before and 2 after.
+
+**The hazard is real rather than theoretical.** Ten names across the twelve real sources carry more
+than one distinct row — the flat namespace over locals and functions makes it possible, and this
+file already recorded that as a known narrowing. A local shadowing a function name is the everyday
+case.
+
+**Last-appearance deduplication is the safe form**, and the argument is short: if tuple `T` at
+position `p` was the last row for name `v`, then no row for `v` follows `p`, so keeping `T` at its
+last position keeps it last. The overall answer is preserved by construction rather than by
+inspection.
+
+This is why the deferral was worth making at the time and worth resolving now: the channel really
+did need a different criterion from the other four, and taking it in the same increment as them
+would have meant applying first-appearance deduplication to all five.
+
+### THE EFFECT
+
+| | before | after |
+|---|---|---|
+| real sources that fit | 8 of 12 | **10 of 12** |
+| corpus-sized shared data | 12,822 words, 1.7x | 11,690 words, **1.6x** |
+| growth over today | +42 KiB | **+33 KiB** |
+| tightest constraint anywhere | `wire` bindings, 6x | `wire` bindings, 4x |
+
+`codegen` and `reconstruct` crossed under.
+
+### WHAT IS LEFT IS NOT MORE OF THE SAME
+
+Two sources remain over, and their character differs:
+
+- **`parse` is over by a little on four channels**, the worst 162 against 128. A cap of 192 would
+  admit it.
+- **`wire` is over by about four times on six**, dominated by the DECLARATION-INDEXED tables that no
+  deduplication reaches: it declares 492 functions and 499 top-level names against caps of 128.
+
+**Closing the last two is a capacity decision, not another reduction.** Six reductions have taken
+the price from +366 KiB to +33 KiB — a factor of eleven — and the remaining growth is mostly the
+floor named two increments ago.
+
+### THE SEQUENCE, WHICH IS THE POINT
+
+Predicted ZERO sources would fit. Measured two. Elision: three. Occurrences: seven. Calls, pairs,
+expressions: eight. Bindings: ten. **Every step verdict-preserving under a differential, every step
+measured rather than argued, and every step larger than I expected.**
+
+---
+
+## 2026-09-12 (sixty-third) — the expression channel deduplicates too, and a deferral becomes the constraint
+
+### THE CHANNEL THAT LOOKED LIKE `dparams` AND IS NOT
+
+The expression table is ADDRESSED BY INDEX: a form-2 binding row carries its initialiser's position
+in it. That is the same property that makes `dparams` undeduplicatable, so the channel had been left
+out of the distinct-facts argument.
+
+**The two cases are not the same, and the difference is exact.** `dparams` is indexed BY
+DECLARATION, so collapsing rows moves every later entry and destroys the addressing. The expression
+table collapses only rows that are IDENTICAL — and a binding pointing at either copy gets the same
+operands and therefore the same tag. The remap the inert-row elision already built handles the rest.
+
+**Measured: 5,145 rows across the corpus carry 718 distinct shapes, 86% repeats.** `parse.kel` falls
+from 1,728 to 116, under its cap; `codegen` from 473 to 110, under.
+
+### THE EFFECT
+
+| | before | after |
+|---|---|---|
+| real sources that fit | 7 of 12 | **8 of 12** |
+| corpus-sized shared data | 19,862 words, 2.7x | 12,822 words, **1.7x** |
+| growth over today | +97 KiB | **+42 KiB** |
+| tightest constraint anywhere | `parse` expression nodes, 7x | `wire` BINDINGS, 6x |
+
+### A DEFERRAL HAS BECOME THE CONSTRAINT
+
+The binding channel was left un-deduplicated one increment ago, on the reasoning that its lookup is
+not a simple per-row predicate and a 34% saving did not justify the extra reasoning while two other
+channels were being changed.
+
+**It is now what stands between the remaining four sources and the caps.** That is a different
+judgement from the one made then, and it was reached not by changing my mind but by everything
+around it moving. Worth recording as a shape: a deferral justified by relative cost is a deferral
+whose justification expires when the alternatives are taken.
+
+### THE FULL SEQUENCE
+
+Predicted zero sources would fit. Measured two. Inert-row elision: three. Occurrence deduplication:
+seven. Call, pair and expression deduplication: eight. **Five reductions, each verdict-preserving
+under a differential, the price down from +366 KiB to +42 KiB — a factor of nine.**
+
+What remains is genuinely different in character: the binding channel, and the two
+declaration-indexed floors that no deduplication reaches.
+
+---
+
+## 2026-09-12 (sixty-second) — the same argument reaches two more channels, and stops at two others
+
+### WHERE IT REACHES
+
+The distinct-facts argument applies to a channel whose rows are a LIST OF FACTS read by a per-row
+predicate folded into a sticky verdict. Two more qualify:
+
+| channel, on `wire.kel` | rows | distinct |
+|---|---|---|
+| operand pairs | 1,452 | **2** |
+| call sites | 1,730 | 472 |
+
+The operand-pair result is the striking one: the channel carries an actual tag against a required
+tag, and across a 217-kilobyte program there are **two distinct combinations**. Reporting it 1,452
+times was pure repetition.
+
+### WHERE IT STOPS, WHICH IS THE MORE USEFUL HALF
+
+- **`dparams` is ADDRESSED POSITIONALLY.** The arity rule reads `dparams[csite[i]]`: the table is
+  indexed by declaration, not scanned as a list. Deduplicating it would destroy the addressing
+  rather than shrink it.
+- **`dname` is already a set** of distinct declared names. There is nothing to remove.
+
+**Both are one row per declaration, and they are a FLOOR.** `wire.kel` declares 492 functions and
+499 top-level names against caps of 128 — roughly four times the cap remains after every reduction
+of this kind, and no further cleverness removes it.
+
+**That number is worth more than another percentage**, because it is the part a capacity decision
+actually has to cover. The reductions have taken the price from 7.3x to 2.7x; what is left is mostly
+not compressible.
+
+### BINDINGS DELIBERATELY LEFT ALONE
+
+The binding lookup takes whichever row matches rather than folding a predicate, so duplicates are
+harmless — but two rows for ONE name that DIFFER are meaningful, and the criterion would have to
+distinguish that case. A 34% saving does not justify reasoning about a channel whose lookup is not a
+simple per-row predicate, in an increment already touching two others.
+
+### THE EFFECT
+
+| | before | after |
+|---|---|---|
+| corpus-sized shared data | 24,770 words, 3.3x | 19,862 words, **2.7x** |
+| growth over today | +135 KiB | **+97 KiB** |
+| real sources that fit | 7 of 12 | 7 of 12 |
+| tightest constraint anywhere | `wire` call sites, 14x | `parse` expression nodes, 7x |
+
+**The count of fitting sources did not move**, and that is worth noting rather than glossing: the
+sources that were over were over on SEVERAL channels, so removing one constraint exposes the next.
+`codegen` is now over on two channels rather than four, and `parse` on five rather than six. Progress
+that does not move the headline count is still progress, and a summary that reported only the count
+would have shown nothing.
+
+### THE WHOLE SEQUENCE
+
+Predicted zero would fit. Measured two. Inert-row elision: three. Occurrence deduplication: seven.
+Pair and call-site deduplication: seven, with the price down another third. **Four reductions, every
+one verdict-preserving under a differential, and the price down from +366 KiB to +97 KiB.**
+
+---
+
 ## 2026-09-12 (sixty-first) — the saving the refusal left open, and a measurement that had drifted
 
 ### THE SAVING THE PREVIOUS INCREMENT LEFT OPEN
