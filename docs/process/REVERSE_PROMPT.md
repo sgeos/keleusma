@@ -10,53 +10,45 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
-**2026-09-12, session 65, through the eighty-sixth increment.**
+**2026-09-12, session 65, through the eighty-ninth increment.**
 
-**A CLASSIFIED "SCOPE GAP" LOOKS LIKE A DEFECT, AND IT IS YOURS TO CALL.** The boundary table
-carries `scope/float_arith__GAP` as `Diverges`, filed under "out of scope for the self-hosted
-subset". Measured per operator: float `+`, `-` and `*` diverge because the SELF-HOSTED codegen emits
-the CHECKED opcode (`CheckedAdd`, `CheckedSub`, `CheckedMul`) where the reference emits the plain
-one. Float division, float comparison, and passing float values around all COMPILE, and the same
-three operators on `Word` agree — so this is specific to the float path, not to arithmetic.
+**THE SELF-HOSTED CODEGEN HAS NO OPERAND TYPES. THAT IS THE WHOLE OF `scope/float_arith__GAP`.**
 
-**THE CAUSE IS KNOWN, AND IT RETRACTS THE "MAY BE A DEFECT" FRAMING WRITTEN FIRST.** `codegen.kel`
-states its own rule: the operator code ALONE selects the op word — `Add` to `CheckedAdd`, `Sub` to
-`CheckedSub`, `Mul` to `CheckedMul`, while `Div` and `Mod` map to their plain forms. **No operand
-type enters the decision**, and the file contains no float or type vocabulary at all.
+`codegen.kel` states its own rule above `push_binop`: the operator code ALONE selects the op word —
+`Add` to `CheckedAdd`, `Sub` to `CheckedSub`, `Mul` to `CheckedMul`, `Div` and `Mod` to their plain
+forms. **No operand type enters the decision**, and the file carries no float, fixed-point or type
+vocabulary at all. The reference DOES have operand types, so wherever it picks a different op for a
+non-`Word` operand, the cross-check refuses.
 
-That accounts for every measured row: division and comparison agree because they have no checked
-variant; `Word` agrees because the reference emits checked there too; float `+`, `-` and `*` diverge
-because the reference has operand types and picks the plain form while the self-hosted codegen has
-none to pick with.
+**The measured matrix**, censused against that mapping comment and with **every cell run**:
 
-**So the `scope/` filing is CORRECT and this is not a mislabelled defect.** The fix is not a branch
-correction; it needs a type channel into codegen, which is a substantial change to a stage source
-and therefore bears on the capacity question. Characterised per operand type and operator in
-`tests/selfhost_typed_opcode_boundary.rs`; no change made.
+| operand | `+` | `-` | `*` | `/` | `%` | unary `-` | compare | bitwise | shift |
+|---|---|---|---|---|---|---|---|---|---|
+| `Word`  | ok | ok | ok | ok | ok | ok | ok | ok | ok |
+| `Byte`  | ok | ok | ok | ok | ok | **chk** | ok | ok | ok |
+| `Float` | **chk** | **chk** | **chk** | ok | ok | **chk** | ok | n/a | n/a |
+| `Fixed<16>` | **chk** | **chk** | **`FixedMul`** | **`FixedDiv`** | ok | **chk** | ok | n/a | n/a |
 
-**IT IS NOT CONFINED TO FLOATS, AND FINDING THAT OUT TESTED THE CAUSE RATHER THAN RE-CENSUSING.**
-Once the cause was known it predicted that any operand type the reference treats unchecked would
-diverge. `Byte` was the cheap test and it AGREES, refuting the specific prediction — while the same
-run showed `Fixed<N>` diverging.
+`chk` is the checked-versus-plain difference; `n/a` is a CHECKED reference type error, not a cell
+nobody ran. So: `+`, `-`, `*` on `Float` and `Fixed<N>`; fixed `*` and `/`; and **unary `-` on every
+non-`Word` operand, `Byte` included**. Everything else agrees. The set matches the tree's own
+residual-tag note grouping `Op::Add`, `Op::Sub`, `Op::Mul`, `Op::CheckedNeg`.
 
-**A LATER CORRECTION: `Byte` UNARY NEGATION DIVERGES TOO**, so "`Word` and `Byte` do not diverge"
-was wrong as stated. `Byte` agrees on every BINARY operator and diverges on unary `-`. The answer
-was already in the tree — `tests/op_tag_tables.rs` records that the reference emits `Op::Neg` for
-`Byte` negation and that `codegen.kel` can emit only `checkedneg`. **The matrix had left that cell
-blank on the assumption the language did not admit it. A blank cell is a claim, and it was never
-run.**
-
-**Fixed-point is the more serious half.** Its `+` and `-` are the same checked-versus-plain
-difference; its `*` and `/` diverge against the reference's SCALE-AWARE `FixedMul(16)` and
+**Fixed `*` and `/` are the serious half.** They diverge against the SCALE-AWARE `FixedMul(16)` and
 `FixedDiv(16)`. A fixed-point multiply without the scale correction computes a DIFFERENT VALUE, so
-that case is a wrong-result hazard rather than a checking difference — which is what the cross-check
+that is a wrong-result hazard rather than a checking difference — exactly what the cross-check
 exists to stop, and it does.
 
-**THE MATRIX IS NOW CLOSED against `codegen.kel`'s own operator mapping rather than an assembled
-set.** The diverging operations are exactly `+`, `-`, `*` and unary `-` on `Float` and `Fixed<N>`,
-plus fixed `*` and `/` against the scale-aware ops. **Everything else agrees**: all operators on
-`Word` and `Byte` (unary negation excepted, see above), every bitwise and shift including `Byte`'s
-promote-operate-truncate path, the booleans, the comparisons, and `%`.
+**THE `scope/` FILING IS CORRECT. This is a capability gap, not a mislabelled defect** — an earlier
+note here argued otherwise and is withdrawn. **The decision that is YOURS**: the fix is a type
+channel into `codegen.kel`, not a branch correction, so it is a substantial stage-source change and
+bears on the capacity question. Characterised in `tests/selfhost_typed_opcode_boundary.rs`; no
+change made.
+
+*(Five framings of this finding were wrong before this one — too broad, too permissive, too strong,
+too narrow, and one asserted where no measurement existed at all. The sequence is in
+[DESIGN_JOURNAL.md](./DESIGN_JOURNAL.md) entries 83 to 89; this block states only the current
+result, which is what it is for.)*
 
 That set matches the tree's own residual-tag note, which groups `Op::Add`, `Op::Sub`, `Op::Mul` and
 `Op::CheckedNeg` — precisely the operations for which the reference has a plain form a typeless
@@ -89,8 +81,26 @@ sources, up from two, at **1.6x** the shared data it uses today rather than 7.3x
 
 **What is next, and it is YOURS.** Closing the last two sources is a **capacity decision**, not
 another reduction. `parse` needs about 192 where the caps are 128; `wire` needs roughly four times,
-dominated by declaration-indexed tables no reduction reaches. The four standing operator decisions
-are unchanged and still block the language-surface work they name.
+dominated by declaration-indexed tables no reduction reaches.
+
+**THE FOUR STANDING DECISIONS, NAMED HERE BECAUSE THEY WERE FILED UNDER SUPERSEDED HISTORY.** They
+are live and unresolved, they were stated only BELOW the superseded-history line, and a reader
+obeying this block's own instruction to stop at that line would never have reached them. The fuller
+statement of each is still there.
+
+1. **How does a value ENTER a `Text<N>`?** It appears in every program anyone writes with the type.
+   Open question 2 in [`TEXT_CAPACITY_TYPE.md`](../decisions/TEXT_CAPACITY_TYPE.md).
+2. **Is the width bundle worth a breaking change?** 33 signatures, 14 public, published crate.
+3. **Should `verify()` refuse float opcodes when the `floats` feature is absent?** Evidence
+   COMPLETE: ten lines, prototyped, zero new failures, and the semantic worry is moot because the
+   lexer refuses float literals in that build. **The cheap one**, unlanded only because it was
+   called your decision in a merged document.
+4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on the
+   WIDTH axis, unchanged on the FEATURE axis.
+
+Three more have been added by this session and are stated above: the type channel into
+`codegen.kel`, whether the boundary table should absorb the four parser gaps, and the capacity
+decision itself. **Seven in total.**
 
 **What is next that is NOT yours.** **Four** self-hosted-parser gaps remain, all traced and all
 feature work: the variable and struct match patterns need new arm semantics; `assert` needs a token
