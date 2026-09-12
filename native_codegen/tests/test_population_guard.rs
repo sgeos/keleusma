@@ -35,6 +35,11 @@
 /// **Derive this, do not transcribe it.** A count in this tree once read
 /// "nineteen" while the block it described held twenty-nine.
 const RECORDED_TEST_FUNCTIONS: usize = 511;
+// Unchanged by the bounds-transfer pin: `spike_bounds_transfer.rs` gained
+// assertions inside an existing test rather than a new test function. Worth
+// saying, because a reader reconciling that increment against this number would
+// otherwise look for one.
+//
 // 510 -> 511 on 2026-09-11, net, and the net hides a REPLACEMENT: two added in
 // `shared_composite_slot.rs` — the indexed form agreeing, and a scalar shared
 // array as the control that the shared resolver's composite branch did not change

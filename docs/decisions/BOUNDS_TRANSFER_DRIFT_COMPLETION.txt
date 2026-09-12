@@ -1,0 +1,36 @@
+COMPLETION CONDITION — the bounds-transfer figures, pinned
+
+Ordering is NOT a completion criterion. Any order of the work satisfies this, and
+nothing here requires a particular branch, commit shape, or process step.
+
+All of the following hold in the tree:
+
+1. THE SPIKE ASSERTS ITS CONCLUSION.
+   The bounds-transfer measurement fails if no inversion is found, so the claim
+   it exists to support cannot silently become unsupported. It is non-vacuous:
+   it also fails if it finds too few subjects to compare.
+
+2. THE FIGURES ARE PINNED AND THEIR MOVEMENT IS VISIBLE.
+   The population and inversion count are recorded in the tree, and a change in
+   them causes a failure that asks for the cause to be established rather than
+   for the number to be edited.
+
+3. THE RECORDED DECISION DOCUMENT CARRIES THE RE-DERIVED FIGURES WITH A DATE,
+   and the earlier figures remain visible as the dated record they are rather
+   than being overwritten.
+
+4. THE CAUSE OF THE MOVEMENT IS MEASURED OR EXPLICITLY LEFT OPEN.
+   Any claim that the change came from corpus growth, from this line's own
+   lowering changes, or from anything else is supported by a measurement. Where
+   no measurement was made, the document says so instead of offering a plausible
+   story.
+
+5. THE SUBJECT OF THE MEASUREMENT IS UNCHANGED.
+   The set being compared is the same kind of set as the one that produced the
+   recorded figures, so the two are comparable.
+
+6. NO NEW OPCODE, NO BYTECODE_VERSION CHANGE, AND NO EDIT TO src/ OR tests/ AT
+   THE REPOSITORY ROOT.
+
+7. THE BACKEND SUITE IS GREEN IN BOTH FLOAT CONFIGURATIONS, with counts
+   re-derived rather than quoted.

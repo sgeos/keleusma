@@ -1,5 +1,42 @@
 # Design Journal
 
+## 2026-09-11 — [v0.3.0] A recorded refutation had drifted, and my attribution of it was wrong
+
+`NATIVE_BOUNDS_TRANSFER.md` carries the sharpest result this line has about the project's central
+premise: the bytecode bound does not even ORDER chunks the way the native code does. Recorded
+2026-08-14 as **9 of 190 comparable pairs over 20 stream chunks, 4.7%**.
+
+**The tree measures 27 chunks, 24 of 351, 6.8%.** The conclusion is unchanged — inversions exist, so
+the ordering is not a proxy — but every number had moved and **nothing would ever have said so**:
+`spike_bounds_transfer.rs` printed its figures and asserted nothing about them.
+
+> **A printing test is a test that cannot fail.** This line applies that rule to censuses and
+> coverage; it had not applied it to the one measurement that bears on why the project exists.
+
+It now asserts the conclusion — the test fails if no inversion is found, which would contradict the
+decision record — and pins the population, with a failure message demanding the cause be established
+rather than the number edited.
+
+### The truncation was hiding the evidence
+
+The spike printed the first twelve of twenty-seven. A reader could not tell which chunks the rate was
+computed over, and the rate is the figure the file exists to produce. Printing all of them is what
+made the next paragraph possible.
+
+### My attribution was a plausible story, and the printed list refuted it
+
+I wrote, in the pin's own failure message, that **the population depends only on the corpus and the
+bytecode analyses, neither of which this line owns** — which would have made the growth someone
+else's. Then the full list showed `14_frame_log.kel::main` at 184 native instructions.
+
+**A chunk enters the population only if its module LOWERS.** This line's refusals remove chunks and
+its implementations restore them, and that module spent part of the same day refused. The claim was
+false and was corrected before it was filed.
+
+**The cause of the movement is left OPEN, explicitly.** Establishing it needs the spike re-run against
+the 2026-08-14 tree, which was not done. Between naming that and offering a story that reads well,
+the record takes the first.
+
 ## 2026-09-11 — [v0.3.0] The last data-slot shape, and a limitation that recurred within the day
 
 `io.items[i]` on a SHARED array of composites lowers. **Every data-slot form now agrees with the

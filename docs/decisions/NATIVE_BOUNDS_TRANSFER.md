@@ -65,8 +65,25 @@ nanoseconds on an unspecified machine, and no amount of care in the lowering mak
 
 **The ordering does not survive either, which is the sharper result.** A weaker hope is that
 the bytecode bound at least *orders* chunks the way the native code does, so it could serve as
-a proxy. Measured across 20 stream chunks with both figures, **9 of 190 comparable pairs are
-inversions (4.7%)** — pairs the bytecode bound orders one way and the native code the other.
+a proxy. Measured 2026-08-14 across 20 stream chunks with both figures, **9 of 190 comparable
+pairs are inversions (4.7%)** — pairs the bytecode bound orders one way and the native code the
+other.
+
+> ⚠ **RE-DERIVED 2026-09-11: 27 stream chunks, 24 of 351 comparable pairs, 6.8%.** The figures
+> above are kept as the dated record they are. **The conclusion is unchanged and is what
+> matters** — inversions exist, so the ordering is not a proxy — but every number in it had
+> moved and nothing said so, because `spike_bounds_transfer.rs` printed its figures and asserted
+> nothing about them. It now asserts the conclusion and pins the population; a printing test is
+> a test that cannot fail, and this one carries the sharpest result this line has about the
+> project's central premise.
+>
+> **The cause of the movement is NOT attributed, and a plausible story was withdrawn rather than
+> filed.** A first draft claimed the population depends only on the corpus and the bytecode
+> analyses, neither of which this line owns. **That is false**: a chunk enters the population
+> only if its module LOWERS, so this line's own refusals remove chunks and its implementations
+> restore them. `14_frame_log.kel::main` sits in the list at 184 native instructions and spent
+> part of 2026-09-11 refused. Establishing the cause needs the spike re-run at the 2026-08-14
+> tree, which was not done.
 The clearest is `lexer.kel::main` at bound 164 producing **1083** native instructions against
 `piano_roll_0.kel::main` at bound 498 producing **385**: the bound says one is three times
 smaller, the emitted code says it is nearly three times larger.

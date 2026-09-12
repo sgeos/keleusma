@@ -434,7 +434,10 @@ fn q2_is_the_bytecode_bound_monotone_in_native_size() {
     }
     pts.sort();
     println!("  stream chunks with both figures : {}", pts.len());
-    for (w, i, name) in pts.iter().take(12) {
+    // **THE WHOLE POPULATION, not the first twelve.** It printed a truncated
+    // list, so a reader could not tell which chunks the rate was computed over —
+    // and the rate is the figure this file exists to produce.
+    for (w, i, name) in pts.iter() {
         println!("   wcet={w:6}  native_insts={i:5}  {name}");
     }
     // Count inversions: pairs ordered one way by bound and the other by size.
@@ -460,6 +463,57 @@ fn q2_is_the_bytecode_bound_monotone_in_native_size() {
     println!("  the native code says A > B. Any inversion falsifies the claim that");
     println!("  the bytecode ordering is a proxy for the native ordering.");
     println!("================\n");
+
+    // **NON-VACUITY.** A corpus that failed to load would report no inversions
+    // and read as a result rather than as a broken measurement.
+    assert!(
+        pts.len() >= 15,
+        "only {} stream chunks carry both figures; the corpus is not loading and \
+         the rate below is an artefact",
+        pts.len()
+    );
+
+    // **THE CONCLUSION, ASSERTED.** This file's whole output is the refutation of
+    // a hope: that the bytecode bound at least ORDERS chunks the way the native
+    // code does. If that ever became unsupported, the decision record resting on
+    // it would be wrong and nothing else would say so.
+    assert!(
+        inv > 0,
+        "no inversions found across {tot} comparable pairs. That would make the \
+         bytecode ordering consistent with the native ordering on this corpus, \
+         which CONTRADICTS `docs/decisions/NATIVE_BOUNDS_TRANSFER.md`. Establish \
+         which is true before touching either."
+    );
+
+    // **THE FIGURES, PINNED.** They printed and asserted nothing, so they drifted:
+    // the decision document records 20 chunks and 9 of 190 pairs (4.7%), measured
+    // 2026-08-14, and the tree measured 27, 24 of 351 (6.8%) on 2026-09-11.
+    //
+    // **A printing test is a test that cannot fail**, and this one carries the
+    // sharpest result this line has about the project's central premise.
+    //
+    // A change here is not by itself a regression — it is a demand that the cause
+    // be established before the number is edited.
+    //
+    // ⚠ **A FIRST DRAFT OF THIS NOTE CLAIMED THE POPULATION DEPENDS ONLY ON THE
+    // CORPUS AND THE BYTECODE ANALYSES, NEITHER OF WHICH THIS LINE OWNS. THAT IS
+    // FALSE.** A chunk enters the population only if its module LOWERS, so this
+    // line's own refusals remove chunks and its implementations restore them —
+    // `14_frame_log.kel::main` is in the list at 184 native instructions, and it
+    // spent part of 2026-09-11 refused. The claim was corrected by reading the
+    // printed population, which is the same reason the truncation above was
+    // removed.
+    assert_eq!(
+        (pts.len(), tot, inv),
+        (27, 351, 24),
+        "the bounds-transfer population or its inversion count changed. Establish \
+         the cause before editing. BOTH figures depend on this line: a chunk enters \
+         the population only if the module LOWERS, so a refusal removes it and an \
+         implementation restores it, and the inversion count reads native \
+         instruction counts directly. They also depend on the corpus and on the \
+         bytecode analyses, which this line does not own. **No single-cause story \
+         is safe here without measuring.**"
+    );
 }
 
 /// Q3: does the memory bound have a native counterpart at all?
