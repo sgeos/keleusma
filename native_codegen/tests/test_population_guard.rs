@@ -34,7 +34,12 @@
 ///
 /// **Derive this, do not transcribe it.** A count in this tree once read
 /// "nineteen" while the block it described held twenty-nine.
-const RECORDED_TEST_FUNCTIONS: usize = 517;
+const RECORDED_TEST_FUNCTIONS: usize = 518;
+// 517 -> 518 on 2026-09-12: one added, `panic_site_census.rs`. It is the
+// deliberate version of the question that found the depth-disagreement panic by
+// hand — which panic-capable sites in the emitter encode an assumption about the
+// MODULE, given that `lower_module` does not require a verified one.
+//
 // 514 -> 517 on 2026-09-12: three added in `depth_disagreement.rs`. A branch
 // retargeted to a valid-but-wrong index makes one block arrive at two operand
 // depths, and the check for that was an `assert_eq!` — a PANIC on a public entry
@@ -177,7 +182,9 @@ const RECORDED_TEST_FUNCTIONS: usize = 517;
 /// 113 -> 114: `outstanding_reports.rs` added, none removed.
 ///
 /// 114 -> 115: `depth_disagreement.rs` added, none removed.
-const RECORDED_TEST_FILES: usize = 115;
+///
+/// 115 -> 116: `panic_site_census.rs` added, none removed.
+const RECORDED_TEST_FILES: usize = 116;
 
 fn test_files() -> Vec<std::path::PathBuf> {
     let mut out: Vec<_> = std::fs::read_dir("tests")

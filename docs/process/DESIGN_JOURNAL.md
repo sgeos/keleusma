@@ -1,5 +1,46 @@
 # Design Journal
 
+## 2026-09-12 — [v0.3.0] The panic-site census, and two arithmetics that did not close
+
+The previous increment found a panic on a public entry point by hand. This is the deliberate version:
+**which panic-capable sites in the emitter encode an assumption about the MODULE**, given that
+`lower_module` does not require a verified one?
+
+**22 sites, six families, no live defect.** The live one was fixed yesterday; this makes the next one
+visible rather than hoping someone thinks to construct it.
+
+### Scope was the hard part, and it is enforced rather than declared
+
+`src/lib.rs` carries **208 `.unwrap()` calls**, nearly all on inkwell results that cannot fail. A
+table over those is one nobody maintains — the premise census already measured a proposed widening at
+29 rows to 132 and declined. So the matcher keeps only sites whose MESSAGE names module vocabulary:
+`.expect("a stream declares its resume parameter")` is a claim about the module,
+`.expect("the builder is positioned")` is not. **The message decides, not the construct.**
+
+The census then **asserts its own filter stays narrow** — fewer than half the panic-capable lines it
+sees — so a filter that started admitting the infallible ones fails instead of quietly rotting.
+
+### Two arithmetics failed to close, and both were caught before filing
+
+**The probe said 21; the committed matcher says 22.** The difference is `debug_assert_eq!`: the
+probe's regex used `\bassert_eq!`, and a word boundary does not match inside `debug_assert_eq!`. **A
+debug assertion panics in exactly the build this suite runs**, so the blind spot sat over the most
+easily overlooked family there is.
+
+**And the first family table summed to 23 against a count of 21** — neither figure right, the table
+having double-counted the stream-frame sites.
+
+> **An arithmetic that does not close is the cheapest available signal that a population was not
+> actually read.** It fired twice in one increment, and both times before anything was recorded.
+
+### Two dispositions were tested rather than argued
+
+The largest family — the three trailing pointers being present — rests on the signature and the
+`DataCtx` being built from one predicate. Rather than assert that, two routes were driven: a data op
+in a module with NO layout, and a `NewComposite` inserted after compilation. **Both refuse before
+reaching the site.** The remaining nineteen are arguments, and the table says which are which: an
+argument recorded beats one re-derived, and loses to a test.
+
 ## 2026-09-12 — [v0.3.0] A panic on a public entry point, and a race in the sweep that hid its class
 
 `lower_chunk` required operand-depth agreement at every branch target with `assert_eq!`, whose message
