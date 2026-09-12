@@ -4352,13 +4352,36 @@ fn the_documented_expression_and_statement_forms_are_censused() {
 /// grammar's enumerated list turned one finding into three, which is the argument
 /// for censusing against a SPECIFIED list rather than an assembled one.
 ///
-/// # This pin does not fix any of them
+/// # This pin does not fix any of them, and they are NOT equally hard
 ///
-/// Teaching `parse.kel` these forms is a change to the self-hosted pattern grammar
-/// and belongs in its own increment; an instrument and the change it argues for
-/// should not land together. What is fixed alongside this is the DIAGNOSTIC, which
-/// asserted that the usual cause of budget exhaustion is an unterminated block — a
-/// claim about a population nobody measured, and false for all three of these.
+/// Teaching `parse.kel` these forms belongs in its own increment; an instrument and
+/// the change it argues for should not land together. What is fixed alongside this
+/// is the DIAGNOSTIC, which asserted that the usual cause of budget exhaustion is
+/// an unterminated block — a claim about a population nobody measured, and false
+/// for all three of these.
+///
+/// **The mechanism was traced so the next increment does not repeat the tracing**,
+/// and it splits the three unevenly:
+///
+/// - **The bare enum unit variant is CONTAINED.** `step_mpat` phase 3 waits for
+///   `LParen` and does nothing on any other token, so the phase never advances and
+///   the parse never completes — that is the spin, exactly. The `LParen` path
+///   reserves the arm's `IsEnum` test slot; the `RParen` path completes the
+///   pattern, counts the arm and returns the `EnumArm` record. A bare form needs
+///   both of those, plus advancing the match phase PAST the `=>` it has already
+///   consumed rather than back to the phase that waits for one. **Every piece it
+///   needs already exists in that one function.**
+///
+/// - **The variable and struct patterns are FEATURE WORK.** `step_match` phase 2
+///   accepts an identifier only when it names a known enum, and otherwise sets
+///   `match_build` — it reads the identifier as the END OF THE ARMS. That is why
+///   they do not spin but produce a stream `reconstruct.kel` cannot rebuild.
+///   Supporting them means new arm semantics — binding the scrutinee, or
+///   destructuring it — not a missing branch.
+///
+/// **Any such change must still self-compile byte-identically**, which is the
+/// constraint that makes even the contained one worth its own run at continuous
+/// integration rather than a ride-along.
 ///
 /// **Each failing form is asserted to FAIL**, so the day one parses, this test
 /// fails and says to widen the documented subset rather than letting the gain go
