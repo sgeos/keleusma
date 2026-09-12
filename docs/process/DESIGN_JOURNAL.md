@@ -1,5 +1,42 @@
 # Design Journal
 
+## 2026-09-12 — [v0.3.0] The operand-variant sweep, and an arm arity that varies by type
+
+Four defects hid behind one instrument's keying. This is the instrument that asks the question that
+was missing: **for each operation, does every operand type it accepts AGREE?** — not "does it lower",
+which is what `backend_support_census.rs` asks and says plainly it asks.
+
+**21 cases, both sides executed, all agreeing.** No new divergence, which is what to expect from an
+instrument built immediately after its defects were fixed. Its value is forward.
+
+### It caught something while being written
+
+The `Word` control would not compile: **a `Word` overflow arm binds the high AND low halves,
+`overflow(h, l)`, where `Byte` and `Fixed` bind one** — because their middle slot is unused where the
+integer arm carries a high half.
+
+**The arm's ARITY varies by operand type**, not merely the arithmetic. One more way the operand
+decides the shape while the opcode name does not — found by writing the control rather than by
+reasoning about it.
+
+### Values chosen so a case cannot agree by being too small
+
+`3 * 4` agrees under every wrong lowering repaired this session. Each case carries an input that
+overflows a byte, or exceeds a word after scaling, so agreement means something.
+
+### The rejected shapes are asserted, not skipped
+
+`Byte` subtraction with an overflow arm, and a `Byte` comparison in the obvious `Bool` spelling, are
+rejected by the reference. Asserting that makes their absence from the matrix a fact rather than an
+untested combination, and the message says to add them if the reference ever admits them.
+
+### And the limit is stated
+
+**It covers the variants it was GIVEN.** The matrix is hand-written — the same limitation the support
+census now states about itself. A clean run is evidence about these combinations, not proof that no
+variant diverges. **The blind spot that hid four defects was a hand-written list too**, and saying so
+is the only honest way to ship another one.
+
 ## 2026-09-12 — [v0.3.0] Checked byte arithmetic returned untruncated values, behind a census blind spot
 
 ```

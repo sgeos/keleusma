@@ -34,7 +34,12 @@
 ///
 /// **Derive this, do not transcribe it.** A count in this tree once read
 /// "nineteen" while the block it described held twenty-nine.
-const RECORDED_TEST_FUNCTIONS: usize = 530;
+const RECORDED_TEST_FUNCTIONS: usize = 533;
+// 530 -> 533 on 2026-09-12: three added in `operand_variant_sweep.rs`, which
+// EXECUTES both sides for each operation-by-operand-type combination. The support
+// census asks whether a thing lowers; four defects showed that is a different
+// question from whether it agrees.
+//
 // 526 -> 530 on 2026-09-12: four added in `checked_byte_arithmetic.rs`. Checked
 // `Byte` multiply and add returned UNTRUNCATED values — 200 * 100 gave 20000
 // where the reference gives Byte(32) — because the backend took the integer arm
@@ -213,7 +218,9 @@ const RECORDED_TEST_FUNCTIONS: usize = 530;
 /// 117 -> 118: `checked_fixed_mul.rs` added, none removed.
 ///
 /// 118 -> 119: `checked_byte_arithmetic.rs` added, none removed.
-const RECORDED_TEST_FILES: usize = 119;
+///
+/// 119 -> 120: `operand_variant_sweep.rs` added, none removed.
+const RECORDED_TEST_FILES: usize = 120;
 
 fn test_files() -> Vec<std::path::PathBuf> {
     let mut out: Vec<_> = std::fs::read_dir("tests")
