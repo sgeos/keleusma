@@ -1317,13 +1317,28 @@ fn resolve_shared_array(
         .shared_layout
         .get(base as usize)
         .ok_or_else(|| refuse(String::from("shared array base outside the layout table")))?;
-    if first.kind & SHARED_COMPOSITE_FLAG != 0 {
-        return Err(refuse(String::from(
-            "shared array of composite bodies; Workstream C",
-        )));
-    }
-    let width = shared_scalar_width(first.kind, float_bytes)
-        .ok_or_else(|| refuse(alloc_format_kind(first.kind, float_bytes)))?;
+    // **A COMPOSITE RANGE STRIDES BY ITS STATED LENGTH.**
+    //
+    // The layout gives every element its own entry with the composite flag set
+    // and a `len` field, so the stride is READ rather than derived — the opposite
+    // direction from the persistent pool, where the size is inferred and the
+    // offsets are the evidence for it. Here the length is the statement and the
+    // offsets are checked against it.
+    //
+    // This arm replaced a refusal reading "shared array of composite bodies;
+    // Workstream C". A placeholder label outliving the work it named is a stale
+    // pointer, so it is gone rather than updated.
+    let width = if first.kind & SHARED_COMPOSITE_FLAG != 0 {
+        if first.len == 0 {
+            return Err(refuse(String::from(
+                "a shared array element marked composite with a stated length of zero; the kind                  and the layout disagree",
+            )));
+        }
+        u32::from(first.len)
+    } else {
+        shared_scalar_width(first.kind, float_bytes)
+            .ok_or_else(|| refuse(alloc_format_kind(first.kind, float_bytes)))?
+    };
     for i in 1..count {
         let e = data
             .shared_layout
@@ -1333,6 +1348,15 @@ fn resolve_shared_array(
             return Err(refuse(format!(
                 "shared array is not uniform: element {i} has kind {} against {}",
                 e.kind, first.kind
+            )));
+        }
+        // **A matching kind is not a matching size.** Two composite elements can
+        // carry the same composite kind and different body lengths, and the copy
+        // is sized from the length.
+        if e.len != first.len {
+            return Err(refuse(format!(
+                "shared array is not uniform: element {i} states a body length of {} against {}",
+                e.len, first.len
             )));
         }
         if e.offset != first.offset + i * width {
@@ -5509,31 +5533,48 @@ fn lower_chunk_body<'ctx>(
                         .get(slot as usize)
                         .filter(|e| e.kind & keleusma::bytecode::SHARED_SLOT_COMPOSITE_FLAG != 0)
                     {
-                        if indexed {
-                            return Err(LowerError::UnsupportedDataSlot {
-                                slot,
-                                why: String::from(
-                                    "an INDEXED shared composite slot: the layout entries for the                                      range are not proven contiguous and uniform here, and the                                      direct case's stride does not carry over",
-                                ),
-                            });
-                        }
-                        let len = u32::from(e.len);
-                        if len == 0 {
-                            return Err(LowerError::UnsupportedDataSlot {
-                                slot,
-                                why: String::from(
-                                    "a shared slot marked composite whose stated body length is                                      zero; the layout and the kind disagree",
-                                ),
-                            });
-                        }
+                        // **INDEXED USES THE SAME RESOLVER THE SCALAR RANGE
+                        // USES**, which proves the whole declared range
+                        // contiguous and uniform before striding — now including
+                        // that every element states the same body length, since a
+                        // matching composite kind is not a matching size.
+                        let (first_off, len) = if indexed {
+                            let (off, stride, _kind) =
+                                resolve_shared_array(&data, slot, bound, float_bytes)?;
+                            (off, stride)
+                        } else {
+                            if e.len == 0 {
+                                return Err(LowerError::UnsupportedDataSlot {
+                                    slot,
+                                    why: String::from(
+                                        "a shared slot marked composite whose stated body length                                          is zero; the layout and the kind disagree",
+                                    ),
+                                });
+                            }
+                            (e.offset, u32::from(e.len))
+                        };
+                        // The index was bounds-checked against the instruction's
+                        // own declared element count before the shared/private
+                        // split, and that remains the guard.
+                        let byte_off = match index {
+                            None => i64t.const_int(u64::from(first_off), false),
+                            Some(ix) => {
+                                st.b.build_int_add(
+                                    i64t.const_int(u64::from(first_off), false),
+                                    st.b.build_int_mul(
+                                        ix,
+                                        i64t.const_int(u64::from(len), false),
+                                        "sharedstride",
+                                    )
+                                    .unwrap(),
+                                    "sharedoff",
+                                )
+                                .unwrap()
+                            }
+                        };
                         let addr = unsafe {
-                            st.b.build_in_bounds_gep(
-                                i8t,
-                                base,
-                                &[i64t.const_int(u64::from(e.offset), false)],
-                                "sharedbody",
-                            )
-                            .unwrap()
+                            st.b.build_in_bounds_gep(i8t, base, &[byte_off], "sharedbody")
+                                .unwrap()
                         };
                         if is_read {
                             let as_int =

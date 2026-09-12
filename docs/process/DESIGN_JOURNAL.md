@@ -1,5 +1,59 @@
 # Design Journal
 
+## 2026-09-11 — [v0.3.0] The last data-slot shape, and a limitation that recurred within the day
+
+`io.items[i]` on a SHARED array of composites lowers. **Every data-slot form now agrees with the
+reference**: private direct, private indexed, shared direct, shared indexed.
+
+### It was a small change because two pieces already existed
+
+- `resolve_shared_array` already proved a range contiguous and uniform for scalars, and refused a
+  composite base with a placeholder reason naming a workstream.
+- The layout **states** each element's body length: a three-element field gives entries at offsets
+  0, 16, 32, each with `len` 16.
+
+So the stride is READ and the offsets are CHECKED against it — **the opposite direction from the
+persistent pool**, where the size is inferred and the offsets are the evidence for it. Worth stating
+because the two look alike and are not.
+
+One addition the scalar path did not need: **a matching composite kind is not a matching size.** Two
+elements can carry the same kind and different lengths, and the copy is sized from the length, so the
+uniformity check compares both.
+
+### The placeholder outlived its workstream
+
+The refusal read *"shared array of composite bodies; Workstream C"*. A label pointing at work that no
+longer has that name is a stale pointer, so it is gone rather than updated.
+
+### The same census limitation, twice in one day
+
+The pointer census records that **a count cannot see a site change class**. It happened again: the
+indexed shared composite turned the host-buffer address from a compile-time constant into
+`first + index * len` on the same line, the count held steady, and the table had to be revised by
+hand — for the second time today.
+
+> **A limitation that recurs within hours of being written down is not a hypothetical.** It is not
+> fixed by the note; the note is what makes the manual revision happen at all.
+
+### A guard I had not met caught a test that could pass without testing
+
+`skippable_tests.rs` pins the population of tests whose body can return before asserting anything —
+because such a test reports as passed and joins the total this line quotes as evidence. My new test
+skipped when the reference declined the shape, and the guard refused it.
+
+**The early return was removed rather than registered.** A C compiler's absence is an environment
+fact and a legitimate skip; **the reference's acceptance of a `.kel` shape is a fact of this tree**,
+and skipping on it would hide a real regression as a pass. If the reference ever stops compiling that
+shape, a loud failure is the honest outcome.
+
+### And a replacement, not a weakening
+
+The test asserting the indexed shared form is refused was DELETED. Its claim became false, and a
+softened version would have been kept green by not implementing the form. Its replacement asserts
+agreement at a constant and a runtime index, checks the bodies land at the offsets the layout states,
+and carries a scalar shared array as the control that the resolver's composite branch did not change
+its scalar answer.
+
 ## 2026-09-11 — [v0.3.0] The shared composite slot, and a refusal that became unreachable
 
 The last refused shape in the data-slot story now lowers. A composite written into a shared slot is

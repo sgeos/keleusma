@@ -33,11 +33,14 @@
 //! returned scalar would pass against a lowering that wrote the body somewhere
 //! else and read it back from there.
 //!
-//! # What remains unsupported
+//! # The indexed form
 //!
-//! An INDEXED shared composite slot is refused: the layout entries for the range
-//! are not proven contiguous and uniform here, and the direct case's stride does
-//! not carry over.
+//! Also lowered, by the resolver the scalar shared arrays already used, extended
+//! to compare each element's STATED body length — **a matching composite kind is
+//! not a matching size.** A range that is not contiguous at that stride, or not
+//! uniform in kind or length, is refused with the property that failed named.
+//! No compiler can currently produce one, so those refusals are reasoned rather
+//! than driven.
 
 use inkwell::OptimizationLevel;
 use inkwell::context::Context;
@@ -202,32 +205,79 @@ fn an_unwritten_shared_slot_reads_the_hosts_bytes() {
     assert_eq!(nat_v, vm_v, "native={nat_v} vm={vm_v}");
 }
 
-/// The indexed form is refused, with the direct one as the control.
+/// **THE INDEXED FORM, AT CONSTANT AND RUNTIME INDICES.**
+///
+/// It was refused when the direct case landed, because the layout entries for the
+/// range were not proven contiguous and uniform. They are now, by the same
+/// resolver the scalar shared arrays already used — extended to compare each
+/// element's STATED body length, since a matching composite kind is not a
+/// matching size.
 #[test]
-fn an_indexed_shared_composite_slot_is_refused() {
+fn an_indexed_shared_composite_agrees_and_lands_at_the_stated_offsets() {
     const ARRAY: &str = "struct F { a: Word, b: Word }\n\
                          shared data io { items: [F; 3], n: Word }\n\
                          fn main(t: Word, u: Word) -> Word {\n\
-                             io.items[0] = F { a: t, b: u };\n\
-                             io.items[0].a\n\
+                             io.items[0] = F { a: t, b: t + 1 };\n\
+                             io.items[2] = F { a: t * 10, b: 0 };\n\
+                             io.items[u].a\n\
                          }\n";
-    match common::try_build(ARRAY) {
-        None => println!(
-            "an array-of-composite SHARED slot does not compile on the reference, so this \
-             refusal has no subject"
-        ),
-        Some(m) => {
-            let refusals = module_refusals(&m, LowerOptions::default());
-            assert!(
-                !refusals.is_empty(),
-                "an indexed shared composite slot must be refused: the range is not proven \
-                 contiguous and uniform here"
-            );
-        }
-    }
-    let direct = module_refusals(&common::build(SUBJECT), LowerOptions::default());
+    // **NO EARLY RETURN.** An earlier draft skipped when the reference declined
+    // the shape, and `skippable_tests.rs` refused it: a test that can pass
+    // without testing joins a pass count as evidence it did not earn. The
+    // reference's acceptance of a `.kel` shape is a fact of THIS TREE, not an
+    // environment capability like having a C compiler, so it is asserted — if the
+    // reference ever stops compiling this, a loud failure is the honest outcome.
+    let m = common::try_build(ARRAY)
+        .expect("the reference compiles an array-of-composite shared slot; if it no longer does,                  that is the finding rather than a reason to skip");
+    let refusals = module_refusals(&m, LowerOptions::default());
     assert!(
-        direct.is_empty(),
-        "the direct form must still lower, or the refusal above is not about indexing: {direct:?}"
+        refusals.is_empty(),
+        "the indexed shared form must lower: {refusals:?}"
     );
+
+    let seed = [0u8; 0];
+    for u in [0i64, 2] {
+        let (vm_v, vm_buf) = vm_run(ARRAY, 5, u, &seed);
+        let (nat_v, nat_buf) = native_run(ARRAY, 5, u, &seed);
+        assert_eq!(nat_v, vm_v, "index {u}: native={nat_v} vm={vm_v}");
+        assert_eq!(
+            nat_buf, vm_buf,
+            "index {u}: the host's bytes differ after the call"
+        );
+    }
+
+    // **The bodies must be at the offsets the layout STATES**, or both sides
+    // could agree by both writing somewhere else.
+    let (_, buf) = native_run(ARRAY, 5, 0, &seed);
+    let dl = m.data_layout.as_ref().expect("layout");
+    for (i, expect) in [(0usize, 5i64), (2, 50)] {
+        let off = dl.shared_layout[i].offset as usize;
+        let a = i64::from_le_bytes(buf[off..off + 8].try_into().unwrap());
+        assert_eq!(a, expect, "element {i}'s first field at its stated offset");
+    }
+}
+
+/// **A scalar shared array is unaffected**, since the same resolver serves both
+/// and a composite branch that changed its scalar answer would break arms with no
+/// relation to this work.
+#[test]
+fn a_scalar_shared_array_still_agrees() {
+    const SCALARS: &str = "shared data io { xs: [Word; 3], n: Word }\n\
+                           fn main(t: Word, u: Word) -> Word {\n\
+                               io.xs[0] = t;\n\
+                               io.xs[2] = t * 10;\n\
+                               io.xs[u] + io.n\n\
+                           }\n";
+    let refusals = module_refusals(&common::build(SCALARS), LowerOptions::default());
+    assert!(
+        refusals.is_empty(),
+        "the scalar control must lower: {refusals:?}"
+    );
+    let seed = [0u8; 0];
+    for u in [0i64, 2] {
+        let (vm_v, vm_buf) = vm_run(SCALARS, 7, u, &seed);
+        let (nat_v, nat_buf) = native_run(SCALARS, 7, u, &seed);
+        assert_eq!(nat_v, vm_v, "index {u}: native={nat_v} vm={vm_v}");
+        assert_eq!(nat_buf, vm_buf, "index {u}: host bytes differ");
+    }
 }

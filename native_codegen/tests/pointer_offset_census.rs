@@ -40,7 +40,8 @@
 //! | **flat array element** | **runtime, guarded by `guard_array_index`** |
 //! | operand spill store and reload | constant — `spill_off` plus a compile-time slot index |
 //! | **nested array element** | **runtime, guarded by `guard_array_index`** — formed by integer ADD, not a gep |
-//! | **shared composite body** | constant — the slot's stated offset in the host buffer; the int-to-pointer beside it takes the copy's source address, already formed |
+//! | **shared composite body, direct** | constant — the slot's stated offset in the host buffer; the int-to-pointer beside it takes the copy's source address, already formed |
+//! | **shared composite body, INDEXED** | runtime, guarded — `first + index * len`, where `index` was compared UNSIGNED against the instruction's declared element count, and the range was proven contiguous at that stated length and uniform in kind before any address was formed |
 //! | **composite-slot initialisation word** | constant — the flag array's base plus the slot's position in the module's own pool table, both fixed at lowering |
 //! | **persistent composite pool, direct** | constant — this backend's private-slot count times its slot width, plus the module table's pool offset. Neither term is a program value, and the placement is refused outright if it would reach the resume-state word |
 //! | **persistent composite pool, INDEXED** | runtime, guarded — `first + index * size`, where `index` was compared UNSIGNED against the instruction's own declared element count before the shared/private split, and `size` is validated uniform across the whole declared range |
@@ -49,9 +50,12 @@
 //!
 //! # ⚠ A COUNT CANNOT SEE A SITE CHANGE CLASS
 //!
-//! **Recorded 2026-09-11, when it happened.** The indexed composite data slot
-//! turned the pool address from a compile-time constant into `first + index *
-//! size`. It is the SAME LINE — the same gep, fed a computed offset — so the
+//! **Recorded 2026-09-11, when it happened — and then AGAIN the same day.** The
+//! indexed composite data slot turned the pool address from a compile-time
+//! constant into `first + index * size`, and the indexed SHARED composite did the
+//! same to the host-buffer address. Both times the count held steady and the
+//! table had to be revised by hand, which is the limitation working exactly as
+//! this section describes and not being fixed by it. It is the SAME LINE — the same gep, fed a computed offset — so the
 //! count did not move, this census passed unchanged, and nothing forced the
 //! classification above to be revisited.
 //!

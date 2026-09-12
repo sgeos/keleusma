@@ -34,7 +34,14 @@
 ///
 /// **Derive this, do not transcribe it.** A count in this tree once read
 /// "nineteen" while the block it described held twenty-nine.
-const RECORDED_TEST_FUNCTIONS: usize = 510;
+const RECORDED_TEST_FUNCTIONS: usize = 511;
+// 510 -> 511 on 2026-09-11, net, and the net hides a REPLACEMENT: two added in
+// `shared_composite_slot.rs` — the indexed form agreeing, and a scalar shared
+// array as the control that the shared resolver's composite branch did not change
+// its scalar answer — and one REMOVED, the test asserting the indexed shared form
+// is refused. Its claim became false when the form was implemented, and a
+// weakened version would have been kept green by not implementing it.
+//
 // 507 -> 510 on 2026-09-11, net: three added in `shared_composite_slot.rs`, and
 // in `value_movement_census.rs` one REPLACED another — the test asserting that a
 // composite written into a shared slot is refused became false when the copy
