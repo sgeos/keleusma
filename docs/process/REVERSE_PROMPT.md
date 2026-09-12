@@ -30,6 +30,15 @@ the pending capacity question. Characterised instead, per operator, in
 `tests/selfhost_float_boundary.rs`. **A scope boundary is a decision; a defect is a bug. This is
 filed as the first and may be the second.**
 
+**THE OTHER TWO DIVERGENCES ARE DIFFERENT IN KIND, AND THAT IS WHY THIS ONE STANDS OUT.** The table
+has exactly three `Diverges` rows. Both struct-equality rows report `CmpEq` against the reference's
+`SetLocal` — a STRUCTURAL difference, and the table's own comment records that the flat
+array-equality family has no nested form and that these were previously admitted and silently
+mis-compiled. Those are missing codegen forms, correctly filed as gaps, with the cross-check now
+catching what used to pass silently. **The float row names no missing form: the same operation, in
+its checked variant, where the reference emits the plain one.** Two of three divergences say the
+codegen cannot do something; the third says it chose differently.
+
 **Where the work is.** The type-rejection input path now carries **ten of twelve** real `.kel` stage
 sources, up from two, at **1.6x** the shared data it uses today rather than 7.3x — a growth of
 **+33 KiB** against a 16 MB ceiling, across six verdict-preserving reductions.

@@ -25,6 +25,27 @@
 //! **The self-hosted side appears to be the divergent one.** That is an
 //! inference from documented intent, not a verdict.
 //!
+//! # How this differs from the other two diverging entries
+//!
+//! The construct-support boundary table carries exactly three `Diverges` rows.
+//! The other two are struct-equality cases, and measuring them separates the
+//! kinds of divergence rather than lumping them together:
+//!
+//! - `eq/struct_tuple_of_impure_struct__GAP` and
+//!   `eq/struct_field_array_of_tuple__GAP` both report `CmpEq` against the
+//!   reference's `SetLocal`. That is a STRUCTURAL difference — a direct compare
+//!   where the reference stages through a local — and the table's own comment
+//!   records that the flat array-equality family "has no nested form" and that
+//!   these cases were "previously admitted and silently mis-compiled". A missing
+//!   codegen form, correctly filed as a gap, with the cross-check now catching
+//!   what used to pass silently.
+//! - The float case has no missing form. The self-hosted side emits the same
+//!   operation, in its CHECKED variant, where the reference emits the plain one.
+//!
+//! **That contrast is why the float entry stands out.** Two of the three
+//! divergences name something the self-hosted codegen does not implement; the
+//! third names a variant it chose.
+//!
 //! # Why this is characterised and not fixed here
 //!
 //! The fix lives in a `.kel` stage source. Stage sources bear on the pending
