@@ -13,6 +13,44 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (seventy-sixth) — a negative result that bounds the previous one
+
+### THE QUESTION THE PREVIOUS INCREMENT LEFT OPEN
+
+It found three unrecorded divergences and a fifth gap by comparing ONE of the seven
+pipeline↔reference channels over the binding forms. **The corpus narrowness that let them hide is a
+property of the agreement tests generally**, not of the occurrence one — so the obvious reading was
+that the other six needed the same treatment.
+
+### THE ANSWER: LOCALISED
+
+Checked over the same forms: the declared-name, field-set and declaration/call channels refuse
+nothing, and **the BINDING channel — which carries the richest rows and is the likeliest to diverge
+alongside — agrees exactly.**
+
+So the divergence is specific to occurrences, which is also the only channel that records the USE of
+a binder rather than its declaration. That is consistent rather than coincidental, and it is why the
+other channels do not need the same treatment.
+
+### WHY A NEGATIVE RESULT IS WORTH AN INCREMENT
+
+**It bounds the previous finding.** Without it, "the pipeline omits binders" reads as an unknown
+amount of divergence across seven channels; with it, the claim is exactly one channel wide and the
+rest is measured rather than assumed.
+
+The localisation is now pinned INSIDE the divergence test rather than stated beside it, so a future
+divergence in the binding channel fails with a message saying the scope has grown — **a different
+and larger fact than the one this test was written for**, and one that would otherwise be invisible
+because the occurrence assertion would still pass.
+
+### THE LINE THIS CLOSES
+
+Every gap this session found came from aiming an instrument somewhere it had not been aimed. This is
+the first application that found nothing, and that is the result: **the vein is bounded.** Reporting
+it as such is more useful than continuing to sample a space already measured.
+
+---
+
 ## 2026-09-12 (seventy-fifth) — the pipeline is safe by omission, and a fifth gap
 
 ### POINTING THE SESSION'S OWN FINDING AT ITS OWN DEFENCE

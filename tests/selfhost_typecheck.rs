@@ -4276,6 +4276,43 @@ fn the_pipeline_omits_the_binders_the_reference_reports() {
          that it also collects it as a LOCAL, because reporting without collecting \
          is exactly the false rejection fixed on the reference side"
     );
+
+    // **THE DIVERGENCE IS LOCALISED TO THE OCCURRENCE CHANNEL, and that was
+    // measured rather than assumed.** The binding channel carries the richest rows
+    // and is the one most likely to diverge alongside; over the same forms it
+    // AGREES exactly. So the other agreement tests do not need the same treatment,
+    // and a future divergence appearing here is a new fact rather than one this
+    // scope never covered.
+    for (form, src) in FORMS {
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+        let (names, rows) = binding_rows(&ast);
+        let name_of = |id: i64| {
+            names
+                .iter()
+                .find(|(_, v)| **v == id)
+                .map(|(k, _)| k.clone())
+        };
+        let mut want: Vec<keleusma::selfhost::BindingRow> = rows
+            .iter()
+            .filter_map(|(n, t, f)| {
+                let nm = name_of(*n)?;
+                match f {
+                    0 => Some((nm, *t, 0, String::new())),
+                    1 => Some((nm, 0, 1, name_of(*t)?)),
+                    _ => None,
+                }
+            })
+            .collect();
+        let (_, mut got) = keleusma::selfhost::binding_rows_from_pipeline(src);
+        want.sort();
+        got.sort();
+        assert_eq!(
+            got, want,
+            "{form}: the BINDING rows diverge too. The occurrence divergence above \
+             was localised to that one channel; this says it no longer is, which is \
+             a different and larger fact"
+        );
+    }
 }
 
 /// **A QUALIFIED CALL EXPRESSION IS UNHANDLED BY THE PIPELINE.**
