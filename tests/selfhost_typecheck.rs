@@ -4268,21 +4268,31 @@ fn every_known_gap_is_refused_by_the_self_hosted_compiler() {
 /// a value, the reference records an occurrence and the pipeline records none.
 /// Only the `for` case was pinned; the other two were not recorded anywhere.
 ///
-/// # SAFE BY OMISSION IS NOT SAFE BY CORRECTNESS
+/// # THE RISK THIS COMMENT USED TO STATE WAS WRONG, AND READING THE CODE SHOWED IT
 ///
-/// Omitting an occurrence is the ACCEPTING direction for the classification rule,
-/// so the pipeline does not currently reject these programs. **But the reason it
-/// is safe is that it reports nothing, not that it handles them.**
+/// It said the pipeline is "safe by omission, not by correctness" — that if it
+/// began reporting these binders without also collecting them as locals, it would
+/// reproduce the reference side's false rejections exactly. **It was flagged as
+/// unverified, and verifying it dismissed it.**
 ///
-/// The reference side's three false rejections were precisely: the name arrived as
-/// an occurrence while the local set did not contain it. **If the pipeline began
-/// reporting these binders without also collecting them as locals, it would
-/// reproduce that defect exactly** — and the increment that widened it would look
-/// like a gap closing.
+/// `occurrence_rows_from_pipeline` has **no separate locals set**. It builds a
+/// SLOT-to-name map from parameters and `let` bindings, and a local-read node
+/// emits `(name, local = 1, call = 0)` — unconditionally local — **only when the
+/// slot has a name.** An unnamed slot produces NO ROW, never a row with
+/// `local = 0`.
 ///
-/// **This is a stated risk, not a verified one**: the pipeline's own local-set
-/// handling has not been inspected here. What is checkable is the divergence, and
-/// that is what the assertion holds.
+/// So the condition behind the reference-side defect — an occurrence present while
+/// the locals set lacks it — **is not expressible here.** Reporting and collecting
+/// are the same lookup rather than two walks that can disagree. The pipeline is
+/// safe by CONSTRUCTION for this class.
+///
+/// **The divergence below is still real and still pinned.** What was wrong was the
+/// account of why it matters, and it was wrong in the direction of alarm — which is
+/// the safer direction to be wrong in, and still worth correcting.
+///
+/// The `local = 0` rows come only from the CALL branch, where locality is decided
+/// by whether the callee names a slot. That is the intended rule rather than an
+/// inconsistency.
 ///
 /// # A fifth parser gap, found by the same comparison
 ///

@@ -47,10 +47,14 @@ gaps surface there as panics; **that is not what a user meets**, and reasoning a
 from the harness measured the wrong thing.
 
 **The pipeline also diverges from the reference on three binder forms** — a `for` variable, a match
-payload binding, a const parameter used as a value — where it reports no occurrence at all. That is
-the ACCEPTING direction, so nothing is currently rejected, but **it is safe by omission rather than
-by correctness**: were it to report them without also collecting them as locals, it would reproduce
-the false rejection already fixed on the reference side. Pinned, and bounded to that one channel.
+payload binding, a const parameter used as a value — where it reports no occurrence at all. Pinned,
+and bounded to that one channel.
+
+**A risk stated here about that divergence has been checked and DISMISSED.** It claimed the pipeline
+is safe only by omission, and would reproduce the reference side's false rejections if it began
+reporting those binders. It has no separate locals set: a local read emits `local = 1`
+unconditionally and only when the slot has a name, so an occurrence-present-but-not-local condition
+is not expressible. Reporting and collecting are one lookup, not two walks that can disagree.
 
 **Before trusting any green run**, read *"How a green local run has actually lied"* in
 [`CLAUDE.md`](../../CLAUDE.md): six observed ways a verification run reported success while covering
