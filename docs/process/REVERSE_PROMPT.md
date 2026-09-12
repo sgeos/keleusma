@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
-**2026-09-12, session 65, through the eighty-first increment.**
+**2026-09-12, session 65, through the eighty-third increment.**
 
 **Where the work is.** The type-rejection input path now carries **ten of twelve** real `.kel` stage
 sources, up from two, at **1.6x** the shared data it uses today rather than 7.3x — a growth of
@@ -44,6 +44,16 @@ source was touched and the pinned worst-case blob does not move. A guard asserts
 nothing in any of the eleven driver-read stage sources, which all compile through the subset; it is
 mutation-tested, and asserts each source parses first, since an unparseable source would make the
 scan return nothing for an unrelated reason.
+
+**THE FLOAT BOUNDARY IS THE LITERAL, NOT THE TYPE**, and measuring it stopped a wrong entry going
+into that list. `fn f(a: Float) -> Float { a }` compiles and matches the reference byte for byte; a
+float literal is refused. Both halves are pinned. **The stage-source guard would NOT have caught the
+mistake**, because no stage source uses a float type — it covers constructs the stages happen to
+use and is not a general check that the list is right.
+
+**The divergence refusal was measured and found ADEQUATE**: it already names the offending chunk,
+and the op-level message names the chunk, the op index and both ops. No code changed; it is pinned,
+including that it assigns no fault, since the reference has been the divergent side before.
 
 **MEASURED SINCE, ON THE PATH THAT MATTERS: all four are refused with an `Err` by
 `self_hosted_compile`, the entry point behind `--compiler self-hosted`, and an ordinary program

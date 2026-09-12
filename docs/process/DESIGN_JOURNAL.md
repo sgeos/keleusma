@@ -13,6 +13,61 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (eighty-third) — the measurement that stopped a wrong construct name
+
+### WHAT I SET OUT TO FIX WAS ALREADY FINE
+
+The intended increment was to localise the divergence refusal, on the reasoning that a
+divergence establishes the two implementations disagree and not which is wrong, so whoever
+investigates needs to know where. Measured first: it already names the offending chunk, and both
+spellings for a chunk-order divergence, and a doc comment there records that this was done
+deliberately to turn a bare disagreement into a pointer. The op-level message names the chunk, the
+op index, and both ops.
+
+No change was warranted, and the correct output was a test pinning behaviour found adequate rather
+than code. That test also asserts the message assigns NO FAULT, because the 2026-08-31 case in which
+the reference was the divergent side is exactly the situation a blaming message would make worse.
+
+### THE MEASUREMENT FOUND SOMETHING BETTER, AND STOPPED A MISTAKE
+
+Floats never reach the cross-check at all. A float program fails earlier in `reconstruct` with the
+same work-stack text the four parser gaps used to produce, and the construct scan added last
+increment does not name it. That looked like a straightforward gap in the list.
+
+**The obvious fix was wrong, and one probe caught it.** `fn f(a: Float) -> Float { a }` COMPILES,
+and its output matches the reference byte for byte. The float TYPE is inside the subset. Only the
+LITERAL is outside. Had the type gone on the list, every float-typed program that failed for an
+unrelated reason would have been blamed on a supported construct.
+
+### THE GUARD WOULD NOT HAVE CAUGHT IT, AND THAT IS THE POINT
+
+The stage-source guard asserts the scan names nothing in any of the eleven driver-read stage
+sources. It is a real guard and it is mutation-tested. **It would have passed with the float type on
+the list**, because no stage source uses a float type.
+
+That is the limit worth stating: the guard covers constructs the stages happen to use. It is not a
+general check that the list is right, and treating a clean result from it as evidence about the
+whole list would be exactly the error of reading a guard's silence as broader than its reach. The
+only thing that established the float boundary was running a float-typed program.
+
+The `Float` occurrences in `wire.kel` are identifier names such as `tag_float`, not types or
+literals, so the guard remains clean with the literal entry added.
+
+### A LOOSE CLAIM CORRECTED
+
+The project file listed floats among the things that error at the divergence cross-check. Measured,
+that is wrong twice over: a float literal is refused earlier by a stage and never reaches the check,
+and a float type does not fail at all. The sentence now says which failures happen where.
+
+### FRONTIER
+
+The driver-side, capacity-neutral category that opened last increment is now largely worked out: the
+gap refusals name their construct, the float literal names itself, and the divergence message was
+already adequate and is pinned. No stage source has been touched, so the capacity decision is
+untouched and still the operator's.
+
+---
+
 ## 2026-09-12 (eighty-second) — reading the refusal a user actually receives
 
 ### THE TEST PROVED THE REFUSAL HAPPENED AND DISCARDED WHAT IT SAID

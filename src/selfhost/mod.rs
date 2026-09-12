@@ -7493,10 +7493,17 @@ pub fn wire_windowed_via_kel(
 /// is absent because its support was never measured, and guessing would attach a confident
 /// noun to a failure that may have nothing to do with it.
 ///
+/// The float entry is the sharpest case of that rule. "Floats are outside the subset" is
+/// the loose summary; what is measurably outside is the LITERAL. A function taking and
+/// returning `Float` compiles and matches the reference byte for byte, so listing the type
+/// would attach a confident and wrong noun to every such program that failed for an
+/// unrelated reason. No stage source uses a float type, so the stage-source guard would not
+/// have caught that mistake either.
+///
 /// Returns the description and the 1-based source line, choosing the earliest occurrence so
 /// the message is deterministic when a program contains several.
 fn name_unsupported_construct(src: &str) -> Option<(String, u32)> {
-    use crate::ast::{Expr, Pattern, Stmt};
+    use crate::ast::{Expr, Literal, Pattern, Stmt};
     use crate::visitor::Visitor;
 
     // The reference has already accepted this source by the time a refusal is built, so a
@@ -7531,6 +7538,21 @@ fn name_unsupported_construct(src: &str) -> Option<(String, u32)> {
                 Expr::Call { name, span, .. } if name.contains("::") => {
                     self.found
                         .push((span.line, span.start, format!("a qualified call `{name}`")));
+                }
+                // **THE LITERAL, NOT THE TYPE.** Measured 2026-09-12: a float-typed identity
+                // function compiles and matches the reference byte for byte, so `Float` in a
+                // signature is INSIDE the subset. A float literal is not. Naming the type
+                // here would have blamed a supported construct, and the stage-source guard
+                // would not have caught it, since no stage source uses a float type.
+                Expr::Literal {
+                    value: Literal::Float(_),
+                    span,
+                } => {
+                    self.found.push((
+                        span.line,
+                        span.start,
+                        "a floating-point literal".to_string(),
+                    ));
                 }
                 _ => {}
             }

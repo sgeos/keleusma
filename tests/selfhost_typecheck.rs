@@ -9279,3 +9279,111 @@ fn every_gap_refusal_names_the_construct() {
 fn alloc_string(e: &keleusma::selfhost::SelfHostError) -> String {
     format!("{e}")
 }
+
+/// **THE FLOAT BOUNDARY IS THE LITERAL, NOT THE TYPE, AND BOTH HALVES ARE PINNED.**
+///
+/// "Floats are outside the self-hosted subset" is the loose summary, and acting on it
+/// without measuring would have been a mistake. Measured 2026-09-12: a function taking and
+/// returning `Float` COMPILES, and its output matches the reference byte for byte. A float
+/// LITERAL does not.
+///
+/// # Why both halves are here
+///
+/// The refusal half alone would let the supported half silently regress, and the supported
+/// half alone would let the refusal lose its name. They are also the two directions a future
+/// change could move: widening the subset to admit float literals should fail the first
+/// assertion, and narrowing it to reject the float type should fail the second. **Either
+/// would be a real change in what the compiler accepts, and neither should pass quietly.**
+///
+/// # Why this mattered beyond the message
+///
+/// The construct scan names what it finds on the failure path. Listing the float TYPE there
+/// would have attached a confident and wrong noun to any float-typed program that failed for
+/// an unrelated reason, and the stage-source guard would NOT have caught it, because no
+/// stage source uses a float type. The guard covers constructs the stages happen to use; it
+/// is not a general check that the list is right.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_float_boundary_is_the_literal_and_not_the_type() {
+    let target = keleusma::target::Target::host();
+
+    // REFUSED, and the refusal names the literal.
+    const WITH_LITERAL: &str = "fn main() -> Float { 1.5 + 2.5 }";
+    let err = keleusma::selfhost::self_hosted_compile(WITH_LITERAL, &target).expect_err(
+        "a float literal now compiles through the self-hosted pipeline. If the subset \
+         genuinely gained float literals, say so and drop this half rather than relaxing it",
+    );
+    let text = format!("{err}");
+    assert!(
+        text.contains("a floating-point literal"),
+        "the refusal does not name the float literal, so a user sees only the stage's \
+         internal diagnostic. Message was: {text}"
+    );
+
+    // ACCEPTED. The type alone is inside the subset, which is the half that is easy to
+    // assume away.
+    const TYPE_ONLY: &str = "fn f(a: Float) -> Float { a }\nfn main(x: Float) -> Float { f(x) }";
+    assert!(
+        keleusma::selfhost::self_hosted_compile(TYPE_ONLY, &target).is_ok(),
+        "a float-typed function without any float literal no longer compiles. The construct \
+         scan names the LITERAL on the strength of this: if the type is now outside the \
+         subset too, the scan should say so, and this test should say which changed"
+    );
+}
+
+/// **A DIVERGENCE REFUSAL LOCALISES THE DISAGREEMENT, AND SAYS NOTHING ABOUT FAULT.**
+///
+/// The cross-check refuses when the two compilers disagree. Measured 2026-09-12, it already
+/// names the offending chunk rather than reporting a bare disagreement, so this test pins
+/// behaviour that was found adequate rather than introducing it.
+///
+/// # Why the neutral phrasing is asserted, not just the localisation
+///
+/// **A divergence establishes that the two implementations disagree, NOT which is wrong.**
+/// On 2026-08-31 the reference was the divergent side for a non-ASCII string literal, and
+/// the refusal pointed the user at `--compiler rust`, which compiled the program silently
+/// and wrongly. A message asserting the self-hosted side is at fault would make that failure
+/// mode worse, so the message must describe the disagreement and attribute nothing.
+///
+/// # What this does not cover
+///
+/// Only the chunk-order divergence is exercised here, because it is the one a short program
+/// reliably produces. The op-level and constant-pool messages are not reached by this
+/// corpus, and a reader should not take this test as evidence about them.
+#[cfg(feature = "self-host")]
+#[test]
+fn a_divergence_refusal_localises_and_does_not_assign_fault() {
+    const GENERIC: &str = "fn id<T>(x: T) -> T { x }\nfn main() -> Word { id(1) }";
+    let target = keleusma::target::Target::host();
+
+    let err = keleusma::selfhost::self_hosted_compile(GENERIC, &target).expect_err(
+        "this program no longer diverges. If the self-hosted pipeline gained generics, this \
+         corpus needs a different divergence rather than a relaxed assertion",
+    );
+    let text = format!("{err}");
+
+    assert!(
+        text.contains("diverges"),
+        "the refusal no longer reports a divergence, so it is failing for some other reason \
+         and this test is not measuring the cross-check. Message was: {text}"
+    );
+    assert!(
+        text.contains("id"),
+        "the refusal no longer names the offending chunk, so whoever investigates gets a \
+         bare statement that the two disagree with no pointer to where. Message was: {text}"
+    );
+
+    // The message must not claim the self-hosted side is the wrong one. `reference` appears
+    // as the name of the other side, which is description rather than attribution.
+    for blame in [
+        "self-hosted compiler is wrong",
+        "self-hosted output is incorrect",
+    ] {
+        assert!(
+            !text.contains(blame),
+            "the refusal now assigns fault to the self-hosted side. A divergence shows the \
+             two disagree and not which is wrong; the reference has been the wrong side \
+             before. Message was: {text}"
+        );
+    }
+}
