@@ -28,9 +28,9 @@ Current sprint source of truth.
 >
 > **The standing result for the operator**: `scope/float_arith__GAP` is correctly filed as a
 > capability gap, NOT a defect -- an earlier framing here said otherwise and is withdrawn. The
-> diverging operations are `+`, `-`, `*` and unary `-` on `Float` and `Fixed<N>`, plus fixed `*` and
-> `/` against the scale-aware `FixedMul`/`FixedDiv`, which is a wrong-VALUE hazard rather than a
-> checking difference. Everything else agrees. The fix is a type channel into codegen, so it bears
+> diverging operations are `+`, `-` and `*` on `Float` and `Fixed<N>`, fixed `*` and `/` against the
+> scale-aware `FixedMul`/`FixedDiv` (a wrong-VALUE hazard rather than a checking difference), and
+> unary `-` on EVERY non-`Word` operand including `Byte`. Everything else agrees. The fix is a type channel into codegen, so it bears
 > on the capacity question and was not made.
 >
 > **Method note worth keeping.** Four framings in this area were each wrong at the edge of their

@@ -12,26 +12,30 @@
 //!
 //! # The measured matrix
 //!
-//! Censused against the operator list in `codegen.kel`'s own mapping comment
-//! rather than against an assembled set, so the empty cells are the ones the
-//! language does not admit, not the ones nobody ran.
+//! Censused against the operator list in `codegen.kel`'s own mapping comment.
+//! **Every cell below was run.** An earlier version left cells blank on the
+//! assumption that the language did not admit them; three of those were admitted,
+//! and one of the three diverges. `n/a` now means a REFERENCE TYPE ERROR, checked,
+//! not a cell nobody tried.
 //!
 //! | operand | `+` | `-` | `*` | `/` | `%` | unary `-` | compare | bitwise | shift |
 //! |---|---|---|---|---|---|---|---|---|---|
 //! | `Word`  | ok | ok | ok | ok | ok | ok | ok | ok | ok |
-//! | `Byte`  | ok | ok | ok | ok | — | — | — | ok | ok |
-//! | `Float` | **chk** | **chk** | **chk** | ok | — | **chk** | ok | — | — |
-//! | `Fixed<16>` | **chk** | **chk** | **`FixedMul`** | **`FixedDiv`** | ok | **chk** | ok | — | — |
+//! | `Byte`  | ok | ok | ok | ok | ok | **chk** | ok | ok | ok |
+//! | `Float` | **chk** | **chk** | **chk** | ok | ok | **chk** | ok | n/a | n/a |
+//! | `Fixed<16>` | **chk** | **chk** | **`FixedMul`** | **`FixedDiv`** | ok | **chk** | ok | n/a | n/a |
 //!
 //! `chk` is the checked-versus-plain difference; the named ops are the
-//! scale-aware ones. Booleans (`and`, `or`, `xor`, `not`) agree.
+//! scale-aware ones. Booleans (`and`, `or`, `xor`, `not`) agree, and so does
+//! `bnot` on `Byte`.
 //!
-//! **The diverging operations are exactly `+`, `-`, `*` and unary `-`, on
-//! `Float` and `Fixed<N>`, plus fixed `*` and `/`.** Everything else in the
-//! mapping agrees. That set matches the tree's own residual-tag note, which
-//! lists `Op::Add`, `Op::Sub`, `Op::Mul` and `Op::CheckedNeg` together: those
-//! are precisely the operations for which the reference has a plain form that a
-//! typeless codegen cannot select.
+//! **Unary negation diverges for EVERY non-`Word` operand**, `Byte` included.
+//! The rest of the divergence is `+`, `-`, `*` on `Float` and `Fixed<N>`, plus
+//! fixed `*` and `/`. Everything else agrees.
+//!
+//! That set matches the tree's own residual-tag note, which lists `Op::Add`,
+//! `Op::Sub`, `Op::Mul` and `Op::CheckedNeg` together: precisely the operations
+//! for which the reference has a plain form a typeless codegen cannot select.
 //!
 //! # Two kinds of divergence, and the second one matters more
 //!
@@ -52,13 +56,20 @@
 //! 2. "Only the float LITERAL is excluded" — float `+` on float parameters, with
 //!    no literal anywhere, diverges.
 //! 3. "Specific to the float path" — fixed-point diverges too, and more badly.
+//! 4. "`Word` and `Byte` agree throughout" — `Byte` unary negation diverges.
 //!
-//! The third fell to a PREDICTION rather than to another census. Once the cause
-//! was known, it implied something not yet looked at, and `Byte` was the cheap
-//! test. `Byte` turned out to AGREE, which refuted the specific prediction while
-//! the same run showed `Fixed` diverging — so the claim needed widening for a
-//! reason the prediction had not anticipated. **Explaining the rows you already
-//! have is weaker than predicting rows you have not.**
+//! The third fell to a PREDICTION. Once the cause was known it implied something
+//! not yet looked at, and `Byte` arithmetic was the cheap test; it AGREED,
+//! refuting that prediction, while the same run showed `Fixed` diverging. So the
+//! claim needed widening for a reason the prediction had not anticipated.
+//!
+//! **The fourth fell to a test already in the tree.** `tests/op_tag_tables.rs`
+//! records that `codegen.kel` emits `checkedneg` for unary negation, that its
+//! decoder has no arm producing `Op::Neg` at all, and that the reference emits
+//! `Op::Neg` for **`Byte`** negation. The conclusion was sitting there; this
+//! file's matrix had left the `Byte` unary cell blank on the assumption that the
+//! language did not admit it. **A blank cell is a claim, and that one was never
+//! run.**
 //!
 //! # Which side is wrong
 //!
@@ -128,6 +139,11 @@ fn float_add_sub_mul_diverge_and_divide_does_not() {
         attempt(&binop("/", "Float", "Float")).is_ok(),
         "float division now fails too, so the divergence is broader than the three \
          operators this file names"
+    );
+    assert!(
+        attempt(&binop("%", "Float", "Float")).is_ok(),
+        "float `%` now fails. The first matrix left this cell blank without running it; it \
+         is admitted and agreed, and a change here widens the divergence"
     );
     assert!(
         attempt(&binop("<", "Float", "bool")).is_ok(),
@@ -229,36 +245,52 @@ fn fixed_point_diverges_on_both_the_checked_and_the_scale_aware_ops() {
     );
 }
 
-/// **`Byte` AGREES ON EVERY ARITHMETIC OPERATOR**, which is what stopped the
-/// divergence being described as "every non-`Word` type".
+/// **`Byte` AGREES ON EVERY BINARY OPERATOR AND DIVERGES ONLY ON UNARY NEGATION.**
 ///
-/// This row exists because it refuted a prediction. Once the cause was known it
-/// implied that any operand type the reference treats unchecked would diverge, and
-/// `Byte` was the cheap test. It agrees, so the claim is about `Float` and
-/// `Fixed<N>` specifically rather than about non-`Word` operands in general.
+/// The split matters. `Byte` arithmetic refuted the prediction that any operand
+/// type the reference treats unchecked would diverge — which is why the claim is
+/// not simply "every non-`Word` type". But its unary negation DOES diverge, so the
+/// claim is not "`Byte` agrees" either. That second half is asserted in
+/// `unary_negation_diverges_on_every_non_word_operand`; this test covers the
+/// binary operators and `%` and comparison, all of which the first matrix left
+/// blank without running them.
 #[test]
-fn byte_arithmetic_does_not_diverge() {
-    for op in ["+", "-", "*", "/"] {
+fn byte_agrees_on_every_binary_operator() {
+    for op in ["+", "-", "*", "/", "%"] {
         assert!(
             attempt(&binop(op, "Byte", "Byte")).is_ok(),
-            "`{op}` on Byte now diverges. The header describes the divergence as reaching \
-             Float and Fixed and NOT Byte; if Byte has joined them, the cause is broader \
-             than the header claims and the account should be rewritten rather than this \
-             assertion relaxed"
+            "`{op}` on Byte now diverges. Byte is documented as agreeing on every BINARY \
+             operator and diverging only on unary negation; if a binary operator has joined, \
+             the account should be rewritten rather than this assertion relaxed"
         );
     }
+    assert!(
+        attempt(&binop("<", "Byte", "bool")).is_ok(),
+        "Byte comparison now diverges, so the divergence is not confined to arithmetic"
+    );
+    assert!(
+        attempt("fn f(a: Byte) -> Byte { bnot a }\nfn main(x: Byte) -> Byte { f(x) }").is_ok(),
+        "Byte `bnot` now diverges, so unary negation is not the only unary operator affected"
+    );
 }
 
-/// **UNARY NEGATION FOLLOWS THE SAME RULE AS `+`, `-` AND `*`.**
+/// **UNARY NEGATION DIVERGES FOR EVERY NON-`Word` OPERAND, `Byte` INCLUDED.**
 ///
-/// `CheckedNeg` against the reference's plain `Neg` for `Float` and `Fixed<N>`,
-/// agreeing on `Word`. This row completes the set against `codegen.kel`'s own
-/// operator mapping and matches the tree's residual-tag note, which groups
-/// `Op::Add`, `Op::Sub`, `Op::Mul` and `Op::CheckedNeg` — the operations with a
-/// plain reference form a typeless codegen cannot pick.
+/// `CheckedNeg` against the reference's plain `Neg`. `Byte` is in this list and
+/// was missing from the first version, where the matrix left its unary cell blank
+/// on the assumption that the language did not admit it. It does, and it diverges.
+///
+/// # The answer was already in the tree
+///
+/// `tests/op_tag_tables.rs` records that `codegen.kel` emits `checkedneg` for
+/// unary negation, that its decoder has no arm producing `Op::Neg` at all, and
+/// that the reference emits `Op::Neg` for **`Byte`** negation. Reading it is what
+/// exposed the blank cell. **A census that skips a cell and a census that measures
+/// it agree on every row it did run**, which is why the gap survived three
+/// readings of the matrix.
 #[test]
-fn unary_negation_diverges_on_float_and_fixed_but_not_word() {
-    for ty in ["Float", "Fixed<16>"] {
+fn unary_negation_diverges_on_every_non_word_operand() {
+    for ty in ["Float", "Fixed<16>", "Byte"] {
         let src = format!("fn f(a: {ty}) -> {ty} {{ -a }}\nfn main(x: {ty}) -> {ty} {{ f(x) }}");
         let err = attempt(&src).expect_err(&format!(
             "unary negation on {ty} now compiles; if the codegen gained operand types this \

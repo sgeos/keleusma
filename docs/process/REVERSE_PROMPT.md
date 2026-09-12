@@ -37,7 +37,14 @@ and therefore bears on the capacity question. Characterised per operand type and
 **IT IS NOT CONFINED TO FLOATS, AND FINDING THAT OUT TESTED THE CAUSE RATHER THAN RE-CENSUSING.**
 Once the cause was known it predicted that any operand type the reference treats unchecked would
 diverge. `Byte` was the cheap test and it AGREES, refuting the specific prediction — while the same
-run showed `Fixed<N>` diverging. So `Float` and `Fixed<N>` diverge and `Word` and `Byte` do not.
+run showed `Fixed<N>` diverging.
+
+**A LATER CORRECTION: `Byte` UNARY NEGATION DIVERGES TOO**, so "`Word` and `Byte` do not diverge"
+was wrong as stated. `Byte` agrees on every BINARY operator and diverges on unary `-`. The answer
+was already in the tree — `tests/op_tag_tables.rs` records that the reference emits `Op::Neg` for
+`Byte` negation and that `codegen.kel` can emit only `checkedneg`. **The matrix had left that cell
+blank on the assumption the language did not admit it. A blank cell is a claim, and it was never
+run.**
 
 **Fixed-point is the more serious half.** Its `+` and `-` are the same checked-versus-plain
 difference; its `*` and `/` diverge against the reference's SCALE-AWARE `FixedMul(16)` and
@@ -48,8 +55,8 @@ exists to stop, and it does.
 **THE MATRIX IS NOW CLOSED against `codegen.kel`'s own operator mapping rather than an assembled
 set.** The diverging operations are exactly `+`, `-`, `*` and unary `-` on `Float` and `Fixed<N>`,
 plus fixed `*` and `/` against the scale-aware ops. **Everything else agrees**: all operators on
-`Word` and `Byte`, every bitwise and shift (including `Byte`'s promote-operate-truncate path, the
-likeliest place for it to reappear), the booleans, the comparisons, and `%`.
+`Word` and `Byte` (unary negation excepted, see above), every bitwise and shift including `Byte`'s
+promote-operate-truncate path, the booleans, the comparisons, and `%`.
 
 That set matches the tree's own residual-tag note, which groups `Op::Add`, `Op::Sub`, `Op::Mul` and
 `Op::CheckedNeg` — precisely the operations for which the reference has a plain form a typeless

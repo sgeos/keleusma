@@ -161,10 +161,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checked form where the reference emits the plain one; `Fixed<N>` diverges for
   the same reason, and its `*` and `/` additionally diverge against the
   scale-aware `FixedMul`/`FixedDiv`, which is a wrong-value hazard rather than a
-  checking difference. Unary `-` follows the same rule. Everything else agrees:
-  all operators on `Word` and `Byte`, the bitwise and shift families, the
-  booleans, the comparisons, and `%`. Measured per operand type and operator, and
-  censused against the codegen's own operator mapping, in
+  checking difference. Unary `-` diverges for EVERY non-`Word` operand, `Byte`
+  included. Everything else agrees: all BINARY operators on `Word` and `Byte`,
+  the bitwise and shift families, the booleans, the comparisons, and `%`.
+  Measured per operand type and operator, with every cell run, in
   `tests/selfhost_typed_opcode_boundary.rs`. `Text` is not a subset
   restriction at all: the reference does not implement it either, so it reports
   a plain source error and correctly withholds the hint. The
