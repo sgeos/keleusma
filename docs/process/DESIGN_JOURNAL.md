@@ -13,6 +13,62 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (sixty-first) — the saving the refusal left open, and a measurement that had drifted
+
+### THE SAVING THE PREVIOUS INCREMENT LEFT OPEN
+
+That increment refused one occurrence-channel saving and said explicitly that a saving not requiring
+the host to apply the rule remained open. This is it.
+
+The channel emitted one row per syntactic OCCURRENCE. Across the twelve real sources that is 14,288
+rows carrying **1,391 distinct facts — 90% repeats.**
+
+**It never asks what a rule would conclude.** It observes that two rows are equal as tuples and
+sends the fact once. That is the whole difference from the refused version, where the host would
+have withheld a row precisely BECAUSE it knew the rule's answer for it.
+
+**What it does rely on, stated rather than glossed**: the stage applies a per-row predicate folded
+into a sticky verdict, so identical rows contribute identically. That is the fold's SHAPE rather
+than a rule's answer — but it is a reliance, and calling the saving free would be the overclaiming
+the refusal was about.
+
+**It changes what the channel means**, from per-occurrence to per-distinct-fact, and the description
+travels with the change. First-appearance order is preserved, because order-independence of a sticky
+disjunction is a SECOND assumption and not needing it is cheaper than arguing it.
+
+### A MEASUREMENT THAT HAD DRIFTED FROM WHAT IT MEASURED
+
+The capacity and price tests went on reporting **3,874** occurrence rows after the driver had begun
+sending **537**. `real_source_channel_rows` called the raw walk; the driver applied the reduction.
+
+**A measurement that drifts from the thing it measures is worse than no measurement, because it
+reads as evidence.** It was caught only because the expected improvement did not appear — had the
+saving been smaller, the drift would have been invisible and both numbers would have gone on being
+quoted.
+
+The expression channel was already in step because its entry point applies the elision. The
+occurrence channel needed it applied explicitly.
+
+### THE EFFECT
+
+| | before | after |
+|---|---|---|
+| real sources that fit | 3 of 12 | **7 of 12** |
+| corpus-sized shared data | 34,781 words, 4.7x | 24,770 words, **3.3x** |
+| growth over today | +213 KiB | **+135 KiB** |
+| tightest constraint anywhere | `wire` occurrences, 15x | `wire` call sites, 14x |
+
+**The prediction history is worth keeping.** I predicted ZERO sources would fit. The first run found
+two; the inert-row elision took it to three; this takes it to seven. Each step was measured, and
+each exceeded what I expected of it.
+
+**The binding constraint has now moved twice** — off the expression channel, then off the occurrence
+channel — and is now the call-site channel. Whether the same argument reaches it is a question for a
+later increment, and the answer is not obvious: call sites are distinct by construction in a way
+occurrences are not.
+
+---
+
 ## 2026-09-12 (sixtieth) — a saving that is available, verdict-preserving, and refused
 
 ### THE SAVING
