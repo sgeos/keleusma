@@ -120,10 +120,23 @@ The per-call-site region-cost measurement recorded above is still owed and is st
 
 ## Status
 
-**Reported and pinned, not repaired.** `composite_return_aliasing.rs` carries the failing case
-as `#[ignore]` with the reason, plus the two boundary cases that pass. The `#[ignore]` is a
-pinned defect awaiting a repair, not a skipped test, and `10_multbyte.kel` remains in
-`KNOWN_DISAGREEMENTS` where the set-equality assertion keeps it visible.
+> ⚠ **SUPERSEDED 2026-08-14, recorded 2026-09-12. THE DEFECT IS REPAIRED AND THIS SECTION SAID
+> OTHERWISE FOR A MONTH.** `composite_return_aliasing.rs` says so in its own text — *"REPAIRED
+> 2026-08-14 and un-ignored. It was a pinned failing case; it is now a regression guard"* — and
+> the file carries **no ignored tests at all**. Each call site now receives a disjoint block of
+> the caller's region (`region::plan_call_site_regions`), which is the repair the section below
+> describes as owed.
+>
+> Found by auditing this line's claims about unrepaired defects, after an identical staleness was
+> found in `NATIVE_BOUNDS_TRANSFER.md`. **This one is about this line's OWN code**, so it is not
+> an accusation — but a reader would still have believed a defect was open that has been closed
+> since August.
+
+**The record as written, 2026-08-13:** Reported and pinned, not repaired.
+`composite_return_aliasing.rs` carries the failing case as `#[ignore]` with the reason, plus the
+two boundary cases that pass. The `#[ignore]` is a pinned defect awaiting a repair, not a skipped
+test, and `10_multbyte.kel` remains in `KNOWN_DISAGREEMENTS` where the set-equality assertion
+keeps it visible.
 
 ---
 

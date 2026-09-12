@@ -1,5 +1,46 @@
 # Design Journal
 
+## 2026-09-12 — [v0.3.0] The register was stale in BOTH directions
+
+The previous increment found a defect report that outlived its defect. This one asked which OTHER
+claims this line makes about unrepaired defects — and found the mirror image as well.
+
+**252 decision documents; 103 mention the other line's code; 19 contain an unrepaired-defect phrase;
+three are live claims.** The narrowing is recorded with its matcher, because a hand-written population
+in this package has already been wrong twice in one increment.
+
+| claim | outcome |
+|---|---|
+| `NATIVE_COMPOSITE_RETURN_ABI.md`: "reported and pinned, not repaired" | **STALE** — repaired 2026-08-14 **by this line**; the test says so and carries no ignored cases |
+| `ORDER_1_VERIFY_TYPES_BRIEF.md` finding 1: `cmd` declared, documented, never read | **ACTED ON by the `v0.2.3` line**, and nothing here said so |
+| the same brief's finding 2: `ty_max_steps()` is 1801 against a 60-tick drive | **still true**, measured rather than assumed to follow |
+| `INVALID_BYTECODE_CENSUS.md`: a column headed "unrepaired" | **false positive** — it compares a suite before and after a repair |
+
+### The mirror is the finding
+
+An un-retracted report becomes an accusation; that was last increment. **An unacknowledged repair is
+the same failure with the sign flipped**, and this line had one of each. A register stale only in the
+accusing direction would be a bias. Stale in both is simply unmaintained — the more accurate and less
+flattering diagnosis.
+
+**The other line fixed something this line reported and explained their reasoning in the file**: `cmd`
+stays at slot 0 because deleting it would shift every other slot and send the seeding to the wrong
+place. That is a better answer than the report asked for, and it sat unrecorded.
+
+### The brief's own framing was too narrow
+
+It scoped the audit to "claims about the other line's code", on the theory that those are the
+dangerous ones. **One of the three is about this line's own backend** — a defect repaired here,
+recorded as open for a month. The class is not *claims about others*; it is **status recorded once and
+never revisited.**
+
+### Measured separately, because one repair does not imply another
+
+Finding 2 was checked on its own rather than assumed to have gone with finding 1: `ty_max_steps()`
+still sums to 1801. It is now the only live item of the three, and it is **unwatched on purpose** — it
+is a design constraint on subject sizing, not a defect, and a guard would pin a number this line does
+not own.
+
 ## 2026-09-11 — [v0.3.0] The reports made self-verifying, before one of them rotted
 
 The previous increment found a defect report that outlived its defect by four weeks. **The same

@@ -17,6 +17,19 @@ comment and the declaration. The bottom of the file states the truth — *"this 
 no commands"*. **A host following the documentation would write a channel that nothing reads.** This
 is `src/selfhost/kel/`, the other line's, so it is REPORTED, not repaired.
 
+> ✅ **ACTED ON BY THE `v0.2.3` LINE, confirmed 2026-09-12.** `verify_types.kel`'s header now states
+> *"`cmd` IS DECLARED AND NEVER READ"*, records that a previous revision of the comment claimed it
+> selected the operation, and explains why the slot is kept rather than deleted: it sits at slot 0,
+> and removing it would shift every other slot so the seeding would go to the wrong place. **The
+> contradiction a host would have followed is gone.**
+>
+> Finding 2 below — `ty_max_steps()` is 1801 against a 60-tick drive — is **unchanged**; the function
+> still sums to 1801. Confirmed by measurement, not by assuming one repair implies the other.
+>
+> Recorded because this line spent an increment discovering that a report nobody re-checks becomes a
+> standing accusation. **This is the opposite case and deserves the same diligence**: the other line
+> fixed it, and nothing here said so.
+
 **2. `ty_max_steps()` IS 1801, AND THIS HARNESS DRIVES 60 TICKS.** The stage states its own bound so a
 host can size a drive loop: one step per row across every table at its cap, one per phase boundary,
 one to report. **At full tables the verdict is unreachable within 60 ticks.**
