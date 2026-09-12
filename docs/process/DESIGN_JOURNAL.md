@@ -13,6 +13,50 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (seventy-third) — six ways a green run has lied, in one reachable place
+
+### WHY CONSOLIDATE RATHER THAN ADD A SEVENTH ENTRY
+
+Four of these were recorded in this journal under the chunk-count increment, a fifth in the reverse
+prompt, and a sixth in the entry immediately above. **The knowledge was present and not reachable.**
+Nobody resuming finds a table in the middle of an append-only file that is now seventy-plus entries
+long, and the proof is that I hit the same class TWICE in one iteration while all of it was already
+written down.
+
+So the six now sit in `CLAUDE.md`, beside the verification commands they qualify — the place a
+session reads while working rather than while reconstructing history. The journal entries stay where
+they are; the consolidation points at them rather than replacing them.
+
+### THE SIX
+
+| how it under-reported | what distinguishes it |
+|---|---|
+| guards ran BEFORE the last edit | compare the guard's start against the file's mtime |
+| a single-package run omits `self-host`; a workspace run unifies it on | they are different feature sets |
+| `cargo test` stops at the FIRST failing binary | "1 failed" is not "one failure in the tree" |
+| a run edited while in flight | belongs to no tree; discard rather than read as a pass |
+| a CACHED clippy run prints nothing either way | `touch` first; a warm target directory proves nothing |
+| a TRUNCATED log looks identical to a clean one | capture whole output and exit status |
+
+### THE PROPERTY THEY SHARE, WHICH IS THE POINT
+
+**In every case the run did less than the reader believed.** Each is a gap between what the command
+actually covered and the claim made from its output.
+
+That is why the corrective is not "run more tests" — it is asking *what did this command cover?*
+before a result is used to justify anything. Two of the six are about the command's scope, two about
+its timing, and two about its OUTPUT being an incomplete view of a run that was itself fine. The
+last pair is the subtle one: the run succeeded and the evidence of success was partial.
+
+### NOT EXHAUSTIVE, AND SAYING SO MATTERS
+
+Six found across one session is evidence that more exist. The table says this. A list of failure
+modes presented as complete invites the reader to stop looking, which is the failure mode one level
+up and the one this session has recorded against rule inventories, binder sets and census corpora
+alike.
+
+---
+
 ## 2026-09-12 (seventy-second) — the pin caught what local verification did not, and a risk I had written down
 
 ### WHAT BROKE
