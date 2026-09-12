@@ -13,6 +13,95 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (eighty-eighth) — closing the matrix against the codegen's own operator list
+
+### THE SET I WAS TESTING WAS ASSEMBLED, NOT SPECIFIED
+
+The typed-opcode divergence had been measured across five arithmetic operators and one comparison.
+That set came from what had been tried, not from anything authoritative. `codegen.kel`'s mapping
+comment states the real list: the five arithmetic operators, six comparisons, three bitwise, the
+shifts, and unary negation. Censusing against it rather than against my own history is the
+instrument that has produced nearly every finding this session, and it closed the matrix here.
+
+### UNARY NEGATION JOINS, AND EVERYTHING ELSE AGREES
+
+`-a` on `Float` and on `Fixed<N>` reports `CheckedNeg` against the reference's plain `Neg`, exactly
+the pattern `+`, `-` and `*` show; `Word` agrees. **Every other cell agrees**: all operators on
+`Word` and `Byte`, the three bitwise operators, all four shifts, the booleans, the comparisons, and
+`%`.
+
+`Byte` was the cell most worth running. It reaches bitwise and shift through
+promote-operate-truncate, a different path from its arithmetic, and it was the likeliest place for
+the divergence to reappear. It does not.
+
+### THE SET MATCHES SOMETHING ALREADY IN THE TREE
+
+The diverging operations are exactly `+`, `-`, `*` and unary `-`, plus fixed `*` and `/` against the
+scale-aware ops. The residual-tag note elsewhere in the suite groups `Op::Add`, `Op::Sub`, `Op::Mul`
+and `Op::CheckedNeg` — the same four. Those are precisely the operations for which the reference has
+a plain form that a typeless codegen cannot select. **An independent artefact arriving at the same
+set is better corroboration than any amount of re-reading the measurement.**
+
+### A CLEAN CLOSE IS A RESULT
+
+Most cells agreed, so this increment "found" little. That is the wrong way to score it. The
+alternative to running the empty cells is a matrix whose gaps get filled in by inference, and this
+area has already produced three framings that were each wrong at the edge of their evidence: too
+broad, too permissive, too narrow. A closed matrix is what stops a fourth.
+
+### ONE BADLY CONSTRUCTED PROBE, CAUGHT BEFORE IT BECAME A FINDING
+
+Unary negation was first probed as `0 - a`, which introduces a `Word` literal. On `Float` that
+produced a reference TYPE ERROR and on `Fixed` a literal-handling divergence — neither a fact about
+the opcode mapping. Both were discarded and the probe rewritten with the real unary spelling. A
+malformed probe that produces an interesting-looking message is a good way to manufacture a false
+finding, and the tell was that the reported op index and opcode had nothing to do with negation.
+
+---
+
+## 2026-09-12 (eighty-seventh) — the cause, which retracts my own "may be a defect"
+
+### THE CLAIM I RAISED WAS TOO STRONG
+
+The previous entry said the float arithmetic divergence is filed as a scope boundary and "may be a
+defect", on the grounds that the reference's unchecked float `+` is documented as intentional and
+float overflow is not a trap condition. Locating the decision point retracts that.
+
+`codegen.kel` states its own rule in a comment above `push_binop`: the operator code ALONE selects
+the op word. `Add` to `CheckedAdd`, `Sub` to `CheckedSub`, `Mul` to `CheckedMul`, while `Div` maps
+to plain `Div` and `Mod` to plain `Mod`. **No operand type enters the decision.** The file contains
+no float or type vocabulary at all — zero occurrences across every spelling checked.
+
+### IT ACCOUNTS FOR EVERY ROW, WHICH IS WHAT MAKES IT THE CAUSE
+
+- float `/` and float comparison agree — they have no checked variant in the mapping;
+- `Word` `+`, `-`, `*` agree — the reference emits the checked form there too;
+- float `+`, `-`, `*` diverge — the reference has operand types and picks the plain form, and the
+  self-hosted codegen has none to pick with.
+
+A cause that explains the accepted rows as well as the refused ones is worth more than one that only
+explains the failures. The earlier account explained only the failures.
+
+### SO THE FILING WAS RIGHT AND I WAS WRONG ABOUT IT
+
+`scope/float_arith__GAP` is a genuine capability gap, correctly filed. It is not a mislabelled
+defect. The distinction drawn last entry — a scope boundary is a decision, a defect is a bug nobody
+chose — was the right distinction, applied to the wrong side.
+
+The practical consequence for the operator is better than the alarm was: the fix is not a branch
+correction but a type channel into codegen, which is substantial and squarely capacity-relevant.
+That is a cost estimate stated as a shape rather than a number, deliberately — an unverified cost
+estimate went into a merged PR body earlier this session and had to be retracted in two places.
+
+### THE PATTERN, ONE MORE TIME
+
+This is the third claim this session corrected by reading further into the thing itself, and the
+second where the correction landed within two increments of the overreach. The overreach was not
+careless: the evidence for it was real and documentary. It was simply incomplete, and one more file
+settled it.
+
+---
+
 ## 2026-09-12 (eighty-sixth) — correcting my own correction, and what it uncovered
 
 ### THE FIX FOR A WRONG SENTENCE WAS ALSO WRONG

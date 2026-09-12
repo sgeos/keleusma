@@ -19,16 +19,62 @@ the CHECKED opcode (`CheckedAdd`, `CheckedSub`, `CheckedMul`) where the referenc
 one. Float division, float comparison, and passing float values around all COMPILE, and the same
 three operators on `Word` agree — so this is specific to the float path, not to arithmetic.
 
-The module comment of `tests/float_arith_width.rs` records that plain `+` on floats emits the
-unchecked `Op::Add` and "never the checked path", and float overflow is not a trap condition, so the
-checked form has nothing to check. **The self-hosted side appears to be the wrong one.** That is an
-inference from documented intent, not a verdict, and the rule that a divergence does not say which
-side is wrong still stands — the reference was the wrong side on 2026-08-31.
+**THE CAUSE IS KNOWN, AND IT RETRACTS THE "MAY BE A DEFECT" FRAMING WRITTEN FIRST.** `codegen.kel`
+states its own rule: the operator code ALONE selects the op word — `Add` to `CheckedAdd`, `Sub` to
+`CheckedSub`, `Mul` to `CheckedMul`, while `Div` and `Mod` map to their plain forms. **No operand
+type enters the decision**, and the file contains no float or type vocabulary at all.
 
-**Not fixed, deliberately.** The fix is in `codegen.kel`, a stage source, and stage sources bear on
-the pending capacity question. Characterised instead, per operator, in
-`tests/selfhost_float_boundary.rs`. **A scope boundary is a decision; a defect is a bug. This is
-filed as the first and may be the second.**
+That accounts for every measured row: division and comparison agree because they have no checked
+variant; `Word` agrees because the reference emits checked there too; float `+`, `-` and `*` diverge
+because the reference has operand types and picks the plain form while the self-hosted codegen has
+none to pick with.
+
+**So the `scope/` filing is CORRECT and this is not a mislabelled defect.** The fix is not a branch
+correction; it needs a type channel into codegen, which is a substantial change to a stage source
+and therefore bears on the capacity question. Characterised per operand type and operator in
+`tests/selfhost_typed_opcode_boundary.rs`; no change made.
+
+**IT IS NOT CONFINED TO FLOATS, AND FINDING THAT OUT TESTED THE CAUSE RATHER THAN RE-CENSUSING.**
+Once the cause was known it predicted that any operand type the reference treats unchecked would
+diverge. `Byte` was the cheap test and it AGREES, refuting the specific prediction — while the same
+run showed `Fixed<N>` diverging. So `Float` and `Fixed<N>` diverge and `Word` and `Byte` do not.
+
+**Fixed-point is the more serious half.** Its `+` and `-` are the same checked-versus-plain
+difference; its `*` and `/` diverge against the reference's SCALE-AWARE `FixedMul(16)` and
+`FixedDiv(16)`. A fixed-point multiply without the scale correction computes a DIFFERENT VALUE, so
+that case is a wrong-result hazard rather than a checking difference — which is what the cross-check
+exists to stop, and it does.
+
+**THE MATRIX IS NOW CLOSED against `codegen.kel`'s own operator mapping rather than an assembled
+set.** The diverging operations are exactly `+`, `-`, `*` and unary `-` on `Float` and `Fixed<N>`,
+plus fixed `*` and `/` against the scale-aware ops. **Everything else agrees**: all operators on
+`Word` and `Byte`, every bitwise and shift (including `Byte`'s promote-operate-truncate path, the
+likeliest place for it to reappear), the booleans, the comparisons, and `%`.
+
+That set matches the tree's own residual-tag note, which groups `Op::Add`, `Op::Sub`, `Op::Mul` and
+`Op::CheckedNeg` — precisely the operations for which the reference has a plain form a typeless
+codegen cannot select. **A census that closes cleanly is worth the same as one that finds
+something**, because the alternative is a matrix whose empty cells get filled in by inference.
+
+**THE OTHER TWO DIVERGENCES ARE DIFFERENT IN KIND, AND THAT IS WHY THIS ONE STANDS OUT.** The table
+has exactly three `Diverges` rows. Both struct-equality rows report `CmpEq` against the reference's
+`SetLocal` — a STRUCTURAL difference, and the table's own comment records that the flat
+array-equality family has no nested form and that these were previously admitted and silently
+mis-compiled. Those are missing codegen forms, correctly filed as gaps, with the cross-check now
+catching what used to pass silently. **The float row names no missing form: the same operation, in
+its checked variant, where the reference emits the plain one.** Two of three divergences say the
+codegen cannot do something; the third says it chose differently.
+
+**AN OBSERVATION ABOUT THE BOUNDARY TABLE, LEFT AS YOURS.** None of the four known parser gaps —
+the variable pattern, struct destructuring, `assert`, the qualified call — appears in it. Verified:
+zero occurrences of each in the table's range, and its families are bool, cast, comp, ctrl, eq,
+literal, nested, op, prec, removed, scalar, scope and tuple. A reader consulting the
+construct-support boundary to learn what the self-hosted compiler does not support therefore gets an
+incomplete answer.
+
+**Not changed.** The four are covered by their own tests, so this is organisation rather than a
+coverage hole, and the table's counts are a documented compaction anchor that adding rows would
+move. Whether the boundary table should absorb the parser gaps is a call for you.
 
 **Where the work is.** The type-rejection input path now carries **ten of twelve** real `.kel` stage
 sources, up from two, at **1.6x** the shared data it uses today rather than 7.3x — a growth of
