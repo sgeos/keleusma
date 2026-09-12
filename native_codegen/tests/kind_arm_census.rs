@@ -199,6 +199,26 @@ fn every_kind_arm_is_reached_by_the_corpus_or_named_as_unreached() {
 /// combination the corpus never produces is either attributed to a named
 /// hand-written test or recorded as UNEXERCISED, and the list is pinned so a new
 /// gap announces itself rather than joining a count nobody reads.
+///
+/// # ⚠ "UNEXERCISED" WAS ONE LABEL OVER THREE SITUATIONS
+///
+/// Measured 2026-09-12, when the residue was sixteen:
+///
+/// | combination | what was measured |
+/// |---|---|
+/// | the four flat reads x `Unit` | **unconstructible** — a `Unit` struct field does not compile |
+/// | the four flat reads x `Opaque` | **unconstructible** — no way to make the value |
+/// | the four flat reads x `Text` | the declaration compiles; **constructing one is REFUSED**, unknown packed width |
+/// | `shared slot` x `Unit`, `Text`, `Opaque` | not separately measured; the value cannot be made |
+/// | **`shared slot` x `Fixed`** | **lowered, and nothing drove it** |
+///
+/// **Only the last was the hazard this file's header describes.** It is now
+/// driven, and the other fifteen are unreachable rather than untested — a
+/// distinction that makes the real one visible instead of burying it in a count
+/// of sixteen.
+///
+/// **The unconstructible verdicts are measurements, not assumptions**: each was
+/// established by compiling the shape and reading what came back.
 #[test]
 fn the_unreached_combinations_are_each_accounted_for() {
     let (tally, _, _) = corpus_reach();
@@ -293,6 +313,15 @@ fn the_unreached_combinations_are_each_accounted_for() {
             "shared slot",
             "Float",
             "shared_data::a_float_shared_slot_agrees_in_value_and_in_buffer",
+        ),
+        // **WAS UNEXERCISED UNTIL 2026-09-12**, and it was the ONLY one of the
+        // sixteen that lowered. The other fifteen are unreachable or refused —
+        // see the disposition note below. This is the shape this census's header
+        // warns about: an accepted path no test executes.
+        (
+            "shared slot",
+            "Fixed",
+            "fixed_shared_scale::a_fixed_shared_slot_reads_the_same_value_on_both_paths",
         ),
         (
             "GetTupleField(Flat)",

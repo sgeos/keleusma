@@ -1,9 +1,20 @@
 //! **Is the `Fixed` shared-slot ABI actually UNSETTLED, or merely UNMEASURED?**
 //!
-//! `alloc_format_kind` in this backend refuses a `Fixed` shared data slot, and
-//! the doc comment above it defends the refusal on the ground that a shared
-//! slot's layout is host-visible and therefore an ABI question rather than an
-//! internal one.
+//! ⚠ **THE REFUSAL THIS FILE OPENED WITH IS GONE, corrected 2026-09-12.** It read:
+//! *"`alloc_format_kind` in this backend refuses a `Fixed` shared data slot"*.
+//! **It does not** — `shared_scalar_width` maps `SCALAR_FIXED` to eight bytes, a
+//! `Fixed` shared slot lowers, and a driven read agrees with the reference.
+//!
+//! **The ABI GAP this file pins is untouched and still open**: `Fixed<16>` and
+//! `Fixed<8>` produce identical host-visible layouts, so a host cannot recover
+//! the Q-format scale from the descriptor. That is what the assertions below
+//! establish, and they have held throughout. **Only the framing described a world
+//! that no longer exists** — the fourth record this session found outliving its
+//! subject.
+//!
+//! The original framing, kept because the reasoning is still the reasoning: a
+//! shared slot's layout is host-visible and therefore an ABI question rather than
+//! an internal one.
 //!
 //! **That refusal is right and this file does not challenge it. What it
 //! challenged was the REASON GIVEN**, which used to read *"fixed-point
@@ -73,6 +84,8 @@
 
 use keleusma::bytecode::{SHARED_SLOT_COMPOSITE_FLAG, SharedSlotLayout};
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
+
+mod common;
 
 /// `ScalarKind::Fixed::to_tag()`. Written numerically on purpose: the variant
 /// is reachable without a feature gate today, but every other tag comparison in
@@ -213,4 +226,110 @@ fn a_fixed_shared_slot_verifies_and_receives_a_memory_bound() {
         .expect("a module with a `Fixed` shared slot must pass the structural verifier");
     keleusma::verify::module_wcmu(&module, &[])
         .expect("a module with a `Fixed` shared slot must receive a worst-case memory bound");
+}
+
+/// **THE SLOT IS DRIVEN, WHICH NOTHING IN THIS FILE DID.**
+///
+/// `kind_arm_census.rs` reported `shared slot x Fixed` as *"UNEXERCISED by corpus
+/// or by any named test"* — and its own header names that as the hazard worth
+/// fearing: **an accepted path no test executes ships a plausible wrong number.**
+///
+/// Every other test here reads the LAYOUT. This one reads the VALUE, through both
+/// the reference and the native code over the same bytes.
+#[test]
+fn a_fixed_shared_slot_reads_the_same_value_on_both_paths() {
+    use inkwell::OptimizationLevel;
+    use inkwell::context::Context;
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{
+        Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for,
+        shared_data_bytes_for,
+    };
+
+    const SRC: &str = "shared data io { x: Fixed<16>, n: Word }\n\
+                       fn main() -> Fixed<16> { io.x }\n";
+    let m = common::build(SRC);
+
+    // Three units in Q16. A value the host wrote, read back through a slot whose
+    // scale the layout does not carry — which is this file's whole subject.
+    let raw: i64 = 3 << 16;
+    let n_shared = shared_data_bytes_for(&m);
+    assert!(
+        n_shared >= 8,
+        "the shared segment must hold the Fixed slot; got {n_shared} bytes"
+    );
+
+    let mut vm_shared = vec![0u8; n_shared];
+    vm_shared[..8].copy_from_slice(&raw.to_le_bytes());
+    let need = required_persistent_capacity_for(&m);
+    let cap = auto_arena_capacity_for(&m, &[]).expect("arena") + need + (1 << 20);
+    let mut arena = keleusma_arena::Arena::with_capacity(cap);
+    arena.resize_persistent(need).expect("persistent");
+    let mut vm = Vm::new(m.clone(), &arena).expect("vm");
+    let vm_out = match vm
+        .call_with_shared(&mut vm_shared, &[])
+        .expect("the reference runs")
+    {
+        VmState::Finished(Value::Fixed(v)) => v,
+        other => panic!("expected a Fixed result, got {other:?}"),
+    };
+    assert_eq!(
+        vm_out, raw,
+        "the reference must hand back the bits the host wrote; if it rescales, the \
+         ABI gap this file pins has changed shape"
+    );
+
+    let entry = m.entry_point.expect("entry point");
+    let ctx = Context::create();
+    let lm = ctx.create_module("k");
+    keleusma_native::lower_module(&ctx, &lm, &m, keleusma_native::LowerOptions::default())
+        .expect("a Fixed shared slot lowers — see the correction at the head of this file");
+    common::maybe_optimize(&lm);
+    let ee = lm
+        .create_jit_execution_engine(OptimizationLevel::None)
+        .expect("jit");
+
+    const CANARY: u64 = 0xDEAD_BEEF_FEED_FACE;
+    let mut nat_shared = vec![0u8; n_shared + 8];
+    nat_shared[..8].copy_from_slice(&raw.to_le_bytes());
+    nat_shared[n_shared..].copy_from_slice(&CANARY.to_le_bytes());
+    let n_priv = (required_persistent_capacity_for(&m)
+        + keleusma_native::region::persistent_supplement_bytes(&m) as usize)
+        .div_ceil(8)
+        .max(1);
+    let mut privs = vec![0u64; n_priv + 1];
+    privs[n_priv] = CANARY;
+    let n_region = keleusma_native::region::host_arena_supplement_bytes(&m) as usize;
+    let mut region = vec![0u64; n_region.div_ceil(8) + 1];
+    let region_canary = region.len() - 1;
+    region[region_canary] = CANARY;
+
+    let f = unsafe {
+        ee.get_function::<unsafe extern "C" fn(*mut u8, *mut u8, *mut u8) -> i64>(&format!(
+            "kel_chunk_{entry}"
+        ))
+    }
+    .expect("entry symbol");
+    let nat = unsafe {
+        f.call(
+            nat_shared.as_mut_ptr(),
+            privs.as_mut_ptr() as *mut u8,
+            region.as_mut_ptr() as *mut u8,
+        )
+    };
+
+    assert_eq!(
+        u64::from_le_bytes(nat_shared[n_shared..].try_into().unwrap()),
+        CANARY,
+        "the lowering wrote past the shared segment"
+    );
+    assert_eq!(privs[n_priv], CANARY, "wrote past the private region");
+    assert_eq!(
+        region[region_canary], CANARY,
+        "wrote past the composite region"
+    );
+    assert_eq!(
+        nat, vm_out,
+        "a Fixed shared slot read differs: native={nat} reference={vm_out}"
+    );
 }

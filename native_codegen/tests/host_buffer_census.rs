@@ -53,6 +53,7 @@ const BUFFER_HARNESSES: &[&str] = &[
     "corpus_differential.rs",
     "declared_float_width.rs",
     "delegated_suspension.rs",
+    "fixed_shared_scale.rs",
     "general_stream_sequence.rs",
     "module_differential.rs",
     "module_source_differential.rs",
@@ -65,7 +66,10 @@ const BUFFER_HARNESSES: &[&str] = &[
     "stage_differential.rs",
 ];
 // `shared_composite_slot.rs` joined on 2026-09-11, **the increment after this
-// census was written**, and the census refused until it was registered. It
+// census was written**, and the census refused until it was registered.
+// `fixed_shared_scale.rs` joined on 2026-09-12 the same way — **the second time
+// this census caught its own author adding a harness**, which is the whole point
+// of pinning the population rather than trusting a sweep. It
 // derives every buffer from the contract and carries three canaries, which is
 // what the registration is for: the list records that someone looked, not merely
 // that a file exists.

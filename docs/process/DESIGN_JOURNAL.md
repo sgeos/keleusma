@@ -1,5 +1,49 @@
 # Design Journal
 
+## 2026-09-12 — [v0.3.0] Sixteen "unexercised" kind arms were one label over three situations
+
+`kind_arm_census.rs` reported 32 combinations the corpus never reaches, 16 resolved to named tests and
+**16 "UNEXERCISED by corpus or by any named test"**. Its header names the hazard exactly: *"an
+accepted path that no test executes ships a plausible wrong number."*
+
+**Measured, only ONE of the sixteen was that.**
+
+| combination | measured | disposition |
+|---|---|---|
+| four flat reads × `Unit` | a `Unit` struct field does not compile | unconstructible |
+| four flat reads × `Opaque` | no way to make the value | unconstructible |
+| four flat reads × `Text` | declaration compiles; **construction REFUSED**, unknown packed width | refused |
+| `shared slot` × `Unit`, `Text`, `Opaque` | the value cannot be made | unconstructible |
+| **`shared slot` × `Fixed`** | **lowered, and nothing drove it** | driven now, and it agrees |
+
+**The count barely moved — 16 to 15 — and the meaning changed entirely.** A reader now sees one live
+gap closed instead of sixteen undifferentiated entries, and the fifteen are unreachable rather than
+neglected. Each verdict is a measurement: the shape was compiled and the result read.
+
+### The stale record found on the way
+
+`fixed_shared_scale.rs` opened by saying this backend REFUSES a `Fixed` shared data slot. **It does
+not**: `shared_scalar_width` maps `SCALAR_FIXED` to eight bytes, and the driven read agrees —
+`Fixed(196608)` on both sides.
+
+**Its assertions were never wrong.** `Fixed<16>` and `Fixed<8>` still produce identical host-visible
+layouts, so the ABI gap it pins is real and open. Only the framing described a world that no longer
+exists.
+
+> **The fourth record this session found outliving its subject.** The pattern is not carelessness
+> about any one file — **it is that nothing re-reads a header when the code under it changes.** Four
+> instruments now fire on drift in code. None fires on drift in prose.
+
+### And the host-buffer census caught its author a second time
+
+The new driven test builds host buffers, so `host_buffer_census.rs` refused the increment until the
+file was registered — **the second time it has fired on the very person who wrote it**, one day apart.
+It derives every buffer from the published contract, so registration was all that was owed.
+
+**That is the argument for pinning a population rather than trusting a sweep**, made by the instrument
+rather than about it: a hand sweep would have missed this file exactly as the first draft of that
+census missed seven.
+
 ## 2026-09-12 — [v0.3.0] The operand-variant sweep, and an arm arity that varies by type
 
 Four defects hid behind one instrument's keying. This is the instrument that asks the question that

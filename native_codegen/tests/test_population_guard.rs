@@ -34,7 +34,12 @@
 ///
 /// **Derive this, do not transcribe it.** A count in this tree once read
 /// "nineteen" while the block it described held twenty-nine.
-const RECORDED_TEST_FUNCTIONS: usize = 533;
+const RECORDED_TEST_FUNCTIONS: usize = 534;
+// 533 -> 534 on 2026-09-12: one added to `fixed_shared_scale.rs`. A `Fixed`
+// shared slot LOWERED and nothing drove it — the one combination of sixteen that
+// the kind-arm census called unexercised where the path was actually live. The
+// other fifteen are unreachable or refused, measured.
+//
 // 530 -> 533 on 2026-09-12: three added in `operand_variant_sweep.rs`, which
 // EXECUTES both sides for each operation-by-operand-type combination. The support
 // census asks whether a thing lowers; four defects showed that is a different
