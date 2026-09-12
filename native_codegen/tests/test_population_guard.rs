@@ -34,7 +34,14 @@
 ///
 /// **Derive this, do not transcribe it.** A count in this tree once read
 /// "nineteen" while the block it described held twenty-nine.
-const RECORDED_TEST_FUNCTIONS: usize = 495;
+const RECORDED_TEST_FUNCTIONS: usize = 501;
+// 495 -> 501 on 2026-09-11: six added across two new files. Four in
+// `private_init_image.rs`, for a defect the read census found: a private scalar
+// slot's declared initializer was never applied natively, because the runtime
+// applies `private_init` at load and there is no native load step. Two in
+// `memory_read_census.rs`, the third axis — what guarantees the contents of
+// memory the emitter reads but did not write.
+//
 // 494 -> 495 on 2026-09-11: one added,
 // `the_published_supplement_covers_every_byte_the_backend_writes`. The
 // initialisation words for composite slots are new persistent state, and a figure
@@ -98,7 +105,10 @@ const RECORDED_TEST_FUNCTIONS: usize = 495;
 /// followed: it rewrote a file's contents without adding or removing one.
 ///
 /// 106 -> 107 on 2026-09-11: `value_movement_census.rs` added, none removed.
-const RECORDED_TEST_FILES: usize = 107;
+///
+/// 107 -> 109 later the same day: `private_init_image.rs` and
+/// `memory_read_census.rs` added, none removed.
+const RECORDED_TEST_FILES: usize = 109;
 
 fn test_files() -> Vec<std::path::PathBuf> {
     let mut out: Vec<_> = std::fs::read_dir("tests")

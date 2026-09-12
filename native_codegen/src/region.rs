@@ -863,3 +863,80 @@ pub fn plan_call_site_regions(
     }
     out
 }
+
+/// **THE INITIAL CONTENTS OF THE PRIVATE SLOT ARRAY, FOR A HOST TO INSTALL.**
+///
+/// # The defect this closes
+///
+/// A private scalar slot carries its declared `= literal` initializer, or its
+/// type's zero, in the module's `private_init` table, and the reference runtime
+/// applies it when the module is loaded. **There is no native load step** — a
+/// host supplies the buffer — so this backend never applied it, and a program
+/// reading a slot it had not written got the host's zeros where the language
+/// promises the declared literal.
+///
+/// ```text
+/// private data log { count: Word = 7 }
+/// fn main(t: Word) -> Word { if t < 0 { log.count = 99; } log.count + 1 }
+///
+///   write skipped : reference 8, this backend 1
+/// ```
+///
+/// # It is the same weaker guarantee as [`host_arena_supplement_bytes`]
+///
+/// **A host that does not install this image is wrong in a way publishing it does
+/// not prevent.** It is stated, not enforced, exactly like the supplement figure
+/// a host must add to the runtime's sizing.
+///
+/// # Composite slots are deliberately left ZERO
+///
+/// Their `private_init` is `Unit`, which is not a body. The initialisation word
+/// added alongside the pool copy makes a read of an unwritten composite slot
+/// FAULT, matching the reference, and filling zeros here without setting that
+/// word keeps exactly that behaviour. **Setting the word would undo it.**
+///
+/// # Failure is a refusal, not a guess
+///
+/// `None` when the module carries an initializer variant this backend cannot
+/// place at a stated width. A packed guess would be a wrong value in persistent
+/// state, which is the failure mode the whole increment is about.
+pub fn private_init_image(module: &keleusma::bytecode::Module) -> Option<Vec<u8>> {
+    use keleusma::bytecode::{ConstValue, SlotVisibility};
+
+    let dl = module.data_layout.as_ref()?;
+    let private_slots = dl
+        .slots
+        .iter()
+        .filter(|s| s.visibility == SlotVisibility::Private)
+        .count();
+    let mut out = vec![0u8; private_slots * crate::PRIVATE_SLOT_BYTES as usize];
+
+    for (i, v) in dl.private_init.iter().enumerate() {
+        if i >= private_slots {
+            break;
+        }
+        // Each slot is a whole word in this backend's private ABI, so a scalar
+        // is placed as its i64 bit pattern and the reads at
+        // `PRIVATE_SLOT_BYTES` stride pick it up unchanged.
+        let bits: i64 = match v {
+            // The composite and `Text` case: not a body, and left zero so the
+            // initialisation word still reports "never written".
+            ConstValue::Unit => continue,
+            ConstValue::Bool(b) => i64::from(*b),
+            ConstValue::Int(n) | ConstValue::Fixed(n) => *n,
+            ConstValue::Byte(b) => i64::from(*b),
+            // No `cfg` gate: this package depends on `keleusma` with floats
+            // enabled and the emitter handles float values unconditionally
+            // elsewhere. A gate naming a feature this package does not declare
+            // is dead text that clippy correctly rejects.
+            ConstValue::Float(f) => f.to_bits() as i64,
+            // A string, a tuple or anything else is not a word, and this
+            // backend has no place to put it. Refuse the whole image rather
+            // than install a partially correct one.
+            _ => return None,
+        };
+        let off = i * crate::PRIVATE_SLOT_BYTES as usize;
+        out[off..off + 8].copy_from_slice(&bits.to_le_bytes());
+    }
+    Some(out)
+}

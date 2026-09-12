@@ -1,5 +1,57 @@
 # Design Journal
 
+## 2026-09-11 — [v0.3.0] A declared initializer this backend never applied, found by asking the third axis
+
+**The fifth defect of the day, and the FIRST one found deliberately.**
+
+```
+private data log { count: Word = 7 }
+fn main(t: Word, u: Word) -> Word { if t < 0 { log.count = 99; } log.count + u }
+
+  write skipped : reference 8, this backend 1
+  write taken   : reference 100, this backend 100
+```
+
+`private_init` carries the declared literal and the runtime applies it at load. **There is no native
+load step** — a host supplies the buffer — so nothing applied it, and every existing subject agreed
+because every one of them writes its slots before reading them.
+
+### How it was found, which is the point of recording it
+
+The four earlier defects shared a property: **data that outlives something**. Two censuses existed —
+how an address is FORMED, how a value is MOVED. **Neither asks what is in memory before the emitter
+reads it.** Writing that question down and asking it of all sixteen read sites put four on the
+host-provided boundary: the resume-state word, the composite initialisation words, the shared
+segment, and the private slot array — whose guarantee turned out to be a table this backend had never
+looked at.
+
+> **Four defects by accident, then one by asking.** The difference is that the question was written
+> as a census instead of being carried in someone's head.
+
+### Three of four host rows are satisfied by a zeroed buffer, which is why it hid
+
+A host that zeroes the persistent region is right about the resume-state word, right about every
+composite initialisation flag, and right about composite slots — and **wrong only about scalar
+initializers**. A plausible host is correct three times out of four. That coverage pattern is what
+lets a defect live.
+
+### A published image, not a load step
+
+`region::private_init_image` states what a host must install, exactly as `persistent_supplement_bytes`
+states how large the region must be — **the same weaker guarantee**, stated in the same voice: a host
+that ignores it is wrong in a way publishing cannot prevent.
+
+**Composite slots are deliberately left zero.** Their initializer is `Unit`, which is not a body, and
+the initialisation word added hours earlier reports "never written" precisely because those bytes are
+zero. An image that reached them would mark a slot as holding a body it does not, silently undoing the
+previous increment — so a test asserts the image stops at the slot array.
+
+### The harness change is not the fix, and the test says so
+
+Installing the image in the differential helper would make the suite green while a real host still
+got zeros. The image is published, and a test drives it **through the public surface** rather than
+through the harness's arrangement.
+
 ## 2026-09-11 — [v0.3.0] A composite slot read before it was written answered 0 where the reference faults
 
 **The fourth defect of the day, and the first one found by asking a question the previous increment

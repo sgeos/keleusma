@@ -118,6 +118,27 @@ pub fn corpus_sources() -> Vec<std::path::PathBuf> {
     out
 }
 
+/// Install the backend's published private-data image into a host buffer.
+///
+/// **The host's obligation, exercised rather than described.** If these helpers
+/// did not call it, the differential would compare a backend that never applies
+/// a declared initializer against a runtime that always does — and would pass,
+/// because every existing subject writes its slots before reading them.
+#[allow(dead_code)]
+pub fn install_private_init(m: &keleusma::bytecode::Module, privs: &mut [u64]) {
+    let bytes: &mut [u8] =
+        unsafe { core::slice::from_raw_parts_mut(privs.as_mut_ptr() as *mut u8, privs.len() * 8) };
+    install_private_init_bytes(m, bytes);
+}
+
+#[allow(dead_code)]
+pub fn install_private_init_bytes(m: &keleusma::bytecode::Module, privs: &mut [u8]) {
+    if let Some(image) = keleusma_native::region::private_init_image(m) {
+        let n = image.len().min(privs.len());
+        privs[..n].copy_from_slice(&image[..n]);
+    }
+}
+
 /// `(vm, native)` for a two-argument entry, driving the trailing pointers when
 /// the module builds composites or declares data slots.
 ///
@@ -176,7 +197,13 @@ pub fn vm_and_native_two_arg(src: &str, a: i64, b: i64) -> (i64, i64) {
         .sum();
     let mut region = vec![0u64; n_region.div_ceil(8) + 4];
     let mut shared = vec![0u8; 64];
+    // **THE PRIVATE REGION IS INSTALLED, NOT ZEROED.** A private scalar slot
+    // carries its declared initializer in the module's `private_init` table and
+    // the runtime applies it at load; there is no native load step, so the host
+    // installs the published image. A harness that zeroed this buffer reported
+    // `1` where the reference reported `8`.
     let mut privs = vec![0u64; 8];
+    install_private_init(&m, &mut privs);
 
     let nv = match np {
         2 => {
@@ -454,6 +481,7 @@ pub fn general_native_sequence(src: &str, first: i64, replies: &[i64]) -> Vec<i6
     let persistent = required_persistent_capacity_for(&m)
         + keleusma_native::region::persistent_supplement_bytes(&m) as usize;
     let mut privs = vec![0u8; persistent + 64];
+    install_private_init_bytes(&m, &mut privs);
     let mut shared = vec![0u8; 4096];
     let mut region =
         vec![0u8; keleusma_native::region::host_arena_supplement_bytes(&m) as usize + 4096];

@@ -1,0 +1,42 @@
+COMPLETION CONDITION — the private data initial image
+
+Ordering is NOT a completion criterion. Any order of the work satisfies this, and
+nothing here requires a particular branch, commit shape, or process step.
+
+All of the following hold in the tree:
+
+1. A DECLARED INITIALIZER IS OBSERVABLE NATIVELY.
+   A program that declares a private scalar data slot with a literal initializer
+   and reads it on a path that never writes it produces the same value natively
+   as on the virtual machine. The reference's value is obtained from the
+   reference, not from description.
+
+2. WRITING STILL WINS, AND ACCUMULATION STILL WORKS.
+   A slot written by the program reads back what was written, and a subject whose
+   private slot accumulates across stream cycles still agrees with the reference,
+   so the image is not being re-applied on every call.
+
+3. THE BYTES ARE PUBLISHED, NOT ONLY USED IN A TEST.
+   The backend exposes the initial private image to a host as part of its public
+   surface, alongside the figure it publishes for how large that region must be.
+   A test driving it through that public surface exists.
+
+4. COMPOSITE SLOTS STILL FAULT WHEN READ UNWRITTEN.
+   The initial image does not mark a composite slot as written; reading one that
+   the program never wrote still faults natively, matching the reference.
+
+5. WIDTHS COME FROM THE SYSTEM, NOT FROM A GUESS.
+   Each initializer variant is placed at a width the module or the target states.
+   A variant that cannot be placed causes a refusal rather than a packed guess,
+   and which variants are unsupported is written down.
+
+6. THE READ-SIDE AXIS IS ENUMERATED.
+   A single place in the tree lists every point where the emitter reads memory it
+   did not write in the same lowering, and states for each what guarantees the
+   contents. A read whose guarantee is the host's is labelled as such. It fails
+   when a new such read appears.
+
+7. NO NEW OPCODE AND NO BYTECODE_VERSION CHANGE.
+
+8. THE BACKEND SUITE IS GREEN IN BOTH FLOAT CONFIGURATIONS, with counts
+   re-derived rather than quoted.

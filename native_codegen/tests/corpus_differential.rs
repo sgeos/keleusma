@@ -1947,6 +1947,12 @@ fn run_native(
     let initial_shared = shared[..n_shared].to_vec();
     let mut privs = vec![0u64; n_priv + 1];
     privs[n_priv] = CANARY;
+    // **The host's obligation, exercised.** A private scalar slot's declared
+    // initializer lives in the module's `private_init` table and the runtime
+    // applies it at load. There is no native load step, so the host installs the
+    // published image; a harness that left this zeroed would compare a backend
+    // that never applies an initializer against a runtime that always does.
+    common::install_private_init(m, &mut privs[..n_priv]);
     let mut region = vec![0u64; n_region.div_ceil(8) + 1];
     let canary_at = n_region.div_ceil(8);
     region[canary_at] = CANARY;
