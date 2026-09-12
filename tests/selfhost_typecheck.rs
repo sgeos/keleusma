@@ -4066,6 +4066,242 @@ fn a_for_loop_variable_is_not_reported_as_an_unresolved_name() {
     );
 }
 
+/// The twelve self-hosted stage sources, as `(name, source)`.
+///
+/// **ONE DEFINITION, because two tests read it.** A second copy is a second thing
+/// to forget when a stage is added, and the capacity result and its price would
+/// then describe different corpora.
+#[cfg(feature = "self-host")]
+const REAL_STAGE_SOURCES: &[(&str, &str)] = &[
+    ("analyze", include_str!("../src/selfhost/kel/analyze.kel")),
+    ("codegen", include_str!("../src/selfhost/kel/codegen.kel")),
+    ("lexer", include_str!("../src/selfhost/kel/lexer.kel")),
+    ("parse", include_str!("../src/selfhost/kel/parse.kel")),
+    (
+        "reconstruct",
+        include_str!("../src/selfhost/kel/reconstruct.kel"),
+    ),
+    (
+        "verify_datalayout",
+        include_str!("../src/selfhost/kel/verify_datalayout.kel"),
+    ),
+    (
+        "verify_depth",
+        include_str!("../src/selfhost/kel/verify_depth.kel"),
+    ),
+    (
+        "verify_structural",
+        include_str!("../src/selfhost/kel/verify_structural.kel"),
+    ),
+    (
+        "verify_typed",
+        include_str!("../src/selfhost/kel/verify_typed.kel"),
+    ),
+    (
+        "verify_types",
+        include_str!("../src/selfhost/kel/verify_types.kel"),
+    ),
+    (
+        "verify_yield",
+        include_str!("../src/selfhost/kel/verify_yield.kel"),
+    ),
+    ("wire", include_str!("../src/selfhost/kel/wire.kel")),
+];
+
+/// Every input channel's row count for one program, as `(channel, rows, capacity)`.
+///
+/// **Named per channel rather than returned as a total**, because reporting only
+/// the largest would hide which capacity actually stops a program, and because the
+/// price measurement needs the per-channel figure.
+#[cfg(feature = "self-host")]
+fn real_source_channel_rows(ast: &keleusma::ast::Program) -> Vec<(&'static str, usize, usize)> {
+    let (mut names, mut bindings) = binding_rows(ast);
+    let frc = field_read_channel(ast, &mut names);
+    bindings.extend(frc.bindings.iter().copied());
+    let (nodes, derived) = expression_nodes_over(ast, &names, &frc.index, true);
+    for (n, idx) in derived {
+        if let Some(&id) = names.get(&n) {
+            bindings.push((id, idx, 2));
+        }
+    }
+    let (dparams, sites, arg_pairs) = decl_call_rows(ast);
+    let (sfirst, _scount, sfield, accesses, _ftag) = field_sets(ast);
+    let (declared, occurrences, _wildcard) = occurrence_rows(ast);
+    vec![
+        ("operand pairs", arg_pairs.len(), 256),
+        ("declared params", dparams.len(), 128),
+        ("call sites", sites.len(), 128),
+        ("struct types", sfirst.len(), 64),
+        ("declared fields", sfield.len(), 256),
+        ("field accesses", accesses.len(), 256),
+        ("declared names", declared.len(), 128),
+        ("name occurrences", occurrences.len(), 256),
+        ("expression nodes", nodes.len(), 256),
+        ("bindings", bindings.len(), 128),
+        ("struct bindings", frc.sbinds.len(), 128),
+        ("field reads", frc.reads.len(), 128),
+        ("pattern binds", frc.pattern_binds.len(), 128),
+        ("payload decls", frc.payload_decls.len(), 128),
+    ]
+}
+
+/// **WHAT SIZING THE CHANNELS TO THE REAL CORPUS WOULD COST, IN WORDS.**
+///
+/// # Why this number and not the multiple
+///
+/// [`the_stage_is_measured_against_the_real_stage_sources`] reports that two of
+/// twelve real sources fit and that `parse.kel` needs twenty-two times the
+/// expression-node cap. **A multiple is not actionable.** The caps are shared-data
+/// array lengths, so the price of closing the gap is words of shared data, which
+/// is worst-case memory usage — the thing this project exists to bound.
+///
+/// The shared ceiling is sixteen megabytes, so nothing here is architecturally
+/// blocked. **This is a price, and it was unknown.**
+///
+/// # This is a measurement, not a proposal
+///
+/// Sizing shared data upward is a worst-case-memory change and is the operator's
+/// decision. Nothing in this increment changes a capacity; a measurement and the
+/// change it argues for should not land together, or neither can be judged on its
+/// own.
+///
+/// # Where the multiplier comes from, because getting it wrong ruins the number
+///
+/// A channel is a NAME, and several names cover more than one parallel array: the
+/// occurrence channel is three arrays sharing one cap, the expression channel is
+/// five. Growing a channel costs the row delta times its array count. The counts
+/// below are read off the stage's data block and checked against it by
+/// [`the_channel_array_counts_match_the_stage_data_block`], so a name added there
+/// without updating this table fails rather than quietly skewing the total.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_price_of_a_corpus_sized_input_path_is_measured_in_words() {
+    // `(channel, current cap, parallel arrays sharing it)`.
+    const CHANNELS: &[(&str, usize, usize)] = &[
+        ("operand pairs", 256, 2),    // lhs, rhs
+        ("call arity", 128, 2),       // cdecl, cact
+        ("claims", 256, 2),           // qact, qreq
+        ("membership", 256, 1),       // member
+        ("declared params", 128, 1),  // dparams
+        ("call sites", 128, 2),       // csite, cargs
+        ("struct types", 64, 2),      // sfirst, scount
+        ("declared fields", 256, 2),  // sfield, sftag
+        ("field accesses", 256, 2),   // atype, aname
+        ("declared names", 128, 1),   // dname
+        ("name occurrences", 256, 3), // oname, olocal, ocall
+        ("expression nodes", 256, 5), // ekind, ea, eb, eaf, ebf
+        ("bindings", 128, 4),         // bname, btag, bform, and tyb.bres
+        ("struct bindings", 128, 3),  // sbname, sbval, sbform
+        ("field reads", 128, 2),      // fbbase, fbfield
+        ("pattern binds", 128, 4),    // pbname, pbenum, pbvar, pbpos
+        ("payload decls", 128, 4),    // epenum, epvar, eppos, epty
+    ];
+
+    // The corpus maximum per channel, MEASURED from the sources rather than
+    // restated: a hardcoded figure is one that goes stale the moment a stage grows.
+    let mut needed: std::collections::BTreeMap<&str, usize> =
+        CHANNELS.iter().map(|(n, _, _)| (*n, 0)).collect();
+    for (_, src) in REAL_STAGE_SOURCES {
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+        for (name, rows, _) in real_source_channel_rows(&program) {
+            let e = needed.entry(name).or_insert(0);
+            *e = (*e).max(rows);
+        }
+    }
+
+    let current: usize = CHANNELS.iter().map(|(_, cap, arrays)| cap * arrays).sum();
+    let sized: usize = CHANNELS
+        .iter()
+        .map(|(name, cap, arrays)| {
+            let want = needed.get(name).copied().unwrap_or(0).max(*cap);
+            want * arrays
+        })
+        .sum();
+
+    std::eprintln!("CORPUS-SIZED INPUT PATH");
+    for (name, cap, arrays) in CHANNELS {
+        let want = needed.get(name).copied().unwrap_or(0);
+        if want > *cap {
+            std::eprintln!(
+                "  {name}: {cap} -> {want} rows x{arrays} arrays = +{} words",
+                (want - cap) * arrays
+            );
+        }
+    }
+    std::eprintln!(
+        "  TOTAL: {current} words now, {sized} words corpus-sized ({:.1}x), \
+         +{} words = +{} KiB at 8 bytes a word",
+        sized as f64 / current as f64,
+        sized - current,
+        (sized - current) * 8 / 1024
+    );
+
+    // NON-VACUITY. A run where nothing needs growing would mean the corpus does not
+    // exceed the caps, which contradicts the capacity measurement this exists to
+    // price.
+    assert!(
+        sized > current,
+        "no channel needs growing, which contradicts the capacity result. Either \
+         the caps were raised -- in which case price the NEW gap -- or this is not \
+         reading the sources"
+    );
+}
+
+/// **THE ARRAY COUNTS ABOVE ARE CHECKED, NOT ASSERTED.**
+///
+/// The price depends on how many parallel arrays share each capacity, and a name
+/// added to the stage's data block without updating that table would skew the
+/// total silently. So the shared block's own array declarations are counted here
+/// and compared against the sum the price table claims.
+///
+/// **Read from the stage source rather than from a copy**, for the reason
+/// `declared_max_steps` is: a bound written in two places is a bound that drifts.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_channel_array_counts_match_the_stage_data_block() {
+    // Every `name: [Word; N],` line in the shared block, as `(name, N)`.
+    let declared: Vec<(String, usize)> = TYPES_KEL
+        .lines()
+        .filter_map(|l| {
+            let t = l.trim();
+            let (name, rest) = t.split_once(": [Word; ")?;
+            let n = rest.strip_suffix("],")?;
+            Some((name.to_string(), n.parse().ok()?))
+        })
+        .collect();
+
+    assert!(
+        declared.len() > 30,
+        "only {} shared arrays were parsed out of the stage source, so the parse is \
+         wrong rather than the stage being small",
+        declared.len()
+    );
+
+    // The price table's arrays, summed.
+    //
+    // **`tyb.bres` IS COUNTED ON BOTH SIDES, and subtracting it was wrong.** It
+    // lives in the stage's PRIVATE block rather than the shared one, so the first
+    // version of this check excluded it from the price and compared 41 against 42.
+    // But the scan above matches any `name: [Word; N],` line and the private block
+    // uses the same shape, so `bres` is in `declared` too -- and it belongs in the
+    // price, because it is sized to the binding table and grows with it.
+    //
+    // The lesson is narrow and worth keeping: **a count is only comparable to
+    // another count when both sides are drawn from the same population**, and here
+    // one side was "shared arrays" while the other was "arrays".
+    let priced: usize = 2 + 2 + 2 + 1 + 1 + 2 + 2 + 2 + 2 + 1 + 3 + 5 + 4 + 3 + 2 + 4 + 4;
+    assert_eq!(
+        priced,
+        declared.len(),
+        "the price table accounts for {} arrays and the stage declares {}. A name \
+         added to a data block without updating the table would skew the price \
+         silently, which is what this check exists to prevent: {:?}",
+        priced,
+        declared.len(),
+        declared.iter().map(|(n, _)| n).collect::<Vec<_>>()
+    );
+}
+
 /// **THE STAGE AGAINST TWELVE REAL PROGRAMS, NOT TWELVE SNIPPETS.**
 ///
 /// # Why real programs
@@ -4095,79 +4331,18 @@ fn a_for_loop_variable_is_not_reported_as_an_unresolved_name() {
 #[cfg(feature = "self-host")]
 #[test]
 fn the_stage_is_measured_against_the_real_stage_sources() {
-    const STAGES: &[(&str, &str)] = &[
-        ("analyze", include_str!("../src/selfhost/kel/analyze.kel")),
-        ("codegen", include_str!("../src/selfhost/kel/codegen.kel")),
-        ("lexer", include_str!("../src/selfhost/kel/lexer.kel")),
-        ("parse", include_str!("../src/selfhost/kel/parse.kel")),
-        (
-            "reconstruct",
-            include_str!("../src/selfhost/kel/reconstruct.kel"),
-        ),
-        (
-            "verify_datalayout",
-            include_str!("../src/selfhost/kel/verify_datalayout.kel"),
-        ),
-        (
-            "verify_depth",
-            include_str!("../src/selfhost/kel/verify_depth.kel"),
-        ),
-        (
-            "verify_structural",
-            include_str!("../src/selfhost/kel/verify_structural.kel"),
-        ),
-        (
-            "verify_typed",
-            include_str!("../src/selfhost/kel/verify_typed.kel"),
-        ),
-        (
-            "verify_types",
-            include_str!("../src/selfhost/kel/verify_types.kel"),
-        ),
-        (
-            "verify_yield",
-            include_str!("../src/selfhost/kel/verify_yield.kel"),
-        ),
-        ("wire", include_str!("../src/selfhost/kel/wire.kel")),
-    ];
+    // ONE DEFINITION of the corpus and of the table walk, hoisted to file scope so
+    // the capacity result and its PRICE cannot come to describe different corpora.
+    let stages = REAL_STAGE_SOURCES;
 
     // `(table, rows, capacity)`. Named per table, because reporting only the
     // largest would hide which one actually binds.
-    fn tables(ast: &keleusma::ast::Program) -> Vec<(&'static str, usize, usize)> {
-        let (mut names, mut bindings) = binding_rows(ast);
-        let frc = field_read_channel(ast, &mut names);
-        bindings.extend(frc.bindings.iter().copied());
-        let (nodes, derived) = expression_nodes_over(ast, &names, &frc.index, true);
-        for (n, idx) in derived {
-            if let Some(&id) = names.get(&n) {
-                bindings.push((id, idx, 2));
-            }
-        }
-        let (dparams, sites, arg_pairs) = decl_call_rows(ast);
-        let (sfirst, _scount, sfield, accesses, _ftag) = field_sets(ast);
-        let (declared, occurrences, _wildcard) = occurrence_rows(ast);
-        vec![
-            ("operand pairs", arg_pairs.len(), 256),
-            ("declared params", dparams.len(), 128),
-            ("call sites", sites.len(), 128),
-            ("struct types", sfirst.len(), 64),
-            ("declared fields", sfield.len(), 256),
-            ("field accesses", accesses.len(), 256),
-            ("declared names", declared.len(), 128),
-            ("name occurrences", occurrences.len(), 256),
-            ("expression nodes", nodes.len(), 256),
-            ("bindings", bindings.len(), 128),
-            ("struct bindings", frc.sbinds.len(), 128),
-            ("field reads", frc.reads.len(), 128),
-            ("pattern binds", frc.pattern_binds.len(), 128),
-            ("payload decls", frc.payload_decls.len(), 128),
-        ]
-    }
+    let tables = real_source_channel_rows;
 
     let mut fits: Vec<&str> = Vec::new();
     let mut overflows: Vec<(&str, String)> = Vec::new();
 
-    for (name, src) in STAGES {
+    for (name, src) in stages {
         let program = parse(&tokenize(src).expect("lex")).expect("parse");
 
         // **THE REFERENCE MUST ACCEPT IT**, established rather than assumed. A
@@ -4206,12 +4381,12 @@ fn the_stage_is_measured_against_the_real_stage_sources() {
     std::eprintln!(
         "REAL-SOURCE CAPACITY: {} of {} stage sources fit the input channels",
         fits.len(),
-        STAGES.len()
+        stages.len()
     );
     // THE MULTIPLE, which is the crisp statement of the distance. Reporting "does
     // not fit" alone would leave a reader unable to tell a near miss from an order
     // of magnitude.
-    let worst_multiple = STAGES
+    let worst_multiple = stages
         .iter()
         .map(|(name, src)| {
             let program = parse(&tokenize(src).expect("lex")).expect("parse");
@@ -4238,7 +4413,7 @@ fn the_stage_is_measured_against_the_real_stage_sources() {
 
     // Where everything fits, the verdict is measurable, and a rejection is a FALSE
     // REJECTION on real code rather than a difference of opinion.
-    for (name, src) in STAGES.iter().filter(|(n, _)| fits.contains(n)) {
+    for (name, src) in stages.iter().filter(|(n, _)| fits.contains(n)) {
         assert!(
             stage_verdict_resolving(src),
             "{name}: the stage REJECTS a real source the reference accepts. This is \

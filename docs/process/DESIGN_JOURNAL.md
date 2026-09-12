@@ -13,6 +13,63 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (fifty-eighth) — the price of a corpus-sized input path, in words
+
+### WHY A PRICE AND NOT A MULTIPLE
+
+The capacity measurement reports two of twelve real sources fitting, and `parse.kel` needing
+twenty-two times the expression-node cap. **A multiple is not actionable.** The caps are shared-data
+array lengths, so the cost of closing the gap is words of shared data — worst-case memory usage,
+which is the thing this project exists to bound. The shared ceiling is sixteen megabytes, so nothing
+is architecturally blocked. It is a price, and it was unknown.
+
+### THE NUMBER
+
+**7,424 words today. 54,301 words sized to the corpus. 7.3 times, or +366 KiB at eight bytes a
+word.**
+
+| channel | now | corpus | arrays | extra words |
+|---|---|---|---|---|
+| expression nodes | 256 | 5,632 | 5 | +26,880 |
+| name occurrences | 256 | 3,874 | 3 | +10,854 |
+| call sites | 128 | 1,730 | 2 | +3,204 |
+| bindings | 128 | 831 | 4 | +2,812 |
+| operand pairs | 256 | 1,452 | 2 | +2,392 |
+| declared names | 128 | 499 | 1 | +371 |
+| declared params | 128 | 492 | 1 | +364 |
+
+**The expression channel alone is 57% of the growth**, because it is five parallel arrays and the
+widest gap. Anything that reduced its row count — or its arity — would dominate any other saving.
+
+### THIS IS A MEASUREMENT AND NOT A PROPOSAL
+
+Sizing shared data upward is a worst-case-memory change and is the operator's decision. **Nothing in
+this increment changes a capacity.** A measurement and the change it argues for should not land
+together, or neither can be judged on its own.
+
+### THE MULTIPLIER IS CHECKED, BECAUSE GETTING IT WRONG RUINS THE NUMBER
+
+A channel is a NAME and several names cover more than one parallel array: the occurrence channel is
+three, the expression channel five. The price is the row delta times the array count, so a name
+added to a data block without updating the table would skew the total silently. A second test counts
+the stage's own array declarations and compares.
+
+**And that check caught me on its first run.** It subtracted the one PRIVATE array from the price
+before comparing, on the reasoning that `tyb.bres` is not shared — but the scan matches any
+`name: [Word; N],` line and the private block uses the same shape, so `bres` was on both sides. It
+belongs in the price too, being sized to the binding table.
+
+**A count is only comparable to another count when both sides are drawn from the same population.**
+One side was "shared arrays" and the other was "arrays".
+
+### ONE DEFINITION OF THE CORPUS
+
+The stage list and the per-channel table walk were local to the capacity test and are now file-scope
+items both tests read. A second copy is a second thing to forget when a stage is added, and the
+capacity result and its price would then describe different corpora.
+
+---
+
 ## 2026-09-11 (fifty-seventh) — a census of binders, and it found two more false rejections
 
 ### WHY A CENSUS AND NOT ANOTHER FIX
