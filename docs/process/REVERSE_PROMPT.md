@@ -8,6 +8,47 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ---
 
+# CURRENT STATE — READ THIS BLOCK, THEN STOP
+
+**2026-09-12, session 65, through the seventy-third increment.**
+
+**Where the work is.** The type-rejection input path now carries **ten of twelve** real `.kel` stage
+sources, up from two, at **1.6x** the shared data it uses today rather than 7.3x — a growth of
+**+33 KiB** against a 16 MB ceiling, across six verdict-preserving reductions.
+
+**What is next, and it is YOURS.** Closing the last two sources is a **capacity decision**, not
+another reduction. `parse` needs about 192 where the caps are 128; `wire` needs roughly four times,
+dominated by declaration-indexed tables no reduction reaches. The four standing operator decisions
+are unchanged and still block the language-surface work they name.
+
+**What is next that is NOT yours.** Three self-hosted-parser gaps remain, all traced and all
+**feature work**: the variable and struct match patterns need new arm semantics, and `assert` needs
+a token code, a lexer arm, statement parsing and emission through two more stages. A fourth gap —
+the bare enum unit-variant pattern the grammar documents — was a missing branch and is fixed.
+
+**Before trusting any green run**, read *"How a green local run has actually lied"* in
+[`CLAUDE.md`](../../CLAUDE.md): six observed ways a verification run reported success while covering
+less than assumed. Two of the six were paid for in this session's last two increments.
+
+**Detail per increment** is in [`DESIGN_JOURNAL.md`](./DESIGN_JOURNAL.md), newest first. It is the
+source of truth for reasoning; this block is the source of truth for state.
+
+---
+
+## EVERYTHING BELOW THIS LINE IS SUPERSEDED HISTORY
+
+**It is retained for provenance and is NOT current.** Sections below describe the state as it was
+when each was written, and several have been corrected since — by name, in the journal.
+
+**This file is specified as the BOUNDED latest-state channel and has re-accreted to nearly 1,800
+lines.** It was split once before, when it reached about 362 KB, for the same reason: each session
+prepends a section and keeps the rest, so "bounded" becomes nominal while the file still claims it.
+The block above exists so a resuming reader can stop at the line rather than reconstruct currency
+from a stack of dated sections. **Nothing below was deleted**, because it is other sessions' record
+and trimming it is not this session's call.
+
+---
+
 ## Last Updated
 
 **Date**: 2026-09-12 (session 65, through the sixty-fourth increment) — the type-rejection input path went from carrying two of twelve real stage sources to TEN, and from 7.3x the shared data to 1.6x, across six verdict-preserving reductions; what is left is a CAPACITY DECISION rather than another reduction

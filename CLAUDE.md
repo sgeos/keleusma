@@ -197,6 +197,26 @@ run the full `scripts/release-gate.sh` (which includes `cargo doc -D warnings`) 
 follow [`docs/process/RELEASE_PROCESS.md`](docs/process/RELEASE_PROCESS.md). Skipping
 the doc build is how V0.2.1 shipped with a red CI Doc job.
 
+### How a green local run has actually lied
+
+Six observed ways a verification run reported success while covering less than assumed.
+**The common property is that the run did less than the person reading it believed**, so
+the corrective is knowing what a command covers, not running more commands. Each was paid
+for once; the detail is in [`docs/process/DESIGN_JOURNAL.md`](docs/process/DESIGN_JOURNAL.md).
+
+| how it under-reported | what distinguishes it |
+|---|---|
+| Guards ran **before** the last edit | Check the guard's start time against the file's mtime, or re-run after the final change |
+| `-p keleusma --test X` never enables `self-host`; `--workspace` unifies it on | A single-package run and a workspace run are different feature sets; dead-code warnings differ between them for this reason |
+| `cargo test` stops at the **first** failing binary | A "1 failed" summary is not "1 failure in the tree"; `nextest` runs them all |
+| A run whose subject was edited **while it was in flight** | Its result belongs to no tree. Discard it rather than reading it as a pass |
+| A **cached** `clippy` run prints nothing whether or not warnings exist | `touch` a source first; zero warnings from a warm target directory is not evidence |
+| A log **truncated** by `tail`/`head` looks identical to a clean one | Capture the whole output and the exit status when the result will be quoted |
+
+**Not exhaustive.** Six found across one session is evidence that more exist, not that
+these are all of them. A run that is about to justify a claim deserves the question
+"what did this command actually cover?" before the claim is made.
+
 ## Coding Conventions
 
 ### no_std + alloc
