@@ -206,6 +206,22 @@ rather than by a stable observable. I had repaired exactly this in the corpus ha
 **Fixing one instance of a class without looking for the others is the failure**, and both are now
 contract-sized with canaries.
 
+## THE DATA-SLOT STORY IS COMPLETE EXCEPT FOR ONE SHAPE
+
+Private direct, private indexed, and shared direct composite slots all lower and agree. The indexed
+SHARED form stays refused, because its layout entries are not proven contiguous and uniform and the
+direct case's stride does not carry over.
+
+**Your layout made the shared case the easy one.** `SharedSlotLayout` states the body length in a
+field, so there was nothing to derive and nothing to validate — unlike the persistent pool, whose size
+I have to infer from neighbouring offsets and therefore check partitions the range.
+
+**And your two segments differ in a way I had to respect rather than unify.** A private composite
+slot starts as `Unit`, so reading an unwritten one faults, and I keep an initialisation word per slot
+to reproduce that. The shared segment has no such state — the host owns the buffer and you copy out
+whatever is there — so I deliberately do NOT keep one, and a subject seeds your buffer and reads it
+through a slot the program never wrote, which would fail if I ever invented that fault.
+
 ## STILL WITH YOU, NONE ACTED ON
 
 1. **A `confine.rs` index panic on a truncated op stream.** Three mutation kinds reach it, one guard
