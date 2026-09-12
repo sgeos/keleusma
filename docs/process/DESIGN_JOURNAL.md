@@ -13,6 +13,123 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (fifty-ninth) — two thirds of the expression table cannot decide anything
+
+### THE LEVER THE PRICE IDENTIFIED
+
+The price measurement found the expression channel to be 57% of the cost of a corpus-sized input
+path -- five parallel arrays across the widest gap -- and said that anything reducing its row count
+would dominate every other saving. This is that reduction.
+
+### THE MEASUREMENT
+
+A row of an agreement kind rejects only when both sides resolve to a known tag and differ; a
+condition row only when its operand resolves to something other than `bool`. An operand the host
+reported as "could not tell" is treated by that predicate as no evidence, so such a row **cannot
+change any verdict**.
+
+**Measured across the twelve real sources: 10,353 of 15,498 rows, 67%.** Per stage it ranges from
+58% (`wire`) to 85% (`verify_datalayout`).
+
+### WHY THE CRITERION IS ADMISSIBLE
+
+**It is SYNTACTIC.** The host declines to send a row it has nothing to say about. Eliding on "this
+operand RESOLVES to unknown" would be different in kind -- it would have the host perform the join
+the stage exists to perform -- and that version is not available to this side at all.
+
+### THE ARGUMENT IS NOT ENOUGH ON ITS OWN
+
+**An optimisation whose only evidence is that the suite still passes is an optimisation nobody
+checked.** So the same programs run with elision on and off and the verdicts must agree, over the
+real sources that fit, over derived-binding chains, and over a mixed corpus with both verdicts
+represented. The differential also asserts the elision actually removes rows, since a criterion that
+elided nothing would satisfy everything else.
+
+**The part most likely to be wrong is the index remap**, not the criterion. A form-2 binding row
+carries its initialiser's INDEX into this table, so dropping rows without remapping would point
+later bindings at the wrong node -- and at a node that EXISTS, so it would resolve to a plausible
+wrong tag rather than fail loudly. The derived-chain cases exist for that and nothing else. A
+derived binding whose own node is elided is DROPPED rather than repointed, which is verdict-
+preserving for a reason worth stating: an inert node yields UNKNOWN from `tyb_node_tag`, and a name
+with no binding row resolves to UNKNOWN as well. Same answer, different route.
+
+### THE EFFECT
+
+| | before | after |
+|---|---|---|
+| corpus-sized shared data | 54,301 words, 7.3x | 34,781 words, 4.7x |
+| growth over today | +366 KiB | +213 KiB |
+| real sources that fit | 2 of 12 | **3 of 12** |
+| tightest constraint anywhere | `parse` expression nodes, 22x | `wire` name occurrences, 15x |
+
+`verify_structural` crossed under the caps. **The binding constraint has moved off the expression
+channel entirely** -- the next saving, if one is wanted, is in the occurrence channel.
+
+### A PIN DOING ITS JOB
+
+The capacity test pins which sources fit, and its failure message says a stage JOINING the set is
+progress worth recording. It failed, and that is how the third one announced itself rather than
+slipping past in a log line.
+
+---
+
+## 2026-09-12 (fifty-eighth) — the price of a corpus-sized input path, in words
+
+### WHY A PRICE AND NOT A MULTIPLE
+
+The capacity measurement reports two of twelve real sources fitting, and `parse.kel` needing
+twenty-two times the expression-node cap. **A multiple is not actionable.** The caps are shared-data
+array lengths, so the cost of closing the gap is words of shared data — worst-case memory usage,
+which is the thing this project exists to bound. The shared ceiling is sixteen megabytes, so nothing
+is architecturally blocked. It is a price, and it was unknown.
+
+### THE NUMBER
+
+**7,424 words today. 54,301 words sized to the corpus. 7.3 times, or +366 KiB at eight bytes a
+word.**
+
+| channel | now | corpus | arrays | extra words |
+|---|---|---|---|---|
+| expression nodes | 256 | 5,632 | 5 | +26,880 |
+| name occurrences | 256 | 3,874 | 3 | +10,854 |
+| call sites | 128 | 1,730 | 2 | +3,204 |
+| bindings | 128 | 831 | 4 | +2,812 |
+| operand pairs | 256 | 1,452 | 2 | +2,392 |
+| declared names | 128 | 499 | 1 | +371 |
+| declared params | 128 | 492 | 1 | +364 |
+
+**The expression channel alone is 57% of the growth**, because it is five parallel arrays and the
+widest gap. Anything that reduced its row count — or its arity — would dominate any other saving.
+
+### THIS IS A MEASUREMENT AND NOT A PROPOSAL
+
+Sizing shared data upward is a worst-case-memory change and is the operator's decision. **Nothing in
+this increment changes a capacity.** A measurement and the change it argues for should not land
+together, or neither can be judged on its own.
+
+### THE MULTIPLIER IS CHECKED, BECAUSE GETTING IT WRONG RUINS THE NUMBER
+
+A channel is a NAME and several names cover more than one parallel array: the occurrence channel is
+three, the expression channel five. The price is the row delta times the array count, so a name
+added to a data block without updating the table would skew the total silently. A second test counts
+the stage's own array declarations and compares.
+
+**And that check caught me on its first run.** It subtracted the one PRIVATE array from the price
+before comparing, on the reasoning that `tyb.bres` is not shared — but the scan matches any
+`name: [Word; N],` line and the private block uses the same shape, so `bres` was on both sides. It
+belongs in the price too, being sized to the binding table.
+
+**A count is only comparable to another count when both sides are drawn from the same population.**
+One side was "shared arrays" and the other was "arrays".
+
+### ONE DEFINITION OF THE CORPUS
+
+The stage list and the per-channel table walk were local to the capacity test and are now file-scope
+items both tests read. A second copy is a second thing to forget when a stage is added, and the
+capacity result and its price would then describe different corpora.
+
+---
+
 ## 2026-09-11 (fifty-seventh) — a census of binders, and it found two more false rejections
 
 ### WHY A CENSUS AND NOT ANOTHER FIX
