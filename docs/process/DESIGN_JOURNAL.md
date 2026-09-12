@@ -13,6 +13,53 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (seventy-fourth) — the bounded channel was not bounded, and the split did not fix it
+
+### TREATING THE ROOT INSTEAD OF REPEATING THE REMEDY
+
+Two increments ago I recorded that **"a channel that has to be rewritten rather than appended to
+will drift, and it drifts fastest when the work is going well"** — then refreshed the reverse prompt
+and moved on. Nine increments later it had drifted again, for exactly the reason named. Refreshing
+it a second time would have been treating the symptom twice.
+
+### THE MEASUREMENT
+
+`REVERSE_PROMPT.md` is specified as the BOUNDED latest-state channel. **It was near 1,800 lines.**
+
+The design journal's own header records why the two were split on 2026-07-22: the reverse prompt had
+accreted to about 362 KB, "contrary to the overwrite-each-task spec". **The split did not stop the
+accretion.** In practice "overwritten" means each session PREPENDS a section and keeps the rest, so
+the same mechanism produced the same result at a smaller scale.
+
+### THE PROPERTY THAT ACTUALLY MATTERS
+
+Two properties were conflated, and only one of them is load-bearing:
+
+- **Bounded SIZE** did not hold, and has not held twice now.
+- **Bounded CURRENCY** — a reader being able to tell what is true *now* — is the property the
+  channel exists for.
+
+Currency is recoverable without deleting anything: the file now opens with a short current-state
+block and an explicit line after which everything is **superseded history, retained for
+provenance**. A resuming reader stops at the line instead of reconstructing currency from a stack of
+dated sections.
+
+### WHY NOT TRIM
+
+The history below that line is other sessions' record. **Deleting it is not a decision a session
+should take for itself**, and the currency problem does not require it. Recording the reasoning for
+the restraint matters as much as the restraint: a later session that decides trimming IS warranted
+should be overruling an argument, not discovering an absence.
+
+### THE SPEC NOW CARRIES IT
+
+`COMMUNICATION.md` records the measurement, the distinction between bounded size and bounded
+currency, and why keeping the current block SHORT is what makes the rewrite cheap enough to actually
+happen. **Putting it in the spec rather than in this journal is the same move as the previous
+increment's**: a finding recorded only where history accumulates is a finding nobody acts on.
+
+---
+
 ## 2026-09-12 (seventy-third) — six ways a green run has lied, in one reachable place
 
 ### WHY CONSOLIDATE RATHER THAN ADD A SEVENTH ENTRY

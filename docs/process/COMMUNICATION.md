@@ -15,6 +15,14 @@ This document defines the protocol for structured communication between the huma
 
 `REVERSE_PROMPT.md` is bounded and overwritten each task; long-lived design reasoning that would otherwise make it grow without bound is appended to `DESIGN_JOURNAL.md` instead. The two were split on 2026-07-22 when `REVERSE_PROMPT.md` had accreted to ~362 KB (process-audit item 5).
 
+**THE SPLIT DID NOT STOP THE ACCRETION, and saying so is the point.** Measured 2026-09-12: the file was near 1,800 lines again, because "overwritten" in practice means each session PREPENDS a section and keeps the rest. The mechanism is the same one that produced the 362 KB, and it will recur.
+
+**Two properties are worth distinguishing, because only one of them held.** Bounded SIZE did not. Bounded CURRENCY — a reader being able to tell what is true now — is the property that actually matters, and it is recoverable without deleting anyone's record: the file opens with a short current-state block and an explicit line after which everything is superseded history. A resuming reader stops at the line.
+
+**Why not simply trim.** The history below that line is other sessions' record. Deleting it is not a decision a session should take for itself, and the currency problem does not require it.
+
+**A channel that must be REWRITTEN rather than appended to will drift, and it drifts fastest when the work is going well** — deciding what the current state *is* costs effort exactly when increments are dense. Keeping the current block short is what makes the rewrite cheap enough to actually happen.
+
 These channels are single-writer and assume one active session. When more than one agent works concurrently, they must not overwrite each other. Each parallel agent writes a per-branch handoff under [`handoffs/`](./handoffs/README.md) instead of overwriting `REVERSE_PROMPT.md`, appends branch-tagged entries to `DESIGN_JOURNAL.md`, and edits only its own claimed `TASKLOG.md` row. See [`PARALLEL_DEVELOPMENT.md`](./PARALLEL_DEVELOPMENT.md) section 3 for the full parallel-channel protocol.
 
 ## Forward Prompt
