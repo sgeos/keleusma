@@ -10,7 +10,25 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
-**2026-09-12, session 65, through the eighty-first increment.**
+**2026-09-12, session 65, through the eighty-sixth increment.**
+
+**A CLASSIFIED "SCOPE GAP" LOOKS LIKE A DEFECT, AND IT IS YOURS TO CALL.** The boundary table
+carries `scope/float_arith__GAP` as `Diverges`, filed under "out of scope for the self-hosted
+subset". Measured per operator: float `+`, `-` and `*` diverge because the SELF-HOSTED codegen emits
+the CHECKED opcode (`CheckedAdd`, `CheckedSub`, `CheckedMul`) where the reference emits the plain
+one. Float division, float comparison, and passing float values around all COMPILE, and the same
+three operators on `Word` agree — so this is specific to the float path, not to arithmetic.
+
+The module comment of `tests/float_arith_width.rs` records that plain `+` on floats emits the
+unchecked `Op::Add` and "never the checked path", and float overflow is not a trap condition, so the
+checked form has nothing to check. **The self-hosted side appears to be the wrong one.** That is an
+inference from documented intent, not a verdict, and the rule that a divergence does not say which
+side is wrong still stands — the reference was the wrong side on 2026-08-31.
+
+**Not fixed, deliberately.** The fix is in `codegen.kel`, a stage source, and stage sources bear on
+the pending capacity question. Characterised instead, per operator, in
+`tests/selfhost_float_boundary.rs`. **A scope boundary is a decision; a defect is a bug. This is
+filed as the first and may be the second.**
 
 **Where the work is.** The type-rejection input path now carries **ten of twelve** real `.kel` stage
 sources, up from two, at **1.6x** the shared data it uses today rather than 7.3x — a growth of
@@ -44,6 +62,23 @@ source was touched and the pinned worst-case blob does not move. A guard asserts
 nothing in any of the eleven driver-read stage sources, which all compile through the subset; it is
 mutation-tested, and asserts each source parses first, since an unparseable source would make the
 scan return nothing for an unrelated reason.
+
+**THE FLOAT BOUNDARY IS THE LITERAL, NOT THE TYPE**, and measuring it stopped a wrong entry going
+into that list. `fn f(a: Float) -> Float { a }` compiles and matches the reference byte for byte; a
+float literal is refused. Both halves are pinned. **The stage-source guard would NOT have caught the
+mistake**, because no stage source uses a float type — it covers constructs the stages happen to
+use and is not a general check that the list is right.
+
+**The divergence refusal was measured and found ADEQUATE**: it already names the offending chunk,
+and the op-level message names the chunk, the op index and both ops. No code changed; it is pinned,
+including that it assigns no fault, since the reference has been the divergent side before.
+
+**THE ERROR TYPE'S THREE VARIANTS ARE NOW ALL MEASURED, AND THIS VEIN IS EXHAUSTED.** A non-host
+target says it supports only the host width and keeps the retry hint; a reference-rejected program
+surfaces the reference's own error and SUPPRESSES the hint, correctly, since the reference would
+fail identically — and that suppression was already tested in `tests/self_hosted_backend.rs`. Only
+`Unsupported` needed work, and it got it. **Nothing further here is available without either
+touching a stage source, which prejudges the capacity decision, or an operator ruling.**
 
 **MEASURED SINCE, ON THE PATH THAT MATTERS: all four are refused with an `Err` by
 `self_hosted_compile`, the entry point behind `--compiler self-hosted`, and an ordinary program

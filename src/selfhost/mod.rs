@@ -7493,10 +7493,17 @@ pub fn wire_windowed_via_kel(
 /// is absent because its support was never measured, and guessing would attach a confident
 /// noun to a failure that may have nothing to do with it.
 ///
+/// The float entry is the sharpest case of that rule. "Floats are outside the subset" is
+/// the loose summary; what is measurably outside is the LITERAL. A function taking and
+/// returning `Float` compiles and matches the reference byte for byte, so listing the type
+/// would attach a confident and wrong noun to every such program that failed for an
+/// unrelated reason. No stage source uses a float type, so the stage-source guard would not
+/// have caught that mistake either.
+///
 /// Returns the description and the 1-based source line, choosing the earliest occurrence so
 /// the message is deterministic when a program contains several.
 fn name_unsupported_construct(src: &str) -> Option<(String, u32)> {
-    use crate::ast::{Expr, Pattern, Stmt};
+    use crate::ast::{Expr, Literal, Pattern, Stmt};
     use crate::visitor::Visitor;
 
     // The reference has already accepted this source by the time a refusal is built, so a
@@ -7531,6 +7538,21 @@ fn name_unsupported_construct(src: &str) -> Option<(String, u32)> {
                 Expr::Call { name, span, .. } if name.contains("::") => {
                     self.found
                         .push((span.line, span.start, format!("a qualified call `{name}`")));
+                }
+                // **THE LITERAL, NOT THE TYPE.** Measured 2026-09-12: a float-typed identity
+                // function compiles and matches the reference byte for byte, so `Float` in a
+                // signature is INSIDE the subset. A float literal is not. Naming the type
+                // here would have blamed a supported construct, and the stage-source guard
+                // would not have caught it, since no stage source uses a float type.
+                Expr::Literal {
+                    value: Literal::Float(_),
+                    span,
+                } => {
+                    self.found.push((
+                        span.line,
+                        span.start,
+                        "a floating-point literal".to_string(),
+                    ));
                 }
                 _ => {}
             }
@@ -8015,7 +8037,7 @@ mod typecheck_input_feasibility {
 
 #[cfg(test)]
 mod construct_naming_guard {
-    use super::{name_unsupported_construct, parse, read_stage, tokenize};
+    use super::{name_unsupported_construct, parse, read_stage, self_hosted_compile, tokenize};
 
     /// The eleven stage sources the driver reads. `verify_types.kel` is embedded by its own
     /// tests rather than by `read_stage`, so it is not reachable here.
@@ -8078,6 +8100,118 @@ mod construct_naming_guard {
                  the subset supports. Remove it from the list rather than excluding this \
                  source",
                 name_unsupported_construct(&src)
+            );
+        }
+    }
+
+    /// **EVERY CONSTRUCT THE SCAN CAN NAME IS REALLY OUTSIDE THE SUBSET.**
+    ///
+    /// This is the check the stage-source guard cannot perform, and the one that would have
+    /// caught the mistake recorded below.
+    ///
+    /// # Why the other guard is not enough
+    ///
+    /// `the_scan_names_no_construct_in_any_stage_source` establishes that nothing on the list
+    /// appears in a source the subset compiles. That only covers constructs the eleven stage
+    /// sources HAPPEN TO USE. On 2026-09-12 the float TYPE was about to be added to the list
+    /// on the strength of "floats are outside the subset"; no stage source uses a float type,
+    /// **so that guard would have passed**, and every float-typed program failing for an
+    /// unrelated reason would have been blamed on a construct that in fact compiles and
+    /// matches the reference byte for byte. Only running such a program showed it.
+    ///
+    /// # What this asserts
+    ///
+    /// For each construct the scan can name: a minimal program containing it is refused by
+    /// the pipeline, AND the scan names it in that program. A construct that is named but
+    /// compiles fine is a wrong entry; a construct that is refused but unnamed is a missing
+    /// one. Both directions fail here.
+    ///
+    /// # The reach of the two guards together, measured
+    ///
+    /// **A scan arm added with no row here passes this test.** The count below compares the
+    /// table's length against a constant, so it catches a row added or removed without
+    /// thought; it cannot see the scan's arms, which are `match` patterns and not data. The
+    /// first version of this comment claimed adding an arm without a row would fail the
+    /// test. That was wrong, and keeping it would have made this guard look broader than it
+    /// is.
+    ///
+    /// Mutation-testing both guards against the same wrong entry gives the real picture. An
+    /// arm naming the SUPPORTED wildcard pattern:
+    ///
+    /// - passes this test, because no row mentions it; but
+    /// - FAILS `the_scan_names_no_construct_in_any_stage_source`, because the stage sources
+    ///   use `_`.
+    ///
+    /// So the two cover the union of "constructs the stage sources happen to use" and
+    /// "constructs with a row here". **The hole is the complement, and it is not
+    /// hypothetical**: the float type is used by no stage source, so a float-type arm added
+    /// with no row would have passed BOTH. That is the entry that was nearly added on
+    /// 2026-09-12, and only running a float-typed program caught it.
+    ///
+    /// A new entry SHOULD therefore be registered here, enforced by convention rather than by
+    /// the test, and a new entry for a construct the stages do not use has no automatic check
+    /// at all.
+
+    #[test]
+    fn every_named_construct_is_really_outside_the_subset() {
+        // (the phrase the scan emits, a minimal program containing that construct)
+        const NAMED: &[(&str, &str)] = &[
+            (
+                "a variable pattern",
+                "fn main(a: Word) -> Word { match a { v => v } }",
+            ),
+            (
+                "a struct destructuring pattern",
+                "struct P { x: Word }\nfn main(p: P) -> Word { match p { P { x } => x, _ => 0 } }",
+            ),
+            (
+                "an `assert` statement",
+                "fn main(a: Word) -> Word { assert a > 0; a }",
+            ),
+            (
+                "a qualified call",
+                "use audio::midi_to_freq\nfn main() -> Float { audio::midi_to_freq(69) }",
+            ),
+            (
+                "a floating-point literal",
+                "fn main() -> Float { 1.5 + 2.5 }",
+            ),
+        ];
+
+        // Catches a row added or removed without thought. It does NOT see the scan's arms:
+        // an arm with no row here passes. See the note above.
+        const EXPECTED_ROWS: usize = 5;
+        assert_eq!(
+            NAMED.len(),
+            EXPECTED_ROWS,
+            "the construct table changed size without the count being updated. If an arm was \
+             added to the scan, add its row and bump this; if one was removed, drop the row"
+        );
+
+        let target = crate::target::Target::host();
+        for (phrase, src) in NAMED {
+            let named = name_unsupported_construct(src);
+            let named = named.unwrap_or_else(|| {
+                panic!(
+                    "{phrase}: the scan names nothing in a program written to contain it, so \
+                     the row and the scan arm have drifted apart"
+                )
+            });
+            assert!(
+                named.0.contains(phrase),
+                "{phrase}: the scan names {:?} here instead. Either the wording changed and \
+                 this row is stale, or an earlier construct in the same source is being \
+                 reported",
+                named.0
+            );
+
+            // THE HALF THE OTHER GUARD CANNOT DO: the construct must really be refused.
+            assert!(
+                self_hosted_compile(src, &target).is_err(),
+                "{phrase}: this program COMPILES through the self-hosted pipeline, so the \
+                 scan names a construct that is inside the subset. On the failure path that \
+                 attaches a confident and wrong noun to an unrelated failure. Remove the arm \
+                 rather than this row, unless the subset genuinely just narrowed"
             );
         }
     }
