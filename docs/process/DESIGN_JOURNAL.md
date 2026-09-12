@@ -1,5 +1,70 @@
 # Design Journal
 
+## 2026-09-11 — [v0.3.0] The indexed composite slot, and two guards catching their author
+
+The refusal added when the direct composite copy landed is now an implementation. `log.items[i]` on
+`private data log { items: [F; 3], .. }` lowers, at constant and runtime indices, and agrees.
+
+**The stride is validated, not extrapolated.** `src/compiler.rs` gives an array-of-composite field one
+pool entry per element in a single loop, each advancing the running total by the same body size — so
+the entries are uniform by construction. That is a fact about the producer, and because it is
+checkable in the table this backend already reads, the whole declared range is walked. **Two
+consecutive offsets prove nothing about the third.**
+
+**Each element has its own initialisation word.** A lowering that used the base slot's word would
+answer where the reference faults, and every test of the indexed path would still pass — they all
+write the element they read. The subject that separates them writes element 0 and reads element 2; it
+is a trap subject, because proving the native side FAULTS needs its own process. Four guard subjects
+now die with `SIGTRAP`.
+
+### A count cannot see a site change class
+
+The indexed path turned the pool address from a compile-time constant into `first + index * size`.
+**It is the same line** — the same gep, fed a computed offset — so the pointer census's count did not
+move and nothing forced its classification table to be revisited.
+
+A first attempt widened the matcher to bare `build_int_add`, taking the count from 22 to 38 by
+sweeping in every ordinary integer operation in the emitter. **That is not a stricter census, it is a
+broken one**: conflating value arithmetic with address arithmetic would make every future increment
+move the number for unrelated reasons. The matcher was reverted, the table now carries a direct row
+and an indexed row, and the limitation is written into the file: **it catches new sites, not
+reclassified ones, and no mechanism there enforces the difference.**
+
+### ⚠ THE GATE FOUND A SIGSEGV, AND IT WAS THE MORNING'S DEFECT IN A HARNESS I DID NOT FIX
+
+`a_runtime_index_agrees_with_the_reference` **segfaulted under the default configuration, passed
+under narrow, and passed in isolation.** All three are the same fact: `common::vm_and_native_two_arg`
+sized its private region as `vec![0u64; 8]` — a literal — and the indexed composite path was the first
+subject in that harness to write into the persistent pool. For its module the pool alone ends at 80
+bytes and the initialisation flags at 200, against a 64-byte buffer.
+
+**A buffer sized from a literal fails by corrupting whatever is next to it**, which is not a stable
+observable: it depends on the allocator, on what else the process is doing, and on how many tests run
+in parallel. Hence green alone, green narrow, segfault in the gate.
+
+> **This is the corpus harness's defect, in a second harness, hours later.** That one was repaired
+> this morning when its canary fired; this one had no canary and no contract-derived sizing, and
+> nothing connected the two. Repairing one instance of a class and not looking for the others is the
+> failure, and it is recorded rather than tidied away.
+
+Every buffer in that harness is now sized from the published contract — the region figure
+**transitively**, since a per-chunk sum under-counts a module whose entry calls anything — and each
+carries a canary asserted after the call, so this class fails as an assertion rather than as a
+corruption.
+
+### The population guard caught a deletion I did not intend
+
+Removing the now-false refusal test took a text slice, and the slice swallowed its neighbour:
+`the_pool_persists_across_a_silent_cycle_and_changes_on_a_writing_one` — the only subject that tells
+survival across `Op::Reset` apart from a pool that is merely never rewritten, and itself added hours
+earlier after auditing a completion condition that turned out too weak.
+
+> **The count came out one short of the accounting, which is the entire reason the accounting is
+> written out instead of the number being patched.** A guard that only compared totals would have
+> been satisfied by editing a digit.
+
+Restored, and the near-loss recorded next to the figure.
+
 ## 2026-09-11 — [v0.3.0] The host contract stated one of three buffers, and the example taught guessing
 
 The entry takes three pointers. The generated header stated the layout of **one** of them.

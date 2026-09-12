@@ -190,20 +190,38 @@ pub fn vm_and_native_two_arg(src: &str, a: i64, b: i64) -> (i64, i64) {
     let sym = format!("kel_chunk_{entry}");
     let np = lm.get_function(&sym).expect("entry fn").count_params();
 
-    let n_region: usize = m
-        .chunks
-        .iter()
-        .map(|c| keleusma_native::region::plan_chunk_region(c).bytes as usize)
-        .sum();
+    // ⚠ **EVERY BUFFER IS SIZED FROM THE PUBLISHED CONTRACT, AND CARRIES A
+    // CANARY.**
+    //
+    // These were literals: `vec![0u64; 8]` for the private region and a
+    // per-chunk sum for the composite region. The corpus harness had the same
+    // defect and was repaired hours earlier; **this one was left and produced a
+    // SIGSEGV within the day**, when the indexed composite path became the first
+    // subject here to write into the persistent pool. Under the narrow
+    // configuration it passed, and in isolation it passed — a literal-sized
+    // buffer fails by corrupting whatever is next to it, which is not a stable
+    // observable.
+    //
+    // The region figure is TRANSITIVE: a call site receives a disjoint block of
+    // the caller's region, so a per-chunk sum under-counts a module whose entry
+    // calls anything.
+    const CANARY: u64 = 0xDEAD_BEEF_FEED_FACE;
+    let n_region = keleusma_native::region::host_arena_supplement_bytes(&m) as usize;
     let mut region = vec![0u64; n_region.div_ceil(8) + 4];
-    let mut shared = vec![0u8; 64];
+    let region_canary_at = region.len() - 1;
+    region[region_canary_at] = CANARY;
+    let mut shared = vec![0u8; keleusma::vm::shared_data_bytes_for(&m).max(64) + 8];
     // **THE PRIVATE REGION IS INSTALLED, NOT ZEROED.** A private scalar slot
     // carries its declared initializer in the module's `private_init` table and
     // the runtime applies it at load; there is no native load step, so the host
     // installs the published image. A harness that zeroed this buffer reported
     // `1` where the reference reported `8`.
-    let mut privs = vec![0u64; 8];
-    install_private_init(&m, &mut privs);
+    let n_priv = (required_persistent_capacity_for(&m)
+        + keleusma_native::region::persistent_supplement_bytes(&m) as usize)
+        .div_ceil(8);
+    let mut privs = vec![0u64; n_priv + 1];
+    privs[n_priv] = CANARY;
+    install_private_init(&m, &mut privs[..n_priv]);
 
     let nv = match np {
         2 => {
@@ -230,6 +248,19 @@ pub fn vm_and_native_two_arg(src: &str, a: i64, b: i64) -> (i64, i64) {
         }
         n => panic!("entry takes {n} parameters; this harness drives 2 or 5"),
     };
+    // **The canaries, checked rather than merely placed.** A buffer sized from a
+    // literal fails by corrupting its neighbour, which is not a stable
+    // observable; these turn that into an assertion at the boundary of what the
+    // backend is entitled to touch.
+    assert_eq!(
+        privs[n_priv], CANARY,
+        "the lowering wrote past the {n_priv}-word private region a host is told \
+         to allocate"
+    );
+    assert_eq!(
+        region[region_canary_at], CANARY,
+        "the lowering wrote past the {n_region}-byte composite region"
+    );
     (vv, nv)
 }
 

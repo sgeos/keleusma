@@ -34,7 +34,24 @@
 ///
 /// **Derive this, do not transcribe it.** A count in this tree once read
 /// "nineteen" while the block it described held twenty-nine.
-const RECORDED_TEST_FUNCTIONS: usize = 503;
+const RECORDED_TEST_FUNCTIONS: usize = 506;
+// 503 -> 506 on 2026-09-11, net, and the net hides a DELETION that must be
+// stated: four added in `indexed_composite_slot.rs`, one REMOVED from
+// `private_slot_composite.rs`. The removed one asserted that an indexed composite
+// slot is refused, and the increment implemented it — **a weakened version would
+// have been kept green by not implementing it**, which is why it was deleted
+// rather than softened. The unwritten-sibling trap subject added in the same
+// increment is a DATA ROW in `corpus_differential.rs`, so it moves no count.
+//
+// ⚠ **THIS GUARD CAUGHT A SECOND, UNINTENDED DELETION IN THE SAME EDIT.** The
+// text slice that removed the refusal test swallowed its neighbour,
+// `the_pool_persists_across_a_silent_cycle_and_changes_on_a_writing_one` — the
+// only subject that tells survival across `Op::Reset` apart from a pool that is
+// merely never rewritten, and itself added only hours earlier after auditing a
+// completion condition. The count came out one short of the accounting above,
+// which is the whole reason the accounting is written rather than the number
+// patched. Restored.
+//
 // 501 -> 503 on 2026-09-11: two added in `host_contract_completeness.rs`. The
 // generated header stated the layout of ONE of the three pointers the entry
 // takes; the shipped C host sized the other two by eye, and that file is what a
@@ -115,7 +132,9 @@ const RECORDED_TEST_FUNCTIONS: usize = 503;
 /// `memory_read_census.rs` added, none removed.
 ///
 /// 109 -> 110: `host_contract_completeness.rs` added, none removed.
-const RECORDED_TEST_FILES: usize = 110;
+///
+/// 110 -> 111: `indexed_composite_slot.rs` added, none removed.
+const RECORDED_TEST_FILES: usize = 111;
 
 fn test_files() -> Vec<std::path::PathBuf> {
     let mut out: Vec<_> = std::fs::read_dir("tests")

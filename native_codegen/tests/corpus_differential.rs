@@ -2346,7 +2346,34 @@ const TRAP_SUBJECTS: &[(&str, &str, TrapKind)] = &[
         "cannot access field on Unit",
         TrapKind::Guard,
     ),
+    // **An UNWRITTEN SIBLING of a written array element.** Added 2026-09-11 with
+    // the indexed composite lowering: each element slot has its own
+    // initialisation word, and using the base slot's would let one written
+    // element make every sibling read as written.
+    (
+        "synthetic:unwritten_sibling_element",
+        "cannot access field on Unit",
+        TrapKind::Guard,
+    ),
 ];
+
+/// **ELEMENT 0 IS WRITTEN AND ELEMENT 2 IS READ.**
+///
+/// An array-of-composite private field gives every element its own pool entry and
+/// therefore its own initialisation word. A lowering that used the base slot's
+/// word for the whole field would answer here instead of faulting, and every
+/// other test of the indexed path would still pass — they all write the element
+/// they read.
+///
+/// Driven with the harness's seed-0 argument, which is 4: any value writes
+/// element 0 and leaves element 2 untouched.
+const SYNTHETIC_UNWRITTEN_SIBLING_ELEMENT: &str = "\
+struct F { a: Word, b: Word }\n\
+private data log { items: [F; 3], count: Word }\n\
+fn main(t: Word) -> Word {\n\
+    log.items[0] = F { a: t, b: 0 };\n\
+    log.items[2].a\n\
+}\n";
 
 /// **A COMPOSITE DATA SLOT WRITTEN ON ONE PATH AND READ ON THE OTHER.**
 ///
@@ -2495,6 +2522,7 @@ fn subject_source(name: &str) -> Option<String> {
         return match key {
             "no_matching_head" => Some(SYNTHETIC_NO_MATCHING_HEAD.to_string()),
             "uninit_composite_slot" => Some(SYNTHETIC_UNINIT_COMPOSITE_SLOT.to_string()),
+            "unwritten_sibling_element" => Some(SYNTHETIC_UNWRITTEN_SIBLING_ELEMENT.to_string()),
             _ => None,
         };
     }

@@ -2288,6 +2288,62 @@ fn private_composite_extent(data: &DataCtx<'_>, slot: u32) -> Result<(u32, u32),
     Ok((base + offset, size))
 }
 
+/// The extent of an array-of-composite field: its first element's pool offset,
+/// the element size, and the number of elements the table covers uniformly.
+///
+/// # Why the stride is validated rather than assumed
+///
+/// `src/compiler.rs` places an array-of-composite field with ONE POOL ENTRY PER
+/// ELEMENT, in a single loop, each advancing the running total by the same body
+/// size — so the entries are consecutive and uniformly spaced **by
+/// construction**. That is a fact about the producer, and this checks it in the
+/// table rather than inheriting it from the shape of the loop that built it.
+///
+/// **Two consecutive entries prove nothing about the third**, so the whole
+/// declared range is walked.
+fn indexed_composite_extent(
+    data: &DataCtx<'_>,
+    base_slot: u32,
+    count: u32,
+) -> Result<(u32, u32), LowerError> {
+    // The element size comes from the SAME derivation the direct path uses, so
+    // the two cannot drift.
+    let (first_off, size) = private_composite_extent(data, base_slot)?;
+    for k in 1..count {
+        let slot = base_slot + k;
+        let (off, sz) =
+            private_composite_extent(data, slot).map_err(|_| LowerError::UnsupportedDataSlot {
+                slot,
+                why: format!(
+                    "an indexed composite field of {count} elements: the module's pool table \
+                     has no entry for element {k}, so its address would be invented from its \
+                     neighbours"
+                ),
+            })?;
+        if sz != size {
+            return Err(LowerError::UnsupportedDataSlot {
+                slot,
+                why: format!(
+                    "element {k} of an indexed composite field is {sz} bytes where element 0 is \
+                     {size}; the stride is not uniform and `base + index * size` would not \
+                     address it"
+                ),
+            });
+        }
+        if off != first_off + k * size {
+            return Err(LowerError::UnsupportedDataSlot {
+                slot,
+                why: format!(
+                    "element {k} sits at pool offset {off} where a uniform stride puts it at {}; \
+                     the table does not partition this field's range",
+                    first_off + k * size
+                ),
+            });
+        }
+    }
+    Ok((first_off, size))
+}
+
 /// How many trailing pointer parameters a function in this module carries.
 ///
 /// **One source, used by the signature, the call-arity check and the argument
@@ -5221,26 +5277,40 @@ fn lower_chunk_body<'ctx>(
                     // there is no subject to prove it against, and lowering it on
                     // the strength of the direct case is how a differential
                     // returns a wrong answer instead of a refusal.
-                    if indexed {
-                        return Err(LowerError::UnsupportedDataSlot {
-                            slot,
-                            why: String::from(
-                                "an INDEXED composite data slot: every element carries its own \
-                                 pool entry, and the stride is not proven uniform across the \
-                                 range here",
-                            ),
-                        });
-                    }
-                    let (pool_off, size) = private_composite_extent(&data, slot)?;
+                    //
+                    // **INDEXED IS NOW LOWERED, with the stride VALIDATED across
+                    // the declared range** rather than extrapolated from the
+                    // direct case. The bound is the instruction's own operand and
+                    // the unsigned check against it was already emitted above, so
+                    // `index` here is in range.
+                    let (pool_off, size) = if indexed {
+                        indexed_composite_extent(&data, slot, bound)?
+                    } else {
+                        private_composite_extent(&data, slot)?
+                    };
                     let base = private_base.expect("has_data implies the private pointer");
+                    // The element offset: constant for a direct access, and
+                    // `first + index * size` for an indexed one, where `index`
+                    // has already been bounds-checked against the declared count.
+                    let byte_off = match index {
+                        None => i64t.const_int(u64::from(pool_off), false),
+                        Some(ix) => {
+                            st.b.build_int_add(
+                                i64t.const_int(u64::from(pool_off), false),
+                                st.b.build_int_mul(
+                                    ix,
+                                    i64t.const_int(u64::from(size), false),
+                                    "poolstride",
+                                )
+                                .unwrap(),
+                                "pooloff",
+                            )
+                            .unwrap()
+                        }
+                    };
                     let addr = unsafe {
-                        st.b.build_in_bounds_gep(
-                            i8t,
-                            base,
-                            &[i64t.const_int(u64::from(pool_off), false)],
-                            "poolptr",
-                        )
-                        .unwrap()
+                        st.b.build_in_bounds_gep(i8t, base, &[byte_off], "poolptr")
+                            .unwrap()
                     };
                     // **THE INITIALISATION WORD FOR THIS SLOT.**
                     //
@@ -5257,17 +5327,31 @@ fn lower_chunk_body<'ctx>(
                         .iter()
                         .position(|p| u32::from(p.slot) == slot)
                         .expect("the slot was just found in this table");
+                    // **THE FLAG MOVES WITH THE ELEMENT.** Each element slot has
+                    // its own pool entry and therefore its own word; using the
+                    // base slot's would let one written element make every
+                    // sibling read as written.
+                    let init_byte = match index {
+                        None => i64t.const_int(
+                            u64::from(data.composite_init_off) + (init_index as u64) * 8,
+                            false,
+                        ),
+                        Some(ix) => {
+                            st.b.build_int_add(
+                                i64t.const_int(
+                                    u64::from(data.composite_init_off) + (init_index as u64) * 8,
+                                    false,
+                                ),
+                                st.b.build_int_mul(ix, i64t.const_int(8, false), "initstride")
+                                    .unwrap(),
+                                "initoff",
+                            )
+                            .unwrap()
+                        }
+                    };
                     let init_ptr = unsafe {
-                        st.b.build_in_bounds_gep(
-                            i8t,
-                            base,
-                            &[i64t.const_int(
-                                u64::from(data.composite_init_off) + (init_index as u64) * 8,
-                                false,
-                            )],
-                            "initp",
-                        )
-                        .unwrap()
+                        st.b.build_in_bounds_gep(i8t, base, &[init_byte], "initp")
+                            .unwrap()
                     };
                     if is_read {
                         // **FAULT WHERE THE REFERENCE FAULTS.** One load and one

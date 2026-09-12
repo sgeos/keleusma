@@ -41,8 +41,28 @@
 //! | operand spill store and reload | constant — `spill_off` plus a compile-time slot index |
 //! | **nested array element** | **runtime, guarded by `guard_array_index`** — formed by integer ADD, not a gep |
 //! | **composite-slot initialisation word** | constant — the flag array's base plus the slot's position in the module's own pool table, both fixed at lowering |
-//! | **persistent composite pool** | constant — this backend's private-slot count times its slot width, plus the module table's pool offset. Neither term is a program value, and the placement is refused outright if it would reach the resume-state word |
+//! | **persistent composite pool, direct** | constant — this backend's private-slot count times its slot width, plus the module table's pool offset. Neither term is a program value, and the placement is refused outright if it would reach the resume-state word |
+//! | **persistent composite pool, INDEXED** | runtime, guarded — `first + index * size`, where `index` was compared UNSIGNED against the instruction's own declared element count before the shared/private split, and `size` is validated uniform across the whole declared range |
+//! | **composite initialisation word, indexed** | runtime, guarded by the same check — the flag index moves with the element, so a written element cannot mark a sibling |
 //! | five int-to-pointer conversions | each takes an address already formed above; they add no offset of their own |
+//!
+//! # ⚠ A COUNT CANNOT SEE A SITE CHANGE CLASS
+//!
+//! **Recorded 2026-09-11, when it happened.** The indexed composite data slot
+//! turned the pool address from a compile-time constant into `first + index *
+//! size`. It is the SAME LINE — the same gep, fed a computed offset — so the
+//! count did not move, this census passed unchanged, and nothing forced the
+//! classification above to be revisited.
+//!
+//! A first attempt widened the matcher to bare `build_int_add`, which took the
+//! count from 22 to 38 by sweeping in every ordinary integer operation in the
+//! emitter. **That is not a stricter census, it is a broken one**: conflating
+//! value arithmetic with address arithmetic would make every future increment
+//! move the number for reasons unrelated to addressing.
+//!
+//! The honest statement is that this file catches NEW sites and not RECLASSIFIED
+//! ones, and that the rows above must be re-read whenever an existing site gains
+//! a runtime operand. No mechanism here enforces that.
 //!
 //! # What this test can and cannot do
 //!
@@ -98,6 +118,7 @@ const ADDRESS_FORMS: &[&str] = &[
     "build_in_bounds_gep",
     // The same arithmetic done on the address as an INTEGER, which a gep-only
     // matcher cannot see.
+    //
     "build_int_add(parent",
     // An integer becoming a pointer: where a computed address enters pointer
     // space and every later use trusts it.

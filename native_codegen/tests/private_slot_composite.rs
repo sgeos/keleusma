@@ -44,10 +44,10 @@
 //!
 //! # What this file does not establish
 //!
-//! - **An INDEXED composite slot is refused, not lowered.** Every element slot
-//!   carries its own pool entry, and `base + index * size` needs the stride
-//!   proven uniform across the range. No corpus module declares an array of
-//!   composites, so there is no subject to prove it against.
+//! - **An INDEXED composite slot was refused here and is now LOWERED**, with the
+//!   stride validated across the declared range. See `indexed_composite_slot.rs`;
+//!   the test that asserted the refusal was DELETED rather than weakened, because
+//!   a weakened version would have been kept green by not implementing it.
 //! - **An empty composite slot is absent from the pool table by design**, so a
 //!   zero-byte composite slot takes neither path.
 //! - **Shared composite slots** are refused by the operand-width leg on the write
@@ -192,81 +192,6 @@ fn the_corpus_subject_lowers_and_agrees() {
     );
 }
 
-/// **An indexed composite slot is refused, and the control is the direct one.**
-///
-/// Without the pair this says only that something about the subject is
-/// unsupported. With it, the refusal is specifically about the INDEXED form.
-#[test]
-fn an_indexed_composite_slot_is_refused_while_the_direct_one_lowers() {
-    const ARRAY_OF_COMPOSITE: &str = "\
-struct F { a: Word, b: Word }\n\
-private data log { items: [F; 3], count: Word }\n\
-loop main(t: Word) -> Word {\n\
-    log.items[0] = F { a: 1, b: 2 };\n\
-    let _ack = yield log.items[0].a;\n\
-    0\n\
-}\n";
-    match common::try_build(ARRAY_OF_COMPOSITE) {
-        None => {
-            // The shape is not admitted upstream, which is a fact about the
-            // reference compiler rather than about this backend. Recorded here so
-            // the absence of a refusal is not read as support.
-            println!(
-                "an array-of-composite private slot does not compile on the reference \
-                 compiler, so the backend's refusal for it has no subject"
-            );
-        }
-        Some(m) => {
-            let refusals = module_refusals(&m, LowerOptions::default());
-            assert!(
-                !refusals.is_empty(),
-                "an indexed composite slot must be refused: every element carries its \
-                 own pool entry and the stride is not proven uniform"
-            );
-            let why = format!("{refusals:?}");
-            assert!(
-                why.contains("INDEXED"),
-                "the refusal must name the indexing, or it could be any other \
-                 limitation of this subject: {why}"
-            );
-        }
-    }
-    let direct = module_refusals(&common::build(DISCRIMINATOR), LowerOptions::default());
-    assert!(
-        direct.is_empty(),
-        "the direct form must still lower, or the refusal above is not about \
-         indexing: {direct:?}"
-    );
-}
-
-/// **SURVIVAL AND REWRITE, TOLD APART.**
-///
-/// `a_composite_written_once_is_still_there_cycles_later` is satisfied by a pool
-/// that is merely never overwritten, which is a weaker property than surviving a
-/// reset. This subject writes on some cycles and not others, so the sequence has
-/// to show the value PERSISTING across a cycle that does not write AND CHANGING
-/// on one that does. A lowering that leaked the write, or one that reset the
-/// pool, fails on a different element of the same sequence.
-#[test]
-fn the_pool_persists_across_a_silent_cycle_and_changes_on_a_writing_one() {
-    const ALTERNATING: &str = "\
-struct F { a: Word, b: Word }\n\
-private data log { latest: F, count: Word }\n\
-loop main(t: Word) -> Word {\n\
-    if t > 0 { log.latest = F { a: t * 10, b: 0 }; }\n\
-    let _ack = yield log.latest.a;\n\
-    0\n\
-}\n";
-    let vm = common::general_vm_sequence(ALTERNATING, 3, &[0, 7, 0]);
-    assert_eq!(
-        vm,
-        vec![30, 30, 70],
-        "the runtime must show the value persisting through the silent cycle and \
-         changing on the writing one, or this subject does not discriminate: {vm:?}"
-    );
-    common::assert_general_stream_agrees(ALTERNATING, 3, &[0, 7, 0]);
-}
-
 /// **THE HIGHEST PERSISTENT BYTE THE EMITTER CAN TOUCH IS INSIDE WHAT A HOST IS
 /// TOLD TO ALLOCATE.**
 ///
@@ -324,4 +249,32 @@ fn the_published_supplement_covers_every_byte_the_backend_writes() {
         "the published supplement is not the sum of its halves, so one of them is \
          invisible to a host"
     );
+}
+
+/// **SURVIVAL AND REWRITE, TOLD APART.**
+///
+/// `a_composite_written_once_is_still_there_cycles_later` is satisfied by a pool
+/// that is merely never overwritten, which is a weaker property than surviving a
+/// reset. This subject writes on some cycles and not others, so the sequence has
+/// to show the value PERSISTING across a cycle that does not write AND CHANGING
+/// on one that does. A lowering that leaked the write, or one that reset the
+/// pool, fails on a different element of the same sequence.
+#[test]
+fn the_pool_persists_across_a_silent_cycle_and_changes_on_a_writing_one() {
+    const ALTERNATING: &str = "\
+struct F { a: Word, b: Word }\n\
+private data log { latest: F, count: Word }\n\
+loop main(t: Word) -> Word {\n\
+    if t > 0 { log.latest = F { a: t * 10, b: 0 }; }\n\
+    let _ack = yield log.latest.a;\n\
+    0\n\
+}\n";
+    let vm = common::general_vm_sequence(ALTERNATING, 3, &[0, 7, 0]);
+    assert_eq!(
+        vm,
+        vec![30, 30, 70],
+        "the runtime must show the value persisting through the silent cycle and \
+         changing on the writing one, or this subject does not discriminate: {vm:?}"
+    );
+    common::assert_general_stream_agrees(ALTERNATING, 3, &[0, 7, 0]);
 }
