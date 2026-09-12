@@ -9087,3 +9087,101 @@ fn sizing_how_far_declaration_lookup_reaches_a_field_read() {
          the edge and needs harder cases before it can size anything"
     );
 }
+
+/// **A BODY WITH NO TAIL EXPRESSION CONTRIBUTES NO DECLARED-VERSUS-ACTUAL ROW.**
+///
+/// `expression_nodes_over` appends a kind-8 row per function by pairing the body's tail
+/// expression against the declared return type, and it does so **only when a tail is
+/// present**. That guard is correct today. It is pinned here because the failure it
+/// prevents is in the FALSE-REJECTION direction, the same direction as the three binder
+/// defects already fixed on this side: a row manufactured for a body that ends in a
+/// statement would feed `ty_node_bad` a comparison the source never wrote.
+///
+/// # Why the unit-returning form is the witness
+///
+/// Keleusma has no early return and a return type is mandatory, so a tail-less body is
+/// not reachable by omitting either. `fn f() -> () { .. }` is the shape that produces one,
+/// established here rather than assumed: the first assertion reads tail presence straight
+/// off the syntax tree.
+///
+/// # The control is inside the source
+///
+/// Each source declares `main` with a tail expression, so the expected count is ONE rather
+/// than zero. **A test expecting zero could pass by extracting nothing at all**, which is
+/// the failure mode this suite has paid for before. The second source is the same program
+/// with `f` given a tail, and it must yield TWO.
+///
+/// # Mutation-tested
+///
+/// Replacing the guard with an unconditional push that substitutes a default operand form
+/// for the absent tail fails this test on the one-row assertion, with the message that
+/// assertion carries. **A guard-pin never observed to fail is not evidence about the
+/// guard**, and this one has been observed to fail.
+#[cfg(feature = "self-host")]
+#[test]
+fn a_body_without_a_tail_expression_contributes_no_declared_versus_actual_row() {
+    const DECLARED_VS_ACTUAL: i64 = 8;
+
+    // `f` ends in a statement; `main` ends in an expression.
+    const TAILLESS: &str = "private data d { q: Word }\n\
+                            fn f() -> () { d.q = 1; }\n\
+                            fn main() -> Word { 0 }";
+    // The same program with `f` given a tail, so the difference is the tail and nothing else.
+    const TAILED: &str = "private data d { q: Word }\n\
+                          fn f() -> Word { d.q = 1; d.q }\n\
+                          fn main() -> Word { 0 }";
+
+    let measure = |src: &str| -> (Vec<bool>, usize, bool) {
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+        let tails: Vec<bool> = ast
+            .functions
+            .iter()
+            .map(|f| f.body.tail_expr.is_some())
+            .collect();
+        let (names, _) = binding_rows(&ast);
+        let (nodes, _) = expression_nodes_and_derived(&ast, &names);
+        let rows = nodes.iter().filter(|r| r.0 == DECLARED_VS_ACTUAL).count();
+        (tails, rows, keleusma::compiler::compile(&ast).is_ok())
+    };
+
+    let (tailless_tails, tailless_rows, tailless_compiles) = measure(TAILLESS);
+    let (tailed_tails, tailed_rows, tailed_compiles) = measure(TAILED);
+
+    // NON-VACUITY: both shapes must be real programs, or the counts below describe
+    // sources no reader could write.
+    assert!(
+        tailless_compiles && tailed_compiles,
+        "the reference no longer compiles one of these shapes (tail-less {tailless_compiles}, \
+         tailed {tailed_compiles}), so this witness is not about programs"
+    );
+
+    // The premise, read off the syntax tree rather than assumed from the spelling.
+    assert_eq!(
+        tailless_tails,
+        vec![false, true],
+        "the tail-less source no longer has exactly one tail-less function followed by a \
+         tailed one, so the row counts below are measuring a different program"
+    );
+    assert_eq!(
+        tailed_tails,
+        vec![true, true],
+        "the tailed source no longer gives both functions a tail expression"
+    );
+
+    // THE PIN. One row, from `main` alone.
+    assert_eq!(
+        tailless_rows, 1,
+        "a function whose body ends in a statement now contributes a declared-versus-actual \
+         row. That comparison has no tail expression behind it, so it can only reject a \
+         correct program; if a row here is deliberate, the tag it carries needs a stated \
+         meaning before this expectation is relaxed"
+    );
+
+    // THE CONTROL. Giving `f` a tail adds exactly one row, so the count above is not
+    // an artefact of extracting nothing.
+    assert_eq!(
+        tailed_rows, 2,
+        "giving the second function a tail expression no longer adds a declared-versus-actual \
+         row, so the count asserted above cannot be attributed to the missing tail"
+    );
+}
