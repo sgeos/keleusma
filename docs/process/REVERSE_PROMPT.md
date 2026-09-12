@@ -31,8 +31,19 @@ none to pick with.
 
 **So the `scope/` filing is CORRECT and this is not a mislabelled defect.** The fix is not a branch
 correction; it needs a type channel into codegen, which is a substantial change to a stage source
-and therefore bears on the capacity question. Characterised per operator in
-`tests/selfhost_float_boundary.rs`; no change made.
+and therefore bears on the capacity question. Characterised per operand type and operator in
+`tests/selfhost_typed_opcode_boundary.rs`; no change made.
+
+**IT IS NOT CONFINED TO FLOATS, AND FINDING THAT OUT TESTED THE CAUSE RATHER THAN RE-CENSUSING.**
+Once the cause was known it predicted that any operand type the reference treats unchecked would
+diverge. `Byte` was the cheap test and it AGREES, refuting the specific prediction — while the same
+run showed `Fixed<N>` diverging. So `Float` and `Fixed<N>` diverge and `Word` and `Byte` do not.
+
+**Fixed-point is the more serious half.** Its `+` and `-` are the same checked-versus-plain
+difference; its `*` and `/` diverge against the reference's SCALE-AWARE `FixedMul(16)` and
+`FixedDiv(16)`. A fixed-point multiply without the scale correction computes a DIFFERENT VALUE, so
+that case is a wrong-result hazard rather than a checking difference — which is what the cross-check
+exists to stop, and it does.
 
 **THE OTHER TWO DIVERGENCES ARE DIFFERENT IN KIND, AND THAT IS WHY THIS ONE STANDS OUT.** The table
 has exactly three `Diverges` rows. Both struct-equality rows report `CmpEq` against the reference's
