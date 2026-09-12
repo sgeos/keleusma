@@ -1,5 +1,50 @@
 # Design Journal
 
+## 2026-09-11 — [v0.3.0] The host contract stated one of three buffers, and the example taught guessing
+
+The entry takes three pointers. The generated header stated the layout of **one** of them.
+
+| buffer | in the header before | what the shipped C host did |
+|---|---|---|
+| shared segment | yes, with a named offset per slot | sized from the macro |
+| private/persistent region | **no** | `int64_t private_region[8]` |
+| composite region | **no** | `int64_t composite_region[64]` |
+| the private initial image | **no** | `memset(..., 0, ...)` |
+
+Every figure existed — in Rust, published to a host written in C.
+
+### Why it mattered even though nothing was wrong
+
+`policy.kel` declares no private data, so both guesses were harmless. **They would have stopped being
+harmless the moment the example grew a `private data` block**, and nothing would have said so. The
+example is the one artefact that turns a stated obligation into a demonstrated one, and it was
+demonstrating the opposite.
+
+This is the weakest part of the design and the backend's own documentation concedes it: *"a figure
+the host must remember to add is not one the runtime's sizing function includes, and publishing the
+figure does not change that."*
+
+### Two things the test had to avoid
+
+**The subject is not `policy.kel`.** Its private figure is 0 and it builds no composite, so it cannot
+tell a correct emitter from one that prints zeros. **A test whose subject makes every figure zero
+proves only that zero was printed.** The subject declares a private scalar with `= 7`, a composite
+slot and a construction, so all three figures are non-zero and the image is non-empty.
+
+**The two tests generate their own headers.** A first version had one generate and the other read,
+which passes in a single process and **silently becomes a no-op** under a runner that isolates tests.
+Caught before it landed, and recorded because the shape recurs.
+
+### What the example still does not exercise, said out loud
+
+`policy.kel` drives the shared segment end to end against the reference and drives neither the private
+region nor the composite region with content of its own. Its header figures are structurally correct
+and behaviourally untested. The structure is covered here; the behaviour is covered by
+`private_init_image.rs`.
+
+**One incidental repair**: `KEL_PRIVATE_BYTES` is 0 for that policy, so sizing the buffer from it
+produced `int64_t x[0]` — a GNU extension, not ISO C. One spare word keeps the declaration portable.
+
 ## 2026-09-11 — [v0.3.0] A declared initializer this backend never applied, found by asking the third axis
 
 **The fifth defect of the day, and the FIRST one found deliberately.**

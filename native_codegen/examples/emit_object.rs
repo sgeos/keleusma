@@ -69,9 +69,60 @@ fn main() {
     h.push_str(" * Do not edit. The layout below is read out of the compiled module,\n");
     h.push_str(" * so it cannot drift from the code it describes. */\n");
     h.push_str("#ifndef KEL_POLICY_H\n#define KEL_POLICY_H\n#include <stdint.h>\n\n");
+    // **EVERY BUFFER THE ENTRY TAKES, NOT JUST THE ONE A HOST CAN GUESS.**
+    //
+    // The entry receives three pointers and this header stated the layout of
+    // ONE of them. The shipped host sized the other two by eye — `int64_t
+    // private_region[8]` and `composite_region[64]` — and a host programmer
+    // copying it learned to guess. `policy.kel` declares no private data, so
+    // the guess was harmless and would have stopped being harmless the moment
+    // the example grew a `private data` block.
+    //
+    // Both figures are DERIVED, like the shared one: this header's own banner
+    // says the layout cannot drift from the code it describes, and a
+    // transcribed number would make that banner false.
+    //
+    // The composite figure is TRANSITIVE. A call site receives a disjoint block
+    // of the caller's region, so the entry needs everything it can reach, which
+    // is what `host_arena_supplement_bytes` reports.
+    let private_bytes = keleusma::vm::required_persistent_capacity_for(&module)
+        + keleusma_native::region::persistent_supplement_bytes(&module) as usize;
+    let region_bytes = keleusma_native::region::host_arena_supplement_bytes(&module);
     h.push_str(&format!(
-        "#define KEL_SHARED_BYTES {shared_bytes}\n#define KEL_ENTRY {sym}\n\n"
+        "#define KEL_SHARED_BYTES {shared_bytes}\n\
+         #define KEL_PRIVATE_BYTES {private_bytes}\n\
+         #define KEL_REGION_BYTES {region_bytes}\n\
+         #define KEL_ENTRY {sym}\n\n"
     ));
+
+    // **THE INITIAL PRIVATE IMAGE, WHEN THERE IS ONE TO INSTALL.**
+    //
+    // A private scalar slot's declared `= literal` initializer lives in the
+    // module's table and the reference applies it at load. There is no native
+    // load step, so a host installs these bytes before the first call; without
+    // them a program reading a slot it has not written sees the host's zeros.
+    //
+    // **Emitted only when some byte is non-zero.** A zeroed image is what a
+    // host's own `memset` already produces, and an empty C array is not valid
+    // C — so a module with nothing to install gets no array and no obligation.
+    if let Some(image) =
+        keleusma_native::region::private_init_image(&module).filter(|i| i.iter().any(|b| *b != 0))
+    {
+        {
+            h.push_str(
+                "/* Install before the FIRST call: a private slot's declared\n                  * initializer. The runtime applies these at load; native code has\n                  * no load step, so this is the host's to copy in. */\n",
+            );
+            h.push_str(&format!("#define KEL_PRIVATE_INIT_BYTES {}\n", image.len()));
+            h.push_str("static const unsigned char KEL_PRIVATE_INIT[] = {");
+            for (i, b) in image.iter().enumerate() {
+                if i % 12 == 0 {
+                    h.push_str("\n    ");
+                }
+                h.push_str(&format!("0x{b:02x}, "));
+            }
+            h.push_str("\n};\n\n");
+        }
+    }
     if let Some(dl) = module.data_layout.as_ref() {
         h.push_str("/* Shared slots: offset, width and how to read the bits.\n");
         h.push_str(" * A Fixed slot is a two's-complement integer whose scale is\n");

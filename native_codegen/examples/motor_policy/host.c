@@ -36,11 +36,22 @@ static int64_t rd(const unsigned char *b, int off) {
 static void wr(unsigned char *b, int off, int64_t v) { memcpy(b + off, &v, sizeof v); }
 
 int main(void) {
-    /* The three trailing pointers the entry takes. The private region must be
-     * word-aligned, which is why it is declared as int64_t rather than char. */
+    /* The three trailing pointers the entry takes, EVERY ONE SIZED FROM THE
+     * GENERATED HEADER. Two of these were literals -- 8 and 64 words, chosen by
+     * eye -- and this file is what a host programmer copies, so it taught
+     * guessing. The private region must be word-aligned, which is why it is
+     * declared as int64_t rather than char; the sizes round up to whole words.
+     *
+     * KEL_PRIVATE_BYTES is the runtime's persistent requirement PLUS the
+     * backend's supplement; KEL_REGION_BYTES is transitive over everything the
+     * entry can reach. Both are derived from the compiled module. */
     unsigned char shared[KEL_SHARED_BYTES];
-    int64_t private_region[8];
-    int64_t composite_region[64];
+    /* The `+ 1` is not slack: this policy declares no private data, so
+     * KEL_PRIVATE_BYTES is 0, and `int64_t x[0]` is a GNU extension rather than
+     * ISO C. One spare word keeps the declaration portable for a module that
+     * needs nothing, and costs eight bytes for one that does. */
+    int64_t private_region[(KEL_PRIVATE_BYTES + 7) / 8 + 1];
+    int64_t composite_region[(KEL_REGION_BYTES + 7) / 8 + 1];
 
     struct { double t0, t1, t2, amps; } cases[] = {
         {  20.0,  25.0,  30.0,  10.0 },   /* all cool, nothing limited      */
@@ -52,6 +63,13 @@ int main(void) {
     for (unsigned i = 0; i < sizeof cases / sizeof cases[0]; i++) {
         memset(shared, 0, sizeof shared);
         memset(private_region, 0, sizeof private_region);
+#ifdef KEL_PRIVATE_INIT_BYTES
+        /* A private slot's declared initializer. The runtime applies these when
+         * the module loads; native code has no load step, so the host installs
+         * them. Absent for this policy, which declares no private data -- the
+         * header emits the array only when there is something to install. */
+        memcpy(private_region, KEL_PRIVATE_INIT, KEL_PRIVATE_INIT_BYTES);
+#endif
         memset(composite_region, 0, sizeof composite_region);
 
         wr(shared, KEL_IO_ZONE_TEMP_0_OFFSET, to_q(cases[i].t0));

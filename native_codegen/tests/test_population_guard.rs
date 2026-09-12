@@ -34,7 +34,12 @@
 ///
 /// **Derive this, do not transcribe it.** A count in this tree once read
 /// "nineteen" while the block it described held twenty-nine.
-const RECORDED_TEST_FUNCTIONS: usize = 501;
+const RECORDED_TEST_FUNCTIONS: usize = 503;
+// 501 -> 503 on 2026-09-11: two added in `host_contract_completeness.rs`. The
+// generated header stated the layout of ONE of the three pointers the entry
+// takes; the shipped C host sized the other two by eye, and that file is what a
+// host programmer copies.
+//
 // 495 -> 501 on 2026-09-11: six added across two new files. Four in
 // `private_init_image.rs`, for a defect the read census found: a private scalar
 // slot's declared initializer was never applied natively, because the runtime
@@ -108,7 +113,9 @@ const RECORDED_TEST_FUNCTIONS: usize = 501;
 ///
 /// 107 -> 109 later the same day: `private_init_image.rs` and
 /// `memory_read_census.rs` added, none removed.
-const RECORDED_TEST_FILES: usize = 109;
+///
+/// 109 -> 110: `host_contract_completeness.rs` added, none removed.
+const RECORDED_TEST_FILES: usize = 110;
 
 fn test_files() -> Vec<std::path::PathBuf> {
     let mut out: Vec<_> = std::fs::read_dir("tests")
