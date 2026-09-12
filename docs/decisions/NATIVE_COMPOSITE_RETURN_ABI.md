@@ -131,6 +131,11 @@ The per-call-site region-cost measurement recorded above is still owed and is st
 > found in `NATIVE_BOUNDS_TRANSFER.md`. **This one is about this line's OWN code**, so it is not
 > an accusation — but a reader would still have believed a defect was open that has been closed
 > since August.
+>
+> **NOW GUARDED, 2026-09-12.** `composite_return_aliasing::this_file_carries_no_ignored_test` fails
+> if a case is ever pinned as ignored again, which would make the claim above true. **A document
+> cannot notice that the code under it changed**; that test is the smallest thing that can. See
+> `PROSE_DRIFT_BRIEF.md` for why no general instrument was built.
 
 **The record as written, 2026-08-13:** Reported and pinned, not repaired.
 `composite_return_aliasing.rs` carries the failing case as `#[ignore]` with the reason, plus the

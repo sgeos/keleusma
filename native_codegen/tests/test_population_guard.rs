@@ -34,7 +34,13 @@
 ///
 /// **Derive this, do not transcribe it.** A count in this tree once read
 /// "nineteen" while the block it described held twenty-nine.
-const RECORDED_TEST_FUNCTIONS: usize = 534;
+const RECORDED_TEST_FUNCTIONS: usize = 535;
+// 534 -> 535 on 2026-09-12: one added to `composite_return_aliasing.rs`. Its
+// decision record said for a month that this file carries the failing case as
+// `#[ignore]`; the repair landed 2026-08-14 and no ignored test remained. A
+// document cannot notice that the code under it changed, and this is the smallest
+// thing that can.
+//
 // 533 -> 534 on 2026-09-12: one added to `fixed_shared_scale.rs`. A `Fixed`
 // shared slot LOWERED and nothing drove it — the one combination of sixteen that
 // the kind-arm census called unexercised where the path was actually live. The

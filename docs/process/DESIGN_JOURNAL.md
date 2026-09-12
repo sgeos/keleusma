@@ -1,5 +1,42 @@
 # Design Journal
 
+## 2026-09-12 — [v0.3.0] The prose-drift instrument, attempted and rejected on measurement
+
+The handoff named one structural gap: **six instruments fire on drift in code, none on drift in
+prose**, after four records were found outliving their subjects in two days.
+
+**It was attempted.** Two matchers, both measured:
+
+| matcher | population | live status |
+|---|---|---|
+| status phrases — `not repaired`, `still open`, `is refused`, `UNEXERCISED` | **169 lines**, 16 with a nearby date | a small minority |
+| claims naming a test AND a state (`#[ignore]`, "`x.rs` … refuses") | **32 lines** | a small minority |
+
+**Both are dominated by narrative.** *"`fixed_shared_scale.rs` opened by stating that this backend
+REFUSES a `Fixed` shared data slot"* is a sentence ABOUT a corrected claim, and no matcher separates
+it from the claim itself.
+
+> **A census whose population is ten times its signal reads as coverage while being none.** That is
+> the failure this package names repeatedly, and the reason the premise census declined a widening
+> from 29 rows to 132. Shipping it anyway would have been the mistake, not the omission.
+
+### What was available instead
+
+A guard per corrected record, so the state cannot revert unnoticed. Three of four already had one; the
+fourth was missing and is trivial: `composite_return_aliasing.rs` now fails if it ever carries an
+ignored test again — which is exactly the claim its decision record made for a month after the repair.
+**Proven to fire** by inserting an `#[ignore]` and watching it fail with the right message.
+
+### The residual, which is the honest deliverable
+
+**Prose drift is closed claim by claim. Nothing general exists**, and the measurement above says why.
+The next stale sentence will be somewhere none of these guards look.
+
+**Dating prose would not fix it either.** A date records when someone wrote a thing, not whether it is
+still true. The prediction stamp works because a prediction is COMPARED against an outcome; a
+description has nothing to be compared against — which is the difference between a claim that can rot
+detectably and one that cannot.
+
 ## 2026-09-12 — [v0.3.0] Sixteen "unexercised" kind arms were one label over three situations
 
 `kind_arm_census.rs` reported 32 combinations the corpus never reaches, 16 resolved to named tests and

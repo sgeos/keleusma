@@ -100,3 +100,42 @@ fn a_caller_composite_beside_one_callee_result_is_correct() {
         "a caller composite beside one callee result must agree"
     );
 }
+
+/// **THE RECORD THAT SAID THIS FILE CARRIES AN IGNORED TEST.**
+///
+/// `docs/decisions/NATIVE_COMPOSITE_RETURN_ABI.md` read, for a month after the
+/// repair: *"Reported and pinned, not repaired. `composite_return_aliasing.rs`
+/// carries the failing case as `#[ignore]`."* The repair landed 2026-08-14 and
+/// this file has carried no ignored test since.
+///
+/// **A document cannot notice that the code under it changed.** This is the
+/// smallest thing that can: if the case is ever pinned as ignored again, the
+/// claim becomes true and this fails, sending a reader to the document rather
+/// than leaving it to rot for another month.
+///
+/// **It is not a general defence.** Prose drift is closed claim by claim; see
+/// `docs/decisions/PROSE_DRIFT_BRIEF.md` for the measurement that ruled out a
+/// mechanical one.
+#[test]
+fn this_file_carries_no_ignored_test() {
+    let src = std::fs::read_to_string("tests/composite_return_aliasing.rs")
+        .expect("this file is readable");
+    let ignored = src
+        .lines()
+        .filter(|l| l.trim() == "#[ignore]" || l.trim().starts_with("#[ignore ="))
+        .count();
+    assert_eq!(
+        ignored, 0,
+        "this file carries {ignored} ignored test(s). The composite-return defect \
+         was repaired on 2026-08-14 and its decision record spent a month saying \
+         otherwise; if a case is pinned as ignored again, update \
+         `docs/decisions/NATIVE_COMPOSITE_RETURN_ABI.md` in the same change."
+    );
+
+    // **NON-VACUITY.** A path that read nothing would report zero for ever.
+    assert!(
+        src.contains("#[test]"),
+        "the file read back contains no tests, so the count above is measuring \
+         nothing"
+    );
+}
