@@ -13,6 +13,53 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (sixty-third) — the expression channel deduplicates too, and a deferral becomes the constraint
+
+### THE CHANNEL THAT LOOKED LIKE `dparams` AND IS NOT
+
+The expression table is ADDRESSED BY INDEX: a form-2 binding row carries its initialiser's position
+in it. That is the same property that makes `dparams` undeduplicatable, so the channel had been left
+out of the distinct-facts argument.
+
+**The two cases are not the same, and the difference is exact.** `dparams` is indexed BY
+DECLARATION, so collapsing rows moves every later entry and destroys the addressing. The expression
+table collapses only rows that are IDENTICAL — and a binding pointing at either copy gets the same
+operands and therefore the same tag. The remap the inert-row elision already built handles the rest.
+
+**Measured: 5,145 rows across the corpus carry 718 distinct shapes, 86% repeats.** `parse.kel` falls
+from 1,728 to 116, under its cap; `codegen` from 473 to 110, under.
+
+### THE EFFECT
+
+| | before | after |
+|---|---|---|
+| real sources that fit | 7 of 12 | **8 of 12** |
+| corpus-sized shared data | 19,862 words, 2.7x | 12,822 words, **1.7x** |
+| growth over today | +97 KiB | **+42 KiB** |
+| tightest constraint anywhere | `parse` expression nodes, 7x | `wire` BINDINGS, 6x |
+
+### A DEFERRAL HAS BECOME THE CONSTRAINT
+
+The binding channel was left un-deduplicated one increment ago, on the reasoning that its lookup is
+not a simple per-row predicate and a 34% saving did not justify the extra reasoning while two other
+channels were being changed.
+
+**It is now what stands between the remaining four sources and the caps.** That is a different
+judgement from the one made then, and it was reached not by changing my mind but by everything
+around it moving. Worth recording as a shape: a deferral justified by relative cost is a deferral
+whose justification expires when the alternatives are taken.
+
+### THE FULL SEQUENCE
+
+Predicted zero sources would fit. Measured two. Inert-row elision: three. Occurrence deduplication:
+seven. Call, pair and expression deduplication: eight. **Five reductions, each verdict-preserving
+under a differential, the price down from +366 KiB to +42 KiB — a factor of nine.**
+
+What remains is genuinely different in character: the binding channel, and the two
+declaration-indexed floors that no deduplication reaches.
+
+---
+
 ## 2026-09-12 (sixty-second) — the same argument reaches two more channels, and stops at two others
 
 ### WHERE IT REACHES

@@ -933,7 +933,7 @@ fn expression_nodes_over(
     freads: &FieldReadIndex,
     wide: bool,
 ) -> (Vec<ResolvableNode>, Vec<(String, i64)>) {
-    expression_nodes_over_with(ast, names, freads, wide, wide)
+    expression_nodes_over_with(ast, names, freads, wide, wide, wide)
 }
 
 /// Whether an expression row can EVER contribute to a rejection.
@@ -982,6 +982,7 @@ fn expression_nodes_over_with(
     freads: &FieldReadIndex,
     wide: bool,
     elide: bool,
+    dedup: bool,
 ) -> (Vec<ResolvableNode>, Vec<(String, i64)>) {
     use keleusma::ast::{Expr, Pattern, Stmt, TypeDef, TypeExpr};
     use keleusma::visitor::Visitor;
@@ -1304,7 +1305,7 @@ fn expression_nodes_over_with(
             out.push((DECLARED_VS_ACTUAL, t, tf, type_tag(&f.return_type), 0));
         }
     }
-    if !elide {
+    if !elide && !dedup {
         return (out, derived);
     }
 
@@ -1313,11 +1314,28 @@ fn expression_nodes_over_with(
     // remapping would point every later binding at the wrong node -- and at a node
     // that EXISTS, so it would resolve to a plausible wrong tag rather than fail.
     // That is the same defect the per-function offset note above records.
+    //
+    // **DEDUPLICATION SHARES THE REMAP, and is addressing-safe where `dparams` was
+    // not.** Two IDENTICAL rows collapsing to one is safe precisely because they
+    // are identical: a form-2 binding pointing at either gets the same operands and
+    // so the same tag. `dparams` could not be deduplicated because it is indexed by
+    // declaration, and collapsing rows there would move every later entry.
+    //
+    // Measured: 5,145 rows across the corpus carry 718 distinct shapes, 86%
+    // repeats, and `parse.kel` falls from 1,728 to 116 -- under the cap.
     let mut remap: Vec<Option<i64>> = Vec::with_capacity(out.len());
     let mut kept: Vec<ResolvableNode> = Vec::with_capacity(out.len());
+    let mut first: std::collections::BTreeMap<ResolvableNode, i64> =
+        std::collections::BTreeMap::new();
     for row in &out {
-        if node_is_inert(row) {
+        if elide && node_is_inert(row) {
             remap.push(None);
+        } else if dedup {
+            let slot = *first.entry(*row).or_insert(kept.len() as i64);
+            if slot == kept.len() as i64 {
+                kept.push(*row);
+            }
+            remap.push(Some(slot));
         } else {
             remap.push(Some(kept.len() as i64));
             kept.push(*row);
@@ -3315,7 +3333,7 @@ fn stage_verdict_full(src: &str, withhold: Option<Channel>, elide: bool, dedup: 
     // collapse to form 0 and type nothing.
     let frc = field_read_channel(&ast, &mut names);
     bindings.extend(frc.bindings.iter().copied());
-    let (nodes, derived) = expression_nodes_over_with(&ast, &names, &frc.index, true, elide);
+    let (nodes, derived) = expression_nodes_over_with(&ast, &names, &frc.index, true, elide, dedup);
     // FORM 2: the binding takes whatever expression node `idx` yields. The host
     // says only WHICH node the initialiser is -- a syntactic fact, like a literal
     // tag or an alias name. Resolving that node's operands and requiring them to
@@ -4376,12 +4394,24 @@ fn real_source_channel_rows(ast: &keleusma::ast::Program) -> Vec<(&'static str, 
 /// answer — but it is a reliance on the stage, and calling the saving free would
 /// be the same overclaiming the refused case was rejected for.
 ///
-/// # Three channels, not one
+/// # Four channels, not one
 ///
-/// The same argument reaches the operand-pair and call-site channels, which are
-/// also lists of facts read by a per-row predicate. For `wire.kel` the pairs go
-/// from 1,452 rows to **2** and the call sites from 1,730 to 472. This test covers
-/// all three, since they share one criterion and one risk.
+/// The same argument reaches the operand-pair, call-site and EXPRESSION channels,
+/// all lists of facts read by a per-row predicate. For `wire.kel` the pairs go from
+/// 1,452 rows to **2** and the call sites from 1,730 to 472; across the corpus the
+/// expression rows go from 5,145 to 718, and `parse.kel` from 1,728 to **116 —
+/// under its cap**.
+///
+/// **The expression channel carries the extra risk and is why the corpus below has
+/// derived-binding chains.** A form-2 binding row addresses that table BY INDEX, so
+/// collapsing rows requires a remap. It is addressing-safe only because the rows
+/// collapsed are IDENTICAL: a binding pointing at either gets the same operands and
+/// so the same tag. That is exactly the property `dparams` lacks, which is why
+/// `dparams` is not deduplicated — it is indexed by declaration, and collapsing
+/// there would move every later entry.
+///
+/// This test covers all four, since they share one criterion and, for three of
+/// them, one risk.
 ///
 /// # Both halves, because a differential with one verdict proves half a thing
 ///
@@ -4504,26 +4534,34 @@ fn deduplicating_occurrence_rows_changes_no_verdict() {
     let raw = occurrence_rows(&ast);
     let deduped = dedup_occurrences(&raw);
     let (_dp, sites, pairs) = decl_call_rows(&ast);
+    let (mut nm, _nb) = binding_rows(&ast);
+    let nfrc = field_read_channel(&ast, &mut nm);
+    let (nodes_full, _) = expression_nodes_over_with(&ast, &nm, &nfrc.index, true, true, false);
+    let (nodes_dedup, _) = expression_nodes_over_with(&ast, &nm, &nfrc.index, true, true, true);
     assert!(
         deduped.1.len() < raw.1.len()
             && dedup_rows(&sites).len() < sites.len()
-            && dedup_rows(&pairs).len() < pairs.len(),
-        "deduplication removed no row from one of the three channels on the largest \
+            && dedup_rows(&pairs).len() < pairs.len()
+            && nodes_dedup.len() < nodes_full.len(),
+        "deduplication removed no row from one of the four channels on the largest \
          source, so the assertions above pass while measuring nothing: occurrences \
-         {}, sites {}, pairs {}",
+         {}, sites {}, pairs {}, nodes {}",
         raw.1.len(),
         sites.len(),
-        pairs.len()
+        pairs.len(),
+        nodes_full.len()
     );
     std::eprintln!(
         "DEDUPLICATION on the largest source: occurrences {} -> {}, call sites {} -> \
-         {}, operand pairs {} -> {}",
+         {}, operand pairs {} -> {}, expression rows {} -> {}",
         raw.1.len(),
         deduped.1.len(),
         sites.len(),
         dedup_rows(&sites).len(),
         pairs.len(),
-        dedup_rows(&pairs).len()
+        dedup_rows(&pairs).len(),
+        nodes_full.len(),
+        nodes_dedup.len()
     );
 }
 
@@ -4758,8 +4796,10 @@ fn eliding_inert_expression_rows_changes_no_verdict() {
     let ast = parse(&tokenize(REAL_STAGE_SOURCES[5].1).expect("lex")).expect("parse");
     let (mut names, _b) = binding_rows(&ast);
     let frc = field_read_channel(&ast, &mut names);
-    let (full, _) = expression_nodes_over_with(&ast, &names, &frc.index, true, false);
-    let (kept, _) = expression_nodes_over_with(&ast, &names, &frc.index, true, true);
+    // DEDUPLICATION HELD OFF ON BOTH SIDES, so this measures the elision alone.
+    // Leaving it on would let a deduplication saving masquerade as an elision one.
+    let (full, _) = expression_nodes_over_with(&ast, &names, &frc.index, true, false, false);
+    let (kept, _) = expression_nodes_over_with(&ast, &names, &frc.index, true, true, false);
     assert!(
         kept.len() < full.len(),
         "the elision removed no row from a real source, so the assertions above pass \
@@ -4946,12 +4986,18 @@ fn the_channel_array_counts_match_the_stage_data_block() {
 /// on overflow rather than truncating -- correctly, because **a verdict from a
 /// stage fed a truncated table proves nothing**.
 ///
-/// **The figures here move with the input path, and have moved twice already.**
-/// When this was first written the binding constraint anywhere was `parse`'s
-/// expression table at twenty-two times its cap; after the inert-row elision it was
-/// `wire`'s occurrence table at fifteen; after deduplicating that channel it is
-/// `wire`'s call sites at fourteen. **Read the numbers from a run rather than from
-/// this comment.**
+/// **The figures here move with the input path, and the binding constraint has now
+/// moved four times**: `parse`'s expression table at twenty-two times its cap, then
+/// `wire`'s occurrences at fifteen, then `wire`'s call sites at fourteen, and now
+/// `wire`'s BINDINGS at six — the one channel deliberately left un-deduplicated.
+/// **Read the numbers from a run rather than from this comment.**
+///
+/// **A deferral becoming the constraint is worth noticing.** The binding channel
+/// was skipped because its lookup is not a simple per-row predicate and a 34%
+/// saving did not justify the reasoning at the time. It is now what stands between
+/// the remaining four sources and the caps, so the reasoning has become worth
+/// doing — which is a different judgement from the one made then, reached because
+/// everything around it moved.
 ///
 /// So the sizes are measured WITHOUT running the stage, and the stage is run only
 /// where every table fits. A result of "no real program fits" is a FINDING rather
@@ -5068,19 +5114,21 @@ fn the_stage_is_measured_against_the_real_stage_sources() {
     fitting.sort_unstable();
     assert_eq!(
         fitting,
-        // **SEVEN, MEASURED 2026-09-12.** The sequence is worth keeping: I predicted
-        // ZERO, the first run found two, the inert-row elision took it to three, and
-        // deduplicating the occurrence channel took it to seven.
+        // **EIGHT, MEASURED 2026-09-12.** The sequence is worth keeping: I predicted
+        // ZERO, the first run found two, the inert-row elision took it to three,
+        // deduplicating the occurrence channel took it to seven, and deduplicating
+        // the call, pair and expression channels took it to eight.
         //
-        // All seven are ACCEPTED by the stage, asserted above -- an over-rejection
-        // result on real code that now covers a majority of the corpus rather than
-        // a corner of it.
+        // All eight are ACCEPTED by the stage, asserted above -- an over-rejection
+        // result on real code covering two thirds of the corpus rather than a
+        // corner of it.
         //
         // **This pin moving is the intended outcome, not a nuisance.** It is how a
         // capacity change announces itself; the failure message says so, and it has
-        // now done so twice.
+        // now done so three times.
         vec![
             "analyze",
+            "lexer",
             "verify_datalayout",
             "verify_depth",
             "verify_structural",
