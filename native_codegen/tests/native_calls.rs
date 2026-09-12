@@ -453,17 +453,26 @@ fn a_composite_from_a_signatured_native_result_agrees_with_the_vm() {
     let ee = lm
         .create_jit_execution_engine(OptimizationLevel::None)
         .expect("jit");
-    let n_region: usize = m
-        .chunks
-        .iter()
-        .map(|c| keleusma_native::region::plan_chunk_region(c).bytes as usize)
-        .sum();
+    // **TRANSITIVE, not a per-chunk sum.** A call site receives a disjoint block
+    // of the caller's region, and this file is entirely about calls, so summing
+    // each chunk's own plan under-provisions exactly the case under test.
+    let n_region = keleusma_native::region::host_arena_supplement_bytes(&m) as usize;
     const CANARY: u64 = 0xDEAD_BEEF_FEED_FACE;
     let mut region = vec![0u64; n_region.div_ceil(8) + 1];
     let canary_at = n_region.div_ceil(8);
     region[canary_at] = CANARY;
     let mut shared = vec![0u8; 8];
-    let mut privs = vec![0u64; 1];
+    // **SIZED FROM THE CONTRACT AND GUARDED.** This was one unguarded word.
+    // These subjects declare no data, so nothing writes here today — but three
+    // harnesses in this package sized a private region by a literal, and one
+    // reached the gate as a SIGSEGV. A one-word buffer's canary cannot catch a
+    // write past it; the contract figure plus a canary can.
+    let n_priv = (keleusma::vm::required_persistent_capacity_for(&m)
+        + keleusma_native::region::persistent_supplement_bytes(&m) as usize)
+        .div_ceil(8)
+        .max(1);
+    let mut privs = vec![0u64; n_priv + 1];
+    privs[n_priv] = CANARY;
     let sym = format!("kel_chunk_{entry}");
     assert_eq!(
         lm.get_function(&sym).expect("entry fn").count_params(),
@@ -486,6 +495,10 @@ fn a_composite_from_a_signatured_native_result_agrees_with_the_vm() {
     assert_eq!(
         region[canary_at], CANARY,
         "wrote past the {n_region}-byte region"
+    );
+    assert_eq!(
+        privs[n_priv], CANARY,
+        "the lowering wrote past the private region the contract allows"
     );
     let nlog = take_log();
 

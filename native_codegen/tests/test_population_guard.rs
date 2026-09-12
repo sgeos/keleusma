@@ -34,7 +34,12 @@
 ///
 /// **Derive this, do not transcribe it.** A count in this tree once read
 /// "nineteen" while the block it described held twenty-nine.
-const RECORDED_TEST_FUNCTIONS: usize = 506;
+const RECORDED_TEST_FUNCTIONS: usize = 507;
+// 506 -> 507 on 2026-09-11: one added, `host_buffer_census.rs`. It is the
+// deliberate instrument for the class the day ended on — a host buffer sized by
+// a literal rather than by the published contract. Three harnesses had it; a
+// hand sweep found one of them and the census found the rest.
+//
 // 503 -> 506 on 2026-09-11, net, and the net hides a DELETION that must be
 // stated: four added in `indexed_composite_slot.rs`, one REMOVED from
 // `private_slot_composite.rs`. The removed one asserted that an indexed composite
@@ -134,7 +139,9 @@ const RECORDED_TEST_FUNCTIONS: usize = 506;
 /// 109 -> 110: `host_contract_completeness.rs` added, none removed.
 ///
 /// 110 -> 111: `indexed_composite_slot.rs` added, none removed.
-const RECORDED_TEST_FILES: usize = 111;
+///
+/// 111 -> 112: `host_buffer_census.rs` added, none removed.
+const RECORDED_TEST_FILES: usize = 112;
 
 fn test_files() -> Vec<std::path::PathBuf> {
     let mut out: Vec<_> = std::fs::read_dir("tests")

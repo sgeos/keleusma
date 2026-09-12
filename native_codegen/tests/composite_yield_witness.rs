@@ -120,7 +120,15 @@ fn what_the_native_side_yields_for_a_composite() {
     let canary_at = n_region.div_ceil(8);
     region_buf[canary_at] = CANARY;
     let mut shared = CANARY.to_le_bytes().to_vec();
-    let mut privs = vec![CANARY; 1];
+    // **SIZED FROM THE CONTRACT AND GUARDED**, rather than one canary word. A
+    // single word catches a write AT it and misses a write PAST it, which is how
+    // a literal-sized private region fails.
+    let n_priv = (keleusma::vm::required_persistent_capacity_for(&m)
+        + region::persistent_supplement_bytes(&m) as usize)
+        .div_ceil(8)
+        .max(1);
+    let mut privs = vec![0u64; n_priv + 1];
+    privs[n_priv] = CANARY;
 
     let sym = format!("kel_chunk_{entry}");
     let f = lm.get_function(&sym).expect("entry");
@@ -150,6 +158,10 @@ fn what_the_native_side_yields_for_a_composite() {
     assert_eq!(
         region_buf[canary_at], CANARY,
         "the lowering wrote past the composite region"
+    );
+    assert_eq!(
+        privs[n_priv], CANARY,
+        "the lowering wrote past the private region the contract allows"
     );
 
     let seen = YIELDED.lock().unwrap().clone();

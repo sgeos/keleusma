@@ -169,16 +169,23 @@ fn scalar(v: &Value) -> i64 {
 fn run_native(m: &Module, seeded: &[u8]) -> Outcome {
     let entry = m.entry_point.expect("entry point");
     let n_shared = shared_data_bytes_for(m);
-    let n_priv = m
-        .data_layout
-        .as_ref()
-        .map(|dl| {
-            dl.slots
-                .iter()
-                .filter(|s| s.visibility == SlotVisibility::Private)
-                .count()
-        })
-        .unwrap_or(0);
+    // **THE PRIVATE REGION IS SIZED BY THE PUBLISHED CONTRACT.**
+    //
+    // It was the private SLOT COUNT — one word per slot — which is narrower than
+    // what the backend is entitled to write: the contract is
+    // `required_persistent_capacity_for` plus the supplement, covering the slot
+    // array, the persistent composite pool and the stream resume-state word.
+    //
+    // **The third harness in this package to carry that defect.** The corpus one
+    // was caught by its canary; the two-argument one produced a SIGSEGV. This one
+    // masks nothing today — measured, not assumed: every stage here lowers as a
+    // DEGENERATE stream, so no resume-state word exists, and no corpus module has
+    // a private composite slot. Repaired because the next stage that gains either
+    // would find the buffer four times too small. For `parse.kel` the slot array
+    // is 173216 B against a 692872 B contract.
+    let n_priv = (required_persistent_capacity_for(m)
+        + keleusma_native::region::persistent_supplement_bytes(m) as usize)
+        .div_ceil(8);
     let n_region = keleusma_native::region::region_total_bytes(m, entry, 0) as usize;
 
     let ctx = Context::create();
@@ -195,6 +202,11 @@ fn run_native(m: &Module, seeded: &[u8]) -> Outcome {
     shared[..n_shared].copy_from_slice(seeded);
     shared[n_shared..].copy_from_slice(&CANARY.to_le_bytes());
     let mut privs = vec![0u64; n_priv + 1];
+    // **The host's obligation, exercised.** No corpus module declares a non-zero
+    // initializer today, so this installs zeros — and a harness that omitted it
+    // would compare a backend that never applies one against a runtime that
+    // always does, the moment a stage grew one.
+    common::install_private_init(m, &mut privs[..n_priv]);
     privs[n_priv] = CANARY;
     let mut region = vec![0u64; n_region.div_ceil(8) + 1];
     let canary_at = n_region.div_ceil(8);

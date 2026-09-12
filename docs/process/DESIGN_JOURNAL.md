@@ -1,5 +1,43 @@
 # Design Journal
 
+## 2026-09-11 — [v0.3.0] Looking for the other instances, and the hand sweep failing twice
+
+The previous increment ended by recording a lesson: **repairing one instance of a class without
+looking for the others is the failure.** This one applied it, and the application is the finding.
+
+### The hand sweep found one more. The census found four.
+
+I swept by eye and found `stage_differential.rs` sizing its private region by the slot count — the
+third harness to do so. Measured before repairing: it masks nothing today, because every stage lowers
+as a DEGENERATE stream, so no resume-state word exists, and no corpus module declares a private
+composite slot or a non-zero initializer. Repaired anyway. For `parse.kel` the slot array is 173 KB
+against a 693 KB contract.
+
+**Then I wrote the census, and my hand-written list of harnesses was wrong twice.**
+
+| draft | claimed | actual |
+|---|---|---|
+| first | 7 files | **14**, three of which asked no contract figure at all |
+| second | added one, dropped one | still wrong in both directions |
+
+`composite_yield_witness.rs` and `native_calls.rs` each allocated a **one-word** private buffer, one
+of them unguarded. **A one-word buffer's canary catches a write AT it and misses a write PAST it**,
+which is exactly how a literal-sized region fails. Both now derive from the contract and assert a
+canary.
+
+> **A hand sweep over a population is the thing this census replaces, and its first two drafts
+> demonstrated why in the same increment.** Both corrections came from the matcher, not from looking
+> again.
+
+### What the census refuses, and what it cannot do
+
+It refuses a NEW harness that calls a three-pointer entry without asking the published contract for
+its private size. It cannot verify that an existing harness's arithmetic is right — the canaries do
+that at run time — only that every harness asks instead of guessing.
+
+`module_source_differential.rs` is the one member that legitimately derives nothing: its programs
+declare no data, it says so in its own text, and the census requires that sentence to be there.
+
 ## 2026-09-11 — [v0.3.0] The indexed composite slot, and two guards catching their author
 
 The refusal added when the direct composite copy landed is now an implementation. `log.items[i]` on
