@@ -4240,6 +4240,96 @@ fn lower_chunk_body<'ctx>(
                         .into_int_value();
                 st.push_triple(ctx, func, trap_bb, opts, (low, high, flag));
             }
+            // **THE CHECKED FIXED-POINT DIVIDE.** The arm above is the integer
+            // one; a NON-ZERO fraction count is the Fixed one, and the count is
+            // the only static signal of that — the runtime dispatches on a type
+            // the backend cannot see, and `Fixed` and `Word` are both eight
+            // bytes.
+            //
+            // ⚠ **THE REASON THIS WAS REFUSED DID NOT DISTINGUISH IT.** The
+            // ground given was that it reaches for `__divti3`, the compiler
+            // runtime's 128-bit signed division. **That cost is already paid**:
+            // `linkage_symbol_census.rs` measured `Fixed` division as the ONE
+            // construct in its sweep needing a compiler-runtime symbol, and the
+            // bare `Op::FixedDiv` lowers. Any object doing fixed division already
+            // depends on it.
+            //
+            // Read from `src/vm.rs`, and it differs from the integer arm exactly
+            // as the checked multiply does — middle slot ZERO rather than the
+            // quotient's high half, low slot WRAPPING — plus a left shift of the
+            // dividend before the division.
+            //
+            // Branch-free for the same reason as the arm above: a new basic block
+            // would have to be reconciled with the per-block operand-depth
+            // bookkeeping, and selects sidestep that.
+            Op::CheckedDiv(frac_bits) => {
+                if u64::from(*frac_bits) >= WORD_BITS {
+                    return Err(LowerError::unsupported_op(
+                        "CheckedDiv",
+                        format!(
+                            "CheckedDiv({frac_bits}) has a fraction count at or beyond the \
+                             {WORD_BITS}-bit word width; the runtime reports InvalidBytecode \
+                             and the count is static, so the lowering refuses"
+                        ),
+                    ));
+                }
+                let rhs = st.pop();
+                let lhs = st.pop();
+
+                // A zero divisor is UNDEFINED in LLVM's `sdiv`, not a fault, so
+                // it is excluded before the division and the result discarded for
+                // that path. The runtime reifies it as flag 3 with the NUMERATOR
+                // in the low slot.
+                let iszero =
+                    st.b.build_int_compare(IntPredicate::EQ, rhs, i64t.const_zero(), "fdzero")
+                        .unwrap();
+                let nonzero =
+                    st.b.build_select(iszero, i64t.const_int(1, false), rhs, "fdnz")
+                        .unwrap()
+                        .into_int_value();
+
+                // `dividend = widen(x) << frac_bits`. **Widen FIRST**: shifting in
+                // 64 bits overflows for exactly the inputs that make the
+                // operation interesting.
+                let a = st.widen(lhs, i128t, "cfd.a");
+                let c = st.widen(nonzero, i128t, "cfd.b");
+                let dividend = st
+                    .b
+                    .build_left_shift(a, i128t.const_int(u64::from(*frac_bits), false), "cfd.sh")
+                    .unwrap();
+                let quotient = st.b.build_int_signed_div(dividend, c, "cfd.q").unwrap();
+
+                // `fixed_checked_outputs`: 0 in range, 1 above max, 2 below min,
+                // and the value wraps into the word.
+                let max = st.widen(i64t.const_int(i64::MAX as u64, false), i128t, "cfd.max");
+                let min = st.widen(i64t.const_int(i64::MIN as u64, true), i128t, "cfd.min");
+                let over =
+                    st.b.build_int_compare(IntPredicate::SGT, quotient, max, "cfd.over")
+                        .unwrap();
+                let under =
+                    st.b.build_int_compare(IntPredicate::SLT, quotient, min, "cfd.under")
+                        .unwrap();
+                let flag_under =
+                    st.b.build_select(under, i64t.const_int(2, false), i64t.const_zero(), "cfd.f2")
+                        .unwrap()
+                        .into_int_value();
+                let flag_ok =
+                    st.b.build_select(over, i64t.const_int(1, false), flag_under, "cfd.f1")
+                        .unwrap()
+                        .into_int_value();
+                let low_ok = st.b.build_int_truncate(quotient, i64t, "cfd.low").unwrap();
+
+                // The zero-divisor override: flag 3, numerator in low.
+                let low =
+                    st.b.build_select(iszero, lhs, low_ok, "cfd.zlow")
+                        .unwrap()
+                        .into_int_value();
+                let flag =
+                    st.b.build_select(iszero, i64t.const_int(3, false), flag_ok, "cfd.zflag")
+                        .unwrap()
+                        .into_int_value();
+                st.push_triple(ctx, func, trap_bb, opts, (low, i64t.const_zero(), flag));
+            }
             // Comparisons. The VM's `compare_op` pops the right operand first,
             // then the left, and compares left against right; the order below
             // matches it. The result is 0 or 1 in an i64, which is the flat

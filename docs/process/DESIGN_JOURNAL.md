@@ -1,5 +1,46 @@
 # Design Journal
 
+## 2026-09-12 — [v0.3.0] The checked fixed divide, and a reason I gave that did not distinguish
+
+One increment after lowering the checked fixed MULTIPLY, the DIVIDE lowers too — and the interesting
+part is why it was still refused.
+
+**The ground was `__divti3`**, the compiler runtime's 128-bit signed division. I wrote that myself, in
+the multiply's brief, as the reason the divide should stay refused.
+
+**It is true and it does not distinguish.** `linkage_symbol_census.rs` measured `Fixed` division as
+the ONE construct in its sweep needing a compiler-runtime symbol — and the bare `Op::FixedDiv`
+**lowers**. Any object performing a fixed division already depends on that symbol. The checked form
+adds nothing the object did not already have.
+
+> **A cost already paid by supported code cannot justify refusing more of it.**
+
+The reason is marked withdrawn in the document that made it, not quietly superseded in the one that
+supersedes it.
+
+### Three paths, and the zero divisor is the one that needed care
+
+| case | result |
+|---|---|
+| zero divisor | flag **3**, low is the NUMERATOR — the runtime does not fault |
+| quotient outside the word range | classified and **wrapped** |
+| otherwise | `widen(x) << frac_bits`, divided in 128 bits |
+
+A zero divisor is **undefined** in LLVM's `sdiv` rather than a fault, so it is excluded before the
+division and overridden by selects afterwards — branch-free, because a new basic block would have to
+be reconciled with the per-block operand-depth bookkeeping the emitter maintains.
+
+**The zero-divisor path is driven and shown distinct** from an ordinary quotient. Agreement alone
+would hold even if the flag were never set, which is the same non-vacuity the multiply's arm-selection
+test needed.
+
+### What the pair of increments says
+
+Two refusals, examined a day apart, both turned out to be gaps rather than decisions — and the second
+was held in place by a reason the first increment supplied. **The claim "no capability work remains"
+was wrong twice**, and both times the evidence was already in the tree: a test comment saying the
+boundary had moved before, and a census measuring the very cost being cited.
+
 ## 2026-09-12 — [v0.3.0] The checked fixed multiply lowers, and a census that could not see its own phrases
 
 **A capability gap, not a decision.** `Op::FixedMul` and `Op::FixedDiv` — the bare forms — both

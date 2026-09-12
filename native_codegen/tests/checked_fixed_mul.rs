@@ -200,3 +200,93 @@ fn a_fraction_count_at_the_word_width_is_refused() {
          InvalidBytecode there"
     );
 }
+
+/// **THE CHECKED FIXED-POINT DIVIDE**, which was refused on a ground that did not
+/// distinguish it.
+///
+/// The reason given was that it reaches for `__divti3`, the compiler runtime's
+/// 128-bit signed division. **That cost is already paid**:
+/// `linkage_symbol_census.rs` measured `Fixed` division as the one construct in
+/// its sweep needing a compiler-runtime symbol, and the bare `Op::FixedDiv`
+/// lowers. Any object doing fixed division already depends on it.
+///
+/// Three paths, and they are genuinely different: an ordinary quotient, a
+/// quotient outside the word range, and a zero divisor — which the runtime
+/// reifies as flag 3 with the NUMERATOR in the low slot rather than faulting.
+#[test]
+fn the_checked_fixed_divide_agrees_on_ok_out_of_range_and_zero_divisor() {
+    const DIV: &str = "fn main(a: Fixed<16>, b: Fixed<16>) -> Fixed<16> \
+                       { a / b { ok(v) => v, overflow(w) => w, zero_divisor(n) => n } }";
+
+    let refusals = module_refusals(&common::build(DIV), LowerOptions::default());
+    assert!(
+        refusals.is_empty(),
+        "the checked divide must lower: {refusals:?}"
+    );
+
+    for (a, b, what) in [
+        (6 * ONE, 2 * ONE, "ok"),
+        (-6 * ONE, 2 * ONE, "ok, negative"),
+        (i64::MAX, ONE / 2, "out of range"),
+        (5 * ONE, 0, "zero divisor"),
+    ] {
+        let vm = vm_fixed(DIV, a, b);
+        let nat = native_fixed(DIV, a, b);
+        assert_eq!(nat, vm, "{what}: a={a} b={b} native={nat} vm={vm}");
+    }
+}
+
+/// **The zero-divisor path is distinct**, which agreement alone does not show: if
+/// it produced the same value as an ordinary quotient, every comparison above
+/// would still hold.
+#[test]
+fn the_zero_divisor_binds_the_numerator_rather_than_a_quotient() {
+    const DIV: &str = "fn main(a: Fixed<16>, b: Fixed<16>) -> Fixed<16> \
+                       { a / b { ok(v) => v, overflow(w) => w, zero_divisor(n) => n } }";
+    let numerator = 5 * ONE;
+    let zero_div = vm_fixed(DIV, numerator, 0);
+    assert_eq!(
+        zero_div, numerator,
+        "the reference binds the NUMERATOR on a zero divisor; if that changes, this \
+         subject is no longer exercising flag 3"
+    );
+    let ordinary = vm_fixed(DIV, numerator, 2 * ONE);
+    assert_ne!(
+        ordinary, zero_div,
+        "the zero-divisor result must differ from an ordinary quotient, or this test \
+         cannot tell the paths apart"
+    );
+    assert_eq!(
+        native_fixed(DIV, numerator, 0),
+        zero_div,
+        "native must take the same path as the reference"
+    );
+}
+
+/// An out-of-range fraction count is refused for the divide as for the multiply.
+#[test]
+fn a_divide_fraction_count_at_the_word_width_is_refused() {
+    use keleusma::bytecode::Op;
+    const DIV: &str = "fn main(a: Fixed<16>, b: Fixed<16>) -> Fixed<16> \
+                       { a / b { ok(v) => v, overflow(w) => w, zero_divisor(n) => n } }";
+    let mut m = common::build(DIV);
+    let entry = m.entry_point.expect("entry point");
+    let mut patched = false;
+    for op in m.chunks[entry].ops.iter_mut() {
+        if let Op::CheckedDiv(n) = op
+            && *n != 0
+        {
+            *op = Op::CheckedDiv(64);
+            patched = true;
+            break;
+        }
+    }
+    assert!(
+        patched,
+        "the subject must contain a non-zero-fraction CheckedDiv"
+    );
+    assert!(
+        !module_refusals(&m, LowerOptions::default()).is_empty(),
+        "a fraction count at the word width must be refused"
+    );
+}

@@ -34,7 +34,12 @@
 ///
 /// **Derive this, do not transcribe it.** A count in this tree once read
 /// "nineteen" while the block it described held twenty-nine.
-const RECORDED_TEST_FUNCTIONS: usize = 523;
+const RECORDED_TEST_FUNCTIONS: usize = 526;
+// 523 -> 526 on 2026-09-12: three added to `checked_fixed_mul.rs` for the checked
+// fixed DIVIDE, refused on a ground that did not distinguish it — the bare
+// `Op::FixedDiv` already reaches `__divti3` and already lowers, so the cost was
+// paid by supported code.
+//
 // 519 -> 523 on 2026-09-12: four added in `checked_fixed_mul.rs`. The checked
 // fixed-point multiply — the form with ok and overflow arms — was refused while
 // the bare saturating form lowered; it now lowers, with the middle slot zero

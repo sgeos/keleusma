@@ -63,8 +63,13 @@ Every wrong turn the brief named was live:
 
 - **Not reused from the integer arm.** The middle slot is zero, the low slot wraps, and the guard
   differs; sharing would have made one of those wrong silently.
-- **`CheckedDiv(n)` stays refused.** It shifts the dividend LEFT into 128 bits and divides, reaching
-  for `__divti3`, which the bare-metal census already flagged.
+- **`CheckedDiv(n)` stays refused** — ⚠ **and this reason was WITHDRAWN the next increment.** It said
+  the divide reaches for `__divti3`, which the bare-metal census flagged. True, **and not
+  distinguishing**: `linkage_symbol_census.rs` measured `Fixed` division as the ONE construct in its
+  sweep needing a compiler-runtime symbol, and the bare `Op::FixedDiv` already lowers. Any object
+  doing fixed division already depends on that symbol. The checked divide now lowers too; see
+  `CHECKED_FIXED_DIV_BRIEF.md`. **A cost already paid by supported code cannot justify refusing
+  more of it.**
 - **The type premise is stated where the code relies on it**, because the count being non-zero is the
   only static signal that the operand is `Fixed`.
 

@@ -1,0 +1,34 @@
+COMPLETION CONDITION — the checked fixed-point divide
+
+Ordering is NOT a completion criterion. Any order of the work satisfies this, and
+nothing here requires a particular branch, commit shape, or process step.
+
+All of the following hold in the tree:
+
+1. A CHECKED FIXED-POINT DIVIDE AGREES WITH THE REFERENCE.
+   A program using the checked form of fixed-point division produces the same
+   result natively as on the virtual machine for an ordinary quotient, for a zero
+   divisor, and for a quotient outside the word range.
+
+2. THE ZERO-DIVISOR PATH IS DRIVEN AND DISTINCT.
+   The zero-divisor case is exercised, and its outcome is shown to differ from the
+   ordinary one rather than coinciding with it.
+
+3. THE THREE PUSHED SLOTS MATCH THE RUNTIME'S,
+   including that the second slot is not the quotient's high half.
+
+4. AN OUT-OF-RANGE FRACTION COUNT IS STILL REFUSED.
+
+5. THE SUPERSEDED REASON IS CORRECTED WHERE IT WAS RECORDED.
+   Any document or comment that justified refusing this by the need for a
+   compiler-runtime division routine states that the bare fixed-point divide
+   already requires the same routine and already lowers.
+
+6. NEW CENSUS-TRACKED SITES ARE CLASSIFIED, and any upstream premise the
+   lowering relies on is recorded where the census requires.
+
+7. NO NEW OPCODE, NO BYTECODE_VERSION CHANGE, AND NO EDIT TO src/ OR tests/ AT
+   THE REPOSITORY ROOT.
+
+8. THE BACKEND SUITE IS GREEN IN BOTH FLOAT CONFIGURATIONS, with counts
+   re-derived rather than quoted.

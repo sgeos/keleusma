@@ -1612,7 +1612,7 @@ fn the_checked_division_forms_agree_with_the_vm_including_a_zero_divisor() {
 }
 
 #[test]
-fn a_fixed_point_divide_is_refused_rather_than_lowered_as_an_integer_one() {
+fn a_fixed_point_divide_lowers_rather_than_being_treated_as_an_integer_one() {
     // The same boundary as the fixed-point multiply: `CheckedDiv` carries the
     // Q-format fraction-bit count and only zero is integer division.
     let src = "fn main(a: Fixed<16>, b: Fixed<16>) -> Fixed<16> { a / b { ok(v) => v, overflow(w) => w, zero_divisor(n) => n } }";
@@ -1636,10 +1636,22 @@ fn a_fixed_point_divide_is_refused_rather_than_lowered_as_an_integer_one() {
         "kel_entry",
         LowerOptions::default(),
     );
+    // **INVERTED 2026-09-12.** The checked fixed-point divide LOWERS: widen,
+    // shift the dividend LEFT by the fraction count, divide in 128 bits, then
+    // classify and wrap — with the zero divisor excluded before the `sdiv` and
+    // reified as flag 3 with the numerator in the low slot, which is what
+    // `src/vm.rs` does there.
+    //
+    // **The ground for refusing it did not distinguish it.** The reason recorded
+    // was that it reaches for `__divti3`; `linkage_symbol_census.rs` measured
+    // `Fixed` division as the one construct in its sweep needing a
+    // compiler-runtime symbol, and the BARE `Op::FixedDiv` already lowers. The
+    // cost was already paid by supported code.
     assert!(
-        err.is_err(),
-        "a fixed-point divide carries a non-zero fraction-bit count and must be \
-         refused, not lowered as if the operand were absent"
+        err.is_ok(),
+        "a fixed-point divide with a non-zero fraction count now LOWERS. If it is \
+         refused again, say why deliberately — and not by citing `__divti3`, which \
+         the bare fixed divide already requires."
     );
 }
 
