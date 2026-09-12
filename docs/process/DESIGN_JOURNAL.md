@@ -1,5 +1,37 @@
 # Design Journal
 
+## 2026-09-12 — [v0.3.0] A prediction inherits the tree it was computed against
+
+Absorption 59's brief predicted **zero conflicting files**. `merge-tree` computed **one**, in output
+printed by the same command that filed the brief.
+
+**Stale, not mistaken.** Its `merge-tree` had run an iteration earlier against a FOUR-commit backlog;
+by filing time the backlog was seven and both lines had rewritten `REVERSE_PROMPT.md` in between.
+
+> **This is the session's recurring class arriving inside the discipline meant to catch it.** The
+> bounds-transfer numbers, a repaired unsoundness still asserted, a "none acted on" resting on
+> recollection — every one a figure separated from the measurement that produced it. A prediction is
+> the one artefact whose entire purpose is to be compared, and nothing compared it to its own tree.
+
+### The rule joins its siblings rather than starting a fifth document
+
+The absorption protocol has three rules learned over 59 instances — measure it alone, record the
+prediction before merging, verify ownership non-vacuously — and they live in the handoff's
+`DO THIS FIRST`. **The fourth now lives there too.** A competing process document is the duplication
+this package has unpicked three times.
+
+### The guard is deliberately narrow, and was proven to fire
+
+It checks **only the newest** absorption brief: what matters is the next prediction, and a guard over
+all sixty would rot into a list. It **does not demand the stamp from the fifty-nine written before the
+rule** — a guard that fails against documents authored before it would be disabled within the day.
+And it **does not claim the recorded figures are right**; it cannot know the true backlog, only that
+one was recorded, which is the whole difference between a prediction that goes stale unnoticed and one
+that cannot.
+
+**Passing is not evidence a guard works**, so the stamp was removed and the failure observed before
+restoring it.
+
 ## 2026-09-12 — [v0.3.0] The panic-site census, and two arithmetics that did not close
 
 The previous increment found a panic on a public entry point by hand. This is the deliberate version:

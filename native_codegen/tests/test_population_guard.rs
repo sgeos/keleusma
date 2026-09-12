@@ -34,7 +34,13 @@
 ///
 /// **Derive this, do not transcribe it.** A count in this tree once read
 /// "nineteen" while the block it described held twenty-nine.
-const RECORDED_TEST_FUNCTIONS: usize = 518;
+const RECORDED_TEST_FUNCTIONS: usize = 519;
+// 518 -> 519 on 2026-09-12: one added, `prediction_stamp.rs`. Absorption 59's
+// brief predicted zero conflicts against a merge-tree computed an iteration
+// earlier on a four-commit backlog; the guard requires the newest absorption
+// brief to record the tree its prediction belongs to. Proven to fire by removing
+// the stamp and watching it fail.
+//
 // 517 -> 518 on 2026-09-12: one added, `panic_site_census.rs`. It is the
 // deliberate version of the question that found the depth-disagreement panic by
 // hand — which panic-capable sites in the emitter encode an assumption about the
@@ -184,7 +190,9 @@ const RECORDED_TEST_FUNCTIONS: usize = 518;
 /// 114 -> 115: `depth_disagreement.rs` added, none removed.
 ///
 /// 115 -> 116: `panic_site_census.rs` added, none removed.
-const RECORDED_TEST_FILES: usize = 116;
+///
+/// 116 -> 117: `prediction_stamp.rs` added, none removed.
+const RECORDED_TEST_FILES: usize = 117;
 
 fn test_files() -> Vec<std::path::PathBuf> {
     let mut out: Vec<_> = std::fs::read_dir("tests")

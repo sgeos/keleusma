@@ -4,6 +4,11 @@
 
 ## The prediction, and its risk, checked against each other
 
+**Computed against `8dff712f` with 7 unabsorbed commits.** This stamp is added retroactively, as the
+example of the rule it produced: the prediction below was carried from a `merge-tree` run against a
+FOUR-commit backlog, and nothing recorded which tree it belonged to. See
+`docs/decisions/PREDICTION_STAMP_BRIEF.md`.
+
 7 commits. **Measured ALONE.**
 
 | clause | prediction |
