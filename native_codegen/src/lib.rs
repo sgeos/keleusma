@@ -4011,6 +4011,80 @@ fn lower_chunk_body<'ctx>(
                 let wide = st.b.build_int_mul(a, c, "p128").unwrap();
                 st.push_checked_triple(ctx, func, trap_bb, opts, wide);
             }
+            // **THE CHECKED FIXED-POINT MULTIPLY.** `Op::CheckedMul(0)` above is
+            // the integer arm; a NON-ZERO fraction count is the Fixed one.
+            //
+            // ⚠ **THE COUNT IS THE STATIC TYPE SIGNAL, and that is an upstream
+            // premise.** The runtime dispatches this opcode on the operand's
+            // RUNTIME type, which the backend cannot see — `Fixed` and `Word` are
+            // both eight bytes and indistinguishable by width. The compiler emits
+            // a non-zero count only for the Fixed arm, so the count carries the
+            // type. Recorded here because that is a claim about what the compiler
+            // emits, which this package censuses.
+            //
+            // **Read from `src/vm.rs`, not inferred from the integer arm**, and
+            // it differs in all three of the ways that matter:
+            //
+            // | | integer `CheckedMul(0)` | Fixed `CheckedMul(n)` |
+            // |---|---|---|
+            // | middle slot | the product's HIGH half | **always zero** |
+            // | low slot | truncated | truncated, and the contract is WRAPPING |
+            // | shift | none | arithmetic right by `n` before classifying |
+            //
+            // **The middle slot is the trap.** Reusing the integer triple would
+            // hand an overflow arm a high half the runtime never produces.
+            //
+            // Distinct from `Op::FixedMul`, which SATURATES. Same arithmetic in
+            // the middle, different contract at the edges.
+            Op::CheckedMul(frac_bits) => {
+                // Fail closed exactly where the runtime does — it returns
+                // `InvalidBytecode` above the word width — and where `FixedMul`
+                // already does. The count is static, so this costs a refusal
+                // rather than a check.
+                if u64::from(*frac_bits) >= WORD_BITS {
+                    return Err(LowerError::unsupported_op(
+                        "CheckedMul",
+                        format!(
+                            "CheckedMul({frac_bits}) has a fraction count at or beyond the \
+                             {WORD_BITS}-bit word width; the runtime reports InvalidBytecode \
+                             and the count is static, so the lowering refuses"
+                        ),
+                    ));
+                }
+                let rhs = st.pop();
+                let lhs = st.pop();
+                let a = st.widen(lhs, i128t, "cfx.a");
+                let c = st.widen(rhs, i128t, "cfx.b");
+                let product = st.b.build_int_mul(a, c, "cfx.p").unwrap();
+                let shifted =
+                    st.b.build_right_shift(
+                        product,
+                        i128t.const_int(u64::from(*frac_bits), false),
+                        true,
+                        "cfx.sh",
+                    )
+                    .unwrap();
+                // `fixed_checked_outputs`: 0 in range, 1 above max, 2 below min,
+                // and the value WRAPS into the word.
+                let max = st.widen(i64t.const_int(i64::MAX as u64, false), i128t, "cfx.max");
+                let min = st.widen(i64t.const_int(i64::MIN as u64, true), i128t, "cfx.min");
+                let over =
+                    st.b.build_int_compare(IntPredicate::SGT, shifted, max, "cfx.over")
+                        .unwrap();
+                let under =
+                    st.b.build_int_compare(IntPredicate::SLT, shifted, min, "cfx.under")
+                        .unwrap();
+                let flag_under =
+                    st.b.build_select(under, i64t.const_int(2, false), i64t.const_zero(), "cfx.f2")
+                        .unwrap()
+                        .into_int_value();
+                let flag =
+                    st.b.build_select(over, i64t.const_int(1, false), flag_under, "cfx.flag")
+                        .unwrap()
+                        .into_int_value();
+                let low = st.b.build_int_truncate(shifted, i64t, "cfx.low").unwrap();
+                st.push_triple(ctx, func, trap_bb, opts, (low, i64t.const_zero(), flag));
+            }
             // Negation in 128 bits rather than 64 is what makes `-i64::MIN`
             // observable: at 64 bits it wraps to itself and the overflow flag
             // would be unrecoverable.

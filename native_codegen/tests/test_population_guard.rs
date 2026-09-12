@@ -34,7 +34,12 @@
 ///
 /// **Derive this, do not transcribe it.** A count in this tree once read
 /// "nineteen" while the block it described held twenty-nine.
-const RECORDED_TEST_FUNCTIONS: usize = 519;
+const RECORDED_TEST_FUNCTIONS: usize = 523;
+// 519 -> 523 on 2026-09-12: four added in `checked_fixed_mul.rs`. The checked
+// fixed-point multiply — the form with ok and overflow arms — was refused while
+// the bare saturating form lowered; it now lowers, with the middle slot zero
+// rather than the integer form's high half and a WRAPPING low slot.
+//
 // 518 -> 519 on 2026-09-12: one added, `prediction_stamp.rs`. Absorption 59's
 // brief predicted zero conflicts against a merge-tree computed an iteration
 // earlier on a four-commit backlog; the guard requires the newest absorption
@@ -192,7 +197,9 @@ const RECORDED_TEST_FUNCTIONS: usize = 519;
 /// 115 -> 116: `panic_site_census.rs` added, none removed.
 ///
 /// 116 -> 117: `prediction_stamp.rs` added, none removed.
-const RECORDED_TEST_FILES: usize = 117;
+///
+/// 117 -> 118: `checked_fixed_mul.rs` added, none removed.
+const RECORDED_TEST_FILES: usize = 118;
 
 fn test_files() -> Vec<std::path::PathBuf> {
     let mut out: Vec<_> = std::fs::read_dir("tests")

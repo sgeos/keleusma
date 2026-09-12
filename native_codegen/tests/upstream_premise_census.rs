@@ -34,6 +34,21 @@
 //! | **the bound comes from `Op::BoundsCheck`** | **MISLOWER — this was the defect. Now checked at the site.** |
 //! | **the operand stack is empty at `Op::Reset`** | **MISLOWER — was assumed. Now checked at the site.** |
 //! | **a verified module cannot present a depth disagreement** | **HARMLESS IF FALSE — the site no longer relies on it.** |
+//! | **a non-zero fraction count means the operand is `Fixed`** | **refuse — the count is the only static type signal, and a wrong one lowers a Fixed multiply as an integer** |
+//! | float division flows through `Op::Div`, not `CheckedDiv` | already corrected once; the note records the correction rather than the premise |
+//!
+//! # ⚠ THREE ENTRIES WERE INVISIBLE TO THIS CENSUS UNTIL 2026-09-12
+//!
+//! The phrases are lowercase and were matched case-SENSITIVELY, so a premise
+//! opening a sentence — *"**The** compiler emits ..."* — never matched. Three did
+//! exactly that, **and one of them was already dispositioned in the table above
+//! while never once being matched**: the `break;` dead-code entry.
+//!
+//! **The start of a sentence is where a premise naturally appears.** This was the
+//! common case, not an edge case, and the count of 29 that this file defended so
+//! carefully was measuring two thirds of a phrase.
+//!
+//! Found by writing a new premise, expecting a refusal, and noticing none came.
 //!
 //! **Two of seven were unchecked and one of those was live.** Both are now
 //! checks rather than prose.
@@ -103,7 +118,7 @@ const PREMISE_PHRASES: &[&str] = &[
 /// **Re-derive this rather than trusting it.** It moves with every increment
 /// that adds or removes such a comment, including this file's own prose being
 /// quoted into the emitter.
-const RECORDED_PREMISE_LINES: usize = 30;
+const RECORDED_PREMISE_LINES: usize = 33;
 // 12 -> 29 with the impossibility phrases. The seventeen new lines were read,
 // and they fall in one class: **statements of what the backend DECLINES** —
 // "an unknown width cannot be placed", "`Op::Add` cannot be lowered without
@@ -117,7 +132,22 @@ fn premise_lines() -> Vec<(usize, String)> {
     let src = std::fs::read_to_string("src/lib.rs").expect("the emitter is readable");
     src.lines()
         .enumerate()
-        .filter(|(_, l)| PREMISE_PHRASES.iter().any(|p| l.contains(p)))
+        // ⚠ **CASE-INSENSITIVE SINCE 2026-09-12, AND IT WAS NOT BEFORE.** The
+        // phrases are written lowercase and matched with `contains`, so a premise
+        // opening a sentence — "**The** compiler emits ..." — escaped entirely.
+        // **Three did**, two of them predating the increment that found it, and
+        // one of those was already dispositioned in the table above while never
+        // once being matched.
+        //
+        // The start of a sentence is where a premise naturally appears, so this
+        // was not an edge case; it was the common case. Found by writing a new
+        // premise, expecting this census to refuse it, and noticing that it did
+        // not. **The same shape as a word boundary that skipped
+        // `debug_assert_eq!` in the panic census, one increment earlier.**
+        .filter(|(_, l)| {
+            let lower = l.to_lowercase();
+            PREMISE_PHRASES.iter().any(|p| lower.contains(p))
+        })
         .map(|(i, l)| (i + 1, l.trim().to_string()))
         .collect()
 }

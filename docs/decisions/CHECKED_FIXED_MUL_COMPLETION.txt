@@ -1,0 +1,40 @@
+COMPLETION CONDITION — the checked fixed-point multiply
+
+Ordering is NOT a completion criterion. Any order of the work satisfies this, and
+nothing here requires a particular branch, commit shape, or process step.
+
+All of the following hold in the tree:
+
+1. A CHECKED FIXED-POINT MULTIPLY AGREES WITH THE REFERENCE.
+   A program using the checked form of fixed-point multiplication -- the one with
+   ok and overflow arms -- produces the same result natively as on the virtual
+   machine, for an ordinary product, for one that exceeds the word range, and for
+   one that falls below it.
+
+2. THE THREE PUSHED SLOTS MATCH THE RUNTIME'S.
+   The value, the second slot and the flag each carry what the reference puts
+   there, established against the reference rather than from description. In
+   particular the second slot is not the integer form's high half.
+
+3. THE LOW SLOT WRAPS RATHER THAN SATURATES,
+   matching the checked contract and distinct from the saturating bare form, and
+   a test distinguishes the two.
+
+4. AN OUT-OF-RANGE FRACTION COUNT IS STILL REFUSED,
+   as the bare form already refuses it, rather than shifting by a count at or
+   beyond the word width.
+
+5. THE CHECKED DIVIDE IS STILL REFUSED, with a reason naming what it would
+   require rather than being left unexplained.
+
+6. THE TEST THAT ASSERTED THE MULTIPLY REFUSAL NOW ASSERTS AGREEMENT
+   rather than having been deleted.
+
+7. NEW CENSUS-TRACKED SITES ARE CLASSIFIED, and any upstream premise the
+   lowering relies on is recorded where the census requires.
+
+8. NO NEW OPCODE, NO BYTECODE_VERSION CHANGE, AND NO EDIT TO src/ OR tests/ AT
+   THE REPOSITORY ROOT.
+
+9. THE BACKEND SUITE IS GREEN IN BOTH FLOAT CONFIGURATIONS, with counts
+   re-derived rather than quoted.

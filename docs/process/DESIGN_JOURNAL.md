@@ -1,5 +1,42 @@
 # Design Journal
 
+## 2026-09-12 — [v0.3.0] The checked fixed multiply lowers, and a census that could not see its own phrases
+
+**A capability gap, not a decision.** `Op::FixedMul` and `Op::FixedDiv` — the bare forms — both
+lower. The CHECKED form, with `ok` and `overflow` arms, was refused. Its own test said the boundary
+*"must be changed deliberately — as the division case above had to be when multiplication arrived"*,
+and it has now moved the same way.
+
+**Read from `src/vm.rs`, because the integer arm is a trap.** `CheckedMul(0)` pushes the product's
+high half in the middle slot; the Fixed arm pushes **zero**, wraps rather than saturates, and shifts
+arithmetically by the fraction count first. Reusing the integer triple would have handed an overflow
+arm a value the runtime never produces.
+
+`CheckedDiv(n)` stays refused: it shifts the dividend left into 128 bits and divides, reaching for
+`__divti3`, which the bare-metal census already flagged.
+
+### The test's arithmetic was wrong before the lowering was
+
+`the_overflow_arm_is_actually_selected` expected `wrapped_only - 1` and measured `-65536`. **`w - 1`
+is fixed-point subtraction** — the literal is one UNIT, `1 << 16` in Q16 bits. Worth recording because
+the first instinct on a red differential is to suspect the backend, and here the backend was right.
+
+### ⚠ The premise census should have refused this increment and could not
+
+The new comment states an upstream premise — *"The compiler emits a non-zero count only for the Fixed
+arm"* — and the census did not fire. **Its phrases are lowercase and it matched case-SENSITIVELY**, so
+a premise opening a sentence never matched.
+
+**Three did.** Two predate this increment, and one of those — the `break;` dead-code entry — **was
+already dispositioned in the census's own table while never once being matched.**
+
+> **The start of a sentence is where a premise naturally appears.** Not an edge case: the common case.
+> The count of 29 that file defended so carefully was measuring two thirds of a phrase.
+
+Found by writing a premise, expecting a refusal, and noticing none came — **the same shape as the word
+boundary that hid `debug_assert_eq!` from the panic census one increment earlier.** Two matchers, two
+silent narrowings, both caught by watching for a guard that should have fired and did not.
+
 ## 2026-09-12 — [v0.3.0] A prediction inherits the tree it was computed against
 
 Absorption 59's brief predicted **zero conflicting files**. `merge-tree` computed **one**, in output

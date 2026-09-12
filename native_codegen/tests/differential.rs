@@ -1715,7 +1715,7 @@ fn the_trap_overflow_policy_emits_a_guard_on_every_checked_opcode() {
 }
 
 #[test]
-fn a_fixed_point_multiply_is_refused_rather_than_lowered_as_an_integer_one() {
+fn a_fixed_point_multiply_lowers_rather_than_being_treated_as_an_integer_one() {
     // `Op::CheckedMul` carries the Q-format fraction-bit count. The lowering
     // matches `CheckedMul(0)` specifically, so a non-zero count falls through to
     // the refusal arm. Lowering it as an integer multiply would be wrong by a
@@ -1750,10 +1750,22 @@ fn a_fixed_point_multiply_is_refused_rather_than_lowered_as_an_integer_one() {
         "kel_entry",
         LowerOptions::default(),
     );
+    // **INVERTED 2026-09-12, as this test's own comment instructed.** The checked
+    // fixed-point multiply LOWERS now: widen, multiply, arithmetic-shift by the
+    // fraction count, then classify and WRAP, which is what `src/vm.rs` does at
+    // the same opcode. The middle slot is zero rather than the product's high
+    // half, and reusing the integer triple would have handed an overflow arm a
+    // value the runtime never produces.
+    //
+    // **The refusal was not deleted**, which is what its old comment warned
+    // against — it asserts the new behaviour, and the agreement itself lives in
+    // `checked_fixed_mul.rs` where the arms and the wrapping contract are driven.
     assert!(
-        err.is_err(),
-        "a fixed-point multiply carries a non-zero fraction-bit count and must \
-         be refused, not lowered as if the operand were absent"
+        err.is_ok(),
+        "a fixed-point multiply with a non-zero fraction count now LOWERS. If it \
+         is refused again, the capability was withdrawn: say so deliberately \
+         rather than restoring this assertion, and move `checked_fixed_mul.rs` \
+         with it."
     );
 }
 // ---------------------------------------------------------------------------
