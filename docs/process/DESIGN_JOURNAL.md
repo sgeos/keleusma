@@ -13,6 +13,59 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (sixty-eighth) — the pattern gaps are local, and a third failure kind
+
+### THE QUESTION THAT DECIDED THE NEXT WORK
+
+The pattern census found three of seven documented forms unhandled. **That could be a local gap or
+a symptom**, and the difference decides whether teaching `parse.kel` three pattern forms is worth
+doing or whether the honest deliverable is a much narrower documented subset.
+
+Writing grammar for a 309-kilobyte stage, with a byte-identical self-compile to preserve, before
+knowing which, would have been building on an unmeasured premise. **So the premise was measured
+first** — the third time this session that has changed what the next work should be.
+
+### THE ANSWER: LOCAL
+
+**Fourteen of the fifteen expression and statement forms the grammar enumerates parse.** Arithmetic,
+shift and bitwise, comparison and logical, calls, pipelines, match, if/else, struct construction,
+field access, array indexing, variable binding, expression statements, `for` loops, `break`.
+
+The parser is not broadly behind the specification. **Fixing the pattern forms is worthwhile rather
+than futile**, and belongs in its own increment.
+
+### THE ONE THAT FAILS, AND IT FAILS A THIRD WAY
+
+`assert` — `reconstruct.kel` refuses with *"a record range did not reduce to exactly one node"*.
+
+Three distinct failure kinds now, across the two censuses:
+
+| kind | where | forms |
+|---|---|---|
+| non-terminating parse | `parse.kel` step budget | bare enum unit variant |
+| work-stack underflow | `reconstruct.kel` | struct destructuring, variable pattern |
+| range did not reduce to one node | `reconstruct.kel` | `assert` |
+
+**None is a clean refusal of an unsupported construct.** A subset that excluded `assert` would say
+so; these are downstream guards catching inconsistent output, or no guard at all. Whether a
+construct is IN the subset is a separate question from whether its failure is well-behaved, and a
+total language's front end should refuse what it cannot handle.
+
+### WHAT THIS DOES NOT CLAIM
+
+One program per form. A form can be handled in one spelling and not another — the failure mode this
+file has now recorded five times, and the reason the bare enum pattern was invisible behind
+`Op::Neg()`. The list is specified, which is the part that matters; the coverage within each form is
+not.
+
+### THE PATTERN, STATED ONCE MORE BECAUSE IT KEEPS PAYING
+
+Measure the premise before acting on it. The capacity price changed what the reductions should be;
+the specified list changed what the pattern census found; and this changed a large risky grammar
+change from "probably pointless" to "worth doing, separately".
+
+---
+
 ## 2026-09-12 (sixty-seventh) — censusing against a SPECIFIED list turned one finding into three
 
 ### THE CHANGE OF LIST

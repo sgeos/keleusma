@@ -4155,6 +4155,159 @@ fn the_rules_the_census_added_do_not_reject_valid_programs() {
     }
 }
 
+/// **THE GRAMMAR'S EXPRESSION AND STATEMENT FORMS, CENSUSED THE SAME WAY.**
+///
+/// # The question this answers
+///
+/// The pattern census found three of seven documented forms unhandled. **That
+/// could be a local gap or a symptom** — and the difference decides whether
+/// teaching `parse.kel` three pattern forms is worth doing or whether the honest
+/// deliverable is a much narrower documented subset. Writing grammar for a
+/// 309-kilobyte stage before knowing which would be building on an unmeasured
+/// premise.
+///
+/// # The answer: the pattern gaps are LOCAL
+///
+/// **Fourteen of the fifteen forms exercised here parse.** Arithmetic, shift and
+/// bitwise, comparison and logical, calls, pipelines, match, if/else, struct
+/// construction, field access, array indexing, variable binding, expression
+/// statements, `for` loops and `break` all work.
+///
+/// So the parser is not broadly behind the specification. Fixing the pattern forms
+/// is worthwhile rather than futile, and belongs in its own increment.
+///
+/// # The one that does not, and it fails a THIRD way
+///
+/// **`assert`** — `reconstruct.kel` refuses with *"a record range did not reduce to
+/// exactly one node"*.
+///
+/// That brings the distinct failure kinds to three across the two censuses:
+///
+/// | kind | where | forms |
+/// |---|---|---|
+/// | non-terminating parse | `parse.kel` step budget | bare enum unit variant |
+/// | work-stack underflow | `reconstruct.kel` | struct destructuring, variable pattern |
+/// | range did not reduce to one node | `reconstruct.kel` | `assert` |
+///
+/// **None of the three is a clean refusal of an unsupported construct.** A subset
+/// that excluded `assert` would say so; these are downstream guards catching
+/// inconsistent output, or no guard at all. **A total language's front end should
+/// refuse what it cannot handle**, and whether a construct is in the subset is a
+/// separate question from whether the failure is well-behaved.
+///
+/// # The list is specified, and the census is still not exhaustive
+///
+/// The forms come from the section headings of `docs/spec/GRAMMAR.md` sections 4
+/// and 5, so this is not a list I assembled — the distinction that made the pattern
+/// census find three times what its predecessor did. It is still **one program per
+/// form**, and a form can be handled in one spelling and not another, which is the
+/// failure mode this file has now recorded five times.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_documented_expression_and_statement_forms_are_censused() {
+    const FORMS: &[(&str, &str)] = &[
+        ("arithmetic", "fn main(a: Word) -> Word { a + 1 * 2 - 3 }"),
+        (
+            "shift and bitwise",
+            "fn main(a: Word) -> Word { (a lsl 1) band 7 }",
+        ),
+        (
+            "comparison and logical",
+            "fn main(a: Word) -> bool { a > 1 andalso a < 9 }",
+        ),
+        (
+            "function call",
+            "fn g(x: Word) -> Word { x }\nfn main() -> Word { g(1) }",
+        ),
+        (
+            "pipeline",
+            "fn g(x: Word) -> Word { x }\nfn main() -> Word { 1 |> g() }",
+        ),
+        (
+            "match expression",
+            "fn main(a: Word) -> Word { match a { 1 => 2, _ => 3 } }",
+        ),
+        (
+            "if else",
+            "fn main(c: bool) -> Word { if c { 1 } else { 0 } }",
+        ),
+        (
+            "struct construction",
+            "struct P { x: Word }\nfn main() -> Word { let p = P { x: 1 }; p.x }",
+        ),
+        (
+            "field access",
+            "struct P { x: Word }\nfn main(p: P) -> Word { p.x }",
+        ),
+        (
+            "array indexing",
+            "fn main() -> Word { let a = [1, 2]; a[0] }",
+        ),
+        ("variable binding", "fn main() -> Word { let a = 1; a }"),
+        (
+            "expression statement",
+            "fn g(x: Word) -> Word { x }\nfn main() -> Word { g(1); 0 }",
+        ),
+        (
+            "for loop",
+            "fn main() -> Word { let t = 0; for i in 0..4 limit 4 { let u = i; } t }",
+        ),
+        (
+            "break",
+            "fn main() -> Word { let t = 0; for i in 0..4 limit 4 { break; } t }",
+        ),
+        ("assert", "fn main(a: Word) -> Word { assert a > 0; a }"),
+    ];
+
+    let mut handled: Vec<&str> = Vec::new();
+    let mut failing: Vec<&str> = Vec::new();
+
+    for (form, src) in FORMS {
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+        assert!(
+            compile(&program).is_ok(),
+            "{form}: the REFERENCE rejects this program, so a parser failure would be \
+             my error rather than the parser's"
+        );
+        if std::panic::catch_unwind(|| keleusma::selfhost::occurrence_rows_from_pipeline(src))
+            .is_ok()
+        {
+            handled.push(form);
+        } else {
+            failing.push(form);
+        }
+    }
+
+    std::eprintln!(
+        "DOCUMENTED EXPRESSION AND STATEMENT FORMS: {} handled, {} not -> {failing:?}",
+        handled.len(),
+        failing.len()
+    );
+
+    // NON-VACUITY BOTH WAYS. All-handled would mean this stopped measuring anything
+    // and should be retired with its result recorded; all-failing would mean the
+    // harness is broken rather than the parser.
+    assert!(
+        !handled.is_empty(),
+        "no documented form is handled, so this is measuring the harness"
+    );
+    assert!(
+        !failing.is_empty(),
+        "every documented expression and statement form is now handled. That is the \
+         good outcome: record it, retire this assertion, and say what closed the gap"
+    );
+
+    let mut got = failing.clone();
+    got.sort_unstable();
+    assert_eq!(
+        got,
+        vec!["assert"],
+        "the set of documented expression and statement forms the self-hosted parser \
+         cannot handle changed. A form leaving it is a gap closing to record; one \
+         joining it is a regression every other test here would miss"
+    );
+}
+
 /// **THE GRAMMAR'S OWN PATTERN FORMS, CENSUSED AGAINST THE SELF-HOSTED PARSER.**
 ///
 /// # Why this list and not one I assembled
