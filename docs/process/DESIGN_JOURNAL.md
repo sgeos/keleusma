@@ -13,6 +13,49 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (eighty-seventh) — the cause, which retracts my own "may be a defect"
+
+### THE CLAIM I RAISED WAS TOO STRONG
+
+The previous entry said the float arithmetic divergence is filed as a scope boundary and "may be a
+defect", on the grounds that the reference's unchecked float `+` is documented as intentional and
+float overflow is not a trap condition. Locating the decision point retracts that.
+
+`codegen.kel` states its own rule in a comment above `push_binop`: the operator code ALONE selects
+the op word. `Add` to `CheckedAdd`, `Sub` to `CheckedSub`, `Mul` to `CheckedMul`, while `Div` maps
+to plain `Div` and `Mod` to plain `Mod`. **No operand type enters the decision.** The file contains
+no float or type vocabulary at all — zero occurrences across every spelling checked.
+
+### IT ACCOUNTS FOR EVERY ROW, WHICH IS WHAT MAKES IT THE CAUSE
+
+- float `/` and float comparison agree — they have no checked variant in the mapping;
+- `Word` `+`, `-`, `*` agree — the reference emits the checked form there too;
+- float `+`, `-`, `*` diverge — the reference has operand types and picks the plain form, and the
+  self-hosted codegen has none to pick with.
+
+A cause that explains the accepted rows as well as the refused ones is worth more than one that only
+explains the failures. The earlier account explained only the failures.
+
+### SO THE FILING WAS RIGHT AND I WAS WRONG ABOUT IT
+
+`scope/float_arith__GAP` is a genuine capability gap, correctly filed. It is not a mislabelled
+defect. The distinction drawn last entry — a scope boundary is a decision, a defect is a bug nobody
+chose — was the right distinction, applied to the wrong side.
+
+The practical consequence for the operator is better than the alarm was: the fix is not a branch
+correction but a type channel into codegen, which is substantial and squarely capacity-relevant.
+That is a cost estimate stated as a shape rather than a number, deliberately — an unverified cost
+estimate went into a merged PR body earlier this session and had to be retracted in two places.
+
+### THE PATTERN, ONE MORE TIME
+
+This is the third claim this session corrected by reading further into the thing itself, and the
+second where the correction landed within two increments of the overreach. The overreach was not
+careless: the evidence for it was real and documentary. It was simply incomplete, and one more file
+settled it.
+
+---
+
 ## 2026-09-12 (eighty-sixth) — correcting my own correction, and what it uncovered
 
 ### THE FIX FOR A WRONG SENTENCE WAS ALSO WRONG

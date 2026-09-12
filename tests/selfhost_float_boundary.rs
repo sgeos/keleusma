@@ -14,16 +14,30 @@
 //! opcode where the reference emits the plain one. On `Word` operands the two
 //! agree, so this is specific to the float path rather than to arithmetic.
 //!
-//! # Which side is wrong, and how confidently
+//! # The cause, which retracts a stronger claim made first
 //!
-//! A divergence establishes that the two implementations disagree and **not**
-//! which is wrong — on 2026-08-31 the reference was the wrong side. Here the
-//! evidence points the other way, and it is documentary rather than a proof:
-//! the module comment of `tests/float_arith_width.rs` records that plain `+` on
-//! floats emits the unchecked `Op::Add` and "never the checked path", and float
-//! overflow is not a trap condition, so the checked form has nothing to check.
-//! **The self-hosted side appears to be the divergent one.** That is an
-//! inference from documented intent, not a verdict.
+//! This file first argued that the self-hosted side "appears to be the wrong
+//! one", on the grounds that `tests/float_arith_width.rs` records plain `+` on
+//! floats emitting the unchecked `Op::Add` and "never the checked path", and
+//! that float overflow is not a trap condition. **That framing was too strong,
+//! and reading `codegen.kel` retracts it.**
+//!
+//! Its own comment states the rule: the operator code ALONE selects the op
+//! word — `Add` to `CheckedAdd`, `Sub` to `CheckedSub`, `Mul` to `CheckedMul`,
+//! while `Div` maps to plain `Div` and `Mod` to plain `Mod`. **No operand type
+//! enters the decision**, and the file contains no float or type vocabulary at
+//! all.
+//!
+//! That accounts for every row measured below. Division and comparison agree
+//! because they have no checked variant in the mapping. `Word` agrees because
+//! the reference emits the checked form there too. Float `+`, `-` and `*`
+//! diverge because the reference has operand types and chooses the plain form,
+//! and the self-hosted codegen has no types to choose with.
+//!
+//! So this is a genuine capability gap and the table's `scope/` filing is
+//! CORRECT. It is not a mislabelled defect, and the fix is not a branch
+//! correction: it requires a type channel into codegen, which is a substantial
+//! change to a stage source.
 //!
 //! # How this differs from the other two diverging entries
 //!

@@ -19,16 +19,20 @@ the CHECKED opcode (`CheckedAdd`, `CheckedSub`, `CheckedMul`) where the referenc
 one. Float division, float comparison, and passing float values around all COMPILE, and the same
 three operators on `Word` agree — so this is specific to the float path, not to arithmetic.
 
-The module comment of `tests/float_arith_width.rs` records that plain `+` on floats emits the
-unchecked `Op::Add` and "never the checked path", and float overflow is not a trap condition, so the
-checked form has nothing to check. **The self-hosted side appears to be the wrong one.** That is an
-inference from documented intent, not a verdict, and the rule that a divergence does not say which
-side is wrong still stands — the reference was the wrong side on 2026-08-31.
+**THE CAUSE IS KNOWN, AND IT RETRACTS THE "MAY BE A DEFECT" FRAMING WRITTEN FIRST.** `codegen.kel`
+states its own rule: the operator code ALONE selects the op word — `Add` to `CheckedAdd`, `Sub` to
+`CheckedSub`, `Mul` to `CheckedMul`, while `Div` and `Mod` map to their plain forms. **No operand
+type enters the decision**, and the file contains no float or type vocabulary at all.
 
-**Not fixed, deliberately.** The fix is in `codegen.kel`, a stage source, and stage sources bear on
-the pending capacity question. Characterised instead, per operator, in
-`tests/selfhost_float_boundary.rs`. **A scope boundary is a decision; a defect is a bug. This is
-filed as the first and may be the second.**
+That accounts for every measured row: division and comparison agree because they have no checked
+variant; `Word` agrees because the reference emits checked there too; float `+`, `-` and `*` diverge
+because the reference has operand types and picks the plain form while the self-hosted codegen has
+none to pick with.
+
+**So the `scope/` filing is CORRECT and this is not a mislabelled defect.** The fix is not a branch
+correction; it needs a type channel into codegen, which is a substantial change to a stage source
+and therefore bears on the capacity question. Characterised per operator in
+`tests/selfhost_float_boundary.rs`; no change made.
 
 **THE OTHER TWO DIVERGENCES ARE DIFFERENT IN KIND, AND THAT IS WHY THIS ONE STANDS OUT.** The table
 has exactly three `Diverges` rows. Both struct-equality rows report `CmpEq` against the reference's
