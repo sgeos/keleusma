@@ -13,6 +13,52 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (eighty-eighth) — closing the matrix against the codegen's own operator list
+
+### THE SET I WAS TESTING WAS ASSEMBLED, NOT SPECIFIED
+
+The typed-opcode divergence had been measured across five arithmetic operators and one comparison.
+That set came from what had been tried, not from anything authoritative. `codegen.kel`'s mapping
+comment states the real list: the five arithmetic operators, six comparisons, three bitwise, the
+shifts, and unary negation. Censusing against it rather than against my own history is the
+instrument that has produced nearly every finding this session, and it closed the matrix here.
+
+### UNARY NEGATION JOINS, AND EVERYTHING ELSE AGREES
+
+`-a` on `Float` and on `Fixed<N>` reports `CheckedNeg` against the reference's plain `Neg`, exactly
+the pattern `+`, `-` and `*` show; `Word` agrees. **Every other cell agrees**: all operators on
+`Word` and `Byte`, the three bitwise operators, all four shifts, the booleans, the comparisons, and
+`%`.
+
+`Byte` was the cell most worth running. It reaches bitwise and shift through
+promote-operate-truncate, a different path from its arithmetic, and it was the likeliest place for
+the divergence to reappear. It does not.
+
+### THE SET MATCHES SOMETHING ALREADY IN THE TREE
+
+The diverging operations are exactly `+`, `-`, `*` and unary `-`, plus fixed `*` and `/` against the
+scale-aware ops. The residual-tag note elsewhere in the suite groups `Op::Add`, `Op::Sub`, `Op::Mul`
+and `Op::CheckedNeg` — the same four. Those are precisely the operations for which the reference has
+a plain form that a typeless codegen cannot select. **An independent artefact arriving at the same
+set is better corroboration than any amount of re-reading the measurement.**
+
+### A CLEAN CLOSE IS A RESULT
+
+Most cells agreed, so this increment "found" little. That is the wrong way to score it. The
+alternative to running the empty cells is a matrix whose gaps get filled in by inference, and this
+area has already produced three framings that were each wrong at the edge of their evidence: too
+broad, too permissive, too narrow. A closed matrix is what stops a fourth.
+
+### ONE BADLY CONSTRUCTED PROBE, CAUGHT BEFORE IT BECAME A FINDING
+
+Unary negation was first probed as `0 - a`, which introduces a `Word` literal. On `Float` that
+produced a reference TYPE ERROR and on `Fixed` a literal-handling divergence — neither a fact about
+the opcode mapping. Both were discarded and the probe rewritten with the real unary spelling. A
+malformed probe that produces an interesting-looking message is a good way to manufacture a false
+finding, and the tell was that the reported op index and opcode had nothing to do with negation.
+
+---
+
 ## 2026-09-12 (eighty-seventh) — the cause, which retracts my own "may be a defect"
 
 ### THE CLAIM I RAISED WAS TOO STRONG

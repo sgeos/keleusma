@@ -45,6 +45,17 @@ difference; its `*` and `/` diverge against the reference's SCALE-AWARE `FixedMu
 that case is a wrong-result hazard rather than a checking difference — which is what the cross-check
 exists to stop, and it does.
 
+**THE MATRIX IS NOW CLOSED against `codegen.kel`'s own operator mapping rather than an assembled
+set.** The diverging operations are exactly `+`, `-`, `*` and unary `-` on `Float` and `Fixed<N>`,
+plus fixed `*` and `/` against the scale-aware ops. **Everything else agrees**: all operators on
+`Word` and `Byte`, every bitwise and shift (including `Byte`'s promote-operate-truncate path, the
+likeliest place for it to reappear), the booleans, the comparisons, and `%`.
+
+That set matches the tree's own residual-tag note, which groups `Op::Add`, `Op::Sub`, `Op::Mul` and
+`Op::CheckedNeg` — precisely the operations for which the reference has a plain form a typeless
+codegen cannot select. **A census that closes cleanly is worth the same as one that finds
+something**, because the alternative is a matrix whose empty cells get filled in by inference.
+
 **THE OTHER TWO DIVERGENCES ARE DIFFERENT IN KIND, AND THAT IS WHY THIS ONE STANDS OUT.** The table
 has exactly three `Diverges` rows. Both struct-equality rows report `CmpEq` against the reference's
 `SetLocal` — a STRUCTURAL difference, and the table's own comment records that the flat

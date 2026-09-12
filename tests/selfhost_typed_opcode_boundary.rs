@@ -12,12 +12,26 @@
 //!
 //! # The measured matrix
 //!
-//! | operand | `+` | `-` | `*` | `/` | `%` | compare |
-//! |---|---|---|---|---|---|---|
-//! | `Word`  | ok | ok | ok | ok | ok | ok |
-//! | `Byte`  | ok | ok | ok | ok | — | — |
-//! | `Float` | **checked vs plain** | **checked vs plain** | **checked vs plain** | ok | — | ok |
-//! | `Fixed<16>` | **checked vs plain** | **checked vs plain** | **generic vs `FixedMul`** | **generic vs `FixedDiv`** | ok | ok |
+//! Censused against the operator list in `codegen.kel`'s own mapping comment
+//! rather than against an assembled set, so the empty cells are the ones the
+//! language does not admit, not the ones nobody ran.
+//!
+//! | operand | `+` | `-` | `*` | `/` | `%` | unary `-` | compare | bitwise | shift |
+//! |---|---|---|---|---|---|---|---|---|---|
+//! | `Word`  | ok | ok | ok | ok | ok | ok | ok | ok | ok |
+//! | `Byte`  | ok | ok | ok | ok | — | — | — | ok | ok |
+//! | `Float` | **chk** | **chk** | **chk** | ok | — | **chk** | ok | — | — |
+//! | `Fixed<16>` | **chk** | **chk** | **`FixedMul`** | **`FixedDiv`** | ok | **chk** | ok | — | — |
+//!
+//! `chk` is the checked-versus-plain difference; the named ops are the
+//! scale-aware ones. Booleans (`and`, `or`, `xor`, `not`) agree.
+//!
+//! **The diverging operations are exactly `+`, `-`, `*` and unary `-`, on
+//! `Float` and `Fixed<N>`, plus fixed `*` and `/`.** Everything else in the
+//! mapping agrees. That set matches the tree's own residual-tag note, which
+//! lists `Op::Add`, `Op::Sub`, `Op::Mul` and `Op::CheckedNeg` together: those
+//! are precisely the operations for which the reference has a plain form that a
+//! typeless codegen cannot select.
 //!
 //! # Two kinds of divergence, and the second one matters more
 //!
@@ -231,6 +245,73 @@ fn byte_arithmetic_does_not_diverge() {
              Float and Fixed and NOT Byte; if Byte has joined them, the cause is broader \
              than the header claims and the account should be rewritten rather than this \
              assertion relaxed"
+        );
+    }
+}
+
+/// **UNARY NEGATION FOLLOWS THE SAME RULE AS `+`, `-` AND `*`.**
+///
+/// `CheckedNeg` against the reference's plain `Neg` for `Float` and `Fixed<N>`,
+/// agreeing on `Word`. This row completes the set against `codegen.kel`'s own
+/// operator mapping and matches the tree's residual-tag note, which groups
+/// `Op::Add`, `Op::Sub`, `Op::Mul` and `Op::CheckedNeg` — the operations with a
+/// plain reference form a typeless codegen cannot pick.
+#[test]
+fn unary_negation_diverges_on_float_and_fixed_but_not_word() {
+    for ty in ["Float", "Fixed<16>"] {
+        let src = format!("fn f(a: {ty}) -> {ty} {{ -a }}\nfn main(x: {ty}) -> {ty} {{ f(x) }}");
+        let err = attempt(&src).expect_err(&format!(
+            "unary negation on {ty} now compiles; if the codegen gained operand types this \
+             is a FIX and the row belongs in the accepted set"
+        ));
+        assert!(
+            err.contains("CheckedNeg"),
+            "{ty} negation no longer names `CheckedNeg`, so the account of the cause in this \
+             file's header is stale. Message was: {err}"
+        );
+    }
+
+    // ACCEPTED, so the refusals above are not "negation always fails".
+    assert!(
+        attempt("fn f(a: Word) -> Word { -a }\nfn main(x: Word) -> Word { f(x) }").is_ok(),
+        "negation on Word now diverges too, so the cause is broader than the header claims"
+    );
+}
+
+/// **THE BITWISE, SHIFT AND BOOLEAN OPERATORS ALL AGREE**, which closes the
+/// matrix rather than extending the finding.
+///
+/// `Byte` reaches the bitwise and shift operators through promote-operate-truncate,
+/// a different path from its arithmetic, and was the most plausible place for the
+/// divergence to reappear. It does not. **A census that closes cleanly is worth
+/// the same as one that finds something**, because the alternative is a matrix
+/// with cells filled in by inference.
+#[test]
+fn the_bitwise_shift_and_boolean_operators_do_not_diverge() {
+    for ty in ["Word", "Byte"] {
+        for op in ["band", "bor", "bxor"] {
+            assert!(
+                attempt(&binop(op, ty, ty)).is_ok(),
+                "`{op}` on {ty} now diverges. The header states the divergence is confined to \
+                 arithmetic and unary negation on Float and Fixed; a bitwise operator joining \
+                 it means the cause is broader and the account needs rewriting"
+            );
+        }
+        for op in ["lsl", "lsr", "asr", "asl"] {
+            let src = format!(
+                "fn f(a: {ty}) -> {ty} {{ a {op} 2 }}\nfn main(x: {ty}) -> {ty} {{ f(x) }}"
+            );
+            assert!(
+                attempt(&src).is_ok(),
+                "`{op}` on {ty} now diverges, so the shift family has joined the divergence"
+            );
+        }
+    }
+    for op in ["and", "or", "xor"] {
+        assert!(
+            attempt(&binop(op, "bool", "bool")).is_ok(),
+            "boolean `{op}` now diverges, so the divergence is not confined to the numeric \
+             operators"
         );
     }
 }
