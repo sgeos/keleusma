@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
-**2026-09-12, session 65, through the seventy-third increment.**
+**2026-09-12, session 65, through the seventy-eighth increment.**
 
 **Where the work is.** The type-rejection input path now carries **ten of twelve** real `.kel` stage
 sources, up from two, at **1.6x** the shared data it uses today rather than 7.3x — a growth of
@@ -21,10 +21,25 @@ another reduction. `parse` needs about 192 where the caps are 128; `wire` needs 
 dominated by declaration-indexed tables no reduction reaches. The four standing operator decisions
 are unchanged and still block the language-surface work they name.
 
-**What is next that is NOT yours.** Three self-hosted-parser gaps remain, all traced and all
-**feature work**: the variable and struct match patterns need new arm semantics, and `assert` needs
-a token code, a lexer arm, statement parsing and emission through two more stages. A fourth gap —
-the bare enum unit-variant pattern the grammar documents — was a missing branch and is fixed.
+**What is next that is NOT yours.** **Four** self-hosted-parser gaps remain, all traced and all
+feature work: the variable and struct match patterns need new arm semantics; `assert` needs a token
+code, a lexer arm, statement parsing and emission through two more stages; a qualified call
+expression needs the same kind of work. A fifth — the bare enum unit-variant pattern the grammar
+documents — was a missing branch and **is fixed**.
+
+**None of the four blocks self-hosting**, and the reason is structural: all twelve stages compile
+through the pipeline byte-identically, so no stage can contain a construct the pipeline cannot
+parse. Each gap blocks a USER program, not the stages.
+
+**So the remaining obligation is smaller than "implement four constructs".** All four fail by
+producing a malformed record stream rather than a refusal naming the construct — a total language's
+front end should refuse what it cannot handle, and that is a separate and lesser piece of work.
+
+**The pipeline also diverges from the reference on three binder forms** — a `for` variable, a match
+payload binding, a const parameter used as a value — where it reports no occurrence at all. That is
+the ACCEPTING direction, so nothing is currently rejected, but **it is safe by omission rather than
+by correctness**: were it to report them without also collecting them as locals, it would reproduce
+the false rejection already fixed on the reference side. Pinned, and bounded to that one channel.
 
 **Before trusting any green run**, read *"How a green local run has actually lied"* in
 [`CLAUDE.md`](../../CLAUDE.md): six observed ways a verification run reported success while covering

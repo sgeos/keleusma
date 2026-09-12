@@ -13,6 +13,47 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (seventy-eighth) — the cheap-update property held, which is the design being tested
+
+### THE CLAIM THAT NEEDED TESTING
+
+Two increments ago the reverse prompt was restructured around one argument: **a channel that must be
+REWRITTEN rather than appended to will drift, and keeping the current block SHORT is what makes the
+rewrite cheap enough to actually happen.**
+
+That was a prediction. Five increments later the block needed updating — the parser fix landed, a
+fifth gap was found, the gaps were reclassified, and the divergence was bounded.
+
+### THE RESULT
+
+**Twenty lines added, five removed. One edit.**
+
+Before the restructure, updating this channel meant composing a new dated section on top of
+seventeen hundred lines and deciding what of the old was still true. That is the cost that caused it
+to drift ten increments the first time. The current block is short enough that bringing it level is
+an ordinary edit, and the superseded history below the line needed no attention at all because it is
+explicitly not current.
+
+### WHY THIS IS WORTH AN ENTRY
+
+**A process change that is never exercised is a guess.** The previous entry recorded the reasoning;
+this one records that the property it predicted actually held on first use. Had the update turned
+out expensive anyway, that would have been the more important finding and it would belong here just
+as much.
+
+### WHAT THE BLOCK NOW SAYS THAT IT DID NOT
+
+- **Four** parser gaps remain, not three — the qualified call joined them.
+- **None of the four blocks self-hosting**, by the structural argument: all twelve stages compile
+  byte-identically, so no stage can contain a construct the pipeline cannot parse. Each gap blocks a
+  USER program.
+- Therefore the obligation is **"refuse cleanly"** rather than "implement four constructs", since
+  all four fail by producing a malformed record stream instead of naming what they cannot handle.
+- The pipeline diverges from the reference on three binder forms, **safe by omission rather than by
+  correctness**, bounded to one channel.
+
+---
+
 ## 2026-09-12 (seventy-sixth) — a negative result that bounds the previous one
 
 ### THE QUESTION THE PREVIOUS INCREMENT LEFT OPEN
