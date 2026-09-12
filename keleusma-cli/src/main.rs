@@ -161,10 +161,12 @@ fn print_help() {
     println!("                                    (default, the reference compiler) or");
     println!("                                    self-hosted (the Keleusma-written pipeline,");
     println!("                                    host target only, self-hosted subset only:");
-    println!("                                    no float literals, no generics, and no CLI");
-    println!("                                    preamble). A float-typed signature with no");
-    println!("                                    literal does compile. Text is unrelated to");
-    println!("                                    the subset: neither backend implements it.");
+    println!("                                    no float literals, no float + - or *, no");
+    println!("                                    generics, and no CLI preamble). Float");
+    println!("                                    division and comparison, and passing float");
+    println!("                                    values around, DO compile. Text is");
+    println!("                                    unrelated to the subset: neither backend");
+    println!("                                    implements it.");
     println!("                                    An out-of-subset program errors with a hint");
     println!("                                    to retry with --compiler rust, naming the");
     println!("                                    offending construct or the diverging");

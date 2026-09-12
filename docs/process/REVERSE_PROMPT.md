@@ -10,7 +10,25 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
-**2026-09-12, session 65, through the eighty-third increment.**
+**2026-09-12, session 65, through the eighty-sixth increment.**
+
+**A CLASSIFIED "SCOPE GAP" LOOKS LIKE A DEFECT, AND IT IS YOURS TO CALL.** The boundary table
+carries `scope/float_arith__GAP` as `Diverges`, filed under "out of scope for the self-hosted
+subset". Measured per operator: float `+`, `-` and `*` diverge because the SELF-HOSTED codegen emits
+the CHECKED opcode (`CheckedAdd`, `CheckedSub`, `CheckedMul`) where the reference emits the plain
+one. Float division, float comparison, and passing float values around all COMPILE, and the same
+three operators on `Word` agree — so this is specific to the float path, not to arithmetic.
+
+The module comment of `tests/float_arith_width.rs` records that plain `+` on floats emits the
+unchecked `Op::Add` and "never the checked path", and float overflow is not a trap condition, so the
+checked form has nothing to check. **The self-hosted side appears to be the wrong one.** That is an
+inference from documented intent, not a verdict, and the rule that a divergence does not say which
+side is wrong still stands — the reference was the wrong side on 2026-08-31.
+
+**Not fixed, deliberately.** The fix is in `codegen.kel`, a stage source, and stage sources bear on
+the pending capacity question. Characterised instead, per operator, in
+`tests/selfhost_float_boundary.rs`. **A scope boundary is a decision; a defect is a bug. This is
+filed as the first and may be the second.**
 
 **Where the work is.** The type-rejection input path now carries **ten of twelve** real `.kel` stage
 sources, up from two, at **1.6x** the shared data it uses today rather than 7.3x — a growth of

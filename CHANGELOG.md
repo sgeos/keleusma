@@ -152,12 +152,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `keleusma::selfhost::self_hosted_compile` entry runs a program through the
   Keleusma-written pipeline at the host target and cross-checks its output
   against the reference compiler, so a program outside the self-hosted subset
-  (a float literal, generics, the four unparsed constructs) or at a non-host
-  `--target` fails loudly with a `retry with --compiler rust` hint rather than
-  emitting a wrong module, naming the offending construct or the diverging
-  chunk. A float-typed signature carrying no literal DOES compile, and `Text` is
-  not a subset restriction at all: the reference does not implement it either,
-  so it reports a plain source error and correctly withholds the hint. The
+  (a float literal, float `+`/`-`/`*`, generics, the four unparsed constructs)
+  or at a non-host `--target` fails loudly with a `retry with --compiler rust`
+  hint rather than emitting a wrong module, naming the offending construct or
+  the diverging chunk. Float division and comparison, and passing float values
+  around, DO compile: the float arithmetic divergence is the self-hosted codegen
+  emitting the checked opcode where the reference emits the plain one, measured
+  per operator in `tests/selfhost_float_boundary.rs`. `Text` is not a subset
+  restriction at all: the reference does not implement it either, so it reports
+  a plain source error and correctly withholds the hint. The
   `compiler/` subproject now re-exports the driver from `keleusma::selfhost`.
 - **The shared-data segment ceiling rises from 64 KB to 16 MB (the wire format
   widens but `BYTECODE_VERSION` stays 1, per the no-public-adoption stance).** The shared byte-offset, unified data-slot index, and

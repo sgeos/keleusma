@@ -13,6 +13,53 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (eighty-sixth) — correcting my own correction, and what it uncovered
+
+### THE FIX FOR A WRONG SENTENCE WAS ALSO WRONG
+
+The previous increment replaced the help text's "no floats" with "only the float LITERAL is
+excluded; a float-typed signature with no literal compiles". **That is also false**, and a census for
+the phrase elsewhere is what caught it: the construct-support boundary table carries
+`scope/float_arith__GAP` with the source `fn f(a: Float, b: Float) -> Float { a + b }` — a
+float-typed signature, no literal, and it does not compile.
+
+Over-correcting is the failure mode worth naming here. The first sentence was too broad; the
+replacement was too permissive; and only a third measurement produced something that survives.
+
+### THE BOUNDARY, MEASURED PER OPERATOR
+
+- float `+`, `-`, `*` — DIVERGE. The self-hosted codegen emits `CheckedAdd`, `CheckedSub`,
+  `CheckedMul` where the reference emits the plain opcode.
+- float `/`, float comparison, a float-typed signature doing neither — COMPILE.
+- the same three operators on `Word` — AGREE.
+
+That last line is the control that makes the finding specific. Without it the result reads as "the
+self-hosted codegen picks checked opcodes", which is a much larger and wrong claim.
+
+### A SCOPE GAP THAT LOOKS LIKE A DEFECT
+
+`tests/float_arith_width.rs` records that plain `+` on floats emits the unchecked `Op::Add` and
+"never the checked path", and float overflow is not a trap condition, so the checked form has
+nothing to check. The self-hosted side therefore appears to be the divergent one.
+
+**The distinction that matters is filing.** A scope boundary is a decision someone made; a defect is
+a bug nobody chose. This entry sits in the table under "out of scope for the self-hosted subset",
+which reads as the first, and the evidence suggests the second. The inference rests on documented
+intent rather than proof, and the rule that a divergence does not establish which side is wrong
+still holds — the reference was the wrong side on 2026-08-31.
+
+**Not fixed.** The fix is in `codegen.kel`. Stage sources bear on the capacity question that is the
+operator's, so the deliverable here is the characterisation, not the change.
+
+### WHY THE CENSUS FOUND IT AND THE FIRST GREP DID NOT
+
+The first pass grepped for the literal phrasings I had just written. The second censused the
+CONCEPT — every place describing the self-hosted subset — and that is what reached the boundary
+table. Searching for an assembled list of phrasings finds what you already thought of; censusing a
+specified concept finds what you did not.
+
+---
+
 ## 2026-09-12 (eighty-fifth) — the last hop, and two wrong sentences in the shipping binary
 
 ### ASSERTING ON `Display` IS NOT ASSERTING ON THE PRODUCT
