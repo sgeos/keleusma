@@ -31,8 +31,19 @@ documents — was a missing branch and **is fixed**.
 through the pipeline byte-identically, so no stage can contain a construct the pipeline cannot
 parse. Each gap blocks a USER program, not the stages.
 
-**All four fail by producing a malformed record stream rather than a refusal naming the
-construct**, and a total language's front end should refuse what it cannot handle.
+**All four used to fail by producing a malformed record stream rather than a refusal naming the
+construct. THAT IS FIXED.** Measured first: every one reported only a `reconstruct.kel` work-stack
+underflow or an unreduced record range, with a note about `reconstruct_range` reading slot zero —
+text addressed to a stage author, never mentioning the `v =>`, the `P { x }`, the `assert` or the
+`audio::` the user wrote. The driver now names the construct and the line, and keeps the stage's own
+report after it, since the two halves serve different readers.
+
+**The naming runs only on the failure path, so it cannot cause a false rejection** — it changes what
+a refusal says and never whether one happens. It is Rust-side, so it is CAPACITY-NEUTRAL: no stage
+source was touched and the pinned worst-case blob does not move. A guard asserts the scan names
+nothing in any of the eleven driver-read stage sources, which all compile through the subset; it is
+mutation-tested, and asserts each source parses first, since an unparseable source would make the
+scan return nothing for an unrelated reason.
 
 **MEASURED SINCE, ON THE PATH THAT MATTERS: all four are refused with an `Err` by
 `self_hosted_compile`, the entry point behind `--compiler self-hosted`, and an ordinary program

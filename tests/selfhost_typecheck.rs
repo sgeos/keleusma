@@ -9185,3 +9185,97 @@ fn a_body_without_a_tail_expression_contributes_no_declared_versus_actual_row() 
          row, so the count asserted above cannot be attributed to the missing tail"
     );
 }
+
+/// **EVERY GAP REFUSAL NAMES THE CONSTRUCT THE USER WROTE.**
+///
+/// `every_known_gap_is_refused_by_the_self_hosted_compiler` establishes that the four gaps
+/// return `Err` rather than a module or a panic. It discards the error, so for as long as it
+/// stood alone **nothing checked what the refusal SAID.**
+///
+/// Measured on 2026-09-12, before this test existed, all four said only that
+/// `reconstruct.kel` popped an empty work stack or left a record range unreduced, with a
+/// note about `reconstruct_range` reading slot zero. Two distinct internal failure modes,
+/// neither mentioning the `v =>`, the `P { x }`, the `assert` or the `audio::` that caused
+/// it. **A user cannot act on a work-stack underflow.**
+///
+/// # Both halves are asserted
+///
+/// The construct name is for the user; the stage detail is for whoever maintains the stage.
+/// Dropping either is a regression, so each is checked: a message that named the construct
+/// and discarded the stage's own report would pass a weaker version of this test while
+/// making the stage harder to debug.
+///
+/// # What this does NOT establish
+///
+/// That the named construct is the true cause. The name comes from a source scan run on the
+/// failure path, not from the stage, so it reports what the program CONTAINS rather than
+/// what the stage tripped over. For these four they coincide, which is what makes them
+/// usable as a corpus; a program carrying two unsupported constructs would be named for the
+/// earlier one regardless of which stopped the pipeline.
+#[cfg(feature = "self-host")]
+#[test]
+fn every_gap_refusal_names_the_construct() {
+    // (label, source, the phrase a user needs to see)
+    const GAPS: &[(&str, &str, &str)] = &[
+        (
+            "variable pattern",
+            "fn main(a: Word) -> Word { match a { v => v } }",
+            "variable pattern `v`",
+        ),
+        (
+            "struct destructuring",
+            "struct P { x: Word }\nfn main(p: P) -> Word { match p { P { x } => x, _ => 0 } }",
+            "struct destructuring pattern `P { .. }`",
+        ),
+        (
+            "assert",
+            "fn main(a: Word) -> Word { assert a > 0; a }",
+            "`assert` statement",
+        ),
+        (
+            "qualified call",
+            "use audio::midi_to_freq\nfn main() -> Float { audio::midi_to_freq(69) }",
+            "qualified call `audio::midi_to_freq`",
+        ),
+    ];
+
+    let target = keleusma::target::Target::host();
+
+    for (gap, src, phrase) in GAPS {
+        let err = keleusma::selfhost::self_hosted_compile(src, &target).expect_err(
+            "this gap no longer refuses. If the subset genuinely gained the construct, \
+             remove it from this corpus and from the gap list rather than relaxing the \
+             assertion",
+        );
+        let text = alloc_string(&err);
+
+        assert!(
+            text.contains(phrase),
+            "{gap}: the refusal does not name the construct. A user sees only the stage's \
+             internal diagnostic and cannot tell which part of their program to change. \
+             Message was: {text}"
+        );
+        assert!(
+            text.contains("reconstruct.kel"),
+            "{gap}: the refusal no longer carries the stage's own report. The construct name \
+             serves the user and the stage detail serves whoever maintains the stage; losing \
+             the second half is a regression even though the first half improved. \
+             Message was: {text}"
+        );
+    }
+
+    // NON-VACUITY: an ordinary program must still compile, or "every refusal names a
+    // construct" would hold because everything is refused.
+    const ORDINARY: &str = "fn main(a: Word) -> Word { a + 1 }";
+    assert!(
+        keleusma::selfhost::self_hosted_compile(ORDINARY, &target).is_ok(),
+        "an ordinary program no longer compiles through the self-hosted pipeline, so the \
+         refusals above say nothing about the gaps in particular"
+    );
+}
+
+/// Render an error through its `Display`, which is what a CLI user sees.
+#[cfg(feature = "self-host")]
+fn alloc_string(e: &keleusma::selfhost::SelfHostError) -> String {
+    format!("{e}")
+}
