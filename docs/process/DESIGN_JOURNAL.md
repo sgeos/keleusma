@@ -1,5 +1,55 @@
 # Design Journal
 
+## 2026-09-11 — [v0.3.0] A defect report that outlived its defect by four weeks
+
+The bounds-transfer drift was found by accident. The deliberate version asked which OTHER recorded
+findings rest on measurements that cannot fail. Its first target was the one the same document calls
+*"the finding that matters most"*:
+
+> `wcmu_region` drives its own running depth NEGATIVE on 17 of 826 shipped chunks, reaching -5 at
+> worst. An operand stack cannot hold a negative number of slots.
+
+**The expectation was a stale number over a grown corpus. The finding is that the claim is FALSE**, and
+has been since **2026-08-17**, when the `v0.2.3` line repaired it: `Op::Yield` declared a net `-1`
+against a true net `0`, so every stream `main` went under at the `PopN` after the yield.
+
+`spike_bounds_transfer.rs` Q4 measures **0 of 1085** and **asserts zero**. The guard has known for four
+weeks. `NATIVE_BOUNDS_TRANSFER.md` went on saying, in its summary table, its section heading, and its
+verdict's *"still reported, not repaired"*, that the reference's own worst-case memory bound is
+unsound.
+
+> **A report that is never re-checked becomes a standing accusation.** It is one thing to carry a
+> stale count; it is another to assert, in a document a reader treats as settled, that another line's
+> analysis is unsound when it has been correct for a month.
+
+### The harder case: the instrument was right and the record was wrong
+
+Q4 carries a comment explaining that it deliberately asserted NOTHING while the defect was open —
+asserting zero would have failed the suite over code this line does not own, and asserting the
+then-current count would have failed the moment the other line repaired it — and that the reason
+expired when the repair landed. **The instrument reasoned about its own lifecycle correctly and
+nothing carried that reasoning back to the document.**
+
+### What was NOT wrong, and the easy error in the other direction
+
+| claim | status |
+|---|---|
+| the walk goes negative on shipped code | **false since 2026-08-17** |
+| the WCMU bound does not TRANSFER to native code | **still true** — it counts virtual-machine operand slots and the native frame counts something else |
+
+The repair fixes the bound's soundness, not its relevance to native code. Retracting both would have
+been as wrong as retracting neither.
+
+### The audit's premise was itself too narrow
+
+It assumed the risk was numbers drifting. **The measured risk is a conclusion inverting while the
+paperwork holds still.** A drifted number misleads about magnitude; an un-retracted defect report
+misleads about whether something is broken.
+
+The document now carries a table at its head saying which of its figures are guarded and which are
+as-of-date, so the remaining stale numbers are visible as such rather than silently repaired or left
+to look current.
+
 ## 2026-09-11 — [v0.3.0] A recorded refutation had drifted, and my attribution of it was wrong
 
 `NATIVE_BOUNDS_TRANSFER.md` carries the sharpest result this line has about the project's central

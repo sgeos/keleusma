@@ -1,0 +1,36 @@
+COMPLETION CONDITION — the drift audit
+
+Ordering is NOT a completion criterion. Any order of the work satisfies this, and
+nothing here requires a particular branch, commit shape, or process step.
+
+All of the following hold in the tree:
+
+1. THE LOAD-BEARING SOUNDNESS FIGURE IS RE-DERIVED.
+   The count of shipped chunks on which the reference's worst-case memory walk
+   drives its own running depth negative is measured against the current corpus,
+   and both the count and the population it is taken from are recorded with a
+   date.
+
+2. ITS STATUS IS STATED ON EVIDENCE.
+   The tree says whether that finding still holds, and does not present a changed
+   number as a changed conclusion unless the populations were compared. Where a
+   comparison was not made, that is stated.
+
+3. THE FIGURE CANNOT DRIFT UNOBSERVED AGAIN.
+   Something in the tree fails if it moves, with a message asking for the cause to
+   be established rather than the number edited. It is non-vacuous: it also fails
+   if the measurement finds too few subjects to be meaningful.
+
+4. THE EARLIER FIGURE REMAINS VISIBLE AS A DATED RECORD rather than being
+   overwritten.
+
+5. THE DOCUMENT SAYS WHICH OF ITS FIGURES ARE PINNED AND WHICH ARE NOT.
+   A reader can tell, without running anything, which numbers are currently
+   guarded and which are as-of-date.
+
+6. THE OWNERSHIP BOUNDARY IS RESPECTED.
+   No file under the repository-root src/ or tests/ is modified. Any defect found
+   in the reference's own analysis is reported rather than repaired here.
+
+7. THE BACKEND SUITE IS GREEN IN BOTH FLOAT CONFIGURATIONS, with counts
+   re-derived rather than quoted.

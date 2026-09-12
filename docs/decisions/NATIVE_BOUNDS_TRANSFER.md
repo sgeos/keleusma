@@ -15,12 +15,21 @@ chunks, 51 modules**.
 
 ## The four-way classification
 
+> **WHICH FIGURES IN THIS DOCUMENT ARE GUARDED, as of 2026-09-11.** A reader should not have to
+> run anything to know this.
+>
+> | figure | guarded by | status |
+> |---|---|---|
+> | negative operand depth | `spike_bounds_transfer.rs` Q4, which asserts zero | **pinned** |
+> | ordering inversions | the same file's Q2, which asserts at least one and pins the population | **pinned**, re-derived 2026-09-11 |
+> | every other number below | nothing | **as-of-date**, and several are known stale: the corpus was 826 chunks and is now over a thousand |
+
 | property | verdict |
 |---|---|
 | loop and call structure (termination) | **TRANSFERS** |
 | machine stack depth | **TRANSFERS**, but from a different premise than the bound |
 | WCET magnitude | **NOT EXPRESSIBLE** at this level |
-| WCMU operand depth | **DOES NOT TRANSFER** — and is unsound on 17 of 826 chunks |
+| WCMU operand depth | **DOES NOT TRANSFER** — and was unsound on 17 of 826 chunks when this was written. ⚠ **THE UNSOUNDNESS WAS REPAIRED by the `v0.2.3` line on 2026-08-17**; see the status note in section 4. The non-transfer stands. |
 
 ---
 
@@ -84,7 +93,8 @@ other.
 > restore them. `14_frame_log.kel::main` sits in the list at 184 native instructions and spent
 > part of 2026-09-11 refused. Establishing the cause needs the spike re-run at the 2026-08-14
 > tree, which was not done.
-The clearest is `lexer.kel::main` at bound 164 producing **1083** native instructions against
+
+The clearest inversion at the time of writing: `lexer.kel::main` at bound 164 producing **1083** native instructions against
 `piano_roll_0.kel::main` at bound 498 producing **385**: the bound says one is three times
 smaller, the emitted code says it is nearly three times larger.
 
@@ -93,9 +103,26 @@ time — it ignores caches, pipelining and branch prediction. The inversion resu
 refutes the *proxy* claim, which is the weaker and more useful thing to refute. It is not a
 timing measurement and is not offered as one.
 
-## 4. WCMU operand depth — DOES NOT TRANSFER, and is unsound on its own terms
+## 4. WCMU operand depth — DOES NOT TRANSFER, and WAS unsound on its own terms
 
 This is the finding that matters most, and it is not about native code.
+
+> ⚠ **STATUS, 2026-09-11: THE UNSOUNDNESS IS REPAIRED AND THIS DOCUMENT SAID OTHERWISE FOR
+> NEARLY A MONTH.** The `v0.2.3` line fixed it on **2026-08-17** — `Op::Yield` declared a net
+> `-1` against a true net `0`, so every stream `main` went under at the `PopN` after the yield.
+> `spike_bounds_transfer.rs::q4_the_stack_model_goes_negative_on_shipped_code` now measures
+> **0 of 1085 chunks** and **asserts zero**, so the repair is guarded rather than merely
+> observed.
+>
+> **The record below is kept as written**, because it was true on 2026-08-14 and the measurement
+> that produced it is the reason the defect was found. What was NOT true is this document's
+> standing claim, in its summary table and in the verdict below, that the reference's own
+> worst-case memory bound is unsound. **That is a serious thing to assert about another line's
+> code, and it outlived the defect by four weeks** because the guard was updated and the record
+> was not.
+>
+> **The NON-TRANSFER claim is unaffected**: the bound counts virtual-machine operand slots and
+> the native frame counts something else, which is section 4's other half and remains true.
 
 **`wcmu_region` drives its own running depth NEGATIVE on 17 of 826 shipped chunks**, reaching
 **-5** at worst. An operand stack cannot hold a negative number of slots. Wherever this
@@ -284,6 +311,12 @@ Sixteen opcodes remain unisolated and are named above rather than passed over.
 
 Still **reported, not repaired**: `src/verify.rs` and `src/bytecode.rs` belong to the `v0.2.3`
 line and are untouched here.
+
+> ⚠ **SUPERSEDED 2026-08-17, recorded 2026-09-11.** The negative-depth defect this sentence
+> refers to WAS repaired by the `v0.2.3` line. The ownership statement stands — those files are
+> theirs and this line does not edit them — but "not repaired" is false and had been for four
+> weeks. **Reporting a defect and never checking whether it was fixed is how a report becomes a
+> standing accusation.**
 
 ---
 

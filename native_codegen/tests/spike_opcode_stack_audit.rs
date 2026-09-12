@@ -1,10 +1,19 @@
 //! **Is `CheckedAdd` the only opcode whose stack model is wrong?**
 //!
-//! `NATIVE_BOUNDS_TRANSFER.md` records that `wcmu_region` drives its own running
-//! depth negative on 17 of 826 shipped chunks, and traces one cause to
-//! `CheckedAdd`: it pushes `(low, high, flag)` — a gross push of three — while
-//! `stack_growth()` returns the net `1`, and the peak calculation uses the net
-//! as the transient rise.
+//! `NATIVE_BOUNDS_TRANSFER.md` recorded, on 2026-08-14, that `wcmu_region` drove
+//! its own running depth negative on 17 of 826 shipped chunks, and traced one
+//! cause to `CheckedAdd`: it pushes `(low, high, flag)` — a gross push of three —
+//! while `stack_growth()` returns the net `1`, and the peak calculation uses the
+//! net as the transient rise.
+//!
+//! ⚠ **THAT DEFECT IS REPAIRED** — the `v0.2.3` line fixed it on 2026-08-17, and
+//! `spike_bounds_transfer.rs` Q4 now measures zero and asserts it. **The past
+//! tense above is deliberate**: this header read as a current unsoundness for
+//! four weeks after the repair, which is the drift the audit below exists to
+//! catch in opcodes and had not been applied to its own framing.
+//!
+//! **The question this file asks is unaffected.** Whether other opcodes carry a
+//! wrong stack model is not settled by one of them being fixed.
 //!
 //! That was found by accident. This asks the question systematically.
 //!
