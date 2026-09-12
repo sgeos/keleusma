@@ -59,7 +59,6 @@
 use keleusma::bytecode::{Module, Op};
 use keleusma_native::{LowerOptions, lower_module};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::Mutex;
 
 mod common;
 
@@ -73,13 +72,46 @@ mod common;
 /// truncation does, because both make a block's recorded extent exceed
 /// `ops.len()`. Blaming the backend for them would have sent someone hunting in
 /// the wrong crate.
-static LAST_PANIC_FILE: Mutex<Option<String>> = Mutex::new(None);
+/// ⚠ **THREAD-LOCAL, AND IT WAS A PROCESS-GLOBAL `Mutex` UNTIL 2026-09-12.**
+///
+/// The test harness runs this file's three tests on parallel threads and all
+/// three provoke panics. With one shared cell, a clear in one test raced a set in
+/// another: the origin came back as `unknown`, fell outside the `confine.rs`
+/// allowance, and was reported as a panic inside the BACKEND. **A green or red
+/// result that depends on thread scheduling is neither.**
+///
+/// It surfaced when a new mutation kind raised the panic count from a handful to
+/// forty-nine — the race was always there and the volume made it certain. Run
+/// alone the test passed; run with its file it failed.
+///
+/// The hook executes on the panicking thread, so a thread-local is not a
+/// workaround for the race but the correct home for the value: the question is
+/// always "where did THIS thread's panic come from".
+mod panic_origin {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static LAST: RefCell<Option<String>> = const { RefCell::new(None) };
+    }
+
+    pub fn clear() {
+        LAST.with(|c| *c.borrow_mut() = None);
+    }
+
+    pub fn set(file: String) {
+        LAST.with(|c| *c.borrow_mut() = Some(file));
+    }
+
+    pub fn get() -> Option<String> {
+        LAST.with(|c| c.borrow().clone())
+    }
+}
 
 fn install_location_hook() {
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         if let Some(loc) = info.location() {
-            *LAST_PANIC_FILE.lock().unwrap() = Some(loc.file().to_string());
+            panic_origin::set(loc.file().to_string());
         }
         let _ = &prev; // deliberately silent: the sweep prints its own summary
     }));
@@ -87,7 +119,7 @@ fn install_location_hook() {
 
 /// Lower `m`, reporting `Ok`, or `(origin file, message)` on a panic.
 fn outcome(m: &Module) -> Result<&'static str, (String, String)> {
-    *LAST_PANIC_FILE.lock().unwrap() = None;
+    panic_origin::clear();
     let r = catch_unwind(AssertUnwindSafe(|| {
         let ctx = inkwell::context::Context::create();
         let lm = ctx.create_module("kel");
@@ -102,11 +134,7 @@ fn outcome(m: &Module) -> Result<&'static str, (String, String)> {
                 .cloned()
                 .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
                 .unwrap_or_else(|| "non-string panic".to_string());
-            let file = LAST_PANIC_FILE
-                .lock()
-                .unwrap()
-                .clone()
-                .unwrap_or_else(|| "unknown".to_string());
+            let file = panic_origin::get().unwrap_or_else(|| "unknown".to_string());
             Err((file, msg.chars().take(110).collect()))
         }
     }
@@ -176,6 +204,38 @@ fn mutants(base: &Module) -> Vec<(String, Module)> {
                 // bound went unfixed and the sweep reported clean. **A sweep is
                 // only as wide as its mutation set.** The mutation-placement
                 // guard pointed at the omission, not this file.
+                // **A BRANCH RETARGETED TO A VALID-BUT-WRONG INDEX.** Added
+                // 2026-09-12, after a panic was found by CONSTRUCTION that this
+                // sweep could not reach.
+                //
+                // The `Else(u16::MAX)` above corrupts a target OUT OF RANGE,
+                // which is refused for being out of range. A depth disagreement
+                // needs a target that is perfectly valid and simply wrong: two
+                // edges arriving at one instruction with different operand-stack
+                // depths. Retargeting `If(6)` to `If(7)` in
+                // `if t > 0 { 1 } else { 2 }` does it, and the assertion that
+                // caught it was a PANIC on a public entry point until the same
+                // increment converted it.
+                //
+                // **The sweep was green throughout.** Its mutations change
+                // opcodes; this one changes a target. A clean guard proves its
+                // own reach before it proves the tree.
+                if let Op::If(t) | Op::Else(t) = base.chunks[ci].ops[at] {
+                    let near = u16::try_from(usize::from(t).saturating_add(1).min(n - 1))
+                        .unwrap_or(u16::MAX);
+                    if near != t {
+                        let mut rt = base.clone();
+                        rt.chunks[ci].ops[at] = match base.chunks[ci].ops[at] {
+                            Op::If(_) => Op::If(near),
+                            _ => Op::Else(near),
+                        };
+                        out.push((
+                            format!("chunk {ci}: op {at} branch retargeted {t} -> {near}"),
+                            rt,
+                        ));
+                    }
+                }
+
                 let mut sl = base.clone();
                 sl.chunks[ci].ops[at] = Op::SetLocal(u16::MAX);
                 out.push((format!("chunk {ci}: op {at} -> SetLocal(huge)"), sl));
@@ -369,7 +429,7 @@ fn the_host_facing_planners_return_rather_than_panicking() {
     for (name, m) in &corpus {
         for (what, mutant) in mutants(m) {
             calls += 1;
-            *LAST_PANIC_FILE.lock().unwrap() = None;
+            panic_origin::clear();
             let r = catch_unwind(AssertUnwindSafe(|| {
                 let a = region::host_arena_supplement_bytes(&mutant);
                 let b = region::persistent_supplement_bytes(&mutant);
@@ -395,11 +455,7 @@ fn the_host_facing_planners_return_rather_than_panicking() {
                         .cloned()
                         .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
                         .unwrap_or_else(|| "non-string panic".to_string());
-                    let file = LAST_PANIC_FILE
-                        .lock()
-                        .unwrap()
-                        .clone()
-                        .unwrap_or_else(|| "unknown".to_string());
+                    let file = panic_origin::get().unwrap_or_else(|| "unknown".to_string());
                     panics.push((name.clone(), what, file, msg.chars().take(110).collect()));
                 }
             }
@@ -483,7 +539,7 @@ fn the_remaining_entry_points_refuse_rather_than_panicking() {
     for (name, m) in &corpus {
         for (what, mutant) in mutants(m) {
             calls += 1;
-            *LAST_PANIC_FILE.lock().unwrap() = None;
+            panic_origin::clear();
             let r = catch_unwind(AssertUnwindSafe(|| {
                 // The whole-module diagnostic path.
                 let (refs, _ix) = module_lowered_op_indices(&mutant, LowerOptions::default());
@@ -513,11 +569,7 @@ fn the_remaining_entry_points_refuse_rather_than_panicking() {
                         .cloned()
                         .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
                         .unwrap_or_else(|| "non-string panic".to_string());
-                    let file = LAST_PANIC_FILE
-                        .lock()
-                        .unwrap()
-                        .clone()
-                        .unwrap_or_else(|| "unknown".to_string());
+                    let file = panic_origin::get().unwrap_or_else(|| "unknown".to_string());
                     panics.push((name.clone(), what, file, msg.chars().take(110).collect()));
                 }
             }

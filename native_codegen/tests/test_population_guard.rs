@@ -34,7 +34,12 @@
 ///
 /// **Derive this, do not transcribe it.** A count in this tree once read
 /// "nineteen" while the block it described held twenty-nine.
-const RECORDED_TEST_FUNCTIONS: usize = 514;
+const RECORDED_TEST_FUNCTIONS: usize = 517;
+// 514 -> 517 on 2026-09-12: three added in `depth_disagreement.rs`. A branch
+// retargeted to a valid-but-wrong index makes one block arrive at two operand
+// depths, and the check for that was an `assert_eq!` — a PANIC on a public entry
+// point that does not require a verified module. It is now a refusal.
+//
 // 511 -> 514 on 2026-09-11: three added in `outstanding_reports.rs`. They watch
 // the defects this line has reported to the `v0.2.3` line, so a repair upstream
 // turns this suite red and forces the report to be retracted. Written after
@@ -170,7 +175,9 @@ const RECORDED_TEST_FUNCTIONS: usize = 514;
 /// 112 -> 113: `shared_composite_slot.rs` added, none removed.
 ///
 /// 113 -> 114: `outstanding_reports.rs` added, none removed.
-const RECORDED_TEST_FILES: usize = 114;
+///
+/// 114 -> 115: `depth_disagreement.rs` added, none removed.
+const RECORDED_TEST_FILES: usize = 115;
 
 fn test_files() -> Vec<std::path::PathBuf> {
     let mut out: Vec<_> = std::fs::read_dir("tests")

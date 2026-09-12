@@ -33,9 +33,24 @@
 //! | the compiler emits dead code after `break` | no safety consequence; permissive only |
 //! | **the bound comes from `Op::BoundsCheck`** | **MISLOWER — this was the defect. Now checked at the site.** |
 //! | **the operand stack is empty at `Op::Reset`** | **MISLOWER — was assumed. Now checked at the site.** |
+//! | **a verified module cannot present a depth disagreement** | **HARMLESS IF FALSE — the site no longer relies on it.** |
 //!
 //! **Two of seven were unchecked and one of those was live.** Both are now
 //! checks rather than prose.
+//!
+//! # The eighth entry is the shape this census wants, arriving 2026-09-12
+//!
+//! The depth-agreement check WAS an `assert_eq!` carrying the premise *"the typed
+//! verifier guarantees agreement, so this is a lowering bug"* — a premise about
+//! upstream, guarding a PANIC on a public entry point that does not require a
+//! verified module. Retargeting a branch to a valid-but-wrong index reached it.
+//!
+//! **It is now a refusal, and that is what makes the replacement premise
+//! harmless.** The comment still observes that a verified module cannot present
+//! the shape, but nothing depends on the observation: the disagreement is refused
+//! whether or not the verifier would have prevented it. **A premise the code does
+//! not rely on costs nothing when it is false** — which is the disposition this
+//! table exists to record, rather than the count.
 //!
 //! # ⚠ WHAT THIS CENSUS DOES NOT COVER, AND IT IS THE CLASS THAT BIT HARDEST
 //!
@@ -88,7 +103,7 @@ const PREMISE_PHRASES: &[&str] = &[
 /// **Re-derive this rather than trusting it.** It moves with every increment
 /// that adds or removes such a comment, including this file's own prose being
 /// quoted into the emitter.
-const RECORDED_PREMISE_LINES: usize = 29;
+const RECORDED_PREMISE_LINES: usize = 30;
 // 12 -> 29 with the impossibility phrases. The seventeen new lines were read,
 // and they fall in one class: **statements of what the backend DECLINES** —
 // "an unknown width cannot be placed", "`Op::Add` cannot be lowered without

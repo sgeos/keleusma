@@ -3489,15 +3489,39 @@ fn lower_chunk_body<'ctx>(
     // The yield at `y` is always walked before its resume point at `y + 1`, so
     // the entry is present by the time the reload needs it.
     let mut spilled: BTreeMap<usize, Vec<(Width, OperandKind)>> = BTreeMap::new();
+    // **A DEPTH DISAGREEMENT IS REFUSED, NOT ASSERTED.**
+    //
+    // This was `assert_eq!` with the message *"the typed verifier guarantees
+    // agreement, so this is a lowering bug"*. **That reasoning holds for a
+    // VERIFIED module and `lower_module` is a public entry point that does not
+    // require one** — `Vm::new_unchecked` exists precisely because trust-skip is
+    // a supported mode, and this package already converted 58 panics on that
+    // entry point into refusals for the same reason.
+    //
+    // **Reachable, by construction rather than by search.** Retargeting the
+    // `If(6)` of `if t > 0 { 1 } else { 2 }` to `If(7)` makes op 7 arrive from
+    // the branch edge at depth 0 and from the then-arm's `Else` at depth 1. The
+    // mutation sweep was green throughout: its mutations change OPCODES, and this
+    // needs a JUMP TARGET moved. **A clean guard proves its own reach before it
+    // proves the tree.**
+    //
+    // **The invariant is unchanged.** Agreement is still required; only the
+    // failure mode moved from a panic to a refusal, so a caller can handle it.
+    // Dropping the check instead would trade a panic for a miscompilation, which
+    // is strictly worse: the depth is what decides which operand slots a block's
+    // code reads.
     macro_rules! note {
         ($t:expr, $d:expr) => {{
             let (t, d) = ($t, $d);
-            if let Some(&prev) = tdepth.get(&t) {
-                assert_eq!(
-                    prev, d,
-                    "operand-stack depth disagreement entering op{t}: {prev} vs {d}. \
-                     The typed verifier guarantees agreement, so this is a lowering bug."
-                );
+            if let Some(&prev) = tdepth.get(&t)
+                && prev != d
+            {
+                return Err(LowerError::MalformedInput(format!(
+                    "operand-stack depth disagreement entering op{t}: {prev} vs {d}. Two edges \
+                     reach that instruction with different operand-stack depths, so the block \
+                     cannot be given one well-defined entry state. A verified module cannot \
+                     present this; an unverified one can."
+                )));
             }
             tdepth.insert(t, d);
         }};

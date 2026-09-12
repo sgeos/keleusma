@@ -1,5 +1,61 @@
 # Design Journal
 
+## 2026-09-12 — [v0.3.0] A panic on a public entry point, and a race in the sweep that hid its class
+
+`lower_chunk` required operand-depth agreement at every branch target with `assert_eq!`, whose message
+read *"the typed verifier guarantees agreement, so this is a lowering bug"*.
+
+**True of a verified module — and `lower_module` does not require one.** `Vm::new_unchecked` exists
+because trust-skip is supported, and this package already converted 58 panics on that entry point into
+refusals for the same reason.
+
+**Reachable by construction.** Retargeting the `If(6)` of `if t > 0 { 1 } else { 2 }` to `If(7)` makes
+op 7 arrive from the branch edge at depth 0 and from the then-arm's `Else` at depth 1. It panicked; it
+now refuses, naming the disagreement.
+
+**The invariant is untouched.** Only the failure mode moved. Dropping the check would trade a panic for
+a miscompilation, which is strictly worse: the depth decides which operand slots a block's code reads.
+
+### Why the sweep was green, and what it says about sweeps
+
+`lowering_robustness.rs` mutates OPCODES. A depth disagreement needs a JUMP TARGET moved to a
+valid-but-wrong index — an out-of-range target, which the sweep does generate, is refused for being out
+of range and never reaches the check. **A clean guard proves its own reach before it proves the tree**,
+and the sweep now carries a retarget mutation so the class is covered rather than the instance.
+
+### The new mutation exposed a race in the sweep itself
+
+Panic volume went from a handful to forty-nine, and the file began failing **only when its three tests
+ran together**. The panic-origin hook wrote to a process-global `Mutex<Option<String>>` while the
+harness ran those tests on parallel threads: one test's clear raced another's set, the origin came back
+`unknown`, fell outside the `confine.rs` allowance, and was reported as a panic inside this backend.
+
+**A green or red result that depends on thread scheduling is neither.** The hook runs on the panicking
+thread, so the value is now thread-local — the right home for it rather than a workaround: the question
+is always *where did THIS thread's panic come from*. Three consecutive full-file runs are green.
+
+### A fourth guard fired, and its demand was the right one
+
+The upstream-premise census refused the increment until the new comment was dispositioned. It exists
+because a comment claiming what the compiler emits was once false and cost an out-of-bounds read
+returned as a value, and it requires each premise-shaped line to be **checked at its site or recorded
+as harmless**.
+
+**This one is harmless in the strongest sense: the site no longer relies on it.** The comment still
+observes that a verified module cannot present a depth disagreement, but the refusal fires whether or
+not that is true. **A premise the code does not depend on costs nothing when it is false** — which is
+the disposition the table records, and the reason the census asks for a disposition rather than a
+number.
+
+> **Five guards have now fired on this session's own work**: the pointer census, the value-movement
+> census, the host-buffer census, the population guard, the skippable-tests pin — and now the premise
+> census. Each demanded classification rather than a patched number, and each was satisfied by
+> answering its question rather than by editing its expectation.
+
+> **Third harness defect of the session**, after two sized a buffer by a literal. The instruments are
+> code, and nothing was auditing them as code. This one had been latent for as long as the file has had
+> three tests; the volume made it certain rather than creating it.
+
 ## 2026-09-12 — [v0.3.0] The register was stale in BOTH directions
 
 The previous increment found a defect report that outlived its defect. This one asked which OTHER

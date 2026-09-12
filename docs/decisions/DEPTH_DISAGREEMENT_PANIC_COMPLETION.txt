@@ -1,0 +1,36 @@
+COMPLETION CONDITION — the depth-disagreement assertion
+
+Ordering is NOT a completion criterion. Any order of the work satisfies this, and
+nothing here requires a particular branch, commit shape, or process step.
+
+All of the following hold in the tree:
+
+1. THE QUESTION IS SETTLED BY CONSTRUCTION, NOT BY ABSENCE.
+   The tree establishes whether a module that the public lowering entry point
+   accepts can reach the operand-depth agreement assertion, by exhibiting such a
+   module or by stating why none can exist. A green mutation sweep is not
+   accepted as the answer.
+
+2. IF REACHABLE, IT FAULTS SOFTLY.
+   A module that would trigger it is REFUSED with a reason naming the
+   disagreement, rather than panicking. A test drives that module through the
+   public entry point and asserts the refusal.
+
+3. THE INVARIANT IS NOT WEAKENED.
+   Whatever replaces the assertion still prevents a block being entered at two
+   different operand depths. No program that previously lowered stops lowering,
+   and no program lowers that previously panicked.
+
+4. IF UNREACHABLE, THE REASON IS RECORDED WHERE THE ASSERTION IS,
+   so the next reader does not re-derive it, and the claim is specific about what
+   makes it unreachable rather than appealing to the verifier in general.
+
+5. THE SWEEP REACHES WHAT WAS FOUND.
+   If a new reachable shape is established, the robustness sweep covers that shape
+   afterwards, or the tree states why it cannot.
+
+6. NO NEW OPCODE, NO BYTECODE_VERSION CHANGE, AND NO EDIT TO src/ OR tests/ AT
+   THE REPOSITORY ROOT.
+
+7. THE BACKEND SUITE IS GREEN IN BOTH FLOAT CONFIGURATIONS, with counts
+   re-derived rather than quoted.
