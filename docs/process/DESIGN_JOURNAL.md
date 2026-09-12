@@ -13,6 +13,95 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (seventy-sixth) — a negative result that bounds the previous one
+
+### THE QUESTION THE PREVIOUS INCREMENT LEFT OPEN
+
+It found three unrecorded divergences and a fifth gap by comparing ONE of the seven
+pipeline↔reference channels over the binding forms. **The corpus narrowness that let them hide is a
+property of the agreement tests generally**, not of the occurrence one — so the obvious reading was
+that the other six needed the same treatment.
+
+### THE ANSWER: LOCALISED
+
+Checked over the same forms: the declared-name, field-set and declaration/call channels refuse
+nothing, and **the BINDING channel — which carries the richest rows and is the likeliest to diverge
+alongside — agrees exactly.**
+
+So the divergence is specific to occurrences, which is also the only channel that records the USE of
+a binder rather than its declaration. That is consistent rather than coincidental, and it is why the
+other channels do not need the same treatment.
+
+### WHY A NEGATIVE RESULT IS WORTH AN INCREMENT
+
+**It bounds the previous finding.** Without it, "the pipeline omits binders" reads as an unknown
+amount of divergence across seven channels; with it, the claim is exactly one channel wide and the
+rest is measured rather than assumed.
+
+The localisation is now pinned INSIDE the divergence test rather than stated beside it, so a future
+divergence in the binding channel fails with a message saying the scope has grown — **a different
+and larger fact than the one this test was written for**, and one that would otherwise be invisible
+because the occurrence assertion would still pass.
+
+### THE LINE THIS CLOSES
+
+Every gap this session found came from aiming an instrument somewhere it had not been aimed. This is
+the first application that found nothing, and that is the result: **the vein is bounded.** Reporting
+it as such is more useful than continuing to sample a space already measured.
+
+---
+
+## 2026-09-12 (seventy-fifth) — the pipeline is safe by omission, and a fifth gap
+
+### POINTING THE SESSION'S OWN FINDING AT ITS OWN DEFENCE
+
+The recurring result has been that **a corpus which cannot distinguish two implementations cannot
+detect that they diverge.** The pipeline↔reference agreement tests are the main defence for the
+self-hosted work, and the occurrence one — for the channel where three false rejections hid — uses a
+corpus with a `match` on a LITERAL, no loop, no const parameter and no qualified import.
+
+Those three false rejections were fixed on the REFERENCE side. **Nothing had checked the pipeline
+side against the same forms.**
+
+### THE RESULT
+
+For a `for` variable, a match-arm payload binding and a const parameter used as a value, the
+reference records an occurrence and **the pipeline records none**. Only the `for` case was pinned;
+the other two were recorded nowhere.
+
+### SAFE BY OMISSION IS NOT SAFE BY CORRECTNESS
+
+Omitting an occurrence is the ACCEPTING direction, so the pipeline does not reject these programs.
+**But the reason it is safe is that it reports nothing, not that it handles them.**
+
+The reference side's three false rejections were precisely: the name arrived as an occurrence while
+the local set did not contain it. **If the pipeline began reporting these binders without also
+collecting them as locals, it would reproduce that defect exactly** — and the increment that widened
+it would look like a gap closing.
+
+**Stated as a risk rather than a finding**, because the pipeline's own local-set handling has not
+been inspected. What is checkable is the divergence, and the pin holds that; its failure message
+says what to check if a form ever leaves the set.
+
+### A FIFTH GAP, FROM THE SAME COMPARISON
+
+`audio::midi_to_freq(69)` — a QUALIFIED CALL — is accepted by the reference and refused by
+`reconstruct.kel` with *"a record range did not reduce to exactly one node"*, the same failure kind
+as `assert`.
+
+**The `use` declaration alone is fine**, which localises it: the import parses; the CALL FORM does
+not. Separating those took one probe, and it is the difference between "imports are unsupported" and
+a precise gap.
+
+### THE PATTERN, STATED ONCE
+
+Every gap this session found came from pointing an instrument at something it had not been aimed at:
+the rule census at forms, the binder census at the twin, the grammar's table at the parser, and now
+the binder corpus at the agreement tests. **The instruments transfer because the failure mode does** —
+a corpus chosen to demonstrate behaviour rather than to distinguish implementations.
+
+---
+
 ## 2026-09-12 (seventy-fourth) — the bounded channel was not bounded, and the split did not fix it
 
 ### TREATING THE ROOT INSTEAD OF REPEATING THE REMEDY

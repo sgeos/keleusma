@@ -4155,6 +4155,202 @@ fn the_rules_the_census_added_do_not_reject_valid_programs() {
     }
 }
 
+/// **THE TWO EXTRACTIONS COMPARED OVER THE BINDING FORMS, WHICH IS WHERE THREE
+/// FALSE REJECTIONS HID.**
+///
+/// # Why this comparison and not the existing agreement test
+///
+/// The pipeline↔reference agreement test for occurrences uses a corpus containing
+/// a `match` on a LITERAL, no loop, no const parameter and no qualified import.
+/// **A corpus that cannot distinguish two implementations cannot detect that they
+/// diverge** — and three false rejections hid in the reference side of exactly
+/// these forms.
+///
+/// Those were fixed on the REFERENCE side. Nothing had checked the pipeline side
+/// against them.
+///
+/// # The result: the pipeline omits every binder the reference reports
+///
+/// For a `for` variable, a match-arm payload binding and a const parameter used as
+/// a value, the reference records an occurrence and the pipeline records none.
+/// Only the `for` case was pinned; the other two were not recorded anywhere.
+///
+/// # SAFE BY OMISSION IS NOT SAFE BY CORRECTNESS
+///
+/// Omitting an occurrence is the ACCEPTING direction for the classification rule,
+/// so the pipeline does not currently reject these programs. **But the reason it
+/// is safe is that it reports nothing, not that it handles them.**
+///
+/// The reference side's three false rejections were precisely: the name arrived as
+/// an occurrence while the local set did not contain it. **If the pipeline began
+/// reporting these binders without also collecting them as locals, it would
+/// reproduce that defect exactly** — and the increment that widened it would look
+/// like a gap closing.
+///
+/// **This is a stated risk, not a verified one**: the pipeline's own local-set
+/// handling has not been inspected here. What is checkable is the divergence, and
+/// that is what the assertion holds.
+///
+/// # A fifth parser gap, found by the same comparison
+///
+/// `audio::midi_to_freq(69)` — a QUALIFIED CALL expression — is accepted by the
+/// reference and refused by the pipeline with *"a record range did not reduce to
+/// exactly one node"*, the same failure kind as `assert`. The `use` declaration
+/// alone is fine; it is the call form that is unhandled.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_pipeline_omits_the_binders_the_reference_reports() {
+    // `(form, source)`. Every source is accepted by the reference, asserted below.
+    const FORMS: &[(&str, &str)] = &[
+        (
+            "for loop variable",
+            "fn main() -> Word { let t = 0; for i in 0..4 limit 4 { let u = i; } t }",
+        ),
+        (
+            "match arm payload binding",
+            "enum E { W(Word), N }\n\
+             fn main(e: E) -> Word { match e { E::W(p) => p + 1, E::N => 0 } }",
+        ),
+        (
+            "const parameter used as a value",
+            "fn plus<const n: Word>() -> Word { n + 10 }\n\
+             fn main() -> Word { plus::<7>() }",
+        ),
+    ];
+
+    let mut diverging: Vec<&str> = Vec::new();
+    for (form, src) in FORMS {
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+        assert!(
+            compile(&ast).is_ok(),
+            "{form}: the REFERENCE rejects this, so a divergence would not be about \
+             the two extractions"
+        );
+        let mut reference = reference_occurrence_names(&ast);
+        let mut pipeline: Vec<String> = keleusma::selfhost::occurrence_rows_from_pipeline(src)
+            .into_iter()
+            .map(|(n, _, _)| n)
+            .collect();
+        reference.sort();
+        reference.dedup();
+        pipeline.sort();
+        pipeline.dedup();
+        if reference != pipeline {
+            diverging.push(form);
+        }
+    }
+
+    // NON-VACUITY: a form both sides agree on, so the assertion below is about the
+    // binders rather than about the harness reporting nothing either way.
+    let control = "fn main() -> Word { let a = 1; a + a }";
+    let cast = parse(&tokenize(control).expect("lex")).expect("parse");
+    let mut cref = reference_occurrence_names(&cast);
+    let mut cpipe: Vec<String> = keleusma::selfhost::occurrence_rows_from_pipeline(control)
+        .into_iter()
+        .map(|(n, _, _)| n)
+        .collect();
+    cref.sort();
+    cref.dedup();
+    cpipe.sort();
+    cpipe.dedup();
+    assert_eq!(
+        cref, cpipe,
+        "the two extractions disagree on a plain `let`, so this test is measuring \
+         something other than the binding forms"
+    );
+    assert!(
+        !cref.is_empty(),
+        "neither extraction reported any name for the control, so agreement on it \
+         establishes nothing"
+    );
+
+    assert_eq!(
+        diverging,
+        vec![
+            "for loop variable",
+            "match arm payload binding",
+            "const parameter used as a value",
+        ],
+        "the set of binding forms on which the two extractions diverge changed. A \
+         form LEAVING it means the pipeline began reporting that binder -- check \
+         that it also collects it as a LOCAL, because reporting without collecting \
+         is exactly the false rejection fixed on the reference side"
+    );
+
+    // **THE DIVERGENCE IS LOCALISED TO THE OCCURRENCE CHANNEL, and that was
+    // measured rather than assumed.** The binding channel carries the richest rows
+    // and is the one most likely to diverge alongside; over the same forms it
+    // AGREES exactly. So the other agreement tests do not need the same treatment,
+    // and a future divergence appearing here is a new fact rather than one this
+    // scope never covered.
+    for (form, src) in FORMS {
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+        let (names, rows) = binding_rows(&ast);
+        let name_of = |id: i64| {
+            names
+                .iter()
+                .find(|(_, v)| **v == id)
+                .map(|(k, _)| k.clone())
+        };
+        let mut want: Vec<keleusma::selfhost::BindingRow> = rows
+            .iter()
+            .filter_map(|(n, t, f)| {
+                let nm = name_of(*n)?;
+                match f {
+                    0 => Some((nm, *t, 0, String::new())),
+                    1 => Some((nm, 0, 1, name_of(*t)?)),
+                    _ => None,
+                }
+            })
+            .collect();
+        let (_, mut got) = keleusma::selfhost::binding_rows_from_pipeline(src);
+        want.sort();
+        got.sort();
+        assert_eq!(
+            got, want,
+            "{form}: the BINDING rows diverge too. The occurrence divergence above \
+             was localised to that one channel; this says it no longer is, which is \
+             a different and larger fact"
+        );
+    }
+}
+
+/// **A QUALIFIED CALL EXPRESSION IS UNHANDLED BY THE PIPELINE.**
+///
+/// `audio::midi_to_freq(69)` is accepted by the reference and refused by
+/// `reconstruct.kel` with *"a record range did not reduce to exactly one node"* —
+/// the same failure kind as `assert`, and the fifth self-hosted gap this file
+/// records.
+///
+/// **The `use` declaration alone is fine**, which localises it: the import parses,
+/// the CALL FORM does not. Separating those two was one probe and it is the
+/// difference between "imports are unsupported" and a precise gap.
+#[cfg(feature = "self-host")]
+#[test]
+fn a_qualified_call_expression_is_not_handled_by_the_pipeline() {
+    let import_only = "use audio::midi_to_freq\nfn main() -> Word { 0 }";
+    assert!(
+        std::panic::catch_unwind(|| keleusma::selfhost::occurrence_rows_from_pipeline(import_only))
+            .is_ok(),
+        "the bare `use` declaration no longer parses, which is a regression rather \
+         than the gap this test records"
+    );
+
+    let qualified = "use audio::midi_to_freq\nfn main() -> Float { audio::midi_to_freq(69) }";
+    let ast = parse(&tokenize(qualified).expect("lex")).expect("parse");
+    assert!(
+        compile(&ast).is_ok(),
+        "the REFERENCE rejects the qualified call, so the pipeline refusing it is \
+         not a divergence"
+    );
+    assert!(
+        std::panic::catch_unwind(|| keleusma::selfhost::occurrence_rows_from_pipeline(qualified))
+            .is_err(),
+        "the pipeline now handles a qualified call expression. THIS IS A GAP \
+         CLOSING: record what changed and widen the documented subset"
+    );
+}
+
 /// **THE GRAMMAR'S EXPRESSION AND STATEMENT FORMS, CENSUSED THE SAME WAY.**
 ///
 /// # The question this answers
