@@ -4401,6 +4401,24 @@ fn a_qualified_call_expression_is_not_handled_by_the_pipeline() {
 /// from self-compiling.** What each gap blocks is a user program, and what it costs
 /// is measured by how badly it fails rather than by whether the subset omits it.
 ///
+/// # AND A CLAIM THAT FOLLOWED FROM THAT WAS WRONG
+///
+/// It seemed to follow that the remaining obligation is merely to REFUSE cleanly,
+/// which would be smaller than implementing the constructs. **Checked, and
+/// retracted.**
+///
+/// `parse.kel` has no refusal channel. Its output vocabulary is 54 node kinds plus
+/// `DONE`, and **not one of them is an error**. A construct it cannot handle
+/// cannot be NAMED by it; it can only mis-parse or spin. Refusing cleanly means
+/// adding a refusal record kind and teaching the driver and every consumer to read
+/// it — which touches MORE components than implementing a construct does, not
+/// fewer.
+///
+/// **The reframing above still holds; the cost estimate that rode along with it
+/// did not.** Whether refusal is cheaper than implementation is an open question,
+/// and it was stated as settled in two places before anyone looked at the
+/// parser's output vocabulary.
+///
 /// **This is FEATURE WORK, not a missing branch**, and that matters for planning:
 /// admitting it needs a token code, a lexer arm, statement parsing, and emission
 /// through reconstruct and codegen. Unlike the bare unit-variant pattern — where

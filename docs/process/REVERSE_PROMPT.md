@@ -31,9 +31,16 @@ documents — was a missing branch and **is fixed**.
 through the pipeline byte-identically, so no stage can contain a construct the pipeline cannot
 parse. Each gap blocks a USER program, not the stages.
 
-**So the remaining obligation is smaller than "implement four constructs".** All four fail by
-producing a malformed record stream rather than a refusal naming the construct — a total language's
-front end should refuse what it cannot handle, and that is a separate and lesser piece of work.
+**All four fail by producing a malformed record stream rather than a refusal naming the
+construct**, and a total language's front end should refuse what it cannot handle.
+
+**A claim here said that obligation is "separate from, and considerably smaller than" implementing
+them. That was not verified and is RETRACTED.** `parse.kel` has no refusal channel: its output
+vocabulary is 54 node kinds plus `DONE`, and not one of them is an error. A construct it cannot
+handle therefore cannot be NAMED by it — it can only mis-parse or spin. Refusing cleanly means
+adding a refusal record kind and teaching the driver and every consumer to handle it, which touches
+more components than implementing the constructs does. **Whether it is smaller is now an open
+question rather than a stated fact.**
 
 **The pipeline also diverges from the reference on three binder forms** — a `for` variable, a match
 payload binding, a const parameter used as a value — where it reports no occurrence at all. That is

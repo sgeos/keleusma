@@ -13,6 +13,50 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (seventy-ninth) — a cost estimate I stated as settled, retracted
+
+### THE CLAIM
+
+Two increments ago I established something true — no gap found by these censuses can block the
+stages from self-compiling, because all twelve compile byte-identically — and then attached a cost
+estimate to it that I did not check:
+
+> the remaining obligation is "make the front end refuse cleanly", separate from and considerably
+> smaller than implementing these four constructs.
+
+**That went into a merged pull request description and into the reverse prompt's current-state
+block.** Both now carry the retraction.
+
+### WHAT CHECKING SHOWED
+
+**`parse.kel` has no refusal channel.** Its output vocabulary is 54 node kinds plus `DONE`, and not
+one of them is an error, refusal, or unsupported marker — enumerated, not assumed.
+
+So a construct the parser cannot handle **cannot be named by it**. It can only mis-parse or spin,
+which is precisely what all four gaps do. Refusing cleanly means adding a refusal record kind and
+teaching the driver and every consumer to read it: **more components than implementing a construct
+touches, not fewer.**
+
+### THE SHAPE OF THE ERROR
+
+The finding it rode on was verified and remains true. **The cost estimate was a plausible inference
+from it, stated in the same breath and in the same confident register.** That is what made it
+dangerous: a reader has no way to tell which half was measured.
+
+One branch of the fix even looked cheap in isolation — at match-arm phase 2 an identifier that is
+not an enum name is unambiguously a pattern rather than an end-of-arms, and detecting that is one
+condition. But detection without a channel to report on has nowhere to go, which is the part the
+estimate skipped.
+
+### THE RULE
+
+**A verified finding and an unverified inference drawn from it should not share a sentence.** This
+session has caught several claims that were reasoned about rather than checked; this one is worse
+than those, because its neighbour in the same paragraph WAS checked, and the proximity lent it
+credibility it had not earned.
+
+---
+
 ## 2026-09-12 (seventy-eighth) — the cheap-update property held, which is the design being tested
 
 ### THE CLAIM THAT NEEDED TESTING
