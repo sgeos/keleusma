@@ -122,14 +122,25 @@ pub fn drive_parse_records_with<F, B>(
             .resume_with_shared(shared, Value::Int(0))
             .expect("resume parse.kel");
     }
-    // Measured cause: an unterminated block. `fn f() -> Word { let x = 1; x` (no closing
-    // brace) exhausts the budget rather than reporting anything, because the stage is still
-    // waiting for the token that closes the body. The budget itself is almost never the
-    // real fault, so it is named last rather than first.
+    // TWO MEASURED CAUSES, AND THIS MESSAGE USED TO ASSERT ONLY THE FIRST.
+    //
+    // 1. An unterminated block. `fn f() -> Word { let x = 1; x` (no closing brace) exhausts
+    //    the budget rather than reporting anything, because the stage is still waiting for
+    //    the token that closes the body.
+    // 2. **A construct `parse.kel` does not handle**, which spins instead of refusing. A
+    //    match arm whose pattern is a BARE enum path -- `E::A => 1` rather than `E::A() => 1`
+    //    -- does this, measured 2026-09-12. The reference accepts both spellings.
+    //
+    // **The old wording named the first as "the usual cause", which is a claim about a
+    // population nobody measured**, and it would send a reader hunting for an unterminated
+    // brace that does not exist. Naming both, and naming neither as usual, costs nothing and
+    // stops the message from being confidently wrong.
     panic!(
-        "parse.kel ran {budget} steps without reaching DONE. The usual cause is an \
-         unterminated block, string, or bracket in the input: the parser is still waiting \
-         for the token that closes it and never reaches the end of the declaration."
+        "parse.kel ran {budget} steps without reaching DONE. Two causes are on record and \
+         this guard cannot tell them apart: an unterminated block, string, or bracket, so \
+         the parser never reaches the end of the declaration; or a construct the stage does \
+         not handle and spins on rather than refusing. Check the input closes, then check \
+         whether it uses a construct outside the self-hosted subset."
     );
 }
 

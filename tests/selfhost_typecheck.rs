@@ -4155,6 +4155,88 @@ fn the_rules_the_census_added_do_not_reject_valid_programs() {
     }
 }
 
+/// **`parse.kel` REQUIRES THE PARENTHESES ON AN ENUM PATTERN, AND SPINS WITHOUT THEM.**
+///
+/// # What was measured
+///
+/// The reference accepts both `E::A => 1` and `E::A() => 1` as match-arm patterns.
+/// The self-hosted parser accepts the parenthesised spelling and **does not
+/// terminate** on the bare one — it exhausts its step budget rather than refusing.
+/// Payload or no payload makes no difference; the parentheses do.
+///
+/// Established by raising the budget: at sixteen steps per token it fails, and at
+/// five hundred and twelve it still fails. **That distinguishes non-termination
+/// from a budget merely sized to the constructs someone tried.**
+///
+/// # How it was found, which is the reusable part
+///
+/// The binding-form census was written for the REFERENCE extraction, where it
+/// found two false rejections. Running the same corpus against the PIPELINE
+/// extraction took one probe — the two walks are twins, and the agreement tests
+/// between them use corpora that contain a `match` on a LITERAL, no loop, no const
+/// parameter and no qualified import. **A corpus that cannot distinguish two
+/// implementations cannot detect that they diverge**, which is the same shape as
+/// this file's other coverage findings, one level out.
+///
+/// # This pin does not fix it
+///
+/// Teaching `parse.kel` the bare spelling is a change to the self-hosted parser's
+/// pattern grammar, and an instrument and the change it argues for should not land
+/// together. What is fixed here is the DIAGNOSTIC, which asserted that the usual
+/// cause of budget exhaustion is an unterminated block — a claim about a
+/// population nobody measured, and false for this input.
+///
+/// The bare case is asserted to FAIL rather than left out, so the day it parses,
+/// this test fails and says so.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_self_hosted_parser_needs_parentheses_on_an_enum_pattern() {
+    // Both spellings are valid to the REFERENCE, which is what makes the
+    // divergence a gap rather than a difference of opinion.
+    const BOTH_VALID: &[(&str, &str)] = &[
+        (
+            "bare",
+            "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A => 1, E::B => 2 } }",
+        ),
+        (
+            "parenthesised",
+            "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A() => 1, E::B() => 2 } }",
+        ),
+    ];
+    for (label, src) in BOTH_VALID {
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+        assert!(
+            compile(&program).is_ok(),
+            "{label}: the REFERENCE rejects this spelling, so the comparison below is not \
+             between two valid programs"
+        );
+    }
+
+    // The parenthesised spelling reaches the pipeline extraction.
+    let paren = "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A() => 1, E::B() => 2 } }";
+    assert!(
+        std::panic::catch_unwind(|| keleusma::selfhost::occurrence_rows_from_pipeline(paren))
+            .is_ok(),
+        "the parenthesised enum pattern no longer parses, which is a regression rather \
+         than the gap this test records"
+    );
+
+    // The bare spelling does not. **Caught as a panic rather than a hang** because the
+    // step budget turns the non-termination into a refusal; without that guard this
+    // test would not return.
+    for src in [
+        "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A => 1, E::B => 2 } }",
+        "enum E { W(Word), N }\nfn main(e: E) -> Word { match e { E::W(p) => p, E::N => 0 } }",
+    ] {
+        assert!(
+            std::panic::catch_unwind(|| keleusma::selfhost::occurrence_rows_from_pipeline(src))
+                .is_err(),
+            "`parse.kel` now handles a BARE enum pattern. THIS IS A GAP CLOSING: record what \
+             changed, widen the documented subset, and retire this test"
+        );
+    }
+}
+
 /// **EVERY WAY THE LANGUAGE BINDS A NAME, CHECKED AT ONCE.**
 ///
 /// # Why a census rather than another fix
