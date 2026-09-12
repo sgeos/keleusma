@@ -4324,9 +4324,10 @@ fn the_documented_expression_and_statement_forms_are_censused() {
 /// TWO DIFFERENT WAYS** — a distinction the first version of this comment got
 /// wrong by asserting all three spin.
 ///
-/// - **Enum unit variant, bare** — `parse.kel` DOES NOT TERMINATE, exhausting its
-///   step budget. The grammar lists `Command::Silence`; the parenthesised `E::A()`
-///   parses and the documented spelling does not.
+/// - **Enum unit variant, bare** — ~~does not terminate~~ **FIXED 2026-09-12.** The
+///   grammar lists `Command::Silence`; `parse.kel` waited for a `(` that never came
+///   and span until its step budget ran out. Phase 3 now completes the pattern on
+///   the `=>` it already has.
 /// - **Struct destructuring** (`Note { channel, pitch }`) and **variable** (`x`) —
 ///   `parse.kel` ACCEPTS these and emits a record stream `reconstruct.kel` cannot
 ///   rebuild, refused as a **work-stack UNDERFLOW**.
@@ -4470,11 +4471,14 @@ fn the_documented_pattern_forms_are_censused_against_the_self_hosted_parser() {
     got.sort_unstable();
     assert_eq!(
         got,
-        vec![
-            "enum unit variant, bare",
-            "struct destructuring",
-            "variable",
-        ],
+        // **THE BARE ENUM UNIT VARIANT LEFT THIS SET on 2026-09-12**, which is what
+        // this assertion exists to announce. `step_mpat` phase 3 now completes the
+        // pattern on `=>` instead of waiting for a `(` that never comes.
+        //
+        // The two that remain are FEATURE WORK by the same trace, not missing
+        // branches: `step_match` phase 2 reads an identifier that is not an enum
+        // name as the END OF THE ARMS, so supporting them means new arm semantics.
+        vec!["struct destructuring", "variable"],
         "the set of documented pattern forms `parse.kel` cannot handle changed. A \
          form leaving it means the self-hosted parser gained a construct: record \
          what changed and widen the documented subset. A form joining it is a \

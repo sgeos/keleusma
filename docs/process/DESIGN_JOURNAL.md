@@ -13,6 +13,54 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (seventieth) — the contained fix, and a hesitation that was misplaced
+
+### A CORRECTION TO THE PREVIOUS INCREMENT'S REASONING
+
+It declined to write the fix because the change "deserves its own continuous-integration run rather
+than a ride-along". **That conflated WRITING the change with PUSHING it.** Working locally and
+holding the push — which is what every increment since the cadence finding has done — gives the
+change its own run. The hesitation protected nothing.
+
+### THE FIX
+
+`step_mpat` phase 3 waited for `LParen` and did nothing on any other token, so given `E::A => 1` the
+phase never advanced, tokens kept arriving with no progress, and the parse ran to its step budget.
+**It did not refuse; it span.**
+
+Phase 3 now completes the pattern on `=>`: the `LParen` path's slot reservation, then the `RParen`
+path's completion with zero payload binds, then **phase 4 rather than 3** — because the `=>` has
+already been consumed here, and returning to the phase that waits for one would swallow the arm
+result's first token.
+
+Only `=>` is handled. A match-arm pattern must be followed by it, so any other token at that phase
+is malformed input, and a narrow branch is easier to argue correct than a general one.
+
+### PARSING IS NOT THE CLAIM
+
+**That it now parses is not evidence it parses CORRECTLY.** The census only checks the pipeline does
+not panic, and would pass on a fix emitting wrong records.
+
+The two spellings denote the same pattern, so their record streams must be IDENTICAL — and comparing
+them is stronger than asserting what the records should contain, because it needs no model of the
+encoding. They match, including **mixed in one match**, which is the case that exercises each
+branch's hand-off to the arm result against the other's.
+
+### WHAT THE SLOT COMMENT WAS FOR
+
+The `LParen` path carries a comment saying its slot reservation exists so parse's slot numbers match
+codegen's allocation. **That is why the reservation was mirrored rather than rewritten**: getting it
+wrong would desynchronise two stages in a way no parse test would show. Byte identity held — 147 of
+147 in the codegen suite, 88 of 88 in the parse suite.
+
+### THE STATE OF THE CENSUS
+
+Documented pattern forms: **five parse, two do not.** The two that remain are feature work by the
+same trace — `step_match` phase 2 reads a non-enum identifier as the end of the arms, so supporting
+them means new arm semantics rather than a missing branch.
+
+---
+
 ## 2026-09-12 (sixty-ninth) — three gaps, one contained fix and two features
 
 ### WHY TRACE RATHER THAN WRITE
