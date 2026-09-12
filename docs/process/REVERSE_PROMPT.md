@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
-**2026-09-12, session 65, through the seventy-eighth increment.**
+**2026-09-12, session 65, through the eighty-first increment.**
 
 **Where the work is.** The type-rejection input path now carries **ten of twelve** real `.kel` stage
 sources, up from two, at **1.6x** the shared data it uses today rather than 7.3x — a growth of
@@ -55,6 +55,22 @@ is safe only by omission, and would reproduce the reference side's false rejecti
 reporting those binders. It has no separate locals set: a local read emits `local = 1`
 unconditionally and only when the slot has a name, so an occurrence-present-but-not-local condition
 is not expressible. Reporting and collecting are one lookup, not two walks that can disagree.
+
+**A second hedge was replaced by a stronger fact.** The comment explaining why the branch-pair row
+is withheld said a tag-based heuristic "could not be shown safe". It cannot work at all: a written
+`else { }` and an implicit arm produce the SAME parse record stream, while the reference separates
+them (one pair row against zero, measured). The distinguishing information never reaches this side,
+so the question of which tag a case yields is moot. Witnessed in `tests/selfhost_parse.rs`.
+
+**A census of the reference syntax tree's eighteen optional fields found no second instance of that
+class in an active channel.** The node rows are extracted from the reference tree, which reads the
+optionality directly; only pipeline-derived channels are exposed to it. That is a negative result,
+recorded rather than tested.
+
+**One guard the census did find worth pinning is now pinned and mutation-tested**: a body with no
+tail expression must contribute no declared-versus-actual row, since manufacturing one is a
+comparison the source never wrote and therefore a false rejection. Unguarding the extraction fails
+the pin; reverting is green.
 
 **Before trusting any green run**, read *"How a green local run has actually lied"* in
 [`CLAUDE.md`](../../CLAUDE.md): six observed ways a verification run reported success while covering
