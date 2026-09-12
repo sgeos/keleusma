@@ -13,6 +13,51 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (eighty-fifth) — the last hop, and two wrong sentences in the shipping binary
+
+### ASSERTING ON `Display` IS NOT ASSERTING ON THE PRODUCT
+
+Every claim this session that a user sees the offending construct rested on tests that format the
+error type. **That is the library, not the product.** The command-line front end builds its own
+message around the error and decides whether to print the retry hint, so a name that survives
+`Display` could still be lost before the terminal.
+
+This is the same substitution as the earlier miss that reasoned about refusal quality from a harness
+that unwraps, moved one layer out. Running the binary settles it: the construct name and the line
+DO reach the terminal, with the retry hint and a non-zero exit. The claims hold at the last hop, and
+now there are tests at that hop rather than one layer below it. The CLI test directory already had a
+precedent for spawning the binary, so the tests follow it.
+
+### THE HELP TEXT WAS WRONG IN TWO OF THREE
+
+The `--compiler` help said the self-hosted subset has "no floats, generics, or Text". Measured
+through the binary:
+
+- **floats** — only the LITERAL. A float-typed signature with no literal compiles and writes a
+  module.
+- **Text** — not a subset restriction at all. The reference refuses it too, because `Text<N>` is not
+  implemented beyond the type surface. It takes the plain compile-error path and correctly gets NO
+  retry hint, since the reference reports the identical error.
+- **generics** — correct, and the divergence names the chunk.
+
+Two of three sentences in the shipping binary's help were misleading, and the Text one would send a
+user to `--compiler rust` for a program no backend compiles. The text now says which failures belong
+to the subset and which do not.
+
+### WHY THIS WAS WORTH DOING NOW
+
+It costs nothing against the capacity decision: no stage source is touched. And the error it
+corrected is the kind that only surfaces by running the thing a user runs — reading `main.rs` would
+have shown the same wrong sentence and produced agreement rather than a finding.
+
+### FRONTIER
+
+The driver and the CLI are now measured end to end. What remains is scoped feature work that grows
+`parse.kel`, and that waits on the operator's capacity decision, or one of the five standing operator
+rulings.
+
+---
+
 ## 2026-09-12 (eighty-fourth) — measuring what two guards actually cover, and a claim retracted mid-increment
 
 ### THE LIST HAD NO CHECK, AND THE FLOAT EPISODE SHOWED WHY THAT MATTERS
