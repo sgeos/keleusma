@@ -65,3 +65,32 @@ by the same command that wrote the brief. **A prediction is only as current as t
 computed against**, and nothing marked it with the backlog it belonged to.
 
 The other three clauses stand as written and are measured below.
+
+---
+
+## OUTCOME — 2026-09-12
+
+| clause | predicted | measured |
+|---|---|---|
+| conflicting files | zero | **one** — `REVERSE_PROMPT.md`, and the miss was recorded BEFORE the merge ran |
+| conflicts in `src/` or `tests/` | zero | **zero** |
+| `src/` and `tests/` after the merge | byte-identical to `origin/v0.2.3` | **identical**, the check returning two files against the previous absorption's tree |
+| backend suite | 545 passed, 0 failed | **545** (535 + 10), both float configurations, every half FROZEN |
+
+**Three of four hit. The one that missed was stale rather than wrong**, and the difference is worth
+keeping: the `merge-tree` that produced it was run one iteration earlier against a four-commit
+backlog, and both lines rewrote the conflicting file in between.
+
+> **A prediction inherits the tree it was computed against, and nothing here stamped it with one.**
+> That is the same class as every other staleness this session found — a figure separated from the
+> measurement that produced it — arriving this time inside the discipline meant to catch it.
+
+### The risk was dismissed by reading, and that is the part worth repeating
+
+`src/selfhost_host.rs` holds the shared-slot layouts this line's stage differential seeds through, so
+a change there could move what the harness writes and where. **The diff is a panic message and its
+comment** — the stage now records two measured causes for a step-budget exhaustion where the old text
+named one "usual cause" nobody had measured.
+
+Dismissing it required reading five lines. **Predicting first and reading afterwards is how absorption
+57 produced a prediction its own risk made impossible.**
