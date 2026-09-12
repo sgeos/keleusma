@@ -55,6 +55,13 @@ use and is not a general check that the list is right.
 and the op-level message names the chunk, the op index and both ops. No code changed; it is pinned,
 including that it assigns no fault, since the reference has been the divergent side before.
 
+**THE ERROR TYPE'S THREE VARIANTS ARE NOW ALL MEASURED, AND THIS VEIN IS EXHAUSTED.** A non-host
+target says it supports only the host width and keeps the retry hint; a reference-rejected program
+surfaces the reference's own error and SUPPRESSES the hint, correctly, since the reference would
+fail identically — and that suppression was already tested in `tests/self_hosted_backend.rs`. Only
+`Unsupported` needed work, and it got it. **Nothing further here is available without either
+touching a stage source, which prejudges the capacity decision, or an operator ruling.**
+
 **MEASURED SINCE, ON THE PATH THAT MATTERS: all four are refused with an `Err` by
 `self_hosted_compile`, the entry point behind `--compiler self-hosted`, and an ordinary program
 still compiles.** So the subset is SAFE — nothing on the gap list mis-compiles — and the remaining
