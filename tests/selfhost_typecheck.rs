@@ -504,6 +504,25 @@ fn occurrence_rows(ast: &keleusma::ast::Program) -> OccurrenceRows {
             ImportItem::Name(n) => {
                 let i = intern(n, &mut ids);
                 declared.push(i);
+                // **BOTH SPELLINGS, AND ONLY THE BARE ONE WAS DECLARED.** `use
+                // audio::midi_to_freq` imports the name `midi_to_freq`, and the call
+                // site writes `audio::midi_to_freq`. The occurrence walk records the
+                // QUALIFIED spelling, so the search missed and the name read as
+                // unresolved -- every program calling an imported native through its
+                // module path was REJECTED.
+                //
+                // **A different sub-class from the four missing binders.** Nothing
+                // here fails to bind a name; the two sides spell one name two ways,
+                // which is the defect the field-set channel already guards against
+                // by sharing one index space. Declaring both spellings is the
+                // conservative repair: it can only ACCEPT more, and the alternative
+                // -- stripping the qualifier from occurrences -- would make two
+                // modules' same-named functions collide.
+                if !u.path.is_empty() {
+                    let qualified = format!("{}::{}", u.path.join("::"), n);
+                    let q = intern(&qualified, &mut ids);
+                    declared.push(q);
+                }
             }
             ImportItem::Wildcard => wildcard = true,
         }
@@ -562,6 +581,25 @@ fn occurrence_rows(ast: &keleusma::ast::Program) -> OccurrenceRows {
             {
                 self.locals.insert(n.clone());
             }
+            // **A `for` LOOP BINDS ITS VARIABLE, AND THIS WALK MISSED IT UNTIL
+            // 2026-09-11.** The reference records the loop variable's read as an
+            // occurrence; nothing put the binding into the local set, so it
+            // resolved to neither a local nor a declaration and the classification
+            // rule REFUSED it. **Every well-typed program containing a `for` loop
+            // was rejected.**
+            //
+            // This is the THIRD binder this one function has missed -- a `for`
+            // variable, a match arm's pattern, and now the `for` variable again
+            // from the other side, since the pin that existed covered the PIPELINE
+            // extraction and not this one.
+            //
+            // **Found by real code, not by a snippet.** Every well-typed control in
+            // this file was hand-written and not one of them contained a loop, so a
+            // defect affecting every looping program was invisible until the
+            // stage's own sources were tried.
+            if let Stmt::For(f) = stmt {
+                self.locals.insert(f.var.clone());
+            }
             self.walk_stmt(stmt);
         }
         fn visit_expr(&mut self, expr: &Expr) {
@@ -597,6 +635,24 @@ fn occurrence_rows(ast: &keleusma::ast::Program) -> OccurrenceRows {
             if let Pattern::Variable(n, _) = &p.pattern {
                 locals.insert(n.clone());
             }
+        }
+        // **A CONST PARAMETER IS A VALUE NAME.** `fn plus<const n: Word>() -> Word
+        // { n + 10 }` reads `n` as an ordinary identifier, so it arrives as an
+        // occurrence; nothing put the declaration into the local set, and the
+        // classification rule REFUSED it. Every const-generic program that used its
+        // parameter as a value was rejected.
+        //
+        // **The fourth binder this channel has missed, and the first PREDICTED
+        // rather than stumbled on.** After the `for` variable and the match arm, the
+        // question "what else binds a name?" was put to the syntax tree instead of
+        // waiting for another program to fail.
+        //
+        // A const parameter used as an ARRAY LENGTH was already accepted, because
+        // there it sits in a TYPE position and yields no occurrence at all. **Same
+        // binder, two syntactic forms, one of them broken** -- the rule-shape
+        // census's finding, showing up in a different channel.
+        for c in &f.const_params {
+            locals.insert(c.name.clone());
         }
         // Two passes: bindings first, because a `let` later in the body still
         // makes the name local to this approximation and a one-pass walk would
@@ -876,6 +932,56 @@ fn expression_nodes_over(
     names: &std::collections::BTreeMap<String, i64>,
     freads: &FieldReadIndex,
     wide: bool,
+) -> (Vec<ResolvableNode>, Vec<(String, i64)>) {
+    expression_nodes_over_with(ast, names, freads, wide, wide)
+}
+
+/// Whether an expression row can EVER contribute to a rejection.
+///
+/// # The criterion is syntactic, and that is what makes it admissible
+///
+/// A row of an agreement kind rejects only when both sides resolve to a known tag
+/// and they differ; a condition row only when its operand resolves to something
+/// other than `bool`. An operand the host reported as `(0, form 0)` means "I could
+/// not tell", and `ty_pair_disagrees` treats an unknown as no evidence. Such a row
+/// therefore cannot change any verdict.
+///
+/// **This does not resolve anything.** Eliding on "the operand RESOLVES to
+/// unknown" would require the host to perform the join the stage exists to
+/// perform. Eliding on "the host reported nothing" is the host declining to send a
+/// row it has nothing to say about, which is a different act.
+///
+/// # What is deliberately never elided
+///
+/// - **Kind 7**, struct-literal field counts, where `0` is a real value rather
+///   than "unknown": a struct with no fields compared against a literal with one
+///   is a genuine rejection.
+/// - **Kinds 5 and 6**, the projection rules, whose rule rejects on a KNOWN
+///   operand and whose host emission always supplies one.
+fn node_is_inert(row: &ResolvableNode) -> bool {
+    let (k, a, af, b, bf) = *row;
+    match k {
+        1 | 2 | 4 | 8 => (a == 0 && af == 0) || (b == 0 && bf == 0),
+        3 => a == 0 && af == 0,
+        _ => false,
+    }
+}
+
+/// [`expression_nodes_over`], with the inert-row elision separately controllable.
+///
+/// **`elide` exists so the differential can run both ways.** An optimisation whose
+/// only evidence is that the suite still passes is an optimisation nobody checked;
+/// `eliding_inert_expression_rows_changes_no_verdict` runs the same programs with
+/// it on and off and requires the verdicts to agree.
+///
+/// It is opt-in for the same reason `wide` is: ten callers compare these tables
+/// against the pipeline's own extraction, which emits every row.
+fn expression_nodes_over_with(
+    ast: &keleusma::ast::Program,
+    names: &std::collections::BTreeMap<String, i64>,
+    freads: &FieldReadIndex,
+    wide: bool,
+    elide: bool,
 ) -> (Vec<ResolvableNode>, Vec<(String, i64)>) {
     use keleusma::ast::{Expr, Pattern, Stmt, TypeDef, TypeExpr};
     use keleusma::visitor::Visitor;
@@ -1198,7 +1304,39 @@ fn expression_nodes_over(
             out.push((DECLARED_VS_ACTUAL, t, tf, type_tag(&f.return_type), 0));
         }
     }
-    (out, derived)
+    if !elide {
+        return (out, derived);
+    }
+
+    // **ELIDE, AND REMAP THE INDICES THAT POINT INTO THE TABLE.** A form-2 binding
+    // row carries its initialiser's INDEX in this table, so dropping rows without
+    // remapping would point every later binding at the wrong node -- and at a node
+    // that EXISTS, so it would resolve to a plausible wrong tag rather than fail.
+    // That is the same defect the per-function offset note above records.
+    let mut remap: Vec<Option<i64>> = Vec::with_capacity(out.len());
+    let mut kept: Vec<ResolvableNode> = Vec::with_capacity(out.len());
+    for row in &out {
+        if node_is_inert(row) {
+            remap.push(None);
+        } else {
+            remap.push(Some(kept.len() as i64));
+            kept.push(*row);
+        }
+    }
+
+    // A derived binding whose node was elided is DROPPED rather than repointed.
+    // That is verdict-preserving and not merely convenient: an inert node yields
+    // UNKNOWN from `tyb_node_tag`, and a name with no binding row resolves to
+    // UNKNOWN as well, so the two are the same answer by different routes.
+    let remapped = derived
+        .into_iter()
+        .filter_map(|(n, i)| {
+            let slot = remap.get(i as usize).copied().flatten()?;
+            Some((n, slot))
+        })
+        .collect();
+
+    (kept, remapped)
 }
 
 /// The expression table alone, for callers with no derived bindings to place.
@@ -3050,6 +3188,17 @@ impl Channel {
 }
 
 fn stage_verdict_resolving_parts(src: &str, with_sets: bool, with_payloads: bool) -> bool {
+    stage_verdict_resolving_eliding(src, with_sets, with_payloads, true)
+}
+
+/// [`stage_verdict_resolving_parts`] with the inert-row elision controllable, so
+/// the differential can compare a run against itself.
+fn stage_verdict_resolving_eliding(
+    src: &str,
+    with_sets: bool,
+    with_payloads: bool,
+    elide: bool,
+) -> bool {
     let withhold = match (with_sets, with_payloads) {
         (true, true) => None,
         (false, true) => Some(Channel::Sets),
@@ -3058,7 +3207,7 @@ fn stage_verdict_resolving_parts(src: &str, with_sets: bool, with_payloads: bool
         // unattributable to either.
         (false, false) => unreachable!("the census withholds exactly one channel"),
     };
-    stage_verdict_withholding(src, withhold)
+    stage_verdict_withholding_eliding(src, withhold, elide)
 }
 
 /// The resolving driver with at most ONE channel withheld.
@@ -3068,6 +3217,57 @@ fn stage_verdict_resolving_parts(src: &str, with_sets: bool, with_payloads: bool
 /// skipped the walk producing that field would change two things at once, and a
 /// flip could then be attributed to the wrong cause.
 fn stage_verdict_withholding(src: &str, withhold: Option<Channel>) -> bool {
+    stage_verdict_withholding_eliding(src, withhold, true)
+}
+
+/// [`stage_verdict_withholding`] with the inert-row elision controllable.
+fn stage_verdict_withholding_eliding(src: &str, withhold: Option<Channel>, elide: bool) -> bool {
+    stage_verdict_full(src, withhold, elide, elide)
+}
+
+/// Each distinct occurrence row once, instead of once per syntactic occurrence.
+///
+/// # What it does and does not consult
+///
+/// **It never asks what a rule would conclude.** It observes that two rows are
+/// EQUAL AS TUPLES and sends the fact once. That is the difference between this
+/// and the saving refused in
+/// [`occurrence_rows_that_cannot_reject_are_still_sent`], where the host would
+/// have withheld a row precisely BECAUSE it knew the rule's answer for it.
+///
+/// # What it does rely on, stated rather than glossed
+///
+/// The stage applies a per-row predicate and folds it into a STICKY verdict, so
+/// identical rows contribute identically. That is a property of the fold's shape
+/// rather than of any rule's answer -- but it is still a reliance on the stage, and
+/// calling the saving free would be the same overclaiming the refused case was
+/// rejected for.
+///
+/// # It changes what the channel MEANS
+///
+/// The table is described per-OCCURRENCE and becomes per-distinct-fact. Reporting
+/// multiplicity was incidental to how the walk was written rather than something
+/// any rule reads, but a channel whose description no longer matches its content
+/// is how the next reader is misled, so the description travels with the change.
+///
+/// **First-appearance order is preserved.** Order-independence of a sticky
+/// disjunction is a SECOND assumption, and not needing it is cheaper than arguing
+/// it.
+fn dedup_occurrences(rows: &OccurrenceRows) -> OccurrenceRows {
+    let (declared, occ, wildcard) = rows;
+    let mut seen: std::collections::BTreeSet<(i64, i64, i64)> = std::collections::BTreeSet::new();
+    let mut kept: Vec<(i64, i64, i64)> = Vec::with_capacity(occ.len());
+    for row in occ {
+        if seen.insert(*row) {
+            kept.push(*row);
+        }
+    }
+    (declared.clone(), kept, *wildcard)
+}
+
+/// The resolving driver with every reduction separately controllable, so each can
+/// be differentiated against its own absence.
+fn stage_verdict_full(src: &str, withhold: Option<Channel>, elide: bool, dedup: bool) -> bool {
     let held = |c: Channel| withhold != Some(c);
     let ast = parse(&tokenize(src).expect("lex")).expect("parse");
     let (mut names, mut bindings) = binding_rows(&ast);
@@ -3077,7 +3277,7 @@ fn stage_verdict_withholding(src: &str, withhold: Option<Channel>) -> bool {
     // collapse to form 0 and type nothing.
     let frc = field_read_channel(&ast, &mut names);
     bindings.extend(frc.bindings.iter().copied());
-    let (nodes, derived) = expression_nodes_over(&ast, &names, &frc.index, true);
+    let (nodes, derived) = expression_nodes_over_with(&ast, &names, &frc.index, true, elide);
     // FORM 2: the binding takes whatever expression node `idx` yields. The host
     // says only WHICH node the initialiser is -- a syntactic fact, like a literal
     // tag or an alias name. Resolving that node's operands and requiring them to
@@ -3089,7 +3289,10 @@ fn stage_verdict_withholding(src: &str, withhold: Option<Channel>) -> bool {
     }
     let (dparams, sites, arg_pairs) = decl_call_rows(&ast);
     let sets = field_sets(&ast);
-    let occ = occurrence_rows(&ast);
+    let occ = {
+        let raw = occurrence_rows(&ast);
+        if dedup { dedup_occurrences(&raw) } else { raw }
+    };
     static EMPTY_OCC_ROWS: OccurrenceRows = (Vec::new(), Vec::new(), false);
     static EMPTY_SET_ROWS: FieldSets = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
     stage_verdict(&StageInput {
@@ -3845,6 +4048,955 @@ fn the_rules_the_census_added_do_not_reject_valid_programs() {
              change rather than a conservative choice"
         );
     }
+}
+
+/// **EVERY WAY THE LANGUAGE BINDS A NAME, CHECKED AT ONCE.**
+///
+/// # Why a census rather than another fix
+///
+/// The occurrence channel classifies a name as local, declared, or unresolved,
+/// and refuses the third. **Four binders have now been found missing from its
+/// local set**: the pipeline-side loop variable, the match arm's pattern, the
+/// reference-side loop variable, and the const parameter. Each was found
+/// separately, three of them by accident.
+///
+/// Four accidents in one function is a class, not a run of bad luck. So the
+/// question "what else binds a name?" is put to the syntax tree here, once, and
+/// every answer gets a well-typed program. **A fifth binder now fails this test
+/// rather than waiting to be tripped over.**
+///
+/// # Not exhaustive, and that is stated rather than hoped
+///
+/// These are the binding forms I could find and write a valid program for. A form
+/// absent from this list is one nobody looked at — the same caveat the rule-shape
+/// census carries, for the same reason.
+///
+/// # Two forms are here because they are NOT occurrences
+///
+/// A const parameter in an ARRAY-LENGTH position and a generic type parameter sit
+/// in type positions and yield no occurrence at all, so they were already
+/// accepted. They are kept because the difference between "handled" and "never
+/// arrives" is invisible from a passing test, and a change that started routing
+/// type positions through this channel would break them first.
+#[test]
+fn every_binding_form_keeps_its_name_out_of_the_unresolved_set() {
+    const FORMS: &[(&str, &str)] = &[
+        ("function parameter", "fn main(n: Word) -> Word { n + 1 }"),
+        ("let binding", "fn main() -> Word { let a = 1; a + 1 }"),
+        (
+            "for loop variable",
+            "fn main() -> Word { let t = 0; for i in 0..4 limit 4 { let u = i; } t }",
+        ),
+        (
+            "match arm payload binding",
+            "enum E { W(Word), N }\n\
+             fn main(e: E) -> Word { match e { E::W(p) => p + 1, E::N => 0 } }",
+        ),
+        (
+            "match arm struct pattern, shorthand",
+            "struct P { x: Word }\n\
+             fn main(p: P) -> Word { match p { P { x } => x + 1, _ => 0 } }",
+        ),
+        (
+            "const parameter used as a value",
+            "fn plus<const n: Word>() -> Word { n + 10 }\n\
+             fn main() -> Word { plus::<7>() }",
+        ),
+        (
+            // TYPE POSITION: no occurrence is produced at all.
+            "const parameter as an array length",
+            "fn first<const n: Word>(a: [Word; n]) -> Word { a[0] }\n\
+             fn main() -> Word { let x = [1, 2]; first::<2>(x) }",
+        ),
+        (
+            // TYPE POSITION likewise.
+            "generic type parameter",
+            "fn id<T>(v: T) -> T { v }\nfn main() -> Word { id(1) }",
+        ),
+        (
+            "data block field read",
+            "shared data d { v: Word }\nfn main() -> Word { d.v }",
+        ),
+        (
+            // NO SEMICOLON: Keleusma's `use` has none, and the first attempt at this
+            // case would not parse.
+            "an imported name",
+            "use audio::midi_to_freq\nfn main() -> Float { audio::midi_to_freq(69) }",
+        ),
+    ];
+
+    for (label, src) in FORMS {
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+        assert!(
+            compile(&program).is_ok(),
+            "{label}: the REFERENCE rejects this, so it is not a well-typed control \
+             and cannot show whether the binder is handled"
+        );
+        assert!(
+            stage_verdict_resolving(src),
+            "{label}: the stage REJECTS a well-typed program. This binding form's \
+             name is reaching the occurrence rule as unresolved, which is the same \
+             defect already found four times in this channel"
+        );
+    }
+}
+
+/// **A `for` LOOP BINDS ITS VARIABLE, AND UNTIL 2026-09-11 THIS STAGE SAID
+/// OTHERWISE.**
+///
+/// The occurrence channel collected locals from parameters, `let` statements and
+/// match-arm patterns — and not from `for`. The reference records the loop
+/// variable's read as an occurrence, so it resolved to neither a local nor a
+/// top-level declaration and the classification rule REFUSED it. **Every
+/// well-typed program containing a `for` loop was rejected.**
+///
+/// # How it survived
+///
+/// **Every well-typed control in this file was hand-written, and not one contained
+/// a loop.** A defect affecting every looping program was invisible to a corpus of
+/// snippets, and it took running the stage against real sources to surface it —
+/// `verify_datalayout.kel`, whose three loops are the whole of its body.
+///
+/// A pin for the loop variable already existed. It covers the PIPELINE extraction
+/// and says, correctly, that the reference DOES record the read; nothing checked
+/// what this side then did with it. **Two tests can name the same construct and
+/// guard different halves of it.**
+///
+/// This is the third binder this one channel has missed. The last case is the
+/// must-fire control: a name no binder introduces is still refused.
+#[test]
+fn a_for_loop_variable_is_not_reported_as_an_unresolved_name() {
+    const ACCEPTED: &[(&str, &str)] = &[
+        (
+            "the loop variable read in the body",
+            "fn main() -> Word { let t = 0; for i in 0..4 limit 4 { let u = i; } t }",
+        ),
+        (
+            // THE SHAPE THE REAL SOURCE USES: a runtime range under a static cap,
+            // with the variable indexing inside the body.
+            "the loop variable used as an index",
+            "shared data d { a: [Word; 8] }\n\
+             fn main() -> Word { let t = 0; for i in 0..8 limit 8 { let u = d.a[i]; } t }",
+        ),
+        (
+            "two loops reusing the same variable name",
+            "fn main() -> Word { let t = 0; for i in 0..2 limit 2 { let u = i; } \
+             for i in 0..2 limit 2 { let v = i; } t }",
+        ),
+    ];
+    for (label, src) in ACCEPTED {
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+        assert!(
+            compile(&program).is_ok(),
+            "{label}: the REFERENCE rejects this, so it is not a well-typed control"
+        );
+        assert!(
+            stage_verdict_resolving(src),
+            "{label}: the stage REJECTS a well-typed program, which is a language \
+             change rather than a conservative choice"
+        );
+    }
+
+    // MUST FIRE. A name no binder introduces is still refused, so the fix cannot
+    // have been "treat every name as local".
+    const SRC: &str =
+        "fn main() -> Word { let t = 0; for i in 0..4 limit 4 { let u = nowhere; } t }";
+    let program = parse(&tokenize(SRC).expect("lex")).expect("parse");
+    assert!(
+        compile(&program).is_err(),
+        "the reference ACCEPTS an unresolved name, so this control measures nothing"
+    );
+    assert!(
+        !stage_verdict_resolving(SRC),
+        "the stage accepts an unresolved name inside a loop body, so the fix for the \
+         loop variable widened the rule instead of correcting it"
+    );
+}
+
+/// The twelve self-hosted stage sources, as `(name, source)`.
+///
+/// **ONE DEFINITION, because two tests read it.** A second copy is a second thing
+/// to forget when a stage is added, and the capacity result and its price would
+/// then describe different corpora.
+#[cfg(feature = "self-host")]
+const REAL_STAGE_SOURCES: &[(&str, &str)] = &[
+    ("analyze", include_str!("../src/selfhost/kel/analyze.kel")),
+    ("codegen", include_str!("../src/selfhost/kel/codegen.kel")),
+    ("lexer", include_str!("../src/selfhost/kel/lexer.kel")),
+    ("parse", include_str!("../src/selfhost/kel/parse.kel")),
+    (
+        "reconstruct",
+        include_str!("../src/selfhost/kel/reconstruct.kel"),
+    ),
+    (
+        "verify_datalayout",
+        include_str!("../src/selfhost/kel/verify_datalayout.kel"),
+    ),
+    (
+        "verify_depth",
+        include_str!("../src/selfhost/kel/verify_depth.kel"),
+    ),
+    (
+        "verify_structural",
+        include_str!("../src/selfhost/kel/verify_structural.kel"),
+    ),
+    (
+        "verify_typed",
+        include_str!("../src/selfhost/kel/verify_typed.kel"),
+    ),
+    (
+        "verify_types",
+        include_str!("../src/selfhost/kel/verify_types.kel"),
+    ),
+    (
+        "verify_yield",
+        include_str!("../src/selfhost/kel/verify_yield.kel"),
+    ),
+    ("wire", include_str!("../src/selfhost/kel/wire.kel")),
+];
+
+/// Every input channel's row count for one program, as `(channel, rows, capacity)`.
+///
+/// **Named per channel rather than returned as a total**, because reporting only
+/// the largest would hide which capacity actually stops a program, and because the
+/// price measurement needs the per-channel figure.
+#[cfg(feature = "self-host")]
+fn real_source_channel_rows(ast: &keleusma::ast::Program) -> Vec<(&'static str, usize, usize)> {
+    let (mut names, mut bindings) = binding_rows(ast);
+    let frc = field_read_channel(ast, &mut names);
+    bindings.extend(frc.bindings.iter().copied());
+    let (nodes, derived) = expression_nodes_over(ast, &names, &frc.index, true);
+    for (n, idx) in derived {
+        if let Some(&id) = names.get(&n) {
+            bindings.push((id, idx, 2));
+        }
+    }
+    let (dparams, sites, arg_pairs) = decl_call_rows(ast);
+    let (sfirst, _scount, sfield, accesses, _ftag) = field_sets(ast);
+    // **THE SAME REDUCTIONS THE DRIVER APPLIES, and the first version of this
+    // function applied neither.** It called the raw walks, so the capacity result
+    // and the price described a configuration nobody runs -- they went on reporting
+    // 3,874 occurrence rows after the driver had begun sending 537.
+    //
+    // A measurement that drifts from the thing it measures is worse than no
+    // measurement, because it reads as evidence. The expression channel above is
+    // already reduced because its entry point applies the elision; the occurrence
+    // channel needs the deduplication applied explicitly, here, so both sides stay
+    // in step.
+    let (declared, occurrences, _wildcard) = dedup_occurrences(&occurrence_rows(ast));
+    vec![
+        ("operand pairs", arg_pairs.len(), 256),
+        ("declared params", dparams.len(), 128),
+        ("call sites", sites.len(), 128),
+        ("struct types", sfirst.len(), 64),
+        ("declared fields", sfield.len(), 256),
+        ("field accesses", accesses.len(), 256),
+        ("declared names", declared.len(), 128),
+        ("name occurrences", occurrences.len(), 256),
+        ("expression nodes", nodes.len(), 256),
+        ("bindings", bindings.len(), 128),
+        ("struct bindings", frc.sbinds.len(), 128),
+        ("field reads", frc.reads.len(), 128),
+        ("pattern binds", frc.pattern_binds.len(), 128),
+        ("payload decls", frc.payload_decls.len(), 128),
+    ]
+}
+
+/// **SENDING EACH DISTINCT OCCURRENCE FACT ONCE CHANGES NO VERDICT.**
+///
+/// # The saving, and why it is the one that was taken
+///
+/// The occurrence channel emitted one row per syntactic occurrence. Across the
+/// twelve real sources that is 14,288 rows carrying **1,391 distinct facts — 90%
+/// of them repeats.**
+///
+/// This is the saving [`occurrence_rows_that_cannot_reject_are_still_sent`] said
+/// remained open: one that does not require the host to apply the rule. **It never
+/// asks what a rule would conclude**; it observes that two rows are equal as
+/// tuples.
+///
+/// # What it relies on
+///
+/// The stage applies a per-row predicate folded into a sticky verdict, so
+/// identical rows contribute identically. That is the fold's SHAPE, not a rule's
+/// answer — but it is a reliance on the stage, and calling the saving free would
+/// be the same overclaiming the refused case was rejected for.
+///
+/// # Both halves, because a differential with one verdict proves half a thing
+///
+/// The corpus carries programs the stage accepts and programs it rejects, the real
+/// sources that fit the channels, and the rejections that depend on the occurrence
+/// rule specifically — an unresolved name, and a local that is called — since
+/// those are the rows deduplication could plausibly disturb.
+#[cfg(feature = "self-host")]
+#[test]
+fn deduplicating_occurrence_rows_changes_no_verdict() {
+    let mut subjects: Vec<(String, String)> = Vec::new();
+
+    for (name, src) in REAL_STAGE_SOURCES {
+        if *name == "verify_datalayout" || *name == "verify_structural" || *name == "verify_yield" {
+            subjects.push((format!("real source {name}"), (*src).to_string()));
+        }
+    }
+
+    // THE ROWS DEDUPLICATION COULD PLAUSIBLY DISTURB: both rejections the
+    // occurrence rule itself produces, each with the offending name repeated, so a
+    // deduplication that dropped the wrong copy would show here.
+    const OCCURRENCE_RULE: &[(&str, &str)] = &[
+        (
+            "an unresolved name, read once",
+            "fn main() -> Word { nowhere }",
+        ),
+        (
+            "an unresolved name, read many times",
+            "fn main() -> Word { nowhere + nowhere + nowhere + nowhere }",
+        ),
+        (
+            "a local that is called, once",
+            "fn main() -> Word { let f = 1; f() }",
+        ),
+        (
+            "a local that is called among many plain reads",
+            "fn main() -> Word { let f = 1; let a = f; let b = f; let c = f; f() }",
+        ),
+        (
+            "a local read many times, well typed",
+            "fn main() -> Word { let f = 1; f + f + f + f + f }",
+        ),
+    ];
+    for (label, src) in OCCURRENCE_RULE {
+        subjects.push(((*label).to_string(), (*src).to_string()));
+    }
+
+    const MIXED: &[(&str, &str)] = &[
+        (
+            "operand through a let",
+            "fn main() -> Word { let b = true; 1 + b }",
+        ),
+        (
+            "a field read as a direct operand",
+            "struct P { x: Word }\nfn main(p: P) -> Word { p.x + true }",
+        ),
+        (
+            "a loop, well typed",
+            "fn main() -> Word { let t = 0; for i in 0..4 limit 4 { let u = i; } t }",
+        ),
+        (
+            "an imported native called by path",
+            "use audio::midi_to_freq\nfn main() -> Float { audio::midi_to_freq(69) }",
+        ),
+    ];
+    for (label, src) in MIXED {
+        subjects.push(((*label).to_string(), (*src).to_string()));
+    }
+
+    let mut differing: Vec<String> = Vec::new();
+    let mut rejected = 0usize;
+    for (label, src) in &subjects {
+        let deduped = stage_verdict_full(src, None, true, true);
+        let full = stage_verdict_full(src, None, true, false);
+        if deduped != full {
+            differing.push(format!("{label}: deduped={deduped} full={full}"));
+        }
+        if !full {
+            rejected += 1;
+        }
+    }
+
+    assert!(
+        differing.is_empty(),
+        "deduplicating occurrence rows CHANGED a verdict, so the fold is not the \
+         per-row sticky disjunction this saving relies on: {differing:?}"
+    );
+    assert!(
+        rejected > 0 && rejected < subjects.len(),
+        "the corpus is {rejected} rejections out of {}, so it does not carry both \
+         verdicts and cannot show the deduplication preserves either",
+        subjects.len()
+    );
+
+    // **AND IT MUST ACTUALLY REMOVE ROWS**, or every assertion above passes while
+    // measuring nothing.
+    let ast = parse(&tokenize(REAL_STAGE_SOURCES[11].1).expect("lex")).expect("parse");
+    let raw = occurrence_rows(&ast);
+    let deduped = dedup_occurrences(&raw);
+    assert!(
+        deduped.1.len() < raw.1.len(),
+        "deduplication removed no row from the largest source: {} either way",
+        raw.1.len()
+    );
+    std::eprintln!(
+        "OCCURRENCE DEDUPLICATION on the largest source: {} rows -> {}",
+        raw.1.len(),
+        deduped.1.len()
+    );
+}
+
+/// **AN AVAILABLE SAVING THAT IS DELIBERATELY NOT TAKEN.**
+///
+/// # The saving
+///
+/// An occurrence row with `local = 1` and `call = 0` can never reject: the rule
+/// returns zero for it directly, with no lookup. Eliding those rows would drop a
+/// measured **39% of the channel** across the twelve real sources — and the
+/// occurrence channel is, since the expression elision landed, the largest
+/// remaining term in the price of a corpus-sized input path.
+///
+/// **It is verdict-preserving.** This is not an unsound optimisation being called
+/// unsound. Every program would get the same answer.
+///
+/// # Why it is refused anyway
+///
+/// The elision that WAS taken removed rows whose content was *nothing*: an operand
+/// reported as "could not tell" and an operand not reported at all are
+/// **indistinguishable to the stage** — both resolve to zero, and the stage's
+/// answer is byte-identical either way. The host declined to send a row it had
+/// nothing to say about.
+///
+/// This one is different in kind. A row saying "this name, local, not a call"
+/// carries real content. Withholding it would be the host declining **because it
+/// knows the rule's answer**. The line this file draws is that the host reports
+/// syntax — "occurrence 4 names index 12, and it is a call" — and does not say
+/// "that is an undefined function", because the classification is the work.
+/// **Suppressing rows whose classification the host predicted is performing that
+/// classification**, and it would be invisible in every verdict.
+///
+/// That is the marshalling objection running backwards: the concern is usually a
+/// host supplying conclusions, and this would be a host withholding evidence on
+/// the strength of one.
+///
+/// # Why this is a test and not a comment
+///
+/// A refusal recorded only in prose is a refusal that gets undone by someone
+/// optimising in good faith. **This fails if the rows stop being sent**, so the
+/// argument above has to be met rather than bypassed. It guards a decision rather
+/// than a behaviour.
+///
+/// If a later increment decides the trade is worth making — perhaps because the
+/// occurrence channel becomes the thing standing between the stage and the real
+/// corpus — the way to do it is to delete this test deliberately and say why, not
+/// to discover it failing.
+#[cfg(feature = "self-host")]
+#[test]
+fn occurrence_rows_that_cannot_reject_are_still_sent() {
+    let mut total = 0usize;
+    let mut inert = 0usize;
+    let mut worst: (&str, usize, usize) = ("", 0, 0);
+
+    for (name, src) in REAL_STAGE_SOURCES {
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+        let (_declared, occ, _wildcard) = occurrence_rows(&ast);
+        // A plain local READ: the rule's first arm returns zero without a lookup.
+        let plain = occ.iter().filter(|(_, l, c)| *l == 1 && *c == 0).count();
+        total += occ.len();
+        inert += plain;
+        if occ.len() > worst.1 {
+            worst = (name, occ.len(), plain);
+        }
+    }
+
+    std::eprintln!(
+        "OCCURRENCE ROWS THAT CANNOT REJECT: {inert} of {total} ({:.0}%), still sent \
+         on purpose; largest channel is {} at {}/{}",
+        100.0 * inert as f64 / total as f64,
+        worst.0,
+        worst.2,
+        worst.1
+    );
+
+    // **THE PIN.** If these rows stop arriving, the saving was taken, and whoever
+    // took it should meet the argument in this test's documentation rather than
+    // find out from a diff.
+    assert!(
+        inert > 0,
+        "no occurrence row is a plain local read any more. Either the corpus \
+         changed beyond recognition, or the host began eliding rows whose \
+         classification it predicted -- which is the host performing the \
+         classification, and is the thing this test exists to refuse. If the trade \
+         is now worth making, delete this test deliberately and record why"
+    );
+
+    // NON-VACUITY the other way: a channel that were ENTIRELY inert rows would mean
+    // the rule never fires and the measurement describes nothing.
+    assert!(
+        inert < total,
+        "every occurrence row is a plain local read, so the classification rule has \
+         nothing to classify and this measurement is not about the stage"
+    );
+}
+
+/// **ELIDING THE ROWS THAT CANNOT DECIDE ANYTHING CHANGES NO VERDICT.**
+///
+/// # Why elide at all
+///
+/// The price measurement found the expression channel to be 57% of the cost of a
+/// corpus-sized input path — five parallel arrays across the widest gap — and said
+/// that anything reducing its row count would dominate every other saving.
+///
+/// **Two thirds of those rows cannot affect any verdict.** A row of an agreement
+/// kind whose operand the host reported as "could not tell" is compared by a
+/// predicate that treats unknown as no evidence; a condition row with the same
+/// operand likewise. Measured across the twelve real sources: **10,353 of 15,498
+/// rows, 67%.**
+///
+/// # The argument, and why it is not enough on its own
+///
+/// The criterion is SYNTACTIC — the host declining to send a row it has nothing to
+/// say about, rather than the host resolving a type and concluding the row is
+/// moot. That distinction is what makes it admissible at all, since the second
+/// would be performing the stage's join.
+///
+/// **But an optimisation whose only evidence is that the suite still passes is an
+/// optimisation nobody checked.** So this runs the same programs with elision on
+/// and off and requires the verdicts to agree, over every corpus in this file that
+/// has a verdict worth comparing — including the two real sources that fit.
+///
+/// # The part most likely to be wrong
+///
+/// A form-2 binding row carries its initialiser's INDEX into this table, so
+/// dropping rows without remapping would point later bindings at the wrong node —
+/// and at a node that EXISTS, so it would resolve to a plausible wrong tag rather
+/// than fail loudly. The derived-index corpus below is chosen to exercise exactly
+/// that: chains of derived bindings, with inert rows between them.
+#[cfg(feature = "self-host")]
+#[test]
+fn eliding_inert_expression_rows_changes_no_verdict() {
+    let mut subjects: Vec<(String, String)> = Vec::new();
+
+    // The two real sources whose tables fit. Everything this optimisation is for.
+    for (name, src) in REAL_STAGE_SOURCES {
+        if *name == "verify_datalayout" || *name == "verify_yield" {
+            subjects.push((format!("real source {name}"), (*src).to_string()));
+        }
+    }
+
+    // DERIVED-BINDING CHAINS, where an index remap is what can go wrong. Each has
+    // a `let` bound to an operator expression, so a form-2 row carries an index,
+    // and each has inert rows around it to move the indices.
+    const CHAINS: &[(&str, &str)] = &[
+        (
+            "a derived chain with an inert row before it",
+            "fn g() -> Word { 1 }\n\
+             fn main() -> Word { let z = g() + g(); let a = 1 + 2; let b = a + 1; b + true }",
+        ),
+        (
+            "a derived chain in the second function",
+            "fn f() -> Word { let q = 1 + 2; q }\n\
+             fn main() -> Word { let a = 1 + 2; let b = a + 1; let c = b + 1; c + true }",
+        ),
+        (
+            "a derived binding whose own node is inert",
+            "struct P { x: Word }\n\
+             fn main(p: P) -> Word { let a = (1 + 2) + 3; let b = true; a + b }",
+        ),
+        (
+            "a well-typed derived chain that must stay accepted",
+            "fn main() -> Word { let a = 1 + 2; let b = a + 1; b + 1 }",
+        ),
+    ];
+    for (label, src) in CHAINS {
+        subjects.push(((*label).to_string(), (*src).to_string()));
+    }
+
+    // A spread of ordinary subjects, both verdicts represented.
+    const MIXED: &[(&str, &str)] = &[
+        (
+            "operand through a let",
+            "fn main() -> Word { let b = true; 1 + b }",
+        ),
+        (
+            "field read as a direct operand",
+            "struct P { x: Word }\nfn main(p: P) -> Word { p.x + true }",
+        ),
+        (
+            "match arms disagreeing",
+            "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A => 1, E::B => true } }",
+        ),
+        (
+            "a loop, well typed",
+            "fn main() -> Word { let t = 0; for i in 0..4 limit 4 { let u = i; } t }",
+        ),
+        (
+            "a struct field set violation",
+            "struct P { x: Word }\nfn main() -> Word { let p = P { x: 1 }; p.y }",
+        ),
+        (
+            "a well-typed program with unknown operands throughout",
+            "fn g() -> Word { 1 }\nfn main() -> Word { g() + g() }",
+        ),
+    ];
+    for (label, src) in MIXED {
+        subjects.push(((*label).to_string(), (*src).to_string()));
+    }
+
+    let mut differing: Vec<String> = Vec::new();
+    let mut rejected = 0usize;
+    for (label, src) in &subjects {
+        let with = stage_verdict_resolving_eliding(src, true, true, true);
+        let without = stage_verdict_resolving_eliding(src, true, true, false);
+        if with != without {
+            differing.push(format!("{label}: elided={with} full={without}"));
+        }
+        if !without {
+            rejected += 1;
+        }
+    }
+
+    assert!(
+        differing.is_empty(),
+        "eliding inert rows CHANGED a verdict, so either the criterion admits a row \
+         that can decide something or the index remap is wrong: {differing:?}"
+    );
+
+    // NON-VACUITY IN BOTH DIRECTIONS. A corpus that is all-accept would not
+    // exercise the rules at all, and one that is all-reject would not show that a
+    // valid program survives the elision.
+    assert!(
+        rejected > 0 && rejected < subjects.len(),
+        "the corpus is {rejected} rejections out of {}, so it does not have both \
+         verdicts and cannot show the elision preserves either",
+        subjects.len()
+    );
+
+    // **AND THE ELISION MUST ACTUALLY DO SOMETHING.** A criterion that elided
+    // nothing would satisfy every assertion above.
+    let ast = parse(&tokenize(REAL_STAGE_SOURCES[5].1).expect("lex")).expect("parse");
+    let (mut names, _b) = binding_rows(&ast);
+    let frc = field_read_channel(&ast, &mut names);
+    let (full, _) = expression_nodes_over_with(&ast, &names, &frc.index, true, false);
+    let (kept, _) = expression_nodes_over_with(&ast, &names, &frc.index, true, true);
+    assert!(
+        kept.len() < full.len(),
+        "the elision removed no row from a real source, so the assertions above pass \
+         while measuring nothing: {} rows either way",
+        full.len()
+    );
+}
+
+/// **WHAT SIZING THE CHANNELS TO THE REAL CORPUS WOULD COST, IN WORDS.**
+///
+/// # Why this number and not the multiple
+///
+/// [`the_stage_is_measured_against_the_real_stage_sources`] reports that two of
+/// twelve real sources fit and that `parse.kel` needs twenty-two times the
+/// expression-node cap. **A multiple is not actionable.** The caps are shared-data
+/// array lengths, so the price of closing the gap is words of shared data, which
+/// is worst-case memory usage — the thing this project exists to bound.
+///
+/// The shared ceiling is sixteen megabytes, so nothing here is architecturally
+/// blocked. **This is a price, and it was unknown.**
+///
+/// # This is a measurement, not a proposal
+///
+/// Sizing shared data upward is a worst-case-memory change and is the operator's
+/// decision. Nothing in this increment changes a capacity; a measurement and the
+/// change it argues for should not land together, or neither can be judged on its
+/// own.
+///
+/// # Where the multiplier comes from, because getting it wrong ruins the number
+///
+/// A channel is a NAME, and several names cover more than one parallel array: the
+/// occurrence channel is three arrays sharing one cap, the expression channel is
+/// five. Growing a channel costs the row delta times its array count. The counts
+/// below are read off the stage's data block and checked against it by
+/// [`the_channel_array_counts_match_the_stage_data_block`], so a name added there
+/// without updating this table fails rather than quietly skewing the total.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_price_of_a_corpus_sized_input_path_is_measured_in_words() {
+    // `(channel, current cap, parallel arrays sharing it)`.
+    const CHANNELS: &[(&str, usize, usize)] = &[
+        ("operand pairs", 256, 2),    // lhs, rhs
+        ("call arity", 128, 2),       // cdecl, cact
+        ("claims", 256, 2),           // qact, qreq
+        ("membership", 256, 1),       // member
+        ("declared params", 128, 1),  // dparams
+        ("call sites", 128, 2),       // csite, cargs
+        ("struct types", 64, 2),      // sfirst, scount
+        ("declared fields", 256, 2),  // sfield, sftag
+        ("field accesses", 256, 2),   // atype, aname
+        ("declared names", 128, 1),   // dname
+        ("name occurrences", 256, 3), // oname, olocal, ocall
+        ("expression nodes", 256, 5), // ekind, ea, eb, eaf, ebf
+        ("bindings", 128, 4),         // bname, btag, bform, and tyb.bres
+        ("struct bindings", 128, 3),  // sbname, sbval, sbform
+        ("field reads", 128, 2),      // fbbase, fbfield
+        ("pattern binds", 128, 4),    // pbname, pbenum, pbvar, pbpos
+        ("payload decls", 128, 4),    // epenum, epvar, eppos, epty
+    ];
+
+    // The corpus maximum per channel, MEASURED from the sources rather than
+    // restated: a hardcoded figure is one that goes stale the moment a stage grows.
+    let mut needed: std::collections::BTreeMap<&str, usize> =
+        CHANNELS.iter().map(|(n, _, _)| (*n, 0)).collect();
+    for (_, src) in REAL_STAGE_SOURCES {
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+        for (name, rows, _) in real_source_channel_rows(&program) {
+            let e = needed.entry(name).or_insert(0);
+            *e = (*e).max(rows);
+        }
+    }
+
+    let current: usize = CHANNELS.iter().map(|(_, cap, arrays)| cap * arrays).sum();
+    let sized: usize = CHANNELS
+        .iter()
+        .map(|(name, cap, arrays)| {
+            let want = needed.get(name).copied().unwrap_or(0).max(*cap);
+            want * arrays
+        })
+        .sum();
+
+    std::eprintln!("CORPUS-SIZED INPUT PATH");
+    for (name, cap, arrays) in CHANNELS {
+        let want = needed.get(name).copied().unwrap_or(0);
+        if want > *cap {
+            std::eprintln!(
+                "  {name}: {cap} -> {want} rows x{arrays} arrays = +{} words",
+                (want - cap) * arrays
+            );
+        }
+    }
+    std::eprintln!(
+        "  TOTAL: {current} words now, {sized} words corpus-sized ({:.1}x), \
+         +{} words = +{} KiB at 8 bytes a word",
+        sized as f64 / current as f64,
+        sized - current,
+        (sized - current) * 8 / 1024
+    );
+
+    // NON-VACUITY. A run where nothing needs growing would mean the corpus does not
+    // exceed the caps, which contradicts the capacity measurement this exists to
+    // price.
+    assert!(
+        sized > current,
+        "no channel needs growing, which contradicts the capacity result. Either \
+         the caps were raised -- in which case price the NEW gap -- or this is not \
+         reading the sources"
+    );
+}
+
+/// **THE ARRAY COUNTS ABOVE ARE CHECKED, NOT ASSERTED.**
+///
+/// The price depends on how many parallel arrays share each capacity, and a name
+/// added to the stage's data block without updating that table would skew the
+/// total silently. So the shared block's own array declarations are counted here
+/// and compared against the sum the price table claims.
+///
+/// **Read from the stage source rather than from a copy**, for the reason
+/// `declared_max_steps` is: a bound written in two places is a bound that drifts.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_channel_array_counts_match_the_stage_data_block() {
+    // Every `name: [Word; N],` line in the shared block, as `(name, N)`.
+    let declared: Vec<(String, usize)> = TYPES_KEL
+        .lines()
+        .filter_map(|l| {
+            let t = l.trim();
+            let (name, rest) = t.split_once(": [Word; ")?;
+            let n = rest.strip_suffix("],")?;
+            Some((name.to_string(), n.parse().ok()?))
+        })
+        .collect();
+
+    assert!(
+        declared.len() > 30,
+        "only {} shared arrays were parsed out of the stage source, so the parse is \
+         wrong rather than the stage being small",
+        declared.len()
+    );
+
+    // The price table's arrays, summed.
+    //
+    // **`tyb.bres` IS COUNTED ON BOTH SIDES, and subtracting it was wrong.** It
+    // lives in the stage's PRIVATE block rather than the shared one, so the first
+    // version of this check excluded it from the price and compared 41 against 42.
+    // But the scan above matches any `name: [Word; N],` line and the private block
+    // uses the same shape, so `bres` is in `declared` too -- and it belongs in the
+    // price, because it is sized to the binding table and grows with it.
+    //
+    // The lesson is narrow and worth keeping: **a count is only comparable to
+    // another count when both sides are drawn from the same population**, and here
+    // one side was "shared arrays" while the other was "arrays".
+    let priced: usize = 2 + 2 + 2 + 1 + 1 + 2 + 2 + 2 + 2 + 1 + 3 + 5 + 4 + 3 + 2 + 4 + 4;
+    assert_eq!(
+        priced,
+        declared.len(),
+        "the price table accounts for {} arrays and the stage declares {}. A name \
+         added to a data block without updating the table would skew the price \
+         silently, which is what this check exists to prevent: {:?}",
+        priced,
+        declared.len(),
+        declared.iter().map(|(n, _)| n).collect::<Vec<_>>()
+    );
+}
+
+/// **THE STAGE AGAINST TWELVE REAL PROGRAMS, NOT TWELVE SNIPPETS.**
+///
+/// # Why real programs
+///
+/// Every well-typed control in this file is a snippet written to exercise one
+/// rule. The file's own argument is that the must-REJECT obligation is enumerable
+/// while the must-ACCEPT obligation is not, and that over-rejection is the failure
+/// a rejection corpus cannot see by construction.
+///
+/// The repository contains twelve Keleusma programs the reference definitely
+/// accepts -- its own self-hosted stage sources, compiled by tests elsewhere in
+/// this suite. **They are the strongest available evidence against over-rejection,
+/// and they were already on disk.**
+///
+/// # What this measures FIRST, and why that order
+///
+/// The input channels are capped between 64 and 256 rows. `parse.kel` is three
+/// hundred kilobytes. Most of these programs will not fit, and the driver asserts
+/// on overflow rather than truncating -- correctly, because **a verdict from a
+/// stage fed a truncated table proves nothing**.
+///
+/// **The figures here move with the input path, and have moved twice already.**
+/// When this was first written the binding constraint anywhere was `parse`'s
+/// expression table at twenty-two times its cap; after the inert-row elision it was
+/// `wire`'s occurrence table at fifteen; after deduplicating that channel it is
+/// `wire`'s call sites at fourteen. **Read the numbers from a run rather than from
+/// this comment.**
+///
+/// So the sizes are measured WITHOUT running the stage, and the stage is run only
+/// where every table fits. A result of "no real program fits" is a FINDING rather
+/// than a failure: it states in numbers the distance between a checker that works
+/// on snippets and one that could run on the corpus it is meant to check, which no
+/// document in this repository currently quantifies.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_stage_is_measured_against_the_real_stage_sources() {
+    // ONE DEFINITION of the corpus and of the table walk, hoisted to file scope so
+    // the capacity result and its PRICE cannot come to describe different corpora.
+    let stages = REAL_STAGE_SOURCES;
+
+    // `(table, rows, capacity)`. Named per table, because reporting only the
+    // largest would hide which one actually binds.
+    let tables = real_source_channel_rows;
+
+    let mut fits: Vec<&str> = Vec::new();
+    let mut overflows: Vec<(&str, String)> = Vec::new();
+
+    for (name, src) in stages {
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+
+        // **THE REFERENCE MUST ACCEPT IT**, established rather than assumed. A
+        // source that did not compile would make an acceptance meaningless and a
+        // rejection unattributable.
+        assert!(
+            compile(&program).is_ok(),
+            "{name}: the reference REJECTS its own stage source, which is a far \
+             larger problem than anything this test was written to measure"
+        );
+
+        let measured = tables(&program);
+        let over: Vec<String> = measured
+            .iter()
+            .filter(|(_, rows, cap)| rows > cap)
+            .map(|(t, rows, cap)| format!("{t} {rows}/{cap}"))
+            .collect();
+        let worst = measured
+            .iter()
+            .map(|(t, rows, cap)| (*rows as f64 / *cap as f64, *t, *rows, *cap))
+            .fold((0.0_f64, "", 0, 0), |a, b| if b.0 > a.0 { b } else { a });
+        if over.is_empty() {
+            std::eprintln!(
+                "  {name}: FITS (tightest {} {}/{})",
+                worst.1,
+                worst.2,
+                worst.3
+            );
+            fits.push(name);
+        } else {
+            std::eprintln!("  {name}: OVER by [{}]", over.join(", "));
+            overflows.push((name, over.join(", ")));
+        }
+    }
+
+    std::eprintln!(
+        "REAL-SOURCE CAPACITY: {} of {} stage sources fit the input channels",
+        fits.len(),
+        stages.len()
+    );
+    // THE MULTIPLE, which is the crisp statement of the distance. Reporting "does
+    // not fit" alone would leave a reader unable to tell a near miss from an order
+    // of magnitude.
+    let worst_multiple = stages
+        .iter()
+        .map(|(name, src)| {
+            let program = parse(&tokenize(src).expect("lex")).expect("parse");
+            let m = tables(&program)
+                .into_iter()
+                .map(|(t, rows, cap)| (rows as f64 / cap as f64, t, rows, cap))
+                .fold((0.0_f64, "", 0, 0), |a, b| if b.0 > a.0 { b } else { a });
+            (*name, m)
+        })
+        .fold(
+            ("", (0.0_f64, "", 0, 0)),
+            |a, b| {
+                if b.1.0 > a.1.0 { b } else { a }
+            },
+        );
+    std::eprintln!(
+        "  tightest anywhere: {} needs {} {}/{} -- {:.0}x its capacity",
+        worst_multiple.0,
+        (worst_multiple.1).1,
+        (worst_multiple.1).2,
+        (worst_multiple.1).3,
+        (worst_multiple.1).0
+    );
+
+    // Where everything fits, the verdict is measurable, and a rejection is a FALSE
+    // REJECTION on real code rather than a difference of opinion.
+    for (name, src) in stages.iter().filter(|(n, _)| fits.contains(n)) {
+        assert!(
+            stage_verdict_resolving(src),
+            "{name}: the stage REJECTS a real source the reference accepts. This is \
+             over-rejection on actual code, which is a language change rather than \
+             a conservative choice"
+        );
+    }
+
+    // NON-VACUITY. A run where nothing fits and nothing overflows would mean the
+    // corpus is empty; one where everything fits would mean the caps are not what
+    // this test believes.
+    assert!(
+        !fits.is_empty() || !overflows.is_empty(),
+        "no stage source was measured at all"
+    );
+
+    // **PINNED, BECAUSE THE NUMBER IS THE POINT.** This is the distance between a
+    // checker that works on snippets and one that could run on the corpus it
+    // exists to check. A stage moving from over to fitting is progress worth
+    // recording; one moving the other way is a regression in capacity.
+    let mut fitting = fits.clone();
+    fitting.sort_unstable();
+    assert_eq!(
+        fitting,
+        // **SEVEN, MEASURED 2026-09-12.** The sequence is worth keeping: I predicted
+        // ZERO, the first run found two, the inert-row elision took it to three, and
+        // deduplicating the occurrence channel took it to seven.
+        //
+        // All seven are ACCEPTED by the stage, asserted above -- an over-rejection
+        // result on real code that now covers a majority of the corpus rather than
+        // a corner of it.
+        //
+        // **This pin moving is the intended outcome, not a nuisance.** It is how a
+        // capacity change announces itself; the failure message says so, and it has
+        // now done so twice.
+        vec![
+            "analyze",
+            "verify_datalayout",
+            "verify_depth",
+            "verify_structural",
+            "verify_typed",
+            "verify_types",
+            "verify_yield",
+        ],
+        "the set of real stage sources whose tables fit the input channels changed. \
+         A stage JOINING it is progress in capacity worth recording; one LEAVING it \
+         is a regression. Record which, and what made the difference"
+    );
 }
 
 /// **WHICH INPUT CHANNELS ANY VERDICT ACTUALLY DEPENDS ON.**

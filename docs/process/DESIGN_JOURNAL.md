@@ -2878,6 +2878,422 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (sixty-first) — the saving the refusal left open, and a measurement that had drifted
+
+### THE SAVING THE PREVIOUS INCREMENT LEFT OPEN
+
+That increment refused one occurrence-channel saving and said explicitly that a saving not requiring
+the host to apply the rule remained open. This is it.
+
+The channel emitted one row per syntactic OCCURRENCE. Across the twelve real sources that is 14,288
+rows carrying **1,391 distinct facts — 90% repeats.**
+
+**It never asks what a rule would conclude.** It observes that two rows are equal as tuples and
+sends the fact once. That is the whole difference from the refused version, where the host would
+have withheld a row precisely BECAUSE it knew the rule's answer for it.
+
+**What it does rely on, stated rather than glossed**: the stage applies a per-row predicate folded
+into a sticky verdict, so identical rows contribute identically. That is the fold's SHAPE rather
+than a rule's answer — but it is a reliance, and calling the saving free would be the overclaiming
+the refusal was about.
+
+**It changes what the channel means**, from per-occurrence to per-distinct-fact, and the description
+travels with the change. First-appearance order is preserved, because order-independence of a sticky
+disjunction is a SECOND assumption and not needing it is cheaper than arguing it.
+
+### A MEASUREMENT THAT HAD DRIFTED FROM WHAT IT MEASURED
+
+The capacity and price tests went on reporting **3,874** occurrence rows after the driver had begun
+sending **537**. `real_source_channel_rows` called the raw walk; the driver applied the reduction.
+
+**A measurement that drifts from the thing it measures is worse than no measurement, because it
+reads as evidence.** It was caught only because the expected improvement did not appear — had the
+saving been smaller, the drift would have been invisible and both numbers would have gone on being
+quoted.
+
+The expression channel was already in step because its entry point applies the elision. The
+occurrence channel needed it applied explicitly.
+
+### THE EFFECT
+
+| | before | after |
+|---|---|---|
+| real sources that fit | 3 of 12 | **7 of 12** |
+| corpus-sized shared data | 34,781 words, 4.7x | 24,770 words, **3.3x** |
+| growth over today | +213 KiB | **+135 KiB** |
+| tightest constraint anywhere | `wire` occurrences, 15x | `wire` call sites, 14x |
+
+**The prediction history is worth keeping.** I predicted ZERO sources would fit. The first run found
+two; the inert-row elision took it to three; this takes it to seven. Each step was measured, and
+each exceeded what I expected of it.
+
+**The binding constraint has now moved twice** — off the expression channel, then off the occurrence
+channel — and is now the call-site channel. Whether the same argument reaches it is a question for a
+later increment, and the answer is not obvious: call sites are distinct by construction in a way
+occurrences are not.
+
+---
+
+## 2026-09-12 (sixtieth) — a saving that is available, verdict-preserving, and refused
+
+### THE SAVING
+
+The expression elision moved the binding constraint to the OCCURRENCE channel, now the largest
+remaining term in the price of a corpus-sized input path.
+
+The same argument appears to apply. An occurrence row with `local = 1` and `call = 0` can never
+reject: the rule returns zero for it directly, with no lookup. **Measured: 5,580 of 14,288 rows, 39%
+across the twelve real sources**, and 1,224 of `wire`'s 3,874.
+
+**It is verdict-preserving.** Every program would get the same answer. This is not an unsound
+optimisation being called unsound.
+
+### WHY IT IS REFUSED ANYWAY
+
+The elision that WAS taken removed rows whose content was **nothing**. An operand reported as "could
+not tell" and an operand not reported at all are **indistinguishable to the stage**: both resolve to
+zero and the answer is identical either way. The host declined to send a row it had nothing to say
+about.
+
+This one is different in kind. A row saying "this name, local, not a call" carries real content, and
+withholding it would be the host declining **because it knows the rule's answer**.
+
+The line this file draws is that the host reports syntax — "occurrence 4 names index 12, and it is a
+call" — and does not say "that is an undefined function", because the classification is the work.
+**Suppressing rows whose classification the host predicted is performing that classification**, and
+it would be invisible in every verdict.
+
+That is the marshalling objection running backwards. The usual concern is a host supplying
+conclusions; this would be a host withholding evidence on the strength of one.
+
+### THE TEST OF THE DISTINCTION
+
+The two cases are separated by a question worth keeping: **can the stage tell the difference between
+the row being absent and the row being present?**
+
+- Expression rows: NO. Absent and reported-unknown both resolve to zero. Eliding is free.
+- Occurrence rows: YES. The fold length changes and one fewer name is classified. Eliding requires
+  the host to have applied the rule.
+
+Both give the same verdict. Only one leaves the decision where the file says it lives.
+
+### WHY THIS IS A TEST AND NOT A COMMENT
+
+**A refusal recorded only in prose is a refusal that gets undone by someone optimising in good
+faith.** The pin fails if the rows stop being sent, so the argument has to be MET rather than
+bypassed. It guards a decision rather than a behaviour, which is a shape this repository did not yet
+have.
+
+If a later increment decides the trade is worth making — perhaps because this channel becomes the
+thing standing between the stage and the real corpus — the way to do it is to delete the test
+deliberately and record why, not to discover it failing.
+
+### WHAT THIS DOES NOT CLAIM
+
+Not that the occurrence channel cannot be made cheaper. A saving that does not require the host to
+apply the rule — fewer occurrences reported because fewer are generated, or a narrower row — remains
+open and is not what this refuses.
+
+---
+
+## 2026-09-12 (fifty-ninth) — two thirds of the expression table cannot decide anything
+
+### THE LEVER THE PRICE IDENTIFIED
+
+The price measurement found the expression channel to be 57% of the cost of a corpus-sized input
+path -- five parallel arrays across the widest gap -- and said that anything reducing its row count
+would dominate every other saving. This is that reduction.
+
+### THE MEASUREMENT
+
+A row of an agreement kind rejects only when both sides resolve to a known tag and differ; a
+condition row only when its operand resolves to something other than `bool`. An operand the host
+reported as "could not tell" is treated by that predicate as no evidence, so such a row **cannot
+change any verdict**.
+
+**Measured across the twelve real sources: 10,353 of 15,498 rows, 67%.** Per stage it ranges from
+58% (`wire`) to 85% (`verify_datalayout`).
+
+### WHY THE CRITERION IS ADMISSIBLE
+
+**It is SYNTACTIC.** The host declines to send a row it has nothing to say about. Eliding on "this
+operand RESOLVES to unknown" would be different in kind -- it would have the host perform the join
+the stage exists to perform -- and that version is not available to this side at all.
+
+### THE ARGUMENT IS NOT ENOUGH ON ITS OWN
+
+**An optimisation whose only evidence is that the suite still passes is an optimisation nobody
+checked.** So the same programs run with elision on and off and the verdicts must agree, over the
+real sources that fit, over derived-binding chains, and over a mixed corpus with both verdicts
+represented. The differential also asserts the elision actually removes rows, since a criterion that
+elided nothing would satisfy everything else.
+
+**The part most likely to be wrong is the index remap**, not the criterion. A form-2 binding row
+carries its initialiser's INDEX into this table, so dropping rows without remapping would point
+later bindings at the wrong node -- and at a node that EXISTS, so it would resolve to a plausible
+wrong tag rather than fail loudly. The derived-chain cases exist for that and nothing else. A
+derived binding whose own node is elided is DROPPED rather than repointed, which is verdict-
+preserving for a reason worth stating: an inert node yields UNKNOWN from `tyb_node_tag`, and a name
+with no binding row resolves to UNKNOWN as well. Same answer, different route.
+
+### THE EFFECT
+
+| | before | after |
+|---|---|---|
+| corpus-sized shared data | 54,301 words, 7.3x | 34,781 words, 4.7x |
+| growth over today | +366 KiB | +213 KiB |
+| real sources that fit | 2 of 12 | **3 of 12** |
+| tightest constraint anywhere | `parse` expression nodes, 22x | `wire` name occurrences, 15x |
+
+`verify_structural` crossed under the caps. **The binding constraint has moved off the expression
+channel entirely** -- the next saving, if one is wanted, is in the occurrence channel.
+
+### A PIN DOING ITS JOB
+
+The capacity test pins which sources fit, and its failure message says a stage JOINING the set is
+progress worth recording. It failed, and that is how the third one announced itself rather than
+slipping past in a log line.
+
+---
+
+## 2026-09-12 (fifty-eighth) — the price of a corpus-sized input path, in words
+
+### WHY A PRICE AND NOT A MULTIPLE
+
+The capacity measurement reports two of twelve real sources fitting, and `parse.kel` needing
+twenty-two times the expression-node cap. **A multiple is not actionable.** The caps are shared-data
+array lengths, so the cost of closing the gap is words of shared data — worst-case memory usage,
+which is the thing this project exists to bound. The shared ceiling is sixteen megabytes, so nothing
+is architecturally blocked. It is a price, and it was unknown.
+
+### THE NUMBER
+
+**7,424 words today. 54,301 words sized to the corpus. 7.3 times, or +366 KiB at eight bytes a
+word.**
+
+| channel | now | corpus | arrays | extra words |
+|---|---|---|---|---|
+| expression nodes | 256 | 5,632 | 5 | +26,880 |
+| name occurrences | 256 | 3,874 | 3 | +10,854 |
+| call sites | 128 | 1,730 | 2 | +3,204 |
+| bindings | 128 | 831 | 4 | +2,812 |
+| operand pairs | 256 | 1,452 | 2 | +2,392 |
+| declared names | 128 | 499 | 1 | +371 |
+| declared params | 128 | 492 | 1 | +364 |
+
+**The expression channel alone is 57% of the growth**, because it is five parallel arrays and the
+widest gap. Anything that reduced its row count — or its arity — would dominate any other saving.
+
+### THIS IS A MEASUREMENT AND NOT A PROPOSAL
+
+Sizing shared data upward is a worst-case-memory change and is the operator's decision. **Nothing in
+this increment changes a capacity.** A measurement and the change it argues for should not land
+together, or neither can be judged on its own.
+
+### THE MULTIPLIER IS CHECKED, BECAUSE GETTING IT WRONG RUINS THE NUMBER
+
+A channel is a NAME and several names cover more than one parallel array: the occurrence channel is
+three, the expression channel five. The price is the row delta times the array count, so a name
+added to a data block without updating the table would skew the total silently. A second test counts
+the stage's own array declarations and compares.
+
+**And that check caught me on its first run.** It subtracted the one PRIVATE array from the price
+before comparing, on the reasoning that `tyb.bres` is not shared — but the scan matches any
+`name: [Word; N],` line and the private block uses the same shape, so `bres` was on both sides. It
+belongs in the price too, being sized to the binding table.
+
+**A count is only comparable to another count when both sides are drawn from the same population.**
+One side was "shared arrays" and the other was "arrays".
+
+### ONE DEFINITION OF THE CORPUS
+
+The stage list and the per-channel table walk were local to the capacity test and are now file-scope
+items both tests read. A second copy is a second thing to forget when a stage is added, and the
+capacity result and its price would then describe different corpora.
+
+---
+
+## 2026-09-11 (fifty-seventh) — a census of binders, and it found two more false rejections
+
+### WHY A CENSUS AND NOT ANOTHER FIX
+
+The occurrence channel classifies a name as local, declared, or unresolved, and refuses the third.
+By this point **four binders had been found missing from its local set**, each separately, three of
+them by accident. **Four accidents in one function is a class, not a run of bad luck.**
+
+So the question "what else binds a name?" was put to the syntax tree once, and every answer got a
+well-typed program.
+
+### TWO MORE FALSE REJECTIONS, AND THEY ARE DIFFERENT SUB-CLASSES
+
+**A CONST PARAMETER used as a value.** `fn plus<const n: Word>() -> Word { n + 10 }` reads `n` as an
+ordinary identifier, so it arrives as an occurrence, and nothing put the declaration into the local
+set. **Every const-generic program that used its parameter as a value was rejected.**
+
+This one was **PREDICTED before looking**, which is worth recording because the previous two
+predictions in this session were both wrong. Asking the syntax tree beat waiting for a program to
+fail.
+
+Note what was already working: the same parameter used as an **array length** was accepted, because
+there it sits in a TYPE position and yields no occurrence at all. **Same binder, two syntactic
+forms, one of them broken** — the rule-shape census's finding surfacing in a different channel.
+
+**AN IMPORTED NAME called through its module path.** `use audio::midi_to_freq` declares the name
+`midi_to_freq`; the call site writes `audio::midi_to_freq`. The occurrence walk records the
+QUALIFIED spelling, the declaration records the bare one, and the search missed. **Every program
+calling an imported native through its module path was rejected.**
+
+**This is not a missing binder at all.** Nothing fails to bind; the two sides spell ONE NAME TWO
+WAYS — the defect the field-set channel already guards against by sharing a single index space, and
+which no amount of binder-hunting would have found. Declaring both spellings is the conservative
+repair: it can only accept more. Stripping the qualifier from occurrences instead would make two
+modules' same-named functions collide.
+
+### THE CENSUS ITSELF
+
+Ten binding forms, each a program the reference accepts, each asserted to survive the stage.
+**Two of the ten are there because they are NOT occurrences** — a const parameter in an array-length
+position and a generic type parameter, both in type positions. They pass trivially today. They are
+kept because **the difference between "handled" and "never arrives" is invisible from a passing
+test**, and a change that started routing type positions through this channel would break them
+first.
+
+Not exhaustive, and stated as such: these are the forms I could find and write a valid program for.
+
+### A PROCESS FAILURE, THIRD OCCURRENCE
+
+An edit script aborted on an assertion again, so a scratch probe it was supposed to delete stayed in
+the file. **Checking `git diff --stat` after every script is what caught it**, for the second time.
+The lesson from two increments ago held only because the check held; the script discipline alone did
+not.
+
+---
+
+## 2026-09-11 (fifty-sixth) — twelve real programs found a false rejection that a snippet corpus could not
+
+### WHY REAL PROGRAMS
+
+Every well-typed control in `tests/selfhost_typecheck.rs` was a snippet written to exercise one
+rule. The file's own argument is that the must-REJECT obligation is enumerable while the must-ACCEPT
+obligation is not, and that over-rejection is the failure a rejection corpus cannot see.
+
+The repository holds twelve Keleusma programs the reference definitely accepts: its own self-hosted
+stage sources. **They were already on disk and nothing had ever run the type-rejection stage against
+them.**
+
+### THE CAPACITY RESULT, WHICH IS A NUMBER NOTHING ELSE STATED
+
+**Two of twelve fit the input channels.** I predicted zero; `verify_datalayout.kel` and
+`verify_yield.kel` fit.
+
+The distance for the rest is not marginal. `parse.kel` needs **5,632 expression nodes against a cap
+of 256 — twenty-two times**. `wire.kel` needs 3,874 name occurrences against 256 and 1,730 call sites
+against 128. Sizes are measured per table and the binding one is named per stage, because reporting
+only the largest would hide which cap actually stops a program.
+
+**Nothing is truncated to make a program run.** A verdict from a stage fed a truncated table proves
+nothing, so a program that does not fit is reported as not fitting.
+
+### THE FALSE REJECTION
+
+Of the two that fit, one was REJECTED: `verify_datalayout.kel`, which the reference accepts.
+
+Localised with the channel-withholding instrument built in the previous increment — withholding the
+occurrence channel made it accept — and then to a single name: `i`, a **`for` loop variable**.
+
+`occurrence_rows` collected locals from parameters, `let` statements and match-arm patterns, and not
+from `for`. The reference records the loop variable's read as an occurrence, so it resolved to
+neither a local nor a declaration and the rule refused it. **Every well-typed program containing a
+`for` loop was rejected.**
+
+### HOW IT SURVIVED, WHICH IS THE FINDING
+
+**Not one hand-written well-typed control in the file contained a loop.** A defect affecting every
+looping program was invisible to a corpus of snippets. It took real code to surface it, and real
+code was three lines of `include_str!` away the whole time.
+
+A pin for the loop variable already existed — and covers the PIPELINE extraction, asserting
+correctly that the reference DOES record the read. Nothing checked what the reference-side channel
+then did with it. **Two tests can name the same construct and guard different halves of it.**
+
+This is the third binder this one channel has missed. The fix is one line; the instrument that found
+it is the increment.
+
+### A CORRECTION I HAD TO MAKE MID-INCREMENT
+
+On the first run I reported that both fitting sources were accepted. I inferred that from a panic's
+LINE NUMBER without reading its message, and the message said the opposite. Same class as reading a
+cached clippy run as evidence, which was the previous increment's finding. **A line number is not a
+message.**
+
+### DELIVERY
+
+Continuous integration completed for the first time on the branch — twenty-two of twenty-two green —
+once the previous increment stopped pushing into it. The six stacked increments are merged.
+
+---
+
+## 2026-09-11 (fifty-fifth) — the loop's own cadence was cancelling every continuous-integration run
+
+### THE FINDING, WHICH IS ABOUT THE PROCESS AND NOT THE CODE
+
+Six increments were stacked on one branch. **Continuous integration had never completed against any
+of them.** Five runs in a row, all `cancelled`, each killed by the next push.
+
+`.github/workflows/ci.yml` sets `cancel-in-progress: true` on a concurrency group keyed by the pull
+request's ref. A run takes roughly forty minutes; the self-paced loop was waking at twenty. **Every
+wake therefore found the run incomplete, produced another increment, pushed, and cancelled it.** The
+cadence structurally guaranteed that the merge gate could never be satisfied.
+
+The project's rule is that a merge proceeds once continuous integration is green. So the work was
+not slow to deliver, it was **undeliverable at that cadence**, and no further increment would have
+changed that. Recognising the bottleneck is the increment.
+
+### WHAT WAS DONE INSTEAD OF A SEVENTH PUSH
+
+The local gate is a SUBSET of continuous integration. The superset's extra job classes had zero
+coverage of this stack, so they were run here, against the tip:
+
+| check | result |
+|---|---|
+| `no_std` build, thumbv7em-none-eabihf | pass |
+| Minimum supported Rust, arena, 1.85 | pass |
+| Minimum supported Rust, runtime, 1.88 | pass |
+| Clippy, workspace, all targets, warnings denied | pass |
+| Miri, stacked borrows | pass |
+| Miri, tree borrows | pass |
+| Language server, detached crate | pass |
+| Playground crate, native half | pass |
+| Editor extension, manifest and syntax | pass |
+
+**Four are UNKNOWN here and are not claimed as passing**: the SDL3 examples build SDL3 from source;
+the RTOS cross-build needs a target not installed, and installing one is a change to the operator's
+toolchain rather than a check; the playground's compile-to-wasm32 half needs a target not installed;
+and the extension's dependency install needs the network. Continuous integration covers all four,
+and by the time this was written it had seventeen of twenty-two jobs green on the same commit with
+none failed.
+
+### A FOURTH WAY A LOCAL CHECK UNDER-REPORTS
+
+Three are already on record. Here is the fourth: **a cached clippy run prints nothing whether or not
+warnings exist.** A no-op rebuild emits no diagnostics, so "zero warnings" from a warm target
+directory is not evidence. The first count taken here was a cache hit; forcing a rebuild is what
+made it evidence.
+
+A related confusion resolved on the way, and it is the feature-unification effect already recorded
+in the repository guide rather than a new defect: `cargo check -p keleusma --tests` warns about
+several unused items that `cargo clippy --workspace --all-targets` does not, because the workspace
+run unifies the `self-host` feature on and the single-package run does not. The items are used
+behind that feature.
+
+### THE RULE THIS LEAVES
+
+**A self-paced loop whose period is shorter than the verification it depends on will cancel that
+verification forever.** Match the wake to what is actually being waited for, and when the thing
+being waited for is the gate itself, stop producing and let it finish.
+
+---
+
 ## 2026-09-11 (fifty-fourth) — which input channels any verdict actually depends on
 
 ### THE CLAIM THIS MEASURES

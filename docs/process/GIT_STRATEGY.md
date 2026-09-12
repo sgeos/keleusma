@@ -58,6 +58,16 @@ integration trunk, and feature integration uses merge commits, not rebase-to-lin
   branch costs nothing but the branch itself. This is the worst case, and it is a normal one.
 - **Must be all-green before merging back** into the version branch (a green
   `scripts/release-gate.sh`).
+- **A PUSH CANCELS THE RUNNING CONTINUOUS-INTEGRATION JOB FOR THAT PULL REQUEST.** The workflow sets
+  `cancel-in-progress: true` on a concurrency group keyed by the pull request's ref, which is
+  correct for superseding a stale run and fatal for a session that pushes faster than the run
+  finishes. **Measured 2026-09-11: five consecutive runs on one branch were cancelled and none ever
+  completed**, because an automated loop woke every twenty minutes against a run that takes about
+  forty. Six increments accumulated with the merge gate never once satisfied.
+- **So: once a branch is ready, stop pushing to it and let the run finish.** A further increment is
+  not progress if it destroys the verification the merge depends on. **A self-paced loop whose
+  period is shorter than the verification it depends on will cancel that verification forever.**
+  Work that cannot wait belongs on a separate branch, whose run is a different concurrency group.
 - Merge via a **no-fast-forward merge commit**, so the version branch's first-parent history stays
   green and readable while the granular per-increment commits are preserved on the merged bubble.
 
