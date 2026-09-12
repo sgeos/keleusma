@@ -13,6 +13,54 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (eightieth) — the question that should have come first
+
+### FOUR INCREMENTS ABOUT REFUSAL QUALITY, NONE ABOUT WHETHER THEY REFUSE
+
+Several increments discussed the four self-hosted gaps: whether their messages name the construct,
+whether refusing is cheaper than implementing, what a refusal channel would cost. **None established
+that they refuse at all.**
+
+That is the only part bearing on correctness. A construct outside the subset must be REFUSED, never
+silently mis-compiled. Everything else is ergonomics.
+
+### AND THE MEASUREMENT HAD TO BE ON THE RIGHT ENTRY POINT
+
+The censuses drive `occurrence_rows_from_pipeline`, a test harness that unwraps, so a gap surfaces
+there as a PANIC. **That is not what a user meets.** The path behind `--compiler self-hosted` is
+`self_hosted_compile`, and every claim I had made about refusal behaviour came from the harness.
+
+**Reasoning about the product from the harness is the scope error this file records against itself
+several times over**, and I made it four increments running without noticing, because the harness's
+behaviour was consistent and plausible.
+
+### THE RESULT
+
+All four gaps return **`Err`** from `self_hosted_compile` — a proper error, not a panic and not a
+module — and an ordinary program still compiles.
+
+**The subset is SAFE at the boundary that matters.** Nothing on the gap list mis-compiles. The
+remaining obligation is message quality, not soundness.
+
+### THE THIRD REFRAMING, AND THE FIRST FROM A MEASUREMENT
+
+This obligation has now been described three ways: "implement four constructs", then "refuse
+cleanly, which is smaller" (retracted as unverified), and now "improve four messages, the safety
+property already holding". **Only the third rests on running the thing rather than reading around
+it.**
+
+The pin asserts what was measured and disclaims the rest: not that the messages are good — several
+name a work-stack underflow rather than a construct — and not that the gap list is complete, only
+that nothing on it compiles to something wrong.
+
+### THE RULE
+
+**Establish the safety property before debating the ergonomics of the failure.** Four increments of
+discussion rested on an assumption that took one test to check, and the test could have been written
+the moment the first gap was found.
+
+---
+
 ## 2026-09-12 (seventy-ninth) — a cost estimate I stated as settled, retracted
 
 ### THE CLAIM
