@@ -13,6 +13,57 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (sixty-ninth) — three gaps, one contained fix and two features
+
+### WHY TRACE RATHER THAN WRITE
+
+Both deferral conditions for fixing the parser had expired: the instrument was on a pushed branch,
+and the previous increment established the gaps are LOCAL rather than symptomatic, so the fix is
+worthwhile. **"Worthwhile" is not "small"**, and `parse.kel` is 6,651 lines that must still
+self-compile byte-identically. So the mechanism was traced before anything was written.
+
+### THE ROOT IS ONE PLACE, AND IT SPLITS THE THREE UNEVENLY
+
+`step_match` phase 2 reads an arm pattern. It accepts an integer literal, `_`, and an identifier
+**only when that identifier names a known enum**. Anything else sets `match_build` — it reads the
+identifier as the END OF THE ARMS.
+
+**That single decision produces both observed failure kinds:**
+
+- **The variable pattern `v` and the struct pattern `P { x }`** take the end-of-arms path. The
+  parser does not hang; it produces a stream that means something else, and `reconstruct.kel`
+  catches it as a work-stack underflow. **FEATURE WORK** — supporting them means new arm semantics,
+  binding or destructuring the scrutinee, not a missing branch.
+
+- **The bare enum unit variant `E::A`** is recognised as an enum, enters `step_mpat`, and reaches
+  phase 3, which waits for `LParen` and **does nothing on any other token**. The phase never
+  advances and tokens keep arriving with no progress. That is the spin, exactly.
+
+### THE CONTAINED ONE, ANALYSED SO IT IS NOT RE-ANALYSED
+
+The `LParen` path reserves the arm's `IsEnum` test slot. The `RParen` path completes the pattern,
+counts the arm, and returns the `EnumArm` record. A bare form needs **both of those, plus advancing
+the match phase PAST the `=>` it has already consumed** rather than back to the phase that waits for
+one.
+
+**Every piece it needs already exists in that one function.** The analysis is recorded beside the
+census so the increment that does it starts from here.
+
+### WHY IT WAS NOT DONE IN THIS INCREMENT
+
+Any change to a stage source must still self-compile byte-identically, and that constraint makes
+even the contained fix worth its own run at continuous integration rather than a ride-along on a
+branch whose run is already in flight. Attempting it while three jobs were pending on another pull
+request would have risked the thing the last several increments spent effort protecting.
+
+### THE SHAPE
+
+**"Three gaps" was not a useful unit of work.** Tracing turned it into one contained fix and two
+features, which is a different plan with a different cost. The tracing took one reading of two
+functions; writing the grammar first would have discovered the same split after the expensive part.
+
+---
+
 ## 2026-09-12 (sixty-eighth) — the pattern gaps are local, and a third failure kind
 
 ### THE QUESTION THAT DECIDED THE NEXT WORK
