@@ -39,6 +39,17 @@ catching what used to pass silently. **The float row names no missing form: the 
 its checked variant, where the reference emits the plain one.** Two of three divergences say the
 codegen cannot do something; the third says it chose differently.
 
+**AN OBSERVATION ABOUT THE BOUNDARY TABLE, LEFT AS YOURS.** None of the four known parser gaps —
+the variable pattern, struct destructuring, `assert`, the qualified call — appears in it. Verified:
+zero occurrences of each in the table's range, and its families are bool, cast, comp, ctrl, eq,
+literal, nested, op, prec, removed, scalar, scope and tuple. A reader consulting the
+construct-support boundary to learn what the self-hosted compiler does not support therefore gets an
+incomplete answer.
+
+**Not changed.** The four are covered by their own tests, so this is organisation rather than a
+coverage hole, and the table's counts are a documented compaction anchor that adding rows would
+move. Whether the boundary table should absorb the parser gaps is a call for you.
+
 **Where the work is.** The type-rejection input path now carries **ten of twelve** real `.kel` stage
 sources, up from two, at **1.6x** the shared data it uses today rather than 7.3x — a growth of
 **+33 KiB** against a 16 MB ceiling, across six verdict-preserving reductions.
