@@ -20,6 +20,14 @@
 //! | faults | 30 | — | 7 | 7 | **1** |
 //! | reference rejects | 1 | 1 | 1 | 1 | 1 |
 //!
+//! **The three blanks in `+ pool tag` were NOT RECORDED, not measured as unchanged.** The fourth
+//! cell in that column carries a value, which makes the blanks read as deliberate; they are not.
+//! Recovering them would mean applying the pool-tag fix in isolation on top of the baseline, which
+//! is not what happened. Annotated here rather than left ambiguous, because a blank cell in a
+//! table is read as a claim: `tests/selfhost_typed_opcode_boundary.rs` carried three such blanks
+//! that meant "never run" while rendering exactly like the cells that meant "inadmissible", and
+//! one of the three turned out to diverge.
+//!
 //! **THE SHIPPING COMPILER NOW MATCHES THE BOUNDARY'S VERDICT ON ALL 95 CASES.** Every remaining
 //! non-identical case is one the table already labels `Diverges`, `Refuses` or `RefRejects`. No
 //! construct recorded `Ok` differs or faults any more. Pinned per-case, not by count, in

@@ -13,6 +13,47 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (eighty-ninth) — a blank cell is a claim, and one of mine was never run
+
+### THE MATRIX I CALLED CLOSED HAD THREE CELLS NOBODY MEASURED
+
+The previous entry reported the opcode matrix closed. It was not. Three cells carried an em dash
+meaning "the language does not admit this", and that meaning was an ASSUMPTION rather than a
+measurement: `Byte` unary negation, `Byte` `%` and comparison, and `Float` `%`.
+
+Running them: `Float` `%` agrees, `Byte` `%` and comparison agree, and **`Byte` unary negation
+DIVERGES**, `CheckedNeg` against the reference's plain `Neg`. So "`Word` and `Byte` agree
+throughout", written into three documents, was wrong.
+
+The correct statement is narrower and tidier: **unary negation diverges for every non-`Word`
+operand**, and `Byte` agrees on every binary operator.
+
+### THE ANSWER WAS ALREADY IN THE TREE, WHICH IS THE PART WORTH KEEPING
+
+`tests/op_tag_tables.rs` records that `codegen.kel` emits `checkedneg` for unary negation, that its
+decoder has no arm producing `Op::Neg` at all, and that the reference emits `Op::Neg` for **`Byte`**
+negation. Every ingredient of the finding was written down before this session started. What was
+missing was running the cell.
+
+Reading that file is what exposed it, and reading it happened only because the question "is there a
+specified list I have not censused" was asked one more time after four increments of believing the
+area exhausted.
+
+### WHY THE GAP SURVIVED THREE READINGS
+
+A census that skips a cell and a census that measures it produce identical output for every row
+either did run. Nothing in the matrix looked wrong, because the blank cell rendered exactly as the
+inadmissible cells did. **The `n/a` in that table now means a checked reference type error**, and
+`Float` bitwise is the only cell that earns it.
+
+### THE COUNT, STATED PLAINLY
+
+Four framings in this area were wrong before this one: too broad, too permissive, too strong, too
+narrow. This is the fifth, and it is of a different kind — not a claim stated past its evidence, but
+a claim made where there was no evidence at all, disguised as an absence.
+
+---
+
 ## 2026-09-12 (eighty-eighth) — closing the matrix against the codegen's own operator list
 
 ### THE SET I WAS TESTING WAS ASSEMBLED, NOT SPECIFIED
