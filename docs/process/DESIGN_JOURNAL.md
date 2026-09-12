@@ -13,6 +13,107 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (sixty-sixth) — the census pointed at the twin, and the twin does not terminate
+
+### THE MOVE
+
+Eighteen increments had gone into one area: the type-rejection host extraction, where three false
+rejections were found. **That walk has a twin** — the PIPELINE extraction in `src/selfhost/mod.rs`,
+compared against the reference side by agreement tests.
+
+Those agreement corpora contain a `match` on a LITERAL, no loop, no const parameter and no qualified
+import. **A corpus that cannot distinguish two implementations cannot detect that they diverge.** So
+the binding-form census was pointed at the twin. One probe.
+
+### WHAT IT FOUND
+
+**`parse.kel` does not terminate on a match arm whose pattern is a BARE enum path.**
+
+| spelling | reference | `parse.kel` |
+|---|---|---|
+| `E::A => 1` | accepts | **spins until the budget is exhausted** |
+| `E::A() => 1` | accepts | parses |
+
+Payload or no payload makes no difference. The parentheses do.
+
+**Non-termination, not a budget shortfall**, and that was established rather than assumed: at
+sixteen steps per token it fails; at five hundred and twelve it still fails. A budget merely sized to
+the constructs someone tried would have passed at the larger figure.
+
+The existing parse-suite test that covers enum patterns uses `Op::Neg()` — the parenthesised form —
+which is why the gap survived a suite of eighty-seven tests. **One spelling of one construct.**
+
+### THE SECOND DEFECT, WHICH IS THE DIAGNOSTIC
+
+The budget guard's message said the failure's *"usual cause is an unterminated block, string, or
+bracket"*. For this input that is false, and it would send a reader hunting for a brace that does not
+exist.
+
+**"The usual cause" is a claim about a population nobody measured.** The message now names both
+recorded causes and calls neither usual, which costs nothing and stops it being confidently wrong.
+
+### WHAT IS FIXED AND WHAT IS NOT
+
+The diagnostic is fixed. **The parser is not**: teaching `parse.kel` the bare spelling is a change to
+the self-hosted pattern grammar, and an instrument and the change it argues for should not land
+together — the same rule applied when the capacity price was measured.
+
+The bare case is pinned as FAILING rather than omitted, so the day it parses, the test fails and says
+to widen the documented subset.
+
+### THE SHAPE, FOR THE FOURTH TIME
+
+A construct supported in one spelling and not another, invisible because every test used the
+supported one. The rule-shape census found it for rules; the binder census found it for binders;
+this finds it for the parser's own grammar. **The instrument transfers because the failure mode
+does.**
+
+---
+
+## 2026-09-12 (sixty-fifth) — the bounded channel had drifted ten increments
+
+### THE FINDING IS ABOUT THIS FILE'S SIBLINGS
+
+`REVERSE_PROMPT.md` stopped at the fifty-fourth increment while this journal reached the
+sixty-fourth. `HANDOFF.md` stopped at the forty-first, and still said *"type rejection reaches only
+literal, direct occurrences"* — true when written, false for weeks.
+
+**The append-only channel kept pace and the bounded one did not, and the asymmetry is structural.**
+Appending is cheap: it needs only what just happened. The bounded channel requires deciding what the
+CURRENT STATE IS, which is work, and which gets deferred exactly when increments are dense — that is,
+when it carries the most.
+
+A session ending here would have handed the next one a picture in which the input path is
+twenty-two times too small (it is 1.6), two real sources fit (ten do), and the field-read edge is
+the frontier (it is a capacity decision).
+
+### WHAT THE REFRESH SAYS
+
+One block covering increments 55 to 64 rather than ten sections, because the channel is BOUNDED and
+its job is the latest state and the next step, not the history — the history is here.
+
+The handoff's stale bullet is **struck through rather than deleted**, with the correction beside it,
+because a resuming agent who has read the old version needs to see that it moved rather than find it
+quietly gone. A handoff that silently changes its story is worse than one that admits it was wrong.
+
+### THE STATE IT NOW CARRIES
+
+- The input path carries **ten of twelve** real sources, up from two; the corpus-sized shared data is
+  **1.6x** what it uses today, down from 7.3x; the growth is **+33 KiB** against a 16 MB ceiling.
+- **Closing the last two is the operator's capacity decision**, not another reduction. `parse` needs
+  about 192 against caps of 128; `wire` about four times, dominated by declaration-indexed tables.
+- Three false rejections found and fixed, two of them only by running the stage against real code.
+- The refusal pin, so the one deliberately-declined saving is not taken by accident.
+- That a push cancels the running check, which cost five consecutive runs.
+
+### THE RULE
+
+**A channel that has to be rewritten rather than appended to will drift, and it drifts fastest when
+the work is going well.** The protocol says to update it after each task; I stopped when the tasks
+got dense. Noticing that it had happened took looking, not remembering.
+
+---
+
 ## 2026-09-12 (sixty-fourth) — the deferred channel, and why it needs the other deduplication
 
 ### THE REASONING THAT HAD BEEN DEFERRED

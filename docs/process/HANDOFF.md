@@ -5,10 +5,33 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-09-11 (session 65, after the forty-first increment).** Validate by the
+> **REFRESHED 2026-09-12 (session 65, after the sixty-fourth increment).** Validate by the
 > ANCESTRY and CONTENT block below,
 > not by a hash: a refresh takes more than one commit, so any hash written here is stale by one the
 > moment it is written.
+>
+> ## READ THIS FIRST: THE FRONTIER HAS MOVED, AND THE BULLETS BELOW ARE OLDER THAN IT
+>
+> **The type-rejection INPUT PATH is no longer the obstacle.** Measured against the twelve real
+> `.kel` stage sources, its tables now carry **ten of twelve**, up from two, and the shared data
+> needed for the whole corpus fell from 7.3x what it uses today to **1.6x**, a growth of **+33 KiB**
+> against a 16 MB ceiling. Six reductions, each verdict-preserving under a differential.
+>
+> **What remains there is a CAPACITY DECISION for the operator, not another reduction.** `parse`
+> needs about 192 where the caps are 128; `wire` needs roughly four times, dominated by tables
+> indexed by declaration that no reduction reaches — it declares 492 functions and 499 top-level
+> names.
+>
+> **Three false rejections were found and fixed** — a `match` arm binding, a `for` loop variable, a
+> const parameter used as a value, plus an imported native called through its module path. Each made
+> the stage refuse programs the reference accepts. **Two were found only by running the stage against
+> real code**, because every well-typed control in the suite was a snippet with no loop in it.
+>
+> **A push cancels the running continuous-integration job for that pull request.** Five consecutive
+> runs were cancelled and none completed. Once a branch is ready, stop pushing and let it finish.
+>
+> Detail in [REVERSE_PROMPT.md](./REVERSE_PROMPT.md) and, per increment, in
+> [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.md).
 >
 > ## THE FOUR DECISIONS ARE THE OPERATOR'S, NONE HAS MOVED, AND THEY LEAD FOR A REASON
 >
@@ -31,9 +54,14 @@ always-current, so it must be able to report itself stale rather than mislead a 
 >   region became a STREAM so the batch cap is gone rather than larger, and the `wire` refusal was a
 >   guard comparing against the wrong bound. Corrected in the roadmap too, since that is where the
 >   figure was copied from.
-> - **Source types.** Type rejection reaches only literal, direct occurrences, because no stage
->   computes source types and `parse.kel` says so in its own comment. That is a missing pipeline
->   capability rather than a missing rule.
+> - **Source types.** ~~Type rejection reaches only literal, direct occurrences~~ — **THIS WAS TRUE
+>   WHEN WRITTEN AND IS NOW FALSE, which is exactly what a stale handoff does.** Resolution reaches
+>   declared names, literal initialisers, one alias hop, a bounded fixpoint over operator
+>   expressions, field reads through three base forms, and enum payload bindings. The rules
+>   themselves are censused against the syntactic forms they govern. What is NOT self-hosted is the
+>   EXTRACTION: the tables are still built by Rust walking the reference parser's syntax tree. That
+>   remains a missing pipeline capability rather than a missing rule, and it is the accurate version
+>   of this bullet.
 >
 > The roadmap also carries FOUR OPEN DECISIONS OF ITS OWN -- cryptography locus, meta-circular
 > bound composition, version granularity, reference retirement -- and they are a different four.
