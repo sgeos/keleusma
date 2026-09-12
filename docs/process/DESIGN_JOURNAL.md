@@ -13,6 +13,67 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (sixty-second) — the same argument reaches two more channels, and stops at two others
+
+### WHERE IT REACHES
+
+The distinct-facts argument applies to a channel whose rows are a LIST OF FACTS read by a per-row
+predicate folded into a sticky verdict. Two more qualify:
+
+| channel, on `wire.kel` | rows | distinct |
+|---|---|---|
+| operand pairs | 1,452 | **2** |
+| call sites | 1,730 | 472 |
+
+The operand-pair result is the striking one: the channel carries an actual tag against a required
+tag, and across a 217-kilobyte program there are **two distinct combinations**. Reporting it 1,452
+times was pure repetition.
+
+### WHERE IT STOPS, WHICH IS THE MORE USEFUL HALF
+
+- **`dparams` is ADDRESSED POSITIONALLY.** The arity rule reads `dparams[csite[i]]`: the table is
+  indexed by declaration, not scanned as a list. Deduplicating it would destroy the addressing
+  rather than shrink it.
+- **`dname` is already a set** of distinct declared names. There is nothing to remove.
+
+**Both are one row per declaration, and they are a FLOOR.** `wire.kel` declares 492 functions and
+499 top-level names against caps of 128 — roughly four times the cap remains after every reduction
+of this kind, and no further cleverness removes it.
+
+**That number is worth more than another percentage**, because it is the part a capacity decision
+actually has to cover. The reductions have taken the price from 7.3x to 2.7x; what is left is mostly
+not compressible.
+
+### BINDINGS DELIBERATELY LEFT ALONE
+
+The binding lookup takes whichever row matches rather than folding a predicate, so duplicates are
+harmless — but two rows for ONE name that DIFFER are meaningful, and the criterion would have to
+distinguish that case. A 34% saving does not justify reasoning about a channel whose lookup is not a
+simple per-row predicate, in an increment already touching two others.
+
+### THE EFFECT
+
+| | before | after |
+|---|---|---|
+| corpus-sized shared data | 24,770 words, 3.3x | 19,862 words, **2.7x** |
+| growth over today | +135 KiB | **+97 KiB** |
+| real sources that fit | 7 of 12 | 7 of 12 |
+| tightest constraint anywhere | `wire` call sites, 14x | `parse` expression nodes, 7x |
+
+**The count of fitting sources did not move**, and that is worth noting rather than glossing: the
+sources that were over were over on SEVERAL channels, so removing one constraint exposes the next.
+`codegen` is now over on two channels rather than four, and `parse` on five rather than six. Progress
+that does not move the headline count is still progress, and a summary that reported only the count
+would have shown nothing.
+
+### THE WHOLE SEQUENCE
+
+Predicted zero would fit. Measured two. Inert-row elision: three. Occurrence deduplication: seven.
+Pair and call-site deduplication: seven, with the price down another third. **Four reductions, every
+one verdict-preserving under a differential, and the price down from +366 KiB to +97 KiB.**
+
+---
+
 ## 2026-09-12 (sixty-first) — the saving the refusal left open, and a measurement that had drifted
 
 ### THE SAVING THE PREVIOUS INCREMENT LEFT OPEN

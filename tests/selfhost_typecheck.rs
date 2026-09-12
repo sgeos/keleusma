@@ -3253,6 +3253,44 @@ fn stage_verdict_withholding_eliding(src: &str, withhold: Option<Channel>, elide
 /// **First-appearance order is preserved.** Order-independence of a sticky
 /// disjunction is a SECOND assumption, and not needing it is cheaper than arguing
 /// it.
+fn dedup_rows<T: Copy + Ord>(rows: &[T]) -> Vec<T> {
+    let mut seen: std::collections::BTreeSet<T> = std::collections::BTreeSet::new();
+    let mut kept: Vec<T> = Vec::with_capacity(rows.len());
+    for r in rows {
+        if seen.insert(*r) {
+            kept.push(*r);
+        }
+    }
+    kept
+}
+
+/// **WHICH CHANNELS THE DISTINCT-FACTS ARGUMENT REACHES, AND WHICH IT DOES NOT.**
+///
+/// It reaches a channel whose rows are a LIST OF FACTS consumed by a per-row
+/// predicate folded into a sticky verdict. Three qualify: name occurrences,
+/// operand pairs, and call sites.
+///
+/// # Where it does not reach, which is the more useful half
+///
+/// - **`dparams` is ADDRESSED POSITIONALLY.** The arity rule reads
+///   `dparams[csite[i]]` — the table is indexed by declaration, not scanned as a
+///   list. Deduplicating it would destroy the addressing rather than shrink it.
+/// - **`dname` is already a set** of distinct declared names. There is nothing to
+///   remove.
+///
+/// **Both are one row per declaration, and they are a floor.** `wire.kel` declares
+/// 492 functions and 499 top-level names against caps of 128, so roughly four
+/// times the cap remains after every reduction here, and no further cleverness of
+/// this kind removes it. That number is worth more than another percentage,
+/// because it is the part that a capacity decision actually has to cover.
+///
+/// # Bindings are deliberately left alone
+///
+/// The binding lookup takes whichever row matches rather than folding a predicate,
+/// so duplicates are harmless — but two rows for ONE name that DIFFER are
+/// meaningful, and the criterion would have to distinguish that case. A 34% saving
+/// does not justify reasoning about a channel whose lookup is not a simple per-row
+/// predicate, in the increment that is already touching two others.
 fn dedup_occurrences(rows: &OccurrenceRows) -> OccurrenceRows {
     let (declared, occ, wildcard) = rows;
     let mut seen: std::collections::BTreeSet<(i64, i64, i64)> = std::collections::BTreeSet::new();
@@ -3287,7 +3325,21 @@ fn stage_verdict_full(src: &str, withhold: Option<Channel>, elide: bool, dedup: 
             bindings.push((id, idx, 2));
         }
     }
-    let (dparams, sites, arg_pairs) = decl_call_rows(&ast);
+    let (dparams, sites_raw, pairs_raw) = decl_call_rows(&ast);
+    // THE SAME DISTINCT-FACTS ARGUMENT as the occurrence channel: both are lists of
+    // facts read by a per-row predicate folded into a sticky verdict. `dparams` is
+    // NOT deduplicated and must not be -- the arity rule addresses it by
+    // declaration index.
+    let sites = if dedup {
+        dedup_rows(&sites_raw)
+    } else {
+        sites_raw
+    };
+    let arg_pairs = if dedup {
+        dedup_rows(&pairs_raw)
+    } else {
+        pairs_raw
+    };
     let sets = field_sets(&ast);
     let occ = {
         let raw = occurrence_rows(&ast);
@@ -4271,7 +4323,9 @@ fn real_source_channel_rows(ast: &keleusma::ast::Program) -> Vec<(&'static str, 
             bindings.push((id, idx, 2));
         }
     }
-    let (dparams, sites, arg_pairs) = decl_call_rows(ast);
+    let (dparams, sites_raw, pairs_raw) = decl_call_rows(ast);
+    let sites = dedup_rows(&sites_raw);
+    let arg_pairs = dedup_rows(&pairs_raw);
     let (sfirst, _scount, sfield, accesses, _ftag) = field_sets(ast);
     // **THE SAME REDUCTIONS THE DRIVER APPLIES, and the first version of this
     // function applied neither.** It called the raw walks, so the capacity result
@@ -4321,6 +4375,13 @@ fn real_source_channel_rows(ast: &keleusma::ast::Program) -> Vec<(&'static str, 
 /// identical rows contribute identically. That is the fold's SHAPE, not a rule's
 /// answer — but it is a reliance on the stage, and calling the saving free would
 /// be the same overclaiming the refused case was rejected for.
+///
+/// # Three channels, not one
+///
+/// The same argument reaches the operand-pair and call-site channels, which are
+/// also lists of facts read by a per-row predicate. For `wire.kel` the pairs go
+/// from 1,452 rows to **2** and the call sites from 1,730 to 472. This test covers
+/// all three, since they share one criterion and one risk.
 ///
 /// # Both halves, because a differential with one verdict proves half a thing
 ///
@@ -4385,6 +4446,28 @@ fn deduplicating_occurrence_rows_changes_no_verdict() {
             "an imported native called by path",
             "use audio::midi_to_freq\nfn main() -> Float { audio::midi_to_freq(69) }",
         ),
+        // THE CALL-SITE AND OPERAND-PAIR CHANNELS, whose rules deduplication could
+        // disturb: an arity mismatch and an argument-type mismatch, each repeated,
+        // and each alongside correct calls to the same function so a dropped copy
+        // would show.
+        (
+            "an arity mismatch repeated",
+            "fn g(a: Word, b: Word) -> Word { a }\n\
+             fn main() -> Word { g(1) + g(1) + g(1) }",
+        ),
+        (
+            "an arity mismatch among correct calls",
+            "fn g(a: Word, b: Word) -> Word { a }\n\
+             fn main() -> Word { g(1, 2) + g(1, 2) + g(1) }",
+        ),
+        (
+            "an argument type mismatch repeated",
+            "fn g(a: Word) -> Word { a }\nfn main() -> Word { g(true) + g(true) }",
+        ),
+        (
+            "correct calls only, repeated",
+            "fn g(a: Word) -> Word { a }\nfn main() -> Word { g(1) + g(1) + g(1) }",
+        ),
     ];
     for (label, src) in MIXED {
         subjects.push(((*label).to_string(), (*src).to_string()));
@@ -4420,15 +4503,27 @@ fn deduplicating_occurrence_rows_changes_no_verdict() {
     let ast = parse(&tokenize(REAL_STAGE_SOURCES[11].1).expect("lex")).expect("parse");
     let raw = occurrence_rows(&ast);
     let deduped = dedup_occurrences(&raw);
+    let (_dp, sites, pairs) = decl_call_rows(&ast);
     assert!(
-        deduped.1.len() < raw.1.len(),
-        "deduplication removed no row from the largest source: {} either way",
-        raw.1.len()
+        deduped.1.len() < raw.1.len()
+            && dedup_rows(&sites).len() < sites.len()
+            && dedup_rows(&pairs).len() < pairs.len(),
+        "deduplication removed no row from one of the three channels on the largest \
+         source, so the assertions above pass while measuring nothing: occurrences \
+         {}, sites {}, pairs {}",
+        raw.1.len(),
+        sites.len(),
+        pairs.len()
     );
     std::eprintln!(
-        "OCCURRENCE DEDUPLICATION on the largest source: {} rows -> {}",
+        "DEDUPLICATION on the largest source: occurrences {} -> {}, call sites {} -> \
+         {}, operand pairs {} -> {}",
         raw.1.len(),
-        deduped.1.len()
+        deduped.1.len(),
+        sites.len(),
+        dedup_rows(&sites).len(),
+        pairs.len(),
+        dedup_rows(&pairs).len()
     );
 }
 
