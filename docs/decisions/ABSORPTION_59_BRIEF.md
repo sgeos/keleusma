@@ -44,3 +44,24 @@ this line does not run.
 
 The merge is in, every clause has an outcome recorded beside it, the ownership boundary is verified
 non-vacuously, and the dismissal of the named risk is recorded with what was read to dismiss it.
+
+---
+
+## ⚠ THE CONFLICT CLAUSE WAS FALSIFIED BEFORE THE MERGE RAN
+
+**Predicted zero conflicting files; `merge-tree` computes ONE — `docs/process/REVERSE_PROMPT.md`.**
+
+Recorded here rather than corrected in place, because the prediction is the artefact and editing it to
+match the outcome would destroy the only thing it was for.
+
+**The cause is this line's own activity, not a surprise about theirs.** The clean tree was computed
+one iteration earlier, when the backlog was four commits and neither line had touched that file since
+absorption 57. Both lines have rewritten it since — this line at the end of the report-guard
+increment, and the other line in the seven commits now incoming.
+
+**The prediction was stale, not mistaken**, which is a distinction without much comfort: it was
+carried forward from a measurement taken against a different backlog, and the current one was printed
+by the same command that wrote the brief. **A prediction is only as current as the tree it was
+computed against**, and nothing marked it with the backlog it belonged to.
+
+The other three clauses stand as written and are measured below.
