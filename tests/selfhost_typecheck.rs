@@ -4268,21 +4268,31 @@ fn every_known_gap_is_refused_by_the_self_hosted_compiler() {
 /// a value, the reference records an occurrence and the pipeline records none.
 /// Only the `for` case was pinned; the other two were not recorded anywhere.
 ///
-/// # SAFE BY OMISSION IS NOT SAFE BY CORRECTNESS
+/// # THE RISK THIS COMMENT USED TO STATE WAS WRONG, AND READING THE CODE SHOWED IT
 ///
-/// Omitting an occurrence is the ACCEPTING direction for the classification rule,
-/// so the pipeline does not currently reject these programs. **But the reason it
-/// is safe is that it reports nothing, not that it handles them.**
+/// It said the pipeline is "safe by omission, not by correctness" — that if it
+/// began reporting these binders without also collecting them as locals, it would
+/// reproduce the reference side's false rejections exactly. **It was flagged as
+/// unverified, and verifying it dismissed it.**
 ///
-/// The reference side's three false rejections were precisely: the name arrived as
-/// an occurrence while the local set did not contain it. **If the pipeline began
-/// reporting these binders without also collecting them as locals, it would
-/// reproduce that defect exactly** — and the increment that widened it would look
-/// like a gap closing.
+/// `occurrence_rows_from_pipeline` has **no separate locals set**. It builds a
+/// SLOT-to-name map from parameters and `let` bindings, and a local-read node
+/// emits `(name, local = 1, call = 0)` — unconditionally local — **only when the
+/// slot has a name.** An unnamed slot produces NO ROW, never a row with
+/// `local = 0`.
 ///
-/// **This is a stated risk, not a verified one**: the pipeline's own local-set
-/// handling has not been inspected here. What is checkable is the divergence, and
-/// that is what the assertion holds.
+/// So the condition behind the reference-side defect — an occurrence present while
+/// the locals set lacks it — **is not expressible here.** Reporting and collecting
+/// are the same lookup rather than two walks that can disagree. The pipeline is
+/// safe by CONSTRUCTION for this class.
+///
+/// **The divergence below is still real and still pinned.** What was wrong was the
+/// account of why it matters, and it was wrong in the direction of alarm — which is
+/// the safer direction to be wrong in, and still worth correcting.
+///
+/// The `local = 0` rows come only from the CALL branch, where locality is decided
+/// by whether the callee names a slot. That is the intended rule rather than an
+/// inconsistency.
 ///
 /// # A fifth parser gap, found by the same comparison
 ///
@@ -7829,10 +7839,22 @@ fn the_condition_rows_agree_between_the_pipeline_and_the_reference() {
 /// that has none in the source. The pipeline therefore cannot tell a synthesised arm from a
 /// written one, while the reference contributes a pair row **only** when `else_block` is present.
 ///
-/// # Why the safe-looking heuristic was rejected
+/// # No heuristic can work, and this is now established rather than suspected
 ///
-/// The synthesised arm yields the UNIT tag, and a real statement-only else yields UNKNOWN, so the
-/// tag appears to separate them. **It could not be shown safe**, and the stakes are asymmetric:
+/// This section used to argue that the synthesised arm yields the UNIT tag while a real
+/// statement-only else yields UNKNOWN, so the tag *appears* to separate them, and that the
+/// separation **could not be shown safe**. That was a hedge, and checking it replaced it with
+/// something stronger.
+///
+/// `an_empty_else_is_indistinguishable_from_an_implicit_one` in `tests/selfhost_parse.rs`
+/// establishes that a written `else { }` and an implicit arm produce **the same parse record
+/// stream**, while the reference separates them (its criterion, `else_block.is_some()`, counts
+/// the written empty else and not the implicit arm). **The distinguishing information never
+/// reaches this side.** A heuristic can only read what the stream carries, so the question of
+/// which tag a case yields is moot: the two sources are already identical before any tag exists.
+///
+/// The stakes remain asymmetric, which is why the withholding is the right response rather than
+/// a guess in either direction:
 ///
 /// - a SPURIOUS pair row feeds `ty_node_bad`'s equality branch and can make the stage **reject a
 ///   correct program**;
@@ -9064,4 +9086,196 @@ fn sizing_how_far_declaration_lookup_reaches_a_field_read() {
         "declaration lookup typed EVERY case, so this corpus no longer contains \
          the edge and needs harder cases before it can size anything"
     );
+}
+
+/// **A BODY WITH NO TAIL EXPRESSION CONTRIBUTES NO DECLARED-VERSUS-ACTUAL ROW.**
+///
+/// `expression_nodes_over` appends a kind-8 row per function by pairing the body's tail
+/// expression against the declared return type, and it does so **only when a tail is
+/// present**. That guard is correct today. It is pinned here because the failure it
+/// prevents is in the FALSE-REJECTION direction, the same direction as the three binder
+/// defects already fixed on this side: a row manufactured for a body that ends in a
+/// statement would feed `ty_node_bad` a comparison the source never wrote.
+///
+/// # Why the unit-returning form is the witness
+///
+/// Keleusma has no early return and a return type is mandatory, so a tail-less body is
+/// not reachable by omitting either. `fn f() -> () { .. }` is the shape that produces one,
+/// established here rather than assumed: the first assertion reads tail presence straight
+/// off the syntax tree.
+///
+/// # The control is inside the source
+///
+/// Each source declares `main` with a tail expression, so the expected count is ONE rather
+/// than zero. **A test expecting zero could pass by extracting nothing at all**, which is
+/// the failure mode this suite has paid for before. The second source is the same program
+/// with `f` given a tail, and it must yield TWO.
+///
+/// # Mutation-tested
+///
+/// Replacing the guard with an unconditional push that substitutes a default operand form
+/// for the absent tail fails this test on the one-row assertion, with the message that
+/// assertion carries. **A guard-pin never observed to fail is not evidence about the
+/// guard**, and this one has been observed to fail.
+#[cfg(feature = "self-host")]
+#[test]
+fn a_body_without_a_tail_expression_contributes_no_declared_versus_actual_row() {
+    const DECLARED_VS_ACTUAL: i64 = 8;
+
+    // `f` ends in a statement; `main` ends in an expression.
+    const TAILLESS: &str = "private data d { q: Word }\n\
+                            fn f() -> () { d.q = 1; }\n\
+                            fn main() -> Word { 0 }";
+    // The same program with `f` given a tail, so the difference is the tail and nothing else.
+    const TAILED: &str = "private data d { q: Word }\n\
+                          fn f() -> Word { d.q = 1; d.q }\n\
+                          fn main() -> Word { 0 }";
+
+    let measure = |src: &str| -> (Vec<bool>, usize, bool) {
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+        let tails: Vec<bool> = ast
+            .functions
+            .iter()
+            .map(|f| f.body.tail_expr.is_some())
+            .collect();
+        let (names, _) = binding_rows(&ast);
+        let (nodes, _) = expression_nodes_and_derived(&ast, &names);
+        let rows = nodes.iter().filter(|r| r.0 == DECLARED_VS_ACTUAL).count();
+        (tails, rows, keleusma::compiler::compile(&ast).is_ok())
+    };
+
+    let (tailless_tails, tailless_rows, tailless_compiles) = measure(TAILLESS);
+    let (tailed_tails, tailed_rows, tailed_compiles) = measure(TAILED);
+
+    // NON-VACUITY: both shapes must be real programs, or the counts below describe
+    // sources no reader could write.
+    assert!(
+        tailless_compiles && tailed_compiles,
+        "the reference no longer compiles one of these shapes (tail-less {tailless_compiles}, \
+         tailed {tailed_compiles}), so this witness is not about programs"
+    );
+
+    // The premise, read off the syntax tree rather than assumed from the spelling.
+    assert_eq!(
+        tailless_tails,
+        vec![false, true],
+        "the tail-less source no longer has exactly one tail-less function followed by a \
+         tailed one, so the row counts below are measuring a different program"
+    );
+    assert_eq!(
+        tailed_tails,
+        vec![true, true],
+        "the tailed source no longer gives both functions a tail expression"
+    );
+
+    // THE PIN. One row, from `main` alone.
+    assert_eq!(
+        tailless_rows, 1,
+        "a function whose body ends in a statement now contributes a declared-versus-actual \
+         row. That comparison has no tail expression behind it, so it can only reject a \
+         correct program; if a row here is deliberate, the tag it carries needs a stated \
+         meaning before this expectation is relaxed"
+    );
+
+    // THE CONTROL. Giving `f` a tail adds exactly one row, so the count above is not
+    // an artefact of extracting nothing.
+    assert_eq!(
+        tailed_rows, 2,
+        "giving the second function a tail expression no longer adds a declared-versus-actual \
+         row, so the count asserted above cannot be attributed to the missing tail"
+    );
+}
+
+/// **EVERY GAP REFUSAL NAMES THE CONSTRUCT THE USER WROTE.**
+///
+/// `every_known_gap_is_refused_by_the_self_hosted_compiler` establishes that the four gaps
+/// return `Err` rather than a module or a panic. It discards the error, so for as long as it
+/// stood alone **nothing checked what the refusal SAID.**
+///
+/// Measured on 2026-09-12, before this test existed, all four said only that
+/// `reconstruct.kel` popped an empty work stack or left a record range unreduced, with a
+/// note about `reconstruct_range` reading slot zero. Two distinct internal failure modes,
+/// neither mentioning the `v =>`, the `P { x }`, the `assert` or the `audio::` that caused
+/// it. **A user cannot act on a work-stack underflow.**
+///
+/// # Both halves are asserted
+///
+/// The construct name is for the user; the stage detail is for whoever maintains the stage.
+/// Dropping either is a regression, so each is checked: a message that named the construct
+/// and discarded the stage's own report would pass a weaker version of this test while
+/// making the stage harder to debug.
+///
+/// # What this does NOT establish
+///
+/// That the named construct is the true cause. The name comes from a source scan run on the
+/// failure path, not from the stage, so it reports what the program CONTAINS rather than
+/// what the stage tripped over. For these four they coincide, which is what makes them
+/// usable as a corpus; a program carrying two unsupported constructs would be named for the
+/// earlier one regardless of which stopped the pipeline.
+#[cfg(feature = "self-host")]
+#[test]
+fn every_gap_refusal_names_the_construct() {
+    // (label, source, the phrase a user needs to see)
+    const GAPS: &[(&str, &str, &str)] = &[
+        (
+            "variable pattern",
+            "fn main(a: Word) -> Word { match a { v => v } }",
+            "variable pattern `v`",
+        ),
+        (
+            "struct destructuring",
+            "struct P { x: Word }\nfn main(p: P) -> Word { match p { P { x } => x, _ => 0 } }",
+            "struct destructuring pattern `P { .. }`",
+        ),
+        (
+            "assert",
+            "fn main(a: Word) -> Word { assert a > 0; a }",
+            "`assert` statement",
+        ),
+        (
+            "qualified call",
+            "use audio::midi_to_freq\nfn main() -> Float { audio::midi_to_freq(69) }",
+            "qualified call `audio::midi_to_freq`",
+        ),
+    ];
+
+    let target = keleusma::target::Target::host();
+
+    for (gap, src, phrase) in GAPS {
+        let err = keleusma::selfhost::self_hosted_compile(src, &target).expect_err(
+            "this gap no longer refuses. If the subset genuinely gained the construct, \
+             remove it from this corpus and from the gap list rather than relaxing the \
+             assertion",
+        );
+        let text = alloc_string(&err);
+
+        assert!(
+            text.contains(phrase),
+            "{gap}: the refusal does not name the construct. A user sees only the stage's \
+             internal diagnostic and cannot tell which part of their program to change. \
+             Message was: {text}"
+        );
+        assert!(
+            text.contains("reconstruct.kel"),
+            "{gap}: the refusal no longer carries the stage's own report. The construct name \
+             serves the user and the stage detail serves whoever maintains the stage; losing \
+             the second half is a regression even though the first half improved. \
+             Message was: {text}"
+        );
+    }
+
+    // NON-VACUITY: an ordinary program must still compile, or "every refusal names a
+    // construct" would hold because everything is refused.
+    const ORDINARY: &str = "fn main(a: Word) -> Word { a + 1 }";
+    assert!(
+        keleusma::selfhost::self_hosted_compile(ORDINARY, &target).is_ok(),
+        "an ordinary program no longer compiles through the self-hosted pipeline, so the \
+         refusals above say nothing about the gaps in particular"
+    );
+}
+
+/// Render an error through its `Display`, which is what a CLI user sees.
+#[cfg(feature = "self-host")]
+fn alloc_string(e: &keleusma::selfhost::SelfHostError) -> String {
+    format!("{e}")
 }

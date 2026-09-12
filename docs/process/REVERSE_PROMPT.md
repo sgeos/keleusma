@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
-**2026-09-12, session 65, through the seventy-eighth increment.**
+**2026-09-12, session 65, through the eighty-first increment.**
 
 **Where the work is.** The type-rejection input path now carries **ten of twelve** real `.kel` stage
 sources, up from two, at **1.6x** the shared data it uses today rather than 7.3x — a growth of
@@ -31,8 +31,19 @@ documents — was a missing branch and **is fixed**.
 through the pipeline byte-identically, so no stage can contain a construct the pipeline cannot
 parse. Each gap blocks a USER program, not the stages.
 
-**All four fail by producing a malformed record stream rather than a refusal naming the
-construct**, and a total language's front end should refuse what it cannot handle.
+**All four used to fail by producing a malformed record stream rather than a refusal naming the
+construct. THAT IS FIXED.** Measured first: every one reported only a `reconstruct.kel` work-stack
+underflow or an unreduced record range, with a note about `reconstruct_range` reading slot zero —
+text addressed to a stage author, never mentioning the `v =>`, the `P { x }`, the `assert` or the
+`audio::` the user wrote. The driver now names the construct and the line, and keeps the stage's own
+report after it, since the two halves serve different readers.
+
+**The naming runs only on the failure path, so it cannot cause a false rejection** — it changes what
+a refusal says and never whether one happens. It is Rust-side, so it is CAPACITY-NEUTRAL: no stage
+source was touched and the pinned worst-case blob does not move. A guard asserts the scan names
+nothing in any of the eleven driver-read stage sources, which all compile through the subset; it is
+mutation-tested, and asserts each source parses first, since an unparseable source would make the
+scan return nothing for an unrelated reason.
 
 **MEASURED SINCE, ON THE PATH THAT MATTERS: all four are refused with an `Err` by
 `self_hosted_compile`, the entry point behind `--compiler self-hosted`, and an ordinary program
@@ -47,10 +58,30 @@ gaps surface there as panics; **that is not what a user meets**, and reasoning a
 from the harness measured the wrong thing.
 
 **The pipeline also diverges from the reference on three binder forms** — a `for` variable, a match
-payload binding, a const parameter used as a value — where it reports no occurrence at all. That is
-the ACCEPTING direction, so nothing is currently rejected, but **it is safe by omission rather than
-by correctness**: were it to report them without also collecting them as locals, it would reproduce
-the false rejection already fixed on the reference side. Pinned, and bounded to that one channel.
+payload binding, a const parameter used as a value — where it reports no occurrence at all. Pinned,
+and bounded to that one channel.
+
+**A risk stated here about that divergence has been checked and DISMISSED.** It claimed the pipeline
+is safe only by omission, and would reproduce the reference side's false rejections if it began
+reporting those binders. It has no separate locals set: a local read emits `local = 1`
+unconditionally and only when the slot has a name, so an occurrence-present-but-not-local condition
+is not expressible. Reporting and collecting are one lookup, not two walks that can disagree.
+
+**A second hedge was replaced by a stronger fact.** The comment explaining why the branch-pair row
+is withheld said a tag-based heuristic "could not be shown safe". It cannot work at all: a written
+`else { }` and an implicit arm produce the SAME parse record stream, while the reference separates
+them (one pair row against zero, measured). The distinguishing information never reaches this side,
+so the question of which tag a case yields is moot. Witnessed in `tests/selfhost_parse.rs`.
+
+**A census of the reference syntax tree's eighteen optional fields found no second instance of that
+class in an active channel.** The node rows are extracted from the reference tree, which reads the
+optionality directly; only pipeline-derived channels are exposed to it. That is a negative result,
+recorded rather than tested.
+
+**One guard the census did find worth pinning is now pinned and mutation-tested**: a body with no
+tail expression must contribute no declared-versus-actual row, since manufacturing one is a
+comparison the source never wrote and therefore a false rejection. Unguarding the extraction fails
+the pin; reverting is green.
 
 **Before trusting any green run**, read *"How a green local run has actually lied"* in
 [`CLAUDE.md`](../../CLAUDE.md): six observed ways a verification run reported success while covering

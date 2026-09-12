@@ -13,6 +13,164 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (eighty-second) — reading the refusal a user actually receives
+
+### THE TEST PROVED THE REFUSAL HAPPENED AND DISCARDED WHAT IT SAID
+
+`every_known_gap_is_refused_by_the_self_hosted_compiler` matches `Ok(Err(_)) => {}`. It establishes
+that each of the four gaps returns an error rather than a module or a panic, which was the important
+property and is why it was written. But the underscore means **no test had ever read the message**,
+and the current-state block carried a claim about what those messages look like.
+
+Reading them took one probe. All four led with the outer wrapper, which does say the compiler does
+not support the program, and then gave a `reconstruct.kel` work-stack underflow or an unreduced
+record range, plus a note about `reconstruct_range` having once read slot zero unconditionally. Two
+distinct internal failure modes, not one: the variable pattern and the struct destructuring
+underflow, while `assert` and the qualified call leave two and three nodes unreduced respectively.
+**Not one of them mentions the construct the user wrote.** A user cannot act on a work-stack
+underflow.
+
+The tracked claim turned out to be ACCURATE, which is worth stating plainly. The measurement was
+still the right move: it was accurate by luck of phrasing rather than by anything checked, and the
+same sentence would have read the same way had it been wrong.
+
+### WHY THIS WAS AVAILABLE WHEN THE GAP WORK WAS NOT
+
+The previous increment concluded that the gap feature work should not start, because all three
+parser gaps grow `parse.kel`, which needs about 192 against caps of 128, and the capacity question
+is the operator's. That conclusion stands. Re-reading the earlier retraction showed it was narrower
+than the conclusion drawn from it: the retracted cost estimate was about adding a REFUSAL CHANNEL TO
+`parse.kel`, a stage-source change. The driver is Rust, and a message improvement there has no blob
+size and no capacity consequence at all.
+
+### THE DESIGN THAT CANNOT MISFIRE
+
+The obvious shape is a pre-check that refuses a listed construct before running the pipeline. That
+shape can refuse a program the subset actually handles, if the list is ever wrong.
+
+The shape adopted instead runs the scan ONLY after a compile has already failed. It changes what a
+refusal says and never whether one happens, so a wrongly listed construct costs a misleading noun in
+a message that was going to be emitted anyway. That is a bounded and recoverable cost, where a false
+rejection is neither.
+
+Two things were measured rather than assumed on the way. Enum construction does NOT parse as a call
+expression, so `::` in a call name is a sound qualified-call signal rather than a trap that would
+have blamed every variant literal in the tree. And a tuple pattern is deliberately ABSENT from the
+list, because its support was never measured and guessing would attach a confident noun to a failure
+that may have nothing to do with it.
+
+### THE GUARD, AND THE VACUITY TRAP IT NEARLY FELL INTO
+
+Every stage source compiles through the subset byte-identically, so the scan must name nothing in
+any of them; a hit means the list has acquired a construct the subset supports.
+
+The scan returns nothing when a source does not parse. **A test that only asserted "names nothing"
+would therefore pass if every stage source failed to tokenize.** Parsing is asserted first, per
+source, before the absence is read as evidence.
+
+Mutation-tested in both directions: adding the supported enum pattern to the list fails the guard
+with a precise attribution, naming `parse.kel` and the first occurrence; and a separate test
+establishes the scan finds something when something is there, so a clean result is not a scan that
+never reports anything.
+
+### FRONTIER
+
+Unchanged in substance. The remaining gap work is scoped feature work that grows `parse.kel` and so
+waits on the capacity decision, and five operator decisions are still blocked. What this increment
+shows is that "blocked" was slightly too broad: the user-facing half of the gap story was reachable
+without touching a stage source at all.
+
+---
+
+## 2026-09-12 (eighty-first) — three claims checked, two of them mine and wrong
+
+### THE PATTERN IS THE FINDING
+
+Six times this session a claim standing in the tree fell to reading or running the component it
+described, and each time the component was one call or one grep away. The individual corrections
+matter less than the rate. Three more landed here.
+
+### THE RISK THAT WAS ONLY EVER STATED
+
+A comment on the binder-divergence pin said the pipeline is safe by omission rather than by
+correctness: that were it to report the three diverging binder forms without also collecting them
+as locals, it would reproduce the false rejection already fixed on the reference side. It said in
+the same breath that this was unverified, because the pipeline's own local handling had not been
+inspected. Inspecting it took one command and dismissed it.
+
+`occurrence_rows_from_pipeline` has no separate locals set that could drift out of step with an
+occurrence list. It builds a slot-to-name map from parameters and `let` bindings; a local-read node
+emits the local flag SET, unconditionally, and only when the slot carries a name. An unnamed slot
+yields no row at all rather than a row with the flag clear. The condition behind the reference-side
+defect is therefore not expressible here: reporting and collecting are one lookup, not two walks
+that can disagree.
+
+The divergence is unchanged and still pinned. What was wrong was the account of why it mattered,
+and it was wrong in the direction of alarm, which is the safer direction and still worth fixing.
+
+### A HEDGE THAT WAS COVERING AN IMPOSSIBILITY
+
+The comment explaining why the branch-pair row is withheld argued that the synthesised else arm
+yields the UNIT tag while a real statement-only else yields UNKNOWN, so the tag *appears* to
+separate them, and that this **could not be shown safe**. Checking it replaced the hedge with
+something stronger and simpler.
+
+A written empty else and an implicit arm produce the SAME parse record stream. The reference
+separates them, its criterion being `else_block.is_some()`, measured as one against zero rather
+than assumed. The distinguishing information never reaches the pipeline, and a heuristic can only
+read what the stream carries. Which tag a case yields is moot, because the two sources are already
+identical before any tag is computed. The witness first establishes that the empty else compiles
+under the reference at all, so the comparison is about a shape a real source can contain.
+
+Its stream-equality assertion names the opposite conclusion too: were the parse stage to start
+distinguishing the two, the row might become implementable and the withholding should be revisited.
+
+### THE CLASS CENSUS, AND ITS BOUNDED NEGATIVE
+
+The hazard behind that finding is a walk that synthesises an optional syntactic element, so the
+specified list to census is the reference syntax tree's optional fields. There are eighteen. **No
+second instance reaches an active channel.** The node rows are extracted from the reference tree,
+which reads the optionality directly; only the pipeline-derived channels are exposed. The retired
+closure surface accounts for one of the optional return types and is not a live concern.
+
+That is a negative result and it earns a sentence, not a test. There is no divergence to pin.
+
+### THE GUARD THE CENSUS DID FIND WORTH PINNING
+
+`expression_nodes_over` appends a declared-versus-actual row only when the body has a tail
+expression. The guard is correct and was unpinned, and the failure it prevents is in the
+FALSE-REJECTION direction: a row manufactured for a body ending in a statement is a comparison the
+source never wrote.
+
+Getting a witness required measurement rather than recall. Keleusma has no early return and a
+return type is mandatory, so a tail-less body is not reachable by omitting either; `Unit` and
+`Void` parse as named types and then fail to compile, so neither is a witness; the unit-returning
+parenthesised form is. The expected count is ONE and not zero, because each source also declares a
+function that does have a tail — a test expecting zero could pass by extracting nothing, which this
+suite has paid for before.
+
+**The pin was mutation-tested.** Replacing the guard with an unconditional push that substitutes a
+default operand form fails the one-row assertion with its own message, and reverting is green. A
+guard-pin never observed to fail is not evidence about the guard.
+
+### TWO BOOKKEEPING ERRORS CAUGHT BY RE-DERIVING
+
+The `selfhost_parse` suite is 91 tests, not the 88 carried in working memory. The figure was
+re-derived from a full unfiltered run before anything was written down, which is the only reason it
+did not become another stale number in a tracked file. Separately, a doc-comment edit aborted
+cleanly on text `cargo fmt` had reflowed, leaving the file untouched while a suite ran against it —
+the abort-before-write discipline working as intended.
+
+### FRONTIER
+
+The small-increment vein here is close to exhausted. The hedge-vocabulary census over the test and
+stage sources returns mostly honest epistemic statements rather than unchecked claims, and the
+optional-field census returned a bounded negative. What remains in this area is the four open
+self-hosted gaps, which are scoped feature work, and five operator decisions that no amount of
+self-directed work can resolve.
+
+---
+
 ## 2026-09-12 (eightieth) — the question that should have come first
 
 ### FOUR INCREMENTS ABOUT REFUSAL QUALITY, NONE ABOUT WHETHER THEY REFUSE

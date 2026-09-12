@@ -7468,6 +7468,94 @@ pub fn wire_windowed_via_kel(
     })
 }
 
+/// Name the earliest known-unsupported construct in `src`, for a refusal message.
+///
+/// # Why this runs only on the failure path
+///
+/// **A scan that decided admission could refuse a program the subset actually handles.**
+/// This one cannot, because it is consulted only after the pipeline has already failed: it
+/// changes what a refusal SAYS and never whether one happens. A construct wrongly listed
+/// here therefore costs a misleading noun in a message that was going to be emitted
+/// anyway, not a working compile.
+///
+/// # Why a name is worth adding at all
+///
+/// Measured on 2026-09-12, the four known gaps reported a `reconstruct.kel` work-stack
+/// underflow or an unreduced record range, with a note about `reconstruct_range` reading
+/// slot zero. That text is addressed to someone debugging the stage. It never mentions the
+/// `v =>`, the `P { x }`, the `assert` or the `audio::` the user wrote, so a user cannot
+/// act on it. The stage's own detail is retained after the name, because it is the part a
+/// stage author needs.
+///
+/// # What is deliberately not listed
+///
+/// Only constructs OBSERVED to be outside the subset are named. A tuple pattern, for one,
+/// is absent because its support was never measured, and guessing would attach a confident
+/// noun to a failure that may have nothing to do with it.
+///
+/// Returns the description and the 1-based source line, choosing the earliest occurrence so
+/// the message is deterministic when a program contains several.
+fn name_unsupported_construct(src: &str) -> Option<(String, u32)> {
+    use crate::ast::{Expr, Pattern, Stmt};
+    use crate::visitor::Visitor;
+
+    // The reference has already accepted this source by the time a refusal is built, so a
+    // failure here is not expected; returning `None` degrades to the stage's own detail.
+    let program = parse(&tokenize(src).ok()?).ok()?;
+
+    struct Scan {
+        /// `(line, start, description)`, earliest wins.
+        found: Vec<(u32, usize, String)>,
+    }
+    impl Visitor for Scan {
+        fn visit_expr(&mut self, e: &Expr) {
+            match e {
+                Expr::Match { arms, .. } => {
+                    for arm in arms {
+                        let named = match &arm.pattern {
+                            Pattern::Variable(n, s) => {
+                                Some((s, format!("a variable pattern `{n}` in a match arm")))
+                            }
+                            Pattern::Struct(n, _, s) => {
+                                Some((s, format!("a struct destructuring pattern `{n} {{ .. }}`")))
+                            }
+                            _ => None,
+                        };
+                        if let Some((span, what)) = named {
+                            self.found.push((span.line, span.start, what));
+                        }
+                    }
+                }
+                // A qualified call carries the path in its name. Enum construction does NOT
+                // reach this arm, measured 2026-09-12, so `::` here is not a variant literal.
+                Expr::Call { name, span, .. } if name.contains("::") => {
+                    self.found
+                        .push((span.line, span.start, format!("a qualified call `{name}`")));
+                }
+                _ => {}
+            }
+            self.walk_expr(e);
+        }
+        fn visit_stmt(&mut self, s: &Stmt) {
+            if let Stmt::Assert { span, .. } = s {
+                self.found
+                    .push((span.line, span.start, "an `assert` statement".to_string()));
+            }
+            self.walk_stmt(s);
+        }
+    }
+
+    let mut scan = Scan { found: Vec::new() };
+    for f in &program.functions {
+        scan.visit_block(&f.body);
+    }
+    scan.found.sort();
+    scan.found
+        .into_iter()
+        .next()
+        .map(|(line, _, what)| (what, line))
+}
+
 /// Compile a whole program with the self-hosted pipeline, returning a self-hosted-built
 /// [`Module`] for an in-subset program at the host target.
 ///
@@ -7518,6 +7606,16 @@ pub fn self_hosted_compile(
             .map(|s| s.to_string())
             .or_else(|| payload.downcast_ref::<String>().cloned())
             .unwrap_or_else(|| "unsupported construct".to_string());
+        // Lead with the construct the user wrote; keep the stage's detail after it, since
+        // that half is what a stage author needs. See `name_unsupported_construct` for why
+        // naming on the failure path cannot cause a false rejection.
+        let detail = match name_unsupported_construct(src) {
+            Some((what, line)) => format!(
+                "{what} at line {line} is outside the self-hosted \
+                 subset. The stage reported: {detail}"
+            ),
+            None => detail,
+        };
         SelfHostError::Unsupported { detail }
     })?;
     // Correctness cross-check: the self-hosted compiled code (each chunk's ops, constant
@@ -7911,6 +8009,88 @@ mod typecheck_input_feasibility {
             "the stage emits binding names under {declared} and the driver diverts \
              {PARSE_LET_NAME_TAG}. A mismatch puts the record into the node stream, \
              where `reconstruct.kel` would meet a tag it has no arm for."
+        );
+    }
+}
+
+#[cfg(test)]
+mod construct_naming_guard {
+    use super::{name_unsupported_construct, parse, read_stage, tokenize};
+
+    /// The eleven stage sources the driver reads. `verify_types.kel` is embedded by its own
+    /// tests rather than by `read_stage`, so it is not reachable here.
+    const STAGES: &[&str] = &[
+        "lexer.kel",
+        "parse.kel",
+        "reconstruct.kel",
+        "codegen.kel",
+        "analyze.kel",
+        "verify_structural.kel",
+        "verify_yield.kel",
+        "verify_depth.kel",
+        "verify_typed.kel",
+        "verify_datalayout.kel",
+        "wire.kel",
+    ];
+
+    /// **THE SCAN MUST NAME NOTHING IN A SOURCE THE SUBSET COMPILES.**
+    ///
+    /// `name_unsupported_construct` lists constructs observed to be outside the self-hosted
+    /// subset. Every stage source compiles through that subset byte-identically, which is
+    /// what self-hosting means, so none of them can contain one. A hit here says the list
+    /// has acquired a construct the subset actually supports.
+    ///
+    /// That would not cause a false rejection — the scan runs only after a compile has
+    /// already failed — but it would attach a confident and wrong noun to an unrelated
+    /// failure, which is worse than the generic message it replaced.
+    ///
+    /// **The vacuity trap is real and is closed below.** The scan returns `None` when the
+    /// source does not parse, so a test that only asserted `None` would pass if every stage
+    /// source failed to tokenize. Parsing is therefore asserted first, per source.
+    ///
+    /// **Mutation-tested.** Adding the supported enum pattern to the list fails this test,
+    /// naming `parse.kel` and the first offending occurrence, and removing it again is
+    /// green. A guard never observed to fail is not evidence about the guard.
+    #[test]
+    fn the_scan_names_no_construct_in_any_stage_source() {
+        for name in STAGES {
+            let src = read_stage(name);
+
+            // NON-VACUITY, per source: a parse failure makes the scan return `None` for a
+            // reason that has nothing to do with the construct list.
+            let tokens = tokenize(&src).unwrap_or_else(|e| {
+                panic!(
+                    "{name}: no longer tokenizes ({e:?}), so the \
+                     absence of a named construct below would prove nothing"
+                )
+            });
+            parse(&tokens).unwrap_or_else(|e| {
+                panic!(
+                    "{name}: no longer parses ({e:?}), so \
+                 the absence of a named construct below would prove nothing"
+                )
+            });
+
+            assert!(
+                name_unsupported_construct(&src).is_none(),
+                "{name}: the scan names {:?} in a stage source. Every stage source compiles \
+                 through the self-hosted subset, so the construct list has gained something \
+                 the subset supports. Remove it from the list rather than excluding this \
+                 source",
+                name_unsupported_construct(&src)
+            );
+        }
+    }
+
+    /// The guard above is only evidence if the scan can find anything at all.
+    #[test]
+    fn the_scan_finds_a_construct_when_one_is_present() {
+        const WITH_ASSERT: &str = "fn main(a: Word) -> Word { assert a > 0; a }";
+        let found = name_unsupported_construct(WITH_ASSERT);
+        assert!(
+            found.is_some(),
+            "the scan finds nothing in a program that contains an `assert`, so the clean \
+             result over the stage sources is about a scan that never reports anything"
         );
     }
 }
