@@ -13,6 +13,139 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (eightieth) — the question that should have come first
+
+### FOUR INCREMENTS ABOUT REFUSAL QUALITY, NONE ABOUT WHETHER THEY REFUSE
+
+Several increments discussed the four self-hosted gaps: whether their messages name the construct,
+whether refusing is cheaper than implementing, what a refusal channel would cost. **None established
+that they refuse at all.**
+
+That is the only part bearing on correctness. A construct outside the subset must be REFUSED, never
+silently mis-compiled. Everything else is ergonomics.
+
+### AND THE MEASUREMENT HAD TO BE ON THE RIGHT ENTRY POINT
+
+The censuses drive `occurrence_rows_from_pipeline`, a test harness that unwraps, so a gap surfaces
+there as a PANIC. **That is not what a user meets.** The path behind `--compiler self-hosted` is
+`self_hosted_compile`, and every claim I had made about refusal behaviour came from the harness.
+
+**Reasoning about the product from the harness is the scope error this file records against itself
+several times over**, and I made it four increments running without noticing, because the harness's
+behaviour was consistent and plausible.
+
+### THE RESULT
+
+All four gaps return **`Err`** from `self_hosted_compile` — a proper error, not a panic and not a
+module — and an ordinary program still compiles.
+
+**The subset is SAFE at the boundary that matters.** Nothing on the gap list mis-compiles. The
+remaining obligation is message quality, not soundness.
+
+### THE THIRD REFRAMING, AND THE FIRST FROM A MEASUREMENT
+
+This obligation has now been described three ways: "implement four constructs", then "refuse
+cleanly, which is smaller" (retracted as unverified), and now "improve four messages, the safety
+property already holding". **Only the third rests on running the thing rather than reading around
+it.**
+
+The pin asserts what was measured and disclaims the rest: not that the messages are good — several
+name a work-stack underflow rather than a construct — and not that the gap list is complete, only
+that nothing on it compiles to something wrong.
+
+### THE RULE
+
+**Establish the safety property before debating the ergonomics of the failure.** Four increments of
+discussion rested on an assumption that took one test to check, and the test could have been written
+the moment the first gap was found.
+
+---
+
+## 2026-09-12 (seventy-ninth) — a cost estimate I stated as settled, retracted
+
+### THE CLAIM
+
+Two increments ago I established something true — no gap found by these censuses can block the
+stages from self-compiling, because all twelve compile byte-identically — and then attached a cost
+estimate to it that I did not check:
+
+> the remaining obligation is "make the front end refuse cleanly", separate from and considerably
+> smaller than implementing these four constructs.
+
+**That went into a merged pull request description and into the reverse prompt's current-state
+block.** Both now carry the retraction.
+
+### WHAT CHECKING SHOWED
+
+**`parse.kel` has no refusal channel.** Its output vocabulary is 54 node kinds plus `DONE`, and not
+one of them is an error, refusal, or unsupported marker — enumerated, not assumed.
+
+So a construct the parser cannot handle **cannot be named by it**. It can only mis-parse or spin,
+which is precisely what all four gaps do. Refusing cleanly means adding a refusal record kind and
+teaching the driver and every consumer to read it: **more components than implementing a construct
+touches, not fewer.**
+
+### THE SHAPE OF THE ERROR
+
+The finding it rode on was verified and remains true. **The cost estimate was a plausible inference
+from it, stated in the same breath and in the same confident register.** That is what made it
+dangerous: a reader has no way to tell which half was measured.
+
+One branch of the fix even looked cheap in isolation — at match-arm phase 2 an identifier that is
+not an enum name is unambiguously a pattern rather than an end-of-arms, and detecting that is one
+condition. But detection without a channel to report on has nowhere to go, which is the part the
+estimate skipped.
+
+### THE RULE
+
+**A verified finding and an unverified inference drawn from it should not share a sentence.** This
+session has caught several claims that were reasoned about rather than checked; this one is worse
+than those, because its neighbour in the same paragraph WAS checked, and the proximity lent it
+credibility it had not earned.
+
+---
+
+## 2026-09-12 (seventy-eighth) — the cheap-update property held, which is the design being tested
+
+### THE CLAIM THAT NEEDED TESTING
+
+Two increments ago the reverse prompt was restructured around one argument: **a channel that must be
+REWRITTEN rather than appended to will drift, and keeping the current block SHORT is what makes the
+rewrite cheap enough to actually happen.**
+
+That was a prediction. Five increments later the block needed updating — the parser fix landed, a
+fifth gap was found, the gaps were reclassified, and the divergence was bounded.
+
+### THE RESULT
+
+**Twenty lines added, five removed. One edit.**
+
+Before the restructure, updating this channel meant composing a new dated section on top of
+seventeen hundred lines and deciding what of the old was still true. That is the cost that caused it
+to drift ten increments the first time. The current block is short enough that bringing it level is
+an ordinary edit, and the superseded history below the line needed no attention at all because it is
+explicitly not current.
+
+### WHY THIS IS WORTH AN ENTRY
+
+**A process change that is never exercised is a guess.** The previous entry recorded the reasoning;
+this one records that the property it predicted actually held on first use. Had the update turned
+out expensive anyway, that would have been the more important finding and it would belong here just
+as much.
+
+### WHAT THE BLOCK NOW SAYS THAT IT DID NOT
+
+- **Four** parser gaps remain, not three — the qualified call joined them.
+- **None of the four blocks self-hosting**, by the structural argument: all twelve stages compile
+  byte-identically, so no stage can contain a construct the pipeline cannot parse. Each gap blocks a
+  USER program.
+- Therefore the obligation is **"refuse cleanly"** rather than "implement four constructs", since
+  all four fail by producing a malformed record stream instead of naming what they cannot handle.
+- The pipeline diverges from the reference on three binder forms, **safe by omission rather than by
+  correctness**, bounded to one channel.
+
+---
+
 ## 2026-09-12 (seventy-sixth) — a negative result that bounds the previous one
 
 ### THE QUESTION THE PREVIOUS INCREMENT LEFT OPEN

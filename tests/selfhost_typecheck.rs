@@ -4155,6 +4155,99 @@ fn the_rules_the_census_added_do_not_reject_valid_programs() {
     }
 }
 
+/// **EVERY KNOWN GAP IS REFUSED BY THE COMPILER, NOT MIS-COMPILED.**
+///
+/// # The question that should have come first
+///
+/// Several increments discussed the QUALITY of the refusals for the four
+/// self-hosted gaps — whether the message names the construct, whether refusing is
+/// cheaper than implementing — **without establishing that they are refusals at
+/// all.** That is the only part which bears on correctness: a construct outside
+/// the subset must be REFUSED, never silently mis-compiled.
+///
+/// # And on the right entry point
+///
+/// The censuses in this file drive `occurrence_rows_from_pipeline`, a test harness
+/// that unwraps, so a gap there surfaces as a PANIC. **That is not what a user
+/// meets.** `self_hosted_compile` is the path behind `--compiler self-hosted`, and
+/// measuring the harness instead of the product is the scope error this file
+/// records against itself several times over.
+///
+/// # The result
+///
+/// All four gaps return `Err` from `self_hosted_compile` — a proper error, not a
+/// panic and not a wrong module — and an ordinary program still compiles.
+///
+/// **So the subset is SAFE at the boundary that matters, and the remaining
+/// obligation is message quality rather than soundness.** That is the third time
+/// this obligation has been reframed, and the first time from a measurement of the
+/// user-facing path rather than an inference from the harness.
+///
+/// # What this does not claim
+///
+/// Not that the messages are good; several name a structural cause such as a
+/// work-stack underflow rather than the construct. Not that the list of gaps is
+/// complete — it is what the censuses in this file have found. **Only that nothing
+/// on the list compiles to something wrong.**
+#[cfg(feature = "self-host")]
+#[test]
+fn every_known_gap_is_refused_by_the_self_hosted_compiler() {
+    const GAPS: &[(&str, &str)] = &[
+        (
+            "variable pattern",
+            "fn main(a: Word) -> Word { match a { v => v } }",
+        ),
+        (
+            "struct destructuring",
+            "struct P { x: Word }\nfn main(p: P) -> Word { match p { P { x } => x, _ => 0 } }",
+        ),
+        ("assert", "fn main(a: Word) -> Word { assert a > 0; a }"),
+        (
+            "qualified call",
+            "use audio::midi_to_freq\nfn main() -> Float { audio::midi_to_freq(69) }",
+        ),
+    ];
+
+    let target = keleusma::target::Target::host();
+
+    for (gap, src) in GAPS {
+        // THE REFERENCE ACCEPTS EACH, so a refusal is the subset declining a valid
+        // program rather than the program being wrong.
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+        assert!(
+            compile(&program).is_ok(),
+            "{gap}: the REFERENCE rejects this, so refusing it says nothing about \
+             the subset"
+        );
+
+        // **`Err`, NOT A PANIC AND NOT A MODULE.** A panic would be a crash at the
+        // user boundary; a module would be the thing that must never happen.
+        match std::panic::catch_unwind(|| keleusma::selfhost::self_hosted_compile(src, &target)) {
+            Ok(Err(_)) => {}
+            Ok(Ok(_)) => panic!(
+                "{gap}: the self-hosted compiler PRODUCED A MODULE for a construct \
+                 it cannot parse. That is the failure this test exists to catch: a \
+                 gap that mis-compiles rather than refusing"
+            ),
+            Err(_) => panic!(
+                "{gap}: the self-hosted compiler PANICKED rather than returning an \
+                 error. It refuses, but not in a form a caller can handle"
+            ),
+        }
+    }
+
+    // NON-VACUITY: an ordinary program must still compile, or "everything is
+    // refused" would satisfy every assertion above.
+    let ordinary = "fn main() -> Word { let a = 1; a + a }";
+    let compiled =
+        std::panic::catch_unwind(|| keleusma::selfhost::self_hosted_compile(ordinary, &target));
+    assert!(
+        matches!(compiled, Ok(Ok(_))),
+        "the self-hosted compiler no longer compiles an ordinary program, so the \
+         refusals above establish nothing"
+    );
+}
+
 /// **THE TWO EXTRACTIONS COMPARED OVER THE BINDING FORMS, WHICH IS WHERE THREE
 /// FALSE REJECTIONS HID.**
 ///
@@ -4400,6 +4493,24 @@ fn a_qualified_call_expression_is_not_handled_by_the_pipeline() {
 /// construct the stages do not need, so **no gap on this list can block the stages
 /// from self-compiling.** What each gap blocks is a user program, and what it costs
 /// is measured by how badly it fails rather than by whether the subset omits it.
+///
+/// # AND A CLAIM THAT FOLLOWED FROM THAT WAS WRONG
+///
+/// It seemed to follow that the remaining obligation is merely to REFUSE cleanly,
+/// which would be smaller than implementing the constructs. **Checked, and
+/// retracted.**
+///
+/// `parse.kel` has no refusal channel. Its output vocabulary is 54 node kinds plus
+/// `DONE`, and **not one of them is an error**. A construct it cannot handle
+/// cannot be NAMED by it; it can only mis-parse or spin. Refusing cleanly means
+/// adding a refusal record kind and teaching the driver and every consumer to read
+/// it — which touches MORE components than implementing a construct does, not
+/// fewer.
+///
+/// **The reframing above still holds; the cost estimate that rode along with it
+/// did not.** Whether refusal is cheaper than implementation is an open question,
+/// and it was stated as settled in two places before anyone looked at the
+/// parser's output vocabulary.
 ///
 /// **This is FEATURE WORK, not a missing branch**, and that matters for planning:
 /// admitting it needs a token code, a lexer arm, statement parsing, and emission
