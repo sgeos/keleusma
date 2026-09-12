@@ -35,6 +35,15 @@
 //! new one arriving unprobed is the thing to watch for next — this file cannot
 //! know which variants exist, only which it was given.
 //!
+//! # ⚠ THIS FILE PROBES 17 OF 66 OPCODES, AND SAYS SO SINCE 2026-09-12
+//!
+//! Its title asks a question about the whole instruction set; its probe table
+//! answers it for about a quarter. **The denominator lives in
+//! `opcode_denominator.rs`**, which parses the opcode names from
+//! `src/bytecode.rs` at test time and classifies every one of them by what the
+//! corpus is observed to do with it. Read that file for coverage; read this one
+//! for the refusal verdict on a deliberately isolated construct.
+//!
 //! # What a pass here does NOT mean
 //!
 //! That the backend accepted the opcode. **Not that the emitted code is

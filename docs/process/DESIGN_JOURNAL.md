@@ -1,5 +1,44 @@
 # Design Journal
 
+## 2026-09-12 — the census that found three defects had no denominator
+
+`backend_support_census.rs` is titled *"WHICH OPCODES CAN THE BACKEND ACTUALLY
+LOWER?"*. The `Op` enum declares **66** opcodes. That file probes **17**, and
+nothing in it related the two numbers, so an opcode's absence meant *covered
+elsewhere*, *unprobeable*, or *forgotten*, indistinguishably.
+
+Three defects had already hidden behind its keying. Its header says so, and closes
+by admitting it *"cannot know which variants exist, only which it was given."*
+This line has an idiom for exactly that — pin a population, fail on growth, demand
+classification rather than a patched number, carry a non-vacuity check — applied
+to test functions, pointer offsets, panic sites, value movement, host buffers and
+upstream premises. **It had never been applied to the census whose blind spot
+produced the defects.**
+
+`opcode_denominator.rs` derives the denominator from `src/bytecode.rs` at test
+time and classifies all 66 by measurement: **63 lowered, 1 emitted-but-unvisited
+(`Reset`), 2 never emitted (`Len`, `IsStruct`)**. Each non-lowered entry carries an
+account, and the two unemitted ones are driven by mutation into a loud
+`UnsupportedOp` refusal, because absence alone says nothing about the backend.
+
+**The generalisable part.** The rad-hard minimal-ISA constraint manufactures this
+blind spot. The P4 consolidation took 69 opcodes to 66 by moving a discriminant
+out of the opcode NAME and into an operand FIELD, and every future consolidation
+does the same. `NewComposite` now carries eight operand variants under one name,
+and the census had no row for it at all. The variant axis is enumerated
+separately: all four `Flat` kinds lower, no `Boxed` form is emitted, and the
+emitter matches only `Flat` — so a `Boxed` construction reaching the corpus would
+be one the backend refuses, and that is now a failure rather than a silence.
+
+**A discipline copied rather than invented.** Upstream records `IsStruct` as
+having no producer *found by a bounded search*, explicitly not as unreachable,
+because an earlier producerless claim there was falsified within the hour. The
+`NotEmitted` class is worded to the same standard: it says this corpus emitted
+none, and nothing stronger.
+
+No lowering defect. The finding is that the instrument measuring progress toward
+"the whole language lowers" could not state its own coverage.
+
 ## 2026-09-12 — [v0.3.0] A "rejected shape" that was a type-name error, filed the same day
 
 `operand_variant_sweep.rs` carries a table of shapes the reference rejects, asserted so that their

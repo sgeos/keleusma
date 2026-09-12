@@ -34,7 +34,7 @@
 ///
 /// **Derive this, do not transcribe it.** A count in this tree once read
 /// "nineteen" while the block it described held twenty-nine.
-const RECORDED_TEST_FUNCTIONS: usize = 535;
+const RECORDED_TEST_FUNCTIONS: usize = 538;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise
@@ -236,7 +236,7 @@ const RECORDED_TEST_FUNCTIONS: usize = 535;
 /// 118 -> 119: `checked_byte_arithmetic.rs` added, none removed.
 ///
 /// 119 -> 120: `operand_variant_sweep.rs` added, none removed.
-const RECORDED_TEST_FILES: usize = 120;
+const RECORDED_TEST_FILES: usize = 121;
 
 fn test_files() -> Vec<std::path::PathBuf> {
     let mut out: Vec<_> = std::fs::read_dir("tests")
