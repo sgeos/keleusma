@@ -13,6 +13,198 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (eighty-sixth) — correcting my own correction, and what it uncovered
+
+### THE FIX FOR A WRONG SENTENCE WAS ALSO WRONG
+
+The previous increment replaced the help text's "no floats" with "only the float LITERAL is
+excluded; a float-typed signature with no literal compiles". **That is also false**, and a census for
+the phrase elsewhere is what caught it: the construct-support boundary table carries
+`scope/float_arith__GAP` with the source `fn f(a: Float, b: Float) -> Float { a + b }` — a
+float-typed signature, no literal, and it does not compile.
+
+Over-correcting is the failure mode worth naming here. The first sentence was too broad; the
+replacement was too permissive; and only a third measurement produced something that survives.
+
+### THE BOUNDARY, MEASURED PER OPERATOR
+
+- float `+`, `-`, `*` — DIVERGE. The self-hosted codegen emits `CheckedAdd`, `CheckedSub`,
+  `CheckedMul` where the reference emits the plain opcode.
+- float `/`, float comparison, a float-typed signature doing neither — COMPILE.
+- the same three operators on `Word` — AGREE.
+
+That last line is the control that makes the finding specific. Without it the result reads as "the
+self-hosted codegen picks checked opcodes", which is a much larger and wrong claim.
+
+### A SCOPE GAP THAT LOOKS LIKE A DEFECT
+
+`tests/float_arith_width.rs` records that plain `+` on floats emits the unchecked `Op::Add` and
+"never the checked path", and float overflow is not a trap condition, so the checked form has
+nothing to check. The self-hosted side therefore appears to be the divergent one.
+
+**The distinction that matters is filing.** A scope boundary is a decision someone made; a defect is
+a bug nobody chose. This entry sits in the table under "out of scope for the self-hosted subset",
+which reads as the first, and the evidence suggests the second. The inference rests on documented
+intent rather than proof, and the rule that a divergence does not establish which side is wrong
+still holds — the reference was the wrong side on 2026-08-31.
+
+**Not fixed.** The fix is in `codegen.kel`. Stage sources bear on the capacity question that is the
+operator's, so the deliverable here is the characterisation, not the change.
+
+### WHY THE CENSUS FOUND IT AND THE FIRST GREP DID NOT
+
+The first pass grepped for the literal phrasings I had just written. The second censused the
+CONCEPT — every place describing the self-hosted subset — and that is what reached the boundary
+table. Searching for an assembled list of phrasings finds what you already thought of; censusing a
+specified concept finds what you did not.
+
+---
+
+## 2026-09-12 (eighty-fifth) — the last hop, and two wrong sentences in the shipping binary
+
+### ASSERTING ON `Display` IS NOT ASSERTING ON THE PRODUCT
+
+Every claim this session that a user sees the offending construct rested on tests that format the
+error type. **That is the library, not the product.** The command-line front end builds its own
+message around the error and decides whether to print the retry hint, so a name that survives
+`Display` could still be lost before the terminal.
+
+This is the same substitution as the earlier miss that reasoned about refusal quality from a harness
+that unwraps, moved one layer out. Running the binary settles it: the construct name and the line
+DO reach the terminal, with the retry hint and a non-zero exit. The claims hold at the last hop, and
+now there are tests at that hop rather than one layer below it. The CLI test directory already had a
+precedent for spawning the binary, so the tests follow it.
+
+### THE HELP TEXT WAS WRONG IN TWO OF THREE
+
+The `--compiler` help said the self-hosted subset has "no floats, generics, or Text". Measured
+through the binary:
+
+- **floats** — only the LITERAL. A float-typed signature with no literal compiles and writes a
+  module.
+- **Text** — not a subset restriction at all. The reference refuses it too, because `Text<N>` is not
+  implemented beyond the type surface. It takes the plain compile-error path and correctly gets NO
+  retry hint, since the reference reports the identical error.
+- **generics** — correct, and the divergence names the chunk.
+
+Two of three sentences in the shipping binary's help were misleading, and the Text one would send a
+user to `--compiler rust` for a program no backend compiles. The text now says which failures belong
+to the subset and which do not.
+
+### WHY THIS WAS WORTH DOING NOW
+
+It costs nothing against the capacity decision: no stage source is touched. And the error it
+corrected is the kind that only surfaces by running the thing a user runs — reading `main.rs` would
+have shown the same wrong sentence and produced agreement rather than a finding.
+
+### FRONTIER
+
+The driver and the CLI are now measured end to end. What remains is scoped feature work that grows
+`parse.kel`, and that waits on the operator's capacity decision, or one of the five standing operator
+rulings.
+
+---
+
+## 2026-09-12 (eighty-fourth) — measuring what two guards actually cover, and a claim retracted mid-increment
+
+### THE LIST HAD NO CHECK, AND THE FLOAT EPISODE SHOWED WHY THAT MATTERS
+
+The construct scan names constructs on the failure path. Until this increment nothing checked that a
+named construct is REALLY outside the subset. The float type was nearly added on the strength of a
+loose summary, and only running a float-typed program caught it.
+
+A new test pairs each named construct with a minimal program and asserts two things: the scan names
+it, and the pipeline refuses it. A construct that is named but compiles is a wrong entry; one that
+is refused but unnamed is a missing one. Both directions fail there.
+
+### A CLAIM WRITTEN AND RETRACTED INSIDE THE SAME INCREMENT
+
+The first draft of that test's comment said the row count was a tripwire that would fail if a scan
+arm were added without a row. **That is false.** The count compares the table's length against a
+constant; it cannot see the scan's arms, which are match patterns rather than data. The sentence was
+caught by re-reading the comment against the code beneath it, which is the cheapest instance yet of
+the pattern this session keeps meeting.
+
+### WHAT THE TWO GUARDS ACTUALLY COVER, MUTATION-MEASURED
+
+Mutating the scan to name the SUPPORTED wildcard pattern separates them:
+
+- the list test PASSES, because no row mentions a wildcard;
+- the stage-source guard FAILS, because the stage sources use `_`.
+
+So the two cover the union of "constructs the stage sources happen to use" and "constructs with a
+row in the table". **The hole is the complement, and it is not hypothetical.** No stage source uses
+a float type, so a float-type arm added with no row would have passed BOTH guards. That is precisely
+the entry nearly added last increment.
+
+Recording the union and the hole is the point. A clean run from either guard is evidence about that
+guard's reach before it is evidence about the list, and the reach is now written down next to the
+tests rather than inferred by a future reader.
+
+### FRONTIER
+
+The driver-side, capacity-neutral category is worked out: gap refusals name their construct, the
+float literal names itself, the divergence message was already adequate and is pinned, and the list
+that drives the naming now has a validity check with its coverage stated. No stage source has been
+touched.
+
+---
+
+## 2026-09-12 (eighty-third) — the measurement that stopped a wrong construct name
+
+### WHAT I SET OUT TO FIX WAS ALREADY FINE
+
+The intended increment was to localise the divergence refusal, on the reasoning that a
+divergence establishes the two implementations disagree and not which is wrong, so whoever
+investigates needs to know where. Measured first: it already names the offending chunk, and both
+spellings for a chunk-order divergence, and a doc comment there records that this was done
+deliberately to turn a bare disagreement into a pointer. The op-level message names the chunk, the
+op index, and both ops.
+
+No change was warranted, and the correct output was a test pinning behaviour found adequate rather
+than code. That test also asserts the message assigns NO FAULT, because the 2026-08-31 case in which
+the reference was the divergent side is exactly the situation a blaming message would make worse.
+
+### THE MEASUREMENT FOUND SOMETHING BETTER, AND STOPPED A MISTAKE
+
+Floats never reach the cross-check at all. A float program fails earlier in `reconstruct` with the
+same work-stack text the four parser gaps used to produce, and the construct scan added last
+increment does not name it. That looked like a straightforward gap in the list.
+
+**The obvious fix was wrong, and one probe caught it.** `fn f(a: Float) -> Float { a }` COMPILES,
+and its output matches the reference byte for byte. The float TYPE is inside the subset. Only the
+LITERAL is outside. Had the type gone on the list, every float-typed program that failed for an
+unrelated reason would have been blamed on a supported construct.
+
+### THE GUARD WOULD NOT HAVE CAUGHT IT, AND THAT IS THE POINT
+
+The stage-source guard asserts the scan names nothing in any of the eleven driver-read stage
+sources. It is a real guard and it is mutation-tested. **It would have passed with the float type on
+the list**, because no stage source uses a float type.
+
+That is the limit worth stating: the guard covers constructs the stages happen to use. It is not a
+general check that the list is right, and treating a clean result from it as evidence about the
+whole list would be exactly the error of reading a guard's silence as broader than its reach. The
+only thing that established the float boundary was running a float-typed program.
+
+The `Float` occurrences in `wire.kel` are identifier names such as `tag_float`, not types or
+literals, so the guard remains clean with the literal entry added.
+
+### A LOOSE CLAIM CORRECTED
+
+The project file listed floats among the things that error at the divergence cross-check. Measured,
+that is wrong twice over: a float literal is refused earlier by a stage and never reaches the check,
+and a float type does not fail at all. The sentence now says which failures happen where.
+
+### FRONTIER
+
+The driver-side, capacity-neutral category that opened last increment is now largely worked out: the
+gap refusals name their construct, the float literal names itself, and the divergence message was
+already adequate and is pinned. No stage source has been touched, so the capacity decision is
+untouched and still the operator's.
+
+---
+
 ## 2026-09-12 (eighty-second) — reading the refusal a user actually receives
 
 ### THE TEST PROVED THE REFUSAL HAPPENED AND DISCARDED WHAT IT SAID
