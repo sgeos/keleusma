@@ -34,6 +34,18 @@
 //!
 //! Shapes the reference rejects are recorded as rejected rather than skipped, so
 //! a gap in the matrix is visible instead of silent.
+//!
+//! # ⚠ AND ONE OF THOSE RECORDS WAS ITSELF WRONG, WITHIN A DAY
+//!
+//! The first draft listed *"byte comparison to Bool"* as rejected by the
+//! reference, implying byte comparisons are unsupported. **The reference rejects
+//! the TYPE NAME**: Keleusma's boolean is lowercase `bool`. Spelled correctly,
+//! `Byte`, `Fixed` and `Word` comparisons all compile and all lower — and they
+//! were absent from the matrix because of it.
+//!
+//! **A typo was recorded as a language property, in the table built to stop
+//! absences being mistaken for facts.** Comparisons are in the matrix now, with a
+//! byte pair straddling 127 where a sign-extending load would invert the answer.
 
 use inkwell::OptimizationLevel;
 use inkwell::context::Context;
@@ -54,6 +66,11 @@ fn raw(v: &Value) -> i64 {
     match v {
         Value::Byte(x) => i64::from(*x),
         Value::Int(x) | Value::Fixed(x) => *x,
+        // **`Bool` IS A SCALAR HERE AND 0/1 IS THE FLAT FORM**, which is exactly
+        // what the backend pushes for a comparison — the emitter's own comment
+        // says the result "is 0 or 1 in an i64, which is the flat representation
+        // of the VM's tagged `Bool`". Added when comparisons joined the matrix.
+        Value::Bool(x) => i64::from(*x),
         other => panic!("this sweep drives scalars only, got {other:?}"),
     }
 }
@@ -212,6 +229,44 @@ fn cases() -> Vec<Case> {
             src: "fn main(a: Fixed<16>, b: Fixed<16>) -> Fixed<16> { a / b { ok(v) => v, overflow(w) => w, zero_divisor(n) => n } }",
             args: vec![fx(1 << 40), fx(0)],
         },
+        // **COMPARISONS, ADDED 2026-09-12.** They were absent because a type-name
+        // error in the rejection table read as "the reference rejects byte
+        // comparisons". Comparison is exactly the family where type-specific
+        // semantics have precedent — the emitter notes that float comparison
+        // matches the reference and is deliberately NOT IEEE.
+        //
+        // The byte pair straddles 127: below it, a sign-extending load agrees by
+        // accident.
+        Case {
+            label: "byte lt low",
+            src: "fn main(a: Byte, b: Byte) -> bool { a < b }",
+            args: vec![b(200), b(100)],
+        },
+        Case {
+            label: "byte lt high",
+            src: "fn main(a: Byte, b: Byte) -> bool { a < b }",
+            args: vec![b(100), b(200)],
+        },
+        Case {
+            label: "byte eq",
+            src: "fn main(a: Byte, b: Byte) -> bool { a == b }",
+            args: vec![b(200), b(200)],
+        },
+        Case {
+            label: "fixed lt",
+            src: "fn main(a: Fixed<16>, b: Fixed<16>) -> bool { a < b }",
+            args: vec![fx(-65536), fx(65536)],
+        },
+        Case {
+            label: "fixed ge",
+            src: "fn main(a: Fixed<16>, b: Fixed<16>) -> bool { a >= b }",
+            args: vec![fx(1 << 40), fx(-(1 << 40))],
+        },
+        Case {
+            label: "word lt extremes",
+            src: "fn main(a: Word, b: Word) -> bool { a < b }",
+            args: vec![w(i64::MIN), w(i64::MAX)],
+        },
         // `Word`, as the control: the variant every `Checked*` row already probed.
         //
         // ⚠ **THE ARM'S ARITY VARIES BY OPERAND TYPE TOO.** A `Word` overflow arm
@@ -234,14 +289,23 @@ const REFERENCE_REJECTS: &[(&str, &str)] = &[
         "byte checked sub",
         "fn main(a: Byte, b: Byte) -> Byte { a - b { ok(v) => v, overflow(w) => w } }",
     ),
+    // ⚠ **THIS ENTRY WAS WRONG AND IS KEPT AS A CORRECTION.** It read
+    // "byte comparison to Bool" and implied the reference rejects byte
+    // comparisons. **It rejects the TYPE NAME**: Keleusma's boolean is lowercase
+    // `bool`, and with the right spelling `Byte`, `Fixed` and `Word` comparisons
+    // all compile and all lower — they are in the matrix above now.
+    //
+    // **A typo was recorded as a language property, in the very table built to
+    // stop absences being mistaken for facts.** The entry is retained, spelled as
+    // what it actually is: an unknown type name.
     (
-        "byte comparison to Bool",
-        "fn main(a: Byte, b: Byte) -> Bool { a < b }",
+        "an unknown type name is rejected (NOT a fact about comparisons)",
+        "fn main(a: Byte, b: Byte) -> NotAType { a < b }",
     ),
 ];
 
 /// Cases at the stamp.
-const RECORDED_CASES: usize = 21;
+const RECORDED_CASES: usize = 27;
 
 #[test]
 fn every_operand_variant_agrees_with_the_reference() {

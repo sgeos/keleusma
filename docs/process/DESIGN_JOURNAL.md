@@ -1,5 +1,44 @@
 # Design Journal
 
+## 2026-09-12 — [v0.3.0] A "rejected shape" that was a type-name error, filed the same day
+
+`operand_variant_sweep.rs` carries a table of shapes the reference rejects, asserted so that their
+absence from the matrix is a fact rather than an untested gap. One entry read:
+
+> `byte comparison to Bool` — `fn main(a: Byte, b: Byte) -> Bool { a < b }`
+
+**The reference does reject it — because `Bool` is not a type name.** Keleusma's boolean is lowercase
+`bool`, and spelled correctly, `Byte`, `Fixed` and `Word` comparisons all compile and all lower.
+
+> **A typo was recorded as a language property, in the very table built to stop absences being
+> mistaken for facts.** The table exists to separate "cannot" from "untested"; that entry conflated
+> them, hours after being written.
+
+### What it hid, now measured
+
+**Comparisons were absent from the matrix entirely** — the family where type-specific semantics have
+the clearest precedent, since the emitter notes that float comparison matches the reference and is
+deliberately NOT IEEE.
+
+Driven now: byte, fixed and word comparisons agree, including a byte pair straddling 127 where a
+sign-extending load would invert the answer, and `i64::MIN` against `i64::MAX`. **No defect** — but
+the sweep now covers the family rather than believing a typo about it.
+
+### The surviving entry was re-checked rather than inherited
+
+`Byte` subtraction with an overflow arm is still rejected, for a real reason the reference states.
+One of two entries was wrong, and assuming the other had rotted too would have been the opposite
+error.
+
+### Two details worth keeping
+
+**`Bool` is a scalar here and 0/1 is its flat form** — the emitter says so at the comparison site, and
+the sweep's converter had to learn it before any comparison could be driven.
+
+**The case count moved 21 to 27 and the test-function count did not.** Cases are data in a matrix,
+not test functions, and the population guard now says so — a reader reconciling this increment against
+that number would otherwise hunt for a change that does not exist.
+
 ## 2026-09-12 — [v0.3.0] The prose-drift instrument, attempted and rejected on measurement
 
 The handoff named one structural gap: **six instruments fire on drift in code, none on drift in

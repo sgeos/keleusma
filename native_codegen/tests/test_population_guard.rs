@@ -35,6 +35,11 @@
 /// **Derive this, do not transcribe it.** A count in this tree once read
 /// "nineteen" while the block it described held twenty-nine.
 const RECORDED_TEST_FUNCTIONS: usize = 535;
+// UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
+// six CASES in its matrix, which is data rather than test functions. Worth saying,
+// because a reader reconciling that increment against this number would otherwise
+// look for a change.
+//
 // 534 -> 535 on 2026-09-12: one added to `composite_return_aliasing.rs`. Its
 // decision record said for a month that this file carries the failing case as
 // `#[ignore]`; the repair landed 2026-08-14 and no ignored test remained. A
