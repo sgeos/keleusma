@@ -2474,11 +2474,17 @@ pub type ExprRow = (i64, ExprOperand, ExprOperand);
 /// reference emits none.
 ///
 /// **That direction is the dangerous one.** A pair row feeds `ty_node_bad`'s EQUALITY branch, so a
-/// spurious row can make the stage reject a correct program. A heuristic on the synthesised arm's
-/// unit tag was considered and rejected: it could not be shown safe, and the opposite error —
-/// dropping a real pair — would let the stage miss a disagreement it exists to catch. **Both
-/// directions are unsound, so the row is not emitted at all**, and
+/// spurious row can make the stage reject a correct program, and the opposite error — dropping a
+/// real pair — would let the stage miss a disagreement it exists to catch. **Both directions are
+/// unsound, so the row is not emitted at all**, and
 /// `a_one_armed_conditional_is_why_the_branch_pair_does_not_move` pins the witness.
+///
+/// **A HEURISTIC ON THE SYNTHESISED ARM'S UNIT TAG CANNOT WORK**, which is stronger than the
+/// earlier wording here that it "could not be shown safe". A written `else { }` and an implicit
+/// arm produce the SAME parse record stream, while the reference separates them by
+/// `else_block.is_some()`. The distinguishing information never reaches this side, so which tag a
+/// case yields is moot. Established by
+/// `an_empty_else_is_indistinguishable_from_an_implicit_one` in `tests/selfhost_parse.rs`.
 ///
 /// **Four do not move**: the branch pair above, and the three composite kinds — field access,
 /// index access and struct literals. Kind 2 was the last non-composite one.

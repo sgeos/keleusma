@@ -677,9 +677,12 @@ it is **not** the blocker it was described as.
 synthesises an else arm, so the pipeline cannot distinguish a one-armed conditional from a
 two-armed one. A pair row feeds `ty_node_bad`'s EQUALITY branch, so a SPURIOUS row can make the
 stage reject a correct program, and a DROPPED row makes it miss a disagreement it exists to catch.
-**Both directions are unsound.** A heuristic on the synthesised arm's UNIT tag was considered and
-rejected because it could not be shown safe.
-`a_one_armed_conditional_is_why_the_branch_pair_does_not_move` pins the witness.
+**Both directions are unsound.** A heuristic on the synthesised arm's UNIT tag **CANNOT WORK** --
+stronger than the earlier wording that it could not be shown safe. A written `else { }` and an
+implicit arm produce the SAME parse record stream, while the reference separates them by
+`else_block.is_some()`, so the distinguishing information never reaches this side.
+`a_one_armed_conditional_is_why_the_branch_pair_does_not_move` pins the witness, and
+`an_empty_else_is_indistinguishable_from_an_implicit_one` establishes the impossibility.
 
 **THE THREE COMPOSITE KINDS ARE THE REMAINING RISK, WITH EVIDENCE RATHER THAN A HUNCH.** The
 occurrences slice established that the two sides **disagree about what a node IS** for a composite:
