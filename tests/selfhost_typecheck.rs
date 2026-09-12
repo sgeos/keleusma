@@ -4155,86 +4155,155 @@ fn the_rules_the_census_added_do_not_reject_valid_programs() {
     }
 }
 
-/// **`parse.kel` REQUIRES THE PARENTHESES ON AN ENUM PATTERN, AND SPINS WITHOUT THEM.**
+/// **THE GRAMMAR'S OWN PATTERN FORMS, CENSUSED AGAINST THE SELF-HOSTED PARSER.**
 ///
-/// # What was measured
+/// # Why this list and not one I assembled
 ///
-/// The reference accepts both `E::A => 1` and `E::A() => 1` as match-arm patterns.
-/// The self-hosted parser accepts the parenthesised spelling and **does not
-/// terminate** on the bare one — it exhausts its step budget rather than refusing.
-/// Payload or no payload makes no difference; the parentheses do.
+/// `docs/spec/GRAMMAR.md` enumerates the pattern forms in a table. **That is a
+/// specified list rather than the forms I happened to think of**, which is the
+/// caveat every other census in this file has to carry. If a form is in that table
+/// and the parser cannot handle it, the parser diverges from the documented
+/// language — not merely from the reference implementation.
 ///
-/// Established by raising the budget: at sixteen steps per token it fails, and at
-/// five hundred and twelve it still fails. **That distinguishes non-termination
-/// from a budget merely sized to the constructs someone tried.**
+/// # The result
 ///
-/// # How it was found, which is the reusable part
+/// Four of the seven forms exercised here parse. **Three do not, and they fail in
+/// TWO DIFFERENT WAYS** — a distinction the first version of this comment got
+/// wrong by asserting all three spin.
 ///
-/// The binding-form census was written for the REFERENCE extraction, where it
-/// found two false rejections. Running the same corpus against the PIPELINE
-/// extraction took one probe — the two walks are twins, and the agreement tests
-/// between them use corpora that contain a `match` on a LITERAL, no loop, no const
-/// parameter and no qualified import. **A corpus that cannot distinguish two
-/// implementations cannot detect that they diverge**, which is the same shape as
-/// this file's other coverage findings, one level out.
+/// - **Enum unit variant, bare** — `parse.kel` DOES NOT TERMINATE, exhausting its
+///   step budget. The grammar lists `Command::Silence`; the parenthesised `E::A()`
+///   parses and the documented spelling does not.
+/// - **Struct destructuring** (`Note { channel, pitch }`) and **variable** (`x`) —
+///   `parse.kel` ACCEPTS these and emits a record stream `reconstruct.kel` cannot
+///   rebuild, refused as a **work-stack UNDERFLOW**.
 ///
-/// # This pin does not fix it
+/// **The second kind is not the conservative stance working.** A subset that
+/// refuses an unsupported construct cleanly would say so; an underflow is a
+/// downstream guard catching an INCONSISTENT STREAM the parser should not have
+/// produced. `match a { v => v }` is the simplest binding pattern the language has.
 ///
-/// Teaching `parse.kel` the bare spelling is a change to the self-hosted parser's
-/// pattern grammar, and an instrument and the change it argues for should not land
-/// together. What is fixed here is the DIAGNOSTIC, which asserted that the usual
-/// cause of budget exhaustion is an unterminated block — a claim about a
-/// population nobody measured, and false for this input.
+/// Reporting all three as one failure mode would have made the parser look merely
+/// incomplete rather than, for two of them, wrong.
 ///
-/// The bare case is asserted to FAIL rather than left out, so the day it parses,
-/// this test fails and says so.
+/// # How it was found
+///
+/// The binding-form census was written for the type-rejection host extraction,
+/// where it found two false rejections. Pointing it at that walk's TWIN — the
+/// pipeline extraction — took one probe. The agreement tests between the two use
+/// corpora containing a `match` on a LITERAL, no loop, no const parameter and no
+/// qualified import: **a corpus that cannot distinguish two implementations cannot
+/// detect that they diverge.**
+///
+/// The first run of this pin recorded only the enum spelling. Widening it to the
+/// grammar's enumerated list turned one finding into three, which is the argument
+/// for censusing against a SPECIFIED list rather than an assembled one.
+///
+/// # This pin does not fix any of them
+///
+/// Teaching `parse.kel` these forms is a change to the self-hosted pattern grammar
+/// and belongs in its own increment; an instrument and the change it argues for
+/// should not land together. What is fixed alongside this is the DIAGNOSTIC, which
+/// asserted that the usual cause of budget exhaustion is an unterminated block — a
+/// claim about a population nobody measured, and false for all three of these.
+///
+/// **Each failing form is asserted to FAIL**, so the day one parses, this test
+/// fails and says to widen the documented subset rather than letting the gain go
+/// unrecorded.
 #[cfg(feature = "self-host")]
 #[test]
-fn the_self_hosted_parser_needs_parentheses_on_an_enum_pattern() {
-    // Both spellings are valid to the REFERENCE, which is what makes the
-    // divergence a gap rather than a difference of opinion.
-    const BOTH_VALID: &[(&str, &str)] = &[
+fn the_documented_pattern_forms_are_censused_against_the_self_hosted_parser() {
+    // `(form, grammar example, source)`. Every source is accepted by the REFERENCE,
+    // asserted below, so a failure is a parser gap rather than an invalid program.
+    const FORMS: &[(&str, &str, &str)] = &[
         (
-            "bare",
-            "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A => 1, E::B => 2 } }",
+            "literal",
+            "42",
+            "fn main(a: Word) -> Word { match a { 1 => 2, _ => 3 } }",
         ),
         (
-            "parenthesised",
-            "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A() => 1, E::B() => 2 } }",
+            "enum variant with bindings",
+            "Command::NoteOn(ch, note, vel)",
+            "enum E { W(Word), N }\nfn main(e: E) -> Word { match e { E::W(p) => p, _ => 0 } }",
+        ),
+        (
+            "enum unit variant, bare",
+            "Command::Silence",
+            "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A => 1, _ => 2 } }",
+        ),
+        (
+            // NOT in the grammar's table, and it is the one that works.
+            "enum unit variant, parenthesised",
+            "(not listed in the table)",
+            "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A() => 1, _ => 2 } }",
+        ),
+        (
+            "struct destructuring",
+            "Note { channel, pitch }",
+            "struct P { x: Word }\nfn main(p: P) -> Word { match p { P { x } => x, _ => 0 } }",
+        ),
+        (
+            "wildcard",
+            "_",
+            "fn main(a: Word) -> Word { match a { _ => 1 } }",
+        ),
+        (
+            "variable",
+            "x",
+            "fn main(a: Word) -> Word { match a { v => v } }",
         ),
     ];
-    for (label, src) in BOTH_VALID {
+
+    let mut parses: Vec<&str> = Vec::new();
+    let mut spins: Vec<&str> = Vec::new();
+
+    for (form, example, src) in FORMS {
         let program = parse(&tokenize(src).expect("lex")).expect("parse");
         assert!(
             compile(&program).is_ok(),
-            "{label}: the REFERENCE rejects this spelling, so the comparison below is not \
-             between two valid programs"
+            "{form} ({example}): the REFERENCE rejects this, so it is not a valid \
+             program and a parser failure would measure nothing"
         );
+        if std::panic::catch_unwind(|| keleusma::selfhost::occurrence_rows_from_pipeline(src))
+            .is_ok()
+        {
+            parses.push(form);
+        } else {
+            spins.push(form);
+        }
     }
 
-    // The parenthesised spelling reaches the pipeline extraction.
-    let paren = "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A() => 1, E::B() => 2 } }";
-    assert!(
-        std::panic::catch_unwind(|| keleusma::selfhost::occurrence_rows_from_pipeline(paren))
-            .is_ok(),
-        "the parenthesised enum pattern no longer parses, which is a regression rather \
-         than the gap this test records"
+    std::eprintln!(
+        "DOCUMENTED PATTERN FORMS: {} parse, {} spin -> {spins:?}",
+        parses.len(),
+        spins.len()
     );
 
-    // The bare spelling does not. **Caught as a panic rather than a hang** because the
-    // step budget turns the non-termination into a refusal; without that guard this
-    // test would not return.
-    for src in [
-        "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A => 1, E::B => 2 } }",
-        "enum E { W(Word), N }\nfn main(e: E) -> Word { match e { E::W(p) => p, E::N => 0 } }",
-    ] {
-        assert!(
-            std::panic::catch_unwind(|| keleusma::selfhost::occurrence_rows_from_pipeline(src))
-                .is_err(),
-            "`parse.kel` now handles a BARE enum pattern. THIS IS A GAP CLOSING: record what \
-             changed, widen the documented subset, and retire this test"
-        );
-    }
+    // NON-VACUITY IN BOTH DIRECTIONS. All-parsing would mean the corpus does not
+    // reach the parser; all-spinning would mean the harness is broken rather than
+    // the parser.
+    assert!(
+        !parses.is_empty(),
+        "no documented pattern form parses, so this is measuring the harness"
+    );
+
+    // **PINNED BY EQUALITY.** A form LEAVING this set is a gap closing and should be
+    // recorded; one JOINING it is a regression, and every other test in this file
+    // would still pass while that happened.
+    let mut got = spins.clone();
+    got.sort_unstable();
+    assert_eq!(
+        got,
+        vec![
+            "enum unit variant, bare",
+            "struct destructuring",
+            "variable",
+        ],
+        "the set of documented pattern forms `parse.kel` cannot handle changed. A \
+         form leaving it means the self-hosted parser gained a construct: record \
+         what changed and widen the documented subset. A form joining it is a \
+         regression"
+    );
 }
 
 /// **EVERY WAY THE LANGUAGE BINDS A NAME, CHECKED AT ONCE.**

@@ -13,6 +13,64 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (sixty-seventh) — censusing against a SPECIFIED list turned one finding into three
+
+### THE CHANGE OF LIST
+
+The previous increment recorded that `parse.kel` cannot handle a bare enum-variant pattern. That was
+found with a corpus I assembled, which carries the caveat every census in this file states: **these
+are the forms I thought of.**
+
+`docs/spec/GRAMMAR.md` enumerates the pattern forms in a table. **That is a SPECIFIED list.**
+Censusing against it turned one finding into three — and made the claim stronger, because a form in
+that table which the parser cannot handle is a divergence from the DOCUMENTED LANGUAGE rather than
+from the reference implementation.
+
+### THE RESULT: FOUR PARSE, THREE DO NOT
+
+| form | grammar example | outcome |
+|---|---|---|
+| enum unit variant, bare | `Command::Silence` | `parse.kel` DOES NOT TERMINATE |
+| struct destructuring | `Note { channel, pitch }` | stream `reconstruct.kel` cannot rebuild |
+| variable | `x` | stream `reconstruct.kel` cannot rebuild |
+
+**`match a { v => v }` is the simplest binding pattern the language has.**
+
+### THE CORRECTION I HAD TO MAKE BEFORE SHIPPING
+
+The first version of this pin's documentation said all three SPIN. **That was wrong for two of
+them**, and the difference matters:
+
+- The bare enum pattern makes `parse.kel` non-terminate — a hang, caught only by the step budget.
+- Struct destructuring and the variable pattern are ACCEPTED by `parse.kel`, which then emits a
+  record stream `reconstruct.kel` cannot rebuild, refused as a **work-stack UNDERFLOW**.
+
+**The second kind is not the conservative stance working.** A subset that refuses an unsupported
+construct cleanly says so; an underflow is a downstream guard catching an INCONSISTENT STREAM the
+parser should not have produced. Reporting all three as one failure mode would have made the parser
+look merely incomplete rather than, for two of them, wrong.
+
+I caught it because the panics came from two different source locations, which was visible only
+because the test ran each case rather than stopping at the first.
+
+### WHAT IS FIXED AND WHAT IS NOT
+
+The DIAGNOSTIC is fixed: the budget guard no longer asserts that the usual cause is an unterminated
+block. Teaching `parse.kel` these three forms is a change to the self-hosted pattern grammar and
+belongs in its own increment.
+
+The three are pinned BY EQUALITY, so a form leaving the set is a gap closing to record and one
+joining it is a regression.
+
+### THE RULE
+
+**A census against a list I assembled is weaker than a census against a list the project
+specified**, and the difference is not rhetorical: the same instrument, pointed at the grammar's own
+table instead of my corpus, found three times as much and upgraded the claim from "the two
+implementations differ" to "the parser does not implement the documented language".
+
+---
+
 ## 2026-09-12 (sixty-sixth) — the census pointed at the twin, and the twin does not terminate
 
 ### THE MOVE
