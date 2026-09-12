@@ -562,6 +562,25 @@ fn occurrence_rows(ast: &keleusma::ast::Program) -> OccurrenceRows {
             {
                 self.locals.insert(n.clone());
             }
+            // **A `for` LOOP BINDS ITS VARIABLE, AND THIS WALK MISSED IT UNTIL
+            // 2026-09-11.** The reference records the loop variable's read as an
+            // occurrence; nothing put the binding into the local set, so it
+            // resolved to neither a local nor a declaration and the classification
+            // rule REFUSED it. **Every well-typed program containing a `for` loop
+            // was rejected.**
+            //
+            // This is the THIRD binder this one function has missed -- a `for`
+            // variable, a match arm's pattern, and now the `for` variable again
+            // from the other side, since the pin that existed covered the PIPELINE
+            // extraction and not this one.
+            //
+            // **Found by real code, not by a snippet.** Every well-typed control in
+            // this file was hand-written and not one of them contained a loop, so a
+            // defect affecting every looping program was invisible until the
+            // stage's own sources were tried.
+            if let Stmt::For(f) = stmt {
+                self.locals.insert(f.var.clone());
+            }
             self.walk_stmt(stmt);
         }
         fn visit_expr(&mut self, expr: &Expr) {
@@ -3845,6 +3864,285 @@ fn the_rules_the_census_added_do_not_reject_valid_programs() {
              change rather than a conservative choice"
         );
     }
+}
+
+/// **A `for` LOOP BINDS ITS VARIABLE, AND UNTIL 2026-09-11 THIS STAGE SAID
+/// OTHERWISE.**
+///
+/// The occurrence channel collected locals from parameters, `let` statements and
+/// match-arm patterns — and not from `for`. The reference records the loop
+/// variable's read as an occurrence, so it resolved to neither a local nor a
+/// top-level declaration and the classification rule REFUSED it. **Every
+/// well-typed program containing a `for` loop was rejected.**
+///
+/// # How it survived
+///
+/// **Every well-typed control in this file was hand-written, and not one contained
+/// a loop.** A defect affecting every looping program was invisible to a corpus of
+/// snippets, and it took running the stage against real sources to surface it —
+/// `verify_datalayout.kel`, whose three loops are the whole of its body.
+///
+/// A pin for the loop variable already existed. It covers the PIPELINE extraction
+/// and says, correctly, that the reference DOES record the read; nothing checked
+/// what this side then did with it. **Two tests can name the same construct and
+/// guard different halves of it.**
+///
+/// This is the third binder this one channel has missed. The last case is the
+/// must-fire control: a name no binder introduces is still refused.
+#[test]
+fn a_for_loop_variable_is_not_reported_as_an_unresolved_name() {
+    const ACCEPTED: &[(&str, &str)] = &[
+        (
+            "the loop variable read in the body",
+            "fn main() -> Word { let t = 0; for i in 0..4 limit 4 { let u = i; } t }",
+        ),
+        (
+            // THE SHAPE THE REAL SOURCE USES: a runtime range under a static cap,
+            // with the variable indexing inside the body.
+            "the loop variable used as an index",
+            "shared data d { a: [Word; 8] }\n\
+             fn main() -> Word { let t = 0; for i in 0..8 limit 8 { let u = d.a[i]; } t }",
+        ),
+        (
+            "two loops reusing the same variable name",
+            "fn main() -> Word { let t = 0; for i in 0..2 limit 2 { let u = i; } \
+             for i in 0..2 limit 2 { let v = i; } t }",
+        ),
+    ];
+    for (label, src) in ACCEPTED {
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+        assert!(
+            compile(&program).is_ok(),
+            "{label}: the REFERENCE rejects this, so it is not a well-typed control"
+        );
+        assert!(
+            stage_verdict_resolving(src),
+            "{label}: the stage REJECTS a well-typed program, which is a language \
+             change rather than a conservative choice"
+        );
+    }
+
+    // MUST FIRE. A name no binder introduces is still refused, so the fix cannot
+    // have been "treat every name as local".
+    const SRC: &str =
+        "fn main() -> Word { let t = 0; for i in 0..4 limit 4 { let u = nowhere; } t }";
+    let program = parse(&tokenize(SRC).expect("lex")).expect("parse");
+    assert!(
+        compile(&program).is_err(),
+        "the reference ACCEPTS an unresolved name, so this control measures nothing"
+    );
+    assert!(
+        !stage_verdict_resolving(SRC),
+        "the stage accepts an unresolved name inside a loop body, so the fix for the \
+         loop variable widened the rule instead of correcting it"
+    );
+}
+
+/// **THE STAGE AGAINST TWELVE REAL PROGRAMS, NOT TWELVE SNIPPETS.**
+///
+/// # Why real programs
+///
+/// Every well-typed control in this file is a snippet written to exercise one
+/// rule. The file's own argument is that the must-REJECT obligation is enumerable
+/// while the must-ACCEPT obligation is not, and that over-rejection is the failure
+/// a rejection corpus cannot see by construction.
+///
+/// The repository contains twelve Keleusma programs the reference definitely
+/// accepts -- its own self-hosted stage sources, compiled by tests elsewhere in
+/// this suite. **They are the strongest available evidence against over-rejection,
+/// and they were already on disk.**
+///
+/// # What this measures FIRST, and why that order
+///
+/// The input channels are capped between 64 and 256 rows. `parse.kel` is three
+/// hundred kilobytes. Most of these programs will not fit, and the driver asserts
+/// on overflow rather than truncating -- correctly, because **a verdict from a
+/// stage fed a truncated table proves nothing**.
+///
+/// So the sizes are measured WITHOUT running the stage, and the stage is run only
+/// where every table fits. A result of "no real program fits" is a FINDING rather
+/// than a failure: it states in numbers the distance between a checker that works
+/// on snippets and one that could run on the corpus it is meant to check, which no
+/// document in this repository currently quantifies.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_stage_is_measured_against_the_real_stage_sources() {
+    const STAGES: &[(&str, &str)] = &[
+        ("analyze", include_str!("../src/selfhost/kel/analyze.kel")),
+        ("codegen", include_str!("../src/selfhost/kel/codegen.kel")),
+        ("lexer", include_str!("../src/selfhost/kel/lexer.kel")),
+        ("parse", include_str!("../src/selfhost/kel/parse.kel")),
+        (
+            "reconstruct",
+            include_str!("../src/selfhost/kel/reconstruct.kel"),
+        ),
+        (
+            "verify_datalayout",
+            include_str!("../src/selfhost/kel/verify_datalayout.kel"),
+        ),
+        (
+            "verify_depth",
+            include_str!("../src/selfhost/kel/verify_depth.kel"),
+        ),
+        (
+            "verify_structural",
+            include_str!("../src/selfhost/kel/verify_structural.kel"),
+        ),
+        (
+            "verify_typed",
+            include_str!("../src/selfhost/kel/verify_typed.kel"),
+        ),
+        (
+            "verify_types",
+            include_str!("../src/selfhost/kel/verify_types.kel"),
+        ),
+        (
+            "verify_yield",
+            include_str!("../src/selfhost/kel/verify_yield.kel"),
+        ),
+        ("wire", include_str!("../src/selfhost/kel/wire.kel")),
+    ];
+
+    // `(table, rows, capacity)`. Named per table, because reporting only the
+    // largest would hide which one actually binds.
+    fn tables(ast: &keleusma::ast::Program) -> Vec<(&'static str, usize, usize)> {
+        let (mut names, mut bindings) = binding_rows(ast);
+        let frc = field_read_channel(ast, &mut names);
+        bindings.extend(frc.bindings.iter().copied());
+        let (nodes, derived) = expression_nodes_over(ast, &names, &frc.index, true);
+        for (n, idx) in derived {
+            if let Some(&id) = names.get(&n) {
+                bindings.push((id, idx, 2));
+            }
+        }
+        let (dparams, sites, arg_pairs) = decl_call_rows(ast);
+        let (sfirst, _scount, sfield, accesses, _ftag) = field_sets(ast);
+        let (declared, occurrences, _wildcard) = occurrence_rows(ast);
+        vec![
+            ("operand pairs", arg_pairs.len(), 256),
+            ("declared params", dparams.len(), 128),
+            ("call sites", sites.len(), 128),
+            ("struct types", sfirst.len(), 64),
+            ("declared fields", sfield.len(), 256),
+            ("field accesses", accesses.len(), 256),
+            ("declared names", declared.len(), 128),
+            ("name occurrences", occurrences.len(), 256),
+            ("expression nodes", nodes.len(), 256),
+            ("bindings", bindings.len(), 128),
+            ("struct bindings", frc.sbinds.len(), 128),
+            ("field reads", frc.reads.len(), 128),
+            ("pattern binds", frc.pattern_binds.len(), 128),
+            ("payload decls", frc.payload_decls.len(), 128),
+        ]
+    }
+
+    let mut fits: Vec<&str> = Vec::new();
+    let mut overflows: Vec<(&str, String)> = Vec::new();
+
+    for (name, src) in STAGES {
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+
+        // **THE REFERENCE MUST ACCEPT IT**, established rather than assumed. A
+        // source that did not compile would make an acceptance meaningless and a
+        // rejection unattributable.
+        assert!(
+            compile(&program).is_ok(),
+            "{name}: the reference REJECTS its own stage source, which is a far \
+             larger problem than anything this test was written to measure"
+        );
+
+        let measured = tables(&program);
+        let over: Vec<String> = measured
+            .iter()
+            .filter(|(_, rows, cap)| rows > cap)
+            .map(|(t, rows, cap)| format!("{t} {rows}/{cap}"))
+            .collect();
+        let worst = measured
+            .iter()
+            .map(|(t, rows, cap)| (*rows as f64 / *cap as f64, *t, *rows, *cap))
+            .fold((0.0_f64, "", 0, 0), |a, b| if b.0 > a.0 { b } else { a });
+        if over.is_empty() {
+            std::eprintln!(
+                "  {name}: FITS (tightest {} {}/{})",
+                worst.1,
+                worst.2,
+                worst.3
+            );
+            fits.push(name);
+        } else {
+            std::eprintln!("  {name}: OVER by [{}]", over.join(", "));
+            overflows.push((name, over.join(", ")));
+        }
+    }
+
+    std::eprintln!(
+        "REAL-SOURCE CAPACITY: {} of {} stage sources fit the input channels",
+        fits.len(),
+        STAGES.len()
+    );
+    // THE MULTIPLE, which is the crisp statement of the distance. Reporting "does
+    // not fit" alone would leave a reader unable to tell a near miss from an order
+    // of magnitude.
+    let worst_multiple = STAGES
+        .iter()
+        .map(|(name, src)| {
+            let program = parse(&tokenize(src).expect("lex")).expect("parse");
+            let m = tables(&program)
+                .into_iter()
+                .map(|(t, rows, cap)| (rows as f64 / cap as f64, t, rows, cap))
+                .fold((0.0_f64, "", 0, 0), |a, b| if b.0 > a.0 { b } else { a });
+            (*name, m)
+        })
+        .fold(
+            ("", (0.0_f64, "", 0, 0)),
+            |a, b| {
+                if b.1.0 > a.1.0 { b } else { a }
+            },
+        );
+    std::eprintln!(
+        "  tightest anywhere: {} needs {} {}/{} -- {:.0}x its capacity",
+        worst_multiple.0,
+        (worst_multiple.1).1,
+        (worst_multiple.1).2,
+        (worst_multiple.1).3,
+        (worst_multiple.1).0
+    );
+
+    // Where everything fits, the verdict is measurable, and a rejection is a FALSE
+    // REJECTION on real code rather than a difference of opinion.
+    for (name, src) in STAGES.iter().filter(|(n, _)| fits.contains(n)) {
+        assert!(
+            stage_verdict_resolving(src),
+            "{name}: the stage REJECTS a real source the reference accepts. This is \
+             over-rejection on actual code, which is a language change rather than \
+             a conservative choice"
+        );
+    }
+
+    // NON-VACUITY. A run where nothing fits and nothing overflows would mean the
+    // corpus is empty; one where everything fits would mean the caps are not what
+    // this test believes.
+    assert!(
+        !fits.is_empty() || !overflows.is_empty(),
+        "no stage source was measured at all"
+    );
+
+    // **PINNED, BECAUSE THE NUMBER IS THE POINT.** This is the distance between a
+    // checker that works on snippets and one that could run on the corpus it
+    // exists to check. A stage moving from over to fitting is progress worth
+    // recording; one moving the other way is a regression in capacity.
+    let mut fitting = fits.clone();
+    fitting.sort_unstable();
+    assert_eq!(
+        fitting,
+        // **THE TWO SMALLEST, AND I PREDICTED ZERO.** Measured 2026-09-11. Both are
+        // ACCEPTED by the stage, asserted above -- which is a narrow but real
+        // over-rejection result on actual code rather than on snippets.
+        vec!["verify_datalayout", "verify_yield"],
+        "the set of real stage sources whose tables fit the input channels changed. \
+         A stage JOINING it is progress in capacity worth recording; one LEAVING it \
+         is a regression. Record which, and what made the difference"
+    );
 }
 
 /// **WHICH INPUT CHANNELS ANY VERDICT ACTUALLY DEPENDS ON.**
