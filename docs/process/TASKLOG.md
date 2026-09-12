@@ -10,6 +10,34 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-12, session 65, increments 79-88). ONE NOTE FOR ELEVEN INCREMENTS,
+> DELIBERATELY.**
+>
+> Per-increment reasoning belongs in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.md), which is the
+> append-only record for exactly that. **This file is 3060 lines** and the accretion
+> [COMMUNICATION.md](./COMMUNICATION.md) records for the reverse prompt applies here too, so eleven
+> notes would cost more currency than they bought. Entries 79 through 88 of the journal carry the
+> detail.
+>
+> **What changed.** Three standing claims were checked and two were wrong: the pipeline's binder
+> divergence is safe by construction rather than by omission, and the branch-pair heuristic is
+> impossible rather than unproven. A gap refusal now NAMES the construct and line, driver-side and
+> verified at the terminal rather than at the error type's `Display`. The self-hosted codegen's
+> typeless opcode mapping is characterised per operand type and operator, censused against
+> `codegen.kel`'s own mapping comment.
+>
+> **The standing result for the operator**: `scope/float_arith__GAP` is correctly filed as a
+> capability gap, NOT a defect -- an earlier framing here said otherwise and is withdrawn. The
+> diverging operations are `+`, `-`, `*` and unary `-` on `Float` and `Fixed<N>`, plus fixed `*` and
+> `/` against the scale-aware `FixedMul`/`FixedDiv`, which is a wrong-VALUE hazard rather than a
+> checking difference. Everything else agrees. The fix is a type channel into codegen, so it bears
+> on the capacity question and was not made.
+>
+> **Method note worth keeping.** Four framings in this area were each wrong at the edge of their
+> evidence -- too broad, too permissive, too strong, too narrow. What corrected each was running or
+> reading the thing itself, and what closed the matrix was censusing against a SPECIFIED list rather
+> than the set already tried.
+
 > **Currency note (2026-09-11, session 65, forty-eighth increment). THE FIELD-READ EDGE IS SIZED:
 > THREE OF FIVE.**
 >
