@@ -215,6 +215,28 @@ fn the_corpus_is_what_the_pinned_figures_were_measured_against() {
 
 /// Name and content digest of every corpus file, as measured when the figures
 /// recorded in `docs/process/handoffs/v0.3.0.md` were last re-derived.
+// **RE-PINNED 2026-09-11, absorption 57**, and the movement is stated rather
+// than absorbed. Two modules changed content: `src/selfhost/kel/wire.kel` and
+// `src/selfhost/kel/verify_types.kel`, both corpus subjects of this backend. The
+// population is unchanged at 74 entries -- nothing added, nothing removed, which
+// is what the diff reported and what an entry count confirms.
+//
+// **The chunk population moved +11, measured DIRECTLY** by compiling both
+// versions of each file: `wire.kel` 486 -> 492, `verify_types.kel` 28 -> 33.
+//
+// **Every derived figure was re-run and none moved because of it**: the refusal
+// set is still 1, the ISA census still 63 of 66 over 74 compiled modules,
+// module-level coverage 98.6%, and the interprocedural and yield-escape suites
+// unchanged. Current totals: 1084 of 1085 chunks fully lowerable (99.9%) and
+// 90800 of 90845 opcode instances.
+//
+// ⚠ **THE 1070-of-1074 FIGURE ELSEWHERE IN THIS TREE IS A DATED CALIBRATION
+// (2026-08-29), NOT A MEASUREMENT OF THE PRE-ABSORPTION TREE.** Adding the
+// measured +11 to it does not reproduce the current 1084 lowerable, and the
+// residual is NOT ATTRIBUTED HERE: `14_frame_log.kel` becoming lowerable earlier
+// the same day accounts for two of its chunks, and the rest was not measured.
+// Stating an arithmetic that does not close as though it did is the failure this
+// note exists to avoid.
 const PINNED: &[(&str, u64)] = &[
     ("compiler/kel/prelude.kel", 0x07c8e691e07a309e),
     (
@@ -395,9 +417,9 @@ const PINNED: &[(&str, u64)] = &[
     ("src/selfhost/kel/verify_depth.kel", 0x6a264c7734ccfc1a),
     ("src/selfhost/kel/verify_structural.kel", 0x9dd4124de42674e9),
     ("src/selfhost/kel/verify_typed.kel", 0x63c5af32b11a4d85),
-    ("src/selfhost/kel/verify_types.kel", 0xb069ffd53ceaf767),
+    ("src/selfhost/kel/verify_types.kel", 0x3e54070c761f2d3d),
     ("src/selfhost/kel/verify_yield.kel", 0x1c55b51d5809ae0f),
-    ("src/selfhost/kel/wire.kel", 0x80f6fe6dc89c9112),
+    ("src/selfhost/kel/wire.kel", 0x6460f721f0c6da04),
 ];
 
 /// **WHY TWO CENSUSES OVER DIFFERENT POPULATIONS REPORT THE SAME TOTAL.**

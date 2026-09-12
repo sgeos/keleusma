@@ -1,5 +1,61 @@
 # Design Journal
 
+## 2026-09-11 — [v0.3.0] Absorption 57, a prediction that contradicted its own risk, and the census for value movement
+
+### The absorption, and the clause that could not have been right
+
+| clause | predicted | measured |
+|---|---|---|
+| conflicting files | exactly two, both process channels | **exactly those two** |
+| conflicts in `src/` or `tests/` | zero | **zero** |
+| `src/` and `tests/` after the merge | byte-identical to `origin/v0.2.3` | **identical**, check non-vacuous at 12 files against the previous tree |
+| backend suite | 519 passed, 0 failed | **519 ran, 1 FAILED** — `corpus_fingerprint` |
+
+**The fourth clause contradicted the risk named in the same document.** The brief said, precisely,
+that the incoming set changes `wire.kel` and `verify_types.kel`, which are corpus subjects of this
+backend — and then predicted a clean run two lines later. `corpus_fingerprint` exists to fail when
+corpus content moves. **If the named risk was real, a green suite was impossible.**
+
+> A prediction that cannot be reconciled with the risk written beside it is not a prediction, it is
+> two documents. Nothing checks a brief against itself, and this one needed it.
+
+### The risk cleared by evidence, and one arithmetic left open
+
+**The chunk population moved +11, measured directly** by compiling both versions of each changed
+file: `wire.kel` 486 to 492, `verify_types.kel` 28 to 33. The file population is unchanged at 74.
+Every figure the guard named was re-run: refusal set 1, ISA census 63 of 66 over 74 modules, module
+coverage 98.6%, 1084 of 1085 chunks lowerable, 90800 of 90845 opcode instances.
+
+**The `1070 of 1074` figure elsewhere in the tree is a calibration dated 2026-08-29, not a
+measurement of the pre-absorption tree.** Adding the measured +11 does not reach 1084, and
+`14_frame_log.kel` becoming lowerable accounts for only two of its chunks. **The residual is left
+named and open rather than forced into an arithmetic that does not close.**
+
+### The census the last two increments earned
+
+Three defects, and the one with an unexamined class behind it was the data-slot store: **every place
+the emitter moves an operand as a word is a place a body operand would be moved as its address.**
+`pointer_offset_census.rs` is the deliberate instrument for ADDRESS arithmetic; there was none for
+VALUE movement, which is where that defect lived.
+
+`value_movement_census.rs` enumerates all 17 move sites — fifteen word stores and two body copies —
+and classifies them **by what the destination outlives**, which is the question, rather than by
+whether the move is word-sized, which is not:
+
+- **operand slot, local slot, spill slice, composite body** — none outlives the region, so an address
+  is the intended content;
+- **shared slot, private slot, persistent pool** — all outlive it, and each either refuses a body or
+  copies it.
+
+**Two escape routes are named rather than omitted**: a `return` and a `yield` are not stores, so they
+are outside the count, and a census that skipped them silently would claim more than it measures —
+the failure the pointer census recorded about its own first version. Its non-vacuity check is
+form-by-form: a matcher finding only the word stores would reproduce exactly the blind spot that made
+the defect invisible.
+
+The two rows that say REFUSED are driven, not asserted. A shared composite slot **compiles on the
+reference** and is refused here, so that row has a real subject rather than a hypothetical one.
+
 ## 2026-09-11 — [v0.3.0] The persistent composite copy, and a refusal count that came home
 
 **The defect found this morning is closed by implementation rather than by refusal.** A composite

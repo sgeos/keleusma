@@ -59,3 +59,50 @@ counterpart for VALUE movement, and the defect that surfaced was in value moveme
    away.
 4. **Do not assume the census is complete because it compiles.** Non-vacuity first: it must find the
    sites already known, including the one that was a defect.
+
+---
+
+## OUTCOME — 2026-09-11, recorded against the prediction above
+
+| clause | predicted | measured |
+|---|---|---|
+| conflicting files | exactly two, `REVERSE_PROMPT.md` and `TASKLOG.md` | **exactly those two** |
+| conflicts in `src/` or `tests/` | zero | **zero** |
+| `src/` and `tests/` after the merge | byte-identical to `origin/v0.2.3` | **identical**, and the check returns 12 files against the previous tree, so it is not vacuous |
+| backend suite | 519 passed, 0 failed | **519 ran, 1 FAILED** — `corpus_fingerprint` |
+
+### THE FOURTH CLAUSE MISSED, AND IT CONTRADICTED THE RISK I NAMED IN THE SAME DOCUMENT
+
+**A green suite and a fired corpus risk cannot both happen.** This brief named the risk precisely —
+the incoming set changes `wire.kel` and `verify_types.kel`, which are corpus subjects — and then
+predicted a clean run two lines later. `corpus_fingerprint` exists to fail when the corpus content
+moves. **If the named risk was real, the prediction was impossible.**
+
+The prediction should have read: *the fingerprint guard fires, names those two files, and every
+derived figure is re-run and re-stated.* That is what happened.
+
+> **A prediction that cannot be reconciled with the risk written beside it is not a prediction, it is
+> two documents.** Nothing checks a brief against itself, and this one needed it.
+
+### The named risk, cleared by evidence rather than by a passing suite
+
+**The chunk population moved +11, measured directly** by compiling both versions of each changed
+file: `wire.kel` 486 to 492, `verify_types.kel` 28 to 33. The corpus file population is unchanged at
+74 — nothing added, nothing removed, confirmed by the diff and by an entry count.
+
+**Every figure the guard named was re-run, and none moved:**
+
+| figure | value |
+|---|---|
+| refusal set | 1 |
+| ISA lowering census | 63 of 66, over 74 compiled modules |
+| module-level coverage | 98.6%, 69 modules, 1 refused |
+| chunks fully lowerable | 1084 of 1085 (99.9%) |
+| opcode instances | 90800 of 90845 |
+| interprocedural residual, yield-escape cost | unchanged, suites green |
+
+**One arithmetic does NOT close, and it is left open rather than forced.** The `1070 of 1074` figure
+elsewhere in the tree is a calibration dated 2026-08-29, not a measurement of the pre-absorption tree.
+Adding the measured +11 to it does not reach 1084; `14_frame_log.kel` becoming lowerable earlier the
+same day accounts for two of its chunks, and the remainder was not measured. **Stating an arithmetic
+that does not close as though it did is a worse outcome than leaving it named and open.**

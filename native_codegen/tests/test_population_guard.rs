@@ -34,7 +34,12 @@
 ///
 /// **Derive this, do not transcribe it.** A count in this tree once read
 /// "nineteen" while the block it described held twenty-nine.
-const RECORDED_TEST_FUNCTIONS: usize = 492;
+const RECORDED_TEST_FUNCTIONS: usize = 494;
+// 492 -> 494 on 2026-09-11: two added, both in the new
+// `value_movement_census.rs`. It is the deliberate instrument for VALUE movement,
+// the counterpart to `pointer_offset_census.rs` for addresses: the data-slot
+// defect was a value move, and no census looked at those.
+//
 // 491 -> 492 on 2026-09-11: one added,
 // `the_private_contract_exceeds_the_slot_array_for_real_corpus_modules`. It is
 // the non-vacuity check on a harness repair: the corpus differential sized its
@@ -83,7 +88,9 @@ const RECORDED_TEST_FUNCTIONS: usize = 492;
 /// the failure message asks for, since a count cannot tell an add from a
 /// delete-plus-add. Unchanged by the persistent-composite-copy increment that
 /// followed: it rewrote a file's contents without adding or removing one.
-const RECORDED_TEST_FILES: usize = 106;
+///
+/// 106 -> 107 on 2026-09-11: `value_movement_census.rs` added, none removed.
+const RECORDED_TEST_FILES: usize = 107;
 
 fn test_files() -> Vec<std::path::PathBuf> {
     let mut out: Vec<_> = std::fs::read_dir("tests")

@@ -102,6 +102,42 @@ Corpus refusals went `1 -> 2` when a silent miscompilation became a loud refusal
 the refusal became a correct lowering. **The digit is where it started and the tree is not.** No
 aggregate distinguishes those three states.
 
+## ABSORPTION 57, AND A PREDICTION THAT CONTRADICTED ITS OWN RISK
+
+25 commits. Three clauses hit exactly; the fourth could not have been right.
+
+**I named the risk precisely** — the incoming set changes `wire.kel` and `verify_types.kel`, which are
+CORPUS SUBJECTS of my backend — **and then predicted a clean suite two lines later.** My corpus
+fingerprint guard exists to fail when corpus content moves. If the risk was real, a green run was
+impossible. The guard fired, named exactly those two files, and told me which figures to re-derive.
+
+**Cleared by evidence.** The chunk population moved +11, measured by compiling both versions of each
+file: `wire.kel` 486 to 492, `verify_types.kel` 28 to 33. File population unchanged at 74. Every
+named figure re-run and none moved: refusal set 1, ISA census 63 of 66, module coverage 98.6%, 1084 of
+1085 chunks lowerable, 90800 of 90845 opcode instances.
+
+**One arithmetic does not close and I left it open.** The `1070 of 1074` figure in my tree is a
+calibration dated 2026-08-29, not a measurement of the pre-absorption tree; adding the measured +11
+does not reach 1084. Forcing it to balance would have been worse than naming it.
+
+**Conflict resolutions, both in process channels**: `TASKLOG.md` took yours with my currency note
+re-applied; `REVERSE_PROMPT.md` kept mine, and says so above.
+
+## THE CENSUS FOR VALUE MOVEMENT
+
+The data-slot defect had an unexamined class behind it: **every place my emitter moves an operand as a
+word is a place a body operand would be moved as its address.** I had a deliberate census for ADDRESS
+arithmetic and none for VALUE movement, which is where that defect lived.
+
+All 17 move sites are now enumerated and classified **by what the destination outlives** — the
+question — rather than by whether the move is word-sized, which is not. Operand slots, locals, the
+spill slice and composite bodies outlive nothing; shared slots, private slots and the pool all
+survive, and each refuses a body or copies it. `return` and `yield` are not stores, so they are named
+as outside the count rather than silently skipped.
+
+**A shared composite slot compiles on your compiler and is refused here**, so that row is driven
+rather than hypothetical.
+
 ## STILL WITH YOU, NEITHER ACTED ON
 
 1. **A `confine.rs` index panic on a truncated op stream.** Three mutation kinds reach it, one guard
