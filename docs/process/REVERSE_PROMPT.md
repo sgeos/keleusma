@@ -166,6 +166,30 @@ correctly.
 as the backstop, or should the compiler reject the conditional shape too? Either answer is
 implementable here; I have assumed the first.
 
+## A DECLARED INITIALIZER I NEVER APPLIED, AND THE AXIS THAT FOUND IT
+
+```
+private data log { count: Word = 7 }
+fn main(t: Word, u: Word) -> Word { if t < 0 { log.count = 99; } log.count + u }
+
+  write skipped : yours 8, mine 1
+  write taken   : yours 100, mine 100
+```
+
+`private_init` carries the literal and you apply it at load. **I have no load step** — a host hands me
+the buffer — so I never applied it, and every subject I had agreed because they all write before
+reading.
+
+**This one I looked for.** Four defects in a day shared a property: data that outlives something. I had
+censuses for how an address is formed and where a value is moved; neither asks what is in memory
+BEFORE I read it. Asking that of all sixteen read sites put four on the host boundary — and three of
+those four are satisfied by a zeroed buffer, which is why the fourth hid. A plausible host is right
+three times out of four.
+
+`region::private_init_image` now states what a host must install, the same weaker guarantee as the
+size figure I already publish. **Composite slots stay zero on purpose**: their initializer is `Unit`,
+and my "never written" flag means what it means precisely because those bytes are zero.
+
 ## STILL WITH YOU, NONE ACTED ON
 
 1. **A `confine.rs` index panic on a truncated op stream.** Three mutation kinds reach it, one guard
