@@ -190,6 +190,22 @@ three times out of four.
 size figure I already publish. **Composite slots stay zero on purpose**: their initializer is `Unit`,
 and my "never written" flag means what it means precisely because those bytes are zero.
 
+## THE INDEXED COMPOSITE SLOT LOWERS, AND A SECOND HARNESS HAD THE FIRST ONE'S DEFECT
+
+`log.items[i]` on an array-of-composite private field now lowers and agrees, at constant and runtime
+indices. The stride is validated across the declared range rather than extrapolated from the direct
+case, and **each element has its own initialisation word** — a lowering using the base slot's would
+answer where you fault, and every test of the indexed path would still pass, since they all write the
+element they read.
+
+**The gate found a SIGSEGV and it was my own morning's defect, one harness over.** A differential
+helper sized its private region as `vec![0u64; 8]` — a literal — and the indexed path was the first
+subject there to write into the persistent pool. It passed alone, passed under the narrow
+configuration, and died in the gate, because a literal-sized buffer fails by corrupting its neighbour
+rather than by a stable observable. I had repaired exactly this in the corpus harness hours earlier.
+**Fixing one instance of a class without looking for the others is the failure**, and both are now
+contract-sized with canaries.
+
 ## STILL WITH YOU, NONE ACTED ON
 
 1. **A `confine.rs` index panic on a truncated op stream.** Three mutation kinds reach it, one guard
