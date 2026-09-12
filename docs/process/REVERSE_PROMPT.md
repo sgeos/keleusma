@@ -10,7 +10,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-09-11 (session 65, fifty-fourth increment) — every one of the stage's eleven input channels now has a named program whose verdict depends on it; the first, one-directional run of that census got one channel wrong, and my prediction of which would be inert was wrong too
+**Date**: 2026-09-12 (session 65, through the sixty-fourth increment) — the type-rejection input path went from carrying two of twelve real stage sources to TEN, and from 7.3x the shared data to 1.6x, across six verdict-preserving reductions; what is left is a CAPACITY DECISION rather than another reduction
 
 ## THE FOUR DECISIONS ARE STILL YOURS AND NONE HAS MOVED
 
@@ -25,6 +25,91 @@ They are the reason the large work is blocked, and nothing below decides any of 
    a merged document, and a deferral is worth something only if honoured. **This is the cheap one.**
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
    the WIDTH axis, unchanged on the FEATURE axis.
+
+## SINCE THE LAST REFRESH (INCREMENTS 55 TO 64), IN ONE BLOCK
+
+**This channel is BOUNDED and had drifted ten increments.** The per-increment reasoning is in
+[DESIGN_JOURNAL.md](./DESIGN_JOURNAL.md); this is the latest state and the next step.
+
+**A process note on the drift itself**: the reverse prompt stopped being updated exactly when the
+increments got dense, which is when it carries the most. The append-only journal kept pace because
+appending is cheap; the bounded channel did not, because it requires deciding what the current state
+IS.
+
+### THE HEADLINE: THE INPUT PATH IS NO LONGER THE OBSTACLE
+
+The type-rejection stage is fed by tables with fixed capacities. Measured against the twelve real
+`.kel` stage sources — the strongest available evidence, and nothing had ever run the stage on them:
+
+| | first measured | now |
+|---|---|---|
+| real sources whose tables fit | 2 of 12 | **10 of 12** |
+| shared data to carry the whole corpus | 54,301 words, 7.3x | 11,690 words, **1.6x** |
+| growth over what it uses today | +366 KiB | **+33 KiB** |
+
+Six reductions, each verdict-preserving under a differential that runs it against its own absence:
+inert-row elision, then distinct-facts deduplication of the occurrence, operand-pair, call-site,
+expression and binding channels.
+
+**I predicted ZERO sources would fit.** Every step was larger than expected, which is the argument
+for measuring rather than reasoning, made six times.
+
+### THE NEXT STEP IS YOURS, AND IT IS A FIFTH DECISION
+
+**Closing the last two is a CAPACITY DECISION, not another reduction.**
+
+- `parse` is over by a little on four channels, the worst 162 against 128. **A cap of 192 admits
+  it.**
+- `wire` is over about fourfold on six, dominated by DECLARATION-INDEXED tables that no
+  deduplication reaches: it declares 492 functions and 499 top-level names against caps of 128.
+
+Raising capacities is a worst-case-memory change, which is this project's value proposition, so it
+is not mine to take. The price is measured and pinned: **+33 KiB of shared data against a 16 MB
+ceiling.**
+
+### THREE FALSE REJECTIONS, ALL FOUND ON REAL CODE OR BY ASKING THE SYNTAX TREE
+
+Every one made the stage refuse a program the reference accepts — the direction a type checker may
+not take, since rejecting a valid program is a language change.
+
+1. **A `match` arm binding.** Every program using one was refused. Found by a well-typed control.
+2. **A `for` loop variable.** Every program containing a loop was refused. Found by running the
+   stage against its own sources — no hand-written control in the file contained a loop.
+3. **A const parameter used as a value**, and **an imported native called through its module path**.
+   Found by censusing the binding forms instead of waiting for the next accident.
+
+**The lesson that generalises**: a corpus of rejections cannot detect over-rejection by
+construction, and every well-typed control was a snippet I wrote. Real code was three lines of
+`include_str!` away the whole time.
+
+### TWO INSTRUMENTS WORTH KNOWING ABOUT
+
+- **The rule-shape census** crosses rule SHAPES against the syntactic FORMS each should govern. It
+  found eight gaps on its first run where the inventory said the rules were complete — including two
+  rules that existed and *could not fire*. **A rule inventory counts shapes, not the forms each
+  shape reaches.**
+- **The channel-withholding census** empties one input channel at a time and requires some verdict
+  to change. All eleven are depended on. Its first, one-directional version got one channel wrong: a
+  channel whose absence trips a fail-closed guard is invisible to an instrument watching only for
+  acceptance.
+
+### ONE SAVING IS DELIBERATELY REFUSED, AND PINNED SO IT STAYS THAT WAY
+
+Occurrence rows that cannot reject are **still sent**, at a measured cost of 39% of that channel.
+Eliding them would have the host withhold a row *because it knows the rule's answer* — the
+marshalling objection running backwards, invisible in every verdict. The pin fails if the rows stop
+arriving, so the argument must be met rather than bypassed. **If the trade becomes worth making,
+delete that test deliberately and say why.**
+
+### A PROCESS RULE THAT COST FIVE RUNS
+
+**A push cancels the running check for that pull request.** Five consecutive runs were cancelled and
+none ever completed, because a self-paced loop woke every twenty minutes against a run taking forty.
+Once a branch is ready, stop pushing and let it finish; work that cannot wait goes on a separate
+branch. Recorded in [GIT_STRATEGY.md](./GIT_STRATEGY.md).
+
+**And a fourth way a local check under-reports**, joining the three on record: a cached clippy run
+prints nothing whether or not warnings exist. Force a rebuild before believing a zero.
 
 ## FIFTY-FOURTH INCREMENT: WHICH INPUT CHANNELS ANY VERDICT DEPENDS ON
 

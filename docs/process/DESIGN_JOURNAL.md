@@ -13,6 +13,50 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (sixty-fifth) — the bounded channel had drifted ten increments
+
+### THE FINDING IS ABOUT THIS FILE'S SIBLINGS
+
+`REVERSE_PROMPT.md` stopped at the fifty-fourth increment while this journal reached the
+sixty-fourth. `HANDOFF.md` stopped at the forty-first, and still said *"type rejection reaches only
+literal, direct occurrences"* — true when written, false for weeks.
+
+**The append-only channel kept pace and the bounded one did not, and the asymmetry is structural.**
+Appending is cheap: it needs only what just happened. The bounded channel requires deciding what the
+CURRENT STATE IS, which is work, and which gets deferred exactly when increments are dense — that is,
+when it carries the most.
+
+A session ending here would have handed the next one a picture in which the input path is
+twenty-two times too small (it is 1.6), two real sources fit (ten do), and the field-read edge is
+the frontier (it is a capacity decision).
+
+### WHAT THE REFRESH SAYS
+
+One block covering increments 55 to 64 rather than ten sections, because the channel is BOUNDED and
+its job is the latest state and the next step, not the history — the history is here.
+
+The handoff's stale bullet is **struck through rather than deleted**, with the correction beside it,
+because a resuming agent who has read the old version needs to see that it moved rather than find it
+quietly gone. A handoff that silently changes its story is worse than one that admits it was wrong.
+
+### THE STATE IT NOW CARRIES
+
+- The input path carries **ten of twelve** real sources, up from two; the corpus-sized shared data is
+  **1.6x** what it uses today, down from 7.3x; the growth is **+33 KiB** against a 16 MB ceiling.
+- **Closing the last two is the operator's capacity decision**, not another reduction. `parse` needs
+  about 192 against caps of 128; `wire` about four times, dominated by declaration-indexed tables.
+- Three false rejections found and fixed, two of them only by running the stage against real code.
+- The refusal pin, so the one deliberately-declined saving is not taken by accident.
+- That a push cancels the running check, which cost five consecutive runs.
+
+### THE RULE
+
+**A channel that has to be rewritten rather than appended to will drift, and it drifts fastest when
+the work is going well.** The protocol says to update it after each task; I stopped when the tasks
+got dense. Noticing that it had happened took looking, not remembering.
+
+---
+
 ## 2026-09-12 (sixty-fourth) — the deferred channel, and why it needs the other deduplication
 
 ### THE REASONING THAT HAD BEEN DEFERRED

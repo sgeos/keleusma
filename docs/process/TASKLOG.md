@@ -53,6 +53,26 @@ Current sprint source of truth.
 > Third artifact in two increments whose answer was true when written and is now about a DIFFERENT
 > QUESTION. The pattern is staleness of SUBJECT, not of fact.
 
+> **Currency note (2026-09-12, session 65, through the sixty-fourth increment). THE TYPE-REJECTION
+> INPUT PATH IS NO LONGER THE OBSTACLE, AND WHAT IS LEFT IS THE OPERATOR'S.**
+>
+> Measured against the twelve real `.kel` stage sources: the input tables now carry **ten of
+> twelve**, up from two, and the shared data needed for the whole corpus fell from **7.3x to 1.6x**
+> — a growth of **+33 KiB** against a 16 MB ceiling. Six reductions, each verdict-preserving under a
+> differential that runs it against its own absence.
+>
+> **Closing the last two is a CAPACITY DECISION rather than another reduction.** `parse` needs about
+> 192 where caps are 128; `wire` needs roughly four times, dominated by declaration-indexed tables no
+> deduplication reaches.
+>
+> **Three false rejections were found and fixed**, each making the stage refuse programs the
+> reference accepts. Two surfaced only by running the stage against REAL CODE — every well-typed
+> control in the suite was a hand-written snippet, and not one contained a loop.
+>
+> **One saving is deliberately REFUSED and pinned**: occurrence rows that cannot reject are still
+> sent, because withholding them would have the host apply the rule. The pin fails if they stop
+> arriving.
+
 > **Currency note (2026-09-11, session 65, fifty-fourth increment). EVERY STAGE INPUT CHANNEL NOW
 > HAS A PROGRAM WHOSE VERDICT DEPENDS ON IT.**
 >
