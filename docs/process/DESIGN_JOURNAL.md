@@ -1,5 +1,50 @@
 # Design Journal
 
+## 2026-09-12 — [v0.3.0] Checked byte arithmetic returned untruncated values, behind a census blind spot
+
+```
+200 * 100 : reference Byte(32),  this backend 20000
+255 * 255 : reference Byte(1),   this backend 65025
+200 + 100 : reference Byte(44),  this backend 300
+```
+
+**The runtime's `Byte` arm is not its integer arm at a narrower type.** The result is computed wide,
+the low EIGHT BITS become the low slot, the middle slot is unused and zero where the integer arm puts
+a high half, and the flag is 1 above `0xFF` and never 2 — unsigned byte arithmetic cannot underflow.
+
+**The flag was as wrong as the value.** The integer classifier asks whether the result left the
+64-bit range, which a byte product never does, so every byte overflow reported flag 0 and took the
+`ok` arm. The natural subject — both arms returning the wrapped value — agrees even then, so the
+arm-selection test uses arms returning different constants.
+
+### Scope probed, not inferred from the two that were found
+
+| operation on `Byte` | status |
+|---|---|
+| `*`, `+` | diverged; fixed |
+| `-` | **no subject** — the reference rejects an `overflow` arm as an outcome that cannot arise |
+| `/`, `%` | already agreed: a byte quotient cannot leave the byte range |
+
+### The census blind spot is the real finding
+
+`backend_support_census.rs` reported **0 refused** while THREE variants were broken. **It is keyed by
+opcode NAME, and both support and semantics are decided by the OPERAND** — every `Checked*` row probed
+`Word`.
+
+> **Three defects behind one blind spot**, across two increments: the `Fixed` pair found by reading
+> refusals, the `Byte` pair by asking what else that table could not see. A row per opcode reports
+> whichever variant happens to be probed.
+
+The variants are probed now, and the file states what it still cannot do: it cannot know which
+variants exist, only which it was given.
+
+### The residual is recorded rather than closed
+
+The byte arm is taken when both operand widths are KNOWN bytes. An unknown width keeps the integer
+path — which every previously lowering program relies on, and which would still be wrong for a byte.
+Refusing on unknown would withdraw support from programs that work today, so the limit is named
+instead.
+
 ## 2026-09-12 — [v0.3.0] The checked fixed divide, and a reason I gave that did not distinguish
 
 One increment after lowering the checked fixed MULTIPLY, the DIVIDE lowers too — and the interesting

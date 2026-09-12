@@ -988,6 +988,46 @@ impl<'ctx> Lower<'ctx> {
     /// its `narrow` path is dead and `truncate_int_to_declared_width` is the
     /// identity. [`check_word_width`] refuses every other width, so that
     /// precondition is enforced rather than assumed.
+    /// **THE `Byte` ARM OF A CHECKED ADD OR MULTIPLY**, which is not the integer
+    /// arm at a narrower type.
+    ///
+    /// Read from `src/vm.rs`: the result is computed wide, the **low eight bits**
+    /// become the low slot, the middle slot is **unused and zero** where the
+    /// integer arm puts a high half, and the flag is `1` above `0xFF` and
+    /// **never 2** — unsigned byte addition and multiplication cannot underflow.
+    ///
+    /// **The flag is the half that is easy to miss.** Truncating the value while
+    /// classifying against the 64-bit range would leave every byte overflow
+    /// reporting flag 0, turning a wrong value into a wrong value with a wrong
+    /// arm.
+    fn push_byte_checked(
+        &mut self,
+        ctx: &'ctx Context,
+        func: FunctionValue<'ctx>,
+        trap_bb: BasicBlock<'ctx>,
+        opts: LowerOptions,
+        wide: IntValue<'ctx>,
+    ) {
+        let i64t = self.i64t;
+        let i128t = ctx.i128_type();
+        let ff = i128t.const_int(0xFF, false);
+        let over = self
+            .b
+            .build_int_compare(IntPredicate::SGT, wide, ff, "byover")
+            .unwrap();
+        let flag = self
+            .b
+            .build_select(over, i64t.const_int(1, false), i64t.const_zero(), "byflag")
+            .unwrap()
+            .into_int_value();
+        let trunc = self.b.build_int_truncate(wide, i64t, "bylow64").unwrap();
+        let low = self
+            .b
+            .build_and(trunc, i64t.const_int(0xFF, false), "bylow")
+            .unwrap();
+        self.push_triple(ctx, func, trap_bb, opts, (low, i64t.const_zero(), flag));
+    }
+
     fn push_checked_triple(
         &mut self,
         ctx: &'ctx Context,
@@ -3983,6 +4023,17 @@ fn lower_chunk_body<'ctx>(
             // against `src/compiler.rs` and the VM's dispatch arms, which raise
             // a type error on an `Int` reaching `Op::Add`.
             Op::CheckedAdd | Op::CheckedSub => {
+                // **A `Byte` OPERAND TAKES A DIFFERENT ARM IN THE RUNTIME**, and
+                // taking the integer one returned an untruncated value: `200 + 100`
+                // gave 300 where the reference gives `Byte(44)`.
+                //
+                // The WIDTH discriminates here — `Byte` is `Scalar(1)` and `Word`
+                // is `Scalar(8)` — unlike `Fixed` versus `Word`, which it cannot.
+                // **Both operands must be known bytes**: an unknown width keeps
+                // the integer path, which is what every previously lowering
+                // program relies on, and is recorded as the residual it is.
+                let byte_operands =
+                    st.width_at(0) == Width::Scalar(1) && st.width_at(1) == Width::Scalar(1);
                 let rhs = st.pop();
                 let lhs = st.pop();
                 let a = st.widen(lhs, i128t, "a128");
@@ -3991,7 +4042,15 @@ fn lower_chunk_body<'ctx>(
                     Op::CheckedAdd => st.b.build_int_add(a, c, "s128").unwrap(),
                     _ => st.b.build_int_sub(a, c, "d128").unwrap(),
                 };
-                st.push_checked_triple(ctx, func, trap_bb, opts, wide);
+                // `Op::CheckedSub` on `Byte` has no subject: the reference rejects
+                // an `overflow` arm there as an outcome that cannot arise. The
+                // branch is taken only by `CheckedAdd` in practice, and costs
+                // nothing to leave general.
+                if byte_operands {
+                    st.push_byte_checked(ctx, func, trap_bb, opts, wide);
+                } else {
+                    st.push_checked_triple(ctx, func, trap_bb, opts, wide);
+                }
             }
             // Both halves of the product are load-bearing for big-number
             // multiplication, so the 128-bit product is computed in full rather
@@ -4004,12 +4063,22 @@ fn lower_chunk_body<'ctx>(
             // helper; it is refused here rather than lowered as if the operand
             // were absent.
             Op::CheckedMul(0) => {
+                // See `Op::CheckedAdd` above: a `Byte` operand takes the
+                // runtime's byte arm, which wraps to eight bits and flags above
+                // `0xFF`. `200 * 100` gave 20000 here against the reference's
+                // `Byte(32)`.
+                let byte_operands =
+                    st.width_at(0) == Width::Scalar(1) && st.width_at(1) == Width::Scalar(1);
                 let rhs = st.pop();
                 let lhs = st.pop();
                 let a = st.widen(lhs, i128t, "a128");
                 let c = st.widen(rhs, i128t, "b128");
                 let wide = st.b.build_int_mul(a, c, "p128").unwrap();
-                st.push_checked_triple(ctx, func, trap_bb, opts, wide);
+                if byte_operands {
+                    st.push_byte_checked(ctx, func, trap_bb, opts, wide);
+                } else {
+                    st.push_checked_triple(ctx, func, trap_bb, opts, wide);
+                }
             }
             // **THE CHECKED FIXED-POINT MULTIPLY.** `Op::CheckedMul(0)` above is
             // the integer arm; a NON-ZERO fraction count is the Fixed one.

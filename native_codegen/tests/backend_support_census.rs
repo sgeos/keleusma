@@ -22,6 +22,19 @@
 //! and a case whose opcode is absent is reported as a BROKEN PROBE rather than
 //! as support.
 //!
+//! # ⚠ KEYED BY OPCODE NAME, WHICH IS NOT WHAT DECIDES SUPPORT
+//!
+//! **Corrected 2026-09-12.** Every `Checked*` probe used `Word` operands, and the
+//! runtime dispatches those opcodes on the operand's TYPE. This census reported
+//! **0 refused** while the `Fixed` variants of `CheckedMul` and `CheckedDiv` were
+//! refused outright, and the `Byte` variants of `CheckedMul` and `CheckedAdd`
+//! returned untruncated values.
+//!
+//! **Three defects behind one blind spot.** A row per opcode reports whichever
+//! variant happens to be probed. The variants are now probed explicitly, and a
+//! new one arriving unprobed is the thing to watch for next — this file cannot
+//! know which variants exist, only which it was given.
+//!
 //! # What a pass here does NOT mean
 //!
 //! That the backend accepted the opcode. **Not that the emitted code is
@@ -120,6 +133,38 @@ const PROBES: &[(&str, &str, &str)] = &[
         "CheckedMod",
         "p",
         "fn p(a: Word, b: Word) -> Word { a % b { ok(v) => v, zero_divisor(n) => 0, } }\nfn main() -> Word { 0 }",
+    ),
+    // ⚠ **OPERAND VARIANTS, ADDED 2026-09-12. THIS TABLE WAS KEYED BY OPCODE
+    // NAME WHILE SUPPORT AND SEMANTICS ARE DECIDED BY THE OPERAND.**
+    //
+    // Every `Checked*` row above uses `Word`. The runtime dispatches these on the
+    // operand's type — `Word`, `Byte`, `Fixed`, `Float` — and this census
+    // reported "0 refused" while the FIXED variants of `CheckedMul` and
+    // `CheckedDiv` were refused outright and the BYTE variants of `CheckedMul`
+    // and `CheckedAdd` returned untruncated values.
+    //
+    // **Three defects, one blind spot**: a row per opcode reports the variant
+    // that happens to be probed. The fixed pair was found by reading refusals,
+    // and the byte pair by asking what else this table could not see.
+    (
+        "CheckedMul",
+        "p",
+        "fn p(a: Byte, b: Byte) -> Byte { a * b { ok(v) => v, overflow(w) => w } }\nfn main() -> Word { 0 }",
+    ),
+    (
+        "CheckedAdd",
+        "p",
+        "fn p(a: Byte, b: Byte) -> Byte { a + b { ok(v) => v, overflow(w) => w } }\nfn main() -> Word { 0 }",
+    ),
+    (
+        "CheckedMul",
+        "p",
+        "fn p(a: Fixed<16>, b: Fixed<16>) -> Fixed<16> { a * b { ok(v) => v, overflow(w) => w } }\nfn main() -> Word { 0 }",
+    ),
+    (
+        "CheckedDiv",
+        "p",
+        "fn p(a: Fixed<16>, b: Fixed<16>) -> Fixed<16> { a / b { ok(v) => v, overflow(w) => w, zero_divisor(n) => n } }\nfn main() -> Word { 0 }",
     ),
     (
         "BoundsCheck",

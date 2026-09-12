@@ -34,7 +34,14 @@
 ///
 /// **Derive this, do not transcribe it.** A count in this tree once read
 /// "nineteen" while the block it described held twenty-nine.
-const RECORDED_TEST_FUNCTIONS: usize = 526;
+const RECORDED_TEST_FUNCTIONS: usize = 530;
+// 526 -> 530 on 2026-09-12: four added in `checked_byte_arithmetic.rs`. Checked
+// `Byte` multiply and add returned UNTRUNCATED values — 200 * 100 gave 20000
+// where the reference gives Byte(32) — because the backend took the integer arm
+// for an operand type the runtime dispatches separately. Found by asking what
+// `backend_support_census.rs` could not see, after it reported 0 refusals while
+// three variants were broken.
+//
 // 523 -> 526 on 2026-09-12: three added to `checked_fixed_mul.rs` for the checked
 // fixed DIVIDE, refused on a ground that did not distinguish it — the bare
 // `Op::FixedDiv` already reaches `__divti3` and already lowers, so the cost was
@@ -204,7 +211,9 @@ const RECORDED_TEST_FUNCTIONS: usize = 526;
 /// 116 -> 117: `prediction_stamp.rs` added, none removed.
 ///
 /// 117 -> 118: `checked_fixed_mul.rs` added, none removed.
-const RECORDED_TEST_FILES: usize = 118;
+///
+/// 118 -> 119: `checked_byte_arithmetic.rs` added, none removed.
+const RECORDED_TEST_FILES: usize = 119;
 
 fn test_files() -> Vec<std::path::PathBuf> {
     let mut out: Vec<_> = std::fs::read_dir("tests")
