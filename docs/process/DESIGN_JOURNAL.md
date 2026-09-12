@@ -13,6 +13,172 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (sixty-fourth) — the deferred channel, and why it needs the other deduplication
+
+### THE REASONING THAT HAD BEEN DEFERRED
+
+The binding channel was skipped two increments ago: its lookup is not a simple per-row predicate,
+and a 34% saving did not justify the extra reasoning while two other channels were changing. It
+became the binding constraint as soon as the alternatives were taken. This does the reasoning.
+
+**The lookup OVERWRITES its accumulator as it scans, so the LAST matching row wins.**
+First-appearance deduplication would therefore change behaviour whenever a name carries two
+conflicting rows: `[(a,1), (a,2), (a,1)]` resolves to 1 before and 2 after.
+
+**The hazard is real rather than theoretical.** Ten names across the twelve real sources carry more
+than one distinct row — the flat namespace over locals and functions makes it possible, and this
+file already recorded that as a known narrowing. A local shadowing a function name is the everyday
+case.
+
+**Last-appearance deduplication is the safe form**, and the argument is short: if tuple `T` at
+position `p` was the last row for name `v`, then no row for `v` follows `p`, so keeping `T` at its
+last position keeps it last. The overall answer is preserved by construction rather than by
+inspection.
+
+This is why the deferral was worth making at the time and worth resolving now: the channel really
+did need a different criterion from the other four, and taking it in the same increment as them
+would have meant applying first-appearance deduplication to all five.
+
+### THE EFFECT
+
+| | before | after |
+|---|---|---|
+| real sources that fit | 8 of 12 | **10 of 12** |
+| corpus-sized shared data | 12,822 words, 1.7x | 11,690 words, **1.6x** |
+| growth over today | +42 KiB | **+33 KiB** |
+| tightest constraint anywhere | `wire` bindings, 6x | `wire` bindings, 4x |
+
+`codegen` and `reconstruct` crossed under.
+
+### WHAT IS LEFT IS NOT MORE OF THE SAME
+
+Two sources remain over, and their character differs:
+
+- **`parse` is over by a little on four channels**, the worst 162 against 128. A cap of 192 would
+  admit it.
+- **`wire` is over by about four times on six**, dominated by the DECLARATION-INDEXED tables that no
+  deduplication reaches: it declares 492 functions and 499 top-level names against caps of 128.
+
+**Closing the last two is a capacity decision, not another reduction.** Six reductions have taken
+the price from +366 KiB to +33 KiB — a factor of eleven — and the remaining growth is mostly the
+floor named two increments ago.
+
+### THE SEQUENCE, WHICH IS THE POINT
+
+Predicted ZERO sources would fit. Measured two. Elision: three. Occurrences: seven. Calls, pairs,
+expressions: eight. Bindings: ten. **Every step verdict-preserving under a differential, every step
+measured rather than argued, and every step larger than I expected.**
+
+---
+
+## 2026-09-12 (sixty-third) — the expression channel deduplicates too, and a deferral becomes the constraint
+
+### THE CHANNEL THAT LOOKED LIKE `dparams` AND IS NOT
+
+The expression table is ADDRESSED BY INDEX: a form-2 binding row carries its initialiser's position
+in it. That is the same property that makes `dparams` undeduplicatable, so the channel had been left
+out of the distinct-facts argument.
+
+**The two cases are not the same, and the difference is exact.** `dparams` is indexed BY
+DECLARATION, so collapsing rows moves every later entry and destroys the addressing. The expression
+table collapses only rows that are IDENTICAL — and a binding pointing at either copy gets the same
+operands and therefore the same tag. The remap the inert-row elision already built handles the rest.
+
+**Measured: 5,145 rows across the corpus carry 718 distinct shapes, 86% repeats.** `parse.kel` falls
+from 1,728 to 116, under its cap; `codegen` from 473 to 110, under.
+
+### THE EFFECT
+
+| | before | after |
+|---|---|---|
+| real sources that fit | 7 of 12 | **8 of 12** |
+| corpus-sized shared data | 19,862 words, 2.7x | 12,822 words, **1.7x** |
+| growth over today | +97 KiB | **+42 KiB** |
+| tightest constraint anywhere | `parse` expression nodes, 7x | `wire` BINDINGS, 6x |
+
+### A DEFERRAL HAS BECOME THE CONSTRAINT
+
+The binding channel was left un-deduplicated one increment ago, on the reasoning that its lookup is
+not a simple per-row predicate and a 34% saving did not justify the extra reasoning while two other
+channels were being changed.
+
+**It is now what stands between the remaining four sources and the caps.** That is a different
+judgement from the one made then, and it was reached not by changing my mind but by everything
+around it moving. Worth recording as a shape: a deferral justified by relative cost is a deferral
+whose justification expires when the alternatives are taken.
+
+### THE FULL SEQUENCE
+
+Predicted zero sources would fit. Measured two. Inert-row elision: three. Occurrence deduplication:
+seven. Call, pair and expression deduplication: eight. **Five reductions, each verdict-preserving
+under a differential, the price down from +366 KiB to +42 KiB — a factor of nine.**
+
+What remains is genuinely different in character: the binding channel, and the two
+declaration-indexed floors that no deduplication reaches.
+
+---
+
+## 2026-09-12 (sixty-second) — the same argument reaches two more channels, and stops at two others
+
+### WHERE IT REACHES
+
+The distinct-facts argument applies to a channel whose rows are a LIST OF FACTS read by a per-row
+predicate folded into a sticky verdict. Two more qualify:
+
+| channel, on `wire.kel` | rows | distinct |
+|---|---|---|
+| operand pairs | 1,452 | **2** |
+| call sites | 1,730 | 472 |
+
+The operand-pair result is the striking one: the channel carries an actual tag against a required
+tag, and across a 217-kilobyte program there are **two distinct combinations**. Reporting it 1,452
+times was pure repetition.
+
+### WHERE IT STOPS, WHICH IS THE MORE USEFUL HALF
+
+- **`dparams` is ADDRESSED POSITIONALLY.** The arity rule reads `dparams[csite[i]]`: the table is
+  indexed by declaration, not scanned as a list. Deduplicating it would destroy the addressing
+  rather than shrink it.
+- **`dname` is already a set** of distinct declared names. There is nothing to remove.
+
+**Both are one row per declaration, and they are a FLOOR.** `wire.kel` declares 492 functions and
+499 top-level names against caps of 128 — roughly four times the cap remains after every reduction
+of this kind, and no further cleverness removes it.
+
+**That number is worth more than another percentage**, because it is the part a capacity decision
+actually has to cover. The reductions have taken the price from 7.3x to 2.7x; what is left is mostly
+not compressible.
+
+### BINDINGS DELIBERATELY LEFT ALONE
+
+The binding lookup takes whichever row matches rather than folding a predicate, so duplicates are
+harmless — but two rows for ONE name that DIFFER are meaningful, and the criterion would have to
+distinguish that case. A 34% saving does not justify reasoning about a channel whose lookup is not a
+simple per-row predicate, in an increment already touching two others.
+
+### THE EFFECT
+
+| | before | after |
+|---|---|---|
+| corpus-sized shared data | 24,770 words, 3.3x | 19,862 words, **2.7x** |
+| growth over today | +135 KiB | **+97 KiB** |
+| real sources that fit | 7 of 12 | 7 of 12 |
+| tightest constraint anywhere | `wire` call sites, 14x | `parse` expression nodes, 7x |
+
+**The count of fitting sources did not move**, and that is worth noting rather than glossing: the
+sources that were over were over on SEVERAL channels, so removing one constraint exposes the next.
+`codegen` is now over on two channels rather than four, and `parse` on five rather than six. Progress
+that does not move the headline count is still progress, and a summary that reported only the count
+would have shown nothing.
+
+### THE WHOLE SEQUENCE
+
+Predicted zero would fit. Measured two. Inert-row elision: three. Occurrence deduplication: seven.
+Pair and call-site deduplication: seven, with the price down another third. **Four reductions, every
+one verdict-preserving under a differential, and the price down from +366 KiB to +97 KiB.**
+
+---
+
 ## 2026-09-12 (sixty-first) — the saving the refusal left open, and a measurement that had drifted
 
 ### THE SAVING THE PREVIOUS INCREMENT LEFT OPEN
