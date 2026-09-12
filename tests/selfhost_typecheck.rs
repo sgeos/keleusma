@@ -4243,6 +4243,99 @@ fn real_source_channel_rows(ast: &keleusma::ast::Program) -> Vec<(&'static str, 
     ]
 }
 
+/// **AN AVAILABLE SAVING THAT IS DELIBERATELY NOT TAKEN.**
+///
+/// # The saving
+///
+/// An occurrence row with `local = 1` and `call = 0` can never reject: the rule
+/// returns zero for it directly, with no lookup. Eliding those rows would drop a
+/// measured **39% of the channel** across the twelve real sources — and the
+/// occurrence channel is, since the expression elision landed, the largest
+/// remaining term in the price of a corpus-sized input path.
+///
+/// **It is verdict-preserving.** This is not an unsound optimisation being called
+/// unsound. Every program would get the same answer.
+///
+/// # Why it is refused anyway
+///
+/// The elision that WAS taken removed rows whose content was *nothing*: an operand
+/// reported as "could not tell" and an operand not reported at all are
+/// **indistinguishable to the stage** — both resolve to zero, and the stage's
+/// answer is byte-identical either way. The host declined to send a row it had
+/// nothing to say about.
+///
+/// This one is different in kind. A row saying "this name, local, not a call"
+/// carries real content. Withholding it would be the host declining **because it
+/// knows the rule's answer**. The line this file draws is that the host reports
+/// syntax — "occurrence 4 names index 12, and it is a call" — and does not say
+/// "that is an undefined function", because the classification is the work.
+/// **Suppressing rows whose classification the host predicted is performing that
+/// classification**, and it would be invisible in every verdict.
+///
+/// That is the marshalling objection running backwards: the concern is usually a
+/// host supplying conclusions, and this would be a host withholding evidence on
+/// the strength of one.
+///
+/// # Why this is a test and not a comment
+///
+/// A refusal recorded only in prose is a refusal that gets undone by someone
+/// optimising in good faith. **This fails if the rows stop being sent**, so the
+/// argument above has to be met rather than bypassed. It guards a decision rather
+/// than a behaviour.
+///
+/// If a later increment decides the trade is worth making — perhaps because the
+/// occurrence channel becomes the thing standing between the stage and the real
+/// corpus — the way to do it is to delete this test deliberately and say why, not
+/// to discover it failing.
+#[cfg(feature = "self-host")]
+#[test]
+fn occurrence_rows_that_cannot_reject_are_still_sent() {
+    let mut total = 0usize;
+    let mut inert = 0usize;
+    let mut worst: (&str, usize, usize) = ("", 0, 0);
+
+    for (name, src) in REAL_STAGE_SOURCES {
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+        let (_declared, occ, _wildcard) = occurrence_rows(&ast);
+        // A plain local READ: the rule's first arm returns zero without a lookup.
+        let plain = occ.iter().filter(|(_, l, c)| *l == 1 && *c == 0).count();
+        total += occ.len();
+        inert += plain;
+        if occ.len() > worst.1 {
+            worst = (name, occ.len(), plain);
+        }
+    }
+
+    std::eprintln!(
+        "OCCURRENCE ROWS THAT CANNOT REJECT: {inert} of {total} ({:.0}%), still sent \
+         on purpose; largest channel is {} at {}/{}",
+        100.0 * inert as f64 / total as f64,
+        worst.0,
+        worst.2,
+        worst.1
+    );
+
+    // **THE PIN.** If these rows stop arriving, the saving was taken, and whoever
+    // took it should meet the argument in this test's documentation rather than
+    // find out from a diff.
+    assert!(
+        inert > 0,
+        "no occurrence row is a plain local read any more. Either the corpus \
+         changed beyond recognition, or the host began eliding rows whose \
+         classification it predicted -- which is the host performing the \
+         classification, and is the thing this test exists to refuse. If the trade \
+         is now worth making, delete this test deliberately and record why"
+    );
+
+    // NON-VACUITY the other way: a channel that were ENTIRELY inert rows would mean
+    // the rule never fires and the measurement describes nothing.
+    assert!(
+        inert < total,
+        "every occurrence row is a plain local read, so the classification rule has \
+         nothing to classify and this measurement is not about the stage"
+    );
+}
+
 /// **ELIDING THE ROWS THAT CANNOT DECIDE ANYTHING CHANGES NO VERDICT.**
 ///
 /// # Why elide at all

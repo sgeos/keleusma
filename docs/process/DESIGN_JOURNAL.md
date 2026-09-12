@@ -13,6 +13,68 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (sixtieth) — a saving that is available, verdict-preserving, and refused
+
+### THE SAVING
+
+The expression elision moved the binding constraint to the OCCURRENCE channel, now the largest
+remaining term in the price of a corpus-sized input path.
+
+The same argument appears to apply. An occurrence row with `local = 1` and `call = 0` can never
+reject: the rule returns zero for it directly, with no lookup. **Measured: 5,580 of 14,288 rows, 39%
+across the twelve real sources**, and 1,224 of `wire`'s 3,874.
+
+**It is verdict-preserving.** Every program would get the same answer. This is not an unsound
+optimisation being called unsound.
+
+### WHY IT IS REFUSED ANYWAY
+
+The elision that WAS taken removed rows whose content was **nothing**. An operand reported as "could
+not tell" and an operand not reported at all are **indistinguishable to the stage**: both resolve to
+zero and the answer is identical either way. The host declined to send a row it had nothing to say
+about.
+
+This one is different in kind. A row saying "this name, local, not a call" carries real content, and
+withholding it would be the host declining **because it knows the rule's answer**.
+
+The line this file draws is that the host reports syntax — "occurrence 4 names index 12, and it is a
+call" — and does not say "that is an undefined function", because the classification is the work.
+**Suppressing rows whose classification the host predicted is performing that classification**, and
+it would be invisible in every verdict.
+
+That is the marshalling objection running backwards. The usual concern is a host supplying
+conclusions; this would be a host withholding evidence on the strength of one.
+
+### THE TEST OF THE DISTINCTION
+
+The two cases are separated by a question worth keeping: **can the stage tell the difference between
+the row being absent and the row being present?**
+
+- Expression rows: NO. Absent and reported-unknown both resolve to zero. Eliding is free.
+- Occurrence rows: YES. The fold length changes and one fewer name is classified. Eliding requires
+  the host to have applied the rule.
+
+Both give the same verdict. Only one leaves the decision where the file says it lives.
+
+### WHY THIS IS A TEST AND NOT A COMMENT
+
+**A refusal recorded only in prose is a refusal that gets undone by someone optimising in good
+faith.** The pin fails if the rows stop being sent, so the argument has to be MET rather than
+bypassed. It guards a decision rather than a behaviour, which is a shape this repository did not yet
+have.
+
+If a later increment decides the trade is worth making — perhaps because this channel becomes the
+thing standing between the stage and the real corpus — the way to do it is to delete the test
+deliberately and record why, not to discover it failing.
+
+### WHAT THIS DOES NOT CLAIM
+
+Not that the occurrence channel cannot be made cheaper. A saving that does not require the host to
+apply the rule — fewer occurrences reported because fewer are generated, or a narrower row — remains
+open and is not what this refuses.
+
+---
+
 ## 2026-09-12 (fifty-ninth) — two thirds of the expression table cannot decide anything
 
 ### THE LEVER THE PRICE IDENTIFIED
