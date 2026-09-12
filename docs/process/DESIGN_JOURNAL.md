@@ -13,6 +13,201 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (seventy-second) — the pin caught what local verification did not, and a risk I had written down
+
+### WHAT BROKE
+
+The parser fix went red in continuous integration. `every_stage_fits_the_driver_caps_with_margin`
+pins the worst-case compiled blob size across the stage corpus: **35,746 against a pinned 35,716**
+— thirty bytes, because the `step_mpat` branch grew `parse.kel`.
+
+**The increment's own brief had named this risk.** Its list of what could go wrong, in order of
+likelihood, ended with *"counts pinned elsewhere: chunk and node figures are asserted in several
+files; a grown source can move them."* I wrote that, then ran the parse, codegen and typecheck
+suites and not the file that checks it.
+
+**A risk named in a brief is only useful if the brief's checks are then run.** Having the right list
+is not the same as using it.
+
+### THE MOVE IS RECORDED WITH ITS CAUSE
+
+That pin carries a history of such moves, each with its size and reason. This is the fourteenth, and
+the **first with zero new names**: the branch introduces no identifier, so the per-name arithmetic
+the comment tracks has nothing to say about it. Recorded as constraining that constant not at all,
+rather than as a data point for it — the file's own convention is to keep the measurement and leave
+the arithmetic open where it is open.
+
+### A SECOND, SMALLER ERROR OF THE SAME SHAPE
+
+After fixing the pin I reported the default-feature workspace run clean. **It was not established.**
+The command ended in `tail -20`, so the twenty-one result lines counted were the LAST twenty
+binaries — the earlier ones, including the integration tests where a `parse.kel` change would
+actually show, were truncated away.
+
+**A truncated log looks identical to a clean one.** That is the fifth way a local check has
+under-reported this session, after the cached clippy run, and it has the same remedy: capture the
+whole output and the exit status, then read both.
+
+Re-run properly: `EXIT=0`, **135 test binaries all passing**, no failures anywhere.
+
+### WHAT CHANGED IN PRACTICE
+
+Two things, neither of which is "run more tests":
+
+1. When a pinned figure moves, run the **whole** suite that contains it, not the one assertion.
+   Fixing an assertion and re-running only that assertion repeats the original error at smaller
+   scale.
+2. Capture full output and exit status for anything whose result will be quoted. A pipeline ending
+   in `tail` or `head` produces evidence that cannot support the claim made from it.
+
+---
+
+## 2026-09-12 (seventy-first) — the last untraced gap, and the cheap wins are exhausted
+
+### THE TRACE
+
+`assert` was the one gap never looked at. It failed a third way — `reconstruct.kel` refusing with
+*"a record range did not reduce to exactly one node"* — and that message describes a symptom rather
+than a cause.
+
+**`assert` is not a keyword in the self-hosted lexer.** `kw6` recognises `shared`, `orelse` and
+`struct`; `assert` is not among them. So it lexes as an ordinary identifier, `assert a > 0` becomes
+two adjacent identifiers the expression parser cannot reduce, and the reconstruct guard catches the
+wreckage downstream.
+
+### ITS ABSENCE IS DEFENSIBLE; ITS FAILURE MODE IS NOT
+
+**No stage source uses `assert` as a statement.** The only occurrences across the twelve `.kel` files
+are in comments, checked rather than assumed. So excluding it from the self-hosted subset is a
+reasonable choice, not an oversight.
+
+What is not reasonable is that the exclusion surfaces as a malformed record stream instead of a
+refusal naming the construct. **That distinction — whether a construct is IN the subset versus
+whether its absence is well-behaved — is the one this file has now applied to all four gaps**, and
+it is the part that would be lost by reporting "the subset is narrow".
+
+### THE PLANNING RESULT: NO CHEAP WINS REMAIN
+
+| gap | kind |
+|---|---|
+| bare enum unit variant | **contained — fixed**; every piece existed in one function |
+| variable pattern | feature work; `step_match` reads a non-enum identifier as the end of the arms |
+| struct destructuring | feature work; same root |
+| `assert` | feature work; needs a token code, a lexer arm, statement parsing, and emission through two more stages |
+
+**One of four was a missing branch. The other three are each multi-stage features.** That is worth
+stating plainly, because the previous increment's success could otherwise suggest the rest are
+similarly cheap. They are not, and the next work in this area is scoped feature work or nothing.
+
+### THE METHOD, FOR THE FOURTH TIME
+
+Trace before writing. It has now changed the plan four times this session: the capacity price
+reshaped the reductions, the specified list tripled the pattern census, the expression census showed
+the pattern gaps were local rather than symptomatic, and this splits the remaining gaps by cost
+rather than by count. **Each trace cost a reading; each would have cost a rewrite if taken in the
+other order.**
+
+---
+
+## 2026-09-12 (seventieth) — the contained fix, and a hesitation that was misplaced
+
+### A CORRECTION TO THE PREVIOUS INCREMENT'S REASONING
+
+It declined to write the fix because the change "deserves its own continuous-integration run rather
+than a ride-along". **That conflated WRITING the change with PUSHING it.** Working locally and
+holding the push — which is what every increment since the cadence finding has done — gives the
+change its own run. The hesitation protected nothing.
+
+### THE FIX
+
+`step_mpat` phase 3 waited for `LParen` and did nothing on any other token, so given `E::A => 1` the
+phase never advanced, tokens kept arriving with no progress, and the parse ran to its step budget.
+**It did not refuse; it span.**
+
+Phase 3 now completes the pattern on `=>`: the `LParen` path's slot reservation, then the `RParen`
+path's completion with zero payload binds, then **phase 4 rather than 3** — because the `=>` has
+already been consumed here, and returning to the phase that waits for one would swallow the arm
+result's first token.
+
+Only `=>` is handled. A match-arm pattern must be followed by it, so any other token at that phase
+is malformed input, and a narrow branch is easier to argue correct than a general one.
+
+### PARSING IS NOT THE CLAIM
+
+**That it now parses is not evidence it parses CORRECTLY.** The census only checks the pipeline does
+not panic, and would pass on a fix emitting wrong records.
+
+The two spellings denote the same pattern, so their record streams must be IDENTICAL — and comparing
+them is stronger than asserting what the records should contain, because it needs no model of the
+encoding. They match, including **mixed in one match**, which is the case that exercises each
+branch's hand-off to the arm result against the other's.
+
+### WHAT THE SLOT COMMENT WAS FOR
+
+The `LParen` path carries a comment saying its slot reservation exists so parse's slot numbers match
+codegen's allocation. **That is why the reservation was mirrored rather than rewritten**: getting it
+wrong would desynchronise two stages in a way no parse test would show. Byte identity held — 147 of
+147 in the codegen suite, 88 of 88 in the parse suite.
+
+### THE STATE OF THE CENSUS
+
+Documented pattern forms: **five parse, two do not.** The two that remain are feature work by the
+same trace — `step_match` phase 2 reads a non-enum identifier as the end of the arms, so supporting
+them means new arm semantics rather than a missing branch.
+
+---
+
+## 2026-09-12 (sixty-ninth) — three gaps, one contained fix and two features
+
+### WHY TRACE RATHER THAN WRITE
+
+Both deferral conditions for fixing the parser had expired: the instrument was on a pushed branch,
+and the previous increment established the gaps are LOCAL rather than symptomatic, so the fix is
+worthwhile. **"Worthwhile" is not "small"**, and `parse.kel` is 6,651 lines that must still
+self-compile byte-identically. So the mechanism was traced before anything was written.
+
+### THE ROOT IS ONE PLACE, AND IT SPLITS THE THREE UNEVENLY
+
+`step_match` phase 2 reads an arm pattern. It accepts an integer literal, `_`, and an identifier
+**only when that identifier names a known enum**. Anything else sets `match_build` — it reads the
+identifier as the END OF THE ARMS.
+
+**That single decision produces both observed failure kinds:**
+
+- **The variable pattern `v` and the struct pattern `P { x }`** take the end-of-arms path. The
+  parser does not hang; it produces a stream that means something else, and `reconstruct.kel`
+  catches it as a work-stack underflow. **FEATURE WORK** — supporting them means new arm semantics,
+  binding or destructuring the scrutinee, not a missing branch.
+
+- **The bare enum unit variant `E::A`** is recognised as an enum, enters `step_mpat`, and reaches
+  phase 3, which waits for `LParen` and **does nothing on any other token**. The phase never
+  advances and tokens keep arriving with no progress. That is the spin, exactly.
+
+### THE CONTAINED ONE, ANALYSED SO IT IS NOT RE-ANALYSED
+
+The `LParen` path reserves the arm's `IsEnum` test slot. The `RParen` path completes the pattern,
+counts the arm, and returns the `EnumArm` record. A bare form needs **both of those, plus advancing
+the match phase PAST the `=>` it has already consumed** rather than back to the phase that waits for
+one.
+
+**Every piece it needs already exists in that one function.** The analysis is recorded beside the
+census so the increment that does it starts from here.
+
+### WHY IT WAS NOT DONE IN THIS INCREMENT
+
+Any change to a stage source must still self-compile byte-identically, and that constraint makes
+even the contained fix worth its own run at continuous integration rather than a ride-along on a
+branch whose run is already in flight. Attempting it while three jobs were pending on another pull
+request would have risked the thing the last several increments spent effort protecting.
+
+### THE SHAPE
+
+**"Three gaps" was not a useful unit of work.** Tracing turned it into one contained fix and two
+features, which is a different plan with a different cost. The tracing took one reading of two
+functions; writing the grammar first would have discovered the same split after the expensive part.
+
+---
+
 ## 2026-09-12 (sixty-eighth) — the pattern gaps are local, and a third failure kind
 
 ### THE QUESTION THAT DECIDED THE NEXT WORK

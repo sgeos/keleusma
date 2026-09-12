@@ -1869,6 +1869,57 @@ fn a_stage_shaped_dispatch_function_parses() {
     assert_eq!(got, reference(src, &names));
 }
 
+// **THE BARE UNIT-VARIANT PATTERN MUST MEAN THE SAME THING AS THE PARENTHESISED ONE.**
+//
+// `docs/spec/GRAMMAR.md` lists `Command::Silence` — no parentheses — as the enum unit variant
+// pattern. Until 2026-09-12 `parse.kel` waited for a `(` that never came: the phase never
+// advanced, tokens kept arriving with no progress, and the parse ran to its step budget without
+// reaching DONE. It did not refuse; it span.
+//
+// **That it now PARSES is not evidence it parses CORRECTLY.** A census that only checks the
+// pipeline does not panic would pass on a fix that emitted the wrong records. The two spellings
+// denote the same pattern, so their record streams must be identical — and comparing them is a
+// stronger check than any assertion about what the records should contain, because it needs no
+// model of the encoding.
+//
+// The mixed case is the one most likely to break: it exercises the bare branch's hand-off to the
+// arm result against the parenthesised branch's, in one match.
+#[test]
+fn a_bare_unit_variant_pattern_parses_as_the_parenthesised_one() {
+    let bare = "enum E { A, B } \
+        fn f(e: E) -> Word { match e { E::A => 1, E::B => 2 } }";
+    let paren = "enum E { A, B } \
+        fn f(e: E) -> Word { match e { E::A() => 1, E::B() => 2 } }";
+
+    let mut n1 = Vec::new();
+    let mut n2 = Vec::new();
+    let got_bare = run_parse(bare, &mut n1);
+    let got_paren = run_parse(paren, &mut n2);
+    assert_eq!(
+        got_bare, got_paren,
+        "the bare and parenthesised unit-variant patterns produced different record streams, so \
+         the bare form parses but does not mean the same thing"
+    );
+
+    // MIXED IN ONE MATCH, which is what exercises each branch's hand-off to the arm result
+    // against the other's.
+    let mixed = "enum E { A, B } \
+        fn f(e: E) -> Word { match e { E::A => 1, E::B() => 2 } }";
+    let mut n3 = Vec::new();
+    let got_mixed = run_parse(mixed, &mut n3);
+    assert_eq!(
+        got_mixed, got_paren,
+        "mixing the two spellings in one match changed the record stream, so the bare branch's \
+         hand-off differs from the parenthesised branch's"
+    );
+
+    // NON-VACUITY: the stream must not be empty, or the comparisons above hold trivially.
+    assert!(
+        !got_bare.funcs.is_empty(),
+        "the parse produced no functions, so comparing two results establishes nothing"
+    );
+}
+
 // A real stage function (parse.kel's own emit_op): a match over enum-variant patterns
 // whose arm results are enum casts, with an enum-cast-plus-arithmetic wildcard. This
 // combines enum patterns, enum casts in arm results, and arithmetic as the stages do.

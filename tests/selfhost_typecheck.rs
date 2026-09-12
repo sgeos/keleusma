@@ -4181,6 +4181,24 @@ fn the_rules_the_census_added_do_not_reject_valid_programs() {
 /// **`assert`** — `reconstruct.kel` refuses with *"a record range did not reduce to
 /// exactly one node"*.
 ///
+/// **TRACED: `assert` IS NOT A KEYWORD IN THE SELF-HOSTED LEXER.** `kw6` recognises
+/// `shared`, `orelse` and `struct`; `assert` is not among them, so it lexes as an
+/// ordinary identifier and `assert a > 0` becomes two adjacent identifiers the
+/// expression parser cannot reduce. The reconstruct message is the downstream
+/// symptom, not the cause.
+///
+/// **Its absence is defensible; the failure mode is not.** No stage source uses
+/// `assert` as a statement — the only occurrences across the twelve are in
+/// comments — so excluding it from the subset is a reasonable choice. What is not
+/// reasonable is that the exclusion surfaces as a malformed record stream rather
+/// than a refusal naming the construct.
+///
+/// **This is FEATURE WORK, not a missing branch**, and that matters for planning:
+/// admitting it needs a token code, a lexer arm, statement parsing, and emission
+/// through reconstruct and codegen. Unlike the bare unit-variant pattern — where
+/// every piece already existed in one function — no existing path contains the
+/// pieces.
+///
 /// That brings the distinct failure kinds to three across the two censuses:
 ///
 /// | kind | where | forms |
@@ -4324,9 +4342,10 @@ fn the_documented_expression_and_statement_forms_are_censused() {
 /// TWO DIFFERENT WAYS** — a distinction the first version of this comment got
 /// wrong by asserting all three spin.
 ///
-/// - **Enum unit variant, bare** — `parse.kel` DOES NOT TERMINATE, exhausting its
-///   step budget. The grammar lists `Command::Silence`; the parenthesised `E::A()`
-///   parses and the documented spelling does not.
+/// - **Enum unit variant, bare** — ~~does not terminate~~ **FIXED 2026-09-12.** The
+///   grammar lists `Command::Silence`; `parse.kel` waited for a `(` that never came
+///   and span until its step budget ran out. Phase 3 now completes the pattern on
+///   the `=>` it already has.
 /// - **Struct destructuring** (`Note { channel, pitch }`) and **variable** (`x`) —
 ///   `parse.kel` ACCEPTS these and emits a record stream `reconstruct.kel` cannot
 ///   rebuild, refused as a **work-stack UNDERFLOW**.
@@ -4352,13 +4371,36 @@ fn the_documented_expression_and_statement_forms_are_censused() {
 /// grammar's enumerated list turned one finding into three, which is the argument
 /// for censusing against a SPECIFIED list rather than an assembled one.
 ///
-/// # This pin does not fix any of them
+/// # This pin does not fix any of them, and they are NOT equally hard
 ///
-/// Teaching `parse.kel` these forms is a change to the self-hosted pattern grammar
-/// and belongs in its own increment; an instrument and the change it argues for
-/// should not land together. What is fixed alongside this is the DIAGNOSTIC, which
-/// asserted that the usual cause of budget exhaustion is an unterminated block — a
-/// claim about a population nobody measured, and false for all three of these.
+/// Teaching `parse.kel` these forms belongs in its own increment; an instrument and
+/// the change it argues for should not land together. What is fixed alongside this
+/// is the DIAGNOSTIC, which asserted that the usual cause of budget exhaustion is
+/// an unterminated block — a claim about a population nobody measured, and false
+/// for all three of these.
+///
+/// **The mechanism was traced so the next increment does not repeat the tracing**,
+/// and it splits the three unevenly:
+///
+/// - **The bare enum unit variant is CONTAINED.** `step_mpat` phase 3 waits for
+///   `LParen` and does nothing on any other token, so the phase never advances and
+///   the parse never completes — that is the spin, exactly. The `LParen` path
+///   reserves the arm's `IsEnum` test slot; the `RParen` path completes the
+///   pattern, counts the arm and returns the `EnumArm` record. A bare form needs
+///   both of those, plus advancing the match phase PAST the `=>` it has already
+///   consumed rather than back to the phase that waits for one. **Every piece it
+///   needs already exists in that one function.**
+///
+/// - **The variable and struct patterns are FEATURE WORK.** `step_match` phase 2
+///   accepts an identifier only when it names a known enum, and otherwise sets
+///   `match_build` — it reads the identifier as the END OF THE ARMS. That is why
+///   they do not spin but produce a stream `reconstruct.kel` cannot rebuild.
+///   Supporting them means new arm semantics — binding the scrutinee, or
+///   destructuring it — not a missing branch.
+///
+/// **Any such change must still self-compile byte-identically**, which is the
+/// constraint that makes even the contained one worth its own run at continuous
+/// integration rather than a ride-along.
 ///
 /// **Each failing form is asserted to FAIL**, so the day one parses, this test
 /// fails and says to widen the documented subset rather than letting the gain go
@@ -4447,11 +4489,14 @@ fn the_documented_pattern_forms_are_censused_against_the_self_hosted_parser() {
     got.sort_unstable();
     assert_eq!(
         got,
-        vec![
-            "enum unit variant, bare",
-            "struct destructuring",
-            "variable",
-        ],
+        // **THE BARE ENUM UNIT VARIANT LEFT THIS SET on 2026-09-12**, which is what
+        // this assertion exists to announce. `step_mpat` phase 3 now completes the
+        // pattern on `=>` instead of waiting for a `(` that never comes.
+        //
+        // The two that remain are FEATURE WORK by the same trace, not missing
+        // branches: `step_match` phase 2 reads an identifier that is not an enum
+        // name as the END OF THE ARMS, so supporting them means new arm semantics.
+        vec!["struct destructuring", "variable"],
         "the set of documented pattern forms `parse.kel` cannot handle changed. A \
          form leaving it means the self-hosted parser gained a construct: record \
          what changed and widen the documented subset. A form joining it is a \
