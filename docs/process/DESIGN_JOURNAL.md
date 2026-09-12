@@ -13,6 +13,51 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (eighty-fourth) — measuring what two guards actually cover, and a claim retracted mid-increment
+
+### THE LIST HAD NO CHECK, AND THE FLOAT EPISODE SHOWED WHY THAT MATTERS
+
+The construct scan names constructs on the failure path. Until this increment nothing checked that a
+named construct is REALLY outside the subset. The float type was nearly added on the strength of a
+loose summary, and only running a float-typed program caught it.
+
+A new test pairs each named construct with a minimal program and asserts two things: the scan names
+it, and the pipeline refuses it. A construct that is named but compiles is a wrong entry; one that
+is refused but unnamed is a missing one. Both directions fail there.
+
+### A CLAIM WRITTEN AND RETRACTED INSIDE THE SAME INCREMENT
+
+The first draft of that test's comment said the row count was a tripwire that would fail if a scan
+arm were added without a row. **That is false.** The count compares the table's length against a
+constant; it cannot see the scan's arms, which are match patterns rather than data. The sentence was
+caught by re-reading the comment against the code beneath it, which is the cheapest instance yet of
+the pattern this session keeps meeting.
+
+### WHAT THE TWO GUARDS ACTUALLY COVER, MUTATION-MEASURED
+
+Mutating the scan to name the SUPPORTED wildcard pattern separates them:
+
+- the list test PASSES, because no row mentions a wildcard;
+- the stage-source guard FAILS, because the stage sources use `_`.
+
+So the two cover the union of "constructs the stage sources happen to use" and "constructs with a
+row in the table". **The hole is the complement, and it is not hypothetical.** No stage source uses
+a float type, so a float-type arm added with no row would have passed BOTH guards. That is precisely
+the entry nearly added last increment.
+
+Recording the union and the hole is the point. A clean run from either guard is evidence about that
+guard's reach before it is evidence about the list, and the reach is now written down next to the
+tests rather than inferred by a future reader.
+
+### FRONTIER
+
+The driver-side, capacity-neutral category is worked out: gap refusals name their construct, the
+float literal names itself, the divergence message was already adequate and is pinned, and the list
+that drives the naming now has a validity check with its coverage stated. No stage source has been
+touched.
+
+---
+
 ## 2026-09-12 (eighty-third) — the measurement that stopped a wrong construct name
 
 ### WHAT I SET OUT TO FIX WAS ALREADY FINE
