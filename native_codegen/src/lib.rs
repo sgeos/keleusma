@@ -5439,7 +5439,17 @@ fn lower_chunk_body<'ctx>(
                 // does not name. The one-word store would write its ADDRESS, so
                 // it is refused. No corpus module declares a shared composite,
                 // so this arm has no subject and is deliberately not lowered.
-                if !is_read && st.width_at(0).is_body() {
+                // **A SLOT WITH A STATED PLACEMENT IS NOT "NOWHERE TO PUT
+                // IT".** The shared layout marks a composite slot and states its
+                // body length, so such a slot is copied below rather than
+                // refused here. The refusal is NARROWED to its actual subject —
+                // a body whose destination outlives the region and has no stated
+                // placement — rather than deleted.
+                let shared_composite = data
+                    .shared_layout
+                    .get(slot as usize)
+                    .is_some_and(|e| e.kind & keleusma::bytecode::SHARED_SLOT_COMPOSITE_FLAG != 0);
+                if !is_read && !shared_composite && st.width_at(0).is_body() {
                     return Err(LowerError::UnsupportedDataSlot {
                         slot,
                         why: String::from(
@@ -5473,6 +5483,104 @@ fn lower_chunk_body<'ctx>(
                     // table does not state, so it is refused rather than
                     // assumed.
                     let base = shared_base.expect("has_data implies the shared pointer");
+
+                    // **A SHARED COMPOSITE SLOT: COPY IN, ADDRESS OUT.**
+                    //
+                    // `SharedSlotLayout` STATES the body length, so unlike the
+                    // private pool this needs no derived size and no validated
+                    // partition — the length is a field, and recomputing it from
+                    // neighbouring offsets would be a second opinion free to
+                    // drift.
+                    //
+                    // **No initialisation word belongs here.** A private
+                    // composite slot's initial value is `Unit`, which is not a
+                    // body, so reading an unwritten one faults. The shared
+                    // segment has no such state: the host owns the buffer and
+                    // initialises it by contract, and the runtime copies out
+                    // whatever bytes are there and re-wraps them as the declared
+                    // kind. Inventing a fault here would be inventing one the
+                    // reference does not have.
+                    //
+                    // The address handed back on a read points into the HOST's
+                    // buffer, which outlives the call — which is why it is safe
+                    // where the same move into the ephemeral region would not be.
+                    if let Some(e) = data
+                        .shared_layout
+                        .get(slot as usize)
+                        .filter(|e| e.kind & keleusma::bytecode::SHARED_SLOT_COMPOSITE_FLAG != 0)
+                    {
+                        if indexed {
+                            return Err(LowerError::UnsupportedDataSlot {
+                                slot,
+                                why: String::from(
+                                    "an INDEXED shared composite slot: the layout entries for the                                      range are not proven contiguous and uniform here, and the                                      direct case's stride does not carry over",
+                                ),
+                            });
+                        }
+                        let len = u32::from(e.len);
+                        if len == 0 {
+                            return Err(LowerError::UnsupportedDataSlot {
+                                slot,
+                                why: String::from(
+                                    "a shared slot marked composite whose stated body length is                                      zero; the layout and the kind disagree",
+                                ),
+                            });
+                        }
+                        let addr = unsafe {
+                            st.b.build_in_bounds_gep(
+                                i8t,
+                                base,
+                                &[i64t.const_int(u64::from(e.offset), false)],
+                                "sharedbody",
+                            )
+                            .unwrap()
+                        };
+                        if is_read {
+                            let as_int =
+                                st.b.build_ptr_to_int(addr, i64t, "sharedbodyint").unwrap();
+                            st.push_w(as_int, Width::Body(len));
+                        } else {
+                            // The operand's width is cross-checked against the
+                            // stated length: two independent statements of one
+                            // number, and a disagreement sizes no copy.
+                            let w = st.width_at(0);
+                            match w {
+                                Width::Body(n) if n == len => {}
+                                other => {
+                                    return Err(LowerError::UnsupportedDataSlot {
+                                        slot,
+                                        why: format!(
+                                            "a shared composite slot of {len} bytes written from                                              an operand of {other:?}"
+                                        ),
+                                    });
+                                }
+                            }
+                            let v = st.pop();
+                            let src =
+                                st.b.build_int_to_ptr(
+                                    v,
+                                    ctx.ptr_type(AddressSpace::default()),
+                                    "sharedsrc",
+                                )
+                                .unwrap();
+                            st.b.build_memcpy(
+                                addr,
+                                1,
+                                src,
+                                1,
+                                i64t.const_int(u64::from(len), false),
+                            )
+                            .map_err(|e| {
+                                LowerError::UnsupportedDataSlot {
+                                    slot,
+                                    why: format!(
+                                        "could not copy a {len}-byte body into shared: {e}"
+                                    ),
+                                }
+                            })?;
+                        }
+                        continue;
+                    }
                     // A direct access resolves one slot; an indexed access
                     // proves the whole range contiguous and uniform first, then
                     // computes `first + index * width`.

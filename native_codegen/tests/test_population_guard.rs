@@ -34,7 +34,14 @@
 ///
 /// **Derive this, do not transcribe it.** A count in this tree once read
 /// "nineteen" while the block it described held twenty-nine.
-const RECORDED_TEST_FUNCTIONS: usize = 507;
+const RECORDED_TEST_FUNCTIONS: usize = 510;
+// 507 -> 510 on 2026-09-11, net: three added in `shared_composite_slot.rs`, and
+// in `value_movement_census.rs` one REPLACED another — the test asserting that a
+// composite written into a shared slot is refused became false when the copy
+// landed, and was replaced by `every_composite_typed_data_slot_has_a_stated_placement`,
+// which is the stronger claim that makes the refusal unreachable from compilable
+// source. A weakened version would have been kept green by not implementing it.
+//
 // 506 -> 507 on 2026-09-11: one added, `host_buffer_census.rs`. It is the
 // deliberate instrument for the class the day ended on — a host buffer sized by
 // a literal rather than by the published contract. Three harnesses had it; a
@@ -141,7 +148,9 @@ const RECORDED_TEST_FUNCTIONS: usize = 507;
 /// 110 -> 111: `indexed_composite_slot.rs` added, none removed.
 ///
 /// 111 -> 112: `host_buffer_census.rs` added, none removed.
-const RECORDED_TEST_FILES: usize = 112;
+///
+/// 112 -> 113: `shared_composite_slot.rs` added, none removed.
+const RECORDED_TEST_FILES: usize = 113;
 
 fn test_files() -> Vec<std::path::PathBuf> {
     let mut out: Vec<_> = std::fs::read_dir("tests")

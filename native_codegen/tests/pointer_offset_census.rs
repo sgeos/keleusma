@@ -40,6 +40,7 @@
 //! | **flat array element** | **runtime, guarded by `guard_array_index`** |
 //! | operand spill store and reload | constant — `spill_off` plus a compile-time slot index |
 //! | **nested array element** | **runtime, guarded by `guard_array_index`** — formed by integer ADD, not a gep |
+//! | **shared composite body** | constant — the slot's stated offset in the host buffer; the int-to-pointer beside it takes the copy's source address, already formed |
 //! | **composite-slot initialisation word** | constant — the flag array's base plus the slot's position in the module's own pool table, both fixed at lowering |
 //! | **persistent composite pool, direct** | constant — this backend's private-slot count times its slot width, plus the module table's pool offset. Neither term is a program value, and the placement is refused outright if it would reach the resume-state word |
 //! | **persistent composite pool, INDEXED** | runtime, guarded — `first + index * size`, where `index` was compared UNSIGNED against the instruction's own declared element count before the shared/private split, and `size` is validated uniform across the whole declared range |
@@ -76,7 +77,13 @@
 ///
 /// **Re-derive rather than trust.** It moves whenever a site is added or
 /// removed.
-const RECORDED_GEP_SITES: usize = 22;
+const RECORDED_GEP_SITES: usize = 24;
+// 22 -> 24 on 2026-09-11, when the shared composite slot landed. **Both are
+// compile-time constant.** The body's address is the slot's STATED offset in the
+// host buffer — a field of the layout, not a computed quantity — and the second
+// site is the int-to-pointer of the copy's source, which is the operand's own
+// address and adds no offset.
+//
 // 21 -> 22 on 2026-09-11, when the composite-slot initialisation words landed.
 // **Compile-time constant.** The flag's address is the array base plus the slot's
 // INDEX IN THE MODULE'S OWN TABLE, times eight — a position the emitter computes

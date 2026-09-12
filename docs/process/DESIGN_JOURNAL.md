@@ -1,5 +1,48 @@
 # Design Journal
 
+## 2026-09-11 — [v0.3.0] The shared composite slot, and a refusal that became unreachable
+
+The last refused shape in the data-slot story now lowers. A composite written into a shared slot is
+**copied** to the offset the layout states, for the length it states; a read hands back a pointer into
+the host's buffer.
+
+### Easier than the private pool, and the reason is worth keeping
+
+`SharedSlotLayout` carries `len` — **the body length is a field, not a derivation.** The private pool
+needed a size inferred from neighbouring offsets and therefore a validated partition; this needed
+neither. Recomputing a stated quantity is the drift this line already refuses for widths and pool
+offsets.
+
+### The semantic difference, stated rather than assumed
+
+A private composite slot's initial value is `Unit`, which is not a body, so reading an unwritten one
+FAULTS — that is what the per-slot initialisation word buys. **The shared segment has no such state**:
+the host owns the buffer and initialises it by contract, and the reference copies out whatever bytes
+are there. **So no initialisation word belongs here**, and a subject exists that would fail if one
+were ever added — it seeds the host buffer with `a = 7, b = 9` and reads them back through a slot the
+program never wrote.
+
+### The value alone would not have been enough
+
+The test compares the returned scalar **and the host's bytes after the call**, and then checks the
+body is at the offset the layout states. A lowering that put the body somewhere else and read it back
+from there would satisfy a scalar comparison.
+
+### A refusal that stopped being reachable
+
+The value-movement census asserted that a composite written into a shared slot is refused. **That
+became false**, and a weakened version would have been kept green by not implementing the copy. The
+replacement is the stronger claim behind it: a composite operand can only be assigned to a
+composite-typed slot, and **every composite-typed slot now has a stated placement** — a pool entry, or
+a composite-flagged layout entry with a non-zero length. The general refusal remains as a backstop for
+bytecode the compiler did not produce, and the census says so.
+
+### The host-buffer census fired on its author's next increment
+
+Written one increment earlier, it refused this one until the new harness was registered. **Three
+censuses have now caught their own author within a day of being written** — the pointer census, the
+value-movement census, and this one.
+
 ## 2026-09-11 — [v0.3.0] Looking for the other instances, and the hand sweep failing twice
 
 The previous increment ended by recording a lesson: **repairing one instance of a class without

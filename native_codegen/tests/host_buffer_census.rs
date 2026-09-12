@@ -61,8 +61,14 @@ const BUFFER_HARNESSES: &[&str] = &[
     "reset_region_retention.rs",
     "rogue_ai_differential.rs",
     "rogue_dungen_differential.rs",
+    "shared_composite_slot.rs",
     "stage_differential.rs",
 ];
+// `shared_composite_slot.rs` joined on 2026-09-11, **the increment after this
+// census was written**, and the census refused until it was registered. It
+// derives every buffer from the contract and carries three canaries, which is
+// what the registration is for: the list records that someone looked, not merely
+// that a file exists.
 
 /// How a harness may establish its private region size.
 ///

@@ -27,7 +27,8 @@
 //! | local slot (`SetLocal`, parameters, the resume value) | no — cleared at `Op::Reset` | nothing needed, same reason |
 //! | operand spill slice | no — abandoned when the depth goes to zero | nothing needed |
 //! | composite body field | no — the body is itself region-resident | a `Width::Body` operand is MEMCPY'd, never stored as a word |
-//! | **shared data slot** | **yes** — host buffer | a body operand is REFUSED |
+//! | **shared data slot, scalar** | **yes** — host buffer | a body operand with no stated placement is REFUSED |
+//! | **shared data slot, composite** | **yes** — host buffer | the body is COPIED to the slot's stated offset, for its stated length. A read hands back a pointer INTO the host's buffer, which is safe precisely because that buffer outlives the call — the same move into the ephemeral region would not be |
 //! | **private data slot** | **yes** — persistent across `Op::Reset` | a body operand is REFUSED, unless the slot is a declared composite, which is COPIED into the pool |
 //! | **persistent composite pool** | **yes** | reached only by a memcpy of the derived body size |
 //! | stream resume-state word | yes | never carries an operand — only a constant yield index |
@@ -45,6 +46,16 @@
 //!   `composite_return_aliasing.rs`.
 //! - **yield** — a composite that escapes its iteration is REFUSED; see
 //!   `YIELD_ESCAPE_REFUSAL.md` and `interproc_yield_escape.rs`.
+//!
+//! # ⚠ THE GENERAL REFUSAL IS NOW A BACKSTOP, NOT A LIVE PATH
+//!
+//! A composite operand can only be assigned to a composite-typed slot, and every
+//! composite-typed slot now has a stated placement — a pool entry for a private
+//! one, a composite-flagged layout entry for a shared one. **So the refusal for
+//! "a body with nowhere stated to put it" is no longer reachable from compilable
+//! source.** It is kept for bytecode that did not come from the compiler, and
+//! `every_composite_typed_data_slot_has_a_stated_placement` is what would notice
+//! if a new composite-typed slot arrived without one.
 //!
 //! # What this file cannot do
 //!
@@ -67,7 +78,12 @@ const MOVE_FORMS: &[&str] = &["build_store(", "build_memcpy("];
 /// Move sites in the emitter, at the stamp.
 ///
 /// **Re-derive rather than transcribe.**
-const RECORDED_MOVE_SITES: usize = 18;
+const RECORDED_MOVE_SITES: usize = 19;
+// 18 -> 19 on 2026-09-11, when the shared composite slot landed: one body copy
+// into the host's buffer, at the offset and length the module's shared layout
+// STATES. Unlike the persistent pool, nothing here is derived — so there is no
+// partition to validate, only a field to read.
+//
 // 17 -> 18 on 2026-09-11, the increment AFTER this census was written, and it
 // fired on its author. The new site marks a composite slot as written. Its
 // destination outlives the region — it has to, since the slot does — but it
@@ -127,62 +143,99 @@ fn every_operand_move_has_a_classified_destination() {
     );
 }
 
-/// **THE ROWS THAT SAY "REFUSED", DRIVEN RATHER THAN ASSERTED.**
+/// **EVERY COMPOSITE-TYPED DATA SLOT HAS A STATED PLACEMENT.**
 ///
-/// The table is prose until something executes it. These are the two
-/// destinations that outlive the region and are closed by a refusal rather than
-/// by a copy.
+/// # The claim this replaces, and why it was replaced rather than weakened
+///
+/// This test asserted that a composite written into a SHARED slot is refused.
+/// **That became false** when the shared composite copy landed, and a weakened
+/// version would have been kept green by not implementing it.
+///
+/// What is true now is stronger and is the reason the refusal is no longer
+/// reachable: a composite operand can only be assigned to a composite-typed
+/// slot, and **every composite-typed slot now has a stated placement** — a
+/// persistent pool entry for a private one, a composite-flagged layout entry with
+/// a stated length for a shared one. The general refusal remains as a backstop
+/// for bytecode that did not come from the compiler, and the census header says
+/// so.
 #[test]
-fn a_body_reaching_a_surviving_destination_is_refused() {
-    // A private slot that is NOT a declared composite, reached by a body. The
-    // module declares the slot as a Word, so no pool entry exists for it, and the
-    // write would be a one-word store of the body's address.
-    const BODY_TO_SCALAR_SLOT: &str = "\
-struct F { a: Word, b: Word }\n\
-private data log { latest: Word }\n\
-fn main() -> Word {\n\
-    let f = F { a: 1, b: 2 };\n\
-    log.latest = f.a;\n\
-    log.latest\n\
-}\n";
-    // The control: the same shape moving a SCALAR into the same slot lowers.
-    let scalar = module_refusals(&common::build(BODY_TO_SCALAR_SLOT), LowerOptions::default());
-    assert!(
-        scalar.is_empty(),
-        "the scalar control must lower, or the refusals below are not specific to a \
-         body: {scalar:?}"
-    );
+fn every_composite_typed_data_slot_has_a_stated_placement() {
+    use keleusma::bytecode::SHARED_SLOT_COMPOSITE_FLAG;
 
-    // A composite declared in a SHARED slot, if the reference admits the shape.
-    const SHARED_COMPOSITE: &str = "\
-struct F { a: Word, b: Word }\n\
-shared data io { latest: F }\n\
-fn main() -> Word {\n\
-    io.latest = F { a: 1, b: 2 };\n\
-    0\n\
-}\n";
-    match common::try_build(SHARED_COMPOSITE) {
-        None => {
-            // Recorded rather than passed over: the absence of a refusal here is a
-            // fact about the reference compiler, not support in this backend.
-            println!(
-                "a shared composite slot does not compile on the reference compiler, so \
-                 the shared row of this file's table has no driven subject"
-            );
+    const SUBJECTS: &[(&str, &str)] = &[
+        (
+            "private direct",
+            "struct F { a: Word, b: Word }\n\
+             private data log { latest: F, count: Word }\n\
+             fn main(t: Word) -> Word { log.latest = F { a: t, b: t }; log.latest.a }\n",
+        ),
+        (
+            "private indexed",
+            "struct F { a: Word, b: Word }\n\
+             private data log { items: [F; 3], count: Word }\n\
+             fn main(t: Word) -> Word { log.items[1] = F { a: t, b: t }; log.items[1].a }\n",
+        ),
+        (
+            "shared direct",
+            "struct F { a: Word, b: Word }\n\
+             shared data io { latest: F, n: Word }\n\
+             fn main(t: Word) -> Word { io.latest = F { a: t, b: t }; io.latest.a }\n",
+        ),
+    ];
+
+    let mut checked = 0usize;
+    for (name, src) in SUBJECTS {
+        let m = common::build(src);
+        let dl = m.data_layout.as_ref().expect("the subject declares data");
+        let shared_count = dl
+            .slots
+            .iter()
+            .filter(|s| s.visibility == keleusma::bytecode::SlotVisibility::Shared)
+            .count();
+
+        // A slot is composite-typed exactly when it has a placement of one kind
+        // or the other; the point is that NEITHER set is empty for a subject
+        // that declares a composite, and that every such slot is covered.
+        let private_placed = dl.private_composite_layout.len();
+        let shared_placed = dl
+            .shared_layout
+            .iter()
+            .filter(|e| e.kind & SHARED_SLOT_COMPOSITE_FLAG != 0)
+            .count();
+        assert!(
+            private_placed + shared_placed > 0,
+            "{name}: the subject declares a composite slot and the module states no \
+             placement for any of them, so the copy would have nowhere to go"
+        );
+
+        // The stated length of a shared composite must be non-zero, or the kind
+        // and the layout disagree and the copy would be empty.
+        for e in dl.shared_layout.iter().take(shared_count) {
+            if e.kind & SHARED_SLOT_COMPOSITE_FLAG != 0 {
+                assert!(
+                    e.len > 0,
+                    "{name}: a shared slot is marked composite with a stated length of zero"
+                );
+                checked += 1;
+            }
         }
-        Some(m) => {
-            let refusals = module_refusals(&m, LowerOptions::default());
-            assert!(
-                !refusals.is_empty(),
-                "a composite written into a SHARED slot must be refused: the store is \
-                 one word wide and the host buffer outlives the region"
-            );
-            let why = format!("{refusals:?}");
-            assert!(
-                why.contains("ADDRESS") && why.contains("composite"),
-                "the refusal must name the body and the address it would store, or it \
-                 could be any other limitation of this shape: {why}"
-            );
-        }
+        checked += private_placed;
+
+        // And it lowers: a stated placement that the backend still refuses would
+        // make the claim above hollow.
+        let refusals = module_refusals(&m, LowerOptions::default());
+        assert!(
+            refusals.is_empty(),
+            "{name}: every composite slot here has a stated placement and the backend \
+             still refuses it: {refusals:?}"
+        );
     }
+
+    // **NON-VACUITY.** A loop that checked nothing would pass.
+    assert!(
+        checked >= 5,
+        "only {checked} composite placements checked across {} subjects; the \
+         extraction is not reading the layouts",
+        SUBJECTS.len()
+    );
 }

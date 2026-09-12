@@ -1,0 +1,42 @@
+COMPLETION CONDITION — the shared composite data slot
+
+Ordering is NOT a completion criterion. Any order of the work satisfies this, and
+nothing here requires a particular branch, commit shape, or process step.
+
+All of the following hold in the tree:
+
+1. A SHARED COMPOSITE SLOT IS WRITTEN BY COPY AND READ AS A BODY.
+   A program that writes a composite into a shared data slot and reads a field of
+   it back agrees with the virtual machine, and the bytes the host sees after the
+   call are the body's, not an address.
+
+2. THE HOST'S BYTES ARE THE OBSERVABLE.
+   A test inspects the host buffer after a native call and finds the composite's
+   field values at the offsets the module's layout states, rather than inferring
+   success from a returned scalar alone.
+
+3. NO FAULT IS INVENTED FOR AN UNWRITTEN SHARED SLOT.
+   Reading a shared composite slot the program has not written produces the same
+   result natively as on the virtual machine, whatever the host placed there. It
+   does not trap.
+
+4. THE LENGTH COMES FROM THE LAYOUT FIELD.
+   The body length used is the one the module's shared layout states, not a
+   quantity recomputed from neighbouring offsets.
+
+5. THE GENERAL REFUSAL STILL FIRES WHERE NOTHING COPIES.
+   A body operand reaching a destination that outlives the region and has no
+   stated placement is still refused.
+
+6. THE INDEXED FORM IS EITHER CORRECT OR REFUSED WITH A REASON.
+   An indexed shared composite slot does not silently take the direct path.
+
+7. THE CENSUSES ARE UPDATED, NOT BYPASSED.
+   Any new address-forming or value-moving site is classified, and any census row
+   that described the shared slot as refused now states what is true.
+
+8. NO NEW OPCODE, NO BYTECODE_VERSION CHANGE, AND NO EDIT TO src/ OR tests/ AT
+   THE REPOSITORY ROOT.
+
+9. THE BACKEND SUITE IS GREEN IN BOTH FLOAT CONFIGURATIONS, with counts
+   re-derived rather than quoted.
