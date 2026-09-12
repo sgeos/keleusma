@@ -142,6 +142,13 @@ pub enum OperandKind {
     /// the stack stays homogeneous. The alternative — a stack of value enums —
     /// touches 46 pop sites for no gain the optimiser does not already give.
     Float,
+    /// A Q-format fixed-point value. **Indistinguishable from `Int` in LLVM** --
+    /// both are `i64` -- which is precisely why the backend once lowered
+    /// `Fixed % Fixed` to an integer remainder and returned a value where the
+    /// reference virtual machine raises `TypeError("cannot modulo Fixed by
+    /// Fixed")`. The scale is not tracked here; only the fact that the value is
+    /// scaled, which is what the reference dispatches on.
+    Fixed,
     /// Not determined here. Fails a float-sensitive operation closed.
     Unknown,
 }
@@ -3006,11 +3013,24 @@ fn degenerate_stream_yield(chunk: &Chunk, module: &Module) -> Option<Vec<usize>>
 /// READER was built with.
 const SCALAR_FLOAT_TAG: u8 = 5;
 
+/// `ScalarKind::Fixed` as `to_tag` encodes it.
+///
+/// **Pinned by `the_fixed_scalar_tag_still_matches_upstream`**, because a tag is
+/// a number agreed with a file this line does not own, and a silent renumbering
+/// upstream would turn every `Fixed` operand into an unrecognised one -- failing
+/// open, back to the `Op::Mod` divergence this constant exists to close.
+const SCALAR_FIXED_TAG: u8 = 4;
+
 /// Whether a declared flat shape is a scalar float, and so takes a
 /// floating-point position in the entry application binary interface rather than
 /// an integer one.
 fn shape_is_float(shape: &keleusma::bytecode::WireShape) -> bool {
     matches!(shape, keleusma::bytecode::WireShape::Scalar { kind } if *kind == SCALAR_FLOAT_TAG)
+}
+
+/// Is this declared shape a Q-format fixed-point scalar?
+fn shape_is_fixed(shape: &keleusma::bytecode::WireShape) -> bool {
+    matches!(shape, keleusma::bytecode::WireShape::Scalar { kind } if *kind == SCALAR_FIXED_TAG)
 }
 
 /// Return `v` from `func`, converting to the function's DECLARED return type.
@@ -3488,6 +3508,23 @@ fn lower_chunk_body<'ctx>(
             && i < st.local_kinds.len()
         {
             st.local_kinds[i] = OperandKind::Float;
+        }
+    }
+
+    // **A `Fixed` parameter cannot be seeded from the LLVM type, because it IS an
+    // `i64`.** The float seeding above reads the declaration through
+    // `is_float_value`; the same trick does not exist here, so the SIGNATURE
+    // table is the only source. A chunk without a signature entry leaves its
+    // parameters `Unknown`, which is the sound direction: an operation that must
+    // know refuses rather than guesses.
+    if let Some(sig) = own_signature {
+        for (i, shape) in sig.params.iter().enumerate() {
+            if i < st.local_kinds.len()
+                && st.local_kinds[i] == OperandKind::Unknown
+                && shape_is_fixed(shape)
+            {
+                st.local_kinds[i] = OperandKind::Fixed;
+            }
         }
     }
 
@@ -4199,6 +4236,41 @@ fn lower_chunk_body<'ctx>(
                 // `f64` is the TRUNCATED remainder carrying the sign of the
                 // dividend — exactly `frem`. Verified with negative dividends,
                 // where a floor-style remainder would disagree.
+                // **THE REFERENCE TRAPS ON A `Fixed` OPERAND HERE, AND THIS
+                // ARM USED TO RETURN A VALUE.**
+                //
+                // The virtual machine's `Op::Div` and `Op::Mod` arms handle
+                // `Int`/`Int`, `Byte`/`Byte` and `Float`/`Float`. A `Fixed`
+                // operand falls to the catch-all and raises
+                // `TypeError("cannot modulo Fixed by Fixed")`. This backend
+                // lowered an integer remainder and returned `4.0` for
+                // `200.0 % 7.0` -- arithmetically right, and **not what the
+                // reference does**, which is the only contract that matters.
+                //
+                // The surface reaches this for `%` only: `*` and `/` on `Fixed`
+                // compile to `Op::FixedMul`/`Op::FixedDiv`. `Div` is refused
+                // alongside `Mod` because the virtual machine's `Div` arm is
+                // equally Fixed-less, so a module that did reach it would trap
+                // there too.
+                //
+                // **The type checker admits `Fixed % Fixed`**, so this is a
+                // statically-known type error escaping to run time. Reported
+                // upstream; watched by `outstanding_reports.rs`. Refusing here
+                // is right regardless of how that report is ruled, because a
+                // value the reference never produces is worse than a refusal.
+                if st.kind_at(0) == OperandKind::Fixed || st.kind_at(1) == OperandKind::Fixed {
+                    return Err(LowerError::unsupported_op(
+                        &op_variant_name(op),
+                        format!(
+                            "{} with a Fixed operand: the reference virtual machine has \
+                             no Fixed arm for this opcode and raises a TypeError at run \
+                             time. Refused rather than lowered, because an integer \
+                             remainder on a scaled value is a number the reference never \
+                             produces",
+                            op_variant_name(op)
+                        ),
+                    ));
+                }
                 if st.kind_at(0) == OperandKind::Float || st.kind_at(1) == OperandKind::Float {
                     if !float_width_lowered(float_bytes) {
                         return Err(LowerError::unsupported_float_width(

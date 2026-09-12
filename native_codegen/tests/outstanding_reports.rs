@@ -162,3 +162,57 @@ fn report_three_still_reproduces_on_the_reference() {
          on exactly this shape"
     );
 }
+
+/// **REPORT 4 — the type checker admits `Fixed % Fixed`, which the virtual
+/// machine then refuses at run time.**
+///
+/// `fn main(a: Fixed, b: Fixed) -> Fixed { a % b }` compiles, verifies, loads,
+/// and **traps on execution** with `TypeError("cannot modulo Fixed by Fixed")`.
+/// The virtual machine's `Op::Mod` arm handles `Int`/`Int`, `Byte`/`Byte` and
+/// `Float`/`Float`; a `Fixed` operand falls to the catch-all. `Op::Div`'s arm is
+/// equally Fixed-less, though the surface reaches it only through `Op::FixedDiv`.
+///
+/// The operand types are statically known, so **a static type error is escaping
+/// to run time**. `*` and `/` on `Fixed` have `Op::FixedMul` and `Op::FixedDiv`;
+/// `%` has no Fixed-aware opcode and falls back to the plain one.
+///
+/// **This line does not assert which repair is right.** Rejecting `%` on `Fixed`
+/// in the type checker and adding a Fixed-aware modulo are both coherent, and the
+/// second would need an opcode, which the minimal-ISA constraint disfavours. What
+/// is reported is the observation.
+///
+/// **This backend is already fixed either way.** It refused nothing here and
+/// returned `4.0` for `200.0 % 7.0` — arithmetically right and not what the
+/// reference produces. It now refuses, which stays correct under either repair.
+///
+/// Guarded from both sides, because the two repairs are distinguishable: if the
+/// compiler starts rejecting the program, the first assertion fires; if the
+/// virtual machine starts running it, the second does.
+#[test]
+fn report_four_still_reproduces_on_the_reference() {
+    const SRC: &str = "fn main(a: Fixed, b: Fixed) -> Fixed { a % b }";
+
+    let Some(m) = common::try_build(SRC) else {
+        panic!(
+            "the reference compiler now REJECTS `Fixed % Fixed`, which ANSWERS report 4 \
+             from the type-checker side. Retract it. The emitter's refusal of `Op::Mod` \
+             on a Fixed operand becomes unreachable from the surface and should be \
+             re-read, though it stays correct for bytecode arriving by other routes."
+        );
+    };
+
+    let need = required_persistent_capacity_for(&m);
+    let cap = auto_arena_capacity_for(&m, &[]).expect("arena") + need + (1 << 20);
+    let mut arena = keleusma_arena::Arena::with_capacity(cap);
+    arena.resize_persistent(need).expect("persistent");
+    let mut vm = Vm::new(m, &arena).expect("the module still loads and verifies");
+    let outcome = vm.call(&[Value::Fixed(200 << 16), Value::Fixed(7 << 16)]);
+    assert!(
+        outcome.is_err(),
+        "the reference virtual machine now RUNS `Fixed % Fixed` and returned \
+         {outcome:?}, which ANSWERS report 4 from the runtime side. Retract it, and \
+         re-read the emitter's refusal of `Op::Mod` on a Fixed operand — it now \
+         refuses a program the reference completes, which is a coverage loss rather \
+         than a correctness one."
+    );
+}

@@ -36,6 +36,7 @@
 //! | **a verified module cannot present a depth disagreement** | **HARMLESS IF FALSE — the site no longer relies on it.** |
 //! | **a non-zero fraction count means the operand is `Fixed`** | **refuse — the count is the only static type signal, and a wrong one lowers a Fixed multiply as an integer** |
 //! | float division flows through `Op::Div`, not `CheckedDiv` | already corrected once; the note records the correction rather than the premise |
+//! | **the reference virtual machine has no `Fixed` arm for `Op::Mod`/`Op::Div`** | **refuse — and CHECKED, by `report_four_still_reproduces_on_the_reference`, which drives the reference and asserts it errors** |
 //!
 //! # ⚠ THREE ENTRIES WERE INVISIBLE TO THIS CENSUS UNTIL 2026-09-12
 //!
@@ -52,6 +53,24 @@
 //!
 //! **Two of seven were unchecked and one of those was live.** Both are now
 //! checks rather than prose.
+//!
+//! # The ninth entry, 2026-09-12: a premise about upstream that is DRIVEN
+//!
+//! The `Op::Mod`/`Op::Div` arms now refuse a `Fixed` operand on the premise that
+//! *"the reference virtual machine has no Fixed arm for this opcode and raises a
+//! TypeError at run time."* That is a premise about a file this line does not
+//! own, and the kind most likely to rot.
+//!
+//! **It is checked by execution rather than by reading.**
+//! `report_four_still_reproduces_on_the_reference` builds the program, runs it on
+//! the reference, and asserts the run errors. If upstream gives `Op::Mod` a Fixed
+//! arm, that test fails and says the refusal here is now a coverage loss rather
+//! than a correctness guard.
+//!
+//! Note the direction: **a false premise here costs a refusal, not a wrong
+//! value** — the safe side. It is checked anyway, because the premise is also the
+//! justification for an outgoing report, and an unchecked report is the thing
+//! this line has already found outliving its subject four times.
 //!
 //! # The eighth entry is the shape this census wants, arriving 2026-09-12
 //!
@@ -118,7 +137,7 @@ const PREMISE_PHRASES: &[&str] = &[
 /// **Re-derive this rather than trusting it.** It moves with every increment
 /// that adds or removes such a comment, including this file's own prose being
 /// quoted into the emitter.
-const RECORDED_PREMISE_LINES: usize = 33;
+const RECORDED_PREMISE_LINES: usize = 34;
 // 12 -> 29 with the impossibility phrases. The seventeen new lines were read,
 // and they fall in one class: **statements of what the backend DECLINES** —
 // "an unknown width cannot be placed", "`Op::Add` cannot be lowered without

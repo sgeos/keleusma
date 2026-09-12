@@ -1,5 +1,46 @@
 # Design Journal
 
+## 2026-09-12 — an instrument can only find defects it has a vocabulary for
+
+The opcode denominator closed one variant axis: the opcode's own operand field.
+**The other axis is the runtime TYPE of the operands, which has no field in the
+bytecode at all** — `Op::Add`, `Op::Mod` and `Op::Shl` carry nothing, and the
+virtual machine dispatches on the values it pops. That axis produced the three
+defects this line had already fixed, and it was covered by 27 hand-written cases
+with no denominator.
+
+Enumerated properly — three scalar types against the operator surface, **90
+cells** — it found one divergence. **`Fixed % Fixed`.** The reference compiler
+accepts it and emits a plain `Op::Mod`; the virtual machine traps with
+`TypeError("cannot modulo Fixed by Fixed")`, its arm handling `Int`, `Byte` and
+`Float` but not `Fixed`; and this backend lowered an integer remainder and
+returned `4.0` for `200.0 % 7.0` — **arithmetically right, and not what the
+reference does, which is the only contract that matters.**
+
+`OperandKind` was `Int | Float | Unknown`. **A `Fixed` parameter IS an `i64`**, so
+the float seeding trick — reading the LLVM parameter type — has no analogue, and
+Fixed was indistinguishable from Word at every arithmetic site. That is the
+mechanism of the defect, not an incidental detail. The kind is now seeded from the
+chunk signature's `ScalarKind::Fixed` tag, and `Op::Mod`/`Op::Div` refuse a Fixed
+operand. `word %` still lowers.
+
+**The methodological finding, which is the reusable part.** The previous defect
+hid behind an instrument's KEYING. This one hid behind an instrument's **OUTCOME
+TYPE**: `run_both` panics on any virtual-machine result that is not `Finished`, so
+a trapping cell could not be added to that matrix at all — the attempt panics
+rather than recording. The harness could say *agree* and *disagree* and had no
+word for *the reference refuses*. **An instrument can only find defects it has a
+vocabulary for.** Ask of any differential what outcomes it can represent, not just
+what inputs it covers.
+
+Two smaller things worth keeping. The shift rows are recorded by AMOUNT type: a
+`Byte` value shifts by a `Word` amount or a literal and agrees; a `Byte` amount is
+refused; `Fixed` is refused in all three forms. Recording "byte shifts are
+refused" would have repeated the `Bool` conflation of the same morning exactly.
+And the upstream half — a statically-known type error escaping to run time — is
+filed as report 4 and guarded from BOTH sides, because the two plausible repairs
+are distinguishable and this line should not assert which is right.
+
 ## 2026-09-12 — the census that found three defects had no denominator
 
 `backend_support_census.rs` is titled *"WHICH OPCODES CAN THE BACKEND ACTUALLY

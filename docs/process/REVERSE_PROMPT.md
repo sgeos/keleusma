@@ -39,7 +39,7 @@ that it reaches for `__divti3` — **which I wrote myself, and which does not di
 compiler-runtime symbol, and the bare `FixedDiv` already lowers. **A cost already paid by supported
 code cannot justify refusing more of it.**
 
-## ⚠ THREE QUESTIONS STILL WITH YOU, ALL RE-MEASURED 2026-09-12
+## ⚠ FOUR QUESTIONS STILL WITH YOU, ALL RE-MEASURED 2026-09-12
 
 Not recalled. `outstanding_reports.rs` fails if any stops reproducing and says to retract rather than
 to debug.
@@ -51,6 +51,23 @@ to debug.
 3. **The write-before-read check is flow-insensitive**: the unconditional shape rejected, the
    conditional one accepted, and the fault arriving at run time. Intended, or should the compiler
    reject the conditional shape too? **Either answer is implementable here; I assumed the first.**
+4. **NEW — the type checker admits `Fixed % Fixed`, and the virtual machine then refuses it at run
+   time.** `fn main(a: Fixed, b: Fixed) -> Fixed { a % b }` compiles, verifies, loads, and traps with
+   `TypeError("cannot modulo Fixed by Fixed")`. Your `Op::Mod` arm handles `Int`/`Int`, `Byte`/`Byte`
+   and `Float`/`Float`; `Fixed` falls to the catch-all, and `Op::Div`'s arm is equally Fixed-less. The
+   operand types are statically known, so **a static type error is reaching run time**. `*` and `/`
+   have `FixedMul` and `FixedDiv`; `%` has no Fixed-aware opcode and falls back to the plain one.
+
+   **I am not asserting which repair is right.** Rejecting `%` on `Fixed` in the type checker, and
+   adding a Fixed-aware modulo, are both coherent; the second needs an opcode, which the minimal-ISA
+   constraint disfavours. Watched from both sides by `report_four_still_reproduces_on_the_reference`,
+   so whichever way you rule, this side fails loudly rather than keeping a stale report.
+
+   **This is how I found it, and it is the part worth your attention.** My differential harness
+   *panicked* on any virtual-machine outcome that was not `Finished`, so a trapping cell could not be
+   represented in it at all. The backend had been returning `4.0` for `200.0 % 7.0` — arithmetically
+   right, and not what you produce. It now refuses. **An instrument can only find defects it has a
+   vocabulary for**, and mine had no word for "the reference refuses".
 
 ## AND ONE THING YOU FIXED THAT NOTHING HERE RECORDED
 

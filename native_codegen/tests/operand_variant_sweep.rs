@@ -79,6 +79,19 @@ fn scalar(v: &Value) -> i64 {
     raw(v)
 }
 
+/// **⚠ THIS HARNESS CANNOT EXPRESS "THE REFERENCE REFUSES".**
+///
+/// It panics on any virtual-machine outcome that is not `Finished`, so a cell
+/// where the reference traps cannot be added to this matrix — the attempt panics
+/// rather than recording a result. That is not a keying gap like the ones this
+/// file's header describes; it is a gap in the harness's **vocabulary of
+/// outcomes**, and it hid `Fixed % Fixed`, where the reference raised a
+/// `TypeError` and the backend returned a value.
+///
+/// **`scalar_operator_matrix.rs` has that vocabulary** and enumerates its cells
+/// from the type and operator lists rather than by hand. Put a trapping shape
+/// there. This file stays for the cases it drives well: specific values chosen to
+/// straddle a boundary, which a generated matrix does not pick.
 fn run_both(c: &Case) -> (i64, i64) {
     let m = common::build(c.src);
     let need = required_persistent_capacity_for(&m);
