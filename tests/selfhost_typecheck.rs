@@ -3271,6 +3271,18 @@ fn stage_verdict_withholding_eliding(src: &str, withhold: Option<Channel>, elide
 /// **First-appearance order is preserved.** Order-independence of a sticky
 /// disjunction is a SECOND assumption, and not needing it is cheaper than arguing
 /// it.
+fn dedup_rows_last<T: Copy + Ord>(rows: &[T]) -> Vec<T> {
+    let mut seen: std::collections::BTreeSet<T> = std::collections::BTreeSet::new();
+    let mut kept: Vec<T> = Vec::with_capacity(rows.len());
+    for r in rows.iter().rev() {
+        if seen.insert(*r) {
+            kept.push(*r);
+        }
+    }
+    kept.reverse();
+    kept
+}
+
 fn dedup_rows<T: Copy + Ord>(rows: &[T]) -> Vec<T> {
     let mut seen: std::collections::BTreeSet<T> = std::collections::BTreeSet::new();
     let mut kept: Vec<T> = Vec::with_capacity(rows.len());
@@ -3302,13 +3314,26 @@ fn dedup_rows<T: Copy + Ord>(rows: &[T]) -> Vec<T> {
 /// this kind removes it. That number is worth more than another percentage,
 /// because it is the part that a capacity decision actually has to cover.
 ///
-/// # Bindings are deliberately left alone
+/// # Bindings need the OTHER deduplication, and the reason is not cosmetic
 ///
-/// The binding lookup takes whichever row matches rather than folding a predicate,
-/// so duplicates are harmless — but two rows for ONE name that DIFFER are
-/// meaningful, and the criterion would have to distinguish that case. A 34% saving
-/// does not justify reasoning about a channel whose lookup is not a simple per-row
-/// predicate, in the increment that is already touching two others.
+/// The binding lookup overwrites its accumulator as it scans, so **the LAST
+/// matching row wins**. First-appearance deduplication would therefore CHANGE
+/// BEHAVIOUR whenever a name carries two conflicting rows: `[(a,1), (a,2), (a,1)]`
+/// resolves to 1 before and 2 after.
+///
+/// **That hazard is real rather than theoretical** — ten names across the twelve
+/// real sources carry more than one distinct row, which the flat namespace over
+/// locals and functions makes possible and which this file already records as a
+/// known narrowing.
+///
+/// [`dedup_rows_last`] keeps, for each distinct tuple, its LAST position. The
+/// overall last row for any name is then preserved by construction: if tuple `T`
+/// at position `p` was the last row for name `v`, no row for `v` follows `p`, so
+/// nothing can overtake it.
+///
+/// This was deferred one increment ago as not worth the reasoning while two other
+/// channels were changing. It became the binding constraint as soon as they were
+/// taken, which is what a deferral justified by relative cost does.
 fn dedup_occurrences(rows: &OccurrenceRows) -> OccurrenceRows {
     let (declared, occ, wildcard) = rows;
     let mut seen: std::collections::BTreeSet<(i64, i64, i64)> = std::collections::BTreeSet::new();
@@ -3334,6 +3359,8 @@ fn stage_verdict_full(src: &str, withhold: Option<Channel>, elide: bool, dedup: 
     let frc = field_read_channel(&ast, &mut names);
     bindings.extend(frc.bindings.iter().copied());
     let (nodes, derived) = expression_nodes_over_with(&ast, &names, &frc.index, true, elide, dedup);
+    // FORM 2 BELOW, then the deduplication, because the derived rows are part of
+    // the same table and a reduction applied before them would miss them.
     // FORM 2: the binding takes whatever expression node `idx` yields. The host
     // says only WHICH node the initialiser is -- a syntactic fact, like a literal
     // tag or an alias name. Resolving that node's operands and requiring them to
@@ -3343,6 +3370,14 @@ fn stage_verdict_full(src: &str, withhold: Option<Channel>, elide: bool, dedup: 
             bindings.push((id, idx, 2));
         }
     }
+    // LAST-APPEARANCE, not first: the binding lookup overwrites as it scans, so the
+    // last matching row wins, and first-appearance deduplication would change which
+    // row that is for a name carrying conflicting rows.
+    let bindings = if dedup {
+        dedup_rows_last(&bindings)
+    } else {
+        bindings
+    };
     let (dparams, sites_raw, pairs_raw) = decl_call_rows(&ast);
     // THE SAME DISTINCT-FACTS ARGUMENT as the occurrence channel: both are lists of
     // facts read by a per-row predicate folded into a sticky verdict. `dparams` is
@@ -4341,6 +4376,7 @@ fn real_source_channel_rows(ast: &keleusma::ast::Program) -> Vec<(&'static str, 
             bindings.push((id, idx, 2));
         }
     }
+    let bindings = dedup_rows_last(&bindings);
     let (dparams, sites_raw, pairs_raw) = decl_call_rows(ast);
     let sites = dedup_rows(&sites_raw);
     let arg_pairs = dedup_rows(&pairs_raw);
@@ -4498,6 +4534,24 @@ fn deduplicating_occurrence_rows_changes_no_verdict() {
             "correct calls only, repeated",
             "fn g(a: Word) -> Word { a }\nfn main() -> Word { g(1) + g(1) + g(1) }",
         ),
+        // **CONFLICTING BINDING ROWS**, the hazard that makes the binding channel
+        // need LAST-appearance deduplication rather than first. A local shadowing a
+        // function name gives one name two distinct rows, and which one the lookup
+        // lands on depends on which is last. Ten names across the real sources do
+        // this, so it is not a constructed curiosity.
+        (
+            "a local shadowing a function name",
+            "fn g() -> Word { 1 }\nfn main() -> Word { let g = true; g + 1 }",
+        ),
+        (
+            "a local shadowing a function name, used correctly",
+            "fn g() -> bool { true }\nfn main() -> Word { let g = 1; g + 1 }",
+        ),
+        (
+            "a shadowing local read several times",
+            "fn g() -> Word { 1 }\n\
+             fn main() -> Word { let g = true; let a = g; let b = g; g + 1 }",
+        ),
     ];
     for (label, src) in MIXED {
         subjects.push(((*label).to_string(), (*src).to_string()));
@@ -4534,7 +4588,7 @@ fn deduplicating_occurrence_rows_changes_no_verdict() {
     let raw = occurrence_rows(&ast);
     let deduped = dedup_occurrences(&raw);
     let (_dp, sites, pairs) = decl_call_rows(&ast);
-    let (mut nm, _nb) = binding_rows(&ast);
+    let (mut nm, nb_full) = binding_rows(&ast);
     let nfrc = field_read_channel(&ast, &mut nm);
     let (nodes_full, _) = expression_nodes_over_with(&ast, &nm, &nfrc.index, true, true, false);
     let (nodes_dedup, _) = expression_nodes_over_with(&ast, &nm, &nfrc.index, true, true, true);
@@ -4542,14 +4596,16 @@ fn deduplicating_occurrence_rows_changes_no_verdict() {
         deduped.1.len() < raw.1.len()
             && dedup_rows(&sites).len() < sites.len()
             && dedup_rows(&pairs).len() < pairs.len()
-            && nodes_dedup.len() < nodes_full.len(),
-        "deduplication removed no row from one of the four channels on the largest \
+            && nodes_dedup.len() < nodes_full.len()
+            && dedup_rows_last(&nb_full).len() < nb_full.len(),
+        "deduplication removed no row from one of the five channels on the largest \
          source, so the assertions above pass while measuring nothing: occurrences \
-         {}, sites {}, pairs {}, nodes {}",
+         {}, sites {}, pairs {}, nodes {}, bindings {}",
         raw.1.len(),
         sites.len(),
         pairs.len(),
-        nodes_full.len()
+        nodes_full.len(),
+        nb_full.len()
     );
     std::eprintln!(
         "DEDUPLICATION on the largest source: occurrences {} -> {}, call sites {} -> \
@@ -4561,7 +4617,12 @@ fn deduplicating_occurrence_rows_changes_no_verdict() {
         pairs.len(),
         dedup_rows(&pairs).len(),
         nodes_full.len(),
-        nodes_dedup.len()
+        nodes_dedup.len(),
+    );
+    std::eprintln!(
+        "  bindings {} -> {}",
+        nb_full.len(),
+        dedup_rows_last(&nb_full).len()
     );
 }
 
@@ -4994,10 +5055,11 @@ fn the_channel_array_counts_match_the_stage_data_block() {
 ///
 /// **A deferral becoming the constraint is worth noticing.** The binding channel
 /// was skipped because its lookup is not a simple per-row predicate and a 34%
-/// saving did not justify the reasoning at the time. It is now what stands between
-/// the remaining four sources and the caps, so the reasoning has become worth
-/// doing — which is a different judgement from the one made then, reached because
-/// everything around it moved.
+/// saving did not justify the reasoning at the time. It became what stood between
+/// the remaining four sources and the caps as soon as the alternatives were taken,
+/// and the reasoning was then done: the lookup keeps the LAST matching row, so that
+/// channel needs last-appearance deduplication where the others take first. The
+/// hazard was real — ten names across the corpus carry conflicting rows.
 ///
 /// So the sizes are measured WITHOUT running the stage, and the stage is run only
 /// where every table fits. A result of "no real program fits" is a FINDING rather
@@ -5114,21 +5176,28 @@ fn the_stage_is_measured_against_the_real_stage_sources() {
     fitting.sort_unstable();
     assert_eq!(
         fitting,
-        // **EIGHT, MEASURED 2026-09-12.** The sequence is worth keeping: I predicted
-        // ZERO, the first run found two, the inert-row elision took it to three,
-        // deduplicating the occurrence channel took it to seven, and deduplicating
-        // the call, pair and expression channels took it to eight.
+        // **TEN OF TWELVE, MEASURED 2026-09-12.** The sequence: I predicted ZERO,
+        // the first run found two, the inert-row elision took it to three,
+        // deduplicating occurrences took it to seven, the call, pair and expression
+        // channels to eight, and the binding channel to ten.
         //
-        // All eight are ACCEPTED by the stage, asserted above -- an over-rejection
-        // result on real code covering two thirds of the corpus rather than a
-        // corner of it.
+        // All ten are ACCEPTED by the stage, asserted above -- an over-rejection
+        // result covering most of the real corpus rather than a corner of it.
         //
-        // **This pin moving is the intended outcome, not a nuisance.** It is how a
-        // capacity change announces itself; the failure message says so, and it has
-        // now done so three times.
+        // **What is left is not more of the same.** `parse` is over by a little on
+        // four channels (the worst 162 against 128) and `wire` by about four times
+        // on six. Both are dominated by the DECLARATION-INDEXED tables, which no
+        // deduplication reaches: `wire` declares 492 functions and 499 top-level
+        // names. Closing the last two is a capacity decision, not another
+        // reduction.
+        //
+        // **This pin moving is the intended outcome.** It is how a capacity change
+        // announces itself, and it has now done so four times.
         vec![
             "analyze",
+            "codegen",
             "lexer",
+            "reconstruct",
             "verify_datalayout",
             "verify_depth",
             "verify_structural",

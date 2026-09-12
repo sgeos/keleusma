@@ -13,6 +13,64 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (sixty-fourth) — the deferred channel, and why it needs the other deduplication
+
+### THE REASONING THAT HAD BEEN DEFERRED
+
+The binding channel was skipped two increments ago: its lookup is not a simple per-row predicate,
+and a 34% saving did not justify the extra reasoning while two other channels were changing. It
+became the binding constraint as soon as the alternatives were taken. This does the reasoning.
+
+**The lookup OVERWRITES its accumulator as it scans, so the LAST matching row wins.**
+First-appearance deduplication would therefore change behaviour whenever a name carries two
+conflicting rows: `[(a,1), (a,2), (a,1)]` resolves to 1 before and 2 after.
+
+**The hazard is real rather than theoretical.** Ten names across the twelve real sources carry more
+than one distinct row — the flat namespace over locals and functions makes it possible, and this
+file already recorded that as a known narrowing. A local shadowing a function name is the everyday
+case.
+
+**Last-appearance deduplication is the safe form**, and the argument is short: if tuple `T` at
+position `p` was the last row for name `v`, then no row for `v` follows `p`, so keeping `T` at its
+last position keeps it last. The overall answer is preserved by construction rather than by
+inspection.
+
+This is why the deferral was worth making at the time and worth resolving now: the channel really
+did need a different criterion from the other four, and taking it in the same increment as them
+would have meant applying first-appearance deduplication to all five.
+
+### THE EFFECT
+
+| | before | after |
+|---|---|---|
+| real sources that fit | 8 of 12 | **10 of 12** |
+| corpus-sized shared data | 12,822 words, 1.7x | 11,690 words, **1.6x** |
+| growth over today | +42 KiB | **+33 KiB** |
+| tightest constraint anywhere | `wire` bindings, 6x | `wire` bindings, 4x |
+
+`codegen` and `reconstruct` crossed under.
+
+### WHAT IS LEFT IS NOT MORE OF THE SAME
+
+Two sources remain over, and their character differs:
+
+- **`parse` is over by a little on four channels**, the worst 162 against 128. A cap of 192 would
+  admit it.
+- **`wire` is over by about four times on six**, dominated by the DECLARATION-INDEXED tables that no
+  deduplication reaches: it declares 492 functions and 499 top-level names against caps of 128.
+
+**Closing the last two is a capacity decision, not another reduction.** Six reductions have taken
+the price from +366 KiB to +33 KiB — a factor of eleven — and the remaining growth is mostly the
+floor named two increments ago.
+
+### THE SEQUENCE, WHICH IS THE POINT
+
+Predicted ZERO sources would fit. Measured two. Elision: three. Occurrences: seven. Calls, pairs,
+expressions: eight. Bindings: ten. **Every step verdict-preserving under a differential, every step
+measured rather than argued, and every step larger than I expected.**
+
+---
+
 ## 2026-09-12 (sixty-third) — the expression channel deduplicates too, and a deferral becomes the constraint
 
 ### THE CHANNEL THAT LOOKED LIKE `dparams` AND IS NOT
