@@ -4389,6 +4389,18 @@ fn a_qualified_call_expression_is_not_handled_by_the_pipeline() {
 /// reasonable is that the exclusion surfaces as a malformed record stream rather
 /// than a refusal naming the construct.
 ///
+/// # A SHORTCUT FOR "IS THIS CONSTRUCT IN THE SUBSET?", WORTH STATING ONCE
+///
+/// **No stage source can contain a construct the pipeline cannot parse**, because
+/// all twelve compile through it byte-identically — that is what
+/// `tests/selfhost_codegen.rs` asserts. So for any construct the pipeline refuses,
+/// "do the stages use it?" is answered NO by construction, without grepping.
+///
+/// The useful direction is the contrapositive: a gap found here is automatically a
+/// construct the stages do not need, so **no gap on this list can block the stages
+/// from self-compiling.** What each gap blocks is a user program, and what it costs
+/// is measured by how badly it fails rather than by whether the subset omits it.
+///
 /// **This is FEATURE WORK, not a missing branch**, and that matters for planning:
 /// admitting it needs a token code, a lexer arm, statement parsing, and emission
 /// through reconstruct and codegen. Unlike the bare unit-variant pattern — where
