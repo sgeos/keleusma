@@ -1,5 +1,45 @@
 # Design Journal
 
+## 2026-09-12 — lowered is not executed, and four opcodes sat in the gap
+
+Four increments of stale-record work was enough; back to lowering behaviour, where
+this session's earlier increments found four real defects.
+
+**Every coverage instrument here measures LOWERING.** `isa_coverage_census` asks
+what nothing has lowered; `spike_corpus_coverage` reports instances lowering;
+`opcode_denominator` classifies all 66 and says in its own header that `Lowered`
+*"does not mean the emitted code is correct"*. **None asked which opcodes are
+lowered but never differentially EXECUTED** — which is precisely where
+`Fixed % Fixed` sat.
+
+Intersecting the differential's own module classification (**63 executed, 1
+vacuous, 10 exempt**) with per-module opcode sets: **`BitAnd`, `BitOr`, `BitXor`
+and `Shr` have no executed witness in the corpus.** All four appear only in
+`wire.kel`, which the virtual machine refuses to resume, so it is compared by the
+FAULT observable rather than by a result. My executed/not-executed counts match
+the differential's report exactly, which is what licenses transcribing its list
+rather than reimplementing its exemption logic — a private copy of a canonical
+walk already cost this package once.
+
+They are covered, by `scalar_operator_matrix.rs`. **But "covered elsewhere" is the
+claim this session keeps finding false, so it is not asserted here.** The first
+attempt checked that the other file CONTAINED the witness text and failed: the
+matrix generates its expressions from an operator list rather than spelling them,
+so the check was coupling to a formatting accident. **The witnesses are now DRIVEN
+in this file**, virtual machine against native, which is stronger and depends on
+nothing but this file.
+
+This also revises what that matrix is for. Built to find type-dispatch defects, it
+is the sole result-comparing evidence for four opcodes — which raises the cost of
+ever trimming it, and is a fact neither file recorded before.
+
+**A fourth formatting trap, this time in my own mutation check.** Renaming
+`"BitOr"` in the record was supposed to fire the guard and did not: `cargo fmt`
+splits the tuple across lines, so the pattern matched nothing and the mutation was
+vacuous. Re-run correctly, it fires. **A mutation test that silently mutates
+nothing reports the same "SILENT" as a guard with no reach**, and the two are
+indistinguishable without checking the edit landed.
+
 ## 2026-09-12 — the test that said it does not run, and ran
 
 Set out to make the gate cheaper: six commands, ~25 minutes, with

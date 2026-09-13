@@ -26,6 +26,34 @@
 //! observed. This is what lets ONE stub table serve 42 natives, and it is sound
 //! here only because **no native in the corpus is called at two different
 //! arities** — measured in `probe_corpus_shapes.rs`, and asserted below.
+//!
+//! # ⚠ AN INTERMITTENT `LEAK` MARKER, AND A HYPOTHESIS OF MINE THAT WAS WRONG
+//!
+//! `cargo nextest` has reported `LEAK` three times, always alongside a PASS:
+//!
+//! | when | test | binary |
+//! |---|---|---|
+//! | 2026-09-12 | `the_sentinel_band_still_matches_the_stage_sources` | this one |
+//! | 2026-09-12 | `the_private_contract_exceeds_the_slot_array_for_real_corpus_modules` | this one |
+//! | 2026-09-13 | `region::width_tests::a_float_tag_has_no_width_because_it_has_no_representation` | the LIBRARY |
+//!
+//! **Commit `6603c399` said this note existed. It did not.** The edit meant to
+//! write it raised inside a heredoc whose output was never read, the command chain
+//! continued, and the commit message recorded a note that was never in the tree —
+//! **this session's own failure mode, committed into the record that catalogues
+//! it.** Written properly now.
+//!
+//! **And the hypothesis that message carried is refuted.** It read *"two different
+//! tests in the same binary points at the binary, not at either test"*, naming
+//! this binary's LLVM JIT engines as a plausible source. The third occurrence is a
+//! LIBRARY UNIT TEST asserting that a tag has no width: it builds nothing and
+//! holds no operating-system resource. **The binary is not the common factor.**
+//!
+//! Three leaks, three tests, two binaries, every one trivial or unrelated, none
+//! reproducing — the first was re-run five times cleanly. The runner or the machine
+//! under load is what remains, and **that is not traced either**. Recorded rather
+//! than chased: a `LEAK` warns about teardown, not a failed assertion, and no
+//! observed behaviour depends on it.
 use inkwell::OptimizationLevel;
 use inkwell::context::Context;
 use keleusma::bytecode::{BlockType, Module, Op, SlotVisibility, Value, WireShape};
