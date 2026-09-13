@@ -124,7 +124,17 @@ statement of each is still there.
    which is why it is small. **The "ten lines" figure itself was NOT re-measured**: the prototype
    was never landed, and re-deriving it would mean performing the deferred work.
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on the
-   WIDTH axis, unchanged on the FEATURE axis.
+   WIDTH axis, unchanged on the FEATURE axis. **Both halves re-checked 2026-09-13.**
+   *Width*: the manifest defines SIX narrow selectors (`narrow-word-8/16/32`,
+   `narrow-address-8/16/32`) and **continuous integration covers none of them** — but
+   `NARROW_WIDTH_FAILURE_CLASSIFICATION.md` records that a width-dependent defect is reachable from
+   an ordinary test in the default build, so guarding one costs no job and no matrix.
+   *Feature*: the gap's SIZE is now known exactly rather than open-ended. It is **one test file** —
+   `tests/float_opcode_without_floats.rs`, needing `verify` present and `floats` absent, a pair no
+   job produces — pinned by `the_only_test_gated_out_of_every_ci_configuration_is_the_known_one` and
+   confirmed by an independent census. Its defect was re-checked 2026-09-12 and is unchanged. **So
+   the feature-axis question is whether ONE file's coverage is worth a job**, which is a narrower
+   question than the line previously implied.
 
 Three more have been added by this session and are stated above: the type channel into
 `codegen.kel`, whether the boundary table should absorb the four parser gaps, and the capacity
