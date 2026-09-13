@@ -1,5 +1,40 @@
 # Design Journal
 
+## 2026-09-12 — a commitment recorded as kept while being broken every increment
+
+Absorption 60's conflict on `REVERSE_PROMPT.md` turned up a stale line in this
+line's own handoff: *"I touch **none** of `REVERSE_PROMPT.md`,
+`DESIGN_JOURNAL.md`, or `TASKLOG.md`."*
+
+**This line has written two of the three continuously.** Eight of the last twelve
+commits touching the journal are this line's, interleaved with the other line's,
+and reports 4 and 5 went into `REVERSE_PROMPT.md` this session. That handoff
+catalogues four records that outlived their subjects; **this is a fifth, pointed
+inward** — not a claim about someone else that went stale, but a rule about this
+line's own conduct, recorded as kept while being broken every increment.
+`TASKLOG.md` is genuinely untouched, so the correction is a correction and not a
+retraction.
+
+The two files behave differently and only one has bitten. `REVERSE_PROMPT.md` is
+**overwritten wholesale by both lines**, 106 lines against 1988, so it conflicts
+whenever both write between absorptions. `DESIGN_JOURNAL.md` is **prepended by
+both at the same anchor** — the classic conflict shape — and auto-merged at
+absorption 60 by luck of position. **It has not conflicted**, and recording it as
+having done so would repeat the two figure errors this session already made.
+Predicted is not observed.
+
+`shared_channel_discipline.rs` asserts the resolution shape: this line's section
+present, and substantial content before it. **It keys on this line's own marker
+and a structural property, never on the other line's wording** — a guard that
+failed when they edited their own channel would be this line imposing a format on
+them, and it was checked against exactly that case: their half rewritten entirely,
+guard still green. Four mutations fire, including the one that matters, a
+wholesale overwrite by this line.
+
+**Where this line's outgoing reports should live is left open.** It is the
+operator's call, it is asked in the file itself, and answering it unilaterally
+would be worse than the collision.
+
 ## 2026-09-12 — absorption 60, and a commitment this line had broken
 
 Three consecutive increments examining this line's own records had let the other
