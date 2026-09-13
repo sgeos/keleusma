@@ -225,6 +225,16 @@ const EXCUSED: &[(&str, &str)] = &[
          `audit_1_which_synthetic_cases_drive_the_model_negative`. The label is \
          kept beside it in the plan table",
     ),
+    // ---- CLASS 4: names REAL things outside this repository. A citation that
+    // can never resolve here because its subject is not here, which is a
+    // different case from a citation to something that does not exist.
+    (
+        "unexpected_cfg_condition_value",
+        "a CLIPPY LINT, real and external. It is cited because it caught a \
+         `#[cfg(feature = \"floats\")]` written in this package, where that \
+         feature belongs to `keleusma` and the guard is therefore always false. \
+         Naming the lint is the useful part of that note",
+    ),
 ];
 
 fn package_root() -> PathBuf {

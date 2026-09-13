@@ -39,7 +39,7 @@ that it reaches for `__divti3` — **which I wrote myself, and which does not di
 compiler-runtime symbol, and the bare `FixedDiv` already lowers. **A cost already paid by supported
 code cannot justify refusing more of it.**
 
-## ⚠ FOUR QUESTIONS STILL WITH YOU, ALL RE-MEASURED 2026-09-12
+## ⚠ FIVE QUESTIONS STILL WITH YOU, ALL RE-MEASURED 2026-09-12
 
 Not recalled. `outstanding_reports.rs` fails if any stops reproducing and says to retract rather than
 to debug.
@@ -68,6 +68,26 @@ to debug.
    represented in it at all. The backend had been returning `4.0` for `200.0 % 7.0` — arithmetically
    right, and not what you produce. It now refuses. **An instrument can only find defects it has a
    vocabulary for**, and mine had no word for "the reference refuses".
+5. **NEW — `DataSlot` carries no scalar kind, so a private slot's declared type is not in the module.**
+   `SharedSlotLayout` carries a kind tag; `DataSlot` carries a name and a visibility. That asymmetry
+   is invisible to the reference, which keeps a tagged `Value` at run time and never needs the
+   declaration. It is not invisible here: a native backend has only the module.
+
+   Concretely, `private data d { v: Fixed }` followed by `d.v % d.v` traps on your side and returns a
+   number on mine, and **I cannot close it** — I can see the slot is eight bytes and not that it holds
+   a scaled value. Every other route by which a `Fixed` value reaches `Op::Mod` is now refused; this
+   one is pinned open by `the_private_slot_route_is_still_open_and_that_is_recorded`, which fails when
+   it closes.
+
+   **I am not asking you to add a field.** If question 4 is settled by rejecting `Fixed % Fixed` in the
+   type checker, this route closes with it and nothing else is needed. I am recording that the private
+   slot layout carries strictly less type information than the shared one, because **the next thing
+   that needs a declared scalar kind will hit the same wall**, and the asymmetry looks unintentional
+   rather than decided.
+
+   The fail-closed alternative on my side — refusing `%` and `/` on any operand of unknown provenance —
+   would refuse ordinary `Word` remainders on private-slot values, which your implementation runs
+   correctly. I judged the coverage loss worse than the recorded residual. Say if you disagree.
 
 ## AND ONE THING YOU FIXED THAT NOTHING HERE RECORDED
 

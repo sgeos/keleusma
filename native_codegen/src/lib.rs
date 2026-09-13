@@ -3028,6 +3028,46 @@ fn shape_is_float(shape: &keleusma::bytecode::WireShape) -> bool {
     matches!(shape, keleusma::bytecode::WireShape::Scalar { kind } if *kind == SCALAR_FLOAT_TAG)
 }
 
+/// The operand kind a declared scalar kind carries onto the stack.
+///
+/// **Every flat read already knew this and threw all of it away but `Float`.**
+/// `StructField::Flat` and `ArrayElem::Flat` carry a `ScalarKind` in the baked
+/// operand; the arms mapped it to a WIDTH and tagged only floats, so a `Fixed`
+/// field read back as an untyped integer and `p.v % p.v` lowered the `Op::Mod`
+/// that `a % b` refuses. The lattice was built for floats and never widened when
+/// `Fixed` started mattering.
+fn operand_kind_of(kind: keleusma::value_layout::ScalarKind) -> OperandKind {
+    use keleusma::value_layout::ScalarKind as SK;
+    // **The `floats` feature belongs to the `keleusma` crate, not to this one.**
+    // Written as `#[cfg(feature = "floats")]` here it is always FALSE, the
+    // `Float` arm vanishes, and float field reads push `Unknown` — undoing the
+    // tagging the two call sites were carrying before this helper replaced them.
+    // Caught by clippy's `unexpected_cfg_condition_value`, which is the only
+    // reason the regression did not ship inside a refactor that looked like a
+    // simplification.
+    match kind {
+        SK::Fixed => OperandKind::Fixed,
+        SK::Float => OperandKind::Float,
+        _ => OperandKind::Unknown,
+    }
+}
+
+/// The kind an arithmetic result carries, given its two operand kinds.
+///
+/// **`Fixed` is contagious through arithmetic, and it has to be.** Seeding it
+/// only at parameters left `(a + b) % (a + b)` lowering the `Op::Mod` that
+/// `a % b` refuses: neither operand was a direct parameter read, so neither
+/// carried the kind. **A guard whose reach stops at the operand it was tested on
+/// is a guard that has not been tested.** Found by driving the fix rather than
+/// trusting it.
+fn arith_result_kind(l: OperandKind, r: OperandKind) -> OperandKind {
+    if l == OperandKind::Fixed || r == OperandKind::Fixed {
+        OperandKind::Fixed
+    } else {
+        OperandKind::Unknown
+    }
+}
+
 /// Is this declared shape a Q-format fixed-point scalar?
 fn shape_is_fixed(shape: &keleusma::bytecode::WireShape) -> bool {
     matches!(shape, keleusma::bytecode::WireShape::Scalar { kind } if *kind == SCALAR_FIXED_TAG)
@@ -4707,7 +4747,13 @@ fn lower_chunk_body<'ctx>(
                     st.b.build_select(under, min, hi, "fxm.sello")
                         .unwrap()
                         .into_int_value();
-                st.push(st.b.build_int_truncate(clamped, i64t, "fxm").unwrap());
+                // The product of two Q-format values IS Q-format; see
+                // `arith_result_kind`.
+                st.push_k(
+                    st.b.build_int_truncate(clamped, i64t, "fxm").unwrap(),
+                    Width::Unknown,
+                    OperandKind::Fixed,
+                );
             }
             // Reproduces `src/vm.rs` `Op::FixedDiv` in all three of its
             // behaviours. **Read from that arm, not pattern-matched from
@@ -4773,7 +4819,12 @@ fn lower_chunk_body<'ctx>(
                     st.b.build_select(under, min, hi, "fxd.sello")
                         .unwrap()
                         .into_int_value();
-                st.push(st.b.build_int_truncate(clamped, i64t, "fxd").unwrap());
+                // A Q-format quotient is Q-format; see `arith_result_kind`.
+                st.push_k(
+                    st.b.build_int_truncate(clamped, i64t, "fxd").unwrap(),
+                    Width::Unknown,
+                    OperandKind::Fixed,
+                );
             }
             Op::FixedToWord(frac_bits) => {
                 if u32::from(*frac_bits) >= WORD_BITS as u32 {
@@ -4791,7 +4842,14 @@ fn lower_chunk_body<'ctx>(
                 // Arithmetic, sign-preserving: the VM uses `bits >> frac_bits`
                 // on a signed value, so negatives keep their sign.
                 let sh = i64t.const_int(u64::from(*frac_bits), false);
-                st.push(st.b.build_right_shift(v, sh, true, "fx2w").unwrap());
+                // **The one site that must NOT carry `Fixed` forward.** The
+                // scale is gone; calling the result Fixed would refuse a
+                // `Word` remainder the reference computes happily.
+                st.push_k(
+                    st.b.build_right_shift(v, sh, true, "fx2w").unwrap(),
+                    Width::Unknown,
+                    OperandKind::Unknown,
+                );
             }
             Op::WordToFixed(frac_bits) => {
                 // The VM's corrupt-input arm saturates by sign when the count
@@ -4840,9 +4898,10 @@ fn lower_chunk_body<'ctx>(
                 // sixteen bytes. Dropping the width here is why
                 // `[a as Fixed<16>, b as Fixed<16>]` compiled and was then
                 // refused at `NewComposite`.
-                st.push_w(
+                st.push_k(
                     st.b.build_int_truncate(clamped, i64t, "w2fx").unwrap(),
                     Width::Scalar(8),
+                    OperandKind::Fixed,
                 );
             }
             Op::Dup => {
@@ -5149,8 +5208,14 @@ fn lower_chunk_body<'ctx>(
                     // The KIND comes from the same declaration as the width, so a
                     // float call result is operable rather than `Unknown` — the
                     // caller-side twin of the parameter seeding in the prologue.
+                    // **Fixed joined Float here 2026-09-12.** The same
+                    // declaration carries both, and taking only the float half
+                    // left `id(a) % id(a)` lowering an `Op::Mod` that `a % b`
+                    // refuses.
                     let k = if sg_ret.is_some_and(shape_is_float) {
                         OperandKind::Float
+                    } else if sg_ret.is_some_and(shape_is_fixed) {
+                        OperandKind::Fixed
                     } else {
                         OperandKind::Unknown
                     };
@@ -5439,6 +5504,10 @@ fn lower_chunk_body<'ctx>(
                             ),
                         )
                     })?;
+                    // A `Fixed` operand makes the result `Fixed`; see
+                    // `arith_result_kind`. Read BEFORE the pops, which discard
+                    // the kinds along with the values.
+                    let rk = arith_result_kind(kl, kr);
                     let rhs = st.pop();
                     let lhs = st.pop();
                     let raw = match op {
@@ -5446,7 +5515,7 @@ fn lower_chunk_body<'ctx>(
                         Op::Sub => st.b.build_int_sub(lhs, rhs, "gsub").unwrap(),
                         _ => st.b.build_int_mul(lhs, rhs, "gmul").unwrap(),
                     };
-                    st.push_w(mask_if_byte(&st.b, i64t, raw, out), out);
+                    st.push_k(mask_if_byte(&st.b, i64t, raw, out), out, rk);
                 }
             }
             // The unary half of the same surface. The virtual machine negates a
@@ -5490,9 +5559,11 @@ fn lower_chunk_body<'ctx>(
                             ),
                         )
                     })?;
+                    // Negation preserves the scale; see `arith_result_kind`.
+                    let nk = st.kind_at(0);
                     let v = st.pop();
                     let raw = st.b.build_int_neg(v, "gneg").unwrap();
-                    st.push_w(mask_if_byte(&st.b, i64t, raw, out), out);
+                    st.push_k(mask_if_byte(&st.b, i64t, raw, out), out, nk);
                 }
             }
             Op::WordToByte => {
@@ -6035,6 +6106,14 @@ fn lower_chunk_body<'ctx>(
                         // detail a float PARAMETER's local needed.
                         if kind == SCALAR_FLOAT_TAG {
                             st.push_k(v, Width::Scalar(float_bytes), OperandKind::Float);
+                        } else if kind == SCALAR_FIXED_TAG {
+                            // **The same reasoning as the float tag above, for
+                            // the same reason it was missed there once.** The
+                            // width is left `Unknown` deliberately: only the
+                            // KIND is being recovered here, and widening a slot
+                            // read is a separate change with its own
+                            // consequences.
+                            st.push_k(v, Width::Unknown, OperandKind::Fixed);
                         } else {
                             st.push(v);
                         }
@@ -6473,11 +6552,7 @@ fn lower_chunk_body<'ctx>(
                 // Untagged, the element is packed and read correctly and then
                 // refused by every float operation downstream -- the same miss
                 // the entry ABI and the shared slot each made once.
-                if matches!(kind, SK::Float) {
-                    st.push_k(v, Width::Scalar(w), OperandKind::Float);
-                } else {
-                    st.push_w(v, Width::Scalar(w));
-                }
+                st.push_k(v, Width::Scalar(w), operand_kind_of(*kind));
             }
             // Enum discriminant test. **PEEKS, like `BoundsCheck`**: the virtual
             // machine reads `stack.last()` and leaves the enum in place for the
@@ -6673,11 +6748,7 @@ fn lower_chunk_body<'ctx>(
                     }
                 };
                 // The tag, for the same reason as the array element above.
-                if matches!(kind, SK::Float) {
-                    st.push_k(v, Width::Scalar(w), OperandKind::Float);
-                } else {
-                    st.push_w(v, Width::Scalar(w));
-                }
+                st.push_k(v, Width::Scalar(w), operand_kind_of(*kind));
             }
             // Suspension. **`Yield` is pop-one, push-one**: it pops the value
             // to yield and pushes the value the host resumes with. Treating it

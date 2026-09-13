@@ -1,5 +1,42 @@
 # Design Journal
 
+## 2026-09-12 — the fix I called precise reached one route in four
+
+Yesterday's increment refused `Op::Mod` and `Op::Div` on a `Fixed` operand and the
+commit said the refusal was precise. **Driving it found nine of sixteen routes
+open.** `OperandKind::Fixed` was seeded at chunk parameters only, so
+`(a + b) % (a + b)` lowered the very opcode `a % b` refused.
+
+I had named this gap at the end of the previous increment and still had to measure
+it to learn it was three times larger than I described. **A passing check is
+evidence about the checker's reach before it is evidence about the tree**, and a
+guard tested only on the shape that prompted it has an unknown reach by
+construction.
+
+**The lattice was wrong, not merely incomplete.** `OperandKind` was
+`Int | Float | Unknown`, and every site that already held a scalar kind discarded
+all of it but `Float`: `StructField::Flat` and `ArrayElem::Flat` carry a
+`ScalarKind` in the baked operand and the arms asked only `matches!(kind,
+SK::Float)`; a call result read the callee signature and took the float half; a
+shared slot read its layout tag and did the same. Built for floats, never widened
+when `Fixed` started mattering.
+
+Fifteen of sixteen routes now close. **One cannot be closed from here:** a `Fixed`
+read back from a private data slot. `DataSlot` carries a name and a visibility and
+no scalar kind, where `SharedSlotLayout` carries a tag — an asymmetry that costs
+the reference nothing, since it holds a tagged `Value` at run time, and costs a
+native backend the information entirely. Refusing every operand of unknown
+provenance would refuse ordinary `Word` remainders the reference runs correctly,
+so the residual is pinned by a test that fails when it closes and filed as report
+5.
+
+**One near-miss worth keeping.** Factoring the two field-read sites into a helper,
+I wrote `#[cfg(feature = "floats")]` — a feature of the `keleusma` crate, not of
+this package, so the guard is always false, the `Float` arm vanished, and float
+field reads would have pushed `Unknown`. A regression hidden inside a refactor
+that looked like a simplification. Clippy's `unexpected_cfg_condition_value` was
+the only thing that saw it.
+
 ## 2026-09-12 — an instrument can only find defects it has a vocabulary for
 
 The opcode denominator closed one variant axis: the opcode's own operand field.

@@ -216,3 +216,26 @@ fn report_four_still_reproduces_on_the_reference() {
          than a correctness one."
     );
 }
+
+/// **REPORT 5 — `DataSlot` carries no scalar kind.**
+///
+/// `SharedSlotLayout` carries a kind tag; `DataSlot` carries a name and a
+/// visibility. The reference never needs the declaration, keeping a tagged
+/// `Value` at run time. A native backend has only the module, so a `Fixed` read
+/// back from a private slot is indistinguishable from a `Word`.
+///
+/// Watched by `fixed_kind_reach.rs`, which pins the consequence — a private-slot
+/// `Fixed % Fixed` that traps upstream and lowers here — and fails when it
+/// closes. Not duplicated: a second copy of one guard is the coupling this
+/// package has had to unpick three times. This test records WHERE it is watched.
+#[test]
+fn report_five_is_watched_by_the_reach_suite() {
+    let src =
+        std::fs::read_to_string("tests/fixed_kind_reach.rs").expect("the reach suite is readable");
+    assert!(
+        src.contains("the_private_slot_route_is_still_open_and_that_is_recorded"),
+        "`fixed_kind_reach.rs` no longer pins the open private-slot route. If it \
+         closed, retract report 5; if the test was removed for another reason, \
+         report 5 is now unwatched."
+    );
+}
