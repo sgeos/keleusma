@@ -123,17 +123,98 @@ const WITNESSED: &[(&str, &str)] = &[
         "enum E { A(Word), B }\nfn main(a: Word, b: Word) -> Word { let e: E = E::A(a); match e { E::A(v) => v, E::B => 0 } }",
     ),
     ("Return", "fn main(a: Word, b: Word) -> Word { a }"),
+    (
+        "Else",
+        "fn main(a: Word, b: Word) -> Word { if a > b { 1 } else { 2 } }",
+    ),
+    (
+        "EndIf",
+        "fn main(a: Word, b: Word) -> Word { if a > b { 1 } else { 2 } }",
+    ),
+    (
+        "Trap",
+        "enum E { A(Word), B }\nfn main(a: Word, b: Word) -> Word { let e: E = E::A(a); match e { E::A(v) => v, E::B => 0 } }",
+    ),
+    (
+        "Add",
+        "fn main(a: Word, b: Word) -> Word { ((a as Byte) + (b as Byte)) as Word }",
+    ),
+    (
+        "Sub",
+        "fn main(a: Word, b: Word) -> Word { ((a as Byte) - (b as Byte)) as Word }",
+    ),
+    (
+        "Mul",
+        "fn main(a: Word, b: Word) -> Word { ((a as Byte) * (b as Byte)) as Word }",
+    ),
+    (
+        "Neg",
+        "fn main(a: Word, b: Word) -> Word { (-(a as Fixed)) as Word }",
+    ),
+    (
+        "FixedMul",
+        "fn main(a: Word, b: Word) -> Word { ((a as Fixed) * (b as Fixed)) as Word }",
+    ),
+    (
+        "FixedDiv",
+        "fn main(a: Word, b: Word) -> Word { ((a as Fixed) / (b as Fixed)) as Word }",
+    ),
+    (
+        "CmpEq",
+        "fn main(a: Word, b: Word) -> Word { if a == b { 1 } else { 0 } }",
+    ),
+    (
+        "CmpNe",
+        "fn main(a: Word, b: Word) -> Word { if a != b { 1 } else { 0 } }",
+    ),
+    (
+        "CmpLt",
+        "fn main(a: Word, b: Word) -> Word { if a < b { 1 } else { 0 } }",
+    ),
+    (
+        "CmpGt",
+        "fn main(a: Word, b: Word) -> Word { if a > b { 1 } else { 0 } }",
+    ),
+    (
+        "CmpLe",
+        "fn main(a: Word, b: Word) -> Word { if a <= b { 1 } else { 0 } }",
+    ),
+    (
+        "CmpGe",
+        "fn main(a: Word, b: Word) -> Word { if a >= b { 1 } else { 0 } }",
+    ),
+    (
+        "Loop",
+        "fn main(a: Word, b: Word) -> Word { let xs: [Word; 4] = [a, b, 1, 2]; for i in 0..4 { let _q = i * a; break; } xs[3] }",
+    ),
+    (
+        "EndLoop",
+        "fn main(a: Word, b: Word) -> Word { let xs: [Word; 4] = [a, b, 1, 2]; for i in 0..4 { let _q = i * a; break; } xs[3] }",
+    ),
+    (
+        "Break",
+        "fn main(a: Word, b: Word) -> Word { let xs: [Word; 4] = [a, b, 1, 2]; for i in 0..4 { let _q = i * a; break; } xs[3] }",
+    ),
+    (
+        "BreakIf",
+        "fn main(a: Word, b: Word) -> Word { let xs: [Word; 4] = [a, b, 1, 2]; for i in 0..4 { let _q = i * a; break; } xs[3] }",
+    ),
+    (
+        "PushImmediate",
+        "fn main(a: Word, b: Word) -> Word { let xs: [Word; 4] = [a, b, 1, 2]; for i in 0..4 { let _q = i * a; break; } xs[3] }",
+    ),
+    (
+        "GetData",
+        "private data d { v: Word }\nfn main(a: Word, b: Word) -> Word { d.v = a; d.v }",
+    ),
+    (
+        "SetData",
+        "private data d { v: Word }\nfn main(a: Word, b: Word) -> Word { d.v = a; d.v }",
+    ),
 ];
 
 /// Opcodes with no driven witness HERE, and why. **Recorded, not omitted.**
 const NO_WITNESS_HERE: &[(&str, &str)] = &[
-    (
-        "Add",
-        "Byte/Fixed only; a Word `+` is CheckedAdd. Driven by scalar_operator_matrix",
-    ),
-    ("Sub", "Byte/Fixed only; driven by scalar_operator_matrix"),
-    ("Mul", "Byte/Fixed only; driven by scalar_operator_matrix"),
-    ("Neg", "Byte/Fixed only; driven by scalar_operator_matrix"),
     (
         "CheckedDiv",
         "a Word `/` emits Div, not this -- no witness constructed here; the corpus's \
@@ -144,20 +225,6 @@ const NO_WITNESS_HERE: &[(&str, &str)] = &[
         "a Word `%` emits Mod, not this -- same producer as CheckedDiv",
     ),
     (
-        "FixedMul",
-        "needs Fixed operands; driven by scalar_operator_matrix",
-    ),
-    (
-        "FixedDiv",
-        "needs Fixed operands; driven by scalar_operator_matrix",
-    ),
-    ("CmpEq", "returns bool; driven by scalar_operator_matrix"),
-    ("CmpNe", "returns bool; driven by scalar_operator_matrix"),
-    ("CmpLt", "returns bool; driven by scalar_operator_matrix"),
-    ("CmpGt", "returns bool; driven by scalar_operator_matrix"),
-    ("CmpLe", "returns bool; driven by scalar_operator_matrix"),
-    ("CmpGe", "returns bool; driven by scalar_operator_matrix"),
-    (
         "BoundsCheck",
         "emitted by indexing a DATA-SLOT array, not a local one -- `opcode_witness.kel` \
          is the corpus's only producer. A local `xs[a]` emits NONE, which is the very \
@@ -165,15 +232,6 @@ const NO_WITNESS_HERE: &[(&str, &str)] = &[
          emitted it before an index, and the compiler does not",
     ),
     ("Dup", "emitted incidentally; no witness isolates it"),
-    ("Else", "structural; carried by the If witness"),
-    ("EndIf", "structural; carried by the If witness"),
-    (
-        "Loop",
-        "structural; loop forms are driven by the corpus differential",
-    ),
-    ("EndLoop", "structural; driven by the corpus differential"),
-    ("Break", "structural; driven by the corpus differential"),
-    ("BreakIf", "structural; driven by the corpus differential"),
     (
         "Stream",
         "a stream entry; driven by the general-stream suites",
@@ -183,14 +241,6 @@ const NO_WITNESS_HERE: &[(&str, &str)] = &[
         "a stream entry; driven by the general-stream suites",
     ),
     ("Reset", "emitted but never visited; see opcode_denominator"),
-    (
-        "PushImmediate",
-        "emitted incidentally; no witness isolates it",
-    ),
-    (
-        "Trap",
-        "reached only on a fault; driven by the trapping-module suites",
-    ),
     ("Len", "the reference emits none; see opcode_denominator"),
     (
         "IsStruct",
@@ -203,14 +253,6 @@ const NO_WITNESS_HERE: &[(&str, &str)] = &[
     (
         "CallExternalNative",
         "needs a registered native; driven by the corpus differential",
-    ),
-    (
-        "GetData",
-        "needs a data slot; driven by the data-slot suites",
-    ),
-    (
-        "SetData",
-        "needs a data slot; driven by the data-slot suites",
     ),
     (
         "GetDataIndexed",

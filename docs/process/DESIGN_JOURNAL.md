@@ -1,5 +1,43 @@
 # Design Journal
 
+## 2026-09-13 — 34 unverified coverage claims, cut to 13 by driving them
+
+The driven-witness census shipped with **34 rows asserting "driven by X"** — the
+exact unverified-coverage pattern the same increment had built machinery to avoid,
+left sitting in the same file. The honest fix is not to check the claims but to
+**remove the need for them**.
+
+**Twenty-one moved from claimed to verified.** `Add`, `Sub`, `Mul` and `Neg` via
+`((a as Byte) + (b as Byte)) as Word`; `FixedMul` and `FixedDiv` the same way
+through `Fixed`; all six comparisons via `if a == b { 1 } else { 0 }`, which
+returns `Word` and so fits the driver. One loop witness emits **five** opcodes at
+once — `Loop`, `EndLoop`, `Break`, `BreakIf`, `PushImmediate` — and one data-slot
+witness emits `GetData` and `SetData`. Three more were already covered by
+witnesses in the table: the `If` witness emits `Else` and `EndIf`, the enum
+witness emits `Trap`.
+
+**53 of 66 driven, 13 recorded**, up from 32 and 34.
+
+Two syntax facts learned by being wrong. **Local bindings are immutable** — there
+is no mutable local, so every accumulator loop I wrote failed to parse, and the
+corpus comment says so plainly: *"local bindings are immutable and each iteration
+rebinds its own."* And **a private data block that is never mutated is refused**,
+with the compiler directing the author to `const data` instead; the witness needs a
+write before its read.
+
+**The partition test caught me deleting rows from both columns.** A regex meant to
+strip the moved rows from the not-driven table matched the identically-shaped rows
+I had just added to the driven one, leaving nineteen opcodes in neither. Bounding
+the deletion to the table between its own `const` and its terminator fixed it.
+
+**And two mutation checks were silent for the fourth and fifth time — both
+application failures, not missing reach.** One pattern had been re-wrapped by
+`cargo fmt`; the other appears five times, and `replace(..., 1)` changed a copy the
+assertion does not read. Both fire once the edit is asserted to have landed.
+**A mutation check must verify its own edit before it can report anything about a
+guard**, which is the same discipline as clearing a probe before reporting a
+divergence.
+
 ## 2026-09-13 — a driven witness per opcode, and four rows that proved nothing
 
 Three questions of increasing strength: does the backend LOWER it
