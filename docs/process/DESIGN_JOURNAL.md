@@ -1,5 +1,40 @@
 # Design Journal
 
+## 2026-09-13 — 60 of 66 driven; the limitation was one driver, not the package
+
+The census recorded its `Word`-return constraint as if it bounded what could be
+driven. **It bounded ONE DRIVER.** `common::assert_general_stream_agrees` already
+existed, drives a resumable entry across ticks and compares every yield — so the
+three stream opcodes were never out of reach, only out of reach of the helper I
+happened to be using.
+
+Seven more moved: `CheckedDiv` and `CheckedMod` through the checked-match form
+`a / b { ok(v) => v, zero_divisor(n) => 0 }`, which is how the corpus's
+`checked_ratio` produces them and which a plain Word `/` does not; `GetDataIndexed`
+and `SetDataIndexed` through an indexed private slot; and `Stream`, `Yield`,
+`Reset` through the stream driver. **60 of 66, from 32 two increments ago.**
+
+**`Reset` is claimed carefully.** The program containing it agrees tick for tick,
+while `opcode_denominator.rs` separately records that the lowering never VISITS
+the instruction — the native stream rewinds its arena at the host boundary
+instead. Both are true, and the table claims only the weaker one. Writing "Reset
+is driven" without that distinction would have been the overclaim this session
+keeps finding in other people's records.
+
+Six remain, each for a reason rather than a shrug: `Len` and `IsStruct` have no
+producer at all; the two natives need registration the simple drivers do not do;
+`BoundsCheck` needs a VARIABLE data-slot index, which the driver declines; and
+`Dup`'s producer is still unidentified.
+
+**Three failures inside the increment, all caught.** The both-columns assertion
+caught two rows that survived in the not-driven table after being added to the
+driven one — the regex missed them because one had a wrapped reason string and the
+other was the table's LAST row, with no trailing newline inside the slice. And an
+assertion raised before its `open(..., 'w')`, so nothing was written; I saw the
+traceback only because the command was not chained behind another. That is the
+same heredoc failure that once let a commit message record work absent from the
+tree, and the habit of not chaining is what surfaced it this time.
+
 ## 2026-09-13 — 34 unverified coverage claims, cut to 13 by driving them
 
 The driven-witness census shipped with **34 rows asserting "driven by X"** — the

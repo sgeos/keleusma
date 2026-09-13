@@ -124,6 +124,22 @@ const WITNESSED: &[(&str, &str)] = &[
     ),
     ("Return", "fn main(a: Word, b: Word) -> Word { a }"),
     (
+        "CheckedDiv",
+        "fn main(a: Word, b: Word) -> Word { let q = a / b { ok(v) => v, zero_divisor(n) => 0 }; let r = a % b { ok(v) => v, zero_divisor(n) => 0 }; q + r }",
+    ),
+    (
+        "CheckedMod",
+        "fn main(a: Word, b: Word) -> Word { let q = a / b { ok(v) => v, zero_divisor(n) => 0 }; let r = a % b { ok(v) => v, zero_divisor(n) => 0 }; q + r }",
+    ),
+    (
+        "GetDataIndexed",
+        "private data d { xs: [Word; 4] }\nfn main(a: Word, b: Word) -> Word { d.xs[1] = a; d.xs[1] }",
+    ),
+    (
+        "SetDataIndexed",
+        "private data d { xs: [Word; 4] }\nfn main(a: Word, b: Word) -> Word { d.xs[1] = a; d.xs[1] }",
+    ),
+    (
         "Else",
         "fn main(a: Word, b: Word) -> Word { if a > b { 1 } else { 2 } }",
     ),
@@ -216,15 +232,6 @@ const WITNESSED: &[(&str, &str)] = &[
 /// Opcodes with no driven witness HERE, and why. **Recorded, not omitted.**
 const NO_WITNESS_HERE: &[(&str, &str)] = &[
     (
-        "CheckedDiv",
-        "a Word `/` emits Div, not this -- no witness constructed here; the corpus's \
-         `checked_ratio` is the producer",
-    ),
-    (
-        "CheckedMod",
-        "a Word `%` emits Mod, not this -- same producer as CheckedDiv",
-    ),
-    (
         "BoundsCheck",
         "emitted by indexing a DATA-SLOT array, not a local one -- `opcode_witness.kel` \
          is the corpus's only producer. A local `xs[a]` emits NONE, which is the very \
@@ -232,15 +239,6 @@ const NO_WITNESS_HERE: &[(&str, &str)] = &[
          emitted it before an index, and the compiler does not",
     ),
     ("Dup", "emitted incidentally; no witness isolates it"),
-    (
-        "Stream",
-        "a stream entry; driven by the general-stream suites",
-    ),
-    (
-        "Yield",
-        "a stream entry; driven by the general-stream suites",
-    ),
-    ("Reset", "emitted but never visited; see opcode_denominator"),
     ("Len", "the reference emits none; see opcode_denominator"),
     (
         "IsStruct",
@@ -253,14 +251,6 @@ const NO_WITNESS_HERE: &[(&str, &str)] = &[
     (
         "CallExternalNative",
         "needs a registered native; driven by the corpus differential",
-    ),
-    (
-        "GetDataIndexed",
-        "needs an indexed slot; driven by the indexed-composite suite",
-    ),
-    (
-        "SetDataIndexed",
-        "needs an indexed slot; driven by the indexed-composite suite",
     ),
 ];
 
@@ -314,7 +304,11 @@ fn the_two_columns_partition_the_instruction_set() {
         "parsed only {} opcodes; a broken probe rather than a shrunken ISA",
         declared.len()
     );
-    let driven: BTreeSet<&str> = WITNESSED.iter().map(|(o, _)| *o).collect();
+    let driven: BTreeSet<&str> = WITNESSED
+        .iter()
+        .map(|(o, _)| *o)
+        .chain(STREAM_WITNESSED.iter().copied())
+        .collect();
     let recorded: BTreeSet<&str> = NO_WITNESS_HERE.iter().map(|(o, _)| *o).collect();
 
     let both: Vec<&&str> = driven.intersection(&recorded).collect();
@@ -363,4 +357,34 @@ fn every_witness_emits_its_opcode_and_agrees_with_the_reference() {
             "`{opcode}` DIVERGES: reference {vm}, native {native}, for {src}"
         );
     }
+}
+
+/// Opcodes driven through the STREAM helper rather than the scalar one.
+///
+/// `common::assert_general_stream_agrees` drives a resumable entry across ticks
+/// and compares every yielded value. The entry must be `loop main`, which is why
+/// these cannot share the scalar table.
+///
+/// **⚠ `Reset` IS A PROGRAM-LEVEL WITNESS, NOT AN INSTRUCTION-LEVEL ONE.** The
+/// program containing it agrees tick for tick, and `opcode_denominator.rs`
+/// separately records that the lowering never VISITS the instruction — the native
+/// stream rewinds its arena at the host boundary instead. Both are true; this
+/// table claims the weaker one.
+const STREAM_WITNESS: &str = "loop main(t: Word) -> Word { (yield t) + (yield t + 1) }";
+
+/// Opcodes the stream witness emits.
+const STREAM_WITNESSED: &[&str] = &["Stream", "Yield", "Reset"];
+
+#[test]
+fn the_stream_witness_emits_its_opcodes_and_agrees_tick_for_tick() {
+    let m = common::try_build(STREAM_WITNESS).expect("the stream witness compiles");
+    let ops = ops_of(&m);
+    for opcode in STREAM_WITNESSED {
+        assert!(
+            ops.contains(*opcode),
+            "the stream witness no longer emits `{opcode}`: {STREAM_WITNESS}"
+        );
+    }
+    // Drives both implementations across ticks and compares every yield.
+    common::assert_general_stream_agrees(STREAM_WITNESS, 1, &[2, 3]);
 }

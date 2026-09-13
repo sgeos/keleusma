@@ -29,13 +29,14 @@
 //!
 //! # ⚠ AN INTERMITTENT `LEAK` MARKER, AND A HYPOTHESIS OF MINE THAT WAS WRONG
 //!
-//! `cargo nextest` has reported `LEAK` three times, always alongside a PASS:
+//! `cargo nextest` has reported `LEAK` four times, always alongside a PASS:
 //!
 //! | when | test | binary |
 //! |---|---|---|
 //! | 2026-09-12 | `the_sentinel_band_still_matches_the_stage_sources` | this one |
 //! | 2026-09-12 | `the_private_contract_exceeds_the_slot_array_for_real_corpus_modules` | this one |
 //! | 2026-09-13 | `region::width_tests::a_float_tag_has_no_width_because_it_has_no_representation` | the LIBRARY |
+//! | 2026-09-13 | `a_trapping_programs_native_side_dies_with_sigtrap` | this one |
 //!
 //! **Commit `6603c399` said this note existed. It did not.** The edit meant to
 //! write it raised inside a heredoc whose output was never read, the command chain
@@ -49,7 +50,12 @@
 //! LIBRARY UNIT TEST asserting that a tag has no width: it builds nothing and
 //! holds no operating-system resource. **The binary is not the common factor.**
 //!
-//! Three leaks, three tests, two binaries, every one trivial or unrelated, none
+//! **The fourth is the only one with a mechanism of its own**: its whole purpose is
+//! to make a process die with `SIGTRAP`, so a surviving handle would be
+//! unsurprising. The other three hold no operating-system resource at all, so it
+//! does not explain them, and the conclusion is unchanged rather than rescued.
+//!
+//! Four leaks, four tests, two binaries, three of them trivial or unrelated, none
 //! reproducing — the first was re-run five times cleanly. The runner or the machine
 //! under load is what remains, and **that is not traced either**. Recorded rather
 //! than chased: a `LEAK` warns about teardown, not a failed assertion, and no
