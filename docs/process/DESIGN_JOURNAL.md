@@ -13,6 +13,58 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (ninetieth) — a reproducibility test, a fifth gap, and a guard catching me again
+
+### THE PROPERTY THE ORACLE DEPENDS ON WAS NOT TESTED
+
+The roadmap requires the toolchain to be byte-reproducible so the fixed-point and
+differential-oracle checks are meaningful. Nothing checked it. The oracle compares self-hosted
+against reference, so both could be non-deterministic the same way unnoticed; and
+`selfhost_counter_reset.rs` is STATIC, scanning stage sources for a counter never assigned zero —
+one known cause that cost a four-cause diagnosis, two of them first diagnosed wrongly. A syntactic
+scan cannot catch a cause nobody has thought of.
+
+The new test compiles each source twice in one process and compares modules the way the oracle
+does. It states what it does NOT establish: reproducibility across processes, where a global
+initialised once would survive unchanged.
+
+### WRITING THE CORPUS FOUND A FIFTH GAP
+
+A corpus entry using `E::N` was refused. The reference compiles it. Probed further: refused as a
+return value, in a `let`, and as a call argument — while `E::A(7)` compiles.
+
+Three hypotheses died on measurement before the right one. Not mixed-versus-all-unit enums: an
+all-unit enum is refused too. Not explicit discriminants: an enum with them is refused too. The
+answer was in `parse.kel` itself, which writes `Node::Local()` — **with parentheses**. Bare `E::N`
+is refused; `E::N()` compiles.
+
+**It is the expression-side twin of the bare unit-variant PATTERN gap fixed earlier this session.**
+Same asymmetry, other side, still open.
+
+### THE GUARD CAUGHT ME, FOR THE SECOND TIME
+
+An arm was added to the construct scan to name the new gap, matching an enum variant with empty
+arguments. `the_scan_names_no_construct_in_any_stage_source` failed immediately, naming
+`Node::Local()` in `parse.kel` — the parenthesised form, which compiles.
+
+The syntax tree records `E::N` and `E::N()` identically. **The distinguishing information is not in
+the tree the scan reads**, which is the branch-pair shape exactly. So the gap is covered by the
+corpus that requires only a refusal, and absent from the one that requires a name, with the reason
+recorded in both.
+
+Without that guard the entry would have shipped and blamed working code for unrelated failures. It
+was written two increments earlier for precisely this, and this is the second time in this session
+a guard written earlier caught an error made later.
+
+### THE COUNT WAS FOUR AND IS FIVE
+
+Censusing the claim distinguished two kinds of statement. "All four gaps return an error" remains
+true OF THOSE FOUR and needed no change. "Four self-hosted-parser gaps remain" was a count of the
+known set and was wrong. Only the latter kind was touched — a blind replacement would have corrupted
+sentences that were never claiming a total.
+
+---
+
 ## 2026-09-12 (eighty-ninth) — a blank cell is a claim, and one of mine was never run
 
 ### THE MATRIX I CALLED CLOSED HAD THREE CELLS NOBODY MEASURED
