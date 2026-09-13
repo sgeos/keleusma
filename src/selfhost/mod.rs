@@ -7499,6 +7499,16 @@ pub fn wire_windowed_via_kel(
 /// is absent because its support was never measured, and guessing would attach a confident
 /// noun to a failure that may have nothing to do with it.
 ///
+/// **A BARE UNIT ENUM VARIANT IS ABSENT FOR A DIFFERENT REASON: IT CANNOT BE NAMED HERE.**
+/// `E::N` in expression position is refused by the self-hosted compiler and accepted by the
+/// reference — a real gap, measured 2026-09-12 as a return value, in a `let`, and as a call
+/// argument. But `E::N()` COMPILES, and the syntax tree records both as `EnumVariant` with
+/// empty `args`, so an arm matching that shape flags the working form too. The arm was
+/// written, and `the_scan_names_no_construct_in_any_stage_source` rejected it by naming
+/// `Node::Local()` in `parse.kel` — the parenthesised form, which compiles. **The
+/// distinguishing information is not in the tree this scan reads**, the same shape as the
+/// branch-pair row withheld elsewhere in this file.
+///
 /// The float entry is the sharpest case of that rule. "Floats are outside the subset" is
 /// the loose summary; what is measurably outside is the LITERAL. A function taking and
 /// returning `Float` compiles and matches the reference byte for byte, so listing the type

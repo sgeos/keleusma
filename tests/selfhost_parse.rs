@@ -3749,3 +3749,59 @@ fn an_empty_else_is_indistinguishable_from_an_implicit_one() {
         "the parse stage produced no functions, so the equality above is vacuous"
     );
 }
+
+/// **THE EXPRESSION SIDE OF THE BARE-VERSUS-PARENTHESISED ASYMMETRY IS STILL OPEN.**
+///
+/// `a_bare_unit_variant_pattern_parses_as_the_parenthesised_one` above pins the PATTERN
+/// side, which was a missing branch and is fixed. The EXPRESSION side has the same shape
+/// and is not.
+///
+/// Measured 2026-09-12: `E::N()` compiles through the self-hosted backend and bare `E::N`
+/// does not, while the reference accepts both. Tested as a return value, in a `let`, and as
+/// a call argument, with the same outcome each time.
+///
+/// # Why the refusal does not name the construct
+///
+/// The driver's construct scan names what a user wrote, and it cannot name this one. The
+/// syntax tree records `E::N` and `E::N()` identically, as `EnumVariant` with empty `args`,
+/// so an arm matching that shape flags the WORKING form too. Such an arm was written and
+/// `the_scan_names_no_construct_in_any_stage_source` rejected it, naming `Node::Local()` in
+/// `parse.kel`. Until the two spellings are distinguishable, a user meets the stage's own
+/// diagnostic for this gap.
+///
+/// # Why this is pinned rather than fixed
+///
+/// The fix is in `parse.kel`, which bears on the operator's capacity decision for the input
+/// path, exactly as the four other known gaps do.
+#[test]
+fn a_bare_unit_variant_expression_is_refused_where_the_parenthesised_one_compiles() {
+    const BARE: &str = "enum E { M, N }\nfn main() -> Word { E::N as Word }";
+    const PAREN: &str = "enum E { M, N }\nfn main() -> Word { E::N() as Word }";
+
+    // CONTROL: the reference accepts BOTH, so a refusal below is the subset declining a
+    // valid program rather than the program being wrong.
+    for (label, src) in [("bare", BARE), ("parenthesised", PAREN)] {
+        let ast =
+            keleusma::parser::parse(&keleusma::lexer::tokenize(src).expect("lex")).expect("parse");
+        assert!(
+            keleusma::compiler::compile(&ast).is_ok(),
+            "the reference rejects the {label} form, so this comparison is not about a \
+             self-hosted gap"
+        );
+    }
+
+    let target = keleusma::target::Target::host();
+
+    assert!(
+        keleusma::selfhost::self_hosted_compile(PAREN, &target).is_ok(),
+        "the parenthesised unit-variant expression no longer compiles. The asymmetry this \
+         test names is bare-versus-parenthesised; if BOTH now fail, the gap widened and the \
+         description above is stale"
+    );
+    assert!(
+        keleusma::selfhost::self_hosted_compile(BARE, &target).is_err(),
+        "the bare unit-variant expression now compiles. If `parse.kel` gained the branch, \
+         this is a FIX: remove this test and drop the gap from the known list rather than \
+         relaxing the assertion"
+    );
+}
