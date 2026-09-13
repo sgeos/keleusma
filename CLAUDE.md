@@ -213,11 +213,13 @@ for once; the detail is in [`docs/process/DESIGN_JOURNAL.md`](docs/process/DESIG
 | A **cached** `clippy` run prints nothing whether or not warnings exist | `touch` a source first; zero warnings from a warm target directory is not evidence |
 | A log **truncated** by `tail`/`head` looks identical to a clean one | Capture the whole output and the exit status when the result will be quoted |
 | A file's **own documented** reproduction command under-ran the file | `tests/float_opcode_without_floats.rs` named `--features verify`, which runs its defect pin and skips its `compile`-gated control. Check the test count against the file's `#[test]` count |
+| **Three of the five feature sets, treated as all five** | A test calling `keleusma::selfhost` in a file not gated on `self-host` compiles under `self-host` and fails the other four. Turned three CI jobs red **in the same session that corrected this file's feature-set count**. Compiling under a feature set is also weaker than RUNNING under it |
 
-**Not exhaustive.** Seven found across two sessions is evidence that more exist, not
-that these are all of them. The seventh was found by re-running a measurement whose
-feature set continuous integration does not cover, which is where a recorded number
-can quietly stop being true. A run that is about to justify a claim deserves the question
+**Not exhaustive.** Eight found across two sessions is evidence that more exist, not
+that these are all of them. The seventh came from re-running a measurement whose feature
+set continuous integration does not cover. **The eighth was committed by the author of the
+seventh, two increments later**, which is the more useful fact: knowing a failure class
+does not prevent producing it, and only running the configurations does. A run that is about to justify a claim deserves the question
 "what did this command actually cover?" before the claim is made.
 
 ## Coding Conventions
