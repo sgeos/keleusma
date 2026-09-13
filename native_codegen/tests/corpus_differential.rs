@@ -29,7 +29,7 @@
 //!
 //! # ⚠ AN INTERMITTENT `LEAK` MARKER, AND A HYPOTHESIS OF MINE THAT WAS WRONG
 //!
-//! `cargo nextest` has reported `LEAK` four times, always alongside a PASS:
+//! `cargo nextest` has reported `LEAK` five times, always alongside a PASS:
 //!
 //! | when | test | binary |
 //! |---|---|---|
@@ -37,6 +37,7 @@
 //! | 2026-09-12 | `the_private_contract_exceeds_the_slot_array_for_real_corpus_modules` | this one |
 //! | 2026-09-13 | `region::width_tests::a_float_tag_has_no_width_because_it_has_no_representation` | the LIBRARY |
 //! | 2026-09-13 | `a_trapping_programs_native_side_dies_with_sigtrap` | this one |
+//! | 2026-09-13 | `a_trapping_programs_native_side_dies_with_sigtrap` **(repeat)** | this one |
 //!
 //! **Commit `6603c399` said this note existed. It did not.** The edit meant to
 //! write it raised inside a heredoc whose output was never read, the command chain
@@ -50,10 +51,17 @@
 //! LIBRARY UNIT TEST asserting that a tag has no width: it builds nothing and
 //! holds no operating-system resource. **The binary is not the common factor.**
 //!
-//! **The fourth is the only one with a mechanism of its own**: its whole purpose is
-//! to make a process die with `SIGTRAP`, so a surviving handle would be
-//! unsurprising. The other three hold no operating-system resource at all, so it
-//! does not explain them, and the conclusion is unchanged rather than rescued.
+//! **The fifth REPEATS the fourth, and that is the first repeat**, which sharpens
+//! the picture rather than confirming the old guess. That test's whole purpose is
+//! to make a process die with `SIGTRAP`, so a surviving handle is unsurprising
+//! there. The other three were one-offs on unrelated tests holding no
+//! operating-system resource at all.
+//!
+//! So the honest shape is **one test that leaks somewhat repeatably with an
+//! obvious mechanism, plus sporadic one-offs elsewhere** — not the single
+//! whole-binary cause first guessed, and not a shapeless scatter either. Still
+//! untraced; the table exists so each occurrence refines the statement instead of
+//! being met fresh.
 //!
 //! Four leaks, four tests, two binaries, three of them trivial or unrelated, none
 //! reproducing — the first was re-run five times cleanly. The runner or the machine

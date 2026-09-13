@@ -1,5 +1,39 @@
 # Design Journal
 
+## 2026-09-13 — absorption 61, and a brief that predicted the GUARDS
+
+Backlog had reached 15, so absorption outranked the tail of the witness table.
+Fifteen commits touching **one `src/` file** — `src/selfhost/mod.rs` — and five
+upstream test files. No `.kel` changed; `native_codegen/` and `examples/`
+untouched.
+
+**Every prediction held, figures and guards alike.** The guard half is the part
+worth keeping: absorption 60's brief predicted six figures, got all six right, and
+still missed `corpus_fingerprint.rs` firing, because that pins corpus CONTENT by
+hash rather than counts. This brief predicted the guards explicitly and named the
+fingerprint as the sharpest case — **it stayed silent, as predicted, because no
+`.kel` moved.** Predicting the figures is not predicting which guards trip, and
+the fix is to write the second list down.
+
+**A fifth `LEAK`, and the first repeat**:
+`a_trapping_programs_native_side_dies_with_sigtrap`, the same test as the fourth.
+That SHARPENS the record rather than confirming it. The honest shape is now **one
+test leaking somewhat repeatably with an obvious mechanism** — its purpose is to
+make a process die with `SIGTRAP` — **plus sporadic one-offs elsewhere**. Neither
+the whole-binary cause first guessed nor a shapeless scatter. Second revision of
+that record as data accumulated, which is exactly what it was built for.
+
+**Every phase ran in the FOREGROUND and completed first time**, against three
+consecutive background kills of the long phase in the previous increment. Two
+phases were re-run after a comment-only edit, because two censuses here READ
+SOURCE TEXT and a comment is not inert in this package.
+
+Also found, and held for the next increment: **`Op::Dup` is emitted by the
+short-circuit booleans** `andalso` and `orelse` — three sites in `compiler.rs`,
+all of them that. A witness compiles, emits it and agrees, which would take the
+driven count to 61 of 66. Verified in a scratch file and deleted, so the
+absorption could be measured on a clean tree.
+
 ## 2026-09-13 — 60 of 66 driven; the limitation was one driver, not the package
 
 The census recorded its `Word`-return constraint as if it bounded what could be

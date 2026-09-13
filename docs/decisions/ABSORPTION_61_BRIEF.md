@@ -66,3 +66,45 @@ here, and absorption 40's attribution had to be argued rather than being certain
   the result; record what moved it.
 - **Assuming no conflict means nothing to check.** The merge is the cheap part;
   the verdict is the measurement.
+
+---
+
+## OUTCOME
+
+**Merged cleanly. Backlog 0. Every prediction held, figures and guards alike.**
+
+| prediction | result |
+|---|---|
+| no conflicting files | **held** — `merge-tree` was right |
+| no backend behaviour change | **held** — 587 tests, 0 failed |
+| corpus 74 modules, 1 refused | **held** |
+| ISA 63 of 66, denominator 66 | **held** |
+| test population unchanged | **held** |
+| driven witnesses 60 of 66 | **held** |
+| **`corpus_fingerprint.rs` does NOT fire** | **held** — no `.kel` changed |
+| the other four guards do not fire | **held** |
+
+**The guard prediction is the part worth keeping.** Absorption 60's brief
+predicted six figures, got all six right, and still missed the content-hash pin
+firing. This brief predicted the guards explicitly and named the fingerprint as
+the sharpest case. It stayed silent, as predicted, because no `.kel` moved.
+
+## A FIFTH `LEAK`, AND THE FIRST REPEAT
+
+`a_trapping_programs_native_side_dies_with_sigtrap` leaked again — the same test
+as the fourth. That **sharpens** the earlier statement rather than confirming it:
+the honest shape is **one test that leaks somewhat repeatably with an obvious
+mechanism** (its purpose is to make a process die with `SIGTRAP`), **plus sporadic
+one-offs elsewhere**. Not the whole-binary cause first guessed, and not a
+shapeless scatter. Still untraced.
+
+This is the second time the leak record has been revised as data accumulated,
+which is what it was built for.
+
+## COST
+
+Six phases, both configurations, **all in the FOREGROUND**. Every phase completed
+first time — against three consecutive background kills of the long phase in the
+previous increment. Two extra phases were re-run after a comment-only edit to a
+module header, because two censuses in this package READ SOURCE TEXT and a comment
+is therefore not inert here.
