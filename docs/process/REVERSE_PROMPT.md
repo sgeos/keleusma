@@ -102,11 +102,18 @@ Three more have been added by this session and are stated above: the type channe
 `codegen.kel`, whether the boundary table should absorb the four parser gaps, and the capacity
 decision itself. **Seven in total.**
 
-**What is next that is NOT yours.** **Four** self-hosted-parser gaps remain, all traced and all
+**What is next that is NOT yours.** **FIVE** self-hosted-parser gaps remain, all traced and all
 feature work: the variable and struct match patterns need new arm semantics; `assert` needs a token
 code, a lexer arm, statement parsing and emission through two more stages; a qualified call
-expression needs the same kind of work. A fifth — the bare enum unit-variant pattern the grammar
-documents — was a missing branch and **is fixed**.
+expression needs the same kind of work.
+
+**The fifth was found on 2026-09-12 and this said FOUR until then.** A BARE unit enum variant in
+expression position (`E::N`) is refused while the parenthesised `E::N()` compiles, and the reference
+accepts both — measured as a return value, in a `let`, and as a call argument. It is the
+expression-side twin of the bare unit-variant PATTERN gap, which was a missing branch and **is
+fixed**. **Its refusal does not name the construct and cannot**: the syntax tree records both
+spellings identically, so a scan arm matching that shape flags the working one, and the
+stage-source guard rejected exactly such an arm by pointing at `Node::Local()` in `parse.kel`.
 
 **None of the four blocks self-hosting**, and the reason is structural: all twelve stages compile
 through the pipeline byte-identically, so no stage can contain a construct the pipeline cannot

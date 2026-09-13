@@ -8,7 +8,18 @@
 //! passes verification, loads, and then raises it is a hole in the load-time
 //! guarantee rather than a bad program.
 //!
-//! Measured 2026-09-04 on a build with `--no-default-features --features verify`:
+//! Measured 2026-09-04 on a build with `--no-default-features --features verify`,
+//! and **RE-CHECKED 2026-09-12: unchanged, still unrepaired**. The re-check matters
+//! because this feature set is not one continuous integration runs, so nothing
+//! else would have noticed it drifting.
+//!
+//! **Reproduce the WHOLE file with `--no-default-features --features verify,compile`.**
+//! The bare `verify` above runs the defect pin and SKIPS the control below, which is
+//! gated on `compile`. One test passes and the run looks clean, so a reader following
+//! the narrower command sees exactly what a complete run looks like while the half
+//! that makes the pin meaningful never executed. Measured: `verify` alone runs 1 test,
+//! `verify,compile` runs 2.
+//!
 //!
 //! | step | result |
 //! |---|---|

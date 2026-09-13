@@ -4206,6 +4206,14 @@ fn every_known_gap_is_refused_by_the_self_hosted_compiler() {
             "qualified call",
             "use audio::midi_to_freq\nfn main() -> Float { audio::midi_to_freq(69) }",
         ),
+        // FIFTH, found 2026-09-12 while building a repeat-compile corpus. The
+        // parenthesised `E::N()` compiles; only the bare spelling is refused. Pinned
+        // in detail by `a_bare_unit_variant_expression_is_refused_where_the_parenthesised_one_compiles`
+        // in `tests/selfhost_parse.rs`.
+        (
+            "bare unit enum variant expression",
+            "enum E { M, N }\nfn main() -> Word { E::N as Word }",
+        ),
     ];
 
     let target = keleusma::target::Target::host();
@@ -9204,6 +9212,15 @@ fn a_body_without_a_tail_expression_contributes_no_declared_versus_actual_row() 
 /// Dropping either is a regression, so each is checked: a message that named the construct
 /// and discarded the stage's own report would pass a weaker version of this test while
 /// making the stage harder to debug.
+///
+/// # A FIFTH GAP EXISTS AND IS DELIBERATELY NOT IN THIS CORPUS
+///
+/// A bare unit enum variant in expression position (`E::N`) is refused while `E::N()`
+/// compiles. It is a real gap — the reference accepts both — but the scan CANNOT name it:
+/// the syntax tree records the two spellings identically, so an arm matching that shape
+/// flags the working one. Such an arm was written and the stage-source guard rejected it.
+/// The gap is covered by `every_known_gap_is_refused_by_the_self_hosted_compiler`, which
+/// only requires a refusal, and is absent here, which requires a name.
 ///
 /// # What this does NOT establish
 ///
