@@ -941,3 +941,93 @@ fn every_file_the_comment_matching_sweep_names_still_exists() {
          which case the row should say so rather than vanish"
     );
 }
+
+/// **THE INSTRUCTIONS' FEATURE-SET COUNT, CHECKED AGAINST THE WORKFLOW.**
+///
+/// `the_only_test_gated_out_of_every_ci_configuration_is_the_known_one` DERIVES the
+/// feature sets from `ci.yml` and says why: restating them is a second copy of a fact
+/// continuous integration owns, and it goes stale the day a job is added. That comment
+/// records the failure being found "in five process documents at once".
+///
+/// **`CLAUDE.md` was a sixth, and this test is why it went unnoticed.** The guard above
+/// derives the truth but never compares the instruction file's restatement against it, so
+/// the file said THREE — omitting `--no-default-features` and `--features signatures` —
+/// while the executable check was correct all along. Those two are precisely the
+/// configurations an earlier increment's docs-only change failed under.
+///
+/// # What this asserts
+///
+/// The count the instructions state matches the count derived from the workflow, and every
+/// derived feature list is named in the file. Adding a job fails this until both are
+/// updated, which is the only thing that keeps a restatement honest.
+///
+/// **Mutation-tested.** Changing the stated count from five to four fails this test, naming
+/// both the stated and the derived number and quoting the surrounding text.
+#[test]
+fn the_instructions_state_the_feature_sets_ci_actually_runs() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workflow = std::fs::read_to_string(root.join(".github/workflows/ci.yml"))
+        .expect("read ci.yml; if the workflow moved, update this guard");
+
+    // Same extraction as the sibling guard: only steps that RUN the integration tests.
+    let mut lists: Vec<String> = Vec::new();
+    for line in workflow.lines() {
+        if !line.contains("nextest run") || !line.contains("-p keleusma ") {
+            continue;
+        }
+        if line.contains("--no-default-features") {
+            lists.push("--no-default-features".to_string());
+            continue;
+        }
+        if let Some(rest) = line.split("--features ").nth(1)
+            && let Some(list) = rest.split_whitespace().next()
+            && !list.is_empty()
+        {
+            lists.push(list.to_string());
+        }
+    }
+    lists.sort();
+    lists.dedup();
+    // Plus the default-features workspace run, which carries no feature flag.
+    let derived = lists.len() + 1;
+
+    // NON-VACUITY: an extraction that stopped matching would assert nothing.
+    assert!(
+        derived >= 4,
+        "only {derived} feature sets were derived from the workflow, so the extraction \
+         stopped matching and this guard is checking almost nothing"
+    );
+
+    const WORDS: [&str; 11] = [
+        "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+    ];
+    let word = WORDS
+        .get(derived)
+        .unwrap_or_else(|| panic!("{derived} feature sets; extend the number-word table"));
+
+    // The instructions state the count immediately before this phrase.
+    const PHRASE: &str = "feature sets continuous integration actually runs";
+    let at = INSTRUCTIONS.find(PHRASE).unwrap_or_else(|| {
+        panic!(
+            "the instructions no longer contain {PHRASE:?}. If the sentence was reworded, \
+             update this guard's phrase rather than deleting the check: the claim it \
+             protects is a restatement of a fact the workflow owns"
+        )
+    });
+    let lead = &INSTRUCTIONS[at.saturating_sub(24)..at];
+    assert!(
+        lead.contains(word),
+        "the instructions state a feature-set count that is not {word:?} ({derived} derived \
+         from the workflow). Context was {lead:?}. A job was probably added or removed; \
+         update the sentence AND the list of sets it names"
+    );
+
+    // Every derived list must be named, so the count cannot be right by accident.
+    for list in &lists {
+        assert!(
+            INSTRUCTIONS.contains(list.as_str()),
+            "the instructions do not name the {list:?} feature set, which the workflow runs \
+             the keleusma suite under"
+        );
+    }
+}
