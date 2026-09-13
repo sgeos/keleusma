@@ -3769,6 +3769,27 @@ fn an_empty_else_is_indistinguishable_from_an_implicit_one() {
 /// `parse.kel`. Until the two spellings are distinguishable, a user meets the stage's own
 /// diagnostic for this gap.
 ///
+/// # Where the fix would go, located but NOT made
+///
+/// `step_enum` in `parse.kel` drives the expression side in phases: phase 1 awaits `::`,
+/// phase 2 resolves the variant's discriminant from the enum table, **phase 3 awaits `(`**,
+/// phase 4 takes `)` or a payload, and phases 5 and 6 take `as` and the target type.
+///
+/// **Phase 3 requires the open parenthesis.** On bare `E::N` the next token is not `(`, so
+/// phase 3 does nothing and the construction never completes — which is precisely the
+/// "0 remained on the work stack" the refusal reports.
+///
+/// The shape is an alternative phase-3 branch that completes the variant as a unit
+/// construction and re-dispatches the token, directly analogous to the PATTERN-side fix made
+/// earlier in this session in `step_mpat` — the function immediately below `step_enum` —
+/// which completed a bare unit-variant pattern on `=>`.
+///
+/// **The size is NOT established and is not claimed.** The pattern-side fix was one branch,
+/// but the expression path additionally carries the `as` phases and the payload
+/// re-dispatch, so an early completion has to interact with both. An unverified cost
+/// estimate went into a merged pull request body earlier in this session and was retracted
+/// twice; this one is stated as a shape only.
+///
 /// # Why this is pinned rather than fixed
 ///
 /// The fix is in `parse.kel`, which bears on the operator's capacity decision for the input

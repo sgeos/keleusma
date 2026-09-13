@@ -215,6 +215,17 @@ for once; the detail is in [`docs/process/DESIGN_JOURNAL.md`](docs/process/DESIG
 | A file's **own documented** reproduction command under-ran the file | `tests/float_opcode_without_floats.rs` named `--features verify`, which runs its defect pin and skips its `compile`-gated control. Check the test count against the file's `#[test]` count |
 | **Three of the five feature sets, treated as all five** | A test calling `keleusma::selfhost` in a file not gated on `self-host` compiles under `self-host` and fails the other four. Turned three CI jobs red **in the same session that corrected this file's feature-set count**. Compiling under a feature set is also weaker than RUNNING under it |
 
+**A guard for that last row was attempted and ABANDONED, which is worth knowing before
+trying again.** A text scan for a gated module path reached by an ungated item produced
+false positives in three distinct shapes — a prefix match (`keleusma::selfhost` also matches
+the ungated `selfhost_host`), an attribute walk starting at the `fn` line instead of above
+it, and gates written indented inside a function — and each fix traded one class for
+another. The weaker form, "the file mentions the feature somewhere", is useless here:
+`tests/selfhost_parse.rs` already carried 41 such attributes, so a new ungated test hides
+among them. A sound version needs brace-aware scoping. **The compiler already does that
+correctly, in five configurations, which is what the gate runs** — so the instrument for
+this class is the gate, not a scan.
+
 **Not exhaustive.** Eight found across two sessions is evidence that more exist, not
 that these are all of them. The seventh came from re-running a measurement whose feature
 set continuous integration does not cover. **The eighth was committed by the author of the
