@@ -101,3 +101,34 @@ reports, attributed. Nothing is dropped. **That is the least destructive option,
 not the right one**: where this line's outgoing reports should live is a question
 for the operator, and it is now asked in the file itself rather than settled
 unilaterally.
+
+
+## THE GATE HAS OUTGROWN A SINGLE INVOCATION
+
+Absorption 60's verdict is **assembled from six frozen runs, not two**, and that is
+weaker than two continuous ones.
+
+| configuration | phase | result |
+|---|---|---|
+| default | part 1 (570 tests) | PASS, FROZEN |
+| default | part 2, 8 of 10 | PASS, then killed at the limit |
+| default | the 2 remaining | PASS, FROZEN |
+| narrow | build warm-up | needed its own window |
+| narrow | part 1 (570 tests) | PASS, FROZEN |
+| narrow | part 2, 9 of 10 | PASS, FROZEN |
+| narrow | `how_deep_does_the_undetected_set_go` | PASS, FROZEN, **425s alone** |
+
+**One test now takes seven minutes.** `how_deep_does_the_undetected_set_go` is 417s
+under default features and 425s under narrow; part 1 is about 190s and the rest of
+the differential about 220s. A whole configuration no longer fits in one
+ten-minute window, and a feature change costs a full rebuild before any phase runs.
+
+Each run verified FROZEN and the tree did not change between them — the commit
+between the two configurations altered no working-tree file. **But "unchanged
+during this run" across six windows is not the guarantee one continuous window
+gives**, and absorption 40 is the precedent for why that distinction is not
+tidiness: this suite contains tests that read source text from disk, so an edit
+landing mid-run makes an attribution arguable rather than certain.
+
+Recorded as assembled. The standing fact for the next session: **four commands
+minimum per full gate**, and a feature switch needs its build warmed first.
