@@ -3773,6 +3773,14 @@ fn an_empty_else_is_indistinguishable_from_an_implicit_one() {
 ///
 /// The fix is in `parse.kel`, which bears on the operator's capacity decision for the input
 /// path, exactly as the four other known gaps do.
+/// **GATED ON `self-host`, WHICH THE FILE AS A WHOLE IS NOT.** This test calls the driver
+/// in `keleusma::selfhost`, a module that does not exist without the feature. The first
+/// version omitted the attribute and turned three continuous-integration jobs red: the
+/// signatures suite, the broad-features suite, and the minimum-supported-Rust check, which
+/// runs `cargo check --tests` under default features. One cause, three jobs, and the same
+/// shape the tree already records for a test file that drove the stage without declaring
+/// the feature it needs.
+#[cfg(feature = "self-host")]
 #[test]
 fn a_bare_unit_variant_expression_is_refused_where_the_parenthesised_one_compiles() {
     const BARE: &str = "enum E { M, N }\nfn main() -> Word { E::N as Word }";
