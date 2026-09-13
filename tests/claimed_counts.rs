@@ -1064,6 +1064,17 @@ fn the_instructions_state_the_feature_sets_ci_actually_runs() {
 /// exercised from the PROSE side only. Its practical value is unchanged — once an added
 /// opcode compiles, this fails until the instructions record it — but the detection of an
 /// added opcode belongs to the compiler, not to this guard.
+///
+/// The `Value` slot width was mutation-tested from the prose side too: stating 40 where the
+/// source pins 32 fails, naming both. The source's own const assertion already fails the
+/// BUILD on a layout change, so this catches the other order — a layout change made
+/// together with an update to that assertion, leaving the instructions stale.
+///
+/// # What is deliberately NOT guarded
+///
+/// The MSRV, because the instructions mention that continuous integration runs MSRV checks
+/// without stating a version, so there is no restatement to drift. And the test counts,
+/// which the instructions explicitly mark as figures to re-derive.
 #[test]
 fn the_instructions_state_the_structural_numbers_the_source_owns() {
     const BYTECODE: &str = include_str!("../src/bytecode.rs");
@@ -1110,6 +1121,27 @@ fn the_instructions_state_the_structural_numbers_the_source_owns() {
         "the Op enum has {variants} variants and the instructions do not state that number. \
          The opcode count is a stated rad-hard constraint, so an opcode was probably added: \
          record it in the instructions and revisit whether the constraint still holds"
+    );
+
+    // --- the `Value` slot width -------------------------------------------------------
+    //
+    // A const assertion in the source already fails the BUILD if the layout changes, so
+    // this is not the first line of defence. It catches the other order of events: someone
+    // changing the layout AND updating that assertion, leaving the instructions stating a
+    // width the runtime no longer has. The slot width feeds the worst-case memory bound,
+    // which is the project's stated value proposition, so a silently stale number here is
+    // worse than a stale test count.
+    let slot = BYTECODE
+        .split("core::mem::size_of::<Value>() == ")
+        .nth(1)
+        .and_then(|rest| rest.split(',').next())
+        .and_then(|n| n.trim().parse::<u16>().ok())
+        .expect("read the Value size assertion from src/bytecode.rs; if it was reworded, fix this extraction rather than deleting the check");
+    assert!(
+        INSTRUCTIONS.contains(&alloc_fmt("`Value` slot is ", slot)),
+        "the source pins the Value slot at {slot} bytes and the instructions state a \
+         different width. The slot width feeds the worst-case memory bound, so the figure \
+         is load-bearing rather than descriptive"
     );
 }
 
