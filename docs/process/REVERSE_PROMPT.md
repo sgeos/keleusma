@@ -100,15 +100,41 @@ are live and unresolved, they were stated only BELOW the superseded-history line
 obeying this block's own instruction to stop at that line would never have reached them. The fuller
 statement of each is still there.
 
-1. **How does a value ENTER a `Text<N>`?** It appears in every program anyone writes with the type.
-   Open question 2 in [`TEXT_CAPACITY_TYPE.md`](../decisions/TEXT_CAPACITY_TYPE.md).
+1. **What SPELLING does the entry operation take?** Open question 2 in
+   [`TEXT_CAPACITY_TYPE.md`](../decisions/TEXT_CAPACITY_TYPE.md), re-read 2026-09-13. **This line
+   said "how does a value ENTER a `Text<N>`", which reads as though the mechanism is undecided.**
+   It is not: the cited question is titled *Surface syntax* and asks whether `Text<N>` gains
+   METHODS or FREE OPERATIONS — `s.push(t)` reads well and matches the authorizing example, but the
+   language's method surface is trait-impl based. The operation's shape is settled; its spelling is
+   the decision. **A smaller question than the old wording implied.** The citation resolved
+   throughout, which is why the looseness survived.
 2. **Is the width bundle worth a breaking change?** 33 signatures, 14 public, published crate.
+   **RE-CHECKED 2026-09-13: both figures are current**, across five files (`bytecode.rs`,
+   `layout_pass.rs`, `marshall.rs`, `value_layout.rs`, `verify_typed.rs`). Count signatures by
+   PARSING them, not by grepping lines: most are multi-line formatted, and line-based greps gave
+   10, then 32, then 42 here before a parse gave 33. A journal entry from 2026-08-31 records 43
+   across seven modules; that is accurate history of an earlier state, not a competing current
+   figure.
 3. **Should `verify()` refuse float opcodes when the `floats` feature is absent?** Evidence
    COMPLETE: ten lines, prototyped, zero new failures, and the semantic worry is moot because the
    lexer refuses float literals in that build. **The cheap one**, unlanded only because it was
-   called your decision in a merged document.
+   called your decision in a merged document. **The defect was re-checked 2026-09-12 and is
+   unchanged**; its BASIS was re-checked 2026-09-13 — `src/verify.rs` contains ZERO mentions of the
+   feature, so the change is an addition rather than a condition threaded through existing logic,
+   which is why it is small. **The "ten lines" figure itself was NOT re-measured**: the prototype
+   was never landed, and re-deriving it would mean performing the deferred work.
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on the
-   WIDTH axis, unchanged on the FEATURE axis.
+   WIDTH axis, unchanged on the FEATURE axis. **Both halves re-checked 2026-09-13.**
+   *Width*: the manifest defines SIX narrow selectors (`narrow-word-8/16/32`,
+   `narrow-address-8/16/32`) and **continuous integration covers none of them** — but
+   `NARROW_WIDTH_FAILURE_CLASSIFICATION.md` records that a width-dependent defect is reachable from
+   an ordinary test in the default build, so guarding one costs no job and no matrix.
+   *Feature*: the gap's SIZE is now known exactly rather than open-ended. It is **one test file** —
+   `tests/float_opcode_without_floats.rs`, needing `verify` present and `floats` absent, a pair no
+   job produces — pinned by `the_only_test_gated_out_of_every_ci_configuration_is_the_known_one` and
+   confirmed by an independent census. Its defect was re-checked 2026-09-12 and is unchanged. **So
+   the feature-axis question is whether ONE file's coverage is worth a job**, which is a narrower
+   question than the line previously implied.
 
 Three more have been added by this session and are stated above: the type channel into
 `codegen.kel`, whether the boundary table should absorb the four parser gaps, and the capacity
