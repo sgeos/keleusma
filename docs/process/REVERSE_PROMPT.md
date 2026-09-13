@@ -103,6 +103,12 @@ statement of each is still there.
 1. **How does a value ENTER a `Text<N>`?** It appears in every program anyone writes with the type.
    Open question 2 in [`TEXT_CAPACITY_TYPE.md`](../decisions/TEXT_CAPACITY_TYPE.md).
 2. **Is the width bundle worth a breaking change?** 33 signatures, 14 public, published crate.
+   **RE-CHECKED 2026-09-13: both figures are current**, across five files (`bytecode.rs`,
+   `layout_pass.rs`, `marshall.rs`, `value_layout.rs`, `verify_typed.rs`). Count signatures by
+   PARSING them, not by grepping lines: most are multi-line formatted, and line-based greps gave
+   10, then 32, then 42 here before a parse gave 33. A journal entry from 2026-08-31 records 43
+   across seven modules; that is accurate history of an earlier state, not a competing current
+   figure.
 3. **Should `verify()` refuse float opcodes when the `floats` feature is absent?** Evidence
    COMPLETE: ten lines, prototyped, zero new failures, and the semantic worry is moot because the
    lexer refuses float literals in that build. **The cheap one**, unlanded only because it was
