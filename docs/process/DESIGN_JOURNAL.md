@@ -1,5 +1,43 @@
 # Design Journal
 
+## 2026-09-13 — a driven witness per opcode, and four rows that proved nothing
+
+Three questions of increasing strength: does the backend LOWER it
+(`opcode_denominator`), does the corpus EXECUTE a module containing it
+(`differential_coverage`), and **is there a program that emits it, runs on both,
+and agrees?** Nothing answered the third.
+
+**The emission check earned itself four times in one increment.** A witness that
+compiles and agrees but does not emit the opcode it is listed against proves
+nothing, and four rows were exactly that: `BoundsCheck` (a local `xs[a]` emits
+NONE — a data-slot array index is the producer), `CheckedDiv` and `CheckedMod`
+(Word `/` and `%` emit `Div` and `Mod`), and `Div`/`Mod` themselves, which I had
+recorded as Byte/Fixed-only when they are precisely what a Word `/` and `%` emit.
+
+The `BoundsCheck` result is the one worth keeping: **a local array index emits no
+bounds check at all.** That is the exact premise that once caused a defect here —
+the emitter assumed *"the compiler emits `Op::BoundsCheck` before the index"* and
+the compiler does not. Recorded with what was learned rather than forced into a
+contrived witness.
+
+**Three apparent divergences while building this were the harness, not the
+backend.** A float argument passed as `i64::MIN` instead of its bit pattern; a
+float return read as an integer; and a hand-named function signature that took a
+**SIGBUS** on the first composite witness. `common/mod.rs` warns about the last in
+as many words — *"a harness that names a signature cannot see it change … ten
+tests kept passing on the calling convention's good manners"* — and delegating to
+the canonical driver, which reads `count_params` and sizes buffers from the
+published contract, fixed it.
+
+**A probe reporting a divergence has implicated itself first.** This one
+implicated itself three times before producing a trustworthy row, and had I
+reported any of them as backend defects they would have been false alarms — the
+mirror of the missed-defect failure this session has spent its length on.
+
+The driver returns `Word` only, panicking on any other finish value. Witnesses are
+shaped around that — `(a as Byte) as Word` witnesses `WordToByte` without asking
+for a `Byte` return — and the constraint is stated rather than left implicit.
+
 ## 2026-09-12 — lowered is not executed, and four opcodes sat in the gap
 
 Four increments of stale-record work was enough; back to lowering behaviour, where
