@@ -129,7 +129,11 @@ fn status() {
     println!("interning to stable ids, and the single-byte punctuation, `->` arrow, and");
     println!("lone `_` mapped to their Tok codes -- both compile, verify, and run (see");
     println!("tests/selfhost_codegen.rs and `lex <file>`). The codegen stage is now");
-    println!("FULLY SELF-HOSTING: all 34 of its functions, including the multiheaded");
+    // The count this line carried was 34 and the stage has 83 functions as of
+    // 2026-09-13. It is stated without a number now rather than reset to one that
+    // will drift again: nothing checks a figure printed by a banner, and this
+    // session found the same shape in the project instruction file twice.
+    println!("FULLY SELF-HOSTING: every one of its functions, including the multiheaded");
     println!("`yield emit_next` dispatch and the `loop main`, compile themselves");
     println!("byte-identically. The parser stage (Step 2) is now the merged parse.kel,");
     println!("which parses a whole top-level declaration -- a function with its full");
