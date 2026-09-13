@@ -1,5 +1,39 @@
 # Design Journal
 
+## 2026-09-12 — the guard's population was the rows I had just fixed
+
+Last increment's completion condition said *"no figure in that table is both
+underivable and unattributed"*. **It was not met, and I said it was.** Of six
+figure rows the guard checked three and attributed one. The two left unchecked
+were **both stale**: the corpus said 69 modules against 74, and the unabsorbed
+count said 26 against 46.
+
+**The rows I checked were exactly the rows I had just been correcting by hand.**
+The stale ones were, by construction, outside that set — if I had been attending
+to them they would not have been stale. A census keyed to the analyst's attention
+finds nothing the analyst had not already noticed. This is the session's recurring
+failure in its sharpest form, and this time the instrument I built to stop drift
+had it.
+
+The fix is structural, not arithmetic: **the rows are now enumerated from the
+table** and each must carry a disposition — `checked`, `measured at <commit>`, or
+`no figure`. A row with none fails. The mutation that matters is the fourth: a
+NEWLY ADDED row fails closed instead of joining silently. The individual
+corrections are secondary to that rule.
+
+Two details worth keeping. The `unabsorbed` row read *"26 at the stamp, and
+MOVING — re-derive, never quote"*; **the hedge did not stop the number being wrong
+by twenty, it only made it defensible.** A number that must not be quoted should
+not be printed, so the row now carries the command instead. And the corpus figure
+is derived through the harness's own enumeration with the rtos prelude composed
+in, not by globbing files — an earlier increment recorded five scripts as compiler
+failures when the missing prelude was the cause.
+
+A smaller lesson from the build itself: the disposition was first read as the
+third table cell, and a cell containing an escaped pipe splits into more than
+three, so prose was silently mistaken for a disposition. Reading the LAST cell
+fixes it, and the derivation command was rewritten to need no pipe at all.
+
 ## 2026-09-12 — I stamped the handoff five times while its state table drifted
 
 `v0.3.0.md` carries a table headed *"State, every figure re-derived at the

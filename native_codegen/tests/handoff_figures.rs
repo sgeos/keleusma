@@ -40,6 +40,21 @@
 //! asserts the attribution is present. A figure that is neither derivable nor
 //! attributed is exactly the shape that drifted.
 //!
+//! # ⚠ THE FIRST VERSION OF THIS GUARD HAD THE SAME DISEASE
+//!
+//! It checked three rows and left three alone — and **both unchecked figures were
+//! stale**, the corpus by five and the unabsorbed count by twenty. The rows it
+//! checked were exactly the ones just corrected by hand.
+//!
+//! > **The population was the analyst's attention, not the table.** A census keyed
+//! > to what you already noticed finds nothing you had not already noticed.
+//!
+//! So the rows are now ENUMERATED FROM THE TABLE and each must carry a
+//! disposition — `checked`, `measured at <commit>`, or `no figure`. A row with
+//! none fails, which makes a row added later fail closed instead of joining
+//! silently. **That rule is the deliverable; the individual corrections are
+//! secondary.**
+//!
 //! # What this does NOT close
 //!
 //! The figures in one table. Not prose drift generally. The next stale sentence
@@ -47,6 +62,8 @@
 //! so.
 
 use std::path::PathBuf;
+
+mod common;
 
 /// The handoff this line writes to.
 fn handoff() -> String {
@@ -135,6 +152,89 @@ fn isa_classification() -> (usize, usize) {
     (lowered, total)
 }
 
+/// Every row of the table, as `(label, disposition cell)`.
+///
+/// **Derived from the table, not named in advance.** Naming the rows is what let
+/// two stale figures sit outside the guard's population.
+fn rows(table: &str) -> Vec<(String, String)> {
+    table
+        .lines()
+        .filter(|l| l.starts_with("| ") && l.ends_with('|'))
+        .filter_map(|l| {
+            let cells: Vec<&str> = l.trim_matches('|').split('|').map(str::trim).collect();
+            // The header separator and the empty spacer row carry no label.
+            if cells.len() < 3 || cells[0].is_empty() || cells[0].starts_with("---") {
+                return None;
+            }
+            // **The LAST cell, not the third.** A cell containing an escaped
+            // pipe splits into more than three, and reading a fixed index then
+            // silently mistakes prose for a disposition.
+            Some((cells[0].to_string(), (*cells.last()?).to_string()))
+        })
+        .collect()
+}
+
+/// Modules the differential harness builds, and how many the backend refuses.
+///
+/// **The harness's own enumeration and source composition**, not a file count:
+/// five rtos scripts were once recorded as compiler failures when the missing
+/// prelude was the cause.
+fn corpus_figures() -> (usize, usize) {
+    let mut built = 0;
+    let mut refused = 0;
+    for p in common::corpus_sources() {
+        let Ok(src) = std::fs::read_to_string(&p) else {
+            continue;
+        };
+        let is_rtos = p.components().any(|c| c.as_os_str() == "rtos");
+        let is_prelude = p.file_name().is_some_and(|n| n == "prelude.kel");
+        let src = if is_rtos && !is_prelude {
+            match std::fs::read_to_string("../examples/rtos/scripts/prelude.kel") {
+                Ok(pr) => format!("{pr}\n{src}"),
+                Err(_) => src,
+            }
+        } else {
+            src
+        };
+        if let Some(m) = common::try_build(&src) {
+            built += 1;
+            if !keleusma_native::module_refusals(&m, keleusma_native::LowerOptions::default())
+                .is_empty()
+            {
+                refused += 1;
+            }
+        }
+    }
+    (built, refused)
+}
+
+/// **The rule that makes the population the table.**
+#[test]
+fn every_row_carries_a_disposition() {
+    let table = state_table();
+    let rows = rows(&table);
+    assert!(
+        rows.len() >= 6,
+        "parsed only {} labelled rows from the state table; a BROKEN PROBE rather \
+         than a short table",
+        rows.len()
+    );
+    let undisposed: Vec<&str> = rows
+        .iter()
+        .filter(|(_, d)| !(d == "checked" || d.starts_with("measured at `") || d == "no figure"))
+        .map(|(l, _)| l.as_str())
+        .collect();
+    assert!(
+        undisposed.is_empty(),
+        "{} row(s) of the state table carry no disposition: {undisposed:?}. Each \
+         row must be `checked` against the tree, `measured at <commit>` when no \
+         guard can re-derive it, or `no figure`. An undisposed row is how two \
+         stale figures sat outside this guard's population while it reported \
+         everything in order.",
+        undisposed.len()
+    );
+}
+
 #[test]
 fn every_derivable_figure_in_the_state_table_matches_the_tree() {
     let table = state_table();
@@ -164,6 +264,35 @@ fn every_derivable_figure_in_the_state_table_matches_the_tree() {
         wrong.push(format!(
             "`test functions` says {fns}, the population guard records {}",
             recorded_test_functions()
+        ));
+    }
+
+    let (built, refused) = corpus_figures();
+    let corpus = row_figure(&table, "corpus").expect("a `corpus` row with a bold figure");
+    if corpus as usize != built {
+        wrong.push(format!(
+            "`corpus` says {corpus} modules, the harness builds {built}"
+        ));
+    }
+    // The refusal count is the SECOND bold figure on that row.
+    let corpus_line = table
+        .lines()
+        .find(|l| l.starts_with("| corpus "))
+        .expect("a corpus row");
+    let refused_said: usize = corpus_line
+        .split("**")
+        .nth(3)
+        .and_then(|c| {
+            c.chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect::<String>()
+                .parse()
+                .ok()
+        })
+        .expect("a second bold figure on the corpus row");
+    if refused_said != refused {
+        wrong.push(format!(
+            "`corpus` says {refused_said} refused, the backend refuses {refused}"
         ));
     }
 
