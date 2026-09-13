@@ -79,6 +79,18 @@ move. Whether the boundary table should absorb the parser gaps is a call for you
 sources, up from two, at **1.6x** the shared data it uses today rather than 7.3x — a growth of
 **+33 KiB** against a 16 MB ceiling, across six verdict-preserving reductions.
 
+**THAT COST IS HOST-SIDE, AND THE 16 MB FRAME IS THE RIGHT ONE.** Checked 2026-09-13 because the
+ceiling is the WIRE FORMAT's addressing limit rather than any target's budget, and quoting it could
+have made the decision look cheaper than it is. It does not: the shared data carries
+`verify_types.kel`'s input tables, and the self-hosted compiler runs on a host. The embedded example
+executes compiled bytecode and never runs the compiler, so its budget does not bind this.
+
+**It would bind a LATER goal, and the numbers are worth having now.** The shipping RTOS example runs
+in a 256 KB RAM region with a 192 KB heap and **16 KiB per task arena**, three tasks. So +33 KiB is
+more than twice one task's entire arena on that target — irrelevant to this decision, and directly
+relevant to `V0_5_0_KELEUSMA_HOST.md`, where a Keleusma-hosted toolchain would pay it on hardware
+like that.
+
 **What is next, and it is YOURS.** Closing the last two sources is a **capacity decision**, not
 another reduction. `parse` needs about 192 where the caps are 128; `wire` needs roughly four times,
 dominated by declaration-indexed tables no reduction reaches.
