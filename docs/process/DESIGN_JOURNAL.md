@@ -1,5 +1,45 @@
 # Design Journal
 
+## 2026-09-12 — I stamped the handoff five times while its state table drifted
+
+`v0.3.0.md` carries a table headed *"State, every figure re-derived at the
+stamp"*, inside `► RESUME HERE`, the one section that declares itself
+authoritative. **The stamp above it was refreshed on five consecutive increments
+and the table was not.** One quantity held three values in one file: the banner
+said 561 tests, the table said 562, the tree ran 576. The `test files` row said
+120 against 124.
+
+The file warns about exactly this. It records four cases of records outliving
+their subjects and states plainly that six instruments fire on drift in code and
+none on drift in prose. I then produced a fifth case, in the section headed *every
+figure re-derived*, by hand-patching a stamp while leaving the figures beneath it.
+
+**A general prose-drift census was attempted before and rejected ON MEASUREMENT**
+— two candidate matchers returned 169 and 32 lines, both dominated by narrative,
+where a sentence about a corrected claim is indistinguishable from the claim. That
+reasoning stands and is not overturned. **But this table is not general prose**: it
+is a fixed set of labelled rows holding numbers at one anchor. The population is
+the table and the signal is the whole population, which is the property the
+rejected instrument lacked.
+
+**The row that cannot be derived is the interesting one.** The suite figure is a
+RUN RESULT — no guard re-derives it by reading files, because it is the outcome of
+executing them, and an approximate derivation that passed would be worse than no
+check. It carries the commit it was measured at instead, and the guard asserts the
+attribution is present. **A figure that is neither derivable nor attributed is
+exactly the shape that drifted.**
+
+The guard's first act was to catch its own file: 125 test files, not 124.
+
+Scoping is its whole correctness. The document is thousands of lines and most of
+it is deliberate history under `◄ RECORD`, carrying older figures that are correct
+AS HISTORY; a guard reading the whole file would report those as drift and be
+wrong. All six checks were mutation-tested, including a parse that matches
+nothing.
+
+**This closes the figures in one table and nothing wider**, and the handoff still
+says so. The next stale sentence will be somewhere none of these instruments look.
+
 ## 2026-09-12 — 42 refusals, and a default I had assumed
 
 The mixed-type half of the operator matrix was named as an open gap in two
