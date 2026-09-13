@@ -1,5 +1,38 @@
 # Design Journal
 
+## 2026-09-13 — streams had been driven six ticks; now two hundred
+
+This line's central claim is that **the arena IS the coroutine instance**, with
+`Op::Reset` rewinding it. Measured: the deepest any hand-written stream witness
+drives is **six replies**, the whole suite ranging 2 to 6. A drift that needs tens
+of ticks — a creeping pointer, state surviving a rewind — would be invisible
+there. The stage differential reaches 180 to 300 comparisons, but on stage sources
+with particular shapes; a general stream carrying a local across a yield is a
+different subject, and is the shape that already carried one fixed defect.
+
+**No divergence at depth 200**, across three shapes, plus a completing stream
+agreeing across repeated rewinds over 40 ticks. Not a defect found — **a floor
+raised from 6 to 200** on the claim everything else rests on.
+
+**A single-yield stream is DEGENERATE**, and the general driver refusing it is
+correct: measured signatures are 1 parameter against the two-yield form's 4, which
+is `declared + 3`. Pinned by assertion so the distinction is measured rather than
+remembered. **Fourth probe self-implication this session** — the others were a
+float argument passed as `i64::MIN`, a float return read as an integer, and a
+hand-named signature that took a SIGBUS.
+
+**And a property that cannot be mutation-tested, recorded as such.** The replies
+vary across ticks to raise detection power; replacing them with a constant leaves
+every assertion passing, because with no defect present both implementations agree
+either way. **It is a design choice, not a guarded invariant.** Saying so is the
+second application this increment of the rule that a mutation must attack the
+claim — the first being a bounds-check witness whose index could be changed
+freely because both forms emit the opcode.
+
+Deliberately not claimed: **anything about memory.** Whether the arena grows
+across ticks is not measured here, only that the sequences match. A bounded arena
+is this line's claim elsewhere and this file is no evidence for it.
+
 ## 2026-09-13 — 62 of 66, and a producer narrowed twice
 
 `Dup` and `BoundsCheck` closed, taking the driven count to **62 of 66**.
