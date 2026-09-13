@@ -1,5 +1,41 @@
 # Design Journal
 
+## 2026-09-12 — 42 refusals, and a default I had assumed
+
+The mixed-type half of the operator matrix was named as an open gap in two
+successive hand-offs. Driven: **all 42 cells are refused by the reference.**
+Keleusma has no implicit numeric conversion.
+
+A uniformly negative matrix is worth an instrument, because it converts *"nobody
+tried mixed operands"* into *"the reference refuses all of them, for this stated
+reason"*. But a refusal is worthless without its cause, so this one checks four
+things: the message names both operand types; a matched-pair control compiles, so
+it is the MIXING that fails; `-> Byte` and `-> Word` fail identically at the same
+span, excluding the return type as the cause; and an explicit cast compiles, so
+the conversion exists and is merely not implicit. That four-part shape is what
+would have prevented filing an unknown type name as a fact about comparisons two
+increments ago.
+
+**A fifth axis appeared while measuring.** `Fixed<16>` and `Fixed<32>` are
+mutually unassignable — the same nominal type at different const parameters is a
+different type.
+
+**And the measurement corrected me.** Bare `Fixed` is `Fixed<32>`; the compiler
+emits `FixedMul(32)`. The previous increment's prose described the `Fixed % Fixed`
+divergence as `4.0` for `200.0 % 7.0`, reading the raw operands as Q16.16. The
+divergence, the mechanism and the fix are unaffected — the integer remainder of
+the raw words is identical either way and the reference traps regardless of scale
+— but the decimal figures in three artifacts were wrong. Corrected where the
+artifacts are editable; the commit message stands, since rewriting a pushed branch
+costs more than the error does. **The default is now pinned by a test**, so it
+cannot be assumed a second time.
+
+For the backend this is a negative result with a precise consequence: it **never
+sees a mixed scalar pair from source**, so the mixed-kind arm of
+`arith_result_kind` is unreachable from the surface while staying reachable
+through hand-built bytecode. Recorded as unreachable, not as verified — the
+distinction the whole `NotEmitted` discipline rests on.
+
 ## 2026-09-12 — the fix I called precise reached one route in four
 
 Yesterday's increment refused `Op::Mod` and `Op::Div` on a `Fixed` operand and the
@@ -51,8 +87,18 @@ cells** — it found one divergence. **`Fixed % Fixed`.** The reference compiler
 accepts it and emits a plain `Op::Mod`; the virtual machine traps with
 `TypeError("cannot modulo Fixed by Fixed")`, its arm handling `Int`, `Byte` and
 `Float` but not `Fixed`; and this backend lowered an integer remainder and
-returned `4.0` for `200.0 % 7.0` — **arithmetically right, and not what the
-reference does, which is the only contract that matters.**
+returned an integer remainder where the reference produces nothing —
+**arithmetically right, and not what the reference does, which is the only
+contract that matters.**
+
+**Correction, 2026-09-12.** This entry first named those operands `200.0` and
+`7.0`, reading them as Q16.16. **Bare `Fixed` is `Fixed<32>`** — the compiler
+emits `FixedMul(32)` — so the raw words used were approximately `0.003052` and
+`0.0001068`, and the result approximately `0.000061`. The divergence, the
+mechanism and the fix are unaffected: the integer remainder of the raw words is
+the same under either reading and the reference traps regardless of scale. Only
+the decimal figures were wrong. Pinned now by
+`fixed_point_widths_do_not_mix_and_the_bare_spelling_is_q32`.
 
 `OperandKind` was `Int | Float | Unknown`. **A `Fixed` parameter IS an `i64`**, so
 the float seeding trick — reading the LLVM parameter type — has no analogue, and

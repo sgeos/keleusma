@@ -1,0 +1,45 @@
+COMPLETION CONDITION — mixed-type scalar operands
+
+Ordering is NOT a completion criterion. The properties below may be reached in any
+order, in any number of commits, on any branch. No process, sequence, or branch
+state is required.
+
+END-STATE PROPERTIES, checkable against the tree:
+
+1. A test enumerates ordered pairs of DISTINCT scalar types against the arithmetic
+   and comparison operator surface, driving each combination, with the cells
+   enumerated from the type and operator lists rather than written out one by one.
+   A run producing fewer cells than a recorded floor fails as a broken probe.
+
+2. Every such cell is assigned a recorded class, and a cell whose observed class
+   differs from its record fails the test.
+
+3. For the refusals, the tree records the REASON given by the reference, not
+   merely that a refusal occurred, and the record is backed by an assertion that
+   the reason still says what it is claimed to say.
+
+4. The record distinguishes a refusal caused by the operand pair from a refusal
+   that could be explained by some other element of the test program, and an
+   assertion demonstrates that the alternative explanation is excluded.
+
+5. Where a conversion between the types exists, the tree shows it being accepted,
+   so that "refused" is recorded as "not implicit" rather than "impossible".
+
+6. Any backend code path that the measurement shows to be unreachable from source
+   is described as unreachable from source, and not as verified or tested.
+
+7. Differences between instances of the same nominal type that differ only in a
+   type parameter are covered by the same treatment as differences between
+   distinct types, or the tree states that they were not.
+
+8. Earlier statements in the tree that misdescribe the fixed-point scale used in
+   the previous increment's measurements are corrected wherever they can be
+   edited, and the correction states that the underlying finding is unaffected.
+
+9. Every claim added about what the reference accepts or refuses is backed by an
+   assertion that runs.
+
+10. The backend gate passes in both float configurations, and the recorded test
+    population figures agree with the tree.
+
+11. Files under src/ and tests/ at the repository root are unmodified.

@@ -126,3 +126,19 @@ emitter fix reproduces `fixed %: VmTrapsNativeComputes` — the assertion catche
 original defect rather than merely passing beside it. The `ScalarKind::Fixed` tag
 is pinned, because a silent renumbering upstream would fail **open**, back to the
 divergence.
+
+
+---
+
+## CORRECTION, 2026-09-12 — the fixed-point scale named above
+
+This brief describes the divergence as *"the backend returned `4.0`"* for
+`200.0 % 7.0`. **Bare `Fixed` is `Fixed<32>`, not Q16.16**; the compiler emits
+`FixedMul(32)` for it. The raw operands used were `200 << 16` and `7 << 16`, which
+as Q32 values are approximately `0.003052` and `0.0001068`, giving approximately
+`0.000061`.
+
+**Nothing else changes.** The integer remainder of the raw words is identical under
+either reading, the reference traps regardless of scale, and the refusal is
+correct. Only the decimal figures in prose were wrong, and the default is now
+pinned by a test so it cannot be assumed again.
