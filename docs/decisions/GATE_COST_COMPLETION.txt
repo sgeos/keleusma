@@ -1,0 +1,36 @@
+COMPLETION CONDITION — the gate's cost and the depth sweep's record
+
+Ordering is NOT a completion criterion. The properties below may be reached in any
+order, in any number of commits, on any branch. No process, sequence, or branch
+state is required.
+
+END-STATE PROPERTIES, checkable against the tree:
+
+1. No documentation attached to a test states that the test is opt-in, ignored, or
+   absent from the everyday gate while that test in fact runs there. Where such a
+   statement existed, the tree states what is actually true.
+
+2. Any cost figure the tree gives for a test or a gate phase is accompanied by the
+   conditions under which it was measured, sufficient for a later reader to judge
+   comparability. A bare duration with no such context does not satisfy this.
+
+3. The tree distinguishes the threshold chosen for whether a test is affordable
+   from any limit imposed by the environment that runs it, and does not treat the
+   two as the same constraint even where their values coincide.
+
+4. The mutation sweep's coverage is not reduced: its site depth, the breadth of
+   its mutation family, and the set of subjects it sweeps are no smaller than
+   before this work, and no test that ran in the gate has been made not to run.
+
+5. Where a claim about a test's behaviour can be checked mechanically, a test
+   checks it, so the claim cannot go stale silently again. If a claim is judged
+   not mechanically checkable, the tree says why.
+
+6. Any assertion added is accompanied by evidence that it fails when the condition
+   it describes is violated.
+
+7. The recorded test population figures and the handoff's state-table figures
+   agree with the tree, and the backend gate passes in both float configurations.
+
+8. Files under src/ and tests/ at the repository root carry no changes originating
+   from this line.

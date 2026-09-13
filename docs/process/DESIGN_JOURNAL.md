@@ -1,5 +1,44 @@
 # Design Journal
 
+## 2026-09-12 — the test that said it does not run, and ran
+
+Set out to make the gate cheaper: six commands, ~25 minutes, with
+`how_deep_does_the_undetected_set_go` at 419s default and 429s narrow, killed once
+at >360s under contention. **Investigating first showed that would have been a
+mistake.**
+
+Its doc block read *"⚠ OPT-IN: this does NOT run in the everyday gate … measured
+at 710s … it is over, so it stays opt-in … its last green result is a dated
+measurement, not a standing guarantee."* **Every statement false.** It carries
+`#[test]` and no `#[ignore]`, and has run on every gate since `e55f307e`
+(2026-08-29), which restored it deliberately after removing a duplicated variant
+axis took it from 712s to 401s — *"the saving came from removing a duplicated axis
+rather than trading coverage"*, with site depth not reduced and the family not
+narrowed.
+
+**A sixth record outliving its subject, and the most expensive.** The others
+misstated a figure or a report's status; this one misdescribed the gate's cost
+structure to whoever was deciding what to do about it. Read as current it
+justifies deleting coverage that was restored on purpose. **I found it while
+looking for something to make cheaper**, which is the only reason it surfaced.
+
+Two limits share the number 600 and are unrelated: the **affordability
+threshold** this project fixed for a test earning its gate place, and the
+**harness ceiling** on one command. At 419–429s the test is comfortably under the
+first and close to the second, so load decides whether a phase completes. That is
+a property of the runner, not a reason to shrink the test.
+
+**Three errors inside the increment, each caught by an instrument rather than by
+care.** I wrote *"on an otherwise-idle machine"* without checking — the load was
+27 — in the same paragraph that warns a duration without its conditions is not
+comparable. The new guard's phrase matcher found nothing because `cargo fmt` had
+wrapped it across two doc lines; only the non-vacuity check revealed it, the third
+such save this session, and it is now keyed on a single unsplittable token. And
+the guard accepted a MENTION of `#[ignore]` in prose as the attribute itself — my
+own correction names the attribute — so it passed on the exact historical state it
+exists to catch, until mutation-testing against that state exposed it. **A mention
+is not an attribute**; the check now requires a real attribute line.
+
 ## 2026-09-12 — a commitment recorded as kept while being broken every increment
 
 Absorption 60's conflict on `REVERSE_PROMPT.md` turned up a stale line in this

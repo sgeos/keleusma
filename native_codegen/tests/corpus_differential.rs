@@ -4631,20 +4631,53 @@ fn sampled_mutants_capped(m: &Module, cap: usize) -> (Vec<(Module, String)>, usi
 /// observable is weak**, because "no sampled site is executed under these seeds"
 /// remains live. The printed per-subject denominators are what let a reader tell
 /// those apart rather than take a verdict on trust.
-/// # ⚠ OPT-IN: this does NOT run in the everyday gate
+/// # ⚠ THIS BLOCK SAID "OPT-IN" FOR TWO WEEKS WHILE THE TEST RAN EVERY GATE
 ///
-/// Run it with `cargo test --test corpus_differential -- --ignored --nocapture`.
+/// **Corrected 2026-09-12.** It read *"OPT-IN: this does NOT run in the everyday
+/// gate … measured at 710s … it is over, so it stays opt-in"*. The test carries
+/// `#[test]` and no `#[ignore]`, and has run on every gate since `e55f307e`
+/// (2026-08-29), which restored it deliberately: the deep sweep had been paying
+/// for the census's variant axis twice, and removing that duplicated axis took it
+/// from 712s to 401s. **The saving came from deleting a redundant axis, not from
+/// trading coverage** — site depth was not reduced and the mutation family was not
+/// narrowed.
 ///
-/// **Measured at 710s alone** on 2026-08-29 at a load average near 5, against a
-/// threshold of 600s fixed before the measurement was taken. It is over, so it
-/// stays opt-in; the sibling census is 206s and runs in the gate.
+/// **A sixth record outliving its subject, and the most expensive yet**: it
+/// misdescribes the gate's cost structure to anyone deciding what to do about it,
+/// and reading it as current would justify deleting coverage that was restored on
+/// purpose.
 ///
-/// **What this costs**: a regression in the DEPTH of mutation sensitivity — a
-/// subject that starts hiding a killable mutant beyond the census's single site
-/// — would be caught only when someone runs this deliberately. **Its last green
-/// result is a dated measurement, not a standing guarantee.** The breadth
-/// property, that every killable mutant found at one site per module is
-/// detected, IS still asserted every run by the census.
+/// # Cost, re-derived, with the conditions
+///
+/// **419s under default features and 429s under `narrow-float-32`**, measured
+/// 2026-09-12 at a one-minute load average of **27**, which is heavily loaded and
+/// not a best case. (This sentence first read *"on an otherwise-idle machine"*,
+/// written without checking — the precise error the paragraph below warns about,
+/// made while writing the warning.) The earlier
+/// figures name their load — 710s near load 5, 400s at load 8.2 — because **a
+/// duration without its conditions is not comparable**. The sibling census, which
+/// carries the breadth axis, remains the cheaper of the two.
+///
+/// # ⚠ TWO DIFFERENT 600s LIMITS, WHICH IS NEW
+///
+/// The 600s in the paragraph above is the **affordability threshold** this project
+/// fixed for whether a test earns its place in the gate. The harness that runs
+/// these commands **also** kills a single invocation at 600s. They are unrelated
+/// limits that happen to share a number.
+///
+/// At 419–429s this test is comfortably under the affordability threshold and
+/// **close to the harness ceiling**: one run was killed at >360s under contention
+/// and passed on re-run at 429s. **Machine load therefore decides whether a phase
+/// completes**, which is why the gate is now invoked as six separate commands
+/// rather than two. That is a property of the runner, not a reason to shrink the
+/// test.
+///
+/// **What it protects**: the DEPTH of mutation sensitivity — a subject that starts
+/// hiding a killable mutant beyond the census's single site. **Its green result IS
+/// a standing guarantee, asserted every gate run**, which is the opposite of what
+/// this paragraph claimed while the test was running. The breadth property, that
+/// every killable mutant found at one site per module is detected, is asserted by
+/// the sibling census.
 ///
 /// The widened mutation family was kept rather than reverted: detected went from
 /// 39 to 48 and subjects with no applicable site at all from 10 to 3, which is
