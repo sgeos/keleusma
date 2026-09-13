@@ -124,6 +124,14 @@ const WITNESSED: &[(&str, &str)] = &[
     ),
     ("Return", "fn main(a: Word, b: Word) -> Word { a }"),
     (
+        "Dup",
+        "fn main(a: Word, b: Word) -> Word { if (a > 0) andalso (b > 0) { 1 } else { 0 } }",
+    ),
+    (
+        "BoundsCheck",
+        "private data g { cells: [[Word; 2]; 2] }\nfn main(a: Word, b: Word) -> Word { g.cells[0][0] = a; g.cells[1][1] }",
+    ),
+    (
         "CheckedDiv",
         "fn main(a: Word, b: Word) -> Word { let q = a / b { ok(v) => v, zero_divisor(n) => 0 }; let r = a % b { ok(v) => v, zero_divisor(n) => 0 }; q + r }",
     ),
@@ -232,17 +240,14 @@ const WITNESSED: &[(&str, &str)] = &[
 /// Opcodes with no driven witness HERE, and why. **Recorded, not omitted.**
 const NO_WITNESS_HERE: &[(&str, &str)] = &[
     (
-        "BoundsCheck",
-        "emitted by indexing a DATA-SLOT array, not a local one -- `opcode_witness.kel` \
-         is the corpus's only producer. A local `xs[a]` emits NONE, which is the very \
-         premise that once caused a defect here: the emitter assumed the compiler \
-         emitted it before an index, and the compiler does not",
+        "Len",
+        "the reference emits none -- B28 P2 deleted every fall-back, a flat array \
+         body being unable to answer a length query; see opcode_denominator",
     ),
-    ("Dup", "emitted incidentally; no witness isolates it"),
-    ("Len", "the reference emits none; see opcode_denominator"),
     (
         "IsStruct",
-        "the reference emits none; see opcode_denominator",
+        "the reference emits none by a bounded search recorded upstream, which \
+         deliberately stops short of claiming unreachability; see opcode_denominator",
     ),
     (
         "CallVerifiedNative",

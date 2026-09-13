@@ -1,5 +1,37 @@
 # Design Journal
 
+## 2026-09-13 — 62 of 66, and a producer narrowed twice
+
+`Dup` and `BoundsCheck` closed, taking the driven count to **62 of 66**.
+
+**`Op::Dup`'s three producers in `compiler.rs` are all the short-circuit
+booleans**, so `(a > 0) andalso (b > 0)` witnesses it — an unknown closed by
+reading the emission sites rather than guessing at constructs.
+
+**The `BoundsCheck` producer has now been narrowed twice.** First from "a local
+`xs[a]`" (which emits none) to "a data-slot array index". That was still too
+broad: a FLAT data-slot array with a variable index emits none either. It is the
+**NESTED** form, `g.cells[a][b]` on `[[Word; 2]; 2]`, which is why
+`opcode_witness.kel`'s `grid.cells[i][j]` was the corpus's only producer. Each
+narrowing came from driving the next-most-specific shape rather than from
+reasoning about it.
+
+**A mutation that fires is not automatically the right mutation.** Changing the
+witness's index from `[1][1]` to `[0][0]` was SILENT — both forms emit
+`BoundsCheck`, so the mutation tested nothing. Removing the NESTING fires, and
+that is the property the witness actually rests on. A mutation must attack the
+claim, not merely edit the subject.
+
+**The partition guard caught a regex overreach for the third time.** The pattern
+for the single-line `Dup` row had no `\n    ),` terminator of its own, so with
+DOTALL it consumed everything through the next multi-line row's end, deleting
+`Len` and `IsStruct`. Two opcodes in neither column, caught immediately.
+
+The four that remain are honest: `Len` and `IsStruct` are emitted nowhere by the
+reference, and the two native-call opcodes need registration machinery that lives
+inside `corpus_differential` rather than in a reusable helper — a fact about where
+the machinery sits, not about whether the opcodes work.
+
 ## 2026-09-13 — absorption 61, and a brief that predicted the GUARDS
 
 Backlog had reached 15, so absorption outranked the tail of the witness table.

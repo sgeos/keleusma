@@ -23,7 +23,7 @@ return `Word`, wrapping the construct under test — `(a as Byte) as Word` witne
 
 | row | I assumed | actually |
 |---|---|---|
-| `BoundsCheck` | a local `xs[a]` emits it | emits NOTHING; a DATA-SLOT array index is the producer |
+| `BoundsCheck` | a local `xs[a]` emits it | emits NOTHING; a **NESTED** data-slot array is the producer |
 | `CheckedDiv` | Word `/` emits it | Word `/` emits `Div` |
 | `CheckedMod` | Word `%` emits it | Word `%` emits `Mod` |
 | `Div`, `Mod` | Byte/Fixed only | Word `/` and `%` emit exactly these |
@@ -60,3 +60,30 @@ implicated itself three times before producing a single trustworthy row.
 - **Naming a lowered function's signature by hand.** The package already pays for
   that lesson; the driver reads `count_params` and sizes buffers from the
   published contract.
+
+
+---
+
+## CORRECTION, 2026-09-13 — the `BoundsCheck` producer, narrowed
+
+This brief said *"a DATA-SLOT array index is the producer"*. **That was still too
+broad.** Measured since:
+
+- a local `xs[a]` emits **no** `BoundsCheck`;
+- a FLAT data-slot array, `d.xs[b]` on `[Word; 4]`, emits **none either** — with a
+  variable index;
+- a **NESTED** data-slot array, `g.cells[a][b]` on `[[Word; 2]; 2]`, **does**, and
+  it drives and agrees.
+
+So the producer is the nested form specifically, which is why
+`opcode_witness.kel`'s `grid.cells[i][j]` was the corpus's only one. `BoundsCheck`
+now has a driven witness, and the mutation that proves the witness meaningful is
+**removing the nesting** — changing the index expression alone does not, since both
+index forms emit it.
+
+`Dup` is closed too: its three producers in `compiler.rs` are all the
+short-circuit booleans, so `(a > 0) andalso (b > 0)` witnesses it.
+
+**62 of 66 driven.** The four remaining are `Len` and `IsStruct`, which the
+reference emits nowhere, and the two native-call opcodes, which need registration
+machinery that lives in `corpus_differential` rather than in a reusable helper.
