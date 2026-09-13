@@ -212,9 +212,12 @@ for once; the detail is in [`docs/process/DESIGN_JOURNAL.md`](docs/process/DESIG
 | A run whose subject was edited **while it was in flight** | Its result belongs to no tree. Discard it rather than reading it as a pass |
 | A **cached** `clippy` run prints nothing whether or not warnings exist | `touch` a source first; zero warnings from a warm target directory is not evidence |
 | A log **truncated** by `tail`/`head` looks identical to a clean one | Capture the whole output and the exit status when the result will be quoted |
+| A file's **own documented** reproduction command under-ran the file | `tests/float_opcode_without_floats.rs` named `--features verify`, which runs its defect pin and skips its `compile`-gated control. Check the test count against the file's `#[test]` count |
 
-**Not exhaustive.** Six found across one session is evidence that more exist, not that
-these are all of them. A run that is about to justify a claim deserves the question
+**Not exhaustive.** Seven found across two sessions is evidence that more exist, not
+that these are all of them. The seventh was found by re-running a measurement whose
+feature set continuous integration does not cover, which is where a recorded number
+can quietly stop being true. A run that is about to justify a claim deserves the question
 "what did this command actually cover?" before the claim is made.
 
 ## Coding Conventions
