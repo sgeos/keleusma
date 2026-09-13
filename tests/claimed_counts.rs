@@ -1031,3 +1031,89 @@ fn the_instructions_state_the_feature_sets_ci_actually_runs() {
         );
     }
 }
+
+/// **THE TWO STRUCTURAL NUMBERS THE INSTRUCTIONS RESTATE, CHECKED AGAINST THE SOURCE.**
+///
+/// Both were correct when this was written, which is the point: they are checked so they
+/// STAY correct, not because either was wrong. They differ from the test counts, which the
+/// instructions explicitly mark as needing re-derivation — guarding those would churn on
+/// every increment.
+///
+/// - **`BYTECODE_VERSION`** gates artefact compatibility and moves only on operator
+///   authorisation. If the constant is bumped and the instructions are not, the file
+///   silently misstates which artefacts a build accepts.
+/// - **The opcode count** is a stated rad-hard design constraint: the instruction set is
+///   kept small deliberately and new opcodes are avoided. A guard here means adding one
+///   fails until someone updates the file, which is exactly when the constraint should be
+///   reconsidered rather than quietly exceeded.
+///
+/// # Why not restate them a third time
+///
+/// This reads both from the source. `the_instructions_state_the_feature_sets_ci_actually_runs`
+/// records what happens otherwise: a fact the tree owns, copied into prose, drifts until
+/// something compares the copy against the original.
+///
+/// # Mutation-tested, and one mutation was INCONCLUSIVE
+///
+/// Bumping `BYTECODE_VERSION` in the source fails this test, naming the source's value.
+/// Changing the instructions' opcode number fails it, naming the enum's variant count.
+///
+/// **Adding an `Op` variant did NOT test the opcode half.** It breaks compilation across
+/// the crate's exhaustive matches, so the test binary never built and the assertion was
+/// never reached. That is worth stating rather than counting as a pass: the opcode half is
+/// exercised from the PROSE side only. Its practical value is unchanged — once an added
+/// opcode compiles, this fails until the instructions record it — but the detection of an
+/// added opcode belongs to the compiler, not to this guard.
+#[test]
+fn the_instructions_state_the_structural_numbers_the_source_owns() {
+    const BYTECODE: &str = include_str!("../src/bytecode.rs");
+
+    // --- BYTECODE_VERSION -------------------------------------------------------------
+    let version = BYTECODE
+        .split("pub const BYTECODE_VERSION: u16 = ")
+        .nth(1)
+        .and_then(|rest| rest.split(';').next())
+        .and_then(|n| n.trim().parse::<u16>().ok())
+        .expect("read BYTECODE_VERSION from src/bytecode.rs; if its declaration was reworded, fix this extraction rather than deleting the check");
+    assert!(
+        INSTRUCTIONS.contains(&alloc_fmt("BYTECODE_VERSION = ", version)),
+        "the source declares BYTECODE_VERSION = {version}, which the instructions do not \
+         state. The number moves only on operator authorisation, so a mismatch means either \
+         an unauthorised bump or a file that misstates which artefacts a build accepts"
+    );
+
+    // --- opcode count -----------------------------------------------------------------
+    let body = BYTECODE
+        .split("pub enum Op {")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}").next())
+        .expect("locate `pub enum Op` in src/bytecode.rs");
+    let variants = body
+        .lines()
+        .filter(|l| {
+            let t = l.trim_start();
+            l.len() - t.len() == 4
+                && t.starts_with(|c: char| c.is_ascii_uppercase())
+                && t.contains(['{', '(', ',', '='])
+        })
+        .count();
+
+    // NON-VACUITY: a broken extraction must fail loudly, not report a small number that
+    // happens to appear in the file.
+    assert!(
+        variants > 50,
+        "only {variants} Op variants were extracted, so the parse stopped matching and this \
+         guard is checking almost nothing. Fix the extraction rather than the expectation"
+    );
+    assert!(
+        INSTRUCTIONS.contains(&alloc_fmt("to ", variants as u16)),
+        "the Op enum has {variants} variants and the instructions do not state that number. \
+         The opcode count is a stated rad-hard constraint, so an opcode was probably added: \
+         record it in the instructions and revisit whether the constraint still holds"
+    );
+}
+
+/// Format `prefix` followed by `n`, for substring checks against the instructions.
+fn alloc_fmt(prefix: &str, n: u16) -> String {
+    format!("{prefix}{n}")
+}
