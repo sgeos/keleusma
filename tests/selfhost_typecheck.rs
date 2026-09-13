@@ -4155,86 +4155,682 @@ fn the_rules_the_census_added_do_not_reject_valid_programs() {
     }
 }
 
-/// **`parse.kel` REQUIRES THE PARENTHESES ON AN ENUM PATTERN, AND SPINS WITHOUT THEM.**
+/// **EVERY KNOWN GAP IS REFUSED BY THE COMPILER, NOT MIS-COMPILED.**
 ///
-/// # What was measured
+/// # The question that should have come first
 ///
-/// The reference accepts both `E::A => 1` and `E::A() => 1` as match-arm patterns.
-/// The self-hosted parser accepts the parenthesised spelling and **does not
-/// terminate** on the bare one — it exhausts its step budget rather than refusing.
-/// Payload or no payload makes no difference; the parentheses do.
+/// Several increments discussed the QUALITY of the refusals for the four
+/// self-hosted gaps — whether the message names the construct, whether refusing is
+/// cheaper than implementing — **without establishing that they are refusals at
+/// all.** That is the only part which bears on correctness: a construct outside
+/// the subset must be REFUSED, never silently mis-compiled.
 ///
-/// Established by raising the budget: at sixteen steps per token it fails, and at
-/// five hundred and twelve it still fails. **That distinguishes non-termination
-/// from a budget merely sized to the constructs someone tried.**
+/// # And on the right entry point
 ///
-/// # How it was found, which is the reusable part
+/// The censuses in this file drive `occurrence_rows_from_pipeline`, a test harness
+/// that unwraps, so a gap there surfaces as a PANIC. **That is not what a user
+/// meets.** `self_hosted_compile` is the path behind `--compiler self-hosted`, and
+/// measuring the harness instead of the product is the scope error this file
+/// records against itself several times over.
 ///
-/// The binding-form census was written for the REFERENCE extraction, where it
-/// found two false rejections. Running the same corpus against the PIPELINE
-/// extraction took one probe — the two walks are twins, and the agreement tests
-/// between them use corpora that contain a `match` on a LITERAL, no loop, no const
-/// parameter and no qualified import. **A corpus that cannot distinguish two
-/// implementations cannot detect that they diverge**, which is the same shape as
-/// this file's other coverage findings, one level out.
+/// # The result
 ///
-/// # This pin does not fix it
+/// All four gaps return `Err` from `self_hosted_compile` — a proper error, not a
+/// panic and not a wrong module — and an ordinary program still compiles.
 ///
-/// Teaching `parse.kel` the bare spelling is a change to the self-hosted parser's
-/// pattern grammar, and an instrument and the change it argues for should not land
-/// together. What is fixed here is the DIAGNOSTIC, which asserted that the usual
-/// cause of budget exhaustion is an unterminated block — a claim about a
-/// population nobody measured, and false for this input.
+/// **So the subset is SAFE at the boundary that matters, and the remaining
+/// obligation is message quality rather than soundness.** That is the third time
+/// this obligation has been reframed, and the first time from a measurement of the
+/// user-facing path rather than an inference from the harness.
 ///
-/// The bare case is asserted to FAIL rather than left out, so the day it parses,
-/// this test fails and says so.
+/// # What this does not claim
+///
+/// Not that the messages are good; several name a structural cause such as a
+/// work-stack underflow rather than the construct. Not that the list of gaps is
+/// complete — it is what the censuses in this file have found. **Only that nothing
+/// on the list compiles to something wrong.**
 #[cfg(feature = "self-host")]
 #[test]
-fn the_self_hosted_parser_needs_parentheses_on_an_enum_pattern() {
-    // Both spellings are valid to the REFERENCE, which is what makes the
-    // divergence a gap rather than a difference of opinion.
-    const BOTH_VALID: &[(&str, &str)] = &[
+fn every_known_gap_is_refused_by_the_self_hosted_compiler() {
+    const GAPS: &[(&str, &str)] = &[
         (
-            "bare",
-            "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A => 1, E::B => 2 } }",
+            "variable pattern",
+            "fn main(a: Word) -> Word { match a { v => v } }",
         ),
         (
-            "parenthesised",
-            "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A() => 1, E::B() => 2 } }",
+            "struct destructuring",
+            "struct P { x: Word }\nfn main(p: P) -> Word { match p { P { x } => x, _ => 0 } }",
+        ),
+        ("assert", "fn main(a: Word) -> Word { assert a > 0; a }"),
+        (
+            "qualified call",
+            "use audio::midi_to_freq\nfn main() -> Float { audio::midi_to_freq(69) }",
         ),
     ];
-    for (label, src) in BOTH_VALID {
+
+    let target = keleusma::target::Target::host();
+
+    for (gap, src) in GAPS {
+        // THE REFERENCE ACCEPTS EACH, so a refusal is the subset declining a valid
+        // program rather than the program being wrong.
         let program = parse(&tokenize(src).expect("lex")).expect("parse");
         assert!(
             compile(&program).is_ok(),
-            "{label}: the REFERENCE rejects this spelling, so the comparison below is not \
-             between two valid programs"
+            "{gap}: the REFERENCE rejects this, so refusing it says nothing about \
+             the subset"
         );
+
+        // **`Err`, NOT A PANIC AND NOT A MODULE.** A panic would be a crash at the
+        // user boundary; a module would be the thing that must never happen.
+        match std::panic::catch_unwind(|| keleusma::selfhost::self_hosted_compile(src, &target)) {
+            Ok(Err(_)) => {}
+            Ok(Ok(_)) => panic!(
+                "{gap}: the self-hosted compiler PRODUCED A MODULE for a construct \
+                 it cannot parse. That is the failure this test exists to catch: a \
+                 gap that mis-compiles rather than refusing"
+            ),
+            Err(_) => panic!(
+                "{gap}: the self-hosted compiler PANICKED rather than returning an \
+                 error. It refuses, but not in a form a caller can handle"
+            ),
+        }
     }
 
-    // The parenthesised spelling reaches the pipeline extraction.
-    let paren = "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A() => 1, E::B() => 2 } }";
+    // NON-VACUITY: an ordinary program must still compile, or "everything is
+    // refused" would satisfy every assertion above.
+    let ordinary = "fn main() -> Word { let a = 1; a + a }";
+    let compiled =
+        std::panic::catch_unwind(|| keleusma::selfhost::self_hosted_compile(ordinary, &target));
     assert!(
-        std::panic::catch_unwind(|| keleusma::selfhost::occurrence_rows_from_pipeline(paren))
+        matches!(compiled, Ok(Ok(_))),
+        "the self-hosted compiler no longer compiles an ordinary program, so the \
+         refusals above establish nothing"
+    );
+}
+
+/// **THE TWO EXTRACTIONS COMPARED OVER THE BINDING FORMS, WHICH IS WHERE THREE
+/// FALSE REJECTIONS HID.**
+///
+/// # Why this comparison and not the existing agreement test
+///
+/// The pipeline↔reference agreement test for occurrences uses a corpus containing
+/// a `match` on a LITERAL, no loop, no const parameter and no qualified import.
+/// **A corpus that cannot distinguish two implementations cannot detect that they
+/// diverge** — and three false rejections hid in the reference side of exactly
+/// these forms.
+///
+/// Those were fixed on the REFERENCE side. Nothing had checked the pipeline side
+/// against them.
+///
+/// # The result: the pipeline omits every binder the reference reports
+///
+/// For a `for` variable, a match-arm payload binding and a const parameter used as
+/// a value, the reference records an occurrence and the pipeline records none.
+/// Only the `for` case was pinned; the other two were not recorded anywhere.
+///
+/// # THE RISK THIS COMMENT USED TO STATE WAS WRONG, AND READING THE CODE SHOWED IT
+///
+/// It said the pipeline is "safe by omission, not by correctness" — that if it
+/// began reporting these binders without also collecting them as locals, it would
+/// reproduce the reference side's false rejections exactly. **It was flagged as
+/// unverified, and verifying it dismissed it.**
+///
+/// `occurrence_rows_from_pipeline` has **no separate locals set**. It builds a
+/// SLOT-to-name map from parameters and `let` bindings, and a local-read node
+/// emits `(name, local = 1, call = 0)` — unconditionally local — **only when the
+/// slot has a name.** An unnamed slot produces NO ROW, never a row with
+/// `local = 0`.
+///
+/// So the condition behind the reference-side defect — an occurrence present while
+/// the locals set lacks it — **is not expressible here.** Reporting and collecting
+/// are the same lookup rather than two walks that can disagree. The pipeline is
+/// safe by CONSTRUCTION for this class.
+///
+/// **The divergence below is still real and still pinned.** What was wrong was the
+/// account of why it matters, and it was wrong in the direction of alarm — which is
+/// the safer direction to be wrong in, and still worth correcting.
+///
+/// The `local = 0` rows come only from the CALL branch, where locality is decided
+/// by whether the callee names a slot. That is the intended rule rather than an
+/// inconsistency.
+///
+/// # A fifth parser gap, found by the same comparison
+///
+/// `audio::midi_to_freq(69)` — a QUALIFIED CALL expression — is accepted by the
+/// reference and refused by the pipeline with *"a record range did not reduce to
+/// exactly one node"*, the same failure kind as `assert`. The `use` declaration
+/// alone is fine; it is the call form that is unhandled.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_pipeline_omits_the_binders_the_reference_reports() {
+    // `(form, source)`. Every source is accepted by the reference, asserted below.
+    const FORMS: &[(&str, &str)] = &[
+        (
+            "for loop variable",
+            "fn main() -> Word { let t = 0; for i in 0..4 limit 4 { let u = i; } t }",
+        ),
+        (
+            "match arm payload binding",
+            "enum E { W(Word), N }\n\
+             fn main(e: E) -> Word { match e { E::W(p) => p + 1, E::N => 0 } }",
+        ),
+        (
+            "const parameter used as a value",
+            "fn plus<const n: Word>() -> Word { n + 10 }\n\
+             fn main() -> Word { plus::<7>() }",
+        ),
+    ];
+
+    let mut diverging: Vec<&str> = Vec::new();
+    for (form, src) in FORMS {
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+        assert!(
+            compile(&ast).is_ok(),
+            "{form}: the REFERENCE rejects this, so a divergence would not be about \
+             the two extractions"
+        );
+        let mut reference = reference_occurrence_names(&ast);
+        let mut pipeline: Vec<String> = keleusma::selfhost::occurrence_rows_from_pipeline(src)
+            .into_iter()
+            .map(|(n, _, _)| n)
+            .collect();
+        reference.sort();
+        reference.dedup();
+        pipeline.sort();
+        pipeline.dedup();
+        if reference != pipeline {
+            diverging.push(form);
+        }
+    }
+
+    // NON-VACUITY: a form both sides agree on, so the assertion below is about the
+    // binders rather than about the harness reporting nothing either way.
+    let control = "fn main() -> Word { let a = 1; a + a }";
+    let cast = parse(&tokenize(control).expect("lex")).expect("parse");
+    let mut cref = reference_occurrence_names(&cast);
+    let mut cpipe: Vec<String> = keleusma::selfhost::occurrence_rows_from_pipeline(control)
+        .into_iter()
+        .map(|(n, _, _)| n)
+        .collect();
+    cref.sort();
+    cref.dedup();
+    cpipe.sort();
+    cpipe.dedup();
+    assert_eq!(
+        cref, cpipe,
+        "the two extractions disagree on a plain `let`, so this test is measuring \
+         something other than the binding forms"
+    );
+    assert!(
+        !cref.is_empty(),
+        "neither extraction reported any name for the control, so agreement on it \
+         establishes nothing"
+    );
+
+    assert_eq!(
+        diverging,
+        vec![
+            "for loop variable",
+            "match arm payload binding",
+            "const parameter used as a value",
+        ],
+        "the set of binding forms on which the two extractions diverge changed. A \
+         form LEAVING it means the pipeline began reporting that binder -- check \
+         that it also collects it as a LOCAL, because reporting without collecting \
+         is exactly the false rejection fixed on the reference side"
+    );
+
+    // **THE DIVERGENCE IS LOCALISED TO THE OCCURRENCE CHANNEL, and that was
+    // measured rather than assumed.** The binding channel carries the richest rows
+    // and is the one most likely to diverge alongside; over the same forms it
+    // AGREES exactly. So the other agreement tests do not need the same treatment,
+    // and a future divergence appearing here is a new fact rather than one this
+    // scope never covered.
+    for (form, src) in FORMS {
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+        let (names, rows) = binding_rows(&ast);
+        let name_of = |id: i64| {
+            names
+                .iter()
+                .find(|(_, v)| **v == id)
+                .map(|(k, _)| k.clone())
+        };
+        let mut want: Vec<keleusma::selfhost::BindingRow> = rows
+            .iter()
+            .filter_map(|(n, t, f)| {
+                let nm = name_of(*n)?;
+                match f {
+                    0 => Some((nm, *t, 0, String::new())),
+                    1 => Some((nm, 0, 1, name_of(*t)?)),
+                    _ => None,
+                }
+            })
+            .collect();
+        let (_, mut got) = keleusma::selfhost::binding_rows_from_pipeline(src);
+        want.sort();
+        got.sort();
+        assert_eq!(
+            got, want,
+            "{form}: the BINDING rows diverge too. The occurrence divergence above \
+             was localised to that one channel; this says it no longer is, which is \
+             a different and larger fact"
+        );
+    }
+}
+
+/// **A QUALIFIED CALL EXPRESSION IS UNHANDLED BY THE PIPELINE.**
+///
+/// `audio::midi_to_freq(69)` is accepted by the reference and refused by
+/// `reconstruct.kel` with *"a record range did not reduce to exactly one node"* —
+/// the same failure kind as `assert`, and the fifth self-hosted gap this file
+/// records.
+///
+/// **The `use` declaration alone is fine**, which localises it: the import parses,
+/// the CALL FORM does not. Separating those two was one probe and it is the
+/// difference between "imports are unsupported" and a precise gap.
+#[cfg(feature = "self-host")]
+#[test]
+fn a_qualified_call_expression_is_not_handled_by_the_pipeline() {
+    let import_only = "use audio::midi_to_freq\nfn main() -> Word { 0 }";
+    assert!(
+        std::panic::catch_unwind(|| keleusma::selfhost::occurrence_rows_from_pipeline(import_only))
             .is_ok(),
-        "the parenthesised enum pattern no longer parses, which is a regression rather \
+        "the bare `use` declaration no longer parses, which is a regression rather \
          than the gap this test records"
     );
 
-    // The bare spelling does not. **Caught as a panic rather than a hang** because the
-    // step budget turns the non-termination into a refusal; without that guard this
-    // test would not return.
-    for src in [
-        "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A => 1, E::B => 2 } }",
-        "enum E { W(Word), N }\nfn main(e: E) -> Word { match e { E::W(p) => p, E::N => 0 } }",
-    ] {
+    let qualified = "use audio::midi_to_freq\nfn main() -> Float { audio::midi_to_freq(69) }";
+    let ast = parse(&tokenize(qualified).expect("lex")).expect("parse");
+    assert!(
+        compile(&ast).is_ok(),
+        "the REFERENCE rejects the qualified call, so the pipeline refusing it is \
+         not a divergence"
+    );
+    assert!(
+        std::panic::catch_unwind(|| keleusma::selfhost::occurrence_rows_from_pipeline(qualified))
+            .is_err(),
+        "the pipeline now handles a qualified call expression. THIS IS A GAP \
+         CLOSING: record what changed and widen the documented subset"
+    );
+}
+
+/// **THE GRAMMAR'S EXPRESSION AND STATEMENT FORMS, CENSUSED THE SAME WAY.**
+///
+/// # The question this answers
+///
+/// The pattern census found three of seven documented forms unhandled. **That
+/// could be a local gap or a symptom** — and the difference decides whether
+/// teaching `parse.kel` three pattern forms is worth doing or whether the honest
+/// deliverable is a much narrower documented subset. Writing grammar for a
+/// 309-kilobyte stage before knowing which would be building on an unmeasured
+/// premise.
+///
+/// # The answer: the pattern gaps are LOCAL
+///
+/// **Fourteen of the fifteen forms exercised here parse.** Arithmetic, shift and
+/// bitwise, comparison and logical, calls, pipelines, match, if/else, struct
+/// construction, field access, array indexing, variable binding, expression
+/// statements, `for` loops and `break` all work.
+///
+/// So the parser is not broadly behind the specification. Fixing the pattern forms
+/// is worthwhile rather than futile, and belongs in its own increment.
+///
+/// # The one that does not, and it fails a THIRD way
+///
+/// **`assert`** — `reconstruct.kel` refuses with *"a record range did not reduce to
+/// exactly one node"*.
+///
+/// **TRACED: `assert` IS NOT A KEYWORD IN THE SELF-HOSTED LEXER.** `kw6` recognises
+/// `shared`, `orelse` and `struct`; `assert` is not among them, so it lexes as an
+/// ordinary identifier and `assert a > 0` becomes two adjacent identifiers the
+/// expression parser cannot reduce. The reconstruct message is the downstream
+/// symptom, not the cause.
+///
+/// **Its absence is defensible; the failure mode is not.** No stage source uses
+/// `assert` as a statement — the only occurrences across the twelve are in
+/// comments — so excluding it from the subset is a reasonable choice. What is not
+/// reasonable is that the exclusion surfaces as a malformed record stream rather
+/// than a refusal naming the construct.
+///
+/// # A SHORTCUT FOR "IS THIS CONSTRUCT IN THE SUBSET?", WORTH STATING ONCE
+///
+/// **No stage source can contain a construct the pipeline cannot parse**, because
+/// all twelve compile through it byte-identically — that is what
+/// `tests/selfhost_codegen.rs` asserts. So for any construct the pipeline refuses,
+/// "do the stages use it?" is answered NO by construction, without grepping.
+///
+/// The useful direction is the contrapositive: a gap found here is automatically a
+/// construct the stages do not need, so **no gap on this list can block the stages
+/// from self-compiling.** What each gap blocks is a user program, and what it costs
+/// is measured by how badly it fails rather than by whether the subset omits it.
+///
+/// # AND A CLAIM THAT FOLLOWED FROM THAT WAS WRONG
+///
+/// It seemed to follow that the remaining obligation is merely to REFUSE cleanly,
+/// which would be smaller than implementing the constructs. **Checked, and
+/// retracted.**
+///
+/// `parse.kel` has no refusal channel. Its output vocabulary is 54 node kinds plus
+/// `DONE`, and **not one of them is an error**. A construct it cannot handle
+/// cannot be NAMED by it; it can only mis-parse or spin. Refusing cleanly means
+/// adding a refusal record kind and teaching the driver and every consumer to read
+/// it — which touches MORE components than implementing a construct does, not
+/// fewer.
+///
+/// **The reframing above still holds; the cost estimate that rode along with it
+/// did not.** Whether refusal is cheaper than implementation is an open question,
+/// and it was stated as settled in two places before anyone looked at the
+/// parser's output vocabulary.
+///
+/// **This is FEATURE WORK, not a missing branch**, and that matters for planning:
+/// admitting it needs a token code, a lexer arm, statement parsing, and emission
+/// through reconstruct and codegen. Unlike the bare unit-variant pattern — where
+/// every piece already existed in one function — no existing path contains the
+/// pieces.
+///
+/// That brings the distinct failure kinds to three across the two censuses:
+///
+/// | kind | where | forms |
+/// |---|---|---|
+/// | non-terminating parse | `parse.kel` step budget | bare enum unit variant |
+/// | work-stack underflow | `reconstruct.kel` | struct destructuring, variable pattern |
+/// | range did not reduce to one node | `reconstruct.kel` | `assert` |
+///
+/// **None of the three is a clean refusal of an unsupported construct.** A subset
+/// that excluded `assert` would say so; these are downstream guards catching
+/// inconsistent output, or no guard at all. **A total language's front end should
+/// refuse what it cannot handle**, and whether a construct is in the subset is a
+/// separate question from whether the failure is well-behaved.
+///
+/// # The list is specified, and the census is still not exhaustive
+///
+/// The forms come from the section headings of `docs/spec/GRAMMAR.md` sections 4
+/// and 5, so this is not a list I assembled — the distinction that made the pattern
+/// census find three times what its predecessor did. It is still **one program per
+/// form**, and a form can be handled in one spelling and not another, which is the
+/// failure mode this file has now recorded five times.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_documented_expression_and_statement_forms_are_censused() {
+    const FORMS: &[(&str, &str)] = &[
+        ("arithmetic", "fn main(a: Word) -> Word { a + 1 * 2 - 3 }"),
+        (
+            "shift and bitwise",
+            "fn main(a: Word) -> Word { (a lsl 1) band 7 }",
+        ),
+        (
+            "comparison and logical",
+            "fn main(a: Word) -> bool { a > 1 andalso a < 9 }",
+        ),
+        (
+            "function call",
+            "fn g(x: Word) -> Word { x }\nfn main() -> Word { g(1) }",
+        ),
+        (
+            "pipeline",
+            "fn g(x: Word) -> Word { x }\nfn main() -> Word { 1 |> g() }",
+        ),
+        (
+            "match expression",
+            "fn main(a: Word) -> Word { match a { 1 => 2, _ => 3 } }",
+        ),
+        (
+            "if else",
+            "fn main(c: bool) -> Word { if c { 1 } else { 0 } }",
+        ),
+        (
+            "struct construction",
+            "struct P { x: Word }\nfn main() -> Word { let p = P { x: 1 }; p.x }",
+        ),
+        (
+            "field access",
+            "struct P { x: Word }\nfn main(p: P) -> Word { p.x }",
+        ),
+        (
+            "array indexing",
+            "fn main() -> Word { let a = [1, 2]; a[0] }",
+        ),
+        ("variable binding", "fn main() -> Word { let a = 1; a }"),
+        (
+            "expression statement",
+            "fn g(x: Word) -> Word { x }\nfn main() -> Word { g(1); 0 }",
+        ),
+        (
+            "for loop",
+            "fn main() -> Word { let t = 0; for i in 0..4 limit 4 { let u = i; } t }",
+        ),
+        (
+            "break",
+            "fn main() -> Word { let t = 0; for i in 0..4 limit 4 { break; } t }",
+        ),
+        ("assert", "fn main(a: Word) -> Word { assert a > 0; a }"),
+    ];
+
+    let mut handled: Vec<&str> = Vec::new();
+    let mut failing: Vec<&str> = Vec::new();
+
+    for (form, src) in FORMS {
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
         assert!(
-            std::panic::catch_unwind(|| keleusma::selfhost::occurrence_rows_from_pipeline(src))
-                .is_err(),
-            "`parse.kel` now handles a BARE enum pattern. THIS IS A GAP CLOSING: record what \
-             changed, widen the documented subset, and retire this test"
+            compile(&program).is_ok(),
+            "{form}: the REFERENCE rejects this program, so a parser failure would be \
+             my error rather than the parser's"
         );
+        if std::panic::catch_unwind(|| keleusma::selfhost::occurrence_rows_from_pipeline(src))
+            .is_ok()
+        {
+            handled.push(form);
+        } else {
+            failing.push(form);
+        }
     }
+
+    std::eprintln!(
+        "DOCUMENTED EXPRESSION AND STATEMENT FORMS: {} handled, {} not -> {failing:?}",
+        handled.len(),
+        failing.len()
+    );
+
+    // NON-VACUITY BOTH WAYS. All-handled would mean this stopped measuring anything
+    // and should be retired with its result recorded; all-failing would mean the
+    // harness is broken rather than the parser.
+    assert!(
+        !handled.is_empty(),
+        "no documented form is handled, so this is measuring the harness"
+    );
+    assert!(
+        !failing.is_empty(),
+        "every documented expression and statement form is now handled. That is the \
+         good outcome: record it, retire this assertion, and say what closed the gap"
+    );
+
+    let mut got = failing.clone();
+    got.sort_unstable();
+    assert_eq!(
+        got,
+        vec!["assert"],
+        "the set of documented expression and statement forms the self-hosted parser \
+         cannot handle changed. A form leaving it is a gap closing to record; one \
+         joining it is a regression every other test here would miss"
+    );
+}
+
+/// **THE GRAMMAR'S OWN PATTERN FORMS, CENSUSED AGAINST THE SELF-HOSTED PARSER.**
+///
+/// # Why this list and not one I assembled
+///
+/// `docs/spec/GRAMMAR.md` enumerates the pattern forms in a table. **That is a
+/// specified list rather than the forms I happened to think of**, which is the
+/// caveat every other census in this file has to carry. If a form is in that table
+/// and the parser cannot handle it, the parser diverges from the documented
+/// language — not merely from the reference implementation.
+///
+/// # The result
+///
+/// Four of the seven forms exercised here parse. **Three do not, and they fail in
+/// TWO DIFFERENT WAYS** — a distinction the first version of this comment got
+/// wrong by asserting all three spin.
+///
+/// - **Enum unit variant, bare** — ~~does not terminate~~ **FIXED 2026-09-12.** The
+///   grammar lists `Command::Silence`; `parse.kel` waited for a `(` that never came
+///   and span until its step budget ran out. Phase 3 now completes the pattern on
+///   the `=>` it already has.
+/// - **Struct destructuring** (`Note { channel, pitch }`) and **variable** (`x`) —
+///   `parse.kel` ACCEPTS these and emits a record stream `reconstruct.kel` cannot
+///   rebuild, refused as a **work-stack UNDERFLOW**.
+///
+/// **The second kind is not the conservative stance working.** A subset that
+/// refuses an unsupported construct cleanly would say so; an underflow is a
+/// downstream guard catching an INCONSISTENT STREAM the parser should not have
+/// produced. `match a { v => v }` is the simplest binding pattern the language has.
+///
+/// Reporting all three as one failure mode would have made the parser look merely
+/// incomplete rather than, for two of them, wrong.
+///
+/// # How it was found
+///
+/// The binding-form census was written for the type-rejection host extraction,
+/// where it found two false rejections. Pointing it at that walk's TWIN — the
+/// pipeline extraction — took one probe. The agreement tests between the two use
+/// corpora containing a `match` on a LITERAL, no loop, no const parameter and no
+/// qualified import: **a corpus that cannot distinguish two implementations cannot
+/// detect that they diverge.**
+///
+/// The first run of this pin recorded only the enum spelling. Widening it to the
+/// grammar's enumerated list turned one finding into three, which is the argument
+/// for censusing against a SPECIFIED list rather than an assembled one.
+///
+/// # This pin does not fix any of them, and they are NOT equally hard
+///
+/// Teaching `parse.kel` these forms belongs in its own increment; an instrument and
+/// the change it argues for should not land together. What is fixed alongside this
+/// is the DIAGNOSTIC, which asserted that the usual cause of budget exhaustion is
+/// an unterminated block — a claim about a population nobody measured, and false
+/// for all three of these.
+///
+/// **The mechanism was traced so the next increment does not repeat the tracing**,
+/// and it splits the three unevenly:
+///
+/// - **The bare enum unit variant is CONTAINED.** `step_mpat` phase 3 waits for
+///   `LParen` and does nothing on any other token, so the phase never advances and
+///   the parse never completes — that is the spin, exactly. The `LParen` path
+///   reserves the arm's `IsEnum` test slot; the `RParen` path completes the
+///   pattern, counts the arm and returns the `EnumArm` record. A bare form needs
+///   both of those, plus advancing the match phase PAST the `=>` it has already
+///   consumed rather than back to the phase that waits for one. **Every piece it
+///   needs already exists in that one function.**
+///
+/// - **The variable and struct patterns are FEATURE WORK.** `step_match` phase 2
+///   accepts an identifier only when it names a known enum, and otherwise sets
+///   `match_build` — it reads the identifier as the END OF THE ARMS. That is why
+///   they do not spin but produce a stream `reconstruct.kel` cannot rebuild.
+///   Supporting them means new arm semantics — binding the scrutinee, or
+///   destructuring it — not a missing branch.
+///
+/// **Any such change must still self-compile byte-identically**, which is the
+/// constraint that makes even the contained one worth its own run at continuous
+/// integration rather than a ride-along.
+///
+/// **Each failing form is asserted to FAIL**, so the day one parses, this test
+/// fails and says to widen the documented subset rather than letting the gain go
+/// unrecorded.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_documented_pattern_forms_are_censused_against_the_self_hosted_parser() {
+    // `(form, grammar example, source)`. Every source is accepted by the REFERENCE,
+    // asserted below, so a failure is a parser gap rather than an invalid program.
+    const FORMS: &[(&str, &str, &str)] = &[
+        (
+            "literal",
+            "42",
+            "fn main(a: Word) -> Word { match a { 1 => 2, _ => 3 } }",
+        ),
+        (
+            "enum variant with bindings",
+            "Command::NoteOn(ch, note, vel)",
+            "enum E { W(Word), N }\nfn main(e: E) -> Word { match e { E::W(p) => p, _ => 0 } }",
+        ),
+        (
+            "enum unit variant, bare",
+            "Command::Silence",
+            "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A => 1, _ => 2 } }",
+        ),
+        (
+            // NOT in the grammar's table, and it is the one that works.
+            "enum unit variant, parenthesised",
+            "(not listed in the table)",
+            "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A() => 1, _ => 2 } }",
+        ),
+        (
+            "struct destructuring",
+            "Note { channel, pitch }",
+            "struct P { x: Word }\nfn main(p: P) -> Word { match p { P { x } => x, _ => 0 } }",
+        ),
+        (
+            "wildcard",
+            "_",
+            "fn main(a: Word) -> Word { match a { _ => 1 } }",
+        ),
+        (
+            "variable",
+            "x",
+            "fn main(a: Word) -> Word { match a { v => v } }",
+        ),
+    ];
+
+    let mut parses: Vec<&str> = Vec::new();
+    let mut spins: Vec<&str> = Vec::new();
+
+    for (form, example, src) in FORMS {
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+        assert!(
+            compile(&program).is_ok(),
+            "{form} ({example}): the REFERENCE rejects this, so it is not a valid \
+             program and a parser failure would measure nothing"
+        );
+        if std::panic::catch_unwind(|| keleusma::selfhost::occurrence_rows_from_pipeline(src))
+            .is_ok()
+        {
+            parses.push(form);
+        } else {
+            spins.push(form);
+        }
+    }
+
+    std::eprintln!(
+        "DOCUMENTED PATTERN FORMS: {} parse, {} spin -> {spins:?}",
+        parses.len(),
+        spins.len()
+    );
+
+    // NON-VACUITY IN BOTH DIRECTIONS. All-parsing would mean the corpus does not
+    // reach the parser; all-spinning would mean the harness is broken rather than
+    // the parser.
+    assert!(
+        !parses.is_empty(),
+        "no documented pattern form parses, so this is measuring the harness"
+    );
+
+    // **PINNED BY EQUALITY.** A form LEAVING this set is a gap closing and should be
+    // recorded; one JOINING it is a regression, and every other test in this file
+    // would still pass while that happened.
+    let mut got = spins.clone();
+    got.sort_unstable();
+    assert_eq!(
+        got,
+        // **THE BARE ENUM UNIT VARIANT LEFT THIS SET on 2026-09-12**, which is what
+        // this assertion exists to announce. `step_mpat` phase 3 now completes the
+        // pattern on `=>` instead of waiting for a `(` that never comes.
+        //
+        // The two that remain are FEATURE WORK by the same trace, not missing
+        // branches: `step_match` phase 2 reads an identifier that is not an enum
+        // name as the END OF THE ARMS, so supporting them means new arm semantics.
+        vec!["struct destructuring", "variable"],
+        "the set of documented pattern forms `parse.kel` cannot handle changed. A \
+         form leaving it means the self-hosted parser gained a construct: record \
+         what changed and widen the documented subset. A form joining it is a \
+         regression"
+    );
 }
 
 /// **EVERY WAY THE LANGUAGE BINDS A NAME, CHECKED AT ONCE.**
@@ -7243,10 +7839,22 @@ fn the_condition_rows_agree_between_the_pipeline_and_the_reference() {
 /// that has none in the source. The pipeline therefore cannot tell a synthesised arm from a
 /// written one, while the reference contributes a pair row **only** when `else_block` is present.
 ///
-/// # Why the safe-looking heuristic was rejected
+/// # No heuristic can work, and this is now established rather than suspected
 ///
-/// The synthesised arm yields the UNIT tag, and a real statement-only else yields UNKNOWN, so the
-/// tag appears to separate them. **It could not be shown safe**, and the stakes are asymmetric:
+/// This section used to argue that the synthesised arm yields the UNIT tag while a real
+/// statement-only else yields UNKNOWN, so the tag *appears* to separate them, and that the
+/// separation **could not be shown safe**. That was a hedge, and checking it replaced it with
+/// something stronger.
+///
+/// `an_empty_else_is_indistinguishable_from_an_implicit_one` in `tests/selfhost_parse.rs`
+/// establishes that a written `else { }` and an implicit arm produce **the same parse record
+/// stream**, while the reference separates them (its criterion, `else_block.is_some()`, counts
+/// the written empty else and not the implicit arm). **The distinguishing information never
+/// reaches this side.** A heuristic can only read what the stream carries, so the question of
+/// which tag a case yields is moot: the two sources are already identical before any tag exists.
+///
+/// The stakes remain asymmetric, which is why the withholding is the right response rather than
+/// a guess in either direction:
 ///
 /// - a SPURIOUS pair row feeds `ty_node_bad`'s equality branch and can make the stage **reject a
 ///   correct program**;
@@ -8478,4 +9086,304 @@ fn sizing_how_far_declaration_lookup_reaches_a_field_read() {
         "declaration lookup typed EVERY case, so this corpus no longer contains \
          the edge and needs harder cases before it can size anything"
     );
+}
+
+/// **A BODY WITH NO TAIL EXPRESSION CONTRIBUTES NO DECLARED-VERSUS-ACTUAL ROW.**
+///
+/// `expression_nodes_over` appends a kind-8 row per function by pairing the body's tail
+/// expression against the declared return type, and it does so **only when a tail is
+/// present**. That guard is correct today. It is pinned here because the failure it
+/// prevents is in the FALSE-REJECTION direction, the same direction as the three binder
+/// defects already fixed on this side: a row manufactured for a body that ends in a
+/// statement would feed `ty_node_bad` a comparison the source never wrote.
+///
+/// # Why the unit-returning form is the witness
+///
+/// Keleusma has no early return and a return type is mandatory, so a tail-less body is
+/// not reachable by omitting either. `fn f() -> () { .. }` is the shape that produces one,
+/// established here rather than assumed: the first assertion reads tail presence straight
+/// off the syntax tree.
+///
+/// # The control is inside the source
+///
+/// Each source declares `main` with a tail expression, so the expected count is ONE rather
+/// than zero. **A test expecting zero could pass by extracting nothing at all**, which is
+/// the failure mode this suite has paid for before. The second source is the same program
+/// with `f` given a tail, and it must yield TWO.
+///
+/// # Mutation-tested
+///
+/// Replacing the guard with an unconditional push that substitutes a default operand form
+/// for the absent tail fails this test on the one-row assertion, with the message that
+/// assertion carries. **A guard-pin never observed to fail is not evidence about the
+/// guard**, and this one has been observed to fail.
+#[cfg(feature = "self-host")]
+#[test]
+fn a_body_without_a_tail_expression_contributes_no_declared_versus_actual_row() {
+    const DECLARED_VS_ACTUAL: i64 = 8;
+
+    // `f` ends in a statement; `main` ends in an expression.
+    const TAILLESS: &str = "private data d { q: Word }\n\
+                            fn f() -> () { d.q = 1; }\n\
+                            fn main() -> Word { 0 }";
+    // The same program with `f` given a tail, so the difference is the tail and nothing else.
+    const TAILED: &str = "private data d { q: Word }\n\
+                          fn f() -> Word { d.q = 1; d.q }\n\
+                          fn main() -> Word { 0 }";
+
+    let measure = |src: &str| -> (Vec<bool>, usize, bool) {
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+        let tails: Vec<bool> = ast
+            .functions
+            .iter()
+            .map(|f| f.body.tail_expr.is_some())
+            .collect();
+        let (names, _) = binding_rows(&ast);
+        let (nodes, _) = expression_nodes_and_derived(&ast, &names);
+        let rows = nodes.iter().filter(|r| r.0 == DECLARED_VS_ACTUAL).count();
+        (tails, rows, keleusma::compiler::compile(&ast).is_ok())
+    };
+
+    let (tailless_tails, tailless_rows, tailless_compiles) = measure(TAILLESS);
+    let (tailed_tails, tailed_rows, tailed_compiles) = measure(TAILED);
+
+    // NON-VACUITY: both shapes must be real programs, or the counts below describe
+    // sources no reader could write.
+    assert!(
+        tailless_compiles && tailed_compiles,
+        "the reference no longer compiles one of these shapes (tail-less {tailless_compiles}, \
+         tailed {tailed_compiles}), so this witness is not about programs"
+    );
+
+    // The premise, read off the syntax tree rather than assumed from the spelling.
+    assert_eq!(
+        tailless_tails,
+        vec![false, true],
+        "the tail-less source no longer has exactly one tail-less function followed by a \
+         tailed one, so the row counts below are measuring a different program"
+    );
+    assert_eq!(
+        tailed_tails,
+        vec![true, true],
+        "the tailed source no longer gives both functions a tail expression"
+    );
+
+    // THE PIN. One row, from `main` alone.
+    assert_eq!(
+        tailless_rows, 1,
+        "a function whose body ends in a statement now contributes a declared-versus-actual \
+         row. That comparison has no tail expression behind it, so it can only reject a \
+         correct program; if a row here is deliberate, the tag it carries needs a stated \
+         meaning before this expectation is relaxed"
+    );
+
+    // THE CONTROL. Giving `f` a tail adds exactly one row, so the count above is not
+    // an artefact of extracting nothing.
+    assert_eq!(
+        tailed_rows, 2,
+        "giving the second function a tail expression no longer adds a declared-versus-actual \
+         row, so the count asserted above cannot be attributed to the missing tail"
+    );
+}
+
+/// **EVERY GAP REFUSAL NAMES THE CONSTRUCT THE USER WROTE.**
+///
+/// `every_known_gap_is_refused_by_the_self_hosted_compiler` establishes that the four gaps
+/// return `Err` rather than a module or a panic. It discards the error, so for as long as it
+/// stood alone **nothing checked what the refusal SAID.**
+///
+/// Measured on 2026-09-12, before this test existed, all four said only that
+/// `reconstruct.kel` popped an empty work stack or left a record range unreduced, with a
+/// note about `reconstruct_range` reading slot zero. Two distinct internal failure modes,
+/// neither mentioning the `v =>`, the `P { x }`, the `assert` or the `audio::` that caused
+/// it. **A user cannot act on a work-stack underflow.**
+///
+/// # Both halves are asserted
+///
+/// The construct name is for the user; the stage detail is for whoever maintains the stage.
+/// Dropping either is a regression, so each is checked: a message that named the construct
+/// and discarded the stage's own report would pass a weaker version of this test while
+/// making the stage harder to debug.
+///
+/// # What this does NOT establish
+///
+/// That the named construct is the true cause. The name comes from a source scan run on the
+/// failure path, not from the stage, so it reports what the program CONTAINS rather than
+/// what the stage tripped over. For these four they coincide, which is what makes them
+/// usable as a corpus; a program carrying two unsupported constructs would be named for the
+/// earlier one regardless of which stopped the pipeline.
+#[cfg(feature = "self-host")]
+#[test]
+fn every_gap_refusal_names_the_construct() {
+    // (label, source, the phrase a user needs to see)
+    const GAPS: &[(&str, &str, &str)] = &[
+        (
+            "variable pattern",
+            "fn main(a: Word) -> Word { match a { v => v } }",
+            "variable pattern `v`",
+        ),
+        (
+            "struct destructuring",
+            "struct P { x: Word }\nfn main(p: P) -> Word { match p { P { x } => x, _ => 0 } }",
+            "struct destructuring pattern `P { .. }`",
+        ),
+        (
+            "assert",
+            "fn main(a: Word) -> Word { assert a > 0; a }",
+            "`assert` statement",
+        ),
+        (
+            "qualified call",
+            "use audio::midi_to_freq\nfn main() -> Float { audio::midi_to_freq(69) }",
+            "qualified call `audio::midi_to_freq`",
+        ),
+    ];
+
+    let target = keleusma::target::Target::host();
+
+    for (gap, src, phrase) in GAPS {
+        let err = keleusma::selfhost::self_hosted_compile(src, &target).expect_err(
+            "this gap no longer refuses. If the subset genuinely gained the construct, \
+             remove it from this corpus and from the gap list rather than relaxing the \
+             assertion",
+        );
+        let text = alloc_string(&err);
+
+        assert!(
+            text.contains(phrase),
+            "{gap}: the refusal does not name the construct. A user sees only the stage's \
+             internal diagnostic and cannot tell which part of their program to change. \
+             Message was: {text}"
+        );
+        assert!(
+            text.contains("reconstruct.kel"),
+            "{gap}: the refusal no longer carries the stage's own report. The construct name \
+             serves the user and the stage detail serves whoever maintains the stage; losing \
+             the second half is a regression even though the first half improved. \
+             Message was: {text}"
+        );
+    }
+
+    // NON-VACUITY: an ordinary program must still compile, or "every refusal names a
+    // construct" would hold because everything is refused.
+    const ORDINARY: &str = "fn main(a: Word) -> Word { a + 1 }";
+    assert!(
+        keleusma::selfhost::self_hosted_compile(ORDINARY, &target).is_ok(),
+        "an ordinary program no longer compiles through the self-hosted pipeline, so the \
+         refusals above say nothing about the gaps in particular"
+    );
+}
+
+/// Render an error through its `Display`, which is what a CLI user sees.
+#[cfg(feature = "self-host")]
+fn alloc_string(e: &keleusma::selfhost::SelfHostError) -> String {
+    format!("{e}")
+}
+
+/// **THE FLOAT BOUNDARY IS THE LITERAL, NOT THE TYPE, AND BOTH HALVES ARE PINNED.**
+///
+/// "Floats are outside the self-hosted subset" is the loose summary, and acting on it
+/// without measuring would have been a mistake. Measured 2026-09-12: a function taking and
+/// returning `Float` COMPILES, and its output matches the reference byte for byte. A float
+/// LITERAL does not.
+///
+/// # Why both halves are here
+///
+/// The refusal half alone would let the supported half silently regress, and the supported
+/// half alone would let the refusal lose its name. They are also the two directions a future
+/// change could move: widening the subset to admit float literals should fail the first
+/// assertion, and narrowing it to reject the float type should fail the second. **Either
+/// would be a real change in what the compiler accepts, and neither should pass quietly.**
+///
+/// # Why this mattered beyond the message
+///
+/// The construct scan names what it finds on the failure path. Listing the float TYPE there
+/// would have attached a confident and wrong noun to any float-typed program that failed for
+/// an unrelated reason, and the stage-source guard would NOT have caught it, because no
+/// stage source uses a float type. The guard covers constructs the stages happen to use; it
+/// is not a general check that the list is right.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_float_boundary_is_the_literal_and_not_the_type() {
+    let target = keleusma::target::Target::host();
+
+    // REFUSED, and the refusal names the literal.
+    const WITH_LITERAL: &str = "fn main() -> Float { 1.5 + 2.5 }";
+    let err = keleusma::selfhost::self_hosted_compile(WITH_LITERAL, &target).expect_err(
+        "a float literal now compiles through the self-hosted pipeline. If the subset \
+         genuinely gained float literals, say so and drop this half rather than relaxing it",
+    );
+    let text = format!("{err}");
+    assert!(
+        text.contains("a floating-point literal"),
+        "the refusal does not name the float literal, so a user sees only the stage's \
+         internal diagnostic. Message was: {text}"
+    );
+
+    // ACCEPTED. The type alone is inside the subset, which is the half that is easy to
+    // assume away.
+    const TYPE_ONLY: &str = "fn f(a: Float) -> Float { a }\nfn main(x: Float) -> Float { f(x) }";
+    assert!(
+        keleusma::selfhost::self_hosted_compile(TYPE_ONLY, &target).is_ok(),
+        "a float-typed function without any float literal no longer compiles. The construct \
+         scan names the LITERAL on the strength of this: if the type is now outside the \
+         subset too, the scan should say so, and this test should say which changed"
+    );
+}
+
+/// **A DIVERGENCE REFUSAL LOCALISES THE DISAGREEMENT, AND SAYS NOTHING ABOUT FAULT.**
+///
+/// The cross-check refuses when the two compilers disagree. Measured 2026-09-12, it already
+/// names the offending chunk rather than reporting a bare disagreement, so this test pins
+/// behaviour that was found adequate rather than introducing it.
+///
+/// # Why the neutral phrasing is asserted, not just the localisation
+///
+/// **A divergence establishes that the two implementations disagree, NOT which is wrong.**
+/// On 2026-08-31 the reference was the divergent side for a non-ASCII string literal, and
+/// the refusal pointed the user at `--compiler rust`, which compiled the program silently
+/// and wrongly. A message asserting the self-hosted side is at fault would make that failure
+/// mode worse, so the message must describe the disagreement and attribute nothing.
+///
+/// # What this does not cover
+///
+/// Only the chunk-order divergence is exercised here, because it is the one a short program
+/// reliably produces. The op-level and constant-pool messages are not reached by this
+/// corpus, and a reader should not take this test as evidence about them.
+#[cfg(feature = "self-host")]
+#[test]
+fn a_divergence_refusal_localises_and_does_not_assign_fault() {
+    const GENERIC: &str = "fn id<T>(x: T) -> T { x }\nfn main() -> Word { id(1) }";
+    let target = keleusma::target::Target::host();
+
+    let err = keleusma::selfhost::self_hosted_compile(GENERIC, &target).expect_err(
+        "this program no longer diverges. If the self-hosted pipeline gained generics, this \
+         corpus needs a different divergence rather than a relaxed assertion",
+    );
+    let text = format!("{err}");
+
+    assert!(
+        text.contains("diverges"),
+        "the refusal no longer reports a divergence, so it is failing for some other reason \
+         and this test is not measuring the cross-check. Message was: {text}"
+    );
+    assert!(
+        text.contains("id"),
+        "the refusal no longer names the offending chunk, so whoever investigates gets a \
+         bare statement that the two disagree with no pointer to where. Message was: {text}"
+    );
+
+    // The message must not claim the self-hosted side is the wrong one. `reference` appears
+    // as the name of the other side, which is description rather than attribution.
+    for blame in [
+        "self-hosted compiler is wrong",
+        "self-hosted output is incorrect",
+    ] {
+        assert!(
+            !text.contains(blame),
+            "the refusal now assigns fault to the self-hosted side. A divergence shows the \
+             two disagree and not which is wrong; the reference has been the wrong side \
+             before. Message was: {text}"
+        );
+    }
 }

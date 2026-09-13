@@ -2089,8 +2089,41 @@ fn step_mpat(k: Word, v: Word) -> Word {
                 stmt.slot_count = stmt.slot_count + 1;
                 mat.mpat_pcount = 0;
             }
-        }
-        0
+            0
+        } else {
+        if k == Tok::FatArrow() as Word {
+            // THE BARE UNIT-VARIANT PATTERN `E::A => ...`, which the grammar's pattern table
+            // documents as the enum unit variant form. Before this, phase 3 waited for `(` and
+            // did NOTHING on any other token, so the phase never advanced, tokens kept arriving
+            // with no progress, and the parse ran to its step budget without reaching DONE. It
+            // did not refuse -- it span.
+            //
+            // Only `=>` is handled here. A match-arm pattern must be followed by it, so any
+            // other token at this phase is malformed input, and a narrow branch is easier to
+            // argue correct than a general one.
+            //
+            // The work is the `(` path's slot reservation followed by the `)` path's
+            // completion, with ZERO payload binds. The slot reservation is not optional: parse's
+            // slot numbers must match codegen's allocation, which is why it is mirrored here
+            // rather than rewritten.
+            if mat.match_isenum[mat.match_sp - 1] == 1 {
+                mat.mpat_tslot = ps.pcount + stmt.slot_count;
+                stmt.slot_count = stmt.slot_count + 1;
+                mat.mpat_pcount = 0;
+            }
+            mat.mpat_phase = 0;
+            mat.match_argcount[mat.match_sp - 1] = mat.match_argcount[mat.match_sp - 1] + 1;
+            // PHASE 4, NOT 3. The `)` path returns to phase 3, which waits for the `=>`. This
+            // branch has already consumed it, so returning to 3 would swallow the arm result's
+            // first token. `expect_operand` is what phase 3 sets when it sees the arrow.
+            mat.match_phase[mat.match_sp - 1] = 4;
+            ops.expect_operand = 1;
+            if mat.match_isenum[mat.match_sp - 1] == 1 {
+                Node::EnumArm() as Word + (((mat.mpat_vname * 65536 + mat.enum_disc) * 8 + mat.mpat_pcount) * 1024 + mat.mpat_tslot) * 64
+            } else {
+                Node::Literal() as Word + mat.enum_disc * 64
+            }
+        } else { 0 } }
     } else {
         if mat.match_isenum[mat.match_sp - 1] == 1 andalso k == Tok::Ident() as Word {
             // A payload bind variable `x` in `E::V(x)`: allocate its frame slot, register it as a

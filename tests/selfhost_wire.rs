@@ -13037,7 +13037,20 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // interned. Guessing between them would put a fourth number in this comment with no more
     // support than the first three had. The pin holds the measurement; the arithmetic behind
     // it is open.
-    assert_eq!(worst_blob, 35716, "the worst-case blob size moved");
+    // FOURTEENTH MOVE: 35,716 -> 35,746, THIRTY bytes for the `step_mpat` branch that
+    // admits the bare enum unit-variant pattern `E::A => ...` the grammar documents.
+    //
+    // **PURE CODE, NO NEW NAME**, which is why the per-name arithmetic above has nothing
+    // to say about it: the branch introduces no identifier, so the residual is entirely
+    // the encoded statements. That is consistent with the note above that the bulk is
+    // code rather than identifiers, and it is the first move here with a name count of
+    // zero — so it constrains the per-name constant not at all rather than contradicting
+    // it.
+    //
+    // **THE PIN CAUGHT WHAT LOCAL VERIFICATION DID NOT.** The parse, codegen and
+    // typecheck suites all passed on that change; this file was not run. The increment's
+    // own brief had named "counts pinned elsewhere" as a risk and did not act on it.
+    assert_eq!(worst_blob, 35746, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**

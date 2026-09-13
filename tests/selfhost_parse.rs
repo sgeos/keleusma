@@ -1869,6 +1869,57 @@ fn a_stage_shaped_dispatch_function_parses() {
     assert_eq!(got, reference(src, &names));
 }
 
+// **THE BARE UNIT-VARIANT PATTERN MUST MEAN THE SAME THING AS THE PARENTHESISED ONE.**
+//
+// `docs/spec/GRAMMAR.md` lists `Command::Silence` — no parentheses — as the enum unit variant
+// pattern. Until 2026-09-12 `parse.kel` waited for a `(` that never came: the phase never
+// advanced, tokens kept arriving with no progress, and the parse ran to its step budget without
+// reaching DONE. It did not refuse; it span.
+//
+// **That it now PARSES is not evidence it parses CORRECTLY.** A census that only checks the
+// pipeline does not panic would pass on a fix that emitted the wrong records. The two spellings
+// denote the same pattern, so their record streams must be identical — and comparing them is a
+// stronger check than any assertion about what the records should contain, because it needs no
+// model of the encoding.
+//
+// The mixed case is the one most likely to break: it exercises the bare branch's hand-off to the
+// arm result against the parenthesised branch's, in one match.
+#[test]
+fn a_bare_unit_variant_pattern_parses_as_the_parenthesised_one() {
+    let bare = "enum E { A, B } \
+        fn f(e: E) -> Word { match e { E::A => 1, E::B => 2 } }";
+    let paren = "enum E { A, B } \
+        fn f(e: E) -> Word { match e { E::A() => 1, E::B() => 2 } }";
+
+    let mut n1 = Vec::new();
+    let mut n2 = Vec::new();
+    let got_bare = run_parse(bare, &mut n1);
+    let got_paren = run_parse(paren, &mut n2);
+    assert_eq!(
+        got_bare, got_paren,
+        "the bare and parenthesised unit-variant patterns produced different record streams, so \
+         the bare form parses but does not mean the same thing"
+    );
+
+    // MIXED IN ONE MATCH, which is what exercises each branch's hand-off to the arm result
+    // against the other's.
+    let mixed = "enum E { A, B } \
+        fn f(e: E) -> Word { match e { E::A => 1, E::B() => 2 } }";
+    let mut n3 = Vec::new();
+    let got_mixed = run_parse(mixed, &mut n3);
+    assert_eq!(
+        got_mixed, got_paren,
+        "mixing the two spellings in one match changed the record stream, so the bare branch's \
+         hand-off differs from the parenthesised branch's"
+    );
+
+    // NON-VACUITY: the stream must not be empty, or the comparisons above hold trivially.
+    assert!(
+        !got_bare.funcs.is_empty(),
+        "the parse produced no functions, so comparing two results establishes nothing"
+    );
+}
+
 // A real stage function (parse.kel's own emit_op): a match over enum-variant patterns
 // whose arm results are enum casts, with an enum-cast-plus-arithmetic wildcard. This
 // combines enum patterns, enum casts in arm results, and arithmetic as the stages do.
@@ -3594,4 +3645,107 @@ fn stage_source_token_counts() {
     ] {
         println!("{f} tokens={}", keleusma::selfhost::lex_token_count(src));
     }
+}
+
+/// **A WRITTEN EMPTY ELSE AND AN IMPLICIT ONE ARE THE SAME RECORD STREAM.**
+///
+/// `a_one_armed_conditional_is_why_the_branch_pair_does_not_move` in
+/// `tests/selfhost_typecheck.rs` explains that the branch-pair row is withheld because
+/// `push_if` visits an else arm unconditionally, so the pipeline carries one even where
+/// the source wrote none. Its comment used to say a tag-based heuristic "could not be
+/// shown safe". **This test establishes the stronger fact: no heuristic can work,
+/// because the distinguishing information is not in the stream.**
+///
+/// The reference's criterion is `else_block.is_some()`. A written `else { }` satisfies it
+/// and an implicit arm does not, so the reference separates the two shapes. The parse
+/// stage emits the SAME records for both. A heuristic can only read what the stream
+/// carries, so the separation the reference makes is unavailable on this side at any
+/// level of cleverness.
+///
+/// **This is a statement about the records, not about the tag.** The earlier argument
+/// reasoned about whether UNIT and UNKNOWN happen to separate the cases. That question is
+/// moot: the two sources are already identical before any tag is computed.
+///
+/// The empty else is not a contrived shape. It is accepted by the reference compiler, as
+/// the first assertion below establishes rather than assumes.
+#[test]
+fn an_empty_else_is_indistinguishable_from_an_implicit_one() {
+    use keleusma::ast::{Expr, Stmt};
+    use keleusma::visitor::Visitor;
+
+    const IMPLICIT: &str = "private data d { q: Word }\n\
+                            fn f(c: bool) -> Word { if c { d.q = 1; } d.q }";
+    const EMPTY: &str = "private data d { q: Word }\n\
+                         fn f(c: bool) -> Word { if c { d.q = 1; } else { } d.q }";
+
+    // NON-VACUITY: an empty else must actually be a legal program, or the whole
+    // comparison is about a shape no source can contain.
+    for (label, src) in [("implicit", IMPLICIT), ("empty else", EMPTY)] {
+        let ast =
+            keleusma::parser::parse(&keleusma::lexer::tokenize(src).expect("lex")).expect("parse");
+        assert!(
+            keleusma::compiler::compile(&ast).is_ok(),
+            "the reference no longer compiles the {label} form, so this witness is about a \
+             shape that is not a program"
+        );
+    }
+
+    // The reference's own criterion, read from its syntax tree rather than assumed.
+    fn reference_pairs(src: &str) -> usize {
+        let ast =
+            keleusma::parser::parse(&keleusma::lexer::tokenize(src).expect("lex")).expect("parse");
+        struct V {
+            n: usize,
+        }
+        impl Visitor for V {
+            fn visit_expr(&mut self, e: &Expr) {
+                if let Expr::If { else_block, .. } = e
+                    && else_block.is_some()
+                {
+                    self.n += 1;
+                }
+                self.walk_expr(e);
+            }
+            fn visit_stmt(&mut self, s: &Stmt) {
+                self.walk_stmt(s);
+            }
+        }
+        let mut v = V { n: 0 };
+        for f in &ast.functions {
+            v.visit_block(&f.body);
+        }
+        v.n
+    }
+
+    // CONTROL: the reference really does separate the two shapes. Without this the claim
+    // below would be about a difference that does not exist.
+    assert_eq!(
+        reference_pairs(IMPLICIT),
+        0,
+        "the reference now pairs an implicit else arm"
+    );
+    assert_eq!(
+        reference_pairs(EMPTY),
+        1,
+        "the reference no longer pairs a written empty else, so the two shapes agree and \
+         the impossibility claimed here would not follow"
+    );
+
+    // THE WITNESS: the pipeline cannot make that separation, because it does not receive it.
+    let mut n1 = Vec::new();
+    let mut n2 = Vec::new();
+    let implicit = run_parse(IMPLICIT, &mut n1);
+    let empty = run_parse(EMPTY, &mut n2);
+    assert_eq!(
+        implicit, empty,
+        "the parse stage now distinguishes a written empty else from an implicit arm; if that \
+         is deliberate, the branch-pair row may be implementable after all and the withholding \
+         recorded in tests/selfhost_typecheck.rs should be revisited"
+    );
+
+    // NON-VACUITY: the streams must not be empty, or the comparison holds trivially.
+    assert!(
+        !implicit.funcs.is_empty(),
+        "the parse stage produced no functions, so the equality above is vacuous"
+    );
 }

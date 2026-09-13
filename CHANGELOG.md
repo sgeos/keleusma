@@ -151,9 +151,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and lean; `keleusma-cli` enables it so the flag ships). The new
   `keleusma::selfhost::self_hosted_compile` entry runs a program through the
   Keleusma-written pipeline at the host target and cross-checks its output
-  against the reference compiler, so any program outside the self-hosted subset
-  (floats, generics, `Text`, a non-host `--target`) fails loudly with a
-  `retry with --compiler rust` hint rather than emitting a wrong module. The
+  against the reference compiler, so a program outside the self-hosted subset
+  (a float literal, float `+`/`-`/`*`, generics, the four unparsed constructs)
+  or at a non-host `--target` fails loudly with a `retry with --compiler rust`
+  hint rather than emitting a wrong module, naming the offending construct or
+  the diverging chunk. Float division and comparison, and passing float values
+  around, DO compile. The cause is that the self-hosted codegen selects the op
+  word from the operator code alone, with no operand type, so it emits the
+  checked form where the reference emits the plain one; `Fixed<N>` diverges for
+  the same reason, and its `*` and `/` additionally diverge against the
+  scale-aware `FixedMul`/`FixedDiv`, which is a wrong-value hazard rather than a
+  checking difference. Unary `-` diverges for EVERY non-`Word` operand, `Byte`
+  included. Everything else agrees: all BINARY operators on `Word` and `Byte`,
+  the bitwise and shift families, the booleans, the comparisons, and `%`.
+  Measured per operand type and operator, with every cell run, in
+  `tests/selfhost_typed_opcode_boundary.rs`. `Text` is not a subset
+  restriction at all: the reference does not implement it either, so it reports
+  a plain source error and correctly withholds the hint. The
   `compiler/` subproject now re-exports the driver from `keleusma::selfhost`.
 - **The shared-data segment ceiling rises from 64 KB to 16 MB (the wire format
   widens but `BYTECODE_VERSION` stays 1, per the no-public-adoption stance).** The shared byte-offset, unified data-slot index, and

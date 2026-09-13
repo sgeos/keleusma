@@ -3694,6 +3694,1105 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-12 (eighty-ninth) — a blank cell is a claim, and one of mine was never run
+
+### THE MATRIX I CALLED CLOSED HAD THREE CELLS NOBODY MEASURED
+
+The previous entry reported the opcode matrix closed. It was not. Three cells carried an em dash
+meaning "the language does not admit this", and that meaning was an ASSUMPTION rather than a
+measurement: `Byte` unary negation, `Byte` `%` and comparison, and `Float` `%`.
+
+Running them: `Float` `%` agrees, `Byte` `%` and comparison agree, and **`Byte` unary negation
+DIVERGES**, `CheckedNeg` against the reference's plain `Neg`. So "`Word` and `Byte` agree
+throughout", written into three documents, was wrong.
+
+The correct statement is narrower and tidier: **unary negation diverges for every non-`Word`
+operand**, and `Byte` agrees on every binary operator.
+
+### THE ANSWER WAS ALREADY IN THE TREE, WHICH IS THE PART WORTH KEEPING
+
+`tests/op_tag_tables.rs` records that `codegen.kel` emits `checkedneg` for unary negation, that its
+decoder has no arm producing `Op::Neg` at all, and that the reference emits `Op::Neg` for **`Byte`**
+negation. Every ingredient of the finding was written down before this session started. What was
+missing was running the cell.
+
+Reading that file is what exposed it, and reading it happened only because the question "is there a
+specified list I have not censused" was asked one more time after four increments of believing the
+area exhausted.
+
+### WHY THE GAP SURVIVED THREE READINGS
+
+A census that skips a cell and a census that measures it produce identical output for every row
+either did run. Nothing in the matrix looked wrong, because the blank cell rendered exactly as the
+inadmissible cells did. **The `n/a` in that table now means a checked reference type error**, and
+`Float` bitwise is the only cell that earns it.
+
+### THE COUNT, STATED PLAINLY
+
+Four framings in this area were wrong before this one: too broad, too permissive, too strong, too
+narrow. This is the fifth, and it is of a different kind — not a claim stated past its evidence, but
+a claim made where there was no evidence at all, disguised as an absence.
+
+---
+
+## 2026-09-12 (eighty-eighth) — closing the matrix against the codegen's own operator list
+
+### THE SET I WAS TESTING WAS ASSEMBLED, NOT SPECIFIED
+
+The typed-opcode divergence had been measured across five arithmetic operators and one comparison.
+That set came from what had been tried, not from anything authoritative. `codegen.kel`'s mapping
+comment states the real list: the five arithmetic operators, six comparisons, three bitwise, the
+shifts, and unary negation. Censusing against it rather than against my own history is the
+instrument that has produced nearly every finding this session, and it closed the matrix here.
+
+### UNARY NEGATION JOINS, AND EVERYTHING ELSE AGREES
+
+`-a` on `Float` and on `Fixed<N>` reports `CheckedNeg` against the reference's plain `Neg`, exactly
+the pattern `+`, `-` and `*` show; `Word` agrees. **Every other cell agrees**: all operators on
+`Word` and `Byte`, the three bitwise operators, all four shifts, the booleans, the comparisons, and
+`%`.
+
+`Byte` was the cell most worth running. It reaches bitwise and shift through
+promote-operate-truncate, a different path from its arithmetic, and it was the likeliest place for
+the divergence to reappear. It does not.
+
+### THE SET MATCHES SOMETHING ALREADY IN THE TREE
+
+The diverging operations are exactly `+`, `-`, `*` and unary `-`, plus fixed `*` and `/` against the
+scale-aware ops. The residual-tag note elsewhere in the suite groups `Op::Add`, `Op::Sub`, `Op::Mul`
+and `Op::CheckedNeg` — the same four. Those are precisely the operations for which the reference has
+a plain form that a typeless codegen cannot select. **An independent artefact arriving at the same
+set is better corroboration than any amount of re-reading the measurement.**
+
+### A CLEAN CLOSE IS A RESULT
+
+Most cells agreed, so this increment "found" little. That is the wrong way to score it. The
+alternative to running the empty cells is a matrix whose gaps get filled in by inference, and this
+area has already produced three framings that were each wrong at the edge of their evidence: too
+broad, too permissive, too narrow. A closed matrix is what stops a fourth.
+
+### ONE BADLY CONSTRUCTED PROBE, CAUGHT BEFORE IT BECAME A FINDING
+
+Unary negation was first probed as `0 - a`, which introduces a `Word` literal. On `Float` that
+produced a reference TYPE ERROR and on `Fixed` a literal-handling divergence — neither a fact about
+the opcode mapping. Both were discarded and the probe rewritten with the real unary spelling. A
+malformed probe that produces an interesting-looking message is a good way to manufacture a false
+finding, and the tell was that the reported op index and opcode had nothing to do with negation.
+
+---
+
+## 2026-09-12 (eighty-seventh) — the cause, which retracts my own "may be a defect"
+
+### THE CLAIM I RAISED WAS TOO STRONG
+
+The previous entry said the float arithmetic divergence is filed as a scope boundary and "may be a
+defect", on the grounds that the reference's unchecked float `+` is documented as intentional and
+float overflow is not a trap condition. Locating the decision point retracts that.
+
+`codegen.kel` states its own rule in a comment above `push_binop`: the operator code ALONE selects
+the op word. `Add` to `CheckedAdd`, `Sub` to `CheckedSub`, `Mul` to `CheckedMul`, while `Div` maps
+to plain `Div` and `Mod` to plain `Mod`. **No operand type enters the decision.** The file contains
+no float or type vocabulary at all — zero occurrences across every spelling checked.
+
+### IT ACCOUNTS FOR EVERY ROW, WHICH IS WHAT MAKES IT THE CAUSE
+
+- float `/` and float comparison agree — they have no checked variant in the mapping;
+- `Word` `+`, `-`, `*` agree — the reference emits the checked form there too;
+- float `+`, `-`, `*` diverge — the reference has operand types and picks the plain form, and the
+  self-hosted codegen has none to pick with.
+
+A cause that explains the accepted rows as well as the refused ones is worth more than one that only
+explains the failures. The earlier account explained only the failures.
+
+### SO THE FILING WAS RIGHT AND I WAS WRONG ABOUT IT
+
+`scope/float_arith__GAP` is a genuine capability gap, correctly filed. It is not a mislabelled
+defect. The distinction drawn last entry — a scope boundary is a decision, a defect is a bug nobody
+chose — was the right distinction, applied to the wrong side.
+
+The practical consequence for the operator is better than the alarm was: the fix is not a branch
+correction but a type channel into codegen, which is substantial and squarely capacity-relevant.
+That is a cost estimate stated as a shape rather than a number, deliberately — an unverified cost
+estimate went into a merged PR body earlier this session and had to be retracted in two places.
+
+### THE PATTERN, ONE MORE TIME
+
+This is the third claim this session corrected by reading further into the thing itself, and the
+second where the correction landed within two increments of the overreach. The overreach was not
+careless: the evidence for it was real and documentary. It was simply incomplete, and one more file
+settled it.
+
+---
+
+## 2026-09-12 (eighty-sixth) — correcting my own correction, and what it uncovered
+
+### THE FIX FOR A WRONG SENTENCE WAS ALSO WRONG
+
+The previous increment replaced the help text's "no floats" with "only the float LITERAL is
+excluded; a float-typed signature with no literal compiles". **That is also false**, and a census for
+the phrase elsewhere is what caught it: the construct-support boundary table carries
+`scope/float_arith__GAP` with the source `fn f(a: Float, b: Float) -> Float { a + b }` — a
+float-typed signature, no literal, and it does not compile.
+
+Over-correcting is the failure mode worth naming here. The first sentence was too broad; the
+replacement was too permissive; and only a third measurement produced something that survives.
+
+### THE BOUNDARY, MEASURED PER OPERATOR
+
+- float `+`, `-`, `*` — DIVERGE. The self-hosted codegen emits `CheckedAdd`, `CheckedSub`,
+  `CheckedMul` where the reference emits the plain opcode.
+- float `/`, float comparison, a float-typed signature doing neither — COMPILE.
+- the same three operators on `Word` — AGREE.
+
+That last line is the control that makes the finding specific. Without it the result reads as "the
+self-hosted codegen picks checked opcodes", which is a much larger and wrong claim.
+
+### A SCOPE GAP THAT LOOKS LIKE A DEFECT
+
+`tests/float_arith_width.rs` records that plain `+` on floats emits the unchecked `Op::Add` and
+"never the checked path", and float overflow is not a trap condition, so the checked form has
+nothing to check. The self-hosted side therefore appears to be the divergent one.
+
+**The distinction that matters is filing.** A scope boundary is a decision someone made; a defect is
+a bug nobody chose. This entry sits in the table under "out of scope for the self-hosted subset",
+which reads as the first, and the evidence suggests the second. The inference rests on documented
+intent rather than proof, and the rule that a divergence does not establish which side is wrong
+still holds — the reference was the wrong side on 2026-08-31.
+
+**Not fixed.** The fix is in `codegen.kel`. Stage sources bear on the capacity question that is the
+operator's, so the deliverable here is the characterisation, not the change.
+
+### WHY THE CENSUS FOUND IT AND THE FIRST GREP DID NOT
+
+The first pass grepped for the literal phrasings I had just written. The second censused the
+CONCEPT — every place describing the self-hosted subset — and that is what reached the boundary
+table. Searching for an assembled list of phrasings finds what you already thought of; censusing a
+specified concept finds what you did not.
+
+---
+
+## 2026-09-12 (eighty-fifth) — the last hop, and two wrong sentences in the shipping binary
+
+### ASSERTING ON `Display` IS NOT ASSERTING ON THE PRODUCT
+
+Every claim this session that a user sees the offending construct rested on tests that format the
+error type. **That is the library, not the product.** The command-line front end builds its own
+message around the error and decides whether to print the retry hint, so a name that survives
+`Display` could still be lost before the terminal.
+
+This is the same substitution as the earlier miss that reasoned about refusal quality from a harness
+that unwraps, moved one layer out. Running the binary settles it: the construct name and the line
+DO reach the terminal, with the retry hint and a non-zero exit. The claims hold at the last hop, and
+now there are tests at that hop rather than one layer below it. The CLI test directory already had a
+precedent for spawning the binary, so the tests follow it.
+
+### THE HELP TEXT WAS WRONG IN TWO OF THREE
+
+The `--compiler` help said the self-hosted subset has "no floats, generics, or Text". Measured
+through the binary:
+
+- **floats** — only the LITERAL. A float-typed signature with no literal compiles and writes a
+  module.
+- **Text** — not a subset restriction at all. The reference refuses it too, because `Text<N>` is not
+  implemented beyond the type surface. It takes the plain compile-error path and correctly gets NO
+  retry hint, since the reference reports the identical error.
+- **generics** — correct, and the divergence names the chunk.
+
+Two of three sentences in the shipping binary's help were misleading, and the Text one would send a
+user to `--compiler rust` for a program no backend compiles. The text now says which failures belong
+to the subset and which do not.
+
+### WHY THIS WAS WORTH DOING NOW
+
+It costs nothing against the capacity decision: no stage source is touched. And the error it
+corrected is the kind that only surfaces by running the thing a user runs — reading `main.rs` would
+have shown the same wrong sentence and produced agreement rather than a finding.
+
+### FRONTIER
+
+The driver and the CLI are now measured end to end. What remains is scoped feature work that grows
+`parse.kel`, and that waits on the operator's capacity decision, or one of the five standing operator
+rulings.
+
+---
+
+## 2026-09-12 (eighty-fourth) — measuring what two guards actually cover, and a claim retracted mid-increment
+
+### THE LIST HAD NO CHECK, AND THE FLOAT EPISODE SHOWED WHY THAT MATTERS
+
+The construct scan names constructs on the failure path. Until this increment nothing checked that a
+named construct is REALLY outside the subset. The float type was nearly added on the strength of a
+loose summary, and only running a float-typed program caught it.
+
+A new test pairs each named construct with a minimal program and asserts two things: the scan names
+it, and the pipeline refuses it. A construct that is named but compiles is a wrong entry; one that
+is refused but unnamed is a missing one. Both directions fail there.
+
+### A CLAIM WRITTEN AND RETRACTED INSIDE THE SAME INCREMENT
+
+The first draft of that test's comment said the row count was a tripwire that would fail if a scan
+arm were added without a row. **That is false.** The count compares the table's length against a
+constant; it cannot see the scan's arms, which are match patterns rather than data. The sentence was
+caught by re-reading the comment against the code beneath it, which is the cheapest instance yet of
+the pattern this session keeps meeting.
+
+### WHAT THE TWO GUARDS ACTUALLY COVER, MUTATION-MEASURED
+
+Mutating the scan to name the SUPPORTED wildcard pattern separates them:
+
+- the list test PASSES, because no row mentions a wildcard;
+- the stage-source guard FAILS, because the stage sources use `_`.
+
+So the two cover the union of "constructs the stage sources happen to use" and "constructs with a
+row in the table". **The hole is the complement, and it is not hypothetical.** No stage source uses
+a float type, so a float-type arm added with no row would have passed BOTH guards. That is precisely
+the entry nearly added last increment.
+
+Recording the union and the hole is the point. A clean run from either guard is evidence about that
+guard's reach before it is evidence about the list, and the reach is now written down next to the
+tests rather than inferred by a future reader.
+
+### FRONTIER
+
+The driver-side, capacity-neutral category is worked out: gap refusals name their construct, the
+float literal names itself, the divergence message was already adequate and is pinned, and the list
+that drives the naming now has a validity check with its coverage stated. No stage source has been
+touched.
+
+---
+
+## 2026-09-12 (eighty-third) — the measurement that stopped a wrong construct name
+
+### WHAT I SET OUT TO FIX WAS ALREADY FINE
+
+The intended increment was to localise the divergence refusal, on the reasoning that a
+divergence establishes the two implementations disagree and not which is wrong, so whoever
+investigates needs to know where. Measured first: it already names the offending chunk, and both
+spellings for a chunk-order divergence, and a doc comment there records that this was done
+deliberately to turn a bare disagreement into a pointer. The op-level message names the chunk, the
+op index, and both ops.
+
+No change was warranted, and the correct output was a test pinning behaviour found adequate rather
+than code. That test also asserts the message assigns NO FAULT, because the 2026-08-31 case in which
+the reference was the divergent side is exactly the situation a blaming message would make worse.
+
+### THE MEASUREMENT FOUND SOMETHING BETTER, AND STOPPED A MISTAKE
+
+Floats never reach the cross-check at all. A float program fails earlier in `reconstruct` with the
+same work-stack text the four parser gaps used to produce, and the construct scan added last
+increment does not name it. That looked like a straightforward gap in the list.
+
+**The obvious fix was wrong, and one probe caught it.** `fn f(a: Float) -> Float { a }` COMPILES,
+and its output matches the reference byte for byte. The float TYPE is inside the subset. Only the
+LITERAL is outside. Had the type gone on the list, every float-typed program that failed for an
+unrelated reason would have been blamed on a supported construct.
+
+### THE GUARD WOULD NOT HAVE CAUGHT IT, AND THAT IS THE POINT
+
+The stage-source guard asserts the scan names nothing in any of the eleven driver-read stage
+sources. It is a real guard and it is mutation-tested. **It would have passed with the float type on
+the list**, because no stage source uses a float type.
+
+That is the limit worth stating: the guard covers constructs the stages happen to use. It is not a
+general check that the list is right, and treating a clean result from it as evidence about the
+whole list would be exactly the error of reading a guard's silence as broader than its reach. The
+only thing that established the float boundary was running a float-typed program.
+
+The `Float` occurrences in `wire.kel` are identifier names such as `tag_float`, not types or
+literals, so the guard remains clean with the literal entry added.
+
+### A LOOSE CLAIM CORRECTED
+
+The project file listed floats among the things that error at the divergence cross-check. Measured,
+that is wrong twice over: a float literal is refused earlier by a stage and never reaches the check,
+and a float type does not fail at all. The sentence now says which failures happen where.
+
+### FRONTIER
+
+The driver-side, capacity-neutral category that opened last increment is now largely worked out: the
+gap refusals name their construct, the float literal names itself, and the divergence message was
+already adequate and is pinned. No stage source has been touched, so the capacity decision is
+untouched and still the operator's.
+
+---
+
+## 2026-09-12 (eighty-second) — reading the refusal a user actually receives
+
+### THE TEST PROVED THE REFUSAL HAPPENED AND DISCARDED WHAT IT SAID
+
+`every_known_gap_is_refused_by_the_self_hosted_compiler` matches `Ok(Err(_)) => {}`. It establishes
+that each of the four gaps returns an error rather than a module or a panic, which was the important
+property and is why it was written. But the underscore means **no test had ever read the message**,
+and the current-state block carried a claim about what those messages look like.
+
+Reading them took one probe. All four led with the outer wrapper, which does say the compiler does
+not support the program, and then gave a `reconstruct.kel` work-stack underflow or an unreduced
+record range, plus a note about `reconstruct_range` having once read slot zero unconditionally. Two
+distinct internal failure modes, not one: the variable pattern and the struct destructuring
+underflow, while `assert` and the qualified call leave two and three nodes unreduced respectively.
+**Not one of them mentions the construct the user wrote.** A user cannot act on a work-stack
+underflow.
+
+The tracked claim turned out to be ACCURATE, which is worth stating plainly. The measurement was
+still the right move: it was accurate by luck of phrasing rather than by anything checked, and the
+same sentence would have read the same way had it been wrong.
+
+### WHY THIS WAS AVAILABLE WHEN THE GAP WORK WAS NOT
+
+The previous increment concluded that the gap feature work should not start, because all three
+parser gaps grow `parse.kel`, which needs about 192 against caps of 128, and the capacity question
+is the operator's. That conclusion stands. Re-reading the earlier retraction showed it was narrower
+than the conclusion drawn from it: the retracted cost estimate was about adding a REFUSAL CHANNEL TO
+`parse.kel`, a stage-source change. The driver is Rust, and a message improvement there has no blob
+size and no capacity consequence at all.
+
+### THE DESIGN THAT CANNOT MISFIRE
+
+The obvious shape is a pre-check that refuses a listed construct before running the pipeline. That
+shape can refuse a program the subset actually handles, if the list is ever wrong.
+
+The shape adopted instead runs the scan ONLY after a compile has already failed. It changes what a
+refusal says and never whether one happens, so a wrongly listed construct costs a misleading noun in
+a message that was going to be emitted anyway. That is a bounded and recoverable cost, where a false
+rejection is neither.
+
+Two things were measured rather than assumed on the way. Enum construction does NOT parse as a call
+expression, so `::` in a call name is a sound qualified-call signal rather than a trap that would
+have blamed every variant literal in the tree. And a tuple pattern is deliberately ABSENT from the
+list, because its support was never measured and guessing would attach a confident noun to a failure
+that may have nothing to do with it.
+
+### THE GUARD, AND THE VACUITY TRAP IT NEARLY FELL INTO
+
+Every stage source compiles through the subset byte-identically, so the scan must name nothing in
+any of them; a hit means the list has acquired a construct the subset supports.
+
+The scan returns nothing when a source does not parse. **A test that only asserted "names nothing"
+would therefore pass if every stage source failed to tokenize.** Parsing is asserted first, per
+source, before the absence is read as evidence.
+
+Mutation-tested in both directions: adding the supported enum pattern to the list fails the guard
+with a precise attribution, naming `parse.kel` and the first occurrence; and a separate test
+establishes the scan finds something when something is there, so a clean result is not a scan that
+never reports anything.
+
+### FRONTIER
+
+Unchanged in substance. The remaining gap work is scoped feature work that grows `parse.kel` and so
+waits on the capacity decision, and five operator decisions are still blocked. What this increment
+shows is that "blocked" was slightly too broad: the user-facing half of the gap story was reachable
+without touching a stage source at all.
+
+---
+
+## 2026-09-12 (eighty-first) — three claims checked, two of them mine and wrong
+
+### THE PATTERN IS THE FINDING
+
+Six times this session a claim standing in the tree fell to reading or running the component it
+described, and each time the component was one call or one grep away. The individual corrections
+matter less than the rate. Three more landed here.
+
+### THE RISK THAT WAS ONLY EVER STATED
+
+A comment on the binder-divergence pin said the pipeline is safe by omission rather than by
+correctness: that were it to report the three diverging binder forms without also collecting them
+as locals, it would reproduce the false rejection already fixed on the reference side. It said in
+the same breath that this was unverified, because the pipeline's own local handling had not been
+inspected. Inspecting it took one command and dismissed it.
+
+`occurrence_rows_from_pipeline` has no separate locals set that could drift out of step with an
+occurrence list. It builds a slot-to-name map from parameters and `let` bindings; a local-read node
+emits the local flag SET, unconditionally, and only when the slot carries a name. An unnamed slot
+yields no row at all rather than a row with the flag clear. The condition behind the reference-side
+defect is therefore not expressible here: reporting and collecting are one lookup, not two walks
+that can disagree.
+
+The divergence is unchanged and still pinned. What was wrong was the account of why it mattered,
+and it was wrong in the direction of alarm, which is the safer direction and still worth fixing.
+
+### A HEDGE THAT WAS COVERING AN IMPOSSIBILITY
+
+The comment explaining why the branch-pair row is withheld argued that the synthesised else arm
+yields the UNIT tag while a real statement-only else yields UNKNOWN, so the tag *appears* to
+separate them, and that this **could not be shown safe**. Checking it replaced the hedge with
+something stronger and simpler.
+
+A written empty else and an implicit arm produce the SAME parse record stream. The reference
+separates them, its criterion being `else_block.is_some()`, measured as one against zero rather
+than assumed. The distinguishing information never reaches the pipeline, and a heuristic can only
+read what the stream carries. Which tag a case yields is moot, because the two sources are already
+identical before any tag is computed. The witness first establishes that the empty else compiles
+under the reference at all, so the comparison is about a shape a real source can contain.
+
+Its stream-equality assertion names the opposite conclusion too: were the parse stage to start
+distinguishing the two, the row might become implementable and the withholding should be revisited.
+
+### THE CLASS CENSUS, AND ITS BOUNDED NEGATIVE
+
+The hazard behind that finding is a walk that synthesises an optional syntactic element, so the
+specified list to census is the reference syntax tree's optional fields. There are eighteen. **No
+second instance reaches an active channel.** The node rows are extracted from the reference tree,
+which reads the optionality directly; only the pipeline-derived channels are exposed. The retired
+closure surface accounts for one of the optional return types and is not a live concern.
+
+That is a negative result and it earns a sentence, not a test. There is no divergence to pin.
+
+### THE GUARD THE CENSUS DID FIND WORTH PINNING
+
+`expression_nodes_over` appends a declared-versus-actual row only when the body has a tail
+expression. The guard is correct and was unpinned, and the failure it prevents is in the
+FALSE-REJECTION direction: a row manufactured for a body ending in a statement is a comparison the
+source never wrote.
+
+Getting a witness required measurement rather than recall. Keleusma has no early return and a
+return type is mandatory, so a tail-less body is not reachable by omitting either; `Unit` and
+`Void` parse as named types and then fail to compile, so neither is a witness; the unit-returning
+parenthesised form is. The expected count is ONE and not zero, because each source also declares a
+function that does have a tail — a test expecting zero could pass by extracting nothing, which this
+suite has paid for before.
+
+**The pin was mutation-tested.** Replacing the guard with an unconditional push that substitutes a
+default operand form fails the one-row assertion with its own message, and reverting is green. A
+guard-pin never observed to fail is not evidence about the guard.
+
+### TWO BOOKKEEPING ERRORS CAUGHT BY RE-DERIVING
+
+The `selfhost_parse` suite is 91 tests, not the 88 carried in working memory. The figure was
+re-derived from a full unfiltered run before anything was written down, which is the only reason it
+did not become another stale number in a tracked file. Separately, a doc-comment edit aborted
+cleanly on text `cargo fmt` had reflowed, leaving the file untouched while a suite ran against it —
+the abort-before-write discipline working as intended.
+
+### FRONTIER
+
+The small-increment vein here is close to exhausted. The hedge-vocabulary census over the test and
+stage sources returns mostly honest epistemic statements rather than unchecked claims, and the
+optional-field census returned a bounded negative. What remains in this area is the four open
+self-hosted gaps, which are scoped feature work, and five operator decisions that no amount of
+self-directed work can resolve.
+
+---
+
+## 2026-09-12 (eightieth) — the question that should have come first
+
+### FOUR INCREMENTS ABOUT REFUSAL QUALITY, NONE ABOUT WHETHER THEY REFUSE
+
+Several increments discussed the four self-hosted gaps: whether their messages name the construct,
+whether refusing is cheaper than implementing, what a refusal channel would cost. **None established
+that they refuse at all.**
+
+That is the only part bearing on correctness. A construct outside the subset must be REFUSED, never
+silently mis-compiled. Everything else is ergonomics.
+
+### AND THE MEASUREMENT HAD TO BE ON THE RIGHT ENTRY POINT
+
+The censuses drive `occurrence_rows_from_pipeline`, a test harness that unwraps, so a gap surfaces
+there as a PANIC. **That is not what a user meets.** The path behind `--compiler self-hosted` is
+`self_hosted_compile`, and every claim I had made about refusal behaviour came from the harness.
+
+**Reasoning about the product from the harness is the scope error this file records against itself
+several times over**, and I made it four increments running without noticing, because the harness's
+behaviour was consistent and plausible.
+
+### THE RESULT
+
+All four gaps return **`Err`** from `self_hosted_compile` — a proper error, not a panic and not a
+module — and an ordinary program still compiles.
+
+**The subset is SAFE at the boundary that matters.** Nothing on the gap list mis-compiles. The
+remaining obligation is message quality, not soundness.
+
+### THE THIRD REFRAMING, AND THE FIRST FROM A MEASUREMENT
+
+This obligation has now been described three ways: "implement four constructs", then "refuse
+cleanly, which is smaller" (retracted as unverified), and now "improve four messages, the safety
+property already holding". **Only the third rests on running the thing rather than reading around
+it.**
+
+The pin asserts what was measured and disclaims the rest: not that the messages are good — several
+name a work-stack underflow rather than a construct — and not that the gap list is complete, only
+that nothing on it compiles to something wrong.
+
+### THE RULE
+
+**Establish the safety property before debating the ergonomics of the failure.** Four increments of
+discussion rested on an assumption that took one test to check, and the test could have been written
+the moment the first gap was found.
+
+---
+
+## 2026-09-12 (seventy-ninth) — a cost estimate I stated as settled, retracted
+
+### THE CLAIM
+
+Two increments ago I established something true — no gap found by these censuses can block the
+stages from self-compiling, because all twelve compile byte-identically — and then attached a cost
+estimate to it that I did not check:
+
+> the remaining obligation is "make the front end refuse cleanly", separate from and considerably
+> smaller than implementing these four constructs.
+
+**That went into a merged pull request description and into the reverse prompt's current-state
+block.** Both now carry the retraction.
+
+### WHAT CHECKING SHOWED
+
+**`parse.kel` has no refusal channel.** Its output vocabulary is 54 node kinds plus `DONE`, and not
+one of them is an error, refusal, or unsupported marker — enumerated, not assumed.
+
+So a construct the parser cannot handle **cannot be named by it**. It can only mis-parse or spin,
+which is precisely what all four gaps do. Refusing cleanly means adding a refusal record kind and
+teaching the driver and every consumer to read it: **more components than implementing a construct
+touches, not fewer.**
+
+### THE SHAPE OF THE ERROR
+
+The finding it rode on was verified and remains true. **The cost estimate was a plausible inference
+from it, stated in the same breath and in the same confident register.** That is what made it
+dangerous: a reader has no way to tell which half was measured.
+
+One branch of the fix even looked cheap in isolation — at match-arm phase 2 an identifier that is
+not an enum name is unambiguously a pattern rather than an end-of-arms, and detecting that is one
+condition. But detection without a channel to report on has nowhere to go, which is the part the
+estimate skipped.
+
+### THE RULE
+
+**A verified finding and an unverified inference drawn from it should not share a sentence.** This
+session has caught several claims that were reasoned about rather than checked; this one is worse
+than those, because its neighbour in the same paragraph WAS checked, and the proximity lent it
+credibility it had not earned.
+
+---
+
+## 2026-09-12 (seventy-eighth) — the cheap-update property held, which is the design being tested
+
+### THE CLAIM THAT NEEDED TESTING
+
+Two increments ago the reverse prompt was restructured around one argument: **a channel that must be
+REWRITTEN rather than appended to will drift, and keeping the current block SHORT is what makes the
+rewrite cheap enough to actually happen.**
+
+That was a prediction. Five increments later the block needed updating — the parser fix landed, a
+fifth gap was found, the gaps were reclassified, and the divergence was bounded.
+
+### THE RESULT
+
+**Twenty lines added, five removed. One edit.**
+
+Before the restructure, updating this channel meant composing a new dated section on top of
+seventeen hundred lines and deciding what of the old was still true. That is the cost that caused it
+to drift ten increments the first time. The current block is short enough that bringing it level is
+an ordinary edit, and the superseded history below the line needed no attention at all because it is
+explicitly not current.
+
+### WHY THIS IS WORTH AN ENTRY
+
+**A process change that is never exercised is a guess.** The previous entry recorded the reasoning;
+this one records that the property it predicted actually held on first use. Had the update turned
+out expensive anyway, that would have been the more important finding and it would belong here just
+as much.
+
+### WHAT THE BLOCK NOW SAYS THAT IT DID NOT
+
+- **Four** parser gaps remain, not three — the qualified call joined them.
+- **None of the four blocks self-hosting**, by the structural argument: all twelve stages compile
+  byte-identically, so no stage can contain a construct the pipeline cannot parse. Each gap blocks a
+  USER program.
+- Therefore the obligation is **"refuse cleanly"** rather than "implement four constructs", since
+  all four fail by producing a malformed record stream instead of naming what they cannot handle.
+- The pipeline diverges from the reference on three binder forms, **safe by omission rather than by
+  correctness**, bounded to one channel.
+
+---
+
+## 2026-09-12 (seventy-sixth) — a negative result that bounds the previous one
+
+### THE QUESTION THE PREVIOUS INCREMENT LEFT OPEN
+
+It found three unrecorded divergences and a fifth gap by comparing ONE of the seven
+pipeline↔reference channels over the binding forms. **The corpus narrowness that let them hide is a
+property of the agreement tests generally**, not of the occurrence one — so the obvious reading was
+that the other six needed the same treatment.
+
+### THE ANSWER: LOCALISED
+
+Checked over the same forms: the declared-name, field-set and declaration/call channels refuse
+nothing, and **the BINDING channel — which carries the richest rows and is the likeliest to diverge
+alongside — agrees exactly.**
+
+So the divergence is specific to occurrences, which is also the only channel that records the USE of
+a binder rather than its declaration. That is consistent rather than coincidental, and it is why the
+other channels do not need the same treatment.
+
+### WHY A NEGATIVE RESULT IS WORTH AN INCREMENT
+
+**It bounds the previous finding.** Without it, "the pipeline omits binders" reads as an unknown
+amount of divergence across seven channels; with it, the claim is exactly one channel wide and the
+rest is measured rather than assumed.
+
+The localisation is now pinned INSIDE the divergence test rather than stated beside it, so a future
+divergence in the binding channel fails with a message saying the scope has grown — **a different
+and larger fact than the one this test was written for**, and one that would otherwise be invisible
+because the occurrence assertion would still pass.
+
+### THE LINE THIS CLOSES
+
+Every gap this session found came from aiming an instrument somewhere it had not been aimed. This is
+the first application that found nothing, and that is the result: **the vein is bounded.** Reporting
+it as such is more useful than continuing to sample a space already measured.
+
+---
+
+## 2026-09-12 (seventy-fifth) — the pipeline is safe by omission, and a fifth gap
+
+### POINTING THE SESSION'S OWN FINDING AT ITS OWN DEFENCE
+
+The recurring result has been that **a corpus which cannot distinguish two implementations cannot
+detect that they diverge.** The pipeline↔reference agreement tests are the main defence for the
+self-hosted work, and the occurrence one — for the channel where three false rejections hid — uses a
+corpus with a `match` on a LITERAL, no loop, no const parameter and no qualified import.
+
+Those three false rejections were fixed on the REFERENCE side. **Nothing had checked the pipeline
+side against the same forms.**
+
+### THE RESULT
+
+For a `for` variable, a match-arm payload binding and a const parameter used as a value, the
+reference records an occurrence and **the pipeline records none**. Only the `for` case was pinned;
+the other two were recorded nowhere.
+
+### SAFE BY OMISSION IS NOT SAFE BY CORRECTNESS
+
+Omitting an occurrence is the ACCEPTING direction, so the pipeline does not reject these programs.
+**But the reason it is safe is that it reports nothing, not that it handles them.**
+
+The reference side's three false rejections were precisely: the name arrived as an occurrence while
+the local set did not contain it. **If the pipeline began reporting these binders without also
+collecting them as locals, it would reproduce that defect exactly** — and the increment that widened
+it would look like a gap closing.
+
+**Stated as a risk rather than a finding**, because the pipeline's own local-set handling has not
+been inspected. What is checkable is the divergence, and the pin holds that; its failure message
+says what to check if a form ever leaves the set.
+
+### A FIFTH GAP, FROM THE SAME COMPARISON
+
+`audio::midi_to_freq(69)` — a QUALIFIED CALL — is accepted by the reference and refused by
+`reconstruct.kel` with *"a record range did not reduce to exactly one node"*, the same failure kind
+as `assert`.
+
+**The `use` declaration alone is fine**, which localises it: the import parses; the CALL FORM does
+not. Separating those took one probe, and it is the difference between "imports are unsupported" and
+a precise gap.
+
+### THE PATTERN, STATED ONCE
+
+Every gap this session found came from pointing an instrument at something it had not been aimed at:
+the rule census at forms, the binder census at the twin, the grammar's table at the parser, and now
+the binder corpus at the agreement tests. **The instruments transfer because the failure mode does** —
+a corpus chosen to demonstrate behaviour rather than to distinguish implementations.
+
+---
+
+## 2026-09-12 (seventy-fourth) — the bounded channel was not bounded, and the split did not fix it
+
+### TREATING THE ROOT INSTEAD OF REPEATING THE REMEDY
+
+Two increments ago I recorded that **"a channel that has to be rewritten rather than appended to
+will drift, and it drifts fastest when the work is going well"** — then refreshed the reverse prompt
+and moved on. Nine increments later it had drifted again, for exactly the reason named. Refreshing
+it a second time would have been treating the symptom twice.
+
+### THE MEASUREMENT
+
+`REVERSE_PROMPT.md` is specified as the BOUNDED latest-state channel. **It was near 1,800 lines.**
+
+The design journal's own header records why the two were split on 2026-07-22: the reverse prompt had
+accreted to about 362 KB, "contrary to the overwrite-each-task spec". **The split did not stop the
+accretion.** In practice "overwritten" means each session PREPENDS a section and keeps the rest, so
+the same mechanism produced the same result at a smaller scale.
+
+### THE PROPERTY THAT ACTUALLY MATTERS
+
+Two properties were conflated, and only one of them is load-bearing:
+
+- **Bounded SIZE** did not hold, and has not held twice now.
+- **Bounded CURRENCY** — a reader being able to tell what is true *now* — is the property the
+  channel exists for.
+
+Currency is recoverable without deleting anything: the file now opens with a short current-state
+block and an explicit line after which everything is **superseded history, retained for
+provenance**. A resuming reader stops at the line instead of reconstructing currency from a stack of
+dated sections.
+
+### WHY NOT TRIM
+
+The history below that line is other sessions' record. **Deleting it is not a decision a session
+should take for itself**, and the currency problem does not require it. Recording the reasoning for
+the restraint matters as much as the restraint: a later session that decides trimming IS warranted
+should be overruling an argument, not discovering an absence.
+
+### THE SPEC NOW CARRIES IT
+
+`COMMUNICATION.md` records the measurement, the distinction between bounded size and bounded
+currency, and why keeping the current block SHORT is what makes the rewrite cheap enough to actually
+happen. **Putting it in the spec rather than in this journal is the same move as the previous
+increment's**: a finding recorded only where history accumulates is a finding nobody acts on.
+
+---
+
+## 2026-09-12 (seventy-third) — six ways a green run has lied, in one reachable place
+
+### WHY CONSOLIDATE RATHER THAN ADD A SEVENTH ENTRY
+
+Four of these were recorded in this journal under the chunk-count increment, a fifth in the reverse
+prompt, and a sixth in the entry immediately above. **The knowledge was present and not reachable.**
+Nobody resuming finds a table in the middle of an append-only file that is now seventy-plus entries
+long, and the proof is that I hit the same class TWICE in one iteration while all of it was already
+written down.
+
+So the six now sit in `CLAUDE.md`, beside the verification commands they qualify — the place a
+session reads while working rather than while reconstructing history. The journal entries stay where
+they are; the consolidation points at them rather than replacing them.
+
+### THE SIX
+
+| how it under-reported | what distinguishes it |
+|---|---|
+| guards ran BEFORE the last edit | compare the guard's start against the file's mtime |
+| a single-package run omits `self-host`; a workspace run unifies it on | they are different feature sets |
+| `cargo test` stops at the FIRST failing binary | "1 failed" is not "one failure in the tree" |
+| a run edited while in flight | belongs to no tree; discard rather than read as a pass |
+| a CACHED clippy run prints nothing either way | `touch` first; a warm target directory proves nothing |
+| a TRUNCATED log looks identical to a clean one | capture whole output and exit status |
+
+### THE PROPERTY THEY SHARE, WHICH IS THE POINT
+
+**In every case the run did less than the reader believed.** Each is a gap between what the command
+actually covered and the claim made from its output.
+
+That is why the corrective is not "run more tests" — it is asking *what did this command cover?*
+before a result is used to justify anything. Two of the six are about the command's scope, two about
+its timing, and two about its OUTPUT being an incomplete view of a run that was itself fine. The
+last pair is the subtle one: the run succeeded and the evidence of success was partial.
+
+### NOT EXHAUSTIVE, AND SAYING SO MATTERS
+
+Six found across one session is evidence that more exist. The table says this. A list of failure
+modes presented as complete invites the reader to stop looking, which is the failure mode one level
+up and the one this session has recorded against rule inventories, binder sets and census corpora
+alike.
+
+---
+
+## 2026-09-12 (seventy-second) — the pin caught what local verification did not, and a risk I had written down
+
+### WHAT BROKE
+
+The parser fix went red in continuous integration. `every_stage_fits_the_driver_caps_with_margin`
+pins the worst-case compiled blob size across the stage corpus: **35,746 against a pinned 35,716**
+— thirty bytes, because the `step_mpat` branch grew `parse.kel`.
+
+**The increment's own brief had named this risk.** Its list of what could go wrong, in order of
+likelihood, ended with *"counts pinned elsewhere: chunk and node figures are asserted in several
+files; a grown source can move them."* I wrote that, then ran the parse, codegen and typecheck
+suites and not the file that checks it.
+
+**A risk named in a brief is only useful if the brief's checks are then run.** Having the right list
+is not the same as using it.
+
+### THE MOVE IS RECORDED WITH ITS CAUSE
+
+That pin carries a history of such moves, each with its size and reason. This is the fourteenth, and
+the **first with zero new names**: the branch introduces no identifier, so the per-name arithmetic
+the comment tracks has nothing to say about it. Recorded as constraining that constant not at all,
+rather than as a data point for it — the file's own convention is to keep the measurement and leave
+the arithmetic open where it is open.
+
+### A SECOND, SMALLER ERROR OF THE SAME SHAPE
+
+After fixing the pin I reported the default-feature workspace run clean. **It was not established.**
+The command ended in `tail -20`, so the twenty-one result lines counted were the LAST twenty
+binaries — the earlier ones, including the integration tests where a `parse.kel` change would
+actually show, were truncated away.
+
+**A truncated log looks identical to a clean one.** That is the fifth way a local check has
+under-reported this session, after the cached clippy run, and it has the same remedy: capture the
+whole output and the exit status, then read both.
+
+Re-run properly: `EXIT=0`, **135 test binaries all passing**, no failures anywhere.
+
+### WHAT CHANGED IN PRACTICE
+
+Two things, neither of which is "run more tests":
+
+1. When a pinned figure moves, run the **whole** suite that contains it, not the one assertion.
+   Fixing an assertion and re-running only that assertion repeats the original error at smaller
+   scale.
+2. Capture full output and exit status for anything whose result will be quoted. A pipeline ending
+   in `tail` or `head` produces evidence that cannot support the claim made from it.
+
+---
+
+## 2026-09-12 (seventy-first) — the last untraced gap, and the cheap wins are exhausted
+
+### THE TRACE
+
+`assert` was the one gap never looked at. It failed a third way — `reconstruct.kel` refusing with
+*"a record range did not reduce to exactly one node"* — and that message describes a symptom rather
+than a cause.
+
+**`assert` is not a keyword in the self-hosted lexer.** `kw6` recognises `shared`, `orelse` and
+`struct`; `assert` is not among them. So it lexes as an ordinary identifier, `assert a > 0` becomes
+two adjacent identifiers the expression parser cannot reduce, and the reconstruct guard catches the
+wreckage downstream.
+
+### ITS ABSENCE IS DEFENSIBLE; ITS FAILURE MODE IS NOT
+
+**No stage source uses `assert` as a statement.** The only occurrences across the twelve `.kel` files
+are in comments, checked rather than assumed. So excluding it from the self-hosted subset is a
+reasonable choice, not an oversight.
+
+What is not reasonable is that the exclusion surfaces as a malformed record stream instead of a
+refusal naming the construct. **That distinction — whether a construct is IN the subset versus
+whether its absence is well-behaved — is the one this file has now applied to all four gaps**, and
+it is the part that would be lost by reporting "the subset is narrow".
+
+### THE PLANNING RESULT: NO CHEAP WINS REMAIN
+
+| gap | kind |
+|---|---|
+| bare enum unit variant | **contained — fixed**; every piece existed in one function |
+| variable pattern | feature work; `step_match` reads a non-enum identifier as the end of the arms |
+| struct destructuring | feature work; same root |
+| `assert` | feature work; needs a token code, a lexer arm, statement parsing, and emission through two more stages |
+
+**One of four was a missing branch. The other three are each multi-stage features.** That is worth
+stating plainly, because the previous increment's success could otherwise suggest the rest are
+similarly cheap. They are not, and the next work in this area is scoped feature work or nothing.
+
+### THE METHOD, FOR THE FOURTH TIME
+
+Trace before writing. It has now changed the plan four times this session: the capacity price
+reshaped the reductions, the specified list tripled the pattern census, the expression census showed
+the pattern gaps were local rather than symptomatic, and this splits the remaining gaps by cost
+rather than by count. **Each trace cost a reading; each would have cost a rewrite if taken in the
+other order.**
+
+---
+
+## 2026-09-12 (seventieth) — the contained fix, and a hesitation that was misplaced
+
+### A CORRECTION TO THE PREVIOUS INCREMENT'S REASONING
+
+It declined to write the fix because the change "deserves its own continuous-integration run rather
+than a ride-along". **That conflated WRITING the change with PUSHING it.** Working locally and
+holding the push — which is what every increment since the cadence finding has done — gives the
+change its own run. The hesitation protected nothing.
+
+### THE FIX
+
+`step_mpat` phase 3 waited for `LParen` and did nothing on any other token, so given `E::A => 1` the
+phase never advanced, tokens kept arriving with no progress, and the parse ran to its step budget.
+**It did not refuse; it span.**
+
+Phase 3 now completes the pattern on `=>`: the `LParen` path's slot reservation, then the `RParen`
+path's completion with zero payload binds, then **phase 4 rather than 3** — because the `=>` has
+already been consumed here, and returning to the phase that waits for one would swallow the arm
+result's first token.
+
+Only `=>` is handled. A match-arm pattern must be followed by it, so any other token at that phase
+is malformed input, and a narrow branch is easier to argue correct than a general one.
+
+### PARSING IS NOT THE CLAIM
+
+**That it now parses is not evidence it parses CORRECTLY.** The census only checks the pipeline does
+not panic, and would pass on a fix emitting wrong records.
+
+The two spellings denote the same pattern, so their record streams must be IDENTICAL — and comparing
+them is stronger than asserting what the records should contain, because it needs no model of the
+encoding. They match, including **mixed in one match**, which is the case that exercises each
+branch's hand-off to the arm result against the other's.
+
+### WHAT THE SLOT COMMENT WAS FOR
+
+The `LParen` path carries a comment saying its slot reservation exists so parse's slot numbers match
+codegen's allocation. **That is why the reservation was mirrored rather than rewritten**: getting it
+wrong would desynchronise two stages in a way no parse test would show. Byte identity held — 147 of
+147 in the codegen suite, 88 of 88 in the parse suite.
+
+### THE STATE OF THE CENSUS
+
+Documented pattern forms: **five parse, two do not.** The two that remain are feature work by the
+same trace — `step_match` phase 2 reads a non-enum identifier as the end of the arms, so supporting
+them means new arm semantics rather than a missing branch.
+
+---
+
+## 2026-09-12 (sixty-ninth) — three gaps, one contained fix and two features
+
+### WHY TRACE RATHER THAN WRITE
+
+Both deferral conditions for fixing the parser had expired: the instrument was on a pushed branch,
+and the previous increment established the gaps are LOCAL rather than symptomatic, so the fix is
+worthwhile. **"Worthwhile" is not "small"**, and `parse.kel` is 6,651 lines that must still
+self-compile byte-identically. So the mechanism was traced before anything was written.
+
+### THE ROOT IS ONE PLACE, AND IT SPLITS THE THREE UNEVENLY
+
+`step_match` phase 2 reads an arm pattern. It accepts an integer literal, `_`, and an identifier
+**only when that identifier names a known enum**. Anything else sets `match_build` — it reads the
+identifier as the END OF THE ARMS.
+
+**That single decision produces both observed failure kinds:**
+
+- **The variable pattern `v` and the struct pattern `P { x }`** take the end-of-arms path. The
+  parser does not hang; it produces a stream that means something else, and `reconstruct.kel`
+  catches it as a work-stack underflow. **FEATURE WORK** — supporting them means new arm semantics,
+  binding or destructuring the scrutinee, not a missing branch.
+
+- **The bare enum unit variant `E::A`** is recognised as an enum, enters `step_mpat`, and reaches
+  phase 3, which waits for `LParen` and **does nothing on any other token**. The phase never
+  advances and tokens keep arriving with no progress. That is the spin, exactly.
+
+### THE CONTAINED ONE, ANALYSED SO IT IS NOT RE-ANALYSED
+
+The `LParen` path reserves the arm's `IsEnum` test slot. The `RParen` path completes the pattern,
+counts the arm, and returns the `EnumArm` record. A bare form needs **both of those, plus advancing
+the match phase PAST the `=>` it has already consumed** rather than back to the phase that waits for
+one.
+
+**Every piece it needs already exists in that one function.** The analysis is recorded beside the
+census so the increment that does it starts from here.
+
+### WHY IT WAS NOT DONE IN THIS INCREMENT
+
+Any change to a stage source must still self-compile byte-identically, and that constraint makes
+even the contained fix worth its own run at continuous integration rather than a ride-along on a
+branch whose run is already in flight. Attempting it while three jobs were pending on another pull
+request would have risked the thing the last several increments spent effort protecting.
+
+### THE SHAPE
+
+**"Three gaps" was not a useful unit of work.** Tracing turned it into one contained fix and two
+features, which is a different plan with a different cost. The tracing took one reading of two
+functions; writing the grammar first would have discovered the same split after the expensive part.
+
+---
+
+## 2026-09-12 (sixty-eighth) — the pattern gaps are local, and a third failure kind
+
+### THE QUESTION THAT DECIDED THE NEXT WORK
+
+The pattern census found three of seven documented forms unhandled. **That could be a local gap or
+a symptom**, and the difference decides whether teaching `parse.kel` three pattern forms is worth
+doing or whether the honest deliverable is a much narrower documented subset.
+
+Writing grammar for a 309-kilobyte stage, with a byte-identical self-compile to preserve, before
+knowing which, would have been building on an unmeasured premise. **So the premise was measured
+first** — the third time this session that has changed what the next work should be.
+
+### THE ANSWER: LOCAL
+
+**Fourteen of the fifteen expression and statement forms the grammar enumerates parse.** Arithmetic,
+shift and bitwise, comparison and logical, calls, pipelines, match, if/else, struct construction,
+field access, array indexing, variable binding, expression statements, `for` loops, `break`.
+
+The parser is not broadly behind the specification. **Fixing the pattern forms is worthwhile rather
+than futile**, and belongs in its own increment.
+
+### THE ONE THAT FAILS, AND IT FAILS A THIRD WAY
+
+`assert` — `reconstruct.kel` refuses with *"a record range did not reduce to exactly one node"*.
+
+Three distinct failure kinds now, across the two censuses:
+
+| kind | where | forms |
+|---|---|---|
+| non-terminating parse | `parse.kel` step budget | bare enum unit variant |
+| work-stack underflow | `reconstruct.kel` | struct destructuring, variable pattern |
+| range did not reduce to one node | `reconstruct.kel` | `assert` |
+
+**None is a clean refusal of an unsupported construct.** A subset that excluded `assert` would say
+so; these are downstream guards catching inconsistent output, or no guard at all. Whether a
+construct is IN the subset is a separate question from whether its failure is well-behaved, and a
+total language's front end should refuse what it cannot handle.
+
+### WHAT THIS DOES NOT CLAIM
+
+One program per form. A form can be handled in one spelling and not another — the failure mode this
+file has now recorded five times, and the reason the bare enum pattern was invisible behind
+`Op::Neg()`. The list is specified, which is the part that matters; the coverage within each form is
+not.
+
+### THE PATTERN, STATED ONCE MORE BECAUSE IT KEEPS PAYING
+
+Measure the premise before acting on it. The capacity price changed what the reductions should be;
+the specified list changed what the pattern census found; and this changed a large risky grammar
+change from "probably pointless" to "worth doing, separately".
+
+---
+
+## 2026-09-12 (sixty-seventh) — censusing against a SPECIFIED list turned one finding into three
+
+### THE CHANGE OF LIST
+
+The previous increment recorded that `parse.kel` cannot handle a bare enum-variant pattern. That was
+found with a corpus I assembled, which carries the caveat every census in this file states: **these
+are the forms I thought of.**
+
+`docs/spec/GRAMMAR.md` enumerates the pattern forms in a table. **That is a SPECIFIED list.**
+Censusing against it turned one finding into three — and made the claim stronger, because a form in
+that table which the parser cannot handle is a divergence from the DOCUMENTED LANGUAGE rather than
+from the reference implementation.
+
+### THE RESULT: FOUR PARSE, THREE DO NOT
+
+| form | grammar example | outcome |
+|---|---|---|
+| enum unit variant, bare | `Command::Silence` | `parse.kel` DOES NOT TERMINATE |
+| struct destructuring | `Note { channel, pitch }` | stream `reconstruct.kel` cannot rebuild |
+| variable | `x` | stream `reconstruct.kel` cannot rebuild |
+
+**`match a { v => v }` is the simplest binding pattern the language has.**
+
+### THE CORRECTION I HAD TO MAKE BEFORE SHIPPING
+
+The first version of this pin's documentation said all three SPIN. **That was wrong for two of
+them**, and the difference matters:
+
+- The bare enum pattern makes `parse.kel` non-terminate — a hang, caught only by the step budget.
+- Struct destructuring and the variable pattern are ACCEPTED by `parse.kel`, which then emits a
+  record stream `reconstruct.kel` cannot rebuild, refused as a **work-stack UNDERFLOW**.
+
+**The second kind is not the conservative stance working.** A subset that refuses an unsupported
+construct cleanly says so; an underflow is a downstream guard catching an INCONSISTENT STREAM the
+parser should not have produced. Reporting all three as one failure mode would have made the parser
+look merely incomplete rather than, for two of them, wrong.
+
+I caught it because the panics came from two different source locations, which was visible only
+because the test ran each case rather than stopping at the first.
+
+### WHAT IS FIXED AND WHAT IS NOT
+
+The DIAGNOSTIC is fixed: the budget guard no longer asserts that the usual cause is an unterminated
+block. Teaching `parse.kel` these three forms is a change to the self-hosted pattern grammar and
+belongs in its own increment.
+
+The three are pinned BY EQUALITY, so a form leaving the set is a gap closing to record and one
+joining it is a regression.
+
+### THE RULE
+
+**A census against a list I assembled is weaker than a census against a list the project
+specified**, and the difference is not rhetorical: the same instrument, pointed at the grammar's own
+table instead of my corpus, found three times as much and upgraded the claim from "the two
+implementations differ" to "the parser does not implement the documented language".
+
+---
+
 ## 2026-09-12 (sixty-sixth) — the census pointed at the twin, and the twin does not terminate
 
 ### THE MOVE
