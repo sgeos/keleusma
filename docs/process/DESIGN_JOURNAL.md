@@ -1,5 +1,40 @@
 # Design Journal
 
+## 2026-09-12 — absorption 60, and a commitment this line had broken
+
+Three consecutive increments examining this line's own records had let the other
+line reach **46 unabsorbed commits**. Taken now, with the prediction filed and
+stamped first, per the rule added after absorption 59.
+
+**Every prediction held.** One conflicting file; no backend behaviour change; the
+corpus still 74 modules with 1 refused; the ISA still 63 of 66 — that last flagged
+in the brief as the most likely to be wrong, because `parse.kel` IS a corpus
+source and a stage gaining a construct could emit a currently unemitted opcode.
+Their 46 commits touch two `src/` files, both in the self-hosted compiler;
+`bytecode.rs`, `vm.rs`, `compiler.rs` and `value_layout.rs` are untouched.
+
+**And the brief still missed the instrument that fired.** `corpus_fingerprint.rs`
+pins corpus CONTENT by hash, not counts. The brief listed only count-based figures,
+predicted every one correctly, and did not anticipate the hash pin. **Predicting
+the figures is not the same as predicting which guards a change trips** — a
+distinction worth carrying into the next absorption brief.
+
+The instrument then did exactly its job: named the moved file, declared every
+corpus-derived figure *"a prediction rather than a fact"*, and listed five
+censuses to re-derive. All five were re-run on the absorbed tree and held, so the
+re-pin records a re-derivation instead of standing in for one.
+
+**The conflict exposed a commitment this line had made and broken.** The handoff
+says plainly: *"I touch none of `REVERSE_PROMPT.md`, `DESIGN_JOURNAL.md`, or
+`TASKLOG.md`."* This session wrote reports 4 and 5 into `REVERSE_PROMPT.md`. Both
+lines overwrite that file wholesale — 106 lines against 1988 — so the conflict
+recurs at every absorption while both write there. Resolved by keeping the other
+line's document entire and appending this line's reports, attributed, so nothing
+is dropped. **That is the least destructive option available without a ruling, not
+the right one**, and the question is now asked in the file rather than settled
+here. Note the same hazard applies to `DESIGN_JOURNAL.md`, which this line writes
+every increment and which auto-merged this time by luck of position.
+
 ## 2026-09-12 — the guard's population was the rows I had just fixed
 
 Last increment's completion condition said *"no figure in that table is both

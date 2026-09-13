@@ -60,3 +60,44 @@ attribution never has to be argued.
 - **Patching a guard's constant to make the gate green.** If the ISA
   classification moves, the move is the result; record what newly emits the
   opcode.
+
+---
+
+## OUTCOME
+
+**Merged at `7e58f373`. Backlog 0.**
+
+| prediction | result |
+|---|---|
+| 1. one conflicting file, `REVERSE_PROMPT.md` | **held** |
+| 2. no backend behaviour change | **held** — 569 of 570 passed; the one failure was a content pin, not a behaviour |
+| 3. corpus 74 modules, 1 refused | **held** |
+| 4. ISA 63 of 66 | **held** — the prediction flagged as most likely to be wrong |
+| 5. test population unchanged | **held** |
+| 6. denominator still parses 66 opcodes | **held** |
+
+**A consequence the brief failed to anticipate.** `corpus_fingerprint.rs` pins
+corpus CONTENT by hash, not counts, and `src/selfhost/kel/parse.kel` is a corpus
+source. The brief listed only count-based figures and predicted them all
+correctly, so every prediction it made held — **and it still missed the one
+instrument that was going to fire.** Predicting the figures is not the same as
+predicting which guards the change trips.
+
+The instrument behaved exactly as designed: it named the moved file, declared
+every corpus-derived figure *"a prediction rather than a fact"*, and listed five
+censuses to re-derive. **All of them were re-run on the absorbed tree and held**,
+which is why the re-pin is a record of a re-derivation rather than a substitute
+for one.
+
+## THE CONFLICT EXPOSED A COMMITMENT THIS LINE BROKE
+
+The handoff records: *"I touch none of `REVERSE_PROMPT.md`, `DESIGN_JOURNAL.md`,
+or `TASKLOG.md`."* This line wrote reports 4 and 5 into `REVERSE_PROMPT.md` this
+session. Both lines overwrite that file wholesale — 106 lines against 1988 — so
+**the conflict recurs at every absorption while both write there**.
+
+Resolved by keeping the other line's document **entire** and appending this line's
+reports, attributed. Nothing is dropped. **That is the least destructive option,
+not the right one**: where this line's outgoing reports should live is a question
+for the operator, and it is now asked in the file itself rather than settled
+unilaterally.

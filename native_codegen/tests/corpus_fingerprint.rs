@@ -238,6 +238,11 @@ fn the_corpus_is_what_the_pinned_figures_were_measured_against() {
 // Stating an arithmetic that does not close as though it did is the failure this
 // note exists to avoid.
 const PINNED: &[(&str, u64)] = &[
+    // **Re-pinned at absorption 60.** `src/selfhost/kel/parse.kel` moved; nothing was
+    // added or removed. Every census this instrument names to re-derive was run on
+    // the absorbed tree and **held**: the corpus still builds 74 modules with 1
+    // refused, and the backend still lowers 63 of 66. The pin follows the
+    // re-derivation rather than standing in for it.
     ("compiler/kel/prelude.kel", 0x07c8e691e07a309e),
     (
         "examples/rtos/scripts/event_listener.kel",
@@ -411,7 +416,7 @@ const PINNED: &[(&str, u64)] = &[
     ("src/selfhost/kel/analyze.kel", 0xca66a2229816243c),
     ("src/selfhost/kel/codegen.kel", 0x696808a6593fe4f9),
     ("src/selfhost/kel/lexer.kel", 0xec5f9dd44b6ba8f8),
-    ("src/selfhost/kel/parse.kel", 0xa5773b6b1ede313d),
+    ("src/selfhost/kel/parse.kel", 0xb3d01d2b28a521d9),
     ("src/selfhost/kel/reconstruct.kel", 0x137bbac9b6ad2ede),
     ("src/selfhost/kel/verify_datalayout.kel", 0xf30296eb4c09fc1a),
     ("src/selfhost/kel/verify_depth.kel", 0x6a264c7734ccfc1a),
