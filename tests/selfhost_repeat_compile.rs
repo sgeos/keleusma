@@ -26,6 +26,13 @@
 //! survive this check unchanged. What this catches is state carried from one
 //! compile to the next INSIDE a process, which is the shape the counter defect
 //! had and the shape a driver accumulating into a reused buffer would have.
+//!
+//! **The cross-process half is now covered**, by
+//! `keleusma-cli/tests/compile_reproducible.rs`, which runs the shipping binary
+//! three times and compares the artefacts, and additionally establishes that the
+//! input path does not reach the output. Neither file establishes reproducibility
+//! across machines or toolchain versions: a source of variation constant for a
+//! given build would pass both.
 
 #![cfg(all(feature = "self-host", feature = "compile", feature = "verify"))]
 
