@@ -115,6 +115,21 @@ fixed**. **Its refusal does not name the construct and cannot**: the syntax tree
 spellings identically, so a scan arm matching that shape flags the working one, and the
 stage-source guard rejected exactly such an arm by pointing at `Node::Local()` in `parse.kel`.
 
+**THE TOOLCHAIN'S BYTE-REPRODUCIBILITY IS NOW ESTABLISHED, IN BOTH SENSES, AND NEITHER WAS TESTED
+BEFORE.** The roadmap requires it "so the fixed-point and differential-oracle checks are meaningful".
+Compiling one source twice in a single process gives the same module
+(`tests/selfhost_repeat_compile.rs`), and three separate runs of the shipping binary give
+byte-identical artefacts for both backends, with the input path not reaching the output even under
+`--debug` (`keleusma-cli/tests/compile_reproducible.rs`).
+
+**The differential oracle could not have established either**, because it compares the two backends
+against each other: a non-determinism they shared would pass unnoticed. The pre-existing
+counter-reset guard is STATIC — it scans stage sources for a counter never assigned zero, one known
+cause that cost a four-cause diagnosis — so it cannot catch a cause nobody has thought of.
+
+**Neither file claims reproducibility across machines or toolchain versions.** A source of variation
+constant for a given build would pass both, and both say so.
+
 **None of the four blocks self-hosting**, and the reason is structural: all twelve stages compile
 through the pipeline byte-identically, so no stage can contain a construct the pipeline cannot
 parse. Each gap blocks a USER program, not the stages.
