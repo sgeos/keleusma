@@ -103,8 +103,13 @@ moved four times. Run:
 | `parse` | bindings **162/128** | +34 (also declared names 151, call sites 132, declared params 133) |
 | `wire` | bindings **548/128** | 4x (declared names 499, params 492, call sites 472) |
 
-**`parse` is at 1.27x, not the ~1.5x "about 192" implied**, and two of its four channels are over by
-only FOUR and FIVE rows. That is a materially more tractable position than this line described.
+**`parse` is at 1.27x, not the ~1.5x "about 192" implied.** That is the whole of the correction.
+
+**It is NOT close to fitting, and the first draft of this note invited that misreading.** Fitting
+requires ALL FOUR channels under the cap, so the governing number is bindings at +34, with declared
+names at +23 behind it. The other two being over by only four and five rows is irrelevant to whether
+`parse` fits — quoting them beside the word "tractable" suggested a near-miss that the measurement
+does not support.
 `wire` is unchanged in character: four times, dominated by declaration-indexed tables.
 
 **A consequence for anyone tempted to edit `parse.kel` first.** Its gap fixes add bindings, which is
