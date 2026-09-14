@@ -1,5 +1,47 @@
 # Design Journal
 
+## 2026-09-14 — the stream driver had slack and no canary
+
+Following the gap named at the end of the last increment rather than inventing a
+new one: I had written that nothing measured whether the arena stays bounded
+across ticks, and that worst-case memory usage rests on it.
+
+**`general_native_sequence` sizes three buffers from the published contract plus
+slack — 64 bytes, 4096, and 4096 — and planted no sentinel in any of them.** A
+write past the bound landed in the slack and was invisible; a write past the slack
+corrupted whatever followed. The scalar driver `vm_and_native_two_arg` was given
+canaries after literal-sized buffers there produced a SIGSEGV within a day; **this
+driver, behind every general-stream comparison, was never given the same
+treatment.**
+
+It matters more since the depth test. At 200 ticks a creep of a few bytes per tick
+would be absorbed silently for tens of ticks and then corrupt, **while the
+sequences kept agreeing right up until they did not** — both implementations
+computing the same values from a buffer one of them had already overrun.
+
+Canaries added, and **reach measured rather than assumed**, which is where the
+increment earned itself:
+
+- **arena region: PROVEN.** Shrink it to 16 bytes and the check fires over 200
+  ticks. This is the canary the arena-is-the-instance claim rests on.
+- **private region: PROVEN, but only after adding a stream that WRITES a private
+  slot.** With the three original shapes nothing wrote there and that canary could
+  never have fired — a guard with no reach, sitting in the file looking like
+  coverage. Shrinking to 8 still does not fire, because one `Word` slot occupies
+  exactly 8 bytes; zero is what demonstrates it.
+- **shared segment: NOT PROVEN, and not provable by this helper.**
+  `general_vm_sequence` calls without supplying a shared segment, so the reference
+  refuses a shared-slot stream and no drivable shape writes there. Kept because it
+  costs nothing, **recorded as evidence of nothing today.**
+
+The slack is retained rather than removed: it may be load-bearing for an alignment
+or a write the bound legitimately excludes, and a canary tells you whether anything
+reaches it where deletion would only tell you something broke.
+
+**No overrun found.** What is claimed is that nothing wrote past these buffers over
+these ticks — **not that the arena is statically bounded**, which is a different
+claim this cannot establish.
+
 ## 2026-09-13 — streams had been driven six ticks; now two hundred
 
 This line's central claim is that **the arena IS the coroutine instance**, with

@@ -57,6 +57,16 @@ const SHAPES: &[(&str, &str)] = &[
         "branching on the seed",
         "loop main(t: Word) -> Word { if t > 0 { let a = yield t; yield a } else { yield 0 } }",
     ),
+    // **Carried here to give the PRIVATE-region canary reach.** The other three
+    // declare no private data, so nothing writes there and that canary can never
+    // fire for them — a guard with no reach, which is the thing this package
+    // keeps finding. A shared-slot stream would give the third canary reach too,
+    // but `general_vm_sequence` calls without supplying a shared segment, so the
+    // reference refuses that shape and it is not drivable by this helper.
+    (
+        "writing a private data slot each tick",
+        "private data d { n: Word }\nloop main(t: Word) -> Word { d.n = t; (yield d.n) + (yield d.n + 1) }",
+    ),
 ];
 
 /// Ticks to drive. The previous maximum in this package was **6**.

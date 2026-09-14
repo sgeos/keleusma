@@ -511,11 +511,52 @@ pub fn general_native_sequence(src: &str, first: i64, replies: &[i64]) -> Vec<i6
     // backend's supplement and not with the runtime's figure alone.
     let persistent = required_persistent_capacity_for(&m)
         + keleusma_native::region::persistent_supplement_bytes(&m) as usize;
-    let mut privs = vec![0u8; persistent + 64];
+    // ⚠ **EVERY BUFFER CARRIES A CANARY, AS THE SCALAR DRIVER'S DO.**
+    //
+    // These three had slack and no sentinel until 2026-09-14. A write past the
+    // published bound landed in the slack and was INVISIBLE; a write past the
+    // slack corrupted whatever the allocator placed next. `vm_and_native_two_arg`
+    // was given canaries after literal-sized buffers there produced a SIGSEGV
+    // within a day; **this driver was never given the same treatment**, and it is
+    // the one behind every general-stream comparison.
+    //
+    // It matters more since the depth test: at 200 ticks, a creep of a few bytes
+    // per tick would be absorbed silently for tens of ticks and then corrupt,
+    // while the sequences kept agreeing right up until they did not.
+    //
+    // The slack is RETAINED rather than removed. It may be load-bearing for an
+    // alignment or a write the bound legitimately excludes; a canary says whether
+    // anything reaches it, where removing it would only say that something broke.
+    //
+    // **REACH, MEASURED RATHER THAN ASSUMED** (2026-09-14):
+    //
+    // - **arena region — PROVEN.** Shrinking it to 16 bytes fires the check over
+    //   200 ticks. This is the one the arena-is-the-instance claim rests on.
+    // - **private region — PROVEN**, but only once a stream that WRITES a private
+    //   slot was added to the depth test; with the earlier shapes nothing wrote
+    //   there and the canary could never have fired. Shrinking to 8 is still not
+    //   enough — one `Word` slot occupies exactly 8 bytes — so zero is what
+    //   demonstrates it.
+    // - **shared segment — NOT PROVEN, and cannot be by this helper.**
+    //   `general_vm_sequence` calls without supplying a shared segment, so the
+    //   reference refuses a shared-slot stream and no drivable shape writes
+    //   there. The canary is kept because it costs nothing and would catch a
+    //   stray write, but **it is not evidence of anything today.**
+    const STREAM_CANARY: u8 = 0xA5;
+    const CANARY_LEN: usize = 16;
+
+    let privs_body = persistent + 64;
+    let mut privs = vec![0u8; privs_body + CANARY_LEN];
     install_private_init_bytes(&m, &mut privs);
-    let mut shared = vec![0u8; 4096];
-    let mut region =
-        vec![0u8; keleusma_native::region::host_arena_supplement_bytes(&m) as usize + 4096];
+    privs[privs_body..].fill(STREAM_CANARY);
+
+    let shared_body = 4096;
+    let mut shared = vec![0u8; shared_body + CANARY_LEN];
+    shared[shared_body..].fill(STREAM_CANARY);
+
+    let region_body = keleusma_native::region::host_arena_supplement_bytes(&m) as usize + 4096;
+    let mut region = vec![0u8; region_body + CANARY_LEN];
+    region[region_body..].fill(STREAM_CANARY);
 
     let mut out = Vec::new();
     let mut input = first;
@@ -530,6 +571,26 @@ pub fn general_native_sequence(src: &str, first: i64, replies: &[i64]) -> Vec<i6
         });
         input = r;
     }
+
+    // **Checked AFTER the whole sequence**, so a creep that needs many ticks to
+    // reach the sentinel is caught. A surviving canary is evidence about these
+    // ticks and this buffer — **not a proof that the arena is statically
+    // bounded**, which is a different claim this cannot establish.
+    for (what, buf, body) in [
+        ("the private region", &privs, privs_body),
+        ("the shared segment", &shared, shared_body),
+        ("the arena region", &region, region_body),
+    ] {
+        assert!(
+            buf[body..].iter().all(|&b| b == STREAM_CANARY),
+            "{what} was overrun by the lowered stream over {} tick(s). Its size \
+             comes from the published contract plus slack; something wrote past \
+             both. This is the defect class that once reached the gate as a \
+             SIGSEGV.",
+            replies.len()
+        );
+    }
+
     out
 }
 
