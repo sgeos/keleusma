@@ -92,8 +92,30 @@ relevant to `V0_5_0_KELEUSMA_HOST.md`, where a Keleusma-hosted toolchain would p
 like that.
 
 **What is next, and it is YOURS.** Closing the last two sources is a **capacity decision**, not
-another reduction. `parse` needs about 192 where the caps are 128; `wire` needs roughly four times,
-dominated by declaration-indexed tables no reduction reaches.
+another reduction.
+
+**RE-MEASURED 2026-09-14, and the `parse` figure here was STALE.** The sizing test's own comment says
+to read the numbers from a run rather than from prose, and records that the binding constraint has
+moved four times. Run:
+
+| source | tightest channel | over by |
+|---|---|---|
+| `parse` | bindings **162/128** | +34 (also declared names 151, call sites 132, declared params 133) |
+| `wire` | bindings **548/128** | 4x (declared names 499, params 492, call sites 472) |
+
+**`parse` is at 1.27x, not the ~1.5x "about 192" implied.** That is the whole of the correction.
+
+**It is NOT close to fitting, and the first draft of this note invited that misreading.** Fitting
+requires ALL FOUR channels under the cap, so the governing number is bindings at +34, with declared
+names at +23 behind it. The other two being over by only four and five rows is irrelevant to whether
+`parse` fits — quoting them beside the word "tractable" suggested a near-miss that the measurement
+does not support.
+`wire` is unchanged in character: four times, dominated by declaration-indexed tables.
+
+**A consequence for anyone tempted to edit `parse.kel` first.** Its gap fixes add bindings, which is
+its tightest channel, so they push it away from a reduction that is closer than the old figure
+suggested. That is why the five parser gaps stay unstarted here — not because a stage source is
+untouchable, but because the binding count is the scarce resource and they spend it.
 
 **THE FOUR STANDING DECISIONS, NAMED HERE BECAUSE THEY WERE FILED UNDER SUPERSEDED HISTORY.** They
 are live and unresolved, they were stated only BELOW the superseded-history line, and a reader
