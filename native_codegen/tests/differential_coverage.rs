@@ -245,16 +245,24 @@ fn every_external_witness_emits_its_opcode_and_agrees_with_the_reference() {
              The claim that this opcode has evidence rests on this."
         );
         // Link 3: **the two implementations agree on it.** Driven here, so the
-        // evidence does not depend on another file's shape. `{driver}` covers the
-        // same ground across the whole type-by-operator space; this is the
-        // standing witness for an opcode the CORPUS cannot supply.
+        // evidence does not depend on another file's shape. The recorded driver
+        // covers the same ground across the whole type-by-operator space; this is
+        // the standing witness for an opcode the CORPUS cannot supply.
+        //
+        // ⚠ **THE DRIVER NAME IS REPORTED, NOT MERELY RECORDED.** It sat in a
+        // COMMENT as `{driver}`, which reads like an interpolation and is not
+        // one, leaving the binding unused — a `-D warnings` failure that stood in
+        // the tree across four commits while the state table called the backend
+        // green. A field carried in a table and never read is a claim nothing
+        // checks; naming it in the failure is what makes it load-bearing.
         let (vm, native) =
             common::vm_and_native_two_arg(src, 0x0F0F_0F0F_0F0F_0F0F, 0x00FF_00FF_00FF_00FF);
         assert_eq!(
             vm, native,
             "`{opcode}` DIVERGES: the reference gives {vm}, native gives {native}. \
              This opcode has no result-comparing witness in the corpus, so this \
-             test is the only thing that would have caught it."
+             test is the only thing that would have caught it. `{driver}` covers \
+             the same ground more broadly and is where to look next."
         );
     }
 }

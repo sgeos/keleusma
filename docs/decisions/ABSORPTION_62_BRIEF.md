@@ -100,3 +100,77 @@ were killed at 240-360s against a ~415s runtime.
   nothing moves is worth exactly as much as the run that confirms it, and
   "obviously inert" is the premise this file's own history keeps falsifying.
 - **Reading a pipeline's exit status as the command's.** See the stamp note.
+
+---
+
+## OUTCOME
+
+**Merged cleanly. Backlog 0. Every prediction held — and the gate found something
+the absorption did not cause.**
+
+| prediction | result |
+|---|---|
+| no conflicting files | **held** — three files auto-merged from both sides |
+| no backend behaviour change | **held** — 590 tests, 0 failed, both configurations |
+| corpus 74 modules, 1 refused | **held** |
+| ISA 63 of 66, denominator 66 | **held** |
+| test population 563 in 130 files | **held** |
+| driven witnesses 62 of 66 | **held** |
+| `corpus_fingerprint.rs` silent | **held** |
+| `opcode_denominator.rs` silent | **held** |
+| `handoff_figures.rs` silent | **held** |
+| `shared_channel_discipline.rs` silent — *lowest confidence* | **held**; the addendum moved from line 2001 to 2076 as upstream grew above it, intact and attributed |
+| `outstanding_reports.rs` silent | **held** — all five reports still reproduce, so the other line has not ruled on `Fixed % Fixed` |
+| `upstream_premise_census.rs`, `comment_citations.rs` silent | **held** |
+
+## ⚠ THE GATE FAILED BEFORE THE SUITE COULD RUN, AND NOT BECAUSE OF THIS MERGE
+
+`cargo clippy --all-targets -- -D warnings` failed on an **unused binding** in
+`differential_coverage.rs`. The `WITNESSES_ELSEWHERE` table carries a `driver`
+column; the loop destructured it, and the only place the name appeared afterwards
+was **inside a comment**, written as `` `{driver}` `` — which reads like an
+interpolation and is not one.
+
+**The absorption did not cause it, and that is provable rather than argued**: the
+merge changed **zero** files under `native_codegen/`, and the offending line is
+byte-identical in `076c42b1`, `2bc0f328`, `7a28fad2` and `e32ea387`.
+
+**`2bc0f328` is the commit the handoff's state table cites** for *"590 tests, 0
+failed, BOTH float configurations, every phase FROZEN — ASSEMBLED from six runs."*
+The suite figure was true. **The clippy phase was not among the six assembled.**
+
+### The failure class, which is new to this project's catalogue
+
+**A gate run phase by phase, with the verdict assembled by hand, is only as
+complete as the assembler's list.** The script `tools/backend-gate.sh` runs four
+phases per configuration and reports one PASS or FAIL. Running the phases
+separately — which the ten-minute ceiling forces for the long one — moves the
+`fail=1` accumulation out of the script and into the operator's memory, and a
+phase can then be dropped without anything saying so. **The assembled verdict has
+no equivalent of `fail=1`.**
+
+It sits alongside the eight ways already recorded in `CLAUDE.md`, and shares the
+common property named there: the run did less than the person reading it believed.
+
+### Repaired by making the field load-bearing
+
+Not by prefixing an underscore. The driver name is now **reported in the
+divergence message**, so the column is read by the code rather than only by a
+reader. A field carried in a table and never read is a claim nothing checks.
+
+## COST, AND A SECOND OPERATIONAL FINDING
+
+Seven phases. **The narrow-configuration `corpus_differential` phase exceeded the
+ten-minute foreground ceiling and was killed**, where the same phase under default
+features completes in 427s. Split by test name it runs as 230s for the nine short
+tests and 397s for `how_deep_does_the_undetected_set_go` alone.
+
+**The handoff says the long phase must run in the FOREGROUND because background
+launches were killed. Under `narrow-float-32` the foreground is not enough
+either.** What worked: detach it with `nohup` to a log and wait on the log. Eight
+phases, then, not six — and the eighth is a split forced by the configuration
+being roughly a fifth slower.
+
+The suite ran with the clippy repair present and uncommitted. **Attribution is
+still certain**, by the same zero-files argument above; the frozen-tree check
+confirms the content did not move mid-run.
