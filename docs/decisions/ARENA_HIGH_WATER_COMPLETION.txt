@@ -1,0 +1,49 @@
+ORDERING IS NOT A COMPLETION CRITERION. The properties below may be reached in
+any order, in any number of commits. Nothing here requires a particular branch,
+commit message, or sequence of steps.
+
+All properties are checked against the worktree holding branch v0.3.0.
+
+1. ABSORPTION
+- The unabsorbed count from origin/v0.2.3 is zero, OR a document under
+  docs/decisions/ names the commits left unabsorbed and why.
+- A brief for absorption 62 exists under docs/decisions/ carrying BOTH the
+  commit it was computed against AND the unabsorbed count at that moment.
+- That brief carries an outcome that scores every prediction it made, figures
+  and guards alike, as held or failed. A prediction that failed is recorded as
+  failed with its reason; it is not edited into a hit.
+
+2. THE ARENA MEASUREMENT
+- A test under native_codegen/tests/ measures the touched extent of the arena
+  region for at least one resumable stream and asserts a relationship between
+  that extent at a low tick count and at a high one.
+- The measurement is not defeated by a written byte coinciding with a fill
+  value.
+- It carries a non-vacuity check: the measured extent is greater than zero.
+- It carries a discrimination check: subjects with different arena appetite
+  produce different extents; OR the file records, citing the measurement that
+  showed it, that no such pair is available.
+- The file states plainly that its result is evidence about the shapes and tick
+  counts driven, and is not a static bound.
+- If growth was found, or if the lowered program's output was found to depend on
+  how the arena buffer is initialised, that finding is recorded in the tree. It
+  is not worked around by changing the probe until it passes.
+
+3. THE SUITE
+- native_codegen is clean under formatting and under lints as errors, and its
+  suite passes in both float configurations.
+- Any test that does not pass is recorded as a finding rather than deleted,
+  skipped, or weakened.
+- No guard's pinned constant is changed without the change that moved it being
+  described in the tree.
+
+4. RECORDS THAT MUST NOT OUTLIVE THEIR SUBJECTS
+- The handoff for this line has state-table figures that agree with the tree,
+  and its figure guard passes.
+- No file still asserts that nothing on this line measures whether the arena
+  grows across ticks, if such a measurement now exists.
+- Any open report this line holds against the other line still reproduces, or is
+  retracted.
+
+5. TREE STATE
+- The working tree is clean and the branch's commits are on origin.
