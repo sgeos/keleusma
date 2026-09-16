@@ -1,5 +1,133 @@
 # Handoff Prompt
 
+**Refreshed 2026-09-14, describing `origin/v0.2.3` at `89a13bfb` (merge of #446).** Session 65
+landed #433 through #446 and left #447 open. Read this block, run the validity check, then stop and
+wait for the human prompt.
+
+---
+
+## Validity
+
+- **Branch**: `v0.2.3`, or a branch cut from it. On `v0.3.0`, read
+  `docs/process/handoffs/v0.3.0.md` and **do not overwrite this file**.
+- **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint.
+
+**Validate by ANCESTRY and by CONTENT, never by a hash match.** A stamp requiring `HEAD~1` to equal
+a recorded parent claims nothing else ever lands, and it has failed three times.
+
+**Ancestry**: `origin/v0.2.3` should contain **`89a13bfb`** (`Merge pull request #446`), the last
+merge before this refresh. If it does not, this file predates a reset and is stale.
+
+**Content** — cheap, independent, and each verified on 2026-09-14. Check the rendered ORDER of this
+list, not just the next unused number: this file has twice had an item inserted above its
+predecessor by an agent that had just read the warning against it.
+
+1. `scripts/fingerprint.sh` reports `0x4327_63E1`. A different value means a release was rolled and
+   every version-adjacent statement here needs re-reading.
+2. `cargo test -p keleusma --test claimed_counts` reports **12** passing. It guards the figures
+   `CLAUDE.md` restates against the sources that own them.
+3. `CLAUDE.md` says continuous integration runs **five** feature sets. If it says three, this file
+   predates the 2026-09-13 correction and the two it omitted are the ones a docs-only change has
+   already failed under.
+4. `src/selfhost/kel/` holds **12** stage sources, and **none was modified in session 65**.
+5. `tests/selfhost_typed_opcode_boundary.rs` and `keleusma-cli/tests/compile_reproducible.rs` exist.
+   Both are session-65 work; their absence means this file predates it.
+
+## What a resuming session should do first
+
+1. Run the validity check above and report the handoff valid, or invalid-and-stale, on its outcome.
+2. Read `docs/process/REVERSE_PROMPT.md` — the CURRENT STATE block at its head, then stop. It holds
+   the bounded latest state and the seven open decisions. Everything below its superseded-history
+   line is history.
+3. Check whether **#447** merged. If it is green and unmerged, merge it; routine green feature
+   merges are pre-authorised.
+4. **Wait for the human prompt.** Do not start the parser-gap work on your own — see below.
+
+## The state
+
+**Green and clean.** Fourteen pull requests merged in session 65 (#433–#446), #447 open carrying
+three commits. Nothing uncommitted, nothing unpushed.
+
+**What session 65 actually did** was not a feature. It found that claims in this repository had
+drifted from what the code does, and corrected them by running or reading the thing rather than
+reasoning about it. Six standing claims were corrected, two of them retractions of framings written
+hours earlier in the same session.
+
+Findings that outlive the session:
+
+- **A FIFTH self-hosted gap.** Bare `E::N` in expression position is refused while `E::N()`
+  compiles; the reference accepts both. Its refusal **cannot name the construct** — the syntax tree
+  records both spellings identically, so a scan arm matching that shape flags the working form, and
+  the stage-source guard rejected exactly such an arm. The fix is located at `step_enum`'s phase 3,
+  which requires `(`. **Its size is deliberately not claimed.**
+- **The typed-opcode divergence is characterised**, censused against `codegen.kel`'s own operator
+  list with every cell run. `codegen.kel` selects opcodes from the operator code ALONE, with no
+  operand type. Fixed-point `*` and `/` are the serious half: they diverge against the scale-aware
+  `FixedMul`/`FixedDiv`, a **wrong-VALUE hazard** rather than a checking difference.
+- **Byte-reproducibility is established in both senses** — same-process and cross-process, plus
+  path-independence — where nothing had tested it. **The differential oracle could not have shown
+  either**, since it compares the two backends against each other.
+- **Five facts `CLAUDE.md` restates are now guarded** against the sources that own them, after one
+  (the feature-set count) was found wrong.
+
+## What is YOURS: seven decisions, every basis re-verified
+
+Stated in full in the reverse prompt's current-state block. **Every one had its basis checked
+against the tree on 2026-09-13/14**; four confirmed, and the two that moved made the decisions
+SMALLER, not larger.
+
+1. **`Text<N>` entry spelling** — methods or free operations. The cited question is *Surface syntax*;
+   the operation's shape is settled. Smaller than earlier wordings implied.
+2. **The width bundle** — 33 signatures, 14 public, re-measured and current. Count by PARSING
+   signatures: line-based greps gave 10, then 32, then 42 before a parse gave 33.
+3. **The float `verify()` refusal** — still the cheapest. `src/verify.rs` contains ZERO mentions of
+   the feature, so the change is an addition rather than a condition threaded through. **The "ten
+   lines" figure was NOT re-measured**; re-deriving it means doing the deferred work.
+4. **Whether any build configuration earns a CI job** — the feature-axis gap is now known to be
+   **exactly one file**.
+5. **The capacity decision** — host-side, so the 16 MB frame is right. `parse` is at **1.27x**
+   (bindings 162/128), not the ~1.5x once recorded. **It is not close to fitting**: all four channels
+   must come under, and bindings is +34.
+6. **Whether the typeless codegen warrants a type channel** — the `scope/` filing is CORRECT; this
+   is a capability gap, not a mislabelled defect.
+7. **Whether the construct-support boundary table should absorb the parser gaps** — its counts are a
+   compaction anchor that adding rows would move.
+
+## What is NOT yours, and why it stays unstarted
+
+**Five self-hosted parser gaps remain**, all feature work. They are left alone for a specific reason,
+not because a stage source is untouchable: **bindings are `parse`'s tightest channel and the gap
+fixes add bindings**, pushing it away from a reduction that is closer than the old figure suggested.
+
+**A seventh host-side reduction was looked for and is not there on the obvious axis.** Dropping
+binding rows no occurrence references saves **4** rows in `parse` and **20** in `wire`, against gaps
+of 34 and ~420. Recorded so it is not re-derived.
+
+## Governing rules that are easy to lose
+
+- **The gate is a FIVE-entry feature matrix**, and compiling under a feature set is weaker than
+  RUNNING under it. Session 65 corrected `CLAUDE.md` for saying three, then failed two of the five
+  itself and turned three jobs red. **Knowing a failure class does not prevent producing it.**
+- **A mechanical guard for that class was attempted and ABANDONED.** Its three false-positive shapes
+  are in `CLAUDE.md` so the next attempt starts informed. The instrument for it is the gate.
+- **A crude instrument does not merely miss things — it can MANUFACTURE a contradiction.** Counting
+  by grep nearly refuted two figures that were correct.
+- **A citation can resolve and still be wrong.** Resolving proves the target exists, not that it says
+  what the citing text claims.
+- **Distinguish a live claim from a ledger entry.** History recording what was true at an increment
+  is not stale; rewriting it corrupts the record.
+- CI gates feature-branch merges; the local gate does not. `BYTECODE_VERSION` moves only on operator
+  authorisation (it is 2). Prefer opcode reuse — the count is 66. Irreversible or outward-facing
+  actions need confirmation; publication needs explicit in-session authorisation.
+
+---
+
+## EVERYTHING BELOW THIS LINE IS ACCUMULATED HISTORY
+
+It is retained deliberately and much of it is still useful, but it predates this refresh and is not
+a statement of current state. Where it disagrees with the block above, **the block above wins**.
+
+
 > **Navigation**: [Process](./README.md) | [Documentation Root](../README.md)
 
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept

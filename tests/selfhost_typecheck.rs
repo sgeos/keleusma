@@ -5739,6 +5739,14 @@ fn the_channel_array_counts_match_the_stage_data_block() {
 /// `wire`'s BINDINGS at six — the one channel deliberately left un-deduplicated.
 /// **Read the numbers from a run rather than from this comment.**
 ///
+/// **A SEVENTH REDUCTION WAS LOOKED FOR ON ONE AXIS AND IS NOT THERE, measured
+/// 2026-09-14.** A binding row whose name no occurrence ever references contributes
+/// nothing to the join, so dropping those is verdict-preserving by construction and
+/// was the obvious next candidate. It does not pay: **`parse` carries 4 such rows and
+/// `wire` carries 20**, against gaps of 34 and roughly 420. Recorded so the axis is
+/// not re-derived; the six reductions already taken left a residue that is genuinely
+/// referenced.
+///
 /// **A deferral becoming the constraint is worth noticing.** The binding channel
 /// was skipped because its lookup is not a simple per-row predicate and a 34%
 /// saving did not justify the reasoning at the time. It became what stood between
