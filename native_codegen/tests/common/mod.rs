@@ -478,6 +478,36 @@ pub fn general_vm_sequence(src: &str, first: i64, replies: &[i64]) -> Vec<i64> {
 /// The same chunk as native code: one call per suspension, arena-resident state.
 #[allow(dead_code)]
 pub fn general_native_sequence(src: &str, first: i64, replies: &[i64]) -> Vec<i64> {
+    general_native_arena_extent(src, first, replies, 0).0
+}
+
+/// The general driver, plus the arena region's **TOUCHED EXTENT**.
+///
+/// `general_native_sequence` is this function under a zero fill, so the two
+/// cannot drift apart: a measurement helper that duplicated the driver would be
+/// measuring a different program from the one every differential here drives.
+///
+/// # What the extent is
+///
+/// The region is pre-filled with `arena_fill`; the extent is one past the
+/// highest index that no longer holds it after the whole run. It is CUMULATIVE
+/// over every tick, and it consults none of the backend's own bookkeeping —
+/// deliberately, since reading the backend's cursor would report what it
+/// believes rather than what it did.
+///
+/// # ⚠ ONE FILL IS NOT ENOUGH, AND A CALLER USING ONE IS UNDER-REPORTING
+///
+/// A byte written with the same value as the fill is invisible. Call this twice
+/// with two distinct fills and take the larger extent; a byte can equal one
+/// pattern or the other, never both. `arena_high_water.rs` does exactly that,
+/// and is the reason this parameter exists.
+#[allow(dead_code)]
+pub fn general_native_arena_extent(
+    src: &str,
+    first: i64,
+    replies: &[i64],
+    arena_fill: u8,
+) -> (Vec<i64>, usize) {
     use inkwell::OptimizationLevel;
     use inkwell::context::Context;
     use keleusma::vm::required_persistent_capacity_for;
@@ -554,8 +584,14 @@ pub fn general_native_sequence(src: &str, first: i64, replies: &[i64]) -> Vec<i6
     let mut shared = vec![0u8; shared_body + CANARY_LEN];
     shared[shared_body..].fill(STREAM_CANARY);
 
+    // The fill must differ from the sentinel, or the overrun check below would
+    // be reporting on the fill rather than on a write.
+    assert_ne!(
+        arena_fill, STREAM_CANARY,
+        "the arena fill may not equal the overrun sentinel"
+    );
     let region_body = keleusma_native::region::host_arena_supplement_bytes(&m) as usize + 4096;
-    let mut region = vec![0u8; region_body + CANARY_LEN];
+    let mut region = vec![arena_fill; region_body + CANARY_LEN];
     region[region_body..].fill(STREAM_CANARY);
 
     let mut out = Vec::new();
@@ -591,7 +627,15 @@ pub fn general_native_sequence(src: &str, first: i64, replies: &[i64]) -> Vec<i6
         );
     }
 
-    out
+    // **THE TOUCHED EXTENT.** A canary answers "did anything write PAST the
+    // buffer?"; this answers "how much of it was used?", which is the question a
+    // creep of a few bytes per tick shows up in long before any sentinel moves.
+    let extent = region[..region_body]
+        .iter()
+        .rposition(|&b| b != arena_fill)
+        .map_or(0, |i| i + 1);
+
+    (out, extent)
 }
 
 /// Assert a resumable stream's whole yielded sequence matches the runtime's.

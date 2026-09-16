@@ -1,5 +1,48 @@
 # Design Journal
 
+## 2026-09-16 — the arena does not grow, and the plan is mostly reservation
+
+The gap named at the end of the last increment, and repeated as the handoff's
+third pickup item: nothing measured whether the arena grows across ticks. The
+canaries added two days earlier answer *"did anything write past the buffer?"*
+and are silent on *"how much of it is used?"* — and a creep of a few bytes per
+tick would pass every one of them for hundreds of ticks while the sequences kept
+agreeing, both implementations reading a buffer one had already overrun.
+
+**Method: fill the region with a known byte, drive, take the highest index that
+no longer holds it.** No consultation of the backend's own bookkeeping, which
+would report what it believes rather than what it did. **Two complementary fills,
+taking the larger extent**, because a byte written with the same value as the
+fill is invisible and one pattern would silently under-report.
+
+**The result: identical at 2, 20 and 200 ticks, for all three shapes.** And the
+instrument is not blind — it returns 16, 24 and 48 for a plain two-yield stream,
+one carrying a local across a yield, and one building a composite each tick.
+Varying with the right variable and constant in the wrong one is the whole of the
+reach argument.
+
+**The second finding was not the one being looked for.** Those extents sit inside
+plans of 520, 536 and 552 bytes. The dominant term is `stream_spill_bytes`, a
+flat 512-byte reservation for every stream chunk, of which **the deepest reach is
+one eight-byte slot**. The reservation is deliberate, fixed, static and safe, and
+its stated rationale holds. But its own comment called the waste *"a few unused
+bytes"*, and measured it is 504 of 512 and 93% to 97% of the whole plan a host is
+told to provision. Corrected at the source, with the measurement cited.
+
+**The test's first version claimed the block was untouched ENTIRELY, and its own
+assertion refuted that on the first run** — touched extents of 16 and 48 run eight
+bytes past the chunk-plus-locals prefix. The claim was corrected to the
+measurement. That is the third time this session an instrument has caught its
+author rather than the backend, and it is the reason the figure is worth quoting.
+
+**Also found, and not caused by the absorption it surfaced in**: `cargo clippy -D
+warnings` had been failing on an unused binding for four commits, including the
+one the state table cites for a gate *"assembled from six runs"*. The suite figure
+was true; the clippy phase was not among the six. **A gate run phase by phase,
+with the verdict assembled by hand, is only as complete as the assembler's list** —
+the script accumulates `fail=1`, and an assembly has no equivalent.
+
+
 ## 2026-09-14 — the stream driver had slack and no canary
 
 Following the gap named at the end of the last increment rather than inventing a

@@ -39,6 +39,11 @@
 //! **Nothing about memory.** Whether the arena grows across ticks is not measured
 //! here; only that the two implementations produce identical sequences. A bounded
 //! arena is this line's claim elsewhere and is not evidenced by this file.
+//!
+//! **That gap is now filled elsewhere, and this note is kept so the reader is
+//! sent there rather than concluding nothing measures it.** `arena_high_water.rs`
+//! measures the arena's touched extent over the same depth and finds it identical
+//! at 2, 20 and 200 ticks. It remains true that THIS file evidences none of it.
 
 mod common;
 

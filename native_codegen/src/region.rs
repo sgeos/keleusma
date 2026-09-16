@@ -261,7 +261,20 @@ pub fn stream_locals_bytes(chunk: &Chunk) -> u32 {
 ///
 /// Reserved for every stream chunk, like [`stream_locals_bytes`] and for the
 /// same reason: a predicate disagreeing with the lowering's own would be a worse
-/// defect than a few unused bytes.
+/// defect than unused bytes.
+///
+/// # ⚠ "A FEW UNUSED BYTES" WAS THIS COMMENT'S OWN WORDING, AND IT IS WRONG BY
+/// AN ORDER OF MAGNITUDE
+///
+/// Measured 2026-09-16 by `tests/arena_high_water.rs`: across three stream
+/// shapes the deepest reach into this block is **one eight-byte slot**, leaving
+/// 504 of 512 bytes untouched, and the reservation is **93% to 97% of the whole
+/// region plan** those subjects are given. The trade-off stated above still
+/// holds — over-provisioning is safe in the direction that matters, and this
+/// figure is fixed and static so the bound moves by a known constant. But the
+/// cost is the DOMINANT term of the published host figure, not a rounding
+/// detail, and a reader sizing an arena deserves to know that before quoting
+/// `host_arena_supplement_bytes` as a tight bound.
 pub fn stream_spill_bytes(chunk: &Chunk) -> u32 {
     if chunk.block_type != keleusma::bytecode::BlockType::Stream {
         return 0;
