@@ -79,24 +79,84 @@ move. Whether the boundary table should absorb the parser gaps is a call for you
 sources, up from two, at **1.6x** the shared data it uses today rather than 7.3x — a growth of
 **+33 KiB** against a 16 MB ceiling, across six verdict-preserving reductions.
 
+**THAT COST IS HOST-SIDE, AND THE 16 MB FRAME IS THE RIGHT ONE.** Checked 2026-09-13 because the
+ceiling is the WIRE FORMAT's addressing limit rather than any target's budget, and quoting it could
+have made the decision look cheaper than it is. It does not: the shared data carries
+`verify_types.kel`'s input tables, and the self-hosted compiler runs on a host. The embedded example
+executes compiled bytecode and never runs the compiler, so its budget does not bind this.
+
+**It would bind a LATER goal, and the numbers are worth having now.** The shipping RTOS example runs
+in a 256 KB RAM region with a 192 KB heap and **16 KiB per task arena**, three tasks. So +33 KiB is
+more than twice one task's entire arena on that target — irrelevant to this decision, and directly
+relevant to `V0_5_0_KELEUSMA_HOST.md`, where a Keleusma-hosted toolchain would pay it on hardware
+like that.
+
 **What is next, and it is YOURS.** Closing the last two sources is a **capacity decision**, not
-another reduction. `parse` needs about 192 where the caps are 128; `wire` needs roughly four times,
-dominated by declaration-indexed tables no reduction reaches.
+another reduction.
+
+**RE-MEASURED 2026-09-14, and the `parse` figure here was STALE.** The sizing test's own comment says
+to read the numbers from a run rather than from prose, and records that the binding constraint has
+moved four times. Run:
+
+| source | tightest channel | over by |
+|---|---|---|
+| `parse` | bindings **162/128** | +34 (also declared names 151, call sites 132, declared params 133) |
+| `wire` | bindings **548/128** | 4x (declared names 499, params 492, call sites 472) |
+
+**`parse` is at 1.27x, not the ~1.5x "about 192" implied.** That is the whole of the correction.
+
+**It is NOT close to fitting, and the first draft of this note invited that misreading.** Fitting
+requires ALL FOUR channels under the cap, so the governing number is bindings at +34, with declared
+names at +23 behind it. The other two being over by only four and five rows is irrelevant to whether
+`parse` fits — quoting them beside the word "tractable" suggested a near-miss that the measurement
+does not support.
+`wire` is unchanged in character: four times, dominated by declaration-indexed tables.
+
+**A consequence for anyone tempted to edit `parse.kel` first.** Its gap fixes add bindings, which is
+its tightest channel, so they push it away from a reduction that is closer than the old figure
+suggested. That is why the five parser gaps stay unstarted here — not because a stage source is
+untouchable, but because the binding count is the scarce resource and they spend it.
 
 **THE FOUR STANDING DECISIONS, NAMED HERE BECAUSE THEY WERE FILED UNDER SUPERSEDED HISTORY.** They
 are live and unresolved, they were stated only BELOW the superseded-history line, and a reader
 obeying this block's own instruction to stop at that line would never have reached them. The fuller
 statement of each is still there.
 
-1. **How does a value ENTER a `Text<N>`?** It appears in every program anyone writes with the type.
-   Open question 2 in [`TEXT_CAPACITY_TYPE.md`](../decisions/TEXT_CAPACITY_TYPE.md).
+1. **What SPELLING does the entry operation take?** Open question 2 in
+   [`TEXT_CAPACITY_TYPE.md`](../decisions/TEXT_CAPACITY_TYPE.md), re-read 2026-09-13. **This line
+   said "how does a value ENTER a `Text<N>`", which reads as though the mechanism is undecided.**
+   It is not: the cited question is titled *Surface syntax* and asks whether `Text<N>` gains
+   METHODS or FREE OPERATIONS — `s.push(t)` reads well and matches the authorizing example, but the
+   language's method surface is trait-impl based. The operation's shape is settled; its spelling is
+   the decision. **A smaller question than the old wording implied.** The citation resolved
+   throughout, which is why the looseness survived.
 2. **Is the width bundle worth a breaking change?** 33 signatures, 14 public, published crate.
+   **RE-CHECKED 2026-09-13: both figures are current**, across five files (`bytecode.rs`,
+   `layout_pass.rs`, `marshall.rs`, `value_layout.rs`, `verify_typed.rs`). Count signatures by
+   PARSING them, not by grepping lines: most are multi-line formatted, and line-based greps gave
+   10, then 32, then 42 here before a parse gave 33. A journal entry from 2026-08-31 records 43
+   across seven modules; that is accurate history of an earlier state, not a competing current
+   figure.
 3. **Should `verify()` refuse float opcodes when the `floats` feature is absent?** Evidence
    COMPLETE: ten lines, prototyped, zero new failures, and the semantic worry is moot because the
    lexer refuses float literals in that build. **The cheap one**, unlanded only because it was
-   called your decision in a merged document.
+   called your decision in a merged document. **The defect was re-checked 2026-09-12 and is
+   unchanged**; its BASIS was re-checked 2026-09-13 — `src/verify.rs` contains ZERO mentions of the
+   feature, so the change is an addition rather than a condition threaded through existing logic,
+   which is why it is small. **The "ten lines" figure itself was NOT re-measured**: the prototype
+   was never landed, and re-deriving it would mean performing the deferred work.
 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on the
-   WIDTH axis, unchanged on the FEATURE axis.
+   WIDTH axis, unchanged on the FEATURE axis. **Both halves re-checked 2026-09-13.**
+   *Width*: the manifest defines SIX narrow selectors (`narrow-word-8/16/32`,
+   `narrow-address-8/16/32`) and **continuous integration covers none of them** — but
+   `NARROW_WIDTH_FAILURE_CLASSIFICATION.md` records that a width-dependent defect is reachable from
+   an ordinary test in the default build, so guarding one costs no job and no matrix.
+   *Feature*: the gap's SIZE is now known exactly rather than open-ended. It is **one test file** —
+   `tests/float_opcode_without_floats.rs`, needing `verify` present and `floats` absent, a pair no
+   job produces — pinned by `the_only_test_gated_out_of_every_ci_configuration_is_the_known_one` and
+   confirmed by an independent census. Its defect was re-checked 2026-09-12 and is unchanged. **So
+   the feature-axis question is whether ONE file's coverage is worth a job**, which is a narrower
+   question than the line previously implied.
 
 Three more have been added by this session and are stated above: the type channel into
 `codegen.kel`, whether the boundary table should absorb the four parser gaps, and the capacity
@@ -114,6 +174,21 @@ expression-side twin of the bare unit-variant PATTERN gap, which was a missing b
 fixed**. **Its refusal does not name the construct and cannot**: the syntax tree records both
 spellings identically, so a scan arm matching that shape flags the working one, and the
 stage-source guard rejected exactly such an arm by pointing at `Node::Local()` in `parse.kel`.
+
+**THE TOOLCHAIN'S BYTE-REPRODUCIBILITY IS NOW ESTABLISHED, IN BOTH SENSES, AND NEITHER WAS TESTED
+BEFORE.** The roadmap requires it "so the fixed-point and differential-oracle checks are meaningful".
+Compiling one source twice in a single process gives the same module
+(`tests/selfhost_repeat_compile.rs`), and three separate runs of the shipping binary give
+byte-identical artefacts for both backends, with the input path not reaching the output even under
+`--debug` (`keleusma-cli/tests/compile_reproducible.rs`).
+
+**The differential oracle could not have established either**, because it compares the two backends
+against each other: a non-determinism they shared would pass unnoticed. The pre-existing
+counter-reset guard is STATIC — it scans stage sources for a counter never assigned zero, one known
+cause that cost a four-cause diagnosis — so it cannot catch a cause nobody has thought of.
+
+**Neither file claims reproducibility across machines or toolchain versions.** A source of variation
+constant for a given build would pass both, and both say so.
 
 **None of the four blocks self-hosting**, and the reason is structural: all twelve stages compile
 through the pipeline byte-identically, so no stage can contain a construct the pipeline cannot

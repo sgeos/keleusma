@@ -1066,7 +1066,8 @@ fn the_instructions_state_the_feature_sets_ci_actually_runs() {
 /// added opcode belongs to the compiler, not to this guard.
 ///
 /// The `Value` slot width was mutation-tested from the prose side too: stating 40 where the
-/// source pins 32 fails, naming both. The source's own const assertion already fails the
+/// source pins 32 fails, naming both. The spec's opcode count likewise: stating 65
+/// where the enum has 66 fails, naming both and noting the book chapter derives from it. The source's own const assertion already fails the
 /// BUILD on a layout change, so this catches the other order — a layout change made
 /// together with an update to that assertion, leaving the instructions stale.
 ///
@@ -1137,6 +1138,20 @@ fn the_instructions_state_the_structural_numbers_the_source_owns() {
         .and_then(|rest| rest.split(',').next())
         .and_then(|n| n.trim().parse::<u16>().ok())
         .expect("read the Value size assertion from src/bytecode.rs; if it was reworded, fix this extraction rather than deleting the check");
+    // --- the SPEC's opcode count ------------------------------------------------------
+    //
+    // The instruction-set spec restates the same number for readers, and the book chapter is
+    // GENERATED from it (`scripts/gen-book-instruction-set.py`, enforced in CI), so checking
+    // the spec covers the user-facing copy too. A wrong count here misleads someone reading
+    // the instruction set, which is worse than a stale figure in a process document.
+    const SPEC: &str = include_str!("../docs/spec/INSTRUCTION_SET.md");
+    assert!(
+        SPEC.contains(&alloc_fmt("contains ", variants as u16)),
+        "the Op enum has {variants} variants and the instruction-set spec states a different \
+         count. The book chapter is generated from that spec, so the user-facing reference is \
+         wrong too"
+    );
+
     assert!(
         INSTRUCTIONS.contains(&alloc_fmt("`Value` slot is ", slot)),
         "the source pins the Value slot at {slot} bytes and the instructions state a \

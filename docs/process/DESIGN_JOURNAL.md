@@ -4095,6 +4095,54 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-13 (ninety-first) — the resume prompt had already described the mistake I made
+
+### THE HANDOFF IS VALID, CHECKED BY ITS OWN RULES
+
+Its validity section defines the check, and the project file warns that an earlier prescribed
+check — comparing a recorded parent to `HEAD~1` — has failed three times and would report a current
+handoff as stale. Following the file's own rules instead: ancestry holds, the fingerprint matches,
+the release process still says seven crates, and both named tests are present. **Valid**, so no
+wholesale refresh; the bounded current-state channel is the reverse prompt, which is current.
+
+### TWO TRACKED DOCUMENTS DISAGREED ABOUT A CHECKABLE FACT
+
+`HANDOFF.md` says plainly: **"The gate is a five-entry feature matrix."** `CLAUDE.md` said three,
+until this session corrected it. Both are tracked, both are read, and nothing compared them. The
+correction made two increments ago is therefore corroborated by a document that had the right number
+all along — which also means the instruction file could have been fixed at any point by reading the
+resume prompt.
+
+### AND THE HANDOFF HAD ALREADY DESCRIBED MY DEFECT, IN ADVANCE
+
+Its 2026-08-26 entry: a run of only `--features self-host` was green on all three signals and
+continuous integration went red on four jobs, because a new test file driving the stage carried no
+`#![cfg(feature = "self-host")]`. It ends: **"a new test in this family that omits it is red by
+construction."**
+
+That is exactly what I did, in the same file family, in a session where I had read this document and
+corrected a claim inside it. The entry even generalises it correctly: "Three independent signals over
+one feature set are still one feature set."
+
+### WHAT IS ACTUALLY LEARNED
+
+The document's own line applies to itself: **knowing the failure does not prevent it.** That
+sentence appears in this file about a numbering mistake made twice by an agent that had just read the
+paragraph warning against it.
+
+So the useful response is not another note. It is that the gate — which builds all five — is the
+instrument, and reading about the matrix is not running it. The abandoned scan from the previous
+increment reached the same conclusion from the other direction.
+
+### ONE CORRECTNESS CHECK WORTH RECORDING
+
+"The three feature sets WITHOUT the feature failed to compile it" looks wrong against five sets, of
+which four lack `self-host`. It is right: `--no-default-features` also lacks `compile` and `verify`,
+so it never builds that file, leaving exactly three that do. The historical record is accurate and
+was left untouched.
+
+---
+
 ## 2026-09-12 (ninetieth) — a reproducibility test, a fifth gap, and a guard catching me again
 
 ### THE PROPERTY THE ORACLE DEPENDS ON WAS NOT TESTED

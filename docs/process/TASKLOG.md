@@ -34,6 +34,37 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-13, session 65, increments 89 onward). THE SESSION'S LAST BLOCK.**
+>
+> Same convention as the note below: one entry, with per-increment reasoning in
+> [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.md).
+>
+> **A FIFTH self-hosted gap.** A BARE unit enum variant in expression position (`E::N`) is refused
+> while the parenthesised `E::N()` compiles; the reference accepts both. It is the expression-side
+> twin of the bare unit-variant PATTERN gap fixed earlier in this session. **Its refusal cannot name
+> the construct** -- the syntax tree records both spellings identically, so a scan arm matching that
+> shape flags the working form, and the stage-source guard rejected exactly such an arm. The fix is
+> located: `step_enum`'s phase 3 requires `(`. Shape stated, size deliberately not claimed.
+>
+> **Byte-reproducibility is established in both senses and was untested before.** Same-process and
+> cross-process, plus the input path not reaching the artefact even under `--debug`. **The
+> differential oracle could not have shown either**, since it compares the two backends against each
+> other.
+>
+> **The instruction file said THREE feature sets; there are FIVE.** The two omitted are exactly the
+> two an earlier increment's change failed under. `HANDOFF.md` had said five all along and nothing
+> compared them. Guarded now, along with `BYTECODE_VERSION`, the opcode count, the `Value` slot
+> width, and the instruction-set spec's opcode count.
+>
+> **AND THE AUTHOR OF THAT CORRECTION THEN FAILED TWO OF THE FIVE**, turning three CI jobs red with
+> a test calling into a `self-host`-gated module from an ungated item -- a defect `HANDOFF.md`
+> already described, ending "a new test in this family that omits it is red by construction".
+> **Knowing a failure class does not prevent producing it.** A mechanical guard for it was attempted
+> and ABANDONED; the reasons are in `CLAUDE.md` so the next attempt starts informed.
+>
+> **Frontier unchanged**: the remaining work touches a `.kel` stage source, which bears on the
+> capacity decision, or waits on one of the standing operator rulings.
+
 > **Currency note (2026-09-12, session 65, increments 79-88). ONE NOTE FOR ELEVEN INCREMENTS,
 > DELIBERATELY.**
 >
