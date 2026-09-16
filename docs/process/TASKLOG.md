@@ -10,6 +10,36 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-16, session 66, first increment). AUDIT H1.**
+>
+> **The verifier could be made to hang forever, or to abort the process, by a module
+> differing from a valid one in a single `If` operand.** Fixed. Every region walker
+> in `src/verify.rs` advances its cursor to a position taken from an `If`, `Else` or
+> `Loop` operand; a backward operand repeats the walk forever, and the recursive
+> If-Else arm overflows the stack and aborts, which does not unwind and so cannot be
+> defended against by wrapping the call. Three public entries reached a walker with
+> the operand unvalidated, `verify` among them, because it computed the productivity
+> classification before the pass that validates targets. Measured exhaustively on a
+> seventeen-instruction chunk: four positions hung, four aborted.
+>
+> **H1 is a sibling of F1 and G1 along an axis those rounds' fix shape could not
+> reach.** Both hardened these same functions against an out-of-bounds index with
+> clamps. An in-range backward target passes every clamp and is a liveness fault,
+> not an indexing fault.
+>
+> **The harness that found it is the one this project's security audit asked for.**
+> Its Coverage note names "a hostile-bytecode corpus driven through the full safe
+> `Vm::new`" as the most valuable missing addition; it had never been built.
+> `tests/hostile_module_mutation.rs` is 4216 mutants in under five seconds, and its
+> census reports zero encoder and zero loader refusals, so the whole burden falls on
+> `verify`.
+>
+> **Not closed, and not claimed**: recursion DEPTH is still unbounded on all-forward
+> targets, and whether that is reachable has not been measured.
+>
+> **Frontier unchanged otherwise**: no `.kel` stage source was touched, no opcode, no
+> `BYTECODE_VERSION`, and the seven operator decisions are untouched.
+
 > **Currency note (2026-09-13, session 65, increments 89 onward). THE SESSION'S LAST BLOCK.**
 >
 > Same convention as the note below: one entry, with per-increment reasoning in

@@ -10,6 +10,67 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
+**2026-09-16, session 66, first increment.**
+
+**THE VERIFIER COULD BE MADE TO HANG FOREVER, OR TO ABORT THE PROCESS, BY A MODULE
+DIFFERING FROM A VALID ONE IN A SINGLE `If` OPERAND. THAT IS FIXED (audit H1).**
+
+Every region walker in `src/verify.rs` advances its cursor to a position taken from
+an `If`, `Else` or `Loop` operand. A **backward** operand sends the cursor to a
+position already passed and the walk repeats forever; where the operand selects the
+recursive If-Else arm instead, the sub-region still contains the same `If` and the
+recursion does not bottom out, overflowing the stack and **aborting**. An abort does
+not unwind, so a host cannot defend itself by wrapping the call.
+
+Three public entries reached a walker with the operand unvalidated: `verify`
+computed `compute_always_yielding` **before** `verify_chunk`, so pass 1 had
+validated nothing, and `wcet_stream_iteration` and `wcmu_stream_iteration` are
+documented as standalone and ran pass 1 at no point. Measured exhaustively on a
+seventeen-instruction chunk: **four positions hung, four aborted.**
+`check_forward_control_flow_targets` now runs on every chunk before any walk reads a
+target, at all three entries. Pass 1's stronger structured-position check is
+untouched.
+
+**H1 IS A SIBLING OF F1 AND G1 THAT THOSE ROUNDS COULD NOT HAVE REACHED.** Both
+hardened these same functions, reading the hazard as an out-of-bounds index and
+fixing it with clamps. A target that is **in range but backward** passes every clamp
+and is not an indexing fault: it is a liveness fault.
+
+**THE HARNESS THAT FOUND IT IS THE ONE THE SECURITY AUDIT ASKED FOR.** The Coverage
+note at the foot of `docs/decisions/SECURITY_AUDIT_V0_2_1.md` lists "a
+hostile-bytecode corpus driven through the full safe `Vm::new`" as the most valuable
+missing addition. The wire-format fuzz target beside it in that list existed; this
+did not. It is `tests/hostile_module_mutation.rs`: 4216 mutants, 3562 refused by
+verification, 654 verified and run, in under five seconds.
+
+**It mutates the `Module` and re-encodes, and that is not a detail.**
+`tests/format_fingerprint.rs` records that a byte edit to a serialized module is
+caught by a checksum before the header is read, so a byte fuzz measures the
+checksum. An attacker computes a valid checksum. The census confirms the choice:
+**zero** mutants were refused by the encoder and **zero** by the loader, so the whole
+burden falls on `verify`.
+
+**WHAT IS NOT CLOSED, AND IS NOT CLAIMED.** The check makes targets forward; it does
+not bound recursion **depth**. A chunk whose targets are all forward can still nest,
+and nesting is what the recursive walkers consume stack on. **Whether that is
+reachable has not been measured.** It is written in the guard's own documentation
+rather than left implicit. This is the obvious next increment and it needs no
+ruling.
+
+**Four candidate goals died against existing coverage before this one was chosen** —
+wire error correction, the Keleusma-level parity plane, empirical worst-case bounds,
+and the wire decoder fuzz are all already covered. Recorded in the journal so they
+are not re-derived.
+
+**THE SEVEN OPERATOR DECISIONS BELOW ARE UNCHANGED AND UNTOUCHED BY THIS WORK.** No
+file under `src/selfhost/kel/` was modified, so the capacity decision is
+unprejudiced. No opcode, no `BYTECODE_VERSION`, no wire-format change.
+
+**Verification.** The workspace suite is green at 2873 tests under default features.
+The remaining four feature sets are CI's to run, per the git strategy.
+
+---
+
 **2026-09-12, session 65, through the eighty-ninth increment.**
 
 **THE SELF-HOSTED CODEGEN HAS NO OPERAND TYPES. THAT IS THE WHOLE OF `scope/float_arith__GAP`.**

@@ -156,6 +156,73 @@ fn analyze_yield_coverage(
     Some(has_yielded)
 }
 
+/// Reject a chunk whose structured-control-flow operands do not point
+/// **forward**, before any region walk reads them (audit H1).
+///
+/// # The defect this closes
+///
+/// Every region walker in this module — [`analyze_yield_coverage`],
+/// [`wcet_region`], [`wcmu_region`] and [`verify_depth_region`] — advances its
+/// cursor to a position taken from an `If`, `Else` or `Loop` operand. A
+/// backward operand moves the cursor to a position it has already passed, and
+/// the walker then re-reads the same instruction forever; where the operand
+/// instead selects the recursive If-Else arm, the region it recurses into
+/// still contains the same `If`, and the recursion does not bottom out.
+///
+/// Both were reachable on hostile input, and neither is a hypothetical:
+///
+/// - `verify` computed [`compute_always_yielding`] **before** `verify_chunk`,
+///   so pass 1's target validation had not run on any chunk yet. A single
+///   backward `If` operand in an otherwise valid module hung `verify`, or
+///   aborted the process with a stack overflow, which no caller can catch.
+/// - [`wcet_stream_iteration`] and [`wcmu_stream_iteration`] are public and
+///   documented as standalone; they never ran pass 1 at all.
+///
+/// # Why a separate check rather than a guard in each walker
+///
+/// The walkers are four, the operands are three, and a guard per cursor
+/// assignment is twelve places to keep right. The property is a property of
+/// the chunk, so it is checked once, on the chunk, before anything walks it.
+///
+/// # What it does NOT establish
+///
+/// Forward and in range is what termination needs; it is weaker than pass 1's
+/// structured-position check (audit D2), which additionally requires each
+/// target to be the matching `Else` or `EndIf`. Pass 1 still runs and still
+/// enforces that. This check exists to make the walkers terminate, not to
+/// replace the structural validation.
+///
+/// It also does not bound recursion DEPTH. A chunk whose targets are all
+/// forward can still nest arbitrarily, and nesting is what the recursive
+/// walkers consume stack on. See
+/// `tests/verify_hostile_termination.rs`, which measures where that stands.
+fn check_forward_control_flow_targets(chunk: &Chunk) -> Result<(), VerifyError> {
+    let ops = &chunk.ops;
+    let n = ops.len();
+    for (ip, op) in ops.iter().enumerate() {
+        let (what, target) = match op {
+            Op::If(t) => ("If", *t as usize),
+            Op::Else(t) => ("Else", *t as usize),
+            Op::Loop(t) => ("Loop", *t as usize),
+            _ => continue,
+        };
+        // `<= n` rather than `< n`: a target of exactly `n` denotes the
+        // position one past the last instruction, which the walkers use as an
+        // exclusive region end and never dereference.
+        if target <= ip || target > n {
+            return Err(VerifyError {
+                chunk_name: chunk.name.clone(),
+                message: alloc::format!(
+                    "{what} at {ip} targets {target}, which is not a forward position \
+                     within the chunk (len={n}); a non-forward target makes the region \
+                     walks non-terminating"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Classify which chunks yield on *every* path from entry to return, accounting
 /// for delegation. A chunk is in the returned set when every path through it
 /// passes a `Yield` or a `Call` to a chunk already in the set. This is the
@@ -1221,6 +1288,11 @@ pub fn wcmu_stream_iteration_with_value_slot_bytes(
             message: String::from("wcmu_stream_iteration requires a Stream block"),
         });
     }
+    // Audit H1: this entry is public and documented as standalone, so
+    // `verify_chunk`'s pass 1 has not run and no target has been validated.
+    // The region walk below follows those operands, and a backward one does
+    // not terminate.
+    check_forward_control_flow_targets(chunk)?;
 
     let ops = &chunk.ops;
     let stream_pos = ops
@@ -1341,6 +1413,11 @@ pub fn wcet_stream_iteration_with_cost_model(
             message: String::from("wcet_stream_iteration requires a Stream block"),
         });
     }
+    // Audit H1: this entry is public and documented as standalone, so
+    // `verify_chunk`'s pass 1 has not run and no target has been validated.
+    // The region walk below follows those operands, and a backward one does
+    // not terminate.
+    check_forward_control_flow_targets(chunk)?;
 
     let ops = &chunk.ops;
     let stream_pos = ops
@@ -2277,6 +2354,14 @@ pub fn chunk_verification_obligations(
 /// 5. Productivity rule (Stream chunks only): All control flow paths from
 ///    Stream to Reset pass through at least one Yield.
 pub fn verify(module: &Module) -> Result<(), VerifyError> {
+    // Control-flow targets first (audit H1). The productivity classification
+    // below walks regions using these operands, and it runs BEFORE
+    // `verify_chunk`'s pass 1, so without this nothing has validated them yet.
+    // A backward target does not merely give a wrong answer: it makes the walk
+    // non-terminating, or overflows the stack and aborts the process.
+    for chunk in &module.chunks {
+        check_forward_control_flow_targets(chunk)?;
+    }
     // Inter-procedural productivity classification, computed once for the module:
     // which chunks yield on every path (directly or by delegating to another
     // always-yielding chunk). A Stream chunk may satisfy its productivity
@@ -4204,6 +4289,14 @@ mod tests {
         // `exit - 1` body delimiter to a verifier-time panic. A returned error
         // (rather than a panic) is itself the assertion that the totality of the
         // verifier is preserved.
+        //
+        // **The rejecting check changed with audit H1, and the contract did
+        // not.** An exit of zero is not a forward position, so
+        // `check_forward_control_flow_targets` now refuses it before pass 1's
+        // structured `expected exit` check is reached. E1's own check is still
+        // exercised, by `loop_exit_not_after_endloop_rejected`, whose hostile
+        // exit is forward and therefore reaches it. What this test asserts is
+        // what it always asserted: the verifier returns rather than panicking.
         let chunk = make_chunk(
             "hostile",
             vec![
@@ -4216,7 +4309,7 @@ mod tests {
         let module = make_module(vec![chunk]);
         let err = verify(&module).unwrap_err();
         assert!(
-            err.message.contains("expected exit"),
+            err.message.contains("expected exit") || err.message.contains("forward position"),
             "expected a Loop-exit rejection, got: {}",
             err.message
         );

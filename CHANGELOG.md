@@ -9,6 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A hostile-bytecode mutation corpus driven through the full safe `Vm::new`,
+  and the verifier defect it found on its first run.** The security audit's own
+  coverage note named this corpus as the most valuable missing addition and it
+  had never been built. It mutates a compiled module and re-encodes the artifact
+  around the mutation rather than flipping bytes in a serialized one, because a
+  measurement already in the tree records that a byte edit is caught by a
+  checksum before the header is read, so a byte fuzz measures the checksum and
+  not the verifier; an attacker who constructs bytecode computes a valid
+  checksum as readily as the compiler does. Four thousand two hundred and
+  sixteen mutants over six programs now carry the invariant that every mutant is
+  refused by the encoder, the loader or the verifier, or else runs without
+  panicking and without hanging, and the reach census fails if mutants stop
+  arriving at the stages under test. On the tree as it stands, three thousand
+  five hundred and sixty-two are refused by verification and six hundred and
+  fifty-four verify and run.
+
+- **The verifier no longer hangs or aborts the process on a hostile module.**
+  Every region walker in the verifier advances a cursor to a position taken from
+  a conditional, alternative, or loop operand. A backward operand sends the
+  cursor to a position already passed and the walk repeats forever; where the
+  operand instead selects the recursive alternative arm, the sub-region still
+  contains the same conditional and the recursion does not bottom out,
+  overflowing the stack and aborting. Three public entries reached a walker with
+  the operand unvalidated: verification computed its productivity classification
+  before the pass that validates targets, and the two standalone worst-case
+  execution time and memory usage entries are documented as usable without
+  verification and ran that pass at no point. Measured on a module differing
+  from a valid one by a single conditional operand, verification hung at four of
+  seventeen instruction positions and aborted at four more; an abort does not
+  unwind, so a host could not defend itself by wrapping the call. Control-flow
+  targets are now required to be forward and in range on every chunk before any
+  walk reads them, at all three entries. The check is weaker than the structured
+  position validation, which still runs unchanged, and exists to make the walks
+  terminate. This is a denial of service on the component whose contract is to
+  bound an untrusted input rather than a memory-safety defect, and it is
+  unreachable from compiler output, which emits only forward targets. It does
+  not bound recursion depth, and the guard says so.
+
 - **The wholly-default private-slot initialiser pool is elided, taking the
   auxiliary body down by a factor of 6.9.** A private slot with no explicit
   initialiser is zero, and the compiler materialised that as one constant per slot

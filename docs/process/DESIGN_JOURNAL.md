@@ -13,6 +13,121 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-16 (ninety-second) — the audit named the missing instrument, and it found a defect the audit's own fixes had walked past
+
+### THE FRONTIER CLAIM WAS TESTED, NOT INHERITED
+
+`HANDOFF.md` says the remaining work touches a `.kel` stage source or waits on an
+operator ruling. That is a strong claim and it gates everything, so it was checked
+rather than believed. Four candidate gaps were proposed and **four died against
+existing coverage**, which is worth recording so they are not re-derived:
+
+| candidate | what refuted it |
+|---|---|
+| the wire format's error correction is untested | `keleusma-wire/tests/ecc.rs` runs EVERY single-bit and EVERY double-bit fault; `src/ecc.rs` repeats it at the codeword |
+| Keleusma emits a parity plane and never reads one | `tests/secded_end_to_end.rs` carries it through a real module |
+| the worst-case bounds are never checked empirically | `c7_loop_bound_soundness.rs` and seven sibling files |
+| the wire decoder is unfuzzed | `tests/wire_fuzz.rs`, fixed-seed and replayable |
+
+**The fifth survived, and it was not a guess.** The foot of
+`docs/decisions/SECURITY_AUDIT_V0_2_1.md` carries a Coverage note listing what the
+suite lacks, and its first item is *"a hostile-bytecode corpus driven through the
+full safe `Vm::new`"*. The wire-format fuzz target beside it in that list had been
+built. This one had not. `tests/typed_conformance.rs` samples the surface with five
+hand-written mutations, each recreating one audit finding, and says so in its own
+header.
+
+### THE DESIGN WAS FORCED BY A MEASUREMENT ALREADY IN THE TREE
+
+The obvious harness flips bytes in a serialized module. `tests/format_fingerprint.rs`
+records, from measurement rather than reasoning, that such an edit "is caught by a
+checksum long before the header is read". **A byte fuzz measures the cyclic
+redundancy check.** An attacker who constructs bytecode computes a valid checksum as
+readily as the compiler does, so the faithful model mutates the `Module` and
+re-encodes around it.
+
+The census vindicates the choice and is the reason it is printed rather than only
+asserted on: of 4216 mutants, **zero** were refused by the encoder and **zero** by
+the loader. The artifact is well formed at every layer below the one under test, so
+the entire burden falls on `verify`, which is where the threat model puts it.
+
+### H1: THE VERIFIER DOES NOT TERMINATE ON A HOSTILE MODULE
+
+The first run never finished. Sampling the process put 2420 of 2476 stack samples in
+`analyze_yield_coverage`, on a single mutant.
+
+Every region walker in `src/verify.rs` advances its cursor to a position taken from
+an `If`, `Else` or `Loop` operand. A **backward** operand sends the cursor to a
+position already passed and the walk repeats forever; where the operand instead
+selects the recursive If-Else arm, the sub-region still contains the same `If` and
+the recursion does not bottom out, **overflowing the stack and aborting the
+process**. An abort does not unwind, so no `catch_unwind` and no watchdog can turn
+it into a named failure, and a host cannot defend itself by wrapping the call.
+
+Three public entries reached a walker with the operand unvalidated. `verify` computed
+`compute_always_yielding` *before* `verify_chunk`, so pass 1 had validated nothing on
+any chunk; `wcet_stream_iteration` and `wcmu_stream_iteration` are documented as
+standalone and ran pass 1 at no point. Swept exhaustively rather than sampled,
+because the outcome is position-dependent: on a seventeen-instruction chunk,
+`verify` hung at four positions and aborted at four more, and a sample would have
+reported whichever it drew.
+
+**The fix is at the ordering, not at the twelve cursor assignments.** Four walkers
+times three operands is twelve places to keep right; the property is a property of
+the chunk, so it is checked once, on the chunk, before anything walks it.
+
+### THE MOST USEFUL THING HERE IS THAT F1 AND G1 TOUCHED THESE EXACT FUNCTIONS
+
+F1 hardened `analyze_yield_coverage`, `wcet_region` and `wcmu_region` against a
+**panic** from an out-of-range target. G1 closed the last slice-clamp sibling. Both
+rounds read the hazard as an out-of-bounds index and fixed it as one.
+
+A target that is **in range but backward** passes every clamp those rounds added,
+and is not an indexing fault at all. It is a liveness fault. So the eighth round of
+the same-class pattern held, but along an axis the previous rounds' fix *shape*
+could not have reached. Auditing a function for one failure mode does not audit it,
+and the clamps are evidence about clamping before they are evidence about the
+function.
+
+### AND I PRODUCED THE SAME CLASS OF ERROR INSIDE THE SAME INCREMENT
+
+The harness originally watchdogged **only execution**, on the written reasoning that
+only execution had a documented reason to be unbounded on a mutated input. The first
+run then hung inside `verify` — the phase whose entire purpose is to bound an
+untrusted input. The file's header now carries that inversion rather than quietly
+covering every phase, because the reasoning error is more transferable than the fix.
+
+Three further failures, each a real consequence of the change and each caught by a
+guard that already existed:
+
+- `loop_exit_zero_rejected_without_panic` pinned E1's message; H1 now refuses
+  `Loop(0)` first. E1's own check stays covered by
+  `loop_exit_not_after_endloop_rejected`, whose hostile exit is **forward** and
+  therefore still reaches it. The test's real contract, return rather than panic,
+  is unchanged.
+- `every_comment_citation_resolves_or_is_a_recorded_debt` caught a citation in my
+  own header naming a test I had folded away.
+- `the_verify_citations_point_at_what_the_document_says_they_do` caught three
+  proof-evidence line pins moved by the insertion. The live citations were updated
+  and `DESIGN_JOURNAL.md` and the archived handoff were **not**, being ledger
+  entries rather than live claims.
+
+### NON-VACUITY WAS ESTABLISHED, NOT ASSUMED
+
+Four of the six regression tests fail against the unfixed verifier, with the exact
+hang messages; `src/verify.rs` was restored byte-identical afterwards and checked.
+A termination guard that would pass without the fix is worth nothing, and this class
+of guard is unusually easy to write vacuously.
+
+### WHAT IS NOT CLOSED
+
+The check makes targets forward. It does **not** bound recursion depth, and a chunk
+whose targets are all forward can still nest. **Whether that is reachable has not
+been measured**, and no claim is made either way. It is stated in the guard's own
+documentation rather than left implicit.
+
+---
+
 ## 2026-09-13 (ninety-first) — the resume prompt had already described the mistake I made
 
 ### THE HANDOFF IS VALID, CHECKED BY ITS OWN RULES
