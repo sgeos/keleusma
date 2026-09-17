@@ -1,0 +1,40 @@
+ORDERING IS NOT A COMPLETION CRITERION. The properties below may be reached in
+any order, in any number of commits, on any branch. Nothing here requires a
+particular sequence, commit message, or process step.
+
+Checked against the worktree holding branch v0.3.0.
+
+1. PACKING IS EXERCISED, NOT JUST VALUES
+- A test stores the result of byte arithmetic into a composite field and reads it
+  back, comparing against the reference.
+- At least one subject places a byte-derived field beside another field, so that a
+  wrong width shifts a neighbour's offset and is detectable.
+- At least one subject's field value comes from byte division or modulo, the case
+  newly reachable.
+
+2. REACH IS SHOWN
+- The tree records a perturbation of the emitter that this packing coverage
+  catches — for example restoring the unknown width, or mis-sizing a field.
+- If a perturbation could not be made to fire, that is recorded as a finding
+  rather than omitted.
+
+3. THE OUTCOME IS RECORDED EITHER WAY
+- If packing is correct, the tree says so with the evidence and its scope.
+- If packing is wrong, the tree records it, and the width propagation is reverted
+  to the refusing behaviour rather than the packing being patched around.
+
+4. SCOPE IS STATED
+- The tree says what the packing coverage does not reach.
+- A green run is not described as a correctness claim about composite layout
+  generally.
+
+5. THE SUITE
+- native_codegen is clean under formatting and under lints as errors, and its
+  suite passes in both float configurations.
+- Any guard whose pinned figure changed has the change explained in the tree.
+- Nothing is weakened, skipped or deleted to make a run green.
+
+6. RECORDS AND TREE STATE
+- The handoff for this line has state-table figures agreeing with the tree, and
+  its figure guard passes.
+- The working tree is clean and the branch's commits are on origin.
