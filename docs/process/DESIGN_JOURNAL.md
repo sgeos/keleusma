@@ -1,5 +1,33 @@
 # Design Journal
 
+## 2026-09-17 — consolidation, two negative leads, and a scoping stated rather than assumed
+
+The measurable work this line owns alone is finished. Backlog zero. Two leads
+chased and both empty: **both declared cargo features are covered by the gate**,
+and **the one test that can skip on a missing toolchain is already named by
+`skippable_tests.rs` and does not skip here**. Recorded so they are not re-chased.
+
+The handoff's newest session block now covers the last four increments —
+absorption 63, the stage arena measurement, report six, and the optimiser work —
+by EXTENDING that block rather than adding a rival section. The file once carried
+seven titled *RESUME HERE*, with the one labelled LAST above the one labelled
+LATEST. An ancestry anchor for the optimiser work joins the block; **149 anchors
+run, 0 failures.**
+
+**A scoping decision, stated because this session catalogued the failure of not
+stating them.** The consolidation is documentation-only, so the two corpus phases
+were not re-run. That is not a forgotten phase: the three tests that read the
+handoff — `handoff_figures`, `corpus_fingerprint`, `delegated_subject_census` —
+all live in the phase that WAS run, in both configurations, and
+`corpus_differential` reads no path under `docs/` at all. **Checked mechanically,
+not reasoned about.**
+
+The distinction matters because the ninth catalogue row added today says an
+assembled verdict is only as complete as the assembler's list. **The corrective is
+not "never assemble" — the ten-minute ceiling forces it — but "say what the
+assembly covered and how you know".**
+
+
 ## 2026-09-17 — the optimiser sweep nobody had run, and the coverage that would have survived it being dead
 
 Three checkable facts made a gap: every execution differential runs at `-O0`,
