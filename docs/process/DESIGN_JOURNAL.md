@@ -1,5 +1,35 @@
 # Design Journal
 
+## 2026-09-17 — the stream-width file tested a different path than it claimed
+
+Asked whether the six repaired widths survive a `yield`. Five subjects carried
+values across suspensions and agreed over sixty ticks. **Then the perturbation
+showed they reach the wrong mechanism entirely.**
+
+There are TWO width tables. **`local_widths`** is what a local carries;
+**`spilled`** holds the `(width, kind)` pairs of operands BENEATH the yielded
+value, saved at the suspension and restored at the resume point — and its own
+comment warns that a value restored at the wrong width is *"a silently wrong number
+rather than a fault"*.
+
+**Every one of the five subjects stored its value in a `let`**, so all five used
+`local_widths` and none touched the spill slice. Corrupting the restored widths to
+`Unknown` left all five passing, and `stream_depth.rs` too.
+
+A sixth subject fixes it: a `Byte` left on the OPERAND STACK across the suspension
+and consumed afterwards by a byte add, which needs a matched one-byte pair. **With
+the restore corrupted it refuses; with it intact it agrees.** That is now the only
+thing in this package known to detect a width lost on the resume path.
+
+**The file's header said it was testing the resume path. It was not.** The claim
+and the subjects disagreed, and only the perturbation could tell them apart —
+because a value carried in a local across a yield LOOKS exactly like a value
+carried on the stack across a yield, from the source text.
+
+**That is the seventh instrument this session that looked like coverage and was
+not**, and the third whose author was told by a perturbation rather than a guard.
+
+
 ## 2026-09-17 — a scoping stated, and checked mechanically
 
 The record correction is a COMMENT in `src/lib.rs` plus one test file, so the two
