@@ -11,7 +11,7 @@
 //!
 //! | could fill a field | could not |
 //! |---|---|
-//! | `param`, `add`, `sub`, `mul`, `neg`, literal | `div`, `mod`, `band`, `bor`, `bxor` |
+//! | `param`, `add`, `sub`, `mul`, `neg`, literal, compare, call | `div`, `mod`, `band`, `bor`, `bxor`, and **all four shifts** |
 //!
 //! **A refusal is not a wrong answer**, and this one erred safely for as long as
 //! it existed. What it cost was capability, silently: no composite field could
@@ -47,6 +47,12 @@ const WORD_PRODUCERS: &[(&str, &str)] = &[
     ("band", "(a band b)"),
     ("bor", "(a bor b)"),
     ("bxor", "(a bxor b)"),
+    ("lsl", "(a lsl 2)"),
+    ("lsr", "(a lsr 2)"),
+    ("asl", "(a asl 2)"),
+    ("asr", "(a asr 2)"),
+    ("compare", "(if a > b { 1 } else { 0 })"),
+    ("call", "g(a)"),
 ];
 
 const BYTE_PRODUCERS: &[(&str, &str)] = &[
@@ -59,6 +65,8 @@ const BYTE_PRODUCERS: &[(&str, &str)] = &[
     ("band", "((a as Byte) band (b as Byte))"),
     ("bor", "((a as Byte) bor (b as Byte))"),
     ("bxor", "((a as Byte) bxor (b as Byte))"),
+    ("lsl", "((a as Byte) lsl 2)"),
+    ("lsr", "((a as Byte) lsr 2)"),
 ];
 
 /// A two-field struct whose FIRST field holds the produced value. **The second
@@ -66,7 +74,8 @@ const BYTE_PRODUCERS: &[(&str, &str)] = &[
 /// distinct multipliers makes the shift observable.
 fn field_source(ty: &str, value: &str, read: &str) -> String {
     format!(
-        "struct P {{ x: {ty}, y: Word }}\n\
+        "fn g(z: Word) -> Word {{ z + 1 }}\n\
+         struct P {{ x: {ty}, y: Word }}\n\
          fn main(a: Word, b: Word) -> Word {{ \
            let p: P = P {{ x: {value}, y: b }}; \
            ({read} * 1000) + p.y }}"

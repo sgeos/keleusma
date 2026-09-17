@@ -1,5 +1,35 @@
 # Design Journal
 
+## 2026-09-17 — a third instance, then a census, which caught its own author
+
+All four shifts join the family: `lsl`, `lsr`, `asl`, `asr` could not fill a
+composite field either. The rule differs slightly — **a shift takes the SHIFTED
+value's width, not a matched pair**, since a count is not an operand of the same
+shape — and that is the third arm-group repaired today by the same reasoning.
+
+**Chasing instances one at a time is how a family gets half-closed**, so
+`unknown_width_census.rs` now enumerates every bare push in the emitter and fails
+on one without a disposition. Four are `fallback` (the arm preserves a width when
+it can), two `sound`, and **three `unmeasured` — recorded as such rather than
+asserted correct**. Saying "not measured" is the honest half of a census, and a
+reader deciding where to look next needs it distinguishable from "measured and
+sound".
+
+> ⚠ **THE CENSUS'S FIRST MATCHER COULD NOT SEE THE SITES IT WAS WRITTEN FOR.**
+> It keyed on `starts_with("st.push(")` and missed every `None => st.push(v),`
+> arm — **the exact form the three repairs it generalises had just introduced**.
+> A census whose matcher cannot see its own subject reports a clean population and
+> means nothing; this package catalogues that class three times over, and I
+> reproduced it inside the file built to close it. Caught only because the STALE
+> half of the check fired, naming four arms that had supposedly stopped pushing.
+
+The two accumulated leaks were recorded in one edit, as the batching note asks.
+**The instruction worked on its author**, which is the only evidence that matters
+for a process note. The sentinel-band test has now leaked three times and still
+does not reproduce on demand — a third occurrence retires "one-off" for it
+entirely.
+
+
 ## 2026-09-17 — the same gap again, five arms wide, found the same way
 
 Generated composites refused on the **second** program. Characterised before

@@ -29,7 +29,7 @@
 //!
 //! # ⚠ AN INTERMITTENT `LEAK` MARKER, AND A HYPOTHESIS OF MINE THAT WAS WRONG
 //!
-//! `cargo nextest` has reported `LEAK` nine times, always alongside a PASS:
+//! `cargo nextest` has reported `LEAK` eleven times, always alongside a PASS:
 //!
 //! | when | test | binary |
 //! |---|---|---|
@@ -42,6 +42,8 @@
 //! | 2026-09-17 | `two_yields_in_one_iteration_agree` | `general_stream_sequence` |
 //! | 2026-09-17 | `region::width_tests::a_composite_body_length_is_not_on_its_tag` | the LIBRARY |
 //! | 2026-09-17 | `the_sentinel_band_still_matches_the_stage_sources` **(repeat of the FIRST)** | this one |
+//! | 2026-09-17 | `the_sentinel_band_still_matches_the_stage_sources` **(third time)** | this one |
+//! | 2026-09-17 | `the_no_faulting_module_emits_op_trap_fact_has_expired` | this one |
 //!
 //! **Commit `6603c399` said this note existed. It did not.** The edit meant to
 //! write it raised inside a heredoc whose output was never read, the command chain
@@ -112,7 +114,17 @@
 //! > is cumulative rather than per-row. **Batch further occurrences into one
 //! > edit.** The instrument is worth keeping; the per-row cost is not.
 //!
-//! Nine leaks, seven tests, three binaries, five of them trivial or unrelated, none
+//! **BATCHED, AS THE NOTE ABOVE ASKS.** These two were observed hours apart and
+//! recorded in one edit rather than two, saving a re-run of the phases that read
+//! source text. The instruction worked on its author, which is the only evidence
+//! that matters for a process note.
+//!
+//! The sentinel-band test has now leaked THREE times and still does not reproduce
+//! on demand. **A third occurrence retires "one-off" for it entirely** — it
+//! belongs with the trap-child family as a recurring leaker, leaving the residue
+//! smaller than the table's shape has claimed since the sixth.
+//!
+//! Eleven leaks, eight tests, three binaries, five of them trivial or unrelated, none
 //! reproducing on demand — the first was re-run five times cleanly. The runner or
 //! the machine under load is what remains, and **that is not traced either**.
 //! Recorded rather than chased: a `LEAK` warns about teardown, not a failed

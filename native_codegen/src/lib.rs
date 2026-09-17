@@ -4732,6 +4732,17 @@ fn lower_chunk_body<'ctx>(
             // omitting the mask would be undefined behaviour on exactly the
             // inputs the VM gives a defined answer for.
             Op::Shl | Op::Shr => {
+                // **The SHIFTED VALUE's width, not a matched pair.** A shift
+                // amount is a count, not an operand of the same shape: `byte lsl
+                // 2` is a byte however the 2 is typed. Read before the pops.
+                //
+                // Refusing here cost the same as everywhere else in this family:
+                // no composite field could hold a shifted value, measured over all
+                // four of `lsl`, `lsr`, `asl` and `asr`.
+                let kept = match st.width_at(1) {
+                    w @ Width::Scalar(_) => Some(w),
+                    _ => None,
+                };
                 let count = st.pop();
                 let value = st.pop();
                 let masked =
@@ -4744,7 +4755,10 @@ fn lower_chunk_body<'ctx>(
                     Op::Shr => st.b.build_right_shift(value, masked, true, "shr").unwrap(),
                     _ => unreachable!("the outer match restricts this set"),
                 };
-                st.push(v);
+                match kept {
+                    Some(out) => st.push_w(mask_if_byte(&st.b, i64t, v, out), out),
+                    None => st.push(v),
+                }
             }
             // **THE FIXED-POINT CONVERSIONS, REPRODUCED FROM THE VM HANDLER**
             // rather than from a definition of Q-format arithmetic. Rounding,
