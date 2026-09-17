@@ -181,9 +181,22 @@ fn the_extent_instrument_distinguishes_subjects() {
     );
 }
 
-/// **Fidelity.** A zero fill must reproduce the shipping driver exactly.
+/// **Fidelity — and this check is WEAKER THAN ITS FIRST NAME CLAIMED.**
+///
+/// It was called `a_zero_fill_reproduces_the_shipping_driver`. **Perturbed by
+/// passing a non-zero fill, it still passes**, so it does not establish anything
+/// about the fill at all: the two drivers agree for these subjects whatever the
+/// region holds, because their output does not depend on arena initialisation.
+///
+/// What it DOES establish is that the measuring driver and the shipping driver
+/// are the same program — the same buffers, the same call sequence — which is
+/// worth asserting, since a measurement taken through a divergent driver would
+/// describe something no other differential here runs. **Renamed to that.**
+///
+/// The fill-independence it appeared to check is genuinely checked, by the
+/// `assert_eq!` inside `extent` comparing two complementary fills.
 #[test]
-fn a_zero_fill_reproduces_the_shipping_driver() {
+fn the_measuring_driver_is_the_shipping_driver() {
     for (label, src) in SHAPES {
         let r = replies(SHALLOW * 4);
         let (measured, _) = common::general_native_arena_extent(src, 1, &r, 0);
@@ -296,3 +309,45 @@ fn the_spill_reservation_is_nearly_all_unused() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// REACH, MEASURED 2026-09-16 — WHICH OF THESE ASSERTIONS CAN ACTUALLY FAIL
+// ---------------------------------------------------------------------------
+//
+// **A clean guard proves its reach first.** Every assertion in this file passed
+// on the day it was written, which is evidence about the checker before it is
+// evidence about the backend. Each was then perturbed AT ITS SUBJECT — never by
+// editing the assertion or its expected value — and the outcome recorded.
+//
+// Two perturbations, applied in the driver rather than to the tests:
+//
+//   CREEP  — one byte of the arena region touched per tick, the shape of a
+//            coroutine instance that is consumed rather than reused.
+//   BEYOND — a single write past the planned bound, constant in tick count.
+//
+// | assertion | perturbation | fires |
+// |---|---|---|
+// | `the_arena_extent_does_not_grow_with_tick_count` | CREEP | **yes** |
+// | `the_touched_extent_stays_within_the_planned_arena_bound` | BEYOND | **yes** |
+// | `the_arena_appetite_of_each_subject_is_pinned` | either | **yes** |
+// | `the_spill_reservation_is_nearly_all_unused` | either | **yes**, and its own first version fired |
+// | `the_extent_instrument_distinguishes_subjects` | CREEP | **yes** |
+// | `the_extent_instrument_sees_something` | — | **no subject perturbation exists** |
+// | `the_measuring_driver_is_the_shipping_driver` | a different fill | **NO — it does not discriminate** |
+// | `the_measured_subjects_still_agree_with_the_reference` | — | inherits the differential's reach |
+//
+// **THE TWO NEGATIVE ROWS ARE THE POINT OF THE EXERCISE**, not a shortfall in it.
+//
+// **The discrimination is as informative as the firing.** CREEP fires the growth
+// test and NOT the bound test — 200 bytes of creep stays inside a 520-byte plan.
+// BEYOND fires the bound test and NOT the growth test — it is constant in tick
+// count. The two assertions detect different defects, which is the property a
+// reader needs and which neither passing alone would have shown.
+//
+// **`the_extent_instrument_sees_something` cannot be fired by choosing a
+// subject.** Every stream this driver can carry reserves locals in the region, so
+// no drivable shape touches zero arena; the smallest observed is sixteen bytes.
+// It guards against a regression in the instrument, not against a state the
+// subjects can reach, and recording that is better than inventing a perturbation
+// that passes for reach. `stream_depth.rs` already records the same distinction
+// about its varying replies.

@@ -1,5 +1,42 @@
 # Design Journal
 
+## 2026-09-16 — twelve new assertions, and two of them cannot fail
+
+Every assertion added this session passed on the day it was written, which is
+evidence about the checker before it is evidence about the backend. Each was
+perturbed AT ITS SUBJECT — never by editing the assertion or its expected value,
+which this line has already twice recorded as testing nothing.
+
+**Nine fire.** The one that matters most is the central claim of the whole memory
+increment: injecting one byte of arena creep per tick fails
+`the_arena_extent_does_not_grow_with_tick_count`. Until that was shown, the
+finding "the arena does not grow" rested on a check nobody had seen produce a
+result.
+
+**The discrimination is as informative as the firing.** A per-tick creep fires the
+growth test and NOT the planned-bound test, because 200 bytes of creep stays
+inside a 520-byte plan. A single write past the plan fires the bound test and NOT
+the growth test, being constant in tick count. **The two assertions detect
+different defects**, which neither passing alone would have shown.
+
+**Two cannot fail, and that is the result rather than a shortfall.**
+
+- `a_zero_fill_reproduces_the_shipping_driver` **passes with a non-zero fill**, so
+  it establishes nothing about the fill. What it does establish — that the
+  measuring driver is the same program as the shipping one — is worth asserting,
+  and it is renamed to that. The fill-independence it appeared to check is
+  genuinely checked elsewhere, by the two-complementary-fills comparison inside
+  `extent`.
+- `the_extent_instrument_sees_something` cannot be fired by choosing a subject:
+  every stream this driver can carry reserves locals in the region, so none
+  touches zero arena. It guards an instrument regression, not a reachable state.
+
+**A name that overstates what a check discriminates is the same defect class as a
+record outliving its subject**, arriving through a different door: a reader
+counting assertions would have counted that one as fill coverage. The census
+found it because it perturbed rather than read.
+
+
 ## 2026-09-16 — a leak observation I did not capture, recorded as the omission it is
 
 The default-features `corpus_differential` phase reported **"2 leaky"** in its

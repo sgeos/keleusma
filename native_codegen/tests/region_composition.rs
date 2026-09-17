@@ -226,3 +226,23 @@ fn the_reservation_share_across_the_corpus_is_pinned() {
          is what you expect. Do not re-pin without saying which."
     );
 }
+
+// ---------------------------------------------------------------------------
+// REACH, MEASURED 2026-09-16
+// ---------------------------------------------------------------------------
+//
+// | assertion | perturbation | fires |
+// |---|---|---|
+// | `the_named_terms_account_for_the_published_figure` | drop `stream_locals_bytes` from the walk | **yes** |
+// | `every_streaming_module_reserves_the_same_flat_block` | — | its earlier share form fired on the first run |
+// | `the_reservation_share_across_the_corpus_is_pinned` | — | fired on its first run: pinned 3, corpus had 28 |
+//
+// **The first row is the one that matters.** It is the check that licenses every
+// share figure in this file, and dropping a term the planner really sums makes
+// the unexplained remainder exceed what alignment can add. Without that
+// demonstration, "the terms account for the total" would rest on the analysis
+// being right about the planner — which is the premise the check exists to test.
+//
+// The other two were not perturbed deliberately. **They fired on their first run
+// against claims written before measuring**, which is the same evidence arrived at
+// the expensive way.

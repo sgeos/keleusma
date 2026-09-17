@@ -423,6 +423,10 @@ fn the_stream_witness_emits_its_opcodes_and_agrees_tick_for_tick() {
 /// dropped the call and forwarded the argument would return the seed**, which is
 /// a different number — the identity stub this witness deliberately does not use
 /// would have hidden exactly that.
+///
+/// **REACH DEMONSTRATED 2026-09-16**, not merely argued: replacing the native
+/// side's stub with the identity — precisely how a dropped call behaves — fails
+/// this test and nothing else in the file.
 #[test]
 fn the_native_call_witnesses_emit_their_opcodes_and_agree() {
     assert!(
