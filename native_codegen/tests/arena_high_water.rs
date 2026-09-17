@@ -183,7 +183,9 @@ fn the_extent_instrument_distinguishes_subjects() {
 
 /// **Fidelity — and this check is WEAKER THAN ITS FIRST NAME CLAIMED.**
 ///
-/// It was called `a_zero_fill_reproduces_the_shipping_driver`. **Perturbed by
+/// It was called a_zero_fill_reproduces_the_shipping_driver, without backticks
+/// here because that name no longer resolves and a citation to a test that does
+/// not exist cannot fail. **Perturbed by
 /// passing a non-zero fill, it still passes**, so it does not establish anything
 /// about the fill at all: the two drivers agree for these subjects whatever the
 /// region holds, because their output does not depend on arena initialisation.
