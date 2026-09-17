@@ -4706,7 +4706,15 @@ fn lower_chunk_body<'ctx>(
                     st.b.build_int_compare(IntPredicate::EQ, v, i64t.const_zero(), "not")
                         .unwrap();
                 let z = st.b.build_int_z_extend(c, i64t, "notz").unwrap();
-                st.push(z);
+                // **A bool is one byte, exactly as a comparison's result is.**
+                // This pushed an unknown width while the comparison arm three
+                // screens up pushed `Scalar(1)` for the same shape, so a negated
+                // comparison could not fill a `bool` field while an un-negated one
+                // could. Measured 2026-09-17, resolving an `unmeasured`
+                // disposition in `unknown_width_census.rs` — the fourth arm in
+                // this family, and the first found by answering the census's own
+                // open question rather than by a generated subject.
+                st.push_w(z, Width::Scalar(1));
             }
             Op::BitAnd | Op::BitOr | Op::BitXor => {
                 // The width the operands agree on, read BEFORE the pops discard

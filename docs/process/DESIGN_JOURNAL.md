@@ -1,5 +1,36 @@
 # Design Journal
 
+## 2026-09-17 — answering my own `unmeasured` markers found a fourth gap
+
+The census recorded three arms as `unmeasured` — *nobody has checked whether a
+width is determinable here*. **Leaving that indefinitely would be a record
+outliving its usefulness**, so I measured all three.
+
+- **`Op::Not` — REFUSED.** A negated comparison could not fill a `bool` field
+  while an un-negated one could, because the comparison arm pushes `Scalar(1)` and
+  the negation arm pushed nothing, **for results of exactly the same shape**. A
+  bool is one byte either way. Fourth arm in the family.
+- **`Op::Dup` — no narrowing.** The short-circuit `andalso` form fills a bool field
+  fine; the duplicate's width never reaches a composite.
+- **`Op::PushImmediate` — no narrowing.** Emitted by the loop-index construct, but
+  its value is not what a field receives.
+
+**Two of the three were fine, and that is the useful shape of the result.** An
+`unmeasured` marker is not a defect claim; it is an admission, and two thirds of
+this one turned out to be nothing. Recording them as unmeasured rather than as
+suspected gaps is what made answering them cheap and honest.
+
+`BOOL_PRODUCERS` now pins all eight bool-valued producers in a field position, so
+the fix has a regression test. Reverting `Op::Not` fails **only** the bool tests —
+the word and byte halves stay green, so the guard is precisely targeted rather than
+broadly sensitive.
+
+**This is the fourth arm-group of the same family in one day**, and the first found
+by answering a question the census itself recorded rather than by a generated
+subject stumbling on it. **A census that admits what it has not looked at is a
+to-do list, not just a record.**
+
+
 ## 2026-09-17 — a third instance, then a census, which caught its own author
 
 All four shifts join the family: `lsl`, `lsr`, `asl`, `asr` could not fill a

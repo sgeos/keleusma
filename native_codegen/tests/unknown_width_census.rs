@@ -21,8 +21,12 @@
 //!
 //! # ⚠ A DISPOSITION IS NOT A CLAIM THAT THE SITE IS FINE
 //!
-//! Three dispositions are `unmeasured` — recorded as such rather than asserted to
-//! be correct. **Saying "not measured" is the honest half of a census**, and a
+//! Two dispositions are `unmeasured` — recorded as such rather than asserted to
+//! be correct. **A third was `Op::Not`, and answering it found a fourth gap**: a
+//! negated comparison could not fill a `bool` field while an un-negated one could,
+//! because the comparison arm pushed `Scalar(1)` and `Op::Not` pushed nothing.
+//! `Op::Dup` and `Op::PushImmediate` were measured at the same time and neither
+//! narrows anything — their results do not reach a composite. **Saying "not measured" is the honest half of a census**, and a
 //! reader deciding where to look next needs to tell it apart from "measured and
 //! sound".
 
@@ -38,11 +42,6 @@ const DISPOSITIONS: &[(&str, &str)] = &[
     ("Op::Div | Op::Mod => {", "fallback"),
     ("Op::BitAnd | Op::BitOr | Op::BitXor => {", "fallback"),
     ("Op::Shl | Op::Shr => {", "fallback"),
-    (
-        "Op::Not => {",
-        "unmeasured: the result is a bool, 0 or 1, and no subject has tried to \
-         store one in a composite field",
-    ),
     (
         "Op::Dup => {",
         "unmeasured: a duplicate could copy the width of what it duplicates, and \
@@ -153,7 +152,7 @@ fn every_unknown_width_push_is_dispositioned() {
 /// **The `unmeasured` count is stated, so it cannot quietly grow.**
 #[test]
 fn the_unmeasured_population_is_pinned() {
-    const PINNED_UNMEASURED: usize = 3;
+    const PINNED_UNMEASURED: usize = 2;
     let n = DISPOSITIONS
         .iter()
         .filter(|(_, d)| d.starts_with("unmeasured"))

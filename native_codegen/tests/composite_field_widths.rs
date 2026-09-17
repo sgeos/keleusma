@@ -69,6 +69,20 @@ const BYTE_PRODUCERS: &[(&str, &str)] = &[
     ("lsr", "((a as Byte) lsr 2)"),
 ];
 
+/// Bool-valued producers. **Added after `Op::Not` was found refused** while a
+/// plain comparison was admitted: the comparison arm pushed `Scalar(1)` and the
+/// negation arm pushed nothing, for results of exactly the same shape.
+const BOOL_PRODUCERS: &[(&str, &str)] = &[
+    ("compare", "(a > b)"),
+    ("not", "not (a > b)"),
+    ("andalso", "((a > 0) andalso (b > 0))"),
+    ("orelse", "((a > 0) orelse (b > 0))"),
+    ("and", "((a > 0) and (b > 0))"),
+    ("or", "((a > 0) or (b > 0))"),
+    ("xor", "((a > 0) xor (b > 0))"),
+    ("literal", "true"),
+];
+
 /// A two-field struct whose FIRST field holds the produced value. **The second
 /// field is the detector**: a wrong width shifts it, and reading both with
 /// distinct multipliers makes the shift observable.
@@ -140,6 +154,35 @@ fn the_admitted_fields_pack_where_the_reference_packs_them() {
         assert_eq!(
             vm, native,
             "byte producer `{name}` MISPACKS: reference {vm}, native {native}\n  {src}"
+        );
+    }
+}
+
+#[test]
+fn every_bool_producer_can_fill_a_composite_field() {
+    let mut broken = Vec::new();
+    for (name, v) in BOOL_PRODUCERS {
+        if let Some(e) = refusal(&field_source("bool", v, "(if p.x { 5 } else { 2 })")) {
+            broken.push((*name, e));
+        }
+    }
+    assert!(
+        broken.is_empty(),
+        "bool producer(s) whose result cannot fill a composite field: {broken:?}.\n\n\
+         A bool is one byte, exactly as a comparison's result is. `Op::Not` was \
+         refused here while a plain comparison was admitted, for values of the \
+         same shape."
+    );
+}
+
+#[test]
+fn the_admitted_bool_fields_pack_where_the_reference_packs_them() {
+    for (name, v) in BOOL_PRODUCERS {
+        let src = field_source("bool", v, "(if p.x { 5 } else { 2 })");
+        let (vm, native) = common::vm_and_native_two_arg(&src, 9, 5);
+        assert_eq!(
+            vm, native,
+            "bool producer `{name}` MISPACKS: reference {vm}, native {native}\n  {src}"
         );
     }
 }
