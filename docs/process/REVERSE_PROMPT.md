@@ -10,6 +10,44 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
+**2026-09-17, session 66, third increment.**
+
+**THE HOSTILE-BYTECODE CORPUS NOW COVERS BOTH UNTRUSTED ARRIVALS, THE DESCRIPTOR
+TABLES, AND THE COROUTINE PATHS. NO NEW DEFECT FOUND.**
+
+Census: **5288** mutants over seven families — 4286 refused by verification, 131
+refused at the hot swap, 871 hot-swapped into a live machine and run. Runs in under
+seven seconds.
+
+**THE PER-FAMILY FLOOR PAID FOR ITSELF IN ONE RUN.** The aggregate read 5184
+mutants, all healthy, while the **native-return-shape table had never been touched**
+— no corpus program called a native. An aggregate floor is satisfied by whichever
+population is largest, and the instruction family is four thousand strong.
+
+**A CLAIM I WROTE AN HOUR EARLIER WAS WRONG, AND IT IS THE USEFUL PART.** I treated
+`schema_hash` as a load-time fingerprint and expected mutations of it to be refused.
+All nineteen ran. It is `compute_schema_hash(data_layout)` and the **only** place it
+is compared is the HOT SWAP. So those mutants were testing nothing, and the census
+could not see it, because "ran without panicking" is what a pass looks like. **A
+mutation aimed at a check that does not exist on the path under test is
+indistinguishable from a passing one.**
+
+That exposed the real gap: the threat model names TWO arrivals and the harness
+covered one. Adding the hot swap turned those nineteen into nineteen refusals — the
+check observed doing its job.
+
+**THE CLEAN RESULT, STATED PRECISELY.** A wrong flat shape in a signature widens what
+the typed pass will accept, and the runtime bounds guard it defers to holds. The
+defer-on-unknown design is documented as sound; what was not known is whether a shape
+that is WRONG rather than unknown behaves the same way. It does, across these
+mutations. That is a result about the enumerated mutations, not a general claim.
+
+**Unchanged and untouched**: the seven operator decisions, the opcode count,
+`BYTECODE_VERSION`, and every file under `src/selfhost/kel/`. H2 remains open on the
+trade stated below.
+
+---
+
 **2026-09-16, session 66, first increment.**
 
 **THE VERIFIER COULD BE MADE TO HANG FOREVER, OR TO ABORT THE PROCESS, BY A MODULE

@@ -13,6 +13,82 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-17 (ninety-fifth) — the aggregate count was healthy and one whole table had never been touched
+
+### THE EXTENSION, AND WHY THESE TWO AXES
+
+`tests/hostile_module_mutation.rs` states its own limits, and two were
+load-bearing. It said it did not cover "auxiliary tables the `Module` type does
+not express" — **which was wrong about its own subject**: `signatures`,
+`native_return_shapes`, `enum_layouts` and `schema_hash` are all `Module`
+fields, and the mutator simply never touched them. Those are precisely the
+tables the A.2.1 typed pass seeds operand shapes from, and four of the audit
+findings that pass closes (B1, B2, B6, B8) were about trusting a compiler-baked
+value an attacker supplies. The harness mutated the ops that CONSUME them and
+never the seeding side.
+
+The corpus was also six `fn` programs and no `loop`, so `Stream`, `Reset`,
+`Yield` and the productivity classification — the neighbourhood H1 was found in
+— received mutants only by accident.
+
+### THE PER-FAMILY CENSUS PAID FOR ITSELF IN ONE RUN
+
+Tagging each mutant with its family and asserting a floor per family
+immediately failed: **the native-return-shape family produced zero mutants**,
+because no corpus program called a native and the table was empty. The
+aggregate had read 5184 mutants, all healthy, while one entire descriptor table
+had never been touched.
+
+That is the general shape worth keeping: **an aggregate floor is satisfied by
+whichever population is largest.** Here the instruction family is four thousand
+strong, so any total-count assertion passes on its own and says nothing about
+the other six.
+
+The family is a FIELD on the mutant, not something parsed back out of its
+printed identity. Reading a category out of a formatted string is the same
+crude-instrument mistake this tree has paid for repeatedly, and it fails
+silently the moment an identity's format changes.
+
+### AND A CLAIM I WROTE AN HOUR EARLIER WAS WRONG
+
+I commented the schema-hash mutations as attacking "the schema hash the reader
+checks the flat layout against", and expected them to be refused at load. All
+nineteen were accepted and ran. The reason is that **`schema_hash` is not a
+load-time fingerprint at all**: it is `compute_schema_hash(data_layout)`, and
+the only place it is ever compared is the HOT SWAP, where the running module's
+hash must match the incoming one. A fresh load of a module carrying any hash is
+correct behaviour.
+
+So the mutants were not finding a hole; they were testing nothing, and the
+census could not see it because "ran without panicking" is what a pass looks
+like. **A mutation aimed at a check that does not exist on the path under test
+is indistinguishable from a passing one.**
+
+### WHICH EXPOSED THE REAL GAP: ONE OF THE TWO ARRIVALS WAS ABSENT
+
+The threat model names two untrusted arrivals, a precompiled artifact and a hot
+swap. The harness covered the first only. Adding the second turned the
+schema-hash family from nineteen meaningless passes into nineteen refusals at
+the swap — the check doing exactly its job, now observed.
+
+One trap in adding it: `replace_module_from_bytes` requires the `signatures`
+feature, and this file is gated on `compile` and `verify`. Calling it would have
+reproduced the defect that turned three continuous-integration jobs red earlier
+in this line. The ungated `replace_module` over a separately decoded module is
+documented as equivalent with no registered key, and the signature layer has
+its own tests.
+
+### THE RESULT IS A CLEAN CENSUS, AND THAT IS A RESULT
+
+5288 mutants over seven families: 4286 refused by verification, 131 refused at
+the swap, 871 hot-swapped into a live machine and run. **No further defect.**
+
+Worth stating precisely rather than as an absence: a wrong flat shape in a
+signature widens what the typed pass will accept, and the runtime bounds guard
+the pass defers to holds. The defer-on-unknown design is documented as sound;
+what was not known is whether a shape that is WRONG rather than unknown behaves
+the same way. It does, across these mutations.
+
 ## 2026-09-16 (ninety-fourth) — I overstated H2, and the measurement I had not taken was the obvious one
 
 ### THE CLAIM I MADE, AND WHY IT WAS WRONG

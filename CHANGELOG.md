@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The hostile-bytecode corpus reaches the descriptor tables, the coroutine
+  paths, and the hot swap.** It previously mutated instructions and chunk
+  metadata only, so the module-level tables the typed operand-stack pass seeds
+  operand shapes from were exercised on the consuming side and never on the
+  seeding side, although four of the audit findings it descends from were about
+  trusting a compiler-baked value an attacker supplies. Per-chunk signatures,
+  native return shapes, enum layouts and the schema hash are now mutated, two
+  coroutine programs and a native-calling program were added so the stream,
+  productivity and native-shape paths receive mutants of their own, and every
+  mutant is now carried through both documented untrusted arrivals rather than
+  one: a fresh load, and a hot swap into a machine that is already live. The
+  second matters because a hot swap runs compatibility checks a fresh load has
+  no occasion to, the schema hash being compared only there, so before this
+  every mutation of that field was accepted and counted as a pass. The census
+  is now per family, with a floor each, after an aggregate count of five
+  thousand one hundred and eighty four mutants looked healthy while one entire
+  table had never been touched, because no program in the corpus called a
+  native. Five thousand two hundred and eighty eight mutants across seven
+  families: four thousand two hundred and eighty six refused by verification,
+  one hundred and thirty one refused at the swap, and eight hundred and
+  seventy one hot-swapped into a live machine and run. No further defect was
+  found, which is a result about the enumerated mutations rather than a general
+  claim.
+
 - **The parser's recursion limit now documents its measured margin, replacing a
   claim that measurement refutes.** The constant asserted that the limit keeps a
   maximally nested admissible program well under two mebibytes of stack even in
