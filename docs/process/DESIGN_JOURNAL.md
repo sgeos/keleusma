@@ -1,5 +1,48 @@
 # Design Journal
 
+## 2026-09-17 — the differential I set out to build turned out to be impossible, correctly
+
+My own new float guard had the gap I had found in four other instruments today: it
+checked that a float-parameter stream **reaches a decision**, not that the decision
+is **right**. Lowering tested, agreement not.
+
+So I set out to build the missing differential, and pre-recorded both outcomes:
+either it agrees, or the driver cannot carry a float parameter and the finding is
+that the path has no coverage. **The second happened, and then a third thing
+happened that I had not listed.**
+
+The reference **does** run float streams — `Value::Float(3.0)` in, `Yielded(Float(3.0))`
+out — and **rejects `Value::Int`** for that parameter. The general driver passes
+`Value::Int`, so it cannot drive one. That confirmed the predicted gap.
+
+**But the differential is impossible for a better reason than a harness
+limitation**: `Op::Yield` REFUSES a float operand, deliberately —
+
+> *"this arm was not written for one. Interpreting a double's bit pattern as an
+> integer is a plausible wrong number rather than a fault, so the operand kind
+> fails closed here"*
+
+That is the conservative stance's second category working exactly as designed: a
+case provable in principle whose analysis is not yet written. **The reference runs
+these streams and this backend declines to lower them.** An asymmetry, recorded
+rather than repaired.
+
+**And my fix this morning is what makes that refusal REACHABLE.** Before it,
+`lower_module` panicked before the refusal could be produced. **A panic and a
+refusal look equally red from a distance; only one of them is a decision.**
+
+The file pins the asymmetry from BOTH sides — the reference still yields, the
+backend still refuses, and the refusal still names the `Yield` arm. A register
+stale in one direction only is a bias, which this line has recorded before. If the
+backend starts lowering these, the test fails and says to switch the differential
+on, because **a lowered float stream with nothing comparing it is precisely the
+state that let a panic sit unnoticed on that path.**
+
+The driver is kept and kept compiling. Rebuilding it later would cost the same care
+twice: the signature is configuration-dependent and hand-named, which is how a
+probe here has already taken a SIGBUS.
+
+
 ## 2026-09-17 — censusing the float defect's MECHANISM found two more, one a panic
 
 The `Op::Neg` defect was not "float negation is wrong". It was **an arm that
