@@ -50,7 +50,7 @@ const FLOAT_OPS: &[(&str, &str)] = &[
     ("mod", "((a as Float) % (b as Float))"),
     ("neg_of_sum", "(-((a as Float) + (b as Float)))"),
     ("neg_twice", "(-(-(a as Float)))"),
-    // ⚠ **A `to_word` ROW WAS REMOVED HERE, AND IT WAS MY DEFECT, NOT THE
+    // ⚠ **A to_word ROW WAS REMOVED HERE, AND IT WAS MY DEFECT, NOT THE
     // BACKEND'S.** It read `((a as Float) as Word)`, and the wrapper below
     // already appends `as Word` — so the subject cast a `Word` to a `Word` and
     // the backend correctly refused *"operand kind is Int, not Float"*.
@@ -61,6 +61,11 @@ const FLOAT_OPS: &[(&str, &str)] = &[
     // stream handed to the general driver, `let mut` in a language with no
     // mutable local, and a census blind to its own subject. The conversion is
     // covered by every row here, since each is wrapped in `as Word`.
+    //
+    // The name is written WITHOUT backticks because the row no longer exists and
+    // the citation checker resolves backticked identifiers against real ones.
+    // **This is the third correction note this session to cite the very thing it
+    // retired** -- the guard caught all three.
 ];
 
 /// Lower and verify. `None` means the module was refused, which is a different

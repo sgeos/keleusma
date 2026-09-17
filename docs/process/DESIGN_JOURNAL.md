@@ -1,5 +1,48 @@
 # Design Journal
 
+## 2026-09-17 — censusing the float defect's MECHANISM found two more, one a panic
+
+The `Op::Neg` defect was not "float negation is wrong". It was **an arm that
+open-coded a conversion instead of calling the shared helper**, and so drifted when
+the helper learned about four-byte floats. That is a family, and the width work had
+already shown that generalising beats chasing.
+
+**The census is small and was decisive**: six `build_bit_cast` sites, four INSIDE
+the two width-aware helpers where they belong, one a comment, and **one genuine
+open-coding left** — in the `Op::Reset` path, restoring a stream's resume parameter
+when it is a float. Same raw cast, same invalidity at four bytes.
+
+**Testing that candidate found something worse than predicted.** I expected invalid
+IR under `narrow-float-32`. Instead `lower_module` **PANICKED**, in BOTH
+configurations, on a well-formed `loop main(t: Float)`:
+
+> `Found FloatValue { .. llvm_type: "double" } but expected the IntValue variant`
+
+**Two sites restore the same resume parameter. One guarded floats; the other called
+`.into_int_value()` unconditionally.** The panic fired at the unguarded one before
+the raw bitcast at the guarded one could even be reached — which is why the census
+found the second defect and the probe found the first.
+
+**A panic on a public entry point** is a class this line already tracks:
+`lowering_robustness.rs` exists to assert that MALFORMED bytecode refuses rather
+than panicking, and this module was not malformed.
+
+Both sites route through `float_to_bits` now, and both guards were perturbed:
+restoring the panic fails only the decision guard; restoring the raw bitcast fails
+only the count guard. **Each catches its own defect and not the other's.**
+
+### The shape worth keeping
+
+**The disagreement between the two sites WAS the defect.** Not either site alone —
+one of them was correct. A quantity restored in two places, by two different
+pieces of code, is the same hazard as a quantity computed twice, and this package
+already refuses to re-derive things for exactly that reason. The count guard now
+pins the number of raw casts, so a third open-coding fails closed.
+
+**And the citation checker caught a third correction note citing what it retired.**
+All three were caught; the note now names the removed row without backticks.
+
+
 ## 2026-09-17 — float negation emitted INVALID IR under narrow-float-32
 
 **The first invalid-IR defect this session, and the first found by a prediction

@@ -7007,10 +7007,26 @@ fn lower_chunk_body<'ctx>(
                             st.push_k(lv, w, k);
                         }
                     }
-                    let rv = func
+                    // **A FLOAT PARAMETER IS NOT AN INT, AND THIS PANICKED ON
+                    // ONE.** `.into_int_value()` was unconditional here, so
+                    // `lower_module` PANICKED -- *"Found FloatValue but expected
+                    // the IntValue variant"* -- on a perfectly well-formed
+                    // `loop main(t: Float)`. A panic on a public entry point is a
+                    // defect class this line has recorded before.
+                    //
+                    // **The sibling restore in the `Op::Reset` path below already
+                    // guarded this**, with `if raw.is_float_value()`. Two sites
+                    // restoring the SAME resume parameter, one handling floats and
+                    // one panicking on them: the disagreement is the defect, and
+                    // it is why a single shared conversion is preferable to two.
+                    let rv_raw = func
                         .get_nth_param(0)
-                        .expect("a stream declares its resume parameter")
-                        .into_int_value();
+                        .expect("a stream declares its resume parameter");
+                    let rv = if rv_raw.is_float_value() {
+                        float_to_bits(&st.b, rv_raw.into_float_value(), i64t, float_bytes)
+                    } else {
+                        rv_raw.into_int_value()
+                    };
                     st.push_w(
                         rv,
                         chunk
@@ -7145,10 +7161,14 @@ fn lower_chunk_body<'ctx>(
                     let raw = func
                         .get_nth_param(0)
                         .expect("a stream declares its resume parameter");
+                    // **THROUGH THE HELPER, NOT A RAW BITCAST.** This was
+                    // `build_bit_cast(.., i64t)`, which is invalid IR for a
+                    // four-byte float -- the identical open-coding that broke
+                    // `Op::Neg` under `narrow-float-32`. Found by censusing every
+                    // `build_bit_cast` outside the two helpers after that fix:
+                    // this was the only one left.
                     let stored = if raw.is_float_value() {
-                        st.b.build_bit_cast(raw.into_float_value(), i64t, "rf2i")
-                            .unwrap()
-                            .into_int_value()
+                        float_to_bits(&st.b, raw.into_float_value(), i64t, float_bytes)
                     } else {
                         raw.into_int_value()
                     };
