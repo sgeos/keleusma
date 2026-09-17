@@ -1,5 +1,43 @@
 # Design Journal
 
+## 2026-09-17 — a pre-committed stop condition triggered, and I honoured it
+
+I set out to write the `Op::Yield` float arm, having committed in the brief to a
+boundary: **if the change reaches beyond the yield arm into the reply parameter or
+the resume restore, stop and report the shape rather than half-implementing a
+feature across three sites at the end of a long session.**
+
+It reaches the reply parameter.
+
+The assessment was worth doing and most of it was encouraging. The general-stream
+yield **already returns through `build_typed_return`**, which is width-aware; the
+spill slice **already carries operand kinds** through a suspension; and the resume
+restore **already handles a float parameter**, as of this morning's panic fix.
+Three of four pieces are in place, all landed today.
+
+**The fourth is `push_w`, which deliberately marks its slot `Int`** — because the
+operand stack reuses slots and a stale `Float` tag would leak into a later integer
+operand. That is correct defensive behaviour, not an oversight. But the resumed
+value is pushed with `push_w`, so **after a yield the reply is integer-kinded even
+in a float stream**, and admitting `Op::Yield` without addressing it would compute
+on a float's bit pattern as an integer — exactly the silent wrong number the
+refusal prevents.
+
+**And the degenerate yield is worse**: it calls the host hook `kel_yield(i64) ->
+i64`, so carrying a float through it is a HOST-FACING ABI change, not an emitter
+change. A blanket `float_aware` entry would admit both forms and mispass that one.
+
+Scoped in `FLOAT_YIELD_SCOPE.md` with the three steps and the recommendation to do
+it as its own increment with the differential switched on in the same change.
+
+**This is the third pre-commitment today that changed what I did rather than
+decorating it** — after the revert contingency for the byte width fix, and the
+demand that generated breadth outperform the hand-written subjects. **A stop
+condition written after the assessment would have been a rationalisation; written
+before, it was a decision.** The temptation to continue was real: three of four
+pieces fit, and the fourth looked like one more small change.
+
+
 ## 2026-09-17 — the third external lint name, and what three of them mean
 
 The citation checker rejected `useless_conversion` in a comment. It is a clippy
