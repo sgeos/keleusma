@@ -115,6 +115,9 @@ fn seed(m: &Module, buf: &mut [u8], len_slot: &str, array_slot: &str, body: &[i6
 struct Outcome {
     yields: Vec<i64>,
     shared: Vec<u8>,
+    /// Bytes of the arena region the run actually touched. `0` from the VM,
+    /// which has no such buffer.
+    region_extent: usize,
 }
 
 fn run_vm(m: &Module, seeded: &[u8]) -> Outcome {
@@ -143,7 +146,11 @@ fn run_vm(m: &Module, seeded: &[u8]) -> Outcome {
         }
         yields.push(scalar_of(&st));
     }
-    Outcome { yields, shared }
+    Outcome {
+        yields,
+        shared,
+        region_extent: 0,
+    }
 }
 
 /// A scalar outcome, or a stable marker for anything else, so the two sides stay
@@ -208,7 +215,8 @@ fn run_native(m: &Module, seeded: &[u8]) -> Outcome {
     // always does, the moment a stage grew one.
     common::install_private_init(m, &mut privs[..n_priv]);
     privs[n_priv] = CANARY;
-    let mut region = vec![0u64; n_region.div_ceil(8) + 1];
+    const REGION_FILL: u64 = 0x5A5A_5A5A_5A5A_5A5A;
+    let mut region = vec![REGION_FILL; n_region.div_ceil(8) + 1];
     let canary_at = n_region.div_ceil(8);
     region[canary_at] = CANARY;
 
@@ -251,8 +259,53 @@ fn run_native(m: &Module, seeded: &[u8]) -> Outcome {
         "wrote past the {n_region}-byte composite region"
     );
 
+    let region_extent = region[..canary_at]
+        .iter()
+        .rposition(|&w| w != REGION_FILL)
+        .map_or(0, |wi| {
+            let bytes = region[wi].to_ne_bytes();
+            let fill = REGION_FILL.to_ne_bytes();
+            let last = bytes
+                .iter()
+                .zip(fill.iter())
+                .rposition(|(b, f)| b != f)
+                .unwrap_or(7);
+            wi * 8 + last + 1
+        });
+
+    // **THE STAGES TOUCH NONE OF THEIR PLANNED ARENA REGION.**
+    //
+    // Measured 2026-09-17 by filling the region with a pattern and taking the
+    // highest index that no longer holds it: **zero bytes**, across all five
+    // native stage drives here, against plans of 520 and 600 bytes. They lower as
+    // degenerate streams with no composite sites, so the entire published figure
+    // is reservation -- `stream_spill_bytes` plus a locals block neither of which
+    // is written.
+    //
+    // `region_composition.rs` reaches the same conclusion statically, from the
+    // planner's terms. **This is the dynamic half**, and it is stronger: the
+    // static census says the spill term is 98% of the figure for these modules,
+    // while this says the whole figure goes untouched.
+    //
+    // **REACH PROVEN, not assumed**: writing a single byte at offset 17 of the
+    // region makes this report 18. A zero that could not become non-zero would be
+    // an instrument defect wearing a finding's clothes, and this package has
+    // found that shape more than once.
+    assert_eq!(
+        region_extent, 0,
+        "a stage touched {region_extent} byte(s) of its {n_region}-byte planned \
+         arena region, where every stage measured touched NONE. That is a real \
+         change rather than noise: say which construct the stage gained, whether \
+         it still lowers as a degenerate stream, and whether the plan still covers \
+         what it now writes."
+    );
+
     shared.truncate(n_shared);
-    Outcome { yields, shared }
+    Outcome {
+        yields,
+        shared,
+        region_extent,
+    }
 }
 
 fn module_of(path: &str) -> Module {
