@@ -29,7 +29,7 @@
 //!
 //! # ⚠ AN INTERMITTENT `LEAK` MARKER, AND A HYPOTHESIS OF MINE THAT WAS WRONG
 //!
-//! `cargo nextest` has reported `LEAK` six times, always alongside a PASS:
+//! `cargo nextest` has reported `LEAK` seven times, always alongside a PASS:
 //!
 //! | when | test | binary |
 //! |---|---|---|
@@ -39,6 +39,7 @@
 //! | 2026-09-13 | `a_trapping_programs_native_side_dies_with_sigtrap` | this one |
 //! | 2026-09-13 | `a_trapping_programs_native_side_dies_with_sigtrap` **(repeat)** | this one |
 //! | 2026-09-17 | `trap_child_runs_one_module_natively` | this one |
+//! | 2026-09-17 | `two_yields_in_one_iteration_agree` | `general_stream_sequence` |
 //!
 //! **Commit `6603c399` said this note existed. It did not.** The edit meant to
 //! write it raised inside a heredoc whose output was never read, the command chain
@@ -76,7 +77,15 @@
 //! > 2026-09-17, and the head count above is now derived from the table when this
 //! > note is touched rather than carried.
 //!
-//! Six leaks, five tests, two binaries, three of them trivial or unrelated, none
+//! **THE SEVENTH ARRIVED HOURS AFTER THE SIXTH AND IS NOT IN THE FAMILY.**
+//! `two_yields_in_one_iteration_agree` spawns no child, traps nothing, and lives
+//! in a THIRD binary. So the trap-child family is a real sub-pattern but **not
+//! the whole story**: the sporadic one-offs continue, and they now span three
+//! binaries rather than two. The shape stated above survives this occurrence
+//! unchanged, which is the first time a new data point has confirmed it rather
+//! than revised it.
+//!
+//! Seven leaks, six tests, three binaries, four of them trivial or unrelated, none
 //! reproducing on demand — the first was re-run five times cleanly. The runner or
 //! the machine under load is what remains, and **that is not traced either**.
 //! Recorded rather than chased: a `LEAK` warns about teardown, not a failed
