@@ -1,5 +1,42 @@
 # Design Journal
 
+## 2026-09-16 — the corpus refuted the generalisation drawn from three shapes
+
+`arena_high_water.rs` found the published arena figure dominated by a flat
+512-byte spill reservation those three streams barely touched, and I wrote that
+finding into `stream_spill_bytes`'s own documentation. **Three subjects is not a
+corpus**, and `arena_gap_explanation.rs` already states the rule this violated:
+the module that motivated a hypothesis cannot also be its evidence.
+
+The census across every corpus module with an entry point:
+
+- **28 modules have a stream chunk** on the entry path. My pin said 3, which was
+  a guess written before measuring and rejected on the first run.
+- **Every one reserves the same flat block**, independent of what it does. That
+  is the documented property, and it is now asserted rather than assumed.
+- **The reservation is NOT the majority everywhere.** `piano_roll_0` and
+  `piano_roll_1` sit at 27% of an 1840-byte figure. The first version of the
+  share test asserted "dominates every streaming module" at 50% or more, and the
+  corpus refuted it immediately. **The claim was corrected to the measurement.**
+- **It is 98% for the twelve self-hosted compiler stages**, which plan almost
+  nothing else. That is the figure worth carrying: the compiler this line exists
+  to support has a published arena demand that is nearly all reservation, of
+  which the deepest observed use is one slot.
+
+**The check that made this more than arithmetic** was asserting the decomposition
+ACCOUNTS for the published figure rather than assuming it. This file recomputes
+the planner's sum, which is a second computation free to drift; the named terms
+must not exceed the total and the remainder must fit alignment. It held across
+the corpus, so the reading of `region_total_bytes` is verified rather than
+believed.
+
+**Over-provisioning is safe and the reservation's rationale stands.** The finding
+is the size of the looseness in a bound sold as definitive, and what to do about
+it is an arena-accounting question for the operator, exactly as
+`host_arena_supplement_bytes` says of itself. **The planner was not touched** --
+it carries an open soundness obligation and this increment had no mandate for it.
+
+
 ## 2026-09-16 — the other line's checker caught this line crediting its own work to them
 
 The push hook runs the WORKSPACE gate, and `comment_citations` rejected two bare

@@ -268,8 +268,15 @@ pub fn stream_locals_bytes(chunk: &Chunk) -> u32 {
 ///
 /// Measured 2026-09-16 by `tests/arena_high_water.rs`: across three stream
 /// shapes the deepest reach into this block is **one eight-byte slot**, leaving
-/// 504 of 512 bytes untouched, and the reservation is **93% to 97% of the whole
-/// region plan** those subjects are given. The trade-off stated above still
+/// 504 of 512 bytes untouched.
+///
+/// **And across the whole corpus** by `tests/region_composition.rs`: 28 modules
+/// have a stream chunk on the entry path, every one reserves the same flat
+/// block, and it is at least half the published figure for 25 of them. The share
+/// runs from 27% up to **98% for the twelve self-hosted compiler stages**, which
+/// plan almost nothing else. The first version of that census claimed the
+/// reservation dominates EVERY streaming module and the corpus refuted it on the
+/// first run. The trade-off stated above still
 /// holds — over-provisioning is safe in the direction that matters, and this
 /// figure is fixed and static so the bound moves by a known constant. But the
 /// cost is the DOMINANT term of the published host figure, not a rounding

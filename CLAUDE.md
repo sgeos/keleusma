@@ -214,6 +214,7 @@ for once; the detail is in [`docs/process/DESIGN_JOURNAL.md`](docs/process/DESIG
 | A log **truncated** by `tail`/`head` looks identical to a clean one | Capture the whole output and the exit status when the result will be quoted |
 | A file's **own documented** reproduction command under-ran the file | `tests/float_opcode_without_floats.rs` named `--features verify`, which runs its defect pin and skips its `compile`-gated control. Check the test count against the file's `#[test]` count |
 | **Three of the five feature sets, treated as all five** | A test calling `keleusma::selfhost` in a file not gated on `self-host` compiles under `self-host` and fails the other four. Turned three CI jobs red **in the same session that corrected this file's feature-set count**. Compiling under a feature set is also weaker than RUNNING under it |
+| A gate run **phase by phase**, with the verdict ASSEMBLED by hand | The script accumulates `fail=1` across its phases and prints one PASS or FAIL; running the phases separately — which a ten-minute ceiling forces for a long one — moves that accumulation into the operator's memory, and **a phase can then be dropped with nothing saying so**. A `clippy` failure stood for four commits behind a suite figure recorded as green from "six runs" |
 
 **A guard for that last row was attempted and ABANDONED, which is worth knowing before
 trying again.** A text scan for a gated module path reached by an ungated item produced
@@ -226,7 +227,7 @@ among them. A sound version needs brace-aware scoping. **The compiler already do
 correctly, in five configurations, which is what the gate runs** — so the instrument for
 this class is the gate, not a scan.
 
-**Not exhaustive.** Eight found across two sessions is evidence that more exist, not
+**Not exhaustive.** Nine found across three sessions is evidence that more exist, not
 that these are all of them. The seventh came from re-running a measurement whose feature
 set continuous integration does not cover. **The eighth was committed by the author of the
 seventh, two increments later**, which is the more useful fact: knowing a failure class
