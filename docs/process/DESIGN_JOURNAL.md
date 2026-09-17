@@ -4254,6 +4254,272 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-16 (ninety-fourth) — I overstated H2, and the measurement I had not taken was the obvious one
+
+### THE CLAIM I MADE, AND WHY IT WAS WRONG
+
+Last increment recorded H2 as "a compile-time denial of service on untrusted source,
+which the command-line front end, the language server and the playground all accept",
+severity Medium. Every number behind it was taken in a **debug** build, and I did not
+say so in the claim. Those three front ends ship as **release** builds.
+
+With the limit lifted, on a two-mebibyte stack:
+
+| shape | release | debug |
+|---|---|---|
+| nested parentheses | 198 | 24 |
+| nested `match` | — | 23 |
+| nested `if`/`else` | 159 | 20 |
+| nested `if` without `else` | 159 | 19 |
+
+At `MAX_PARSE_DEPTH = 24` a release build has about six times the headroom the limit
+needs. Only a debug build aborts, at 20, below the limit. Severity corrected Medium
+to Low.
+
+**The generalisable form**: a measurement taken in one build profile is a claim about
+that profile. I reported it as a claim about the product. The debug/release frame-size
+difference here is roughly eightfold, which is more than enough to invert a
+conclusion.
+
+### WHAT IS ACTUALLY WRONG IS A SENTENCE, AND IT WAS ALREADY IN THE TREE
+
+`MAX_PARSE_DEPTH`'s comment said the limit keeps a maximally-nested admissible program
+"well under 2 MiB of stack **even in a debug build with fat frames**, fitting
+comfortably inside the default cargo-test thread stack". That sentence is false as
+written, and measurement refutes precisely it. The comment now carries the table.
+
+The guard itself works, and the tests show it: nested parentheses are refused cleanly
+at the limit. It is the `if`-shaped input the limit does not cover in debug.
+
+### WHY NO SINGLE LIMIT FIXES IT, MEASURED RATHER THAN ARGUED
+
+The counter increments once per expression level, and that is a poor proxy for stack
+in **both** directions:
+
+- At equal counter depth, `if`-shaped input consumes far more stack than
+  parenthesis-shaped input — debug aborts at 20 against 24.
+- The deepest **real** source in the tree, `src/selfhost/kel/wire.kel` at depth
+  **21**, consumes less than either, which is why it parses comfortably.
+
+So the ordering is: real source needs 21, `if`-shaped input dies at 20, parentheses
+survive to 24. **A limit of 21 refuses a shipping stage source; a limit of 22 still
+lets `if`-shaped input abort in debug, which was measured, not assumed.** There is no
+value that admits the corpus and prevents the abort.
+
+**Charging blocks against the budget as well was tried, and made it worse.** It raised
+the corpus maximum from 21 to 41 while parenthesis-shaped input began aborting at
+counter 27 — the binding shape simply changed from `if` to parentheses, and the gap
+widened. Recorded so the next person does not spend the same hour.
+
+### THE DECISION, AND IT IS OVERRULABLE
+
+Left open. Narrowing the language's accepted nesting depth to accommodate an artefact
+of debug frame sizes costs more than the defect, which affects no shipping build. The
+trade is stated in the reverse prompt so the operator can overrule it.
+
+**An increment whose honest output is a corrected claim and a "no" is a complete
+increment.** The alternative on offer was a code change that degrades the language
+surface to fix something that does not occur in any shipped configuration.
+
+## 2026-09-16 (ninety-third) — my instrument shared a failure mode with its subject, and reported the sum
+
+### THE RESIDUAL WAS REAL, AND THE FIRST NUMBER FOR IT WAS WRONG
+
+The previous increment closed H1 and wrote down, deliberately, that the forward-target
+check does not bound recursion **depth** and that whether that is reachable had not
+been measured. This increment measured it.
+
+It is reachable. With the cap lifted, on a two-mebibyte stack, the walks survive a
+chunk nested **4600** deep and **abort the process** at **4800**. A `u16` target
+addresses about 16384 levels at five instructions per level, so 4800 sits well
+inside the representable space.
+
+**The first boundary I measured was 5500, and it was wrong.** The test builder that
+produced the nested chunk was itself **recursive**, and recursed exactly as deeply as
+the structure it built. The probe and the subject were overflowing together, so the
+number described neither one. The builder derives its layout in closed form now.
+
+The general form is worth more than the number: **an instrument that shares a failure
+mode with its subject reports the sum of the two.** This sits beside the tree's
+existing lesson that a crude instrument can manufacture a contradiction. The
+manufactured contradiction here was a boundary that looked like a property of the
+verifier and was partly a property of the test.
+
+It also cost a second wrong claim before it was caught: with the recursive builder,
+depth 16380 still aborted after the first walker was capped, and the obvious reading
+was that another walker was unbounded. That reading was wrong. Once the builder was
+iterative, 16380 was refused cleanly.
+
+### WHAT MADE THE GUARD TESTABLE TOOK A SECOND ATTEMPT TOO
+
+The first regression test asserted the depth guard was the check that refused. It
+failed, because the hand-built chunk had no instruction pushing each `If`'s
+condition, so the operand-stack walk refused it at instruction **zero** — before any
+walk nested. The test would have been evidence about that check instead. Adding the
+condition push per level makes the chunk reach the walks, which is also the shape the
+compiler actually emits.
+
+### THE CAP'S VALUE IS MEASURED, NOT BORROWED
+
+`crate::zero_value` has a `MAX_DEPTH` of 64 and would have been an easy analogy. The
+number here is 256 and comes from two measurements: the deepest nesting the
+**compiler** can emit is **20** (the recursive-descent parser overflows at 22, so no
+source program can produce a chunk nested deeper than the parser survives), and the
+uncapped walks abort at 4800. So 256 is about thirteen times what a program can reach
+and about nineteen times below the abort. Both endpoints scale with the host's stack,
+so the **ratios** are the durable part; an embedded host with a small stack is the
+case this protects most.
+
+### NON-VACUITY, DEMONSTRATED BY THE ABORT ITSELF
+
+With `MAX_REGION_DEPTH` lifted to `u32::MAX`, the test binary dies with SIGABRT. With
+it at 256, all nine pass. That is a stronger demonstration than a failing assertion,
+because the failure mode under guard is exactly one that cannot be asserted on: an
+abort does not unwind, so no watchdog and no `catch_unwind` names it, and
+`tests/hostile_module_mutation.rs` structurally cannot report this class.
+
+### THE WRAPPER IDIOM, AND ONE TRAP IN IT
+
+Each walker keeps its public signature and delegates to an `_at` form carrying the
+nesting count, which is the idiom `zero_value`/`zero_value_at` already establishes.
+Two things it would have been easy to get wrong:
+
+- `verify_depth_region` already has a local named `depth`, the **operand stack**
+  depth. The new parameter is `nest` for that reason.
+- `wcmu_region` recurses through a helper, `wcmu_subregion`, which called the
+  **wrapper**. Left alone, that resets the count to zero at every level and the cap
+  never fires however deep the chunk nests. The helper carries the count now, and the
+  comment at that call site says why it must.
+
+### H2: A SECOND FINDING, MEASURED AND DELIBERATELY NOT FIXED
+
+Establishing the compiler's nesting ceiling turned up a separate defect. The
+**parser** aborts on deeply nested SOURCE, with no bytecode involved: nesting 20
+compiles and verifies, 22 aborts inside `parse`, on a two-mebibyte stack. That is a
+compile-time denial of service on untrusted source, and the shipping command-line
+front end, the language server and the playground all accept source they did not
+write.
+
+It is a different component and a different fix. It is recorded in the audit ledger
+with its measurement and left open rather than folded into this increment, because
+widening scope mid-increment is how a fix stops being reviewable — but it is written
+down, with numbers, so it is not rediscovered from scratch.
+
+## 2026-09-16 (ninety-second) — the audit named the missing instrument, and it found a defect the audit's own fixes had walked past
+
+### THE FRONTIER CLAIM WAS TESTED, NOT INHERITED
+
+`HANDOFF.md` says the remaining work touches a `.kel` stage source or waits on an
+operator ruling. That is a strong claim and it gates everything, so it was checked
+rather than believed. Four candidate gaps were proposed and **four died against
+existing coverage**, which is worth recording so they are not re-derived:
+
+| candidate | what refuted it |
+|---|---|
+| the wire format's error correction is untested | `keleusma-wire/tests/ecc.rs` runs EVERY single-bit and EVERY double-bit fault; `src/ecc.rs` repeats it at the codeword |
+| Keleusma emits a parity plane and never reads one | `tests/secded_end_to_end.rs` carries it through a real module |
+| the worst-case bounds are never checked empirically | `c7_loop_bound_soundness.rs` and seven sibling files |
+| the wire decoder is unfuzzed | `tests/wire_fuzz.rs`, fixed-seed and replayable |
+
+**The fifth survived, and it was not a guess.** The foot of
+`docs/decisions/SECURITY_AUDIT_V0_2_1.md` carries a Coverage note listing what the
+suite lacks, and its first item is *"a hostile-bytecode corpus driven through the
+full safe `Vm::new`"*. The wire-format fuzz target beside it in that list had been
+built. This one had not. `tests/typed_conformance.rs` samples the surface with five
+hand-written mutations, each recreating one audit finding, and says so in its own
+header.
+
+### THE DESIGN WAS FORCED BY A MEASUREMENT ALREADY IN THE TREE
+
+The obvious harness flips bytes in a serialized module. `tests/format_fingerprint.rs`
+records, from measurement rather than reasoning, that such an edit "is caught by a
+checksum long before the header is read". **A byte fuzz measures the cyclic
+redundancy check.** An attacker who constructs bytecode computes a valid checksum as
+readily as the compiler does, so the faithful model mutates the `Module` and
+re-encodes around it.
+
+The census vindicates the choice and is the reason it is printed rather than only
+asserted on: of 4216 mutants, **zero** were refused by the encoder and **zero** by
+the loader. The artifact is well formed at every layer below the one under test, so
+the entire burden falls on `verify`, which is where the threat model puts it.
+
+### H1: THE VERIFIER DOES NOT TERMINATE ON A HOSTILE MODULE
+
+The first run never finished. Sampling the process put 2420 of 2476 stack samples in
+`analyze_yield_coverage`, on a single mutant.
+
+Every region walker in `src/verify.rs` advances its cursor to a position taken from
+an `If`, `Else` or `Loop` operand. A **backward** operand sends the cursor to a
+position already passed and the walk repeats forever; where the operand instead
+selects the recursive If-Else arm, the sub-region still contains the same `If` and
+the recursion does not bottom out, **overflowing the stack and aborting the
+process**. An abort does not unwind, so no `catch_unwind` and no watchdog can turn
+it into a named failure, and a host cannot defend itself by wrapping the call.
+
+Three public entries reached a walker with the operand unvalidated. `verify` computed
+`compute_always_yielding` *before* `verify_chunk`, so pass 1 had validated nothing on
+any chunk; `wcet_stream_iteration` and `wcmu_stream_iteration` are documented as
+standalone and ran pass 1 at no point. Swept exhaustively rather than sampled,
+because the outcome is position-dependent: on a seventeen-instruction chunk,
+`verify` hung at four positions and aborted at four more, and a sample would have
+reported whichever it drew.
+
+**The fix is at the ordering, not at the twelve cursor assignments.** Four walkers
+times three operands is twelve places to keep right; the property is a property of
+the chunk, so it is checked once, on the chunk, before anything walks it.
+
+### THE MOST USEFUL THING HERE IS THAT F1 AND G1 TOUCHED THESE EXACT FUNCTIONS
+
+F1 hardened `analyze_yield_coverage`, `wcet_region` and `wcmu_region` against a
+**panic** from an out-of-range target. G1 closed the last slice-clamp sibling. Both
+rounds read the hazard as an out-of-bounds index and fixed it as one.
+
+A target that is **in range but backward** passes every clamp those rounds added,
+and is not an indexing fault at all. It is a liveness fault. So the eighth round of
+the same-class pattern held, but along an axis the previous rounds' fix *shape*
+could not have reached. Auditing a function for one failure mode does not audit it,
+and the clamps are evidence about clamping before they are evidence about the
+function.
+
+### AND I PRODUCED THE SAME CLASS OF ERROR INSIDE THE SAME INCREMENT
+
+The harness originally watchdogged **only execution**, on the written reasoning that
+only execution had a documented reason to be unbounded on a mutated input. The first
+run then hung inside `verify` — the phase whose entire purpose is to bound an
+untrusted input. The file's header now carries that inversion rather than quietly
+covering every phase, because the reasoning error is more transferable than the fix.
+
+Three further failures, each a real consequence of the change and each caught by a
+guard that already existed:
+
+- `loop_exit_zero_rejected_without_panic` pinned E1's message; H1 now refuses
+  `Loop(0)` first. E1's own check stays covered by
+  `loop_exit_not_after_endloop_rejected`, whose hostile exit is **forward** and
+  therefore still reaches it. The test's real contract, return rather than panic,
+  is unchanged.
+- `every_comment_citation_resolves_or_is_a_recorded_debt` caught a citation in my
+  own header naming a test I had folded away.
+- `the_verify_citations_point_at_what_the_document_says_they_do` caught three
+  proof-evidence line pins moved by the insertion. The live citations were updated
+  and `DESIGN_JOURNAL.md` and the archived handoff were **not**, being ledger
+  entries rather than live claims.
+
+### NON-VACUITY WAS ESTABLISHED, NOT ASSUMED
+
+Four of the six regression tests fail against the unfixed verifier, with the exact
+hang messages; `src/verify.rs` was restored byte-identical afterwards and checked.
+A termination guard that would pass without the fix is worth nothing, and this class
+of guard is unusually easy to write vacuously.
+
+### WHAT IS NOT CLOSED
+
+The check makes targets forward. It does **not** bound recursion depth, and a chunk
+whose targets are all forward can still nest. **Whether that is reachable has not
+been measured**, and no claim is made either way. It is stated in the guard's own
+documentation rather than left implicit.
+
+---
+
 ## 2026-09-13 (ninety-first) — the resume prompt had already described the mistake I made
 
 ### THE HANDOFF IS VALID, CHECKED BY ITS OWN RULES

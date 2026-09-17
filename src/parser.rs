@@ -82,19 +82,52 @@ struct Parser<'a> {
     depth: u32,
 }
 
-/// Maximum recursive-descent depth before the parser bails with
-/// an error. Each level of expression nesting traverses the
-/// precedence chain (pipeline → logical → comparison → bitwise →
-/// shift → addition → multiplication → unary → postfix → primary),
-/// so a single level of parenthesisation consumes roughly a dozen
-/// stack frames. The limit is chosen so that a maximally-nested
-/// admissible program consumes well under 2 MiB of stack even in a
-/// debug build with fat frames, fitting comfortably inside the
-/// default cargo-test thread stack and inside the small stacks of
-/// `no_std` embedded targets, and leaving headroom for the type
-/// checker, compiler, and VM passes that follow. The bound was
-/// reduced from 32 to 24 when the bitwise operator level was added
-/// to the precedence chain, restoring the per-level stack margin.
+/// Maximum recursive-descent depth before the parser bails with an error.
+///
+/// Each level of expression nesting traverses the precedence chain (pipeline →
+/// logical → comparison → bitwise → shift → addition → multiplication → unary
+/// → postfix → primary), so a single level of parenthesisation consumes
+/// roughly a dozen stack frames. The bound was reduced from 32 to 24 when the
+/// bitwise operator level was added to the chain.
+///
+/// # The margin, measured (audit H2)
+///
+/// **This comment previously claimed the limit keeps a maximally-nested
+/// admissible program "well under 2 MiB of stack even in a debug build". That
+/// is true of a release build and FALSE of a debug one.** Measured on a
+/// two-mebibyte stack, the size Rust gives a spawned thread, with the limit
+/// lifted so the stack rather than the counter decides:
+///
+/// | shape | release | debug |
+/// |---|---|---|
+/// | nested parentheses | 198 | 24 |
+/// | nested `match` | — | 23 |
+/// | nested `if`/`else` | 159 | 20 |
+/// | nested `if` without `else` | 159 | 19 |
+///
+/// So a release build has roughly six times the headroom this limit needs,
+/// and a **debug** build aborts on `if`-shaped input at depth 20, below the
+/// limit of 24. The shipping binaries are release builds.
+///
+/// # Why the limit is not simply lowered
+///
+/// Because no single value separates the shapes. The counter increments once
+/// per expression level, and that is a poor proxy for stack in **both**
+/// directions: at the same counter value, `if`-shaped input consumes far more
+/// stack than parenthesis-shaped input, while the deepest real source in this
+/// repository — `src/selfhost/kel/wire.kel`, at depth **21** — consumes less
+/// than either. A limit of 21 would refuse a shipping stage source; a limit of
+/// 22 still lets `if`-shaped input abort in a debug build, which was measured
+/// rather than reasoned about.
+///
+/// Charging blocks against the budget as well was tried and **made it worse**:
+/// it raised the corpus maximum to 41 while parenthesis-shaped input began
+/// aborting at counter 27, so the binding shape merely changed.
+///
+/// The residual is recorded in `docs/decisions/SECURITY_AUDIT_V0_2_1.md` as
+/// H2 rather than papered over. Narrowing the language's accepted nesting to
+/// accommodate an artefact of debug frame sizes would cost more than the
+/// defect does.
 const MAX_PARSE_DEPTH: u32 = 24;
 
 impl<'a> Parser<'a> {

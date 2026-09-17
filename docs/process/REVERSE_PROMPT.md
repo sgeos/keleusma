@@ -10,6 +10,106 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
+**2026-09-16, session 66, first increment.**
+
+**THE VERIFIER COULD BE MADE TO HANG FOREVER, OR TO ABORT THE PROCESS, BY A MODULE
+DIFFERING FROM A VALID ONE IN A SINGLE `If` OPERAND. THAT IS FIXED (audit H1).**
+
+Every region walker in `src/verify.rs` advances its cursor to a position taken from
+an `If`, `Else` or `Loop` operand. A **backward** operand sends the cursor to a
+position already passed and the walk repeats forever; where the operand selects the
+recursive If-Else arm instead, the sub-region still contains the same `If` and the
+recursion does not bottom out, overflowing the stack and **aborting**. An abort does
+not unwind, so a host cannot defend itself by wrapping the call.
+
+Three public entries reached a walker with the operand unvalidated: `verify`
+computed `compute_always_yielding` **before** `verify_chunk`, so pass 1 had
+validated nothing, and `wcet_stream_iteration` and `wcmu_stream_iteration` are
+documented as standalone and ran pass 1 at no point. Measured exhaustively on a
+seventeen-instruction chunk: **four positions hung, four aborted.**
+`check_forward_control_flow_targets` now runs on every chunk before any walk reads a
+target, at all three entries. Pass 1's stronger structured-position check is
+untouched.
+
+**H1 IS A SIBLING OF F1 AND G1 THAT THOSE ROUNDS COULD NOT HAVE REACHED.** Both
+hardened these same functions, reading the hazard as an out-of-bounds index and
+fixing it with clamps. A target that is **in range but backward** passes every clamp
+and is not an indexing fault: it is a liveness fault.
+
+**THE HARNESS THAT FOUND IT IS THE ONE THE SECURITY AUDIT ASKED FOR.** The Coverage
+note at the foot of `docs/decisions/SECURITY_AUDIT_V0_2_1.md` lists "a
+hostile-bytecode corpus driven through the full safe `Vm::new`" as the most valuable
+missing addition. The wire-format fuzz target beside it in that list existed; this
+did not. It is `tests/hostile_module_mutation.rs`: 4216 mutants, 3562 refused by
+verification, 654 verified and run, in under five seconds.
+
+**It mutates the `Module` and re-encodes, and that is not a detail.**
+`tests/format_fingerprint.rs` records that a byte edit to a serialized module is
+caught by a checksum before the header is read, so a byte fuzz measures the
+checksum. An attacker computes a valid checksum. The census confirms the choice:
+**zero** mutants were refused by the encoder and **zero** by the loader, so the whole
+burden falls on `verify`.
+
+**THE DEPTH RESIDUAL IS NOW MEASURED AND CLOSED.** Forward targets make the walks
+terminate; they do not bound how deeply the walks NEST. With the bound lifted, on a
+two-mebibyte stack, the walks survive a chunk nested **4600** deep and **abort** at
+**4800** — well inside the ~16384 levels a `u16` target addresses, so it was
+reachable. `MAX_REGION_DEPTH` is **256**, threaded through all four walkers by the
+`_at` wrapper idiom `zero_value` already uses. Chosen from measurement: the deepest
+nesting the COMPILER can emit is **20**, so 256 is ~13x what a program can reach and
+~19x below the abort. **Non-vacuity is demonstrated by the abort itself** — with the
+cap lifted the test binary dies with SIGABRT.
+
+**AND THE FIRST BOUNDARY I MEASURED WAS WRONG.** It said 5500. The test builder
+producing the nested chunk was **itself recursive** and overflowed alongside its
+subject, so the number described neither. The builder derives its layout in closed
+form now. An instrument that shares a failure mode with its subject reports the sum
+of the two, and this one was mine.
+
+**H2 IS OPEN, AND I OVERSTATED IT — THE CORRECTION IS THE USEFUL PART.** I wrote
+that the parser's abort on deeply nested SOURCE was "a compile-time denial of
+service on the command-line front end, the language server and the playground".
+**Those ship as RELEASE builds, and the measurement I had not taken was the release
+one.** With the limit lifted on a two-mebibyte stack:
+
+| shape | release | debug |
+|---|---|---|
+| nested parentheses | 198 | 24 |
+| nested `if`/`else` | 159 | 20 |
+
+So at `MAX_PARSE_DEPTH = 24` a release build has ~6x the headroom it needs, and only
+a **debug** build aborts, at depth 20, below the limit. Severity corrected from
+Medium to Low in the ledger.
+
+**What is genuinely wrong is a claim, and it is fixed.** The constant's comment said
+the limit holds "even in a debug build with fat frames". Measurement refutes exactly
+that sentence; the comment now carries the table instead.
+
+**NO SINGLE LIMIT FIXES IT, and this is the part worth your attention.** The counter
+is a poor proxy for stack in BOTH directions. At equal counter depth, `if`-shaped
+input costs far more stack than parenthesis-shaped input, while the deepest real
+source in the tree — `src/selfhost/kel/wire.kel` at depth **21** — costs less than
+either. A limit of 21 would refuse a shipping stage source; 22 still lets `if`-shaped
+input abort in debug. **Charging blocks against the budget was tried and made it
+worse**, raising the corpus maximum to 41 while parenthesis input began aborting at
+counter 27. Left open deliberately: narrowing the language's accepted nesting to
+accommodate an artefact of debug frame sizes costs more than the defect does. That
+trade is yours to overrule if you disagree.
+
+**Four candidate goals died against existing coverage before this one was chosen** —
+wire error correction, the Keleusma-level parity plane, empirical worst-case bounds,
+and the wire decoder fuzz are all already covered. Recorded in the journal so they
+are not re-derived.
+
+**THE SEVEN OPERATOR DECISIONS BELOW ARE UNCHANGED AND UNTOUCHED BY THIS WORK.** No
+file under `src/selfhost/kel/` was modified, so the capacity decision is
+unprejudiced. No opcode, no `BYTECODE_VERSION`, no wire-format change.
+
+**Verification.** The workspace suite is green at 2873 tests under default features.
+The remaining four feature sets are CI's to run, per the git strategy.
+
+---
+
 **2026-09-12, session 65, through the eighty-ninth increment.**
 
 **THE SELF-HOSTED CODEGEN HAS NO OPERAND TYPES. THAT IS THE WHOLE OF `scope/float_arith__GAP`.**

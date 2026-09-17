@@ -350,6 +350,52 @@ now carried out.
 The doc-comment addition does not change behavior; `fmt` and `clippy --tests
 --all-features -D warnings` remain clean and the full gate remains green.
 
+## Delta 8 (hostile-module mutation harness, 2026-09-16)
+
+Not a re-audit. This round came from building the instrument the **Coverage note**
+at the foot of this document named and never had: *"a hostile-bytecode corpus driven
+through the full safe `Vm::new`"*. The corpus is
+`tests/hostile_module_mutation.rs`, and it found H1 on its first run.
+
+The harness mutates a compiled `Module` and **re-encodes** the artifact around the
+mutation, rather than flipping bytes in a serialized one. That choice is forced by a
+measurement already in the tree: `tests/format_fingerprint.rs` records that a
+byte-level edit is caught by a checksum before the header is read, so a byte fuzz
+measures the cyclic redundancy check and not the verifier. An attacker who
+constructs bytecode computes a valid checksum as readily as the compiler does.
+Re-encoding makes the artifact well formed at every layer below the one under test,
+which is why the census places the whole burden on `verify`.
+
+| # | Sev | Status | Note |
+|---|-----|--------|------|
+| H1 | Med | Fixed | Every region walker in `src/verify.rs` -- `analyze_yield_coverage`, `wcet_region`, `wcmu_region` and `verify_depth_region` -- advances its cursor to a position taken from an `If`, `Else` or `Loop` operand. A **backward** operand moves the cursor to a position already passed and the walk repeats forever; where the operand instead selects the recursive If-Else arm, the sub-region still contains the same `If` and the recursion does not bottom out, overflowing the stack and **aborting the process**. Three public entries reached a walker with the operand unvalidated: `verify` computed `compute_always_yielding` before `verify_chunk`, so pass 1 had validated nothing on any chunk, and `wcet_stream_iteration` and `wcmu_stream_iteration` are documented as standalone and ran pass 1 at no point. Measured on a module differing from a valid one by a single `If` operand: `verify` hung at four of seventeen instruction positions and aborted at four more. `check_forward_control_flow_targets` now requires every `If`, `Else` and `Loop` operand to be forward and in range, on every chunk, before any walk reads it, at all three entries. Tests `tests/verify_hostile_termination.rs` (six, four of which fail against the unfixed verifier) and the mutation corpus. |
+
+| H1 residual | Med | Fixed | The H1 forward-target check makes the walks terminate but does not bound how deeply they NEST, and each of the four recurses once per nested region. Measured with the cap lifted, on a two-mebibyte stack: the walks survive a hand-built chunk nested **4600** deep and **abort the process** at **4800**. A `u16` target addresses about 16384 levels at five instructions per level, so 4800 is well inside the representable space and the residual was reachable rather than theoretical. `MAX_REGION_DEPTH` is 256, threaded through all four walkers by the `_at` wrapper idiom `crate::zero_value` already uses; the yield-coverage walk answers `Some(false)` past the cap, which is its conservative direction, and the three that return `Result` refuse. Justified by measurement: the deepest nesting the COMPILER can emit is 20, the parser overflowing at 22, so 256 is about thirteen times what a program can reach and about nineteen times below the abort. Tests in `tests/verify_hostile_termination.rs`; with the cap lifted the test binary aborts with SIGABRT, which is the non-vacuity demonstration. |
+| H2 | Low (was stated Med, **corrected**) | OPEN, documentation corrected | The recursive-descent **parser** aborts on deeply nested source in a **debug build**, independently of any bytecode. Measured on a two-mebibyte stack with the limit lifted, so the stack rather than the counter decides: nested `if`/`else` survives **159** levels in release and **20** in debug; nested parentheses, **198** and **24**. With `MAX_PARSE_DEPTH` at 24, a release build therefore has roughly six times the headroom it needs and a debug build aborts at depth 20, below the limit. **The first statement of this finding called it a compile-time denial of service on the command-line front end, the language server and the playground; that was wrong, because those ship as release builds.** The constant's own comment claimed the limit holds "even in a debug build with fat frames", which measurement refutes; the comment now carries the table. No single limit fixes it: the counter is a poor proxy for stack in both directions, since at equal counter depth `if`-shaped input costs far more than parenthesis-shaped input, while the deepest real source here (`src/selfhost/kel/wire.kel`, depth **21**) costs less than either. A limit of 21 would refuse a shipping stage source; 22 still lets `if`-shaped input abort in debug. Charging blocks against the budget as well was tried and made it worse, raising the corpus maximum to 41 while parenthesis input began aborting at counter 27. Left open deliberately: narrowing the accepted nesting to accommodate an artefact of debug frame sizes costs more than the defect. |
+
+**H1 is a sibling of F1 and G1 that those rounds did not reach, and the distinction
+is worth stating.** F1 hardened these same functions against a *panic* from an
+out-of-range target, and G1 closed the last slice-clamp sibling. Both treated the
+hazard as an out-of-bounds read. A target that is **in range but backward** passes
+every clamp F1 and G1 added and is not an indexing fault at all: it is a liveness
+fault. The recurring same-class pattern therefore held for an eighth round, but
+along an axis the previous rounds' fix shape could not have covered.
+
+**Severity reasoning.** Medium, not high. It is a denial of service on the
+component whose contract is to bound an untrusted input, reachable through the
+documented hot-swap and precompiled-artifact paths, and the stack-overflow half
+aborts rather than unwinding, so a host cannot defend itself by wrapping the call.
+It is not memory unsafety, and it is unreachable from compiler output, which emits
+only forward targets.
+
+**What H1 does NOT close.** The check makes targets forward; it does not bound
+recursion *depth*. A chunk whose targets are all forward can still nest, and nesting
+is what the recursive walkers consume stack on. Whether that is reachable has not
+been measured, and the guard's own documentation says so rather than leaving it
+implicit.
+
+No wire-format, `BYTECODE_VERSION`, or instruction-set change.
+
 ## Severity and category distribution
 
 | Severity | Count |
