@@ -1,5 +1,59 @@
 # Design Journal
 
+## 2026-09-17 — float negation emitted INVALID IR under narrow-float-32
+
+**The first invalid-IR defect this session, and the first found by a prediction
+being wrong.**
+
+I filed two predictions before probing `Float` as a composite field value: that it
+would behave like the other types with division and the conversions as likely
+gaps, and that any difference between the configurations would be a hard-coded
+eight. **Both were falsified.** All seven float producers lower in both
+configurations — because every float path pushes `Width::Scalar(float_bytes)`, a
+DERIVED width, while the integer path in the very same `match` arm pushed nothing.
+
+Then the VALUES disagreed under `narrow-float-32`, and the cause was not a width
+at all:
+
+```
+fn main(a: Word, b: Word) -> Word { (-(a as Float)) as Word }
+  InvalidIr("Invalid bitcast\n  %nbits = bitcast float %fneg to i64")
+```
+
+**`Op::Neg` open-coded its conversion back to bits as a raw `build_bit_cast`.**
+Correct at eight bytes, invalid at four, because a bitcast may not change a bit
+width. Every other float path routes through the `float_to_bits` helper, which
+narrows to `i32` and extends. **The one arm that duplicated the conversion instead
+of calling it is the one that drifted** — the same shape as a second computation of
+a quantity being free to disagree with the first.
+
+**Float negation was broken outright in a supported configuration**, and the gate
+runs that configuration.
+
+### Why nothing caught it
+
+`scalar_operator_matrix.rs` enumerates *"every cell, from the types and the
+operators"*. **Its type list is `byte`, `word`, `fixed`.** A scalar type is absent
+from the scalar-operator matrix, its `raw` helper panics on a float calling it a
+non-scalar, and its header discusses float dispatch. **The omission looked
+deliberate and was stated nowhere.**
+
+That is the same class as the census whose population was narrower than its title,
+and it is now written at the point where the list is defined rather than in a
+journal nobody greps.
+
+### The guard, and the sharpest reach evidence yet
+
+`float_ir_validity.rs` lowers every float operator and calls `verify()` — no
+execution, so it needs none of the bit-pattern marshalling that has produced probe
+defects here. **Restoring the defect fails it under `narrow-float-32` and leaves it
+GREEN under default features**, matching the bug's configuration-dependence
+exactly. A guard that fires precisely where the defect lives and nowhere else.
+
+**A seventh probe implicated itself on the way**: a `to_word` subject that
+double-cast a `Word` to a `Word`, which the backend correctly refused.
+
+
 ## 2026-09-17 — the optimised run becomes a gate phase, and a fresh claim of mine is already wrong
 
 `KEL_OPTIMIZE` existed, was documented, and no script set it. It is a **phase**

@@ -150,6 +150,25 @@ fn observe() -> Vec<(String, Cell)> {
     let b = Value::Byte;
     let w = Value::Int;
     let fx = Value::Fixed;
+    // ⚠ **`Float` IS MISSING FROM THIS LIST, AND THAT COST A REAL DEFECT.**
+    //
+    // This function is documented as enumerating *"every cell, from the types and
+    // the operators"*. It enumerates three of the four scalar types. `raw` above
+    // panics on a `Value::Float` with a message calling it a non-scalar, and this
+    // file's header discusses float dispatch — so the omission reads as deliberate
+    // and was stated nowhere.
+    //
+    // **On 2026-09-17 `Op::Neg` on a `Float` was found to emit INVALID IR under
+    // `narrow-float-32`** — a bitcast changing the bit width — so float negation
+    // was broken outright in a supported configuration, and no cell here could
+    // have seen it. It was found by a composite-field probe instead.
+    //
+    // **Adding `Float` here is not a small change**: the driver passes arguments
+    // as raw `i64` bit patterns, and this package has already recorded a probe
+    // defect from passing a float as `i64::MIN` rather than as its bits. Until
+    // that is done properly, `float_ir_validity.rs` covers the float surface for
+    // IR validity in both configurations, which is what the missing cells would
+    // have caught. **The gap is narrower now and it is written down.**
     let types: &[(&str, &str, Value, Value)] = &[
         ("byte", "Byte", b(200), b(7)),
         ("word", "Word", w(200), w(7)),

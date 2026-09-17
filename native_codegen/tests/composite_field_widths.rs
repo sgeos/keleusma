@@ -97,6 +97,26 @@ const FIXED_PRODUCERS: &[(&str, &str)] = &[
     ("div", "((a as Fixed) / (b as Fixed))"),
 ];
 
+/// `Float`-valued producers. **None of these was ever a gap**, and the reason is
+/// the finding: every float path pushes `Width::Scalar(float_bytes)` — a width
+/// DERIVED from the configuration — while the integer path in the very same
+/// `match` arm pushed nothing. The float half was written stating its width from
+/// the start.
+///
+/// **Pinned across BOTH float configurations**, because `Float` is the only scalar
+/// type whose size differs between them: eight bytes by default, four under
+/// `narrow-float-32`. That makes it the one place a hard-coded width and a derived
+/// one would diverge, and the gate runs both.
+const FLOAT_PRODUCERS: &[(&str, &str)] = &[
+    ("cast", "(a as Float)"),
+    ("add", "((a as Float) + (b as Float))"),
+    ("sub", "((a as Float) - (b as Float))"),
+    ("mul", "((a as Float) * (b as Float))"),
+    ("div", "((a as Float) / (b as Float))"),
+    ("mod", "((a as Float) % (b as Float))"),
+    ("neg", "(-(a as Float))"),
+];
+
 /// A two-field struct whose FIRST field holds the produced value. **The second
 /// field is the detector**: a wrong width shifts it, and reading both with
 /// distinct multipliers makes the shift observable.
@@ -291,6 +311,42 @@ fn the_admitted_fixed_fields_agree_with_the_reference() {
         assert_eq!(
             vm, native,
             "fixed producer `{name}` diverges: reference {vm}, native {native}\n  {src}"
+        );
+    }
+}
+
+/// **The float surface was clean before it was checked, and both predictions
+/// filed in advance were wrong.**
+///
+/// They were: that `Float` would behave like the other types, with division and
+/// the conversions as likely gaps; and that if anything differed between the two
+/// configurations it would be a hard-coded eight. **All seven producers lower in
+/// both configurations and nothing differs**, because the float paths derive their
+/// width from `float_bytes` rather than stating a constant.
+#[test]
+fn every_float_producer_can_fill_a_composite_field() {
+    let mut broken = Vec::new();
+    for (name, v) in FLOAT_PRODUCERS {
+        if let Some(e) = refusal(&field_source("Float", v, "(p.x as Word)")) {
+            broken.push((*name, e));
+        }
+    }
+    assert!(
+        broken.is_empty(),
+        "float producer(s) whose result cannot fill a composite field: {broken:?}. \
+         The float paths derive their width from the configuration; a refusal here \
+         means one of them stopped."
+    );
+}
+
+#[test]
+fn the_admitted_float_fields_agree_with_the_reference() {
+    for (name, v) in FLOAT_PRODUCERS {
+        let src = field_source("Float", v, "(p.x as Word)");
+        let (vm, native) = common::vm_and_native_two_arg(&src, 9, 5);
+        assert_eq!(
+            vm, native,
+            "float producer `{name}` diverges: reference {vm}, native {native}\n  {src}"
         );
     }
 }

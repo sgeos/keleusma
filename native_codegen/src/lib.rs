@@ -5670,10 +5670,20 @@ fn lower_chunk_body<'ctx>(
                     let bits = st.pop();
                     let f = bits_to_float(&st.b, bits, f64t, float_bytes);
                     let n = st.b.build_float_neg(f, "fneg").unwrap();
-                    let out =
-                        st.b.build_bit_cast(n, i64t, "nbits")
-                            .unwrap()
-                            .into_int_value();
+                    // **THROUGH `float_to_bits`, NOT A RAW BITCAST.**
+                    //
+                    // This arm open-coded `build_bit_cast(n, i64t)`, which is
+                    // correct for an eight-byte float and **INVALID IR for a
+                    // four-byte one**: `bitcast float to i64` changes the bit
+                    // width. Under `narrow-float-32`, `-(x as Float)` therefore
+                    // produced a module that failed `lm.verify()` — float
+                    // negation was broken outright in a supported configuration.
+                    //
+                    // Every other float path already routed through the helper,
+                    // which narrows to `i32` first and then extends. **This arm
+                    // was the one that duplicated the conversion instead of
+                    // calling it**, which is why it was the one that drifted.
+                    let out = float_to_bits(&st.b, n, i64t, float_bytes);
                     st.push_k(out, Width::Scalar(float_bytes), OperandKind::Float);
                 } else {
                     let w = st.width_at(0);
