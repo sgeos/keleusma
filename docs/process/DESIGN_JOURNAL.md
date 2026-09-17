@@ -1,5 +1,40 @@
 # Design Journal
 
+## 2026-09-17 — the generator earned itself on its fourth byte program
+
+Widened on the two safe axes — five seeds, and `Byte` operands at a depth derived
+from the type rather than inherited. `Fixed` was excluded for stated reasons.
+
+**1500 `Word` trees: no divergence. 1500 `Byte` trees: a refusal on program
+four.** `Op::Div` and `Op::Mod` pushed `Width::Unknown` unconditionally, which is
+right for a `Word` and wrong by omission for a matched `Byte` pair — the reference
+divides two bytes to a byte. **A byte quotient could therefore feed nothing**,
+since the generic arithmetic surface admits only a matched pair.
+
+**Characterised before being touched**: all nine byte producers lower alone, and
+only `/` and `%` refuse once their result is consumed. That shape is the point.
+**The 90-cell and 42-cell matrices apply one operator each**, and a width lost on
+the way OUT of an operation is invisible until something consumes the result. No
+enumerated cell could have seen it; the census keyed by opcode name probes `Word`,
+where the behaviour is correct.
+
+**This is the first defect found by a generated subject in this package**, and it
+is the argument for generating rather than enumerating, made concretely rather
+than in a brief.
+
+Repaired narrowly — matched `Byte` pair only, `Word` untouched and pinned — and
+**verified by the same 1500 trees that found it**. Perturbing the emitter to emit
+`sdiv` where `srem` belongs fails the differential, so the reach is real.
+**Dropping the byte mask does NOT fail it, and that is correct**: a quotient of two
+masked bytes cannot exceed the dividend, so the mask is provably inert there. It is
+applied anyway, so the invariant is held by construction rather than by that
+argument.
+
+**A refusal is not a wrong answer**, and this one erred safely for as long as it
+existed. What it cost was capability: composed byte arithmetic through a division
+was unlowerable, and nothing said so.
+
+
 ## 2026-09-17 — the first generated subjects, and the first reach proven by breaking the lowering
 
 Every subject in this package was hand-written: 74 corpus modules, 132 operator

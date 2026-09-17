@@ -4352,6 +4352,28 @@ fn lower_chunk_body<'ctx>(
                     let bits = float_to_bits(&st.b, q, i64t, float_bytes);
                     st.push_k(bits, Width::Scalar(float_bytes), OperandKind::Float);
                 } else {
+                    // **THE RESULT WIDTH, READ BEFORE THE POPS DISCARD IT.**
+                    //
+                    // This arm pushed `Width::Unknown` unconditionally until
+                    // 2026-09-17, and for a `Word` division that is right — a word
+                    // carries no packed width. **For a matched `Byte` pair it was
+                    // wrong by omission**: the reference divides two `Byte`s to a
+                    // `Byte`, and dropping that made every operation CONSUMING a
+                    // byte quotient refuse, since the generic arithmetic surface
+                    // admits only a matched pair.
+                    //
+                    // Measured: all nine byte-producing operations lower ALONE;
+                    // only `/` and `%` refused once their result fed another
+                    // operation. `+`, `-`, `*` and the three bitwise operators
+                    // already propagated it. **Found by a generated expression
+                    // tree, on its fourth program** — no single-operator cell
+                    // composes two operations, so no enumerated matrix could see it.
+                    //
+                    // Narrow on purpose: a matched `Byte` pair gains the width, and
+                    // every other combination keeps exactly the `Unknown` it had.
+                    // A `Fixed` operand never reaches here, being refused above.
+                    let byte_pair =
+                        st.width_at(1) == Width::Scalar(1) && st.width_at(0) == Width::Scalar(1);
                     let rhs = st.pop();
                     let lhs = st.pop();
 
@@ -4377,7 +4399,16 @@ fn lower_chunk_body<'ctx>(
                         Op::Div => st.b.build_int_signed_div(lhs, safe, "sdiv").unwrap(),
                         _ => st.b.build_int_signed_rem(lhs, safe, "srem").unwrap(),
                     };
-                    st.push(v);
+                    // The mask is inert for a quotient or remainder of two masked
+                    // bytes, which cannot exceed the dividend. It is applied anyway
+                    // so the byte representation invariant is held by construction
+                    // here as it is everywhere else, rather than by an argument.
+                    if byte_pair {
+                        let out = Width::Scalar(1);
+                        st.push_w(mask_if_byte(&st.b, i64t, v, out), out);
+                    } else {
+                        st.push(v);
+                    }
                 }
             }
             // The checked forms do NOT fault on a zero divisor. They reify it as

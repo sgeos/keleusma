@@ -100,11 +100,77 @@ fn program(rng: &mut Rng, depth: u32) -> String {
     )
 }
 
-/// Programs per run. Each is a compile, a lowering and a JIT, measured at a few
-/// milliseconds; the whole test is under a second. **The gate's longest phase is
-/// already 380s and had to be split, so this must stay cheap.**
+/// A `Byte` leaf. **Bounded by 3, not by 9**, and the reason is arithmetic
+/// rather than caution: `Byte` arithmetic is checked and a byte overflows far
+/// sooner than a word. With leaves at most 3, a depth-2 all-multiply tree reaches
+/// 81 and stays inside a byte; **depth 3 reaches 6561 and does not**, and the
+/// consequence is not a failing assertion but a `SIGTRAP` that kills the binary.
+fn byte_leaf(rng: &mut Rng) -> String {
+    match rng.below(4) {
+        0 => "(a as Byte)".into(),
+        1 => "(b as Byte)".into(),
+        n => format!("({} as Byte)", n - 1),
+    }
+}
+
+/// A `Byte` expression tree, wrapped by the caller into a `Word` signature.
+///
+/// **`Byte` is the type with the worst record in this package**: checked `Byte`
+/// multiply and add once returned untruncated values, so `200 * 100` gave 20000
+/// where the reference gives `Byte(32)`. The fixed matrices cover those operators
+/// one at a time; this composes them.
+fn byte_expr(rng: &mut Rng, depth: u32) -> String {
+    if depth == 0 {
+        return byte_leaf(rng);
+    }
+    match rng.below(6) {
+        0 => format!(
+            "({} / ({} as Byte))",
+            byte_expr(rng, depth - 1),
+            rng.below(9) + 1
+        ),
+        1 => format!(
+            "({} % ({} as Byte))",
+            byte_expr(rng, depth - 1),
+            rng.below(9) + 1
+        ),
+        n => {
+            let op = SAFE_BINARY[(n as usize - 2) % SAFE_BINARY.len()];
+            format!(
+                "({} {op} {})",
+                byte_expr(rng, depth - 1),
+                byte_expr(rng, depth - 1)
+            )
+        }
+    }
+}
+
+fn byte_program(rng: &mut Rng, depth: u32) -> String {
+    format!(
+        "fn main(a: Word, b: Word) -> Word {{ ({}) as Word }}",
+        byte_expr(rng, depth)
+    )
+}
+
+/// Programs per seed. Each is a compile, a lowering and a JIT, measured at a few
+/// milliseconds. **The gate's longest phase is already 380s and had to be split,
+/// so this must stay cheap.**
 const PROGRAMS: usize = 300;
 const DEPTH: u32 = 3;
+
+/// `Byte` trees are SHALLOWER, and the bound is derived from the type rather
+/// than inherited. See `byte_leaf`.
+const BYTE_DEPTH: u32 = 2;
+
+/// **A single seed is a single sample of the shape space.** Sweeping several
+/// costs seconds, which is the cheapest real strengthening available.
+const SEEDS: &[u64] = &[
+    0x5EED_1234_ABCD_0001,
+    0x0F0F_0F0F_0F0F_0F0F,
+    0xDEAD_BEEF_FEED_FACE,
+    0x1111_2222_3333_4444,
+    0xA5A5_A5A5_5A5A_5A5A,
+];
 
 /// Below this the generator collapsed and this is a slower operator matrix.
 const DISTINCT_FLOOR: usize = 250;
@@ -114,43 +180,47 @@ const OPERATOR_FLOOR: usize = 7;
 /// **THE COMPARISON.**
 #[test]
 fn generated_expression_trees_agree_with_the_reference() {
-    let mut rng = Rng(0x5EED_1234_ABCD_0001);
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut ops: BTreeSet<&str> = BTreeSet::new();
     let mut compared = 0usize;
 
-    for i in 0..PROGRAMS {
-        let src = program(&mut rng, DEPTH);
-        seen.insert(src.clone());
-        for op in SAFE_BINARY.iter().chain(["/", "%"].iter()) {
-            if src.contains(&format!(" {op} ")) {
-                ops.insert(op);
+    for seed in SEEDS {
+        let mut rng = Rng(*seed);
+        for i in 0..PROGRAMS {
+            let src = program(&mut rng, DEPTH);
+            seen.insert(src.clone());
+            for op in SAFE_BINARY.iter().chain(["/", "%"].iter()) {
+                if src.contains(&format!(" {op} ")) {
+                    ops.insert(op);
+                }
             }
-        }
 
-        // **A program this generator cannot compile is the GENERATOR's defect
-        // until shown otherwise**, and it fails loudly. Discarding such cases
-        // silently is how a generator shrinks to the trivial subset while still
-        // reporting a program count.
-        let (vm, native) = common::vm_and_native_two_arg(&src, 7, 3);
-        compared += 1;
-        assert_eq!(
-            vm, native,
-            "DIVERGENCE on generated program {i}:\n  {src}\n  reference = {vm}\n  \
+            // **A program this generator cannot compile is the GENERATOR's defect
+            // until shown otherwise**, and it fails loudly. Discarding such cases
+            // silently is how a generator shrinks to the trivial subset while still
+            // reporting a program count.
+            let (vm, native) = common::vm_and_native_two_arg(&src, 7, 3);
+            compared += 1;
+            assert_eq!(
+                vm, native,
+                "DIVERGENCE on generated program {i}:\n  {src}\n  reference = {vm}\n  \
              native    = {native}\n\nReproduce by re-running this test: the \
              generator is seeded and deterministic. This establishes that the two \
              implementations disagree, NOT which of them is right."
-        );
+            );
+        }
     }
 
     assert_eq!(
-        compared, PROGRAMS,
-        "only {compared} of {PROGRAMS} programs were compared; a run that \
-         generated almost nothing must not pass as coverage"
+        compared,
+        PROGRAMS * SEEDS.len(),
+        "only {compared} of {} programs were compared; a run that generated \
+         almost nothing must not pass as coverage",
+        PROGRAMS * SEEDS.len()
     );
     assert!(
-        seen.len() >= DISTINCT_FLOOR,
-        "the generator produced only {} distinct programs out of {PROGRAMS}. It \
+        seen.len() >= DISTINCT_FLOOR * SEEDS.len(),
+        "the generator produced only {} distinct programs. It \
          has collapsed toward a small set, which makes this a slower version of \
          the fixed operator matrix rather than a test of composition.",
         seen.len()
@@ -190,5 +260,48 @@ fn the_generated_trees_are_actually_nested() {
         "the deepest generated tree nests {deepest} level(s). At one level this \
          file duplicates `scalar_operator_matrix.rs`; the whole reason it exists \
          is that nothing else tests COMPOSITION."
+    );
+}
+
+/// **`Byte` trees, across every seed.**
+///
+/// Kept separate from the `Word` sweep because the depth bound differs and the
+/// reason for the difference is worth reading at the point of use.
+#[test]
+fn generated_byte_trees_agree_with_the_reference() {
+    let mut compared = 0usize;
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+
+    for (s_i, seed) in SEEDS.iter().enumerate() {
+        let mut rng = Rng(seed ^ 0xBB);
+        for i in 0..PROGRAMS {
+            let src = byte_program(&mut rng, BYTE_DEPTH);
+            seen.insert(src.clone());
+            let (vm, native) = common::vm_and_native_two_arg(&src, 7, 3);
+            compared += 1;
+            assert_eq!(
+                vm, native,
+                "DIVERGENCE on generated BYTE program {i} of seed {s_i}:\n  {src}\n  \
+                 reference = {vm}\n  native    = {native}\n\nByte arithmetic is \
+                 where this line has already found two genuine defects -- checked \
+                 multiply and add returning untruncated values. The generator is \
+                 seeded, so this reproduces by re-running. This establishes that \
+                 the two implementations disagree, NOT which is right."
+            );
+        }
+    }
+
+    assert_eq!(
+        compared,
+        PROGRAMS * SEEDS.len(),
+        "only {compared} byte programs compared"
+    );
+    assert!(
+        seen.len() >= PROGRAMS,
+        "the byte generator produced only {} distinct programs across {} seeds; \
+         at a shallower depth it collapses sooner, and below this floor it is \
+         re-testing the fixed matrix.",
+        seen.len(),
+        SEEDS.len()
     );
 }

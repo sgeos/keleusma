@@ -61,3 +61,49 @@ needing the operator matrix's own typed driver.
 - **Assuming the widened generator still has reach.** It is a new instrument.
   **Perturb the lowering again** — the previous demonstration was for `Word`
   `bxor`, and says nothing about whether a `Byte` tree would catch a `Byte` defect.
+
+
+---
+
+## OUTCOME — **THE GENERATOR FOUND A BACKEND GAP ON ITS FOURTH BYTE PROGRAM**
+
+**1500 `Word` trees across five seeds: no divergence, 2.8s. 1500 `Byte` trees:
+one refusal, immediately.**
+
+```
+fn main(a: Word, b: Word) -> Word { ((((b as Byte) / (5 as Byte)) - ((a as Byte) % (6 as Byte)))) as Word }
+  Sub with operand widths Unknown and Unknown
+```
+
+### The gap, characterised before it was touched
+
+All nine byte-producing operations lower ALONE. **Only `/` and `%` refused once
+their result fed another operation**: `Op::Div` and `Op::Mod` pushed
+`Width::Unknown` unconditionally, so a byte quotient could feed nothing, the
+generic arithmetic surface admitting only a matched pair. `+`, `-`, `*` and the
+three bitwise operators already propagated it.
+
+**No existing instrument could have seen it.** The 90-cell and 42-cell matrices
+apply a SINGLE operator each, and a width lost on the way OUT is invisible until
+something consumes the result. `backend_support_census.rs` is keyed by opcode name
+and probes `Word`, where the behaviour is correct.
+
+### Repaired, narrowly
+
+A matched `Byte` pair gains the width; every other combination keeps exactly the
+`Unknown` it had. `Word` division is untouched — pinned — and a `Fixed` operand
+never reaches the arm, being refused above it. **Verified by the 1500 byte trees
+now agreeing with the reference**, which is the same instrument that found it.
+
+### Reach, and one thing that cannot fire
+
+- **Emitting `sdiv` where `srem` belongs fails the byte differential.** Reach on
+  the operation.
+- **Dropping the byte mask does NOT fail it, and that is correct rather than a
+  hole**: a quotient or remainder of two masked bytes cannot exceed the dividend,
+  so the mask is provably inert there. It is applied anyway, so the representation
+  invariant is held by construction rather than by that argument.
+
+### The cost
+
+Word 2.8s, Byte 2.3s, five seeds each. The gate's longest phase is 380s.
