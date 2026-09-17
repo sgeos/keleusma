@@ -29,7 +29,7 @@
 //!
 //! # ⚠ AN INTERMITTENT `LEAK` MARKER, AND A HYPOTHESIS OF MINE THAT WAS WRONG
 //!
-//! `cargo nextest` has reported `LEAK` five times, always alongside a PASS:
+//! `cargo nextest` has reported `LEAK` six times, always alongside a PASS:
 //!
 //! | when | test | binary |
 //! |---|---|---|
@@ -38,6 +38,7 @@
 //! | 2026-09-13 | `region::width_tests::a_float_tag_has_no_width_because_it_has_no_representation` | the LIBRARY |
 //! | 2026-09-13 | `a_trapping_programs_native_side_dies_with_sigtrap` | this one |
 //! | 2026-09-13 | `a_trapping_programs_native_side_dies_with_sigtrap` **(repeat)** | this one |
+//! | 2026-09-17 | `trap_child_runs_one_module_natively` | this one |
 //!
 //! **Commit `6603c399` said this note existed. It did not.** The edit meant to
 //! write it raised inside a heredoc whose output was never read, the command chain
@@ -57,17 +58,29 @@
 //! there. The other three were one-offs on unrelated tests holding no
 //! operating-system resource at all.
 //!
-//! So the honest shape is **one test that leaks somewhat repeatably with an
-//! obvious mechanism, plus sporadic one-offs elsewhere** — not the single
-//! whole-binary cause first guessed, and not a shapeless scatter either. Still
-//! untraced; the table exists so each occurrence refines the statement instead of
-//! being met fresh.
+//! **THE SIXTH SHARPENS IT AGAIN, AND THIS TIME INTO A FAMILY.**
+//! `trap_child_runs_one_module_natively` had never leaked before, but it is not a
+//! new one-off: it **spawns a child process that dies by signal**, which is the
+//! same mechanism as the fourth and fifth. So the repeatable half is not one test
+//! — it is the **trap-child mechanism**, and it now has two members.
 //!
-//! Four leaks, four tests, two binaries, three of them trivial or unrelated, none
-//! reproducing — the first was re-run five times cleanly. The runner or the machine
-//! under load is what remains, and **that is not traced either**. Recorded rather
-//! than chased: a `LEAK` warns about teardown, not a failed assertion, and no
-//! observed behaviour depends on it.
+//! The honest shape is therefore **a trap-child family that leaks somewhat
+//! repeatably with an obvious mechanism, plus sporadic one-offs elsewhere** — not
+//! the single whole-binary cause first guessed, not one specific test, and not a
+//! shapeless scatter. Still untraced; the table exists so each occurrence refines
+//! the statement instead of being met fresh.
+//!
+//! > ⚠ **THE PARAGRAPH BELOW SAID "FOUR LEAKS, FOUR TESTS" ABOVE A TABLE OF
+//! > FIVE ROWS.** A stale count inside the note that exists to keep the count
+//! > honest, and it survived the edit that added the fifth row. Corrected
+//! > 2026-09-17, and the head count above is now derived from the table when this
+//! > note is touched rather than carried.
+//!
+//! Six leaks, five tests, two binaries, three of them trivial or unrelated, none
+//! reproducing on demand — the first was re-run five times cleanly. The runner or
+//! the machine under load is what remains, and **that is not traced either**.
+//! Recorded rather than chased: a `LEAK` warns about teardown, not a failed
+//! assertion, and no observed behaviour depends on it.
 use inkwell::OptimizationLevel;
 use inkwell::context::Context;
 use keleusma::bytecode::{BlockType, Module, Op, SlotVisibility, Value, WireShape};

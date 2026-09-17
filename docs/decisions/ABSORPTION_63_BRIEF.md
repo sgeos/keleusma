@@ -76,3 +76,44 @@ the result, not a nuisance.
   asserting the boundary; the prediction above is explicitly marked as an
   inference from file names.
 - **Patching a guard's constant.** A figure that moves is the result.
+
+
+---
+
+## OUTCOME
+
+**Merged cleanly. Backlog 0. Every prediction held, including the one filed with
+low confidence and an explicit warning about its basis.**
+
+| prediction | result |
+|---|---|
+| no conflicting files | **held** |
+| corpus 74 modules, 1 refused | **held** |
+| ISA 63 of 66, denominator 66 | **held** |
+| test population unchanged | **held** |
+| driven witnesses 64 of 66 | **held** |
+| backend suite 602 | **held** — 592 + 10, both configurations, all eight phases FROZEN |
+| **`outstanding_reports.rs` silent — LOW CONFIDENCE** | **held** — all five reports still reproduce |
+| `lowering_robustness.rs` silent | **held** — the `confine.rs` panic it allows by origin is still there |
+| `shared_channel_discipline.rs` silent | **held** — the addendum survived a second upstream rewrite |
+| the other four silent | **held** |
+
+**The verifier hardening did not reach the confinement path.** Two commits bounded
+region-walk nesting and refused non-forward control-flow targets in `verify.rs`;
+the reported panic is in `confine.rs` and remains. **The prediction was right and
+its stated basis — file names rather than the fix — was the honest reason to
+distrust it.** It is worth noting which way that cuts: had it been wrong, the
+correct response was to RETRACT report 1, not to debug it.
+
+## AND A LEAK WITH A NAME, BECAUSE THE LOG WAS CAPTURED THIS TIME
+
+The narrow `corpus_differential` phase reported one leak:
+`trap_child_runs_one_module_natively`. **A new test for the register, but not a new
+mechanism** — it spawns a child that dies by signal, exactly like the only test
+that had previously repeated there. The register's shape sharpens from *"one test
+that leaks repeatably"* to *"the trap-child family leaks, and it has two
+members"*.
+
+The previous absorption's run reported *"2 leaky"* and could not name them,
+because that command was piped through `tail`. **Capturing the whole log is what
+turned an unusable observation into a refinement.**
