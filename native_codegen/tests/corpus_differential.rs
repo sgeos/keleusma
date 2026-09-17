@@ -29,7 +29,7 @@
 //!
 //! # ⚠ AN INTERMITTENT `LEAK` MARKER, AND A HYPOTHESIS OF MINE THAT WAS WRONG
 //!
-//! `cargo nextest` has reported `LEAK` eight times, always alongside a PASS:
+//! `cargo nextest` has reported `LEAK` nine times, always alongside a PASS:
 //!
 //! | when | test | binary |
 //! |---|---|---|
@@ -41,6 +41,7 @@
 //! | 2026-09-17 | `trap_child_runs_one_module_natively` | this one |
 //! | 2026-09-17 | `two_yields_in_one_iteration_agree` | `general_stream_sequence` |
 //! | 2026-09-17 | `region::width_tests::a_composite_body_length_is_not_on_its_tag` | the LIBRARY |
+//! | 2026-09-17 | `the_sentinel_band_still_matches_the_stage_sources` **(repeat of the FIRST)** | this one |
 //!
 //! **Commit `6603c399` said this note existed. It did not.** The edit meant to
 //! write it raised inside a heredoc whose output was never read, the command chain
@@ -98,7 +99,20 @@
 //! mechanism with the other. That is further from a single cause than the first
 //! guess, not closer.
 //!
-//! Eight leaks, seven tests, three binaries, five of them trivial or unrelated, none
+//! **THE NINTH REPEATS THE FIRST, FIVE DAYS LATER.** That entry was the one
+//! described as *"re-run five times cleanly"* — it did not reproduce on demand,
+//! and then recurred on its own. **So "one-off" was a statement about how often
+//! it had been seen, not about the test**, and the residue is not a set of tests
+//! that leak once each. Both halves of that sentence can be true at the same
+//! time: not reproducible on demand, and recurring.
+//!
+//! > **STOP RECORDING THESE ONE AT A TIME.** Four rows were added on 2026-09-17,
+//! > and each edit to this header forces a re-run of the two phases that read
+//! > source text — roughly 250 seconds per observation, for a table whose value
+//! > is cumulative rather than per-row. **Batch further occurrences into one
+//! > edit.** The instrument is worth keeping; the per-row cost is not.
+//!
+//! Nine leaks, seven tests, three binaries, five of them trivial or unrelated, none
 //! reproducing on demand — the first was re-run five times cleanly. The runner or
 //! the machine under load is what remains, and **that is not traced either**.
 //! Recorded rather than chased: a `LEAK` warns about teardown, not a failed
