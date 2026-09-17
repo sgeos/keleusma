@@ -72,6 +72,22 @@ type Flt = f32;
 #[cfg(not(feature = "narrow-float-32"))]
 type Flt = f64;
 
+/// Widen this configuration's float to `f64` for comparison.
+///
+/// **Split by configuration rather than written once**, because `f64::from` is
+/// required at four bytes and is a `useless_conversion` lint error at eight. A
+/// single spelling cannot be clean in both, and the gate runs both — which is
+/// how this was found: clippy failed under default features while the narrow
+/// configuration passed, with all three suite phases green in each.
+#[cfg(feature = "narrow-float-32")]
+fn wide(x: Flt) -> f64 {
+    f64::from(x)
+}
+#[cfg(not(feature = "narrow-float-32"))]
+fn wide(x: Flt) -> f64 {
+    x
+}
+
 /// The reference's first yield, or `None` if it does not yield a float.
 fn vm_first_yield(src: &str) -> Option<f64> {
     let m = common::build(src);
@@ -100,19 +116,19 @@ fn vm_sequence(src: &str, first: Flt, replies: &[Flt]) -> Vec<f64> {
 
     let mut out = Vec::new();
     let mut st = vm
-        .call_with_shared(&mut shared, &[Value::Float(f64::from(first))])
+        .call_with_shared(&mut shared, &[Value::Float(wide(first))])
         .expect("vm run");
     while out.len() < replies.len() {
         match st {
             VmState::Yielded(Value::Float(v)) => {
                 out.push(v);
-                let r = f64::from(replies[out.len() - 1]);
+                let r = wide(replies[out.len() - 1]);
                 st = vm
                     .resume_with_shared(&mut shared, Value::Float(r))
                     .expect("resume");
             }
             VmState::Reset => {
-                let r = f64::from(replies[out.len().saturating_sub(1)]);
+                let r = wide(replies[out.len().saturating_sub(1)]);
                 st = vm
                     .resume_with_shared(&mut shared, Value::Float(r))
                     .expect("resume after reset");
@@ -172,7 +188,7 @@ fn native_sequence(src: &str, first: Flt, replies: &[Flt]) -> Vec<f64> {
     let mut out = Vec::new();
     let mut input = first;
     for &r in replies {
-        out.push(f64::from(unsafe {
+        out.push(wide(unsafe {
             callable.call(
                 input,
                 shared.as_mut_ptr(),

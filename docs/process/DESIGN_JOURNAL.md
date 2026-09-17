@@ -1,5 +1,30 @@
 # Design Journal
 
+## 2026-09-17 — the gate script caught what my by-hand reading would have missed
+
+The default gate reported **FAIL** with all three suite phases showing *628 tests,
+0 failed*. The narrow gate, identical suite results, reported PASS.
+
+The difference was **clippy**: `useless conversion to the same type: f64`, four
+times in the new float file. `Flt` is `f32` under `narrow-float-32`, where
+`f64::from` is required, and `f64` by default, where it is a lint error. **Correct
+in one configuration and a failure in the other**, which is exactly what running
+both is for.
+
+**This is the first time this session the SCRIPT caught something my by-hand phase
+runs would have missed.** I have run phases individually all day and read their
+summaries; three summaries saying 628 passed is precisely the shape I would have
+called green. The `fail=1` accumulation is the whole difference, and the ninth
+catalogue row — *an assembled verdict is only as complete as the assembler's list*
+— was added by me this morning after a clippy failure stood for four commits
+behind a true suite figure. **The same class, caught this time, by the mechanism
+added because of it.**
+
+Repaired by splitting the widening helper per configuration rather than searching
+for one spelling clean in both. There isn't one: the conversion is a no-op at eight
+bytes and mandatory at four.
+
+
 ## 2026-09-17 — I edited the tree during a running gate, having avoided it all day
 
 A census I had not met — `host_buffer_census.rs` — failed the default gate on my
