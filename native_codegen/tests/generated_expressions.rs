@@ -84,23 +84,11 @@ fn expr(rng: &mut Rng, depth: u32) -> String {
     match rng.below(8) {
         // A division or modulo, whose divisor is a literal in `1..=9` so it can
         // never be zero however the left side evaluates.
-        0 => format!(
-            "({} / {})",
-            expr(rng, depth - 1),
-            rng.below(9) + 1
-        ),
-        1 => format!(
-            "({} % {})",
-            expr(rng, depth - 1),
-            rng.below(9) + 1
-        ),
+        0 => format!("({} / {})", expr(rng, depth - 1), rng.below(9) + 1),
+        1 => format!("({} % {})", expr(rng, depth - 1), rng.below(9) + 1),
         n => {
             let op = SAFE_BINARY[(n as usize - 2) % SAFE_BINARY.len()];
-            format!(
-                "({} {op} {})",
-                expr(rng, depth - 1),
-                expr(rng, depth - 1)
-            )
+            format!("({} {op} {})", expr(rng, depth - 1), expr(rng, depth - 1))
         }
     }
 }
