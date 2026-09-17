@@ -1,5 +1,18 @@
 # Design Journal
 
+## 2026-09-17 — a scoping stated, and checked mechanically
+
+The record correction is a COMMENT in `src/lib.rs` plus one test file, so the two
+corpus phases were not re-run. **Stated rather than silently skipped**, and the
+basis checked rather than reasoned about: the two censuses that read emitter source
+live in the phase that WAS run, in both configurations, and `corpus_differential`
+contains zero references to `src/lib.rs` or to the census file.
+
+**The ninth catalogue row says an assembled verdict is only as complete as the
+assembler's list.** The corrective is not "never assemble" — the ten-minute ceiling
+forces it — but to say what the assembly covered and how it was checked. That is
+the third time today this scoping has been written down instead of taken.
+
 ## 2026-09-17 — two of my own records, an hour old, already overstating
 
 **A justification reasoning about a configuration nobody can build.** I wrote that
