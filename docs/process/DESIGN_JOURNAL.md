@@ -1,5 +1,36 @@
 # Design Journal
 
+## 2026-09-17 — discharging the obligation my own fix created
+
+I propagated a `Byte` width through `Op::Div`/`Op::Mod` on the strength of 1500
+generated scalar trees agreeing. **A scalar differential never packs anything** —
+a returned value is not a value stored at an offset — and the refusal I removed
+existed precisely to stop a silent wrong answer in composite packing. So the
+riskiest consequence of my change was the one my evidence did not touch.
+
+Five subjects, each storing a byte-derived field beside a neighbour, because **a
+single-field struct returns the right answer under a wrong width**: nothing
+follows it. A wrong width shifts subsequent offsets, so the symptom shows in the
+neighbour. **All five agree.**
+
+**Both perturbations fire**, which is what makes the green meaningful:
+
+- a WRONG width (`Scalar(8)`) produces a wrong value, caught by the comparison;
+- a DROPPED width produces `NewComposite at op 6 has an operand of unknown packed
+  width`, caught by the refusal assertion.
+
+**That second message is the best description of the original gap I have.**
+Composite packing is what consumes the width; the refusal was `NewComposite`
+declining an unknown-width operand. So the conservative design was blocking
+capability at exactly the point the brief worried about, and the fix restores it
+rather than bypassing a check.
+
+**I wrote the revert contingency before running**: if packing had been wrong, the
+correct response was to restore the refusal, not to patch the packing — refusing
+was the conservative position and I was the one who moved off it. It was not
+needed. **Writing it first is what made the run a test rather than a formality.**
+
+
 ## 2026-09-17 — the generator earned itself on its fourth byte program
 
 Widened on the two safe axes — five seeds, and `Byte` operands at a depth derived

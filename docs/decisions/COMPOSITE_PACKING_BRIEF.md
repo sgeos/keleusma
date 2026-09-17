@@ -58,3 +58,41 @@ than in the field itself.
 correct response is to revert the width propagation and restore the refusal, not
 to patch the packing — the refusal was the conservative position and I am the one
 who moved off it. Record that outcome as readily as the green one.
+
+
+---
+
+## OUTCOME — **THE PACKING IS CORRECT, AND BOTH PERTURBATIONS FIRE**
+
+Five subjects, each reading a byte-derived field AND a neighbour, including two
+fed by the newly reachable division and modulo. **All agree with the reference.**
+
+### Reach, demonstrated two ways
+
+| perturbation | what happens | caught by |
+|---|---|---|
+| push `Width::Scalar(8)` — a WRONG width | the value is wrong | the differential comparison |
+| push no width at all — the old behaviour | refusal | the refusal assertion |
+
+**The second message is the clearest statement of the original gap:**
+
+> `NewComposite at op 6 has an operand of unknown packed width: operand 1 of 2`
+
+**Composite packing is what consumes the width.** The refusal I removed was
+`NewComposite` declining an unknown-width operand — so the conservative design was
+blocking capability at exactly the point the brief worried about, and the fix
+restores it rather than bypassing a safety check.
+
+### The evidence chain, complete
+
+1. **Gap**: a byte quotient carried no width, so `NewComposite` and the generic
+   arithmetic surface both refused it.
+2. **Fix**: propagate `Width::Scalar(1)` for a matched `Byte` pair, and nothing
+   else.
+3. **Verified**: 1500 generated scalar trees, five packing subjects, the whole
+   corpus differential, both float configurations.
+4. **Reach**: a wrong width gives a wrong answer that is caught; a dropped width
+   gives a refusal that is caught.
+
+**The revert contingency was not needed**, and it was worth writing down before
+the run rather than after.
