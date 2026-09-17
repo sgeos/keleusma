@@ -1,5 +1,31 @@
 # Design Journal
 
+## 2026-09-17 — the third external lint name, and what three of them mean
+
+The citation checker rejected `useless_conversion` in a comment. It is a clippy
+lint, real and external, and **the third one to need the same excuse** —
+`unexpected_cfg_condition_value` and `function_casts_as_integer` are already
+there.
+
+**Three is the point, not the third.** A comment explaining why code is shaped
+oddly almost always has to name the lint that shaped it, and every such name lands
+in this list. That is not a defect in the checker: it resolves backticked
+identifiers against the tree, which is exactly what makes it useful, and an
+external name genuinely cannot resolve. **But the excuse list is now accumulating
+a predictable category rather than exceptions**, and a reader should know that
+before adding a fourth and wondering whether they are working around a guard.
+
+Recorded in the entry itself rather than as a separate note, since the list is
+where someone will be standing when the question occurs to them.
+
+**I also killed the narrow gate rather than let it run ten more minutes to a
+verdict I already knew.** It was failing on the identical citation; the default
+gate had already shown it. Discarding a run whose outcome is determined is not the
+same as discarding one whose subject moved — the first is economy, the second is
+the recorded discipline — and conflating them would be an excuse to stop waiting
+when waiting is what the tree needs.
+
+
 ## 2026-09-17 — the gate script caught what my by-hand reading would have missed
 
 The default gate reported **FAIL** with all three suite phases showing *628 tests,

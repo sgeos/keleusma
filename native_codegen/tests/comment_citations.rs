@@ -243,6 +243,15 @@ const EXCUSED: &[(&str, &str)] = &[
          the cast goes through a function POINTER type instead, which is \
          otherwise an unexplained detour",
     ),
+    (
+        "useless_conversion",
+        "a CLIPPY LINT, real and external. **The third lint name to need this \
+         excuse**, which is itself the finding: a comment explaining WHY code is \
+         shaped oddly usually has to name the lint that shaped it, and every such \
+         name lands here. Cited because `f64::from` is required where the float \
+         type is `f32` and a lint error where it is `f64`, so the widening helper \
+         is split by configuration rather than written once",
+    ),
 ];
 
 fn package_root() -> PathBuf {
