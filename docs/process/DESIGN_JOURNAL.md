@@ -1,5 +1,22 @@
 # Design Journal
 
+## 2026-09-16 — a leak observation I did not capture, recorded as the omission it is
+
+The default-features `corpus_differential` phase reported **"2 leaky"** in its
+summary line. **I do not know which two**, because the command was piped through
+`tail` and the per-test `LEAK` lines scrolled past unread.
+
+That is the seventh entry in this project's own catalogue -- *"a log truncated by
+`tail`/`head` looks identical to a clean one"* -- committed by someone who had
+read it the same day. The LEAK register in `corpus_differential` has six rows and
+records the honest shape as one test that leaks somewhat repeatably with an
+obvious mechanism plus sporadic one-offs elsewhere. **This run is consistent with
+that and adds nothing to it**, which is exactly why it must not be written in as
+though it did.
+
+Recorded rather than silently dropped, and not attributed to any named test.
+Capture the whole output when the result will be quoted.
+
 ## 2026-09-16 — the corpus refuted the generalisation drawn from three shapes
 
 `arena_high_water.rs` found the published arena figure dominated by a flat
