@@ -54,6 +54,12 @@ const BUFFER_HARNESSES: &[&str] = &[
     "declared_float_width.rs",
     "delegated_suspension.rs",
     "fixed_shared_scale.rs",
+    // Added 2026-09-17 with the float-stream asymmetry file. **Its driver is
+    // parked rather than live** -- `Op::Yield` refuses a float operand, so the
+    // differential it implements cannot run yet -- but it builds the same three
+    // host buffers and sizes the private region from the contract, so it belongs
+    // in this population now rather than whenever the refusal lifts.
+    "float_stream_differential.rs",
     "general_stream_sequence.rs",
     "module_differential.rs",
     "module_source_differential.rs",

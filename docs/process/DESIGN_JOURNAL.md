@@ -1,5 +1,34 @@
 # Design Journal
 
+## 2026-09-17 — I edited the tree during a running gate, having avoided it all day
+
+A census I had not met — `host_buffer_census.rs` — failed the default gate on my
+new float driver. It pins the set of harnesses that build host buffers, because
+**three in this package once sized the private region by a literal and one of those
+reached the gate as a SIGSEGV**. My driver sizes it from the contract, so it
+complies; the census simply demands that a new harness be REGISTERED rather than
+appearing silently. That is the idiom working.
+
+**Then I registered it while the narrow gate was still running.**
+
+The frozen check exists precisely to catch that, and the discipline is recorded in
+this project's own catalogue: *a run whose subject was edited while it was in
+flight belongs to no tree; discard it rather than reading it as a pass.* I have
+quoted that several times today and waited for gates specifically to avoid it —
+and then did it anyway, in the same minute as fixing something else.
+
+**Killed the run rather than spending thirteen minutes on a verdict I would have to
+throw away.** Scoped the kill to this worktree's script and its own
+`target/debug/deps`, so it could not reach a sibling checkout.
+
+**The useful observation is not "be careful".** It is that the dangerous moment was
+not the long wait — it was the SHORT edit that felt too small to matter, made while
+attention was on a different failure. Every deliberate wait today succeeded; the
+one lapse came when the edit looked like a one-line registration. **The frozen
+check is the only reason this is a recoverable annoyance rather than a figure I
+would have quoted.**
+
+
 ## 2026-09-17 — the differential I set out to build turned out to be impossible, correctly
 
 My own new float guard had the gap I had found in four other instruments today: it
