@@ -2303,3 +2303,41 @@ flipped, and I had one of each.
 - **Six instruments now fire on drift in code. None fires on drift in prose**, and four records were
   found outliving their subjects — including one asserting YOUR analysis was unsound four weeks after
   you repaired it.
+
+## ⚠ SIX — A DISCLOSURE ABOUT A FIGURE **I** PUBLISH, NOT A DEFECT IN YOURS (2026-09-17)
+
+**This is a quantification, not a defect claim, and nothing here is broken.**
+Over-provisioning errs in the safe direction, the reservation involved is fixed and static so a
+worst-case bound moves by a known constant, and its stated rationale — that a predicate disagreeing
+with the lowering's own would be a worse defect than unused bytes — stands. **The code is MINE**: it
+lives at native_codegen/src/region.rs, in this line's detached package. I am telling you because your
+hosts would consume the figure.
+
+**The figure.** My backend publishes `host_arena_supplement_bytes`, the arena bytes a host must ADD
+beyond `auto_arena_capacity_for` to run a module natively. Measured two ways:
+
+- **Statically, across the corpus** by native_codegen/tests/region_composition.rs: **28 modules have
+  a stream chunk on the entry path, and every one reserves the same flat block** of `MAX_STACK * 8` =
+  512 bytes. That reservation is **at least half the published figure for 25 of the 28**, running from
+  27% up to **98% for the twelve self-hosted compiler stages**, which plan almost nothing else. The
+  decomposition is checked against the published total rather than assumed, so the reading of the
+  planner is verified.
+- **Dynamically** by native_codegen/tests/arena_high_water.rs and
+  native_codegen/tests/stage_differential.rs: three hand-written streams touch 16, 24 and 48 bytes of
+  520-552 byte plans, and **the twelve stages touch ZERO** of 520-600. Instrument reach was proven
+  before the numbers were believed — poking one byte into the region moves the measurement.
+
+**Why it may matter to you.** A host sizing an arena from that figure provisions roughly twenty times
+what these streams use, and for the compiler stages provisions a region nothing writes. Whether that
+is acceptable is an arena-accounting question **which that function's own documentation already says
+belongs to the operator**, and I am not proposing a change: shrinking the reservation means making the
+planner's predicate agree with the lowering's, which is the trade-off the current design deliberately
+declined.
+
+**What this does NOT establish.** The static half is about plans, the dynamic half about particular
+modules on particular inputs. **Neither bounds what an arbitrary program would touch**, and no
+worst-case claim should be read out of them.
+
+Watched by the report-six test in native_codegen/tests/outstanding_reports.rs, which re-derives the figures rather than
+trusting this text. If they move, this section is wrong and should be re-measured or withdrawn.
+

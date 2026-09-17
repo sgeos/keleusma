@@ -1,5 +1,38 @@
 # Design Journal
 
+## 2026-09-17 — the arena finding is reported, and the measurement stops here
+
+Report six is filed in the shared channel: the arena figure my backend publishes
+is 27% to 98% flat reservation across 28 streaming modules, and the twelve
+compiler stages touch none of their plan at all.
+
+**Framed as a disclosure rather than an accusation, deliberately, and the guard
+enforces the framing.** The reservation is in `native_codegen/src/region.rs` —
+**this line's own code** — so the report is about a figure I publish and their
+hosts would consume. Two days ago this same channel credited this line's census to
+the other line; getting the attribution right is not a courtesy here, it is the
+difference between a disclosure and a false accusation. `report_six` fails if the
+phrases *"not a defect claim"*, *"The code is MINE"* and *"does NOT establish"*
+leave the text.
+
+**The other five reports are reproductions; six is a measurement**, so its guard
+re-derives the figures from the instruments rather than re-running a program. Both
+halves were perturbed: moving a pinned figure fires it, and so does deleting the
+framing.
+
+**AND THE MEASUREMENT STOPS HERE, ON PURPOSE.** The obvious next step was driving
+the other sixteen streaming corpus modules. I declined, and the reasoning is in
+`ARENA_LOOSENESS_REPORT_BRIEF.md` so it can be overturned: the drive machinery is
+private to a 380-second phase that already had to be split to fit the harness
+ceiling, duplicating it would be a second computation of the drive contract, and
+**two disjoint methods already agree on the answer**. Breadth would be bought with
+the gate's worst phase and would not change the conclusion.
+
+Two backticked identifiers in the report would not have resolved against the root
+citation scan, which does not walk the detached package. **Caught before filing
+this time**, after it caught this line twice.
+
+
 ## 2026-09-17 — I repeated a wrong turn I had written down four increments earlier
 
 `cargo clippy ... 2>&1 | tail -1 && <next step>` reads **`tail`'s** exit status,

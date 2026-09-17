@@ -239,3 +239,65 @@ fn report_five_is_watched_by_the_reach_suite() {
          report 5 is now unwatched."
     );
 }
+
+/// **Report six re-derives its own figures instead of being believed.**
+///
+/// The other five reports are reproductions: run a program, see the reference
+/// behave as reported. Six is a MEASUREMENT, so the analogous check is that the
+/// numbers in the report still come out of the tree.
+///
+/// It reads the report text and the instruments that produced it, and fails when
+/// they disagree. **A disclosure whose figures have drifted is worse than none**,
+/// because the other line would act on numbers this line no longer measures.
+#[test]
+fn report_six_still_reproduces_from_the_tree() {
+    let report = std::fs::read_to_string("../docs/process/REVERSE_PROMPT.md")
+        .expect("the shared channel is readable");
+    let section = report
+        .split("## ⚠ SIX — A DISCLOSURE")
+        .nth(1)
+        .expect("report six is present in the channel; if it was withdrawn, delete this test too");
+
+    // The two instruments the report cites by path must still exist and still
+    // pin the quantities it quotes.
+    let composition = std::fs::read_to_string("tests/region_composition.rs")
+        .expect("the static census is readable");
+    for (quantity, needle) in [
+        ("the streaming population", "PINNED_STREAMING: usize = 28"),
+        ("the majority count", "PINNED_MAJORITY: usize = 25"),
+        ("the minimum share", "PINNED_MIN_SHARE: u32 = 27"),
+    ] {
+        assert!(
+            composition.contains(needle),
+            "report six quotes {quantity}, and `region_composition.rs` no longer \
+             pins it. Re-measure and correct the report, or withdraw it — do not \
+             leave the other line reading a figure this line has stopped \
+             measuring."
+        );
+    }
+
+    let stages = std::fs::read_to_string("tests/stage_differential.rs")
+        .expect("the stage differential is readable");
+    assert!(
+        stages.contains("region_extent, 0,"),
+        "report six says the twelve stages touch ZERO arena bytes, and \
+         `stage_differential.rs` no longer asserts it. If a stage began using the \
+         arena, that is the more interesting finding and the report must say so."
+    );
+
+    // And the report must keep saying what it is NOT, since that framing is the
+    // difference between a disclosure and an accusation.
+    for phrase in [
+        "not a defect claim",
+        "The code is MINE",
+        "does NOT establish",
+    ] {
+        assert!(
+            section.contains(phrase),
+            "report six no longer states `{phrase}`. That framing is load-bearing: \
+             the reservation is safe and deliberate, the code is this line's own, \
+             and the measurement bounds nothing about arbitrary programs. Without \
+             it the section reads as an accusation about someone else's defect."
+        );
+    }
+}
