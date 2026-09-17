@@ -45,7 +45,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   terminate. This is a denial of service on the component whose contract is to
   bound an untrusted input rather than a memory-safety defect, and it is
   unreachable from compiler output, which emits only forward targets. It does
-  not bound recursion depth, and the guard says so.
+  not bound recursion depth on its own, which the companion entry below closes.
+
+- **The verifier bounds how deeply control-flow regions may nest.** Forward
+  targets make the region walks terminate; they do not bound how deeply the
+  walks nest, and each of the four recurses once per nested region. Measured
+  with the bound lifted, on a two-mebibyte stack, the walks survive a
+  hand-built chunk nested four thousand six hundred deep and abort the process
+  at four thousand eight hundred, which is well inside the roughly sixteen
+  thousand levels a sixteen-bit target can address, so the exposure was
+  reachable rather than theoretical. The bound is two hundred and fifty six,
+  chosen from measurement rather than by analogy: the deepest nesting the
+  compiler can emit is twenty, because the parser itself overflows at
+  twenty-two, so the bound is about thirteen times what a program can reach and
+  about nineteen times below the depth at which the walk aborts. Past the bound
+  the productivity classification answers conservatively, since it has no error
+  channel and its conservative direction is to decline to classify, and the
+  three walks that return a result refuse. The first boundary measured here was
+  wrong, because the test builder producing the nested chunk was itself
+  recursive and overflowed alongside its subject; the builder derives its
+  layout in closed form now, and an instrument that shares a failure mode with
+  its subject reports the sum of the two.
 
 - **The wholly-default private-slot initialiser pool is elided, taking the
   auxiliary body down by a factor of 6.9.** A private slot with no explicit

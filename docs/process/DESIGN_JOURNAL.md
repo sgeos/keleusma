@@ -13,6 +13,90 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-16 (ninety-third) — my instrument shared a failure mode with its subject, and reported the sum
+
+### THE RESIDUAL WAS REAL, AND THE FIRST NUMBER FOR IT WAS WRONG
+
+The previous increment closed H1 and wrote down, deliberately, that the forward-target
+check does not bound recursion **depth** and that whether that is reachable had not
+been measured. This increment measured it.
+
+It is reachable. With the cap lifted, on a two-mebibyte stack, the walks survive a
+chunk nested **4600** deep and **abort the process** at **4800**. A `u16` target
+addresses about 16384 levels at five instructions per level, so 4800 sits well
+inside the representable space.
+
+**The first boundary I measured was 5500, and it was wrong.** The test builder that
+produced the nested chunk was itself **recursive**, and recursed exactly as deeply as
+the structure it built. The probe and the subject were overflowing together, so the
+number described neither one. The builder derives its layout in closed form now.
+
+The general form is worth more than the number: **an instrument that shares a failure
+mode with its subject reports the sum of the two.** This sits beside the tree's
+existing lesson that a crude instrument can manufacture a contradiction. The
+manufactured contradiction here was a boundary that looked like a property of the
+verifier and was partly a property of the test.
+
+It also cost a second wrong claim before it was caught: with the recursive builder,
+depth 16380 still aborted after the first walker was capped, and the obvious reading
+was that another walker was unbounded. That reading was wrong. Once the builder was
+iterative, 16380 was refused cleanly.
+
+### WHAT MADE THE GUARD TESTABLE TOOK A SECOND ATTEMPT TOO
+
+The first regression test asserted the depth guard was the check that refused. It
+failed, because the hand-built chunk had no instruction pushing each `If`'s
+condition, so the operand-stack walk refused it at instruction **zero** — before any
+walk nested. The test would have been evidence about that check instead. Adding the
+condition push per level makes the chunk reach the walks, which is also the shape the
+compiler actually emits.
+
+### THE CAP'S VALUE IS MEASURED, NOT BORROWED
+
+`crate::zero_value` has a `MAX_DEPTH` of 64 and would have been an easy analogy. The
+number here is 256 and comes from two measurements: the deepest nesting the
+**compiler** can emit is **20** (the recursive-descent parser overflows at 22, so no
+source program can produce a chunk nested deeper than the parser survives), and the
+uncapped walks abort at 4800. So 256 is about thirteen times what a program can reach
+and about nineteen times below the abort. Both endpoints scale with the host's stack,
+so the **ratios** are the durable part; an embedded host with a small stack is the
+case this protects most.
+
+### NON-VACUITY, DEMONSTRATED BY THE ABORT ITSELF
+
+With `MAX_REGION_DEPTH` lifted to `u32::MAX`, the test binary dies with SIGABRT. With
+it at 256, all nine pass. That is a stronger demonstration than a failing assertion,
+because the failure mode under guard is exactly one that cannot be asserted on: an
+abort does not unwind, so no watchdog and no `catch_unwind` names it, and
+`tests/hostile_module_mutation.rs` structurally cannot report this class.
+
+### THE WRAPPER IDIOM, AND ONE TRAP IN IT
+
+Each walker keeps its public signature and delegates to an `_at` form carrying the
+nesting count, which is the idiom `zero_value`/`zero_value_at` already establishes.
+Two things it would have been easy to get wrong:
+
+- `verify_depth_region` already has a local named `depth`, the **operand stack**
+  depth. The new parameter is `nest` for that reason.
+- `wcmu_region` recurses through a helper, `wcmu_subregion`, which called the
+  **wrapper**. Left alone, that resets the count to zero at every level and the cap
+  never fires however deep the chunk nests. The helper carries the count now, and the
+  comment at that call site says why it must.
+
+### H2: A SECOND FINDING, MEASURED AND DELIBERATELY NOT FIXED
+
+Establishing the compiler's nesting ceiling turned up a separate defect. The
+**parser** aborts on deeply nested SOURCE, with no bytecode involved: nesting 20
+compiles and verifies, 22 aborts inside `parse`, on a two-mebibyte stack. That is a
+compile-time denial of service on untrusted source, and the shipping command-line
+front end, the language server and the playground all accept source they did not
+write.
+
+It is a different component and a different fix. It is recorded in the audit ledger
+with its measurement and left open rather than folded into this increment, because
+widening scope mid-increment is how a fix stops being reviewable — but it is written
+down, with numbers, so it is not rediscovered from scratch.
+
 ## 2026-09-16 (ninety-second) — the audit named the missing instrument, and it found a defect the audit's own fixes had walked past
 
 ### THE FRONTIER CLAIM WAS TESTED, NOT INHERITED

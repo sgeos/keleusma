@@ -10,6 +10,26 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-16, session 66, second increment). H1 RESIDUAL CLOSED, H2 OPEN.**
+>
+> **The depth residual was reachable.** With the bound lifted, on a two-mebibyte
+> stack, the verifier's region walks survive a chunk nested 4600 deep and ABORT at
+> 4800 — inside the ~16384 levels a `u16` target addresses. `MAX_REGION_DEPTH` is
+> 256, threaded through all four walkers. Chosen from measurement: the deepest
+> nesting the COMPILER can emit is 20, so 256 is ~13x what a program can reach and
+> ~19x below the abort.
+>
+> **THE FIRST BOUNDARY I MEASURED WAS WRONG, AND THE REASON GENERALISES.** It said
+> 5500. The test builder was itself recursive and overflowed alongside its subject.
+> An instrument that shares a failure mode with its subject reports the sum of the
+> two.
+>
+> **H2 is OPEN and not fixed**: the recursive-descent PARSER aborts on deeply nested
+> SOURCE, with no bytecode involved — nesting 20 compiles, 22 aborts inside `parse`.
+> A compile-time denial of service on untrusted source, which the command-line front
+> end, the language server and the playground all accept. Different component,
+> different fix, recorded with its measurement rather than folded in here.
+
 > **Currency note (2026-09-16, session 66, first increment). AUDIT H1.**
 >
 > **The verifier could be made to hang forever, or to abort the process, by a module

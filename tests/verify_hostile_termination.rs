@@ -35,11 +35,27 @@
 //! it terminates on the inputs that did not terminate before, and that the
 //! rejection is by the intended check rather than incidental.
 //! `tests/hostile_module_mutation.rs` is the systematic instrument.
+//!
+//! # The depth residual, and why it needed its own guard
+//!
+//! Forward targets make the walks terminate; they do not bound how deeply the
+//! walks NEST, and each of the four recurses once per nested region. Measured
+//! on a two-mebibyte stack with the cap lifted, the walks survive a chunk
+//! nested 4600 deep and **abort the process** at 4800, which is well inside
+//! the roughly 16384 levels a `u16` target can address. So the residual was
+//! reachable, not theoretical.
+//!
+//! A stack overflow aborts rather than unwinding, so no watchdog and no
+//! `catch_unwind` can name it, and `tests/hostile_module_mutation.rs`
+//! structurally cannot report this class. `MAX_REGION_DEPTH` is the
+//! instrument instead, and the tests below are what check it.
+
+extern crate alloc;
 
 use std::sync::mpsc;
 use std::time::Duration;
 
-use keleusma::bytecode::{BlockType, Module, Op};
+use keleusma::bytecode::{BlockType, Chunk, ConstValue, Module, Op};
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
 use keleusma::parser::parse;
@@ -225,4 +241,123 @@ fn the_guard_admits_every_shape_the_compiler_emits() {
         let m = compiled(src);
         verify(&m).unwrap_or_else(|e| panic!("valid program refused: {e:?}\n{src}"));
     }
+}
+
+/// Nesting deeper than the walks can recurse is refused rather than aborting.
+///
+/// The chunk is built ITERATIVELY from a closed-form layout. **A recursive
+/// builder gave a wrong answer here**: it recursed as deeply as the structure
+/// it built, so the probe and the subject overflowed together and the boundary
+/// it reported described neither. An instrument that shares a failure mode
+/// with its subject reports the sum of the two.
+///
+/// Layout, reproducing the shape the compiler emits for nested `if`/`else`,
+/// **including the instruction that pushes each condition**. Without that push
+/// the chunk is refused at instruction zero for an operand underflow, long
+/// before any walk nests, and the test would be evidence about that check
+/// rather than about this guard.
+///
+/// Level `j`, counting outward from 1, sits at base `2(k - j)`: its `Const` is
+/// at the base, its `If` at the base plus one, its `Else` at `2k + 3j - 2` and
+/// its `EndIf` at `2k + 3j`, with the innermost `Const` at `2k`. Every target
+/// is forward and in range, so the chunk passes the forward-target check and
+/// reaches the walks.
+fn nested_chunk(k: usize) -> Chunk {
+    let n = 5 * k + 1;
+    let mut ops: Vec<Op> = alloc::vec![Op::Const(0); n];
+    for j in 1..=k {
+        let if_pos = 2 * (k - j) + 1;
+        let else_pos = 2 * k + 3 * j - 2;
+        let endif_pos = 2 * k + 3 * j;
+        ops[if_pos] = Op::If((else_pos + 1) as u16);
+        ops[else_pos] = Op::Else(endif_pos as u16);
+        ops[endif_pos] = Op::EndIf;
+    }
+    ops.push(Op::Return);
+    Chunk {
+        name: alloc::string::String::from("nested"),
+        ops,
+        constants: alloc::vec![ConstValue::Int(0)],
+        struct_templates: Vec::new(),
+        local_count: 1,
+        param_count: 0,
+        block_type: BlockType::Func,
+        param_types: Vec::new(),
+        debug_pool: None,
+    }
+}
+
+fn module_of(chunk: Chunk) -> Module {
+    Module {
+        schema_hash: 0,
+        enum_layouts: Vec::new(),
+        signatures: Vec::new(),
+        native_return_shapes: Vec::new(),
+        chunks: alloc::vec![chunk],
+        native_names: Vec::new(),
+        entry_point: Some(0),
+        data_layout: None,
+        word_bits_log2: keleusma::bytecode::RUNTIME_WORD_BITS_LOG2,
+        addr_bits_log2: keleusma::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
+        float_bits_log2: keleusma::bytecode::RUNTIME_FLOAT_BITS_LOG2,
+        wcet_cycles: 0,
+        wcmu_bytes: 0,
+        aux_arena_bytes: 0,
+        persistent_composite_bytes: 0,
+        flags: 0,
+        shared_data_bytes: 0,
+        private_data_bytes: 0,
+    }
+}
+
+/// The whole addressable nesting range is disposed of without aborting.
+///
+/// The top of the range is the point of the test. 13100 levels is 65501
+/// instructions, which is as deep as a `u16` target can address at five
+/// instructions per level, and it is nearly three times past the depth at
+/// which the uncapped walks abort. If this test ever aborts rather than
+/// fails, the guard is gone.
+#[test]
+fn nesting_across_the_whole_addressable_range_is_refused_not_aborted() {
+    for k in [1usize, 64, 255, 256, 257, 1000, 4800, 13100] {
+        let m = module_of(nested_chunk(k));
+        let verdict = finishes_within(WATCHDOG, move || verify(&m).is_err());
+        assert!(
+            verdict,
+            "verify did not terminate on a chunk nested {k} deep"
+        );
+    }
+}
+
+/// The depth guard is what refuses a chunk past the cap, and it says so.
+///
+/// Without this the test above would pass on any rejection at all, including
+/// one from an unrelated structural check, and would stop being evidence about
+/// the guard.
+#[test]
+fn past_the_cap_the_depth_guard_is_the_one_that_refuses() {
+    let m = module_of(nested_chunk(4000));
+    let err = verify(&m).expect_err("a chunk nested 4000 deep is refused");
+    assert!(
+        err.message.contains("nest deeper than"),
+        "refused, but not by the depth guard: {}",
+        err.message
+    );
+}
+
+/// Nesting a real program can reach is not refused by the depth guard.
+///
+/// The cheapest way for a depth cap to be wrong is to be too low. The deepest
+/// nesting the compiler can emit was measured at 20 on a two-mebibyte stack,
+/// the parser overflowing at 22, so a program cannot approach the cap; this
+/// drives what a program CAN reach through the whole verifier.
+#[test]
+fn the_depth_guard_does_not_refuse_nesting_a_program_can_actually_reach() {
+    let mut body = alloc::string::String::from("1");
+    for _ in 0..16 {
+        body = alloc::format!("if a > 0 {{ {body} }} else {{ 0 }}");
+    }
+    let src = alloc::format!("fn main() -> Word {{ let a = 7; {body} }}");
+    let m = compiled(&src);
+    verify(&m).expect("a 16-deep nested program verifies");
 }

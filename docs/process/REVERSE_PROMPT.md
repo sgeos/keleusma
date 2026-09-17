@@ -50,12 +50,28 @@ checksum. An attacker computes a valid checksum. The census confirms the choice:
 **zero** mutants were refused by the encoder and **zero** by the loader, so the whole
 burden falls on `verify`.
 
-**WHAT IS NOT CLOSED, AND IS NOT CLAIMED.** The check makes targets forward; it does
-not bound recursion **depth**. A chunk whose targets are all forward can still nest,
-and nesting is what the recursive walkers consume stack on. **Whether that is
-reachable has not been measured.** It is written in the guard's own documentation
-rather than left implicit. This is the obvious next increment and it needs no
-ruling.
+**THE DEPTH RESIDUAL IS NOW MEASURED AND CLOSED.** Forward targets make the walks
+terminate; they do not bound how deeply the walks NEST. With the bound lifted, on a
+two-mebibyte stack, the walks survive a chunk nested **4600** deep and **abort** at
+**4800** — well inside the ~16384 levels a `u16` target addresses, so it was
+reachable. `MAX_REGION_DEPTH` is **256**, threaded through all four walkers by the
+`_at` wrapper idiom `zero_value` already uses. Chosen from measurement: the deepest
+nesting the COMPILER can emit is **20**, so 256 is ~13x what a program can reach and
+~19x below the abort. **Non-vacuity is demonstrated by the abort itself** — with the
+cap lifted the test binary dies with SIGABRT.
+
+**AND THE FIRST BOUNDARY I MEASURED WAS WRONG.** It said 5500. The test builder
+producing the nested chunk was **itself recursive** and overflowed alongside its
+subject, so the number described neither. The builder derives its layout in closed
+form now. An instrument that shares a failure mode with its subject reports the sum
+of the two, and this one was mine.
+
+**H2 IS OPEN AND IS YOURS TO PRIORITISE.** The recursive-descent **parser** aborts
+on deeply nested SOURCE, independently of any bytecode: nesting **20** compiles,
+**22** aborts inside `parse`, on a two-mebibyte stack. That is a compile-time denial
+of service on untrusted source, which the command-line front end, the language
+server and the playground all accept. Different component, different fix; recorded
+with its measurement rather than folded into this increment.
 
 **Four candidate goals died against existing coverage before this one was chosen** —
 wire error correction, the Keleusma-level parity plane, empirical worst-case bounds,
