@@ -115,9 +115,6 @@ fn seed(m: &Module, buf: &mut [u8], len_slot: &str, array_slot: &str, body: &[i6
 struct Outcome {
     yields: Vec<i64>,
     shared: Vec<u8>,
-    /// Bytes of the arena region the run actually touched. `0` from the VM,
-    /// which has no such buffer.
-    region_extent: usize,
 }
 
 fn run_vm(m: &Module, seeded: &[u8]) -> Outcome {
@@ -146,11 +143,7 @@ fn run_vm(m: &Module, seeded: &[u8]) -> Outcome {
         }
         yields.push(scalar_of(&st));
     }
-    Outcome {
-        yields,
-        shared,
-        region_extent: 0,
-    }
+    Outcome { yields, shared }
 }
 
 /// A scalar outcome, or a stable marker for anything else, so the two sides stay
@@ -301,11 +294,7 @@ fn run_native(m: &Module, seeded: &[u8]) -> Outcome {
     );
 
     shared.truncate(n_shared);
-    Outcome {
-        yields,
-        shared,
-        region_extent,
-    }
+    Outcome { yields, shared }
 }
 
 fn module_of(path: &str) -> Module {

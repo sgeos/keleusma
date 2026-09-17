@@ -1,5 +1,29 @@
 # Design Journal
 
+## 2026-09-17 — I repeated a wrong turn I had written down four increments earlier
+
+`cargo clippy ... 2>&1 | tail -1 && <next step>` reads **`tail`'s** exit status,
+not clippy's. Clippy failed with `field region_extent is never read`; the chain
+continued; the suite then ran green, because that is a LINT error and nextest
+builds the binary without the lint. **A green suite and a red gate at the same
+moment, and the chain reported the green one.**
+
+**I wrote this exact wrong turn into `ABSORPTION_62_BRIEF.md` the same session**,
+under the heading *"Reading a pipeline's exit status as the command's"*, after
+catching it in a `merge-tree` probe. Knowing the failure did not prevent
+reproducing it — which is the same lesson `CLAUDE.md` already draws about its
+eighth row, committed by the author of the seventh two increments later.
+
+**The structural fix is not resolving to be careful.** It is that the gate script
+exists and accumulates `fail=1` across phases precisely so no human reads a
+pipeline's status. Running phases by hand is what re-opens this, and the
+ten-minute ceiling is what forces running them by hand. The ninth catalogue row
+added earlier today says the same thing from the other direction.
+
+The lint itself was real and the repair is a simplification: `Outcome` carried a
+`region_extent` field nobody read, because the assertion lives where the value is
+computed. The field is gone.
+
 ## 2026-09-17 — the compiler stages touch none of the arena they are provisioned
 
 The static census said the flat spill reservation is 98% of the published arena
