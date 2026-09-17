@@ -1,5 +1,33 @@
 # Design Journal
 
+## 2026-09-17 — the optimised run becomes a gate phase, and a fresh claim of mine is already wrong
+
+`KEL_OPTIMIZE` existed, was documented, and no script set it. It is a **phase**
+now, for the half where the cost measured to nothing: 155-173s optimised against
+165-175s at `-O0`, covering every hand-written differential and all the generated
+programs. **The corpus half stays manual at ~420s**, because adding it would double
+the gate's worst phase, and the script now carries both numbers so the next person
+weighing it has figures rather than an impression.
+
+**Both configurations were run end to end, and that is the first time this session
+the script itself has been executed** rather than its phases retyped by hand. That
+matters: only a real run demonstrates the `fail=1` accumulation works across all
+five steps, which is exactly what the assembled-verdict failure broke.
+
+> ⚠ **AND A CLAIM I ADDED TO THAT HEADER AN HOUR AGO IS ALREADY WRONG.** I wrote
+> that under `narrow-float-32` the corpus phase *"alone exceeds"* the ten-minute
+> ceiling. **It was killed once, under load; the same phase then completed in 415s
+> inside the script.** So it is load-dependent, not structural. I generalised one
+> observation into a property — in a file whose entire purpose is to stop
+> measurements being taken on faith — and the correcting evidence arrived within
+> the hour, from the very run I added the claim to justify.
+
+**Two waiters were killed mid-wait and the gate survived both.** A dead waiter is
+not a dead run; `pgrep` and the log said it was still in phase one. Reading the
+notification as "the gate stopped" would have been the killed-run-read-as-a-result
+error, arriving through the harness rather than through the command.
+
+
 ## 2026-09-17 — re-optimising after my own six changes, and the generators' first O2 run
 
 The corpus `default<O2>` sweep was green at `d99ed3de`. **Six emitter changes
