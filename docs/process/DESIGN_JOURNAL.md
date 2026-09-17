@@ -1,5 +1,30 @@
 # Design Journal
 
+## 2026-09-17 — re-optimising after my own six changes, and the generators' first O2 run
+
+The corpus `default<O2>` sweep was green at `d99ed3de`. **Six emitter changes
+landed after it**, and `-O0` is a codegen setting rather than a pass pipeline, so
+every gate run since exercised the new lowerings **without the middle end ever
+seeing them**. A green sweep from before the changes is evidence about the code
+before the changes — the FIRST row in this project's catalogue of how a green run
+under-reports.
+
+**Re-run on the current emitter: 619 tests and the 10 corpus tests, all green,
+both frozen.** The several thousand generated scalar, byte, composite and nesting
+programs went through the middle end for the first time.
+
+**The clock said nothing again**: 155s optimised against roughly 175s unoptimised,
+i.e. faster. The probe is what settles it — with the variable set a panic inside
+the hook fires, without it the test passes. **That check was in the brief because
+the same flat runtime nearly produced a false negative the first time**, and
+writing it down in advance is why it got run rather than rationalised.
+
+**No guard could have found this gap.** Every gate since those changes was green
+and every one ran at `-O0`. It surfaced only from asking what the last sweep
+actually covered, rather than that it passed — which is the difference between a
+result and a reassurance.
+
+
 ## 2026-09-17 — the stream-width file tested a different path than it claimed
 
 Asked whether the six repaired widths survive a `yield`. Five subjects carried

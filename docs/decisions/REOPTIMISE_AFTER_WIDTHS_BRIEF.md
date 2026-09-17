@@ -45,3 +45,39 @@ package and the cheapest to re-run.
   optimiser is entitled to exploit. It would take priority over everything queued,
   and would establish that the two implementations disagree — **not which is
   wrong**.
+
+
+---
+
+## OUTCOME — **GREEN ON THE CURRENT EMITTER, AND THE GENERATED SUBJECTS TOO**
+
+| run | result |
+|---|---|
+| everything but the corpus, under `default<O2>` | **619 tests, 0 failed, frozen, 155s** |
+| the corpus differential, under `default<O2>` | **10 tests, 0 failed, frozen, 420s** |
+
+Both on a tree carrying all six width changes. **The generated scalar, byte,
+composite and nesting programs — several thousand — went through the middle end
+for the first time.**
+
+### The optimiser demonstrably ran, and the clock again said nothing
+
+155s optimised against roughly 175s unoptimised: **faster**, which is noise.
+**The probe settles it**: with `KEL_OPTIMIZE` set a panic inside the hook fires,
+without it the same test passes. That check was written into the brief precisely
+because the flat runtime nearly became a false negative the first time.
+
+### Scope
+
+The corpus and the generated subjects agree under `default<O2>` **at this commit,
+on this machine**. Not that the emitted IR is free of undefined behaviour — an
+optimiser exploiting UB is input- and version-dependent, and a green sweep is a
+sample.
+
+### What this closes, and what it says about the six changes
+
+Every gate since those changes ran at `-O0`, so **the middle end had never seen any
+of the new lowerings** until now. The width propagation added to six arm-groups
+survives `default<O2>` across the corpus and across the generators. That is the
+strongest evidence available here that those repairs did not introduce IR the
+optimiser is entitled to exploit.
