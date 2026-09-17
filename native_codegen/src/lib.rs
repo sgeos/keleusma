@@ -2585,6 +2585,33 @@ fn arith_result_width(l: Width, r: Width, byte_only: bool) -> Option<Width> {
     }
 }
 
+/// The width a width-preserving binary operation should push.
+///
+/// # Why this exists, and what it deliberately excludes
+///
+/// `Op::Div`, `Op::Mod` and the three bitwise operators return a value of the
+/// SAME shape as their operands — a word divided by a word is a word, a byte
+/// xored with a byte is a byte. **They pushed `Width::Unknown` regardless**, and
+/// the cost was not a wrong answer but a refusal: `NewComposite` declines an
+/// operand of unknown packed width, so **no composite field could hold the result
+/// of a division, a modulo, or any bitwise operation.**
+///
+/// Measured 2026-09-17 over a generated composite, which refused on its second
+/// program. Of eleven `Word` producers, `param`, `add`, `sub`, `mul`, `neg` and a
+/// literal could fill a field; `div`, `mod`, `band`, `bor` and `bxor` could not.
+///
+/// **`Body` is excluded on purpose.** A `Body(n)` operand POINTS AT its data, and
+/// propagating that through an arithmetic result would label a computed scalar as
+/// a pointer — the exact confusion the `Scalar`/`Body` split exists to prevent.
+/// Such an operand cannot reach these arms today; excluding it means a future
+/// change cannot make it silently wrong.
+fn preserved_scalar_width(l: Width, r: Width) -> Option<Width> {
+    match (l, r) {
+        (Width::Scalar(a), Width::Scalar(b)) if a == b => Some(Width::Scalar(a)),
+        _ => None,
+    }
+}
+
 /// Truncate to eight bits when the result is a `Byte`, and leave it alone
 /// otherwise.
 ///
@@ -4372,8 +4399,7 @@ fn lower_chunk_body<'ctx>(
                     // Narrow on purpose: a matched `Byte` pair gains the width, and
                     // every other combination keeps exactly the `Unknown` it had.
                     // A `Fixed` operand never reaches here, being refused above.
-                    let byte_pair =
-                        st.width_at(1) == Width::Scalar(1) && st.width_at(0) == Width::Scalar(1);
+                    let kept = preserved_scalar_width(st.width_at(1), st.width_at(0));
                     let rhs = st.pop();
                     let lhs = st.pop();
 
@@ -4403,11 +4429,9 @@ fn lower_chunk_body<'ctx>(
                     // bytes, which cannot exceed the dividend. It is applied anyway
                     // so the byte representation invariant is held by construction
                     // here as it is everywhere else, rather than by an argument.
-                    if byte_pair {
-                        let out = Width::Scalar(1);
-                        st.push_w(mask_if_byte(&st.b, i64t, v, out), out);
-                    } else {
-                        st.push(v);
+                    match kept {
+                        Some(out) => st.push_w(mask_if_byte(&st.b, i64t, v, out), out),
+                        None => st.push(v),
                     }
                 }
             }
@@ -4685,6 +4709,10 @@ fn lower_chunk_body<'ctx>(
                 st.push(z);
             }
             Op::BitAnd | Op::BitOr | Op::BitXor => {
+                // The width the operands agree on, read BEFORE the pops discard
+                // it. Without this a composite field could not hold the result of
+                // any bitwise operation -- see `preserved_scalar_width`.
+                let kept = preserved_scalar_width(st.width_at(1), st.width_at(0));
                 let rhs = st.pop();
                 let lhs = st.pop();
                 let v = match op {
@@ -4693,7 +4721,10 @@ fn lower_chunk_body<'ctx>(
                     Op::BitXor => st.b.build_xor(lhs, rhs, "bxor").unwrap(),
                     _ => unreachable!("the outer match restricts this set"),
                 };
-                st.push(v);
+                match kept {
+                    Some(out) => st.push_w(mask_if_byte(&st.b, i64t, v, out), out),
+                    None => st.push(v),
+                }
             }
             // Shifts. THE MASK IS NOT OPTIONAL. The VM masks the count to the
             // word width, `count & (word_bits - 1)`, so every count is defined.

@@ -50,3 +50,51 @@ worthwhile is either a divergence, or a perturbation showing the generated
 subjects catch something the five hand-written ones do not. **Try that
 perturbation** — for instance a width error that only manifests at a field index
 the five do not use — rather than assuming breadth implies power.
+
+
+---
+
+## OUTCOME — **A SECOND WIDTH GAP, WIDER THAN THE FIRST**
+
+**The generated composite refused on its SECOND program.**
+
+```
+struct P { f0: Byte, f1: Word, f2: Byte }
+  ... f1: ((3 % 7) % 7) ...
+  NewComposite at op 33 has an operand of unknown packed width
+```
+
+Characterised over eleven `Word` producers before anything was touched:
+
+| could fill a field | could not |
+|---|---|
+| `param`, `add`, `sub`, `mul`, `neg`, literal | `div`, `mod`, `band`, `bor`, `bxor` |
+
+**Five producers, not one.** The byte fix covered `Div`/`Mod` for a matched byte
+pair; this is the same family across two more arms and the other scalar type.
+
+Repaired with one rule — `preserved_scalar_width`: when both operands are scalars
+of equal width, the result keeps it. **`Body` is excluded on purpose**, since a
+`Body(n)` operand points at its data and labelling a computed scalar as a pointer
+is the confusion the `Scalar`/`Body` split exists to prevent.
+
+## THE BRIEF ASKED WHETHER THE BREADTH ADDS POWER. IT DOES, AND HERE IS THE PROOF
+
+The brief warned against assuming breadth implies power, and asked for a
+perturbation the generated subjects catch and the five hand-written packing
+subjects do not. **The answer turned out to be better than a synthetic
+perturbation: the generator found a gap the five could not.**
+
+Every hand-written packing subject fills its `Word` field with a plain parameter —
+`w: b`, `lo: a`, `hi: b`. **None of them ever puts a COMPUTED word in a field**,
+so none could reach the `Word` half of this gap. The generated subjects vary field
+types and values independently, and hit it on the second program.
+
+**Both perturbations of the new rule fire** across all three files — dropping the
+width (refusal) and inverting it (mispack). Reach is not the question here; the
+question the brief raised was power, and the answer is a finding rather than an
+argument.
+
+## COST
+
+240 composites across two seeds and three field counts: 0.86 seconds.

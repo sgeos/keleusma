@@ -1,5 +1,36 @@
 # Design Journal
 
+## 2026-09-17 — the same gap again, five arms wide, found the same way
+
+Generated composites refused on the **second** program. Characterised before
+touching anything: of eleven `Word` producers, `param`, `add`, `sub`, `mul`, `neg`
+and a literal can fill a composite field; **`div`, `mod`, `band`, `bor` and `bxor`
+cannot.** The byte fix earlier today covered `Div`/`Mod` for a matched byte pair —
+this is the same family across two more arms and the other scalar type.
+
+One rule replaces both special cases: when both operands are scalars of equal
+width, the result keeps it. **`Body` is excluded deliberately**, because a `Body`
+operand points at its data and labelling a computed scalar as a pointer is exactly
+what the `Scalar`/`Body` split exists to prevent. It cannot reach these arms today;
+excluding it means a later change cannot make it silently wrong.
+
+**The brief asked whether generated breadth adds power over the five hand-written
+packing subjects, and warned against assuming it does.** The answer is concrete:
+every hand-written subject fills its `Word` field with a plain parameter — `w: b`,
+`lo: a`, `hi: b` — so **none of them ever puts a computed word in a field**, and
+none could have reached the `Word` half. The generator varies field type and field
+value independently and hit it immediately.
+
+**That is the second time today a generated subject found what enumeration could
+not**, and the mechanism is identical both times: a width lost on the way OUT of an
+operation is invisible until something consumes the result, and hand-written
+subjects consume what their author thought to consume.
+
+**Neither gap was a wrong answer.** Both were refusals, erring safely for as long
+as they existed. What they cost was capability, silently — no composite field could
+hold a division, a modulo, or any bitwise result.
+
+
 ## 2026-09-17 — discharging the obligation my own fix created
 
 I propagated a `Byte` width through `Op::Div`/`Op::Mod` on the strength of 1500
