@@ -276,7 +276,16 @@ pub fn stream_locals_bytes(chunk: &Chunk) -> u32 {
 /// runs from 27% up to **98% for the twelve self-hosted compiler stages**, which
 /// plan almost nothing else. The first version of that census claimed the
 /// reservation dominates EVERY streaming module and the corpus refuted it on the
-/// first run. The trade-off stated above still
+/// first run.
+///
+/// **And dynamically, for those same twelve stages** by
+/// `tests/stage_differential.rs`: **zero bytes touched**, across every native
+/// stage drive, against plans of 520 and 600. They lower as degenerate streams
+/// with no composite sites, so the published figure for them is not merely
+/// dominated by reservation — it goes entirely unwritten. Reach proven by poking
+/// one byte into the region and watching the measurement move.
+///
+/// The trade-off stated above still
 /// holds — over-provisioning is safe in the direction that matters, and this
 /// figure is fixed and static so the bound moves by a known constant. But the
 /// cost is the DOMINANT term of the published host figure, not a rounding

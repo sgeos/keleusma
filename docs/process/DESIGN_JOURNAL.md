@@ -1,5 +1,43 @@
 # Design Journal
 
+## 2026-09-17 — the compiler stages touch none of the arena they are provisioned
+
+The static census said the flat spill reservation is 98% of the published arena
+figure for the twelve self-hosted stages. **The dynamic measurement is stronger:
+they touch ZERO of it.**
+
+Filled the region with a pattern in `stage_differential`'s native driver and took
+the highest index that no longer holds it, across all five native stage drives:
+**0 bytes of plans of 520 and 600**. They lower as degenerate streams with no
+composite sites, so the locals block and the spill block are both reserved and
+neither is written.
+
+**A zero is the one result that must never be believed on its face**, and this
+package has twice found a guard that could not produce a finding. So the
+instrument was perturbed before the number was written down: a single byte poked
+into the region at offset 17 makes it report 18. **The zero can become non-zero,
+so the zero means something.**
+
+It is a standing assertion now rather than a recorded measurement. A stage that
+begins using the arena fails the driver every stage test runs through, and the
+message asks which construct it gained rather than for a new constant.
+
+**What this does and does not say.** These modules, driven with these seeds, write
+nothing to the region. It does not bound what they would write on other inputs —
+that is the static plan's job, and the plan is exactly what looks loose. The two
+halves are complementary and neither substitutes for the other.
+
+> ⚠ **THE COMMIT THAT LANDED THE TEST CLAIMED MORE THAN IT CONTAINED.** The doc
+> edit and this journal entry were chained after it with `&&`; the doc edit's
+> guard assertion failed on a pattern that did not match, and **the commit ran
+> anyway** because it sat in the same chain. `8505a15b` therefore carries the test
+> alone while its message describes the whole increment. **This is the same shape
+> as `6603c399`, recorded in `corpus_differential.rs`'s own header** — an edit
+> raised inside a chain whose failure was never read. Twice now, in one session,
+> from the same cause: a guarded edit and a commit in one `&&` chain, where the
+> guard protects the edit and nothing protects the commit.
+
+
 ## 2026-09-16 — twelve new assertions, and two of them cannot fail
 
 Every assertion added this session passed on the day it was written, which is
