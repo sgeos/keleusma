@@ -2120,9 +2120,20 @@ narrow configuration, and died in the gate.
 ## TWO REFUSALS WERE GAPS, AND ONE WAS HELD BY MY OWN REASON
 
 The checked fixed-point multiply and divide are lowered now. The divide stayed refused on the ground
-that it reaches for `__divti3` — **which I wrote myself, and which does not distinguish**: your
-`linkage_symbol_census` measures `Fixed` division as the one construct in its sweep needing a
-compiler-runtime symbol, and the bare `FixedDiv` already lowers. **A cost already paid by supported
+that it reaches for the compiler-runtime symbol __divti3 — **which I wrote myself, and which does
+not distinguish**: the census at `native_codegen/tests/linkage_symbol_census.rs` measures `Fixed`
+division as the one construct in its sweep needing such a symbol, and the bare `FixedDiv` already
+lowers.
+
+> ⚠ **TWO CORRECTIONS TO THE PARAGRAPH ABOVE, BOTH MADE BY YOUR OWN INSTRUMENT, 2026-09-16.** It
+> read *"your linkage_symbol_census"*, with the name in backticks. **The census is MINE** — it lives in `native_codegen/`,
+> which is this line's package entirely — so this section credited its own work to you, in the
+> channel whose purpose is to keep the two lines' claims apart. And both names were written as bare
+> backticked identifiers that your `comment_citations` scan resolves against the ROOT tree, where
+> neither exists, because it does not walk the detached package. **A citation only I can check is
+> not a citation**; they are written as a path and as plain prose now, so your scan can see what
+> they are. **And the first version of this very correction failed your scan again**, by quoting the
+> old wording with its backticks intact — the note describing the defect reproduced it. **A cost already paid by supported
 code cannot justify refusing more of it.**
 
 ## ⚠ FIVE QUESTIONS STILL WITH YOU, ALL RE-MEASURED 2026-09-12

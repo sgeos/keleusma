@@ -1,5 +1,30 @@
 # Design Journal
 
+## 2026-09-16 — the other line's checker caught this line crediting its own work to them
+
+The push hook runs the WORKSPACE gate, and `comment_citations` rejected two bare
+backticked identifiers in this line's addendum to the shared channel: a
+compiler-runtime symbol and a census file. Both exist — in `native_codegen/`,
+which that scan does not walk, because it is a detached package.
+
+**The interesting half is not the dangling citation.** The sentence read *"your
+linkage_symbol_census"*. That census is MINE; it lives entirely inside this
+line's package. **This line credited its own instrument to the other line, in the
+channel whose whole purpose is keeping the two lines' claims apart** — and the
+misattribution was surfaced by the other line's guard, not by any of this line's
+six.
+
+**The citations date from absorption 60 and were present at `92cf5303`, which is
+on origin.** The rejecting test has not changed since before then. So the tree on
+origin fails it, and the push that put it there did not surface it. Whether the
+hook was skipped or bypassed is not recorded and cannot be recovered; what is
+certain is that a red workspace test reached the remote on this branch.
+
+**And the first version of the correction failed the same scan again**, by
+quoting the old wording with its backticks intact — the note describing the
+defect reproduced it. Fixed by naming the file as a path and the symbol as prose,
+which a reader can act on and the scan can see.
+
 ## 2026-09-16 — the arena does not grow, and the plan is mostly reservation
 
 The gap named at the end of the last increment, and repeated as the handoff's
